@@ -5,7 +5,7 @@
     "buildCommand": "npm install && npx prisma generate && npm run build"
   },
   "deploy": {
-    "startCommand": "echo '==> (1) prisma db push' && npx prisma db push --accept-data-loss --skip-generate 2>&1 && echo '==> (2) seed admin' && (node prisma/seed-prod.js 2>&1 || echo '==> seed FALHOU, seguindo mesmo assim') && echo '==> (3) iniciando Nest' && node dist/main",
+    "startCommand": "echo '==> (1) prisma db push' && npx prisma db push --accept-data-loss --skip-generate && echo '==> (2) seed admin' && node prisma/seed-prod.js || echo '==> (2) seed falhou' ; echo '==> (3) iniciando Nest' && node dist/main",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
     "healthcheckPath": "/api/health",
