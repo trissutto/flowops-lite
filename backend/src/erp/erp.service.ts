@@ -1,0 +1,289 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as mysql from 'mysql2/promise';
+import { StockEntry } from '../routing/types';
+
+/**
+ * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
+ * SOMENTE LEITURA. Usa pool de 5 conexões para proteger o banco do ERP.
+ *
+ * Schema real (confirmado via inspect-erp):
+ *   tabela `estoque`  (266k registros — estoque consolidado)
+ *     CODIGO   varchar(14)   SKU do produto
+ *     ESTOQUE  int(11)       quantidade disponível
+ *     LOJA     char(2)       código da loja (01..20)
+ */
+@Injectable()
+export class ErpService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ErpService.name);
+  private pool: mysql.Pool;
+
+  constructor(private readonly config: ConfigService) {}
+
+  async onModuleInit() {
+    this.pool = mysql.createPool({
+      host: this.config.get<string>('ERP_HOST'),
+      port: Number(this.config.get<string>('ERP_PORT') ?? 3306),
+      user: this.config.get<string>('ERP_USER'),
+      password: this.config.get<string>('ERP_PASSWORD'),
+      database: this.config.get<string>('ERP_DATABASE'),
+      waitForConnections: true,
+      connectionLimit: 5,
+      queueLimit: 0,
+      connectTimeout: 5000,
+    });
+
+    try {
+      const conn = await this.pool.getConnection();
+      await conn.ping();
+      conn.release();
+      this.logger.log('✅ ERP MySQL conectado (gigasistemas21)');
+    } catch (e) {
+      this.logger.warn(`⚠️  ERP MySQL não conectou: ${(e as Error).message}`);
+    }
+  }
+
+  async onModuleDestroy() {
+    if (this.pool) await this.pool.end();
+  }
+
+  /**
+   * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
+   * Retorna só registros com ESTOQUE > 0.
+   */
+  async getStock(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
+    if (!skus.length || !storeCodes.length || !this.pool) return [];
+
+    const sql = `
+      SELECT CODIGO AS sku,
+             LOJA   AS storeCode,
+             ESTOQUE AS availableQty
+        FROM estoque
+       WHERE CODIGO IN (?)
+         AND LOJA IN (?)
+         AND ESTOQUE > 0
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [skus, storeCodes]);
+      return rows.map((r) => ({
+        storeCode: String(r.storeCode).trim(),
+        sku: String(r.sku).trim(),
+        availableQty: Number(r.availableQty),
+      }));
+    } catch (e) {
+      this.logger.error(`Falha ao consultar estoque ERP: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Estoque TOTAL consolidado por SKU (soma de todas as lojas).
+   * Retorna um mapa { [sku]: totalQty }.
+   * SKUs que não existem no ERP não aparecem no mapa (não ficam 0).
+   *
+   * Usado pela tela /produtos pra comparar estoque WooCommerce x ERP físico.
+   */
+  async getStockTotalBySkus(skus: string[]): Promise<Record<string, number>> {
+    if (!skus.length || !this.pool) return {};
+
+    // Normaliza: tira duplicados e strings vazias
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+
+    // PASSO 1: verifica quais SKUs existem no CADASTRO (tabela `produtos`).
+    // Produto pode existir em `produtos` mas NÃO em `estoque` se ele está zerado
+    // em todas as lojas (gigasistemas só cria linha em `estoque` quando há movimento).
+    // Se confundirmos "sem linha em estoque" com "não existe", as 698 variações
+    // não atualizam pra zero quando deveriam.
+    const existsInProducts = new Set<string>();
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SELECT CODIGO FROM produtos WHERE CODIGO IN (?)',
+        [unique],
+      );
+      for (const r of rows) {
+        existsInProducts.add(String(r.CODIGO).trim());
+      }
+    } catch (e) {
+      this.logger.error(`Falha ao verificar cadastro ERP: ${(e as Error).message}`);
+      // Em erro, segue pro passo 2 sem distinção (comportamento antigo)
+    }
+
+    // PASSO 2: busca estoque consolidado dos que têm movimento em pelo menos uma loja.
+    const stockMap: Record<string, number> = {};
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS sku, SUM(ESTOQUE) AS totalQty
+           FROM estoque
+          WHERE CODIGO IN (?)
+          GROUP BY CODIGO`,
+        [unique],
+      );
+      for (const r of rows) {
+        stockMap[String(r.sku).trim()] = Number(r.totalQty) || 0;
+      }
+    } catch (e) {
+      this.logger.error(`Falha ao consultar estoque total ERP: ${(e as Error).message}`);
+      return {};
+    }
+
+    // PASSO 3: para cada SKU que EXISTE no cadastro mas NÃO tem linha em estoque,
+    // assume estoque = 0. Pra SKU que não existe no cadastro, omite do mapa
+    // (fica como "não encontrado" — produto descatalogado, não mexer no WC).
+    const result: Record<string, number> = { ...stockMap };
+    for (const sku of existsInProducts) {
+      if (!(sku in result)) {
+        result[sku] = 0;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Estoque por SKU detalhado por loja — retorna mapa {[sku]: [{storeCode, qty}, ...]}.
+   * Útil pra detalhamento por filial na tela de produto.
+   */
+  async getStockBySkusDetailed(skus: string[]): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
+    if (!skus.length || !this.pool) return {};
+    const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
+    if (!unique.length) return {};
+
+    const sql = `
+      SELECT CODIGO AS sku,
+             LOJA   AS storeCode,
+             ESTOQUE AS qty
+        FROM estoque
+       WHERE CODIGO IN (?)
+         AND ESTOQUE > 0
+       ORDER BY CODIGO, LOJA
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [unique]);
+      const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+      for (const r of rows) {
+        const sku = String(r.sku).trim();
+        if (!map[sku]) map[sku] = [];
+        map[sku].push({ storeCode: String(r.storeCode).trim(), qty: Number(r.qty) || 0 });
+      }
+      return map;
+    } catch (e) {
+      this.logger.error(`Falha ao consultar estoque detalhado ERP: ${(e as Error).message}`);
+      return {};
+    }
+  }
+
+  /**
+   * Diagnóstico: lista colunas da tabela `produtos` do Gigasistemas.
+   * Usado pra descobrir qual coluna guarda o EAN13 (código de barras).
+   * Retorna também 3 registros de amostra (com TODOS os campos preenchidos)
+   * pra facilitar a identificação visual do campo certo.
+   */
+  async describeProductsTable(): Promise<{
+    columns: Array<{ field: string; type: string }>;
+    sample: any[];
+  }> {
+    if (!this.pool) return { columns: [], sample: [] };
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SHOW COLUMNS FROM produtos',
+      );
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SELECT * FROM produtos LIMIT 3',
+      );
+      return {
+        columns: cols.map((c: any) => ({ field: c.Field, type: c.Type })),
+        sample: rows as any[],
+      };
+    } catch (e) {
+      this.logger.error(`describeProductsTable falhou: ${(e as Error).message}`);
+      return { columns: [], sample: [] };
+    }
+  }
+
+  /**
+   * Busca produtos no Gigasistemas por uma lista de códigos que podem estar
+   * em QUALQUER campo (CODIGO, EAN13, CODBARRAS, etc). Retorna um mapa
+   * codigo-procurado → CODIGO oficial do Gigasistemas.
+   *
+   * Só é usada quando algum SKU não bateu em getStockTotalBySkus (padrão),
+   * pra evitar query cara no fluxo normal.
+   */
+  async findCodigosByAny(
+    candidates: string[],
+    column: string,
+  ): Promise<Record<string, string>> {
+    if (!candidates.length || !this.pool) return {};
+    // Whitelist de colunas pra proteger contra injeção — expandir conforme schema
+    const allowed = new Set([
+      'CODIGO',
+      'EAN',
+      'EAN13',
+      'CODBARRAS',
+      'CODIGOBARRAS',
+      'COD_BARRAS',
+      'CODIGO_BARRAS',
+      'COD_EAN',
+      'REFERENCIA',
+      'REF',
+    ]);
+    if (!allowed.has(column)) {
+      throw new Error(`Coluna não permitida: ${column}`);
+    }
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, \`${column}\` AS found FROM produtos WHERE \`${column}\` IN (?)`,
+        [candidates],
+      );
+      const map: Record<string, string> = {};
+      for (const r of rows as any[]) {
+        if (r.found) map[String(r.found)] = String(r.CODIGO);
+      }
+      return map;
+    } catch (e) {
+      this.logger.error(
+        `findCodigosByAny(${column}) falhou: ${(e as Error).message}`,
+      );
+      return {};
+    }
+  }
+
+  /**
+   * DIAGNÓSTICO: busca produtos no ERP por trecho (LIKE) em CODIGO, REF ou DESCRICAOCOMPLETA.
+   * Limita a 20 resultados. Retorna os campos relevantes pra entender o match.
+   */
+  async searchProductsLike(term: string): Promise<any[]> {
+    if (!this.pool || !term) return [];
+    const like = `%${term}%`;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
+           FROM produtos
+          WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+          LIMIT 20`,
+        [like, like, like],
+      );
+      return rows as any[];
+    } catch (e) {
+      this.logger.error(`searchProductsLike falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /** Retorna metadados de um produto (nome, preço) direto da tabela produtos. */
+  async getProduct(sku: string): Promise<{ name: string; price: number } | null> {
+    if (!this.pool) return null;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT DESCRICAOCOMPLETA AS name, VENDAUN AS price
+           FROM produtos
+          WHERE CODIGO = ?
+          LIMIT 1`,
+        [sku],
+      );
+      if (!rows.length) return null;
+      return { name: String(rows[0].name), price: Number(rows[0].price) };
+    } catch {
+      return null;
+    }
+  }
+}

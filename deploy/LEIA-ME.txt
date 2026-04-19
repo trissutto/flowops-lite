@@ -1,0 +1,148 @@
+========================================================================
+  FlowOps - Guia de Instalacao na Matriz (Servidor + 4 clientes)
+========================================================================
+
+O QUE VOCE TEM AQUI:
+  - Aplicacao FlowOps completa (pastas backend e frontend)
+  - 5 scripts .bat pra instalar e operar sem precisar de terminal/linha
+    de comando
+  - Este guia
+
+========================================================================
+  CENARIO
+========================================================================
+
+  1 maquina = SERVIDOR  (roda o FlowOps + guarda o banco de dados)
+  4 maquinas = CLIENTES (acessam pelo navegador via IP da rede)
+
+  Todas as 5 maquinas precisam estar na MESMA rede (Wi-Fi ou cabo).
+
+========================================================================
+  INSTALACAO - MAQUINA SERVIDOR (uma vez so)
+========================================================================
+
+  PASSO 1 - Copia a pasta inteira deste FlowOps pro disco da maquina que
+           vai ser o servidor. Ex: C:\FlowOps
+
+  PASSO 2 - Abre a pasta "deploy" e da dois cliques em:
+              1-instalar.bat
+
+           Ele vai:
+             - Instalar Node.js (se nao tiver)
+             - Baixar dependencias (demora 5 min, seja paciente)
+             - Criar o banco SQLite
+             - Fazer o build de producao do frontend
+             - Liberar portas 3000 e 3001 no firewall
+
+           No final aparece "INSTALACAO CONCLUIDA".
+
+  PASSO 3 - Da dois cliques em:
+              2-iniciar-flowops.bat
+
+           Vao abrir 2 janelas pretas (backend e frontend).
+           DEIXE AS 2 ABERTAS - enquanto elas estiverem abertas, o
+           FlowOps esta rodando. Pode minimizar.
+
+           O navegador vai abrir sozinho em http://localhost:3000
+
+  PASSO 4 (opcional, mas recomendado) - Pra o FlowOps iniciar sozinho
+           toda vez que a maquina ligar, da dois cliques em:
+              5-auto-iniciar-com-windows.bat
+
+========================================================================
+  INSTALACAO - MAQUINAS CLIENTES (4 maquinas das colaboradoras)
+========================================================================
+
+  Nas maquinas CLIENTE nao precisa instalar NADA. So precisa de um atalho.
+
+  NA MAQUINA SERVIDOR:
+    PASSO 1 - Da dois cliques em:
+                3-gerar-atalho-cliente.bat
+
+              Ele detecta o IP da rede (ex: 192.168.1.50) e cria um
+              arquivo chamado "FlowOps.url" no Desktop.
+
+    PASSO 2 - Copia esse arquivo "FlowOps.url" num pendrive
+              (ou envia por email/WhatsApp pras colaboradoras).
+
+  EM CADA MAQUINA CLIENTE:
+    PASSO 1 - Cola o arquivo "FlowOps.url" no Desktop.
+    PASSO 2 - Dois cliques no atalho. Abre o FlowOps no navegador padrao.
+
+    PRONTO. Nao precisa instalar Node, Prisma, nada. E o mesmo FlowOps
+    do servidor, usando o mesmo banco de dados.
+
+========================================================================
+  OPERACAO DIA-A-DIA
+========================================================================
+
+  LIGAR O FLOWOPS (se nao configurou auto-start):
+    Dois cliques em 2-iniciar-flowops.bat
+
+  DESLIGAR:
+    Fecha as 2 janelas pretas que subiram com o start.
+    Ou rode 4-parar-flowops.bat
+
+  REINICIAR (se travar alguma coisa):
+    4-parar-flowops.bat  -> 2-iniciar-flowops.bat
+
+  IP DA MAQUINA MUDOU?
+    Gera o atalho de novo (3-gerar-atalho-cliente.bat) e distribui
+    o .url novo pras colaboradoras.
+
+========================================================================
+  PROBLEMAS COMUNS
+========================================================================
+
+  1) Colaboradora clica no atalho e abre pagina "nao da pra acessar"
+     - O servidor esta ligado? As 2 janelas pretas estao abertas?
+     - A colaboradora esta na mesma rede (mesmo Wi-Fi ou cabo)?
+     - Windows Firewall bloqueou: rode abrir-firewall.bat como admin
+
+  2) "npm install" da erro no 1-instalar.bat
+     - Sem internet? O instalador precisa baixar pacotes (5-10 min)
+     - Antivirus bloqueando? Desliga o tempo real temporariamente
+
+  3) Backend nao sobe - janela preta fecha sozinha
+     - Abre a janela "FlowOps Backend" com o cmd e rode manualmente:
+         cd C:\FlowOps\backend
+         npm run start:prod
+     - Le a mensagem de erro (provavelmente faltando .env)
+
+  4) Pedido novo nao aparece na tela em tempo real
+     - O socket precisa da porta 3001 aberta na mesma rede
+     - Confere abrir-firewall.bat rodou OK
+
+========================================================================
+  IMPORTANTE - BANCO DE DADOS / MIGRACAO
+========================================================================
+
+  O arquivo  backend\prisma\dev.db  dentro deste pacote e uma COPIA do
+  banco atual do FlowOps (com o estado que voce ja usa hoje: lojas,
+  usuarios, configs, pedidos, etc).
+
+  Depois que o servidor da matriz estiver no ar:
+    -> VOCE TAMBEM deve usar o servidor da matriz como cliente
+       (abra http://IP-DA-MATRIZ:3000 no SEU notebook).
+    -> Nao continue usando o FlowOps que estava na sua maquina como
+       antes, senao vai ter 2 bancos paralelos divergindo.
+
+  Se quiser comecar LIMPO no servidor da matriz (banco novo, sem
+  historico), antes do passo 2 (iniciar), DELETE o arquivo:
+      backend\prisma\dev.db
+  O 1-instalar.bat ja rodou prisma db push, entao na primeira execucao
+  ele vai criar um banco vazio novo automaticamente.
+
+========================================================================
+  ARQUIVOS SENSIVEIS
+========================================================================
+
+  O arquivo  backend\.env  contem:
+    - chave do plugin FlowOps do WordPress
+    - credenciais do WooCommerce (ck_/cs_)
+    - credenciais do banco do ERP Gigasistemas
+
+  NAO compartilhe esta pasta com pessoas fora da empresa.
+  O servidor deve ficar numa maquina interna da matriz.
+
+========================================================================

@@ -1,0 +1,147 @@
+// FlowOps Lite - Prisma Schema
+//
+// Em DEV LOCAL usa SQLite (arquivo backend/prisma/dev.db).
+// Em PRODUCAO (Railway) usa Postgres — Railway injeta DATABASE_URL.
+//
+// A troca é só mudar o provider via env PRISMA_PROVIDER no Railway,
+// mas como Prisma não aceita provider via env em tempo de schema,
+// deixamos postgresql fixo aqui. Para dev local, usar SQLite num branch
+// separado ou criar schema.dev.prisma.
+//
+// Recomendado em dev: rodar Postgres local via docker-compose (incluso
+// no repo — `docker compose up -d db`).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite não suporta enums nativos. Usamos String com validação no código.
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         String   // admin | operator | store
+  storeId      String?  @map("store_id")
+  store        Store?   @relation(fields: [storeId], references: [id])
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  history OrderHistory[]
+
+  @@map("users")
+}
+
+model Store {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  name          String
+  cep           String?
+  city          String?
+  state         String?
+  whatsapp      String?              // formato E.164 sem +, ex: 5511999999999
+  contactName   String?  @map("contact_name")
+  active        Boolean  @default(true)
+  priorityScore Int      @default(50) @map("priority_score")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  users      User[]
+  pickOrders PickOrder[]
+  orderItems OrderItem[]
+
+  @@map("stores")
+}
+
+model Order {
+  id              String   @id @default(uuid())
+  wcOrderId       Int      @unique @map("wc_order_id")
+  wcOrderNumber   String?  @map("wc_order_number")
+  status          String   // pending, routing, awaiting_stock, separating, ready, shipped, delivered, cancelled
+  customerName    String?  @map("customer_name")
+  customerEmail   String?  @map("customer_email")
+  customerPhone   String?  @map("customer_phone")
+  shippingCep     String?  @map("shipping_cep")
+  shippingAddress String   @map("shipping_address") // JSON serializado
+  totalAmount     Float?   @map("total_amount")
+  trackingCode    String?  @map("tracking_code")
+  carrier         String?
+  routingResult   String?  @map("routing_result") // JSON serializado
+  wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
+  createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  items      OrderItem[]
+  pickOrders PickOrder[]
+  history    OrderHistory[]
+
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id              String  @id @default(uuid())
+  orderId         String  @map("order_id")
+  sku             String
+  productName     String? @map("product_name")
+  quantity        Int
+  unitPrice       Float?  @map("unit_price")
+  assignedStoreId String? @map("assigned_store_id")
+
+  order         Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  assignedStore Store? @relation(fields: [assignedStoreId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model PickOrder {
+  id           String   @id @default(uuid())
+  orderId      String   @map("order_id")
+  storeId      String   @map("store_id")
+  status       String   // new, separating, ready, shipped
+  trackingCode String?  @map("tracking_code")
+  carrier      String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, status])
+  @@map("pick_orders")
+}
+
+model OrderHistory {
+  id         String   @id @default(uuid())
+  orderId    String   @map("order_id")
+  userId     String?  @map("user_id")
+  fromStatus String?  @map("from_status")
+  toStatus   String?  @map("to_status")
+  note       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+  user  User? @relation(fields: [userId], references: [id])
+
+  @@map("order_history")
+}
+
+model IntegrationLog {
+  id        Int      @id @default(autoincrement())
+  source    String
+  direction String
+  event     String
+  payload   String?
+  status    Int?
+  error     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([source, event, createdAt(sort: Desc)])
+  @@map("integration_logs")
+}

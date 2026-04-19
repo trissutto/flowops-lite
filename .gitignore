@@ -1,0 +1,74 @@
+# ============================================================================
+#  FlowOps Lite — .gitignore
+#  Garante que NUNCA vá pro repo: segredos, node_modules, builds, backups.
+# ============================================================================
+
+# --- Segredos (NUNCA commitar) ---------------------------------------------
+.env
+.env.local
+.env.*.local
+*.env.secret
+backend/.env
+frontend/.env.local
+
+# --- Banco local (SQLite de dev) -------------------------------------------
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backend/prisma/dev.db
+backend/prisma/migrations/migration_lock.toml
+
+# --- node_modules ----------------------------------------------------------
+node_modules/
+**/node_modules/
+
+# --- Build outputs ---------------------------------------------------------
+dist/
+build/
+.next/
+out/
+**/*.tsbuildinfo
+
+# --- Logs ------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Backups e artefatos de operação ---------------------------------------
+backend/backups/
+*.xlsx.tmp
+*.tmp
+*.bak
+erp-inspect.txt
+
+# --- ZIPs grandes (instaladores gerados) -----------------------------------
+FlowOps-Instalacao-Matriz.zip
+flowops-plugin-upload.zip
+flowops-plugin-upload-v2.zip
+flowops-abandoned-carts.zip
+ziCEJ0iY
+ziBUdDVP
+ziTIAm2u
+
+# --- Editor / OS -----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- Coverage / teste ------------------------------------------------------
+coverage/
+.nyc_output/
+
+# --- Vercel / Railway ------------------------------------------------------
+.vercel
+.railway
+
+# --- Uploads locais --------------------------------------------------------
+uploads/
