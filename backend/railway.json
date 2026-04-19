@@ -5,7 +5,7 @@
     "buildCommand": "npm install && npx prisma generate && npm run build && echo '==> conteudo de dist:' && ls -la dist"
   },
   "deploy": {
-    "startCommand": "node dist/main",
+    "startCommand": "echo '==> procurando main.js em dist/:' && find dist -name 'main.js' -not -path '*/node_modules/*' && MAIN=$(find dist -name 'main.js' -not -path '*/node_modules/*' | head -1) && echo \"==> iniciando: $MAIN\" && node \"$MAIN\"",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3,
     "healthcheckPath": "/api/health",
