@@ -4,7 +4,14 @@ import helmet from 'helmet';
 import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 
+// Diagnóstico de startup (aparece SEMPRE, mesmo se Nest não conseguir iniciar)
+console.log('==> [main.ts] ENTRANDO NO BOOTSTRAP');
+console.log('==> NODE_ENV =', process.env.NODE_ENV);
+console.log('==> PORT =', process.env.PORT);
+console.log('==> DATABASE_URL =', process.env.DATABASE_URL ? '(set)' : '(MISSING)');
+
 async function bootstrap() {
+  console.log('==> [bootstrap] iniciando NestFactory.create...');
   // CORS — em prod aceita só FRONTEND_URL (Vercel). Em dev libera tudo.
   const isProd = process.env.NODE_ENV === 'production';
   const frontendUrl = process.env.FRONTEND_URL?.split(',').map((s) => s.trim()).filter(Boolean);
@@ -40,4 +47,7 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('==> [bootstrap] ERRO FATAL:', err);
+  process.exit(1);
+});
