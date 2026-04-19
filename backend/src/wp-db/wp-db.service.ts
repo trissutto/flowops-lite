@@ -36,14 +36,26 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
       timezone: 'Z',
     });
 
-    try {
-      const conn = await this.pool.getConnection();
-      await conn.ping();
-      conn.release();
-      this.logger.log('✅ WP MySQL conectado (wordpress)');
-    } catch (e) {
-      this.logger.warn(`⚠️  WP MySQL não conectou: ${(e as Error).message}`);
-    }
+    // IMPORTANTE: ping em background (fire-and-forget). NÃO bloquear o boot.
+    // Se o IP do Railway não estiver liberado no WP, o TCP fica pendurado
+    // e trava o startup do Nest → healthcheck falha.
+    this.pool
+      .getConnection()
+      .then((conn) => {
+        conn
+          .ping()
+          .then(() => {
+            this.logger.log('✅ WP MySQL conectado (wordpress)');
+            conn.release();
+          })
+          .catch((e) => {
+            this.logger.warn(`⚠️  WP MySQL ping falhou: ${(e as Error).message}`);
+            conn.release();
+          });
+      })
+      .catch((e) => {
+        this.logger.warn(`⚠️  WP MySQL não conectou: ${(e as Error).message}`);
+      });
   }
 
   async onModuleDestroy() {

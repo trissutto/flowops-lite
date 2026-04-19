@@ -33,14 +33,26 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       connectTimeout: 5000,
     });
 
-    try {
-      const conn = await this.pool.getConnection();
-      await conn.ping();
-      conn.release();
-      this.logger.log('✅ ERP MySQL conectado (gigasistemas21)');
-    } catch (e) {
-      this.logger.warn(`⚠️  ERP MySQL não conectou: ${(e as Error).message}`);
-    }
+    // IMPORTANTE: ping em background. NÃO bloquear o boot do Nest.
+    // Se ERP_HOST não estiver acessível do Railway, o TCP fica pendurado
+    // e trava o startup → healthcheck falha.
+    this.pool
+      .getConnection()
+      .then((conn) => {
+        conn
+          .ping()
+          .then(() => {
+            this.logger.log('✅ ERP MySQL conectado (gigasistemas21)');
+            conn.release();
+          })
+          .catch((e) => {
+            this.logger.warn(`⚠️  ERP MySQL ping falhou: ${(e as Error).message}`);
+            conn.release();
+          });
+      })
+      .catch((e) => {
+        this.logger.warn(`⚠️  ERP MySQL não conectou: ${(e as Error).message}`);
+      });
   }
 
   async onModuleDestroy() {
