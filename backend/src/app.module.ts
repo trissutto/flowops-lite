@@ -18,6 +18,7 @@ import { WebsocketModule } from './websocket/websocket.module';
 import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { HealthModule } from './health/health.module';
+import { BootstrapModule } from './bootstrap/bootstrap.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { HealthModule } from './health/health.module';
     WpDbModule,
     AbandonedCartsModule,
     HealthModule,
+    BootstrapModule,
   ],
 })
 export class AppModule {}
