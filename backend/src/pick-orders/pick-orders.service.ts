@@ -437,6 +437,72 @@ export class PickOrdersService {
   }
 
   /**
+   * Matriz aprova baixa em LOTE — recebe array de pick-order IDs, itera e aprova
+   * cada um. Não é transacional (se um falhar, os outros já aprovados continuam).
+   * Retorna summary: approved/skipped/errors pra UI mostrar o que rolou.
+   *
+   * Usa um único integration_log "debit.bulk-approved.shadow" agregando o batch
+   * inteiro (além dos logs individuais por pick-order que `approveDebit` já cria).
+   */
+  async bulkApproveDebit(pickOrderIds: string[], operatorUserId: string) {
+    const ids = Array.from(new Set((pickOrderIds ?? []).filter(Boolean)));
+    if (ids.length === 0) {
+      return { approved: [], skipped: [], errors: [], total: 0 };
+    }
+
+    const approved: Array<{ id: string; itemsCount: number }> = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    const errors: Array<{ id: string; error: string }> = [];
+
+    for (const id of ids) {
+      try {
+        const res = await this.approveDebit(id, operatorUserId);
+        approved.push({ id: res.id, itemsCount: res.itemsCount });
+      } catch (e: any) {
+        const msg = String(e?.message ?? 'erro desconhecido');
+        // Distingue "já aprovado" / "status inválido" (skipped) de erro real
+        if (
+          msg.includes('já foi aprovada') ||
+          msg.includes('só aprova depois') ||
+          msg.includes('não encontrado')
+        ) {
+          skipped.push({ id, reason: msg });
+        } else {
+          errors.push({ id, error: msg });
+        }
+      }
+    }
+
+    // Log agregado pro auditoria rápida do batch
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.bulk-approved.shadow',
+        payload: JSON.stringify({
+          approvedBy: operatorUserId,
+          total: ids.length,
+          approvedCount: approved.length,
+          skippedCount: skipped.length,
+          errorCount: errors.length,
+          approvedIds: approved.map((a) => a.id),
+          skipped,
+          errors,
+        }),
+        status: 200,
+      },
+    });
+
+    return {
+      approved,
+      skipped,
+      errors,
+      total: ids.length,
+      shadowMode: true,
+    };
+  }
+
+  /**
    * Matriz rejeita a baixa — volta pra `separating` pra loja revisar.
    * Grava motivo no log pra loja consultar.
    */

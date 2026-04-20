@@ -75,6 +75,20 @@ export class PickOrdersController {
   }
 
   /**
+   * Matriz aprova baixa em LOTE — aceita array de pickOrderIds e aprova tudo.
+   * Retorna summary (approved/skipped/errors) pra UI decidir o que mostrar.
+   * Rota estática — fica antes das dinâmicas.
+   */
+  @Post('bulk-approve-debit')
+  bulkApproveDebit(@Req() req: any, @Body() body: { pickOrderIds: string[] }) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) aprova baixa em lote');
+    }
+    return this.svc.bulkApproveDebit(body?.pickOrderIds ?? [], user.userId);
+  }
+
+  /**
    * Matriz rejeita baixa — volta pra separating, loja revisa.
    * Body: { reason: string }
    */
