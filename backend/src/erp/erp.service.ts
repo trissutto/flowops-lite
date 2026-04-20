@@ -389,7 +389,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const list = Array.from(variants).filter(Boolean);
     if (!list.length) return null;
 
-    const columns = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
+    // IMPORTANTE: busca por CODIGO primeiro — muitas confecções imprimem o código
+    // interno do ERP como barcode (não usam EAN13 internacional). Só depois
+    // tenta as colunas de EAN propriamente ditas.
+    const columns = ['CODIGO', 'EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
     for (const col of columns) {
       try {

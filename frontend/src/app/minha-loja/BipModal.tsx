@@ -136,25 +136,29 @@ export default function BipModal({
     return () => clearTimeout(t);
   }, [feedback?.ts]); // eslint-disable-line
 
-  // Mapas derivados: cada EAN e TODAS suas variantes (zeros à esquerda/padding)
-  // apontam pro mesmo SKU — tolera divergência entre scanner e cadastro do ERP.
+  // Mapas derivados: cada EAN (e o próprio SKU) + TODAS suas variantes de padding
+  // apontam pro mesmo SKU — tolera divergência entre scanner e cadastro do ERP,
+  // e também aceita scanner que imprime o próprio código interno do ERP como barcode.
   const eanToSku = useMemo(() => {
     const m = new Map<string, string>();
+    const addEntry = (value: string | null | undefined, sku: string) => {
+      if (!value) return;
+      const s = String(value).trim();
+      if (!s) return;
+      m.set(s, sku);
+      if (/^\d+$/.test(s)) {
+        const stripped = s.replace(/^0+/, '');
+        if (stripped) m.set(stripped, sku);
+        m.set(s.padStart(13, '0'), sku);
+        m.set(s.padStart(14, '0'), sku);
+      }
+    };
     if (data) {
       for (const it of data.items) {
         const variants = it.eanVariants && it.eanVariants.length ? it.eanVariants : it.ean ? [it.ean] : [];
-        for (const v of variants) {
-          if (v) m.set(v, it.sku);
-        }
-        // Como fallback extra, indexa também sem zeros à esquerda e com padding
-        if (it.ean) {
-          const stripped = it.ean.replace(/^0+/, '');
-          if (stripped) m.set(stripped, it.sku);
-          if (/^\d+$/.test(it.ean)) {
-            m.set(it.ean.padStart(13, '0'), it.sku);
-            m.set(it.ean.padStart(14, '0'), it.sku);
-          }
-        }
+        for (const v of variants) addEntry(v, it.sku);
+        addEntry(it.ean, it.sku);
+        addEntry(it.sku, it.sku); // bipar o próprio SKU funciona
       }
     }
     return m;

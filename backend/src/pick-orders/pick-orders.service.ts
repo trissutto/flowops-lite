@@ -69,18 +69,24 @@ export class PickOrdersService {
       items: items.map((i) => {
         const ean = eanMap[i.sku] ?? null;
         // Variantes pra tolerar zeros à esquerda do scanner (ex: "0789..." vs "789...")
+        // IMPORTANTE: o próprio SKU/CODIGO também entra como variante — muitas confecções
+        // imprimem o código interno do ERP como barcode, sem EAN13 real.
         const eanVariants: string[] = [];
-        if (ean) {
-          eanVariants.push(ean);
-          const stripped = ean.replace(/^0+/, '');
-          if (stripped && stripped !== ean) eanVariants.push(stripped);
-          if (/^\d+$/.test(ean)) {
-            const p13 = ean.padStart(13, '0');
-            const p14 = ean.padStart(14, '0');
+        const addVariant = (v: string | null | undefined) => {
+          if (!v) return;
+          const s = String(v).trim();
+          if (s && !eanVariants.includes(s)) eanVariants.push(s);
+          if (s && /^\d+$/.test(s)) {
+            const stripped = s.replace(/^0+/, '');
+            if (stripped && !eanVariants.includes(stripped)) eanVariants.push(stripped);
+            const p13 = s.padStart(13, '0');
+            const p14 = s.padStart(14, '0');
             if (!eanVariants.includes(p13)) eanVariants.push(p13);
             if (!eanVariants.includes(p14)) eanVariants.push(p14);
           }
-        }
+        };
+        addVariant(ean);
+        addVariant(i.sku); // sku bipado direto também conta
         return {
           id: i.id,
           sku: i.sku,
