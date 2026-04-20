@@ -134,6 +134,24 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   /**
+   * Dispara comando de impressão remota pro Electron da loja.
+   * /minha-loja escuta esse evento e abre a tela imprimir/[id]?autoprint=1 que
+   * chama window.electronAPI.silentPrintHTML e fecha sozinha.
+   */
+  emitPrintRequest(storeId: string, payload: { pickOrderId: string; url: string }) {
+    this.server.to(`store:${storeId}`).emit('pick-order:print', payload);
+  }
+
+  /**
+   * Retorna se a loja tem ao menos 1 socket conectado agora (Electron aberto).
+   * Usado pra falhar rápido quando matriz tenta imprimir numa loja offline.
+   */
+  isStoreOnline(storeId: string): boolean {
+    const set = this.storeSockets.get(storeId);
+    return !!set && set.size > 0;
+  }
+
+  /**
    * Retorna snapshot da presença (usado pelo endpoint /stores/presence).
    */
   getPresence(): Array<{ storeId: string; online: boolean; lastSeen: string | null }> {

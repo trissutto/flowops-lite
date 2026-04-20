@@ -71,4 +71,19 @@ export class PickOrdersController {
     }
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
   }
+
+  /**
+   * Matriz dispara impressão REMOTA do cupom na térmica da loja.
+   * Fluxo: backend valida → verifica presença → emite socket pro Electron da loja →
+   * Electron abre hidden window /minha-loja/imprimir/{id}?autoprint=1 → print silencioso.
+   * Retorna erro claro se loja offline.
+   */
+  @Post(':id/print')
+  printRemote(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) imprime remotamente');
+    }
+    return this.svc.triggerRemotePrint(id);
+  }
 }

@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 
@@ -48,7 +48,9 @@ interface PickDetail {
 
 export default function ImprimirCupomPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params.id as string;
+  const autoprint = searchParams?.get('autoprint') === '1';
   const [pick, setPick] = useState<PickDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,26 +60,44 @@ export default function ImprimirCupomPage() {
       .catch((e) => setError(e.message));
   }, [id]);
 
-  // Quando os dados carregam, dispara a impressão
+  // Quando os dados carregam, dispara a impressão.
+  // Se vier ?autoprint=1 E o Electron estiver disponível (silentPrintHTML),
+  // imprime SILENCIOSO na térmica configurada (sem preview). Senão faz window.print() normal.
   useEffect(() => {
     if (!pick) return;
-    const t = setTimeout(() => {
-      window.print();
+    const t = setTimeout(async () => {
+      const electron = (window as any).electronAPI;
+      if (autoprint && electron?.silentPrintHTML) {
+        try {
+          await electron.silentPrintHTML(document.documentElement.outerHTML);
+        } catch (e) {
+          console.warn('silentPrintHTML falhou, caindo pra window.print():', e);
+          window.print();
+        }
+        // Fecha a janela (hidden ou popup) depois do print silencioso
+        setTimeout(() => {
+          try { window.close(); } catch {}
+        }, 500);
+      } else {
+        window.print();
+      }
     }, 250);
     return () => clearTimeout(t);
-  }, [pick]);
+  }, [pick, autoprint]);
 
   // Após print (ou cancelamento), fecha a janela
   useEffect(() => {
     function handleAfterPrint() {
-      // Fecha somente se foi aberto via window.open (popup)
+      // Fecha somente se foi aberto via window.open (popup) OU se for autoprint (hidden win)
       setTimeout(() => {
-        if (window.opener) window.close();
+        if (window.opener || autoprint) {
+          try { window.close(); } catch {}
+        }
       }, 300);
     }
     window.addEventListener('afterprint', handleAfterPrint);
     return () => window.removeEventListener('afterprint', handleAfterPrint);
-  }, []);
+  }, [autoprint]);
 
   if (error) {
     return (

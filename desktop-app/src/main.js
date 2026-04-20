@@ -311,6 +311,51 @@ ipcMain.handle('flowops:silent-print', async (_evt, html) => {
   }
 });
 
+/**
+ * Impressão silenciosa VIA URL — usado quando a matriz dispara impressão remota.
+ * Abre hidden BrowserWindow, carrega a URL, espera a página sinalizar pronto
+ * (ou timeout de 6s), imprime silenciosamente e destrói a janela.
+ *
+ * A URL pode ser relativa ('/minha-loja/imprimir/...') → resolve em cima da URL
+ * base configurada no electron-store.
+ */
+ipcMain.handle('flowops:silent-print-url', async (_evt, inputUrl) => {
+  if (!inputUrl || typeof inputUrl !== 'string') {
+    return { ok: false, error: 'URL vazia' };
+  }
+  // Resolve URL relativa contra a base configurada
+  let absoluteUrl = inputUrl;
+  if (inputUrl.startsWith('/')) {
+    const base = (store.get('url') || '').replace(/\/minha-loja.*$/, '');
+    absoluteUrl = base + inputUrl;
+  }
+  const win = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      // Compartilha sessão com a janela principal → localStorage (JWT) disponível
+      partition: 'persist:default',
+    },
+  });
+  try {
+    await win.loadURL(absoluteUrl);
+    // Espera a página terminar de hidratar + renderizar dados fetchados.
+    // A página imprimir/[id] já chama window.electronAPI.silentPrintHTML() sozinha
+    // quando tem ?autoprint=1 — então NÃO imprimimos aqui, só deixamos a página fazer.
+    // Só usamos esse handler pra: abrir invisível + garantir que fecha.
+    // Timeout de segurança pra garantir que não fica janela órfã.
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    try { win.destroy(); } catch {}
+  }
+});
+
 ipcMain.handle('flowops:list-printers', async () => {
   if (!mainWindow) return [];
   try {

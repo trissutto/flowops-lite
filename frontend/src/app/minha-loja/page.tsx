@@ -214,10 +214,33 @@ export default function MinhaLojaPage() {
       );
     };
 
+    // Impressão remota disparada pela matriz: abre hidden window (Electron)
+    // ou janela pop-up (browser) apontando pro cupom com ?autoprint=1.
+    // A página de impressão se auto-imprime e se fecha.
+    const onPrintRequest = (payload: { pickOrderId: string; url: string }) => {
+      if (!payload?.url) return;
+      const absolute = payload.url.startsWith('http')
+        ? payload.url
+        : window.location.origin + payload.url;
+      // Se estiver no Electron, usa o IPC que abre hidden window silenciosa
+      const electron = (window as any).electronAPI;
+      if (electron?.silentPrintUrl) {
+        electron.silentPrintUrl(absolute).catch((e: any) => {
+          console.warn('silentPrintUrl falhou:', e);
+          window.open(absolute, 'flowops-print', 'width=400,height=600');
+        });
+      } else {
+        // Browser normal: abre janela popup (vai mostrar preview do browser)
+        window.open(absolute, 'flowops-print', 'width=400,height=600');
+      }
+      pushToast(`🖨️ Imprimindo pedido #${payload.pickOrderId.slice(0, 6)}...`);
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
     socket.on('pick-order:status', onStatus);
+    socket.on('pick-order:print', onPrintRequest);
     if (socket.connected) setConnected(true);
 
     return () => {
@@ -225,6 +248,7 @@ export default function MinhaLojaPage() {
       socket.off('disconnect', onDisconnect);
       socket.off('pick-order:new', onNew);
       socket.off('pick-order:status', onStatus);
+      socket.off('pick-order:print', onPrintRequest);
     };
   }, [me]);
 

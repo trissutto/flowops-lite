@@ -127,6 +127,9 @@ export default function PedidoDetailPage() {
     reason?: string;
     message?: string;
   } | null>(null);
+  // Impressão remota: state por pickOrderId
+  const [printState, setPrintState] = useState<Record<string, 'idle' | 'sending' | 'sent' | 'error'>>({});
+  const [printError, setPrintError] = useState<Record<string, string>>({});
 
   useEffect(() => { load(); /* eslint-disable-line */ }, [wcId]);
 
@@ -316,6 +319,36 @@ export default function PedidoDetailPage() {
       } catch (e: any) {
         console.warn('Falha ao atualizar status pra separacao:', e.message);
       }
+    }
+  }
+
+  /**
+   * Dispara impressão remota na térmica da loja.
+   * Backend valida presença → emite socket → Electron da loja imprime silencioso.
+   * Se loja offline, retorna erro claro.
+   */
+  async function sendPrintRemote(pickOrderId: string, storeName: string) {
+    setPrintState((s) => ({ ...s, [pickOrderId]: 'sending' }));
+    setPrintError((s) => ({ ...s, [pickOrderId]: '' }));
+    try {
+      const res = await api<{
+        ok: boolean;
+        sent: boolean;
+        storeId: string;
+        storeName: string | null;
+        reason?: string;
+      }>(`/pick-orders/${pickOrderId}/print`, { method: 'POST' });
+      if (res.sent) {
+        setPrintState((s) => ({ ...s, [pickOrderId]: 'sent' }));
+        setFlash(`🖨️ Impressão disparada pra ${res.storeName || storeName}`);
+        setTimeout(() => setFlash(null), 4000);
+      } else {
+        setPrintState((s) => ({ ...s, [pickOrderId]: 'error' }));
+        setPrintError((s) => ({ ...s, [pickOrderId]: res.reason || 'Falha desconhecida' }));
+      }
+    } catch (e: any) {
+      setPrintState((s) => ({ ...s, [pickOrderId]: 'error' }));
+      setPrintError((s) => ({ ...s, [pickOrderId]: e.message || 'Erro de rede' }));
     }
   }
 

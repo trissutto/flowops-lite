@@ -439,4 +439,60 @@ export class PickOrdersService {
       wcSyncWarning,
     };
   }
+
+  /**
+   * Matriz dispara impressão remota. Emite socket pra loja dona do pick-order.
+   * O Electron da loja (em /minha-loja) recebe o evento e abre uma janela hidden
+   * apontando pra /minha-loja/imprimir/{id}?autoprint=1 — essa página chama
+   * window.electronAPI.silentPrintHTML() e se fecha.
+   *
+   * Falha rápido se:
+   *  - pick-order não existe
+   *  - loja não está online (Electron fechado / PC desligado)
+   */
+  async triggerRemotePrint(pickOrderId: string): Promise<{
+    ok: boolean;
+    sent: boolean;
+    storeId: string;
+    storeName: string | null;
+    reason?: string;
+  }> {
+    const pick = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: { store: { select: { id: true, name: true, code: true } } },
+    });
+    if (!pick) throw new NotFoundException('Pick-order não encontrado');
+
+    const storeId = pick.storeId;
+    const storeName = pick.store?.name ?? null;
+
+    if (!this.gateway.isStoreOnline(storeId)) {
+      this.logger.warn(
+        `[print-remote] loja ${storeName || storeId} offline — Electron não conectado`,
+      );
+      return {
+        ok: false,
+        sent: false,
+        storeId,
+        storeName,
+        reason: 'Loja offline — Electron não está conectado. Verifique se o computador da loja está ligado e com LURDS ORDER ONE aberto.',
+      };
+    }
+
+    this.gateway.emitPrintRequest(storeId, {
+      pickOrderId,
+      url: `/minha-loja/imprimir/${pickOrderId}?autoprint=1`,
+    });
+
+    this.logger.log(
+      `[print-remote] disparado pro Electron da loja ${storeName || storeId} (pick ${pickOrderId})`,
+    );
+
+    return {
+      ok: true,
+      sent: true,
+      storeId,
+      storeName,
+    };
+  }
 }
