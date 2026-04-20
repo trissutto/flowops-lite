@@ -27,7 +27,7 @@ import Logo from '@/components/Logo';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
-  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Hourglass,
+  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -526,11 +526,15 @@ export default function MinhaLojaPage() {
             </button>
           </div>
         </div>
-        {/* Contadores */}
-        <div className="px-4 pb-3 max-w-3xl mx-auto flex gap-2 text-xs">
+        {/* Contadores — 3 grandes, fácil bater o olho e ver o volume */}
+        <div className="px-4 pb-3 max-w-3xl mx-auto grid grid-cols-3 gap-2">
           <Counter label="Novos" count={countByStatus.new} color="bg-amber-400 text-amber-950" />
           <Counter label="Separando" count={countByStatus.separating} color="bg-blue-400 text-blue-950" />
-          <Counter label="Prontos" count={countByStatus.ready} color="bg-emerald-400 text-emerald-950" />
+          <Counter
+            label="Pronto p/ postar"
+            count={countByStatus.separated + countByStatus.ready}
+            color="bg-emerald-400 text-emerald-950"
+          />
         </div>
       </header>
 
@@ -625,20 +629,89 @@ function openPrintWindow(pickOrderId: string) {
 }
 
 function Counter({ label, count, color }: { label: string; count: number; color: string }) {
+  const hasCount = count > 0;
   return (
-    <div className={`flex-1 rounded px-2 py-1 font-medium ${color}`}>
-      <span className="text-base font-bold">{count}</span>{' '}
-      <span className="opacity-80">{label}</span>
+    <div
+      className={`flex-1 rounded-lg px-3 py-2 font-medium transition-all ${color} ${
+        hasCount ? 'shadow-md ring-2 ring-white/30' : 'opacity-70'
+      }`}
+    >
+      <div className="text-2xl font-extrabold leading-none">{count}</div>
+      <div className="text-[11px] uppercase tracking-wide opacity-90 mt-0.5">{label}</div>
     </div>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-500">
-      <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-400 mb-2" />
-      <p className="font-medium">Nenhum pedido pendente</p>
-      <p className="text-sm mt-1">Quando o escritório confirmar um pedido, ele aparece aqui.</p>
+    <div className="bg-white rounded-xl border-2 border-dashed border-slate-300 p-10 text-center">
+      <div className="w-20 h-20 mx-auto rounded-full bg-emerald-50 flex items-center justify-center mb-3">
+        <CheckCircle2 className="w-10 h-10 text-emerald-500" />
+      </div>
+      <p className="font-bold text-lg text-slate-800">Tudo em dia por aqui!</p>
+      <p className="text-sm mt-1 text-slate-500">
+        Assim que um novo pedido chegar da matriz, ele aparece automaticamente.
+      </p>
+    </div>
+  );
+}
+
+/** Barrinha lateral colorida do card conforme status — tipo "semáforo". */
+function statusAccent(s: PickStatus): string {
+  switch (s) {
+    case 'new': return 'bg-amber-500';
+    case 'separating': return 'bg-blue-500';
+    case 'separated':
+    case 'ready': return 'bg-emerald-500';
+    case 'shipped': return 'bg-slate-400';
+  }
+}
+
+/** Passos visuais do pipeline — mostra o progresso mesmo sem texto. */
+function PipelineSteps({ status }: { status: PickStatus }) {
+  const steps = [
+    { key: 'new', label: 'Recebido' },
+    { key: 'separating', label: 'Separando' },
+    { key: 'separated', label: 'Pronto' },
+    { key: 'shipped', label: 'Enviado' },
+  ] as const;
+  const order = ['new', 'separating', 'separated', 'ready', 'shipped'];
+  const currentIdx = order.indexOf(status);
+  const stepIdx = (k: string) => {
+    if (k === 'separated') {
+      return status === 'separated' || status === 'ready' || status === 'shipped' ? 2 : -1;
+    }
+    return order.indexOf(k);
+  };
+  return (
+    <div className="flex items-center gap-1 px-3 pt-2 pb-1">
+      {steps.map((s, i) => {
+        const reachedIdx = s.key === 'separated'
+          ? (status === 'separated' || status === 'ready' || status === 'shipped' ? 99 : -1)
+          : order.indexOf(s.key);
+        const done = reachedIdx !== -1 && reachedIdx <= currentIdx
+          || (s.key === 'separated' && (status === 'separated' || status === 'ready' || status === 'shipped'))
+          || (s.key === 'shipped' && status === 'shipped');
+        const isCurrent =
+          (s.key === status) ||
+          (s.key === 'separated' && status === 'ready');
+        return (
+          <div key={s.key} className="flex-1 flex flex-col items-center gap-0.5">
+            <div
+              className={`w-full h-1.5 rounded-full transition-colors ${
+                done ? 'bg-emerald-500' : 'bg-slate-200'
+              }`}
+            />
+            <span
+              className={`text-[10px] uppercase tracking-wide ${
+                isCurrent ? 'text-emerald-700 font-bold' : done ? 'text-emerald-600' : 'text-slate-400'
+              }`}
+            >
+              {s.label}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -666,14 +739,18 @@ function PickOrderCard({
 
   return (
     <article
-      className={`bg-white rounded-lg border shadow-sm ${
+      className={`bg-white rounded-xl border shadow-md overflow-hidden flex ${
         isTransfer ? 'border-orange-400 ring-2 ring-orange-200' : 'border-slate-200'
       }`}
       onClick={onSeen}
     >
+      {/* Faixa lateral colorida conforme status — semáforo visual de 6px */}
+      <div className={`w-1.5 flex-shrink-0 ${statusAccent(status)}`} />
+
+      <div className="flex-1 min-w-0">
       {/* Banner TRANSFERÊNCIA — alerta visual forte quando não é venda direta */}
       {isTransfer && (
-        <div className="bg-orange-500 text-white px-3 py-2 rounded-t-lg">
+        <div className="bg-orange-500 text-white px-4 py-2.5">
           <div className="font-bold text-sm flex items-center gap-2">
             🚚 TRANSFERÊNCIA PRA LOJA {row.transferToStoreName ?? row.transferToStoreCode}
           </div>
@@ -683,51 +760,65 @@ function PickOrderCard({
         </div>
       )}
 
-      {/* Header do card */}
-      <header className="flex items-center justify-between p-3 border-b border-slate-100">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="font-bold text-slate-900">#{order.wcOrderNumber ?? order.wcOrderId ?? '—'}</span>
+      {/* Pipeline steps — mostra o progresso visualmente */}
+      <PipelineSteps status={status} />
+
+      {/* Header do card — número do pedido BEM grande */}
+      <header className="flex items-start justify-between px-4 pt-2 pb-3 border-b border-slate-100">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-2xl font-black text-slate-900 tracking-tight">
+              #{order.wcOrderNumber ?? order.wcOrderId ?? '—'}
+            </span>
             <span
-              className={`text-xs px-2 py-0.5 rounded border ${STATUS_COLOR[status]}`}
+              className={`text-xs font-bold uppercase tracking-wide px-2 py-1 rounded border ${STATUS_COLOR[status]}`}
             >
               {STATUS_LABEL[status]}
             </span>
             {isTransfer && (
-              <span className="text-xs px-2 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300 font-semibold">
+              <span className="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800 border border-orange-300 font-bold uppercase">
                 Transferência
               </span>
             )}
           </div>
-          <div className="text-sm text-slate-600 truncate">{customerName ?? '—'}</div>
+          <div className="text-sm text-slate-700 font-medium mt-1 truncate">
+            {customerName ?? '—'}
+          </div>
         </div>
-        <div className="text-right text-xs text-slate-500">
+        <div className="text-right text-xs text-slate-500 ml-2 flex-shrink-0">
           {order.totalAmount != null && (
-            <div className="font-semibold text-slate-800">
+            <div className="text-base font-bold text-slate-900">
               R$ {Number(order.totalAmount).toFixed(2)}
             </div>
           )}
-          <div className="flex items-center gap-1 mt-1">
+          <div className="flex items-center gap-1 mt-1 justify-end">
             <Clock className="w-3 h-3" />
             <span>{formatRelativeTime(row.createdAt)}</span>
           </div>
         </div>
       </header>
 
-      {/* Itens */}
-      <section className="p-3 space-y-1 text-sm">
+      {/* Itens — qty em badge circular de destaque */}
+      <section className="px-4 py-3 space-y-2 text-sm">
+        <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-1">
+          Peças ({items.reduce((s, i) => s + (i.quantity ?? 0), 0)})
+        </div>
         {items.length === 0 ? (
           <div className="text-slate-400 italic">Sem itens atribuídos</div>
         ) : (
           items.map((it, idx) => (
-            <div key={it.id ?? `${it.sku}-${idx}`} className="flex gap-2">
-              <span className="font-mono text-xs bg-slate-100 px-1 rounded shrink-0 self-start mt-0.5">
+            <div key={it.id ?? `${it.sku}-${idx}`} className="flex gap-3 items-start">
+              <span className="inline-flex items-center justify-center min-w-[2.25rem] h-9 px-2 rounded-full bg-slate-900 text-white font-extrabold text-sm shrink-0">
                 {it.quantity}x
               </span>
-              <div className="flex-1">
-                <div className="text-slate-800">{it.productName ?? it.sku}</div>
-                {it.variant && <div className="text-xs text-slate-500">{it.variant}</div>}
-                <div className="text-xs text-slate-400">SKU: {it.sku}</div>
+              <div className="flex-1 min-w-0">
+                <div className="text-slate-900 font-semibold leading-tight">
+                  {it.productName ?? it.sku}
+                </div>
+                {it.variant && (
+                  <div className="text-xs text-slate-500 mt-0.5">{it.variant}</div>
+                )}
+                <div className="text-xs text-slate-400 font-mono mt-0.5">SKU: {it.sku}</div>
               </div>
             </div>
           ))
@@ -784,47 +875,52 @@ function PickOrderCard({
 
       {/* Rastreio (se já enviado) */}
       {status === 'shipped' && row.trackingCode && (
-        <section className="px-3 pb-2 text-sm bg-slate-50">
-          <div className="font-medium text-slate-700">Rastreio</div>
-          <div className="font-mono text-slate-900">{row.trackingCode}</div>
-          <div className="text-xs text-slate-500">{row.carrier}</div>
+        <section className="mx-4 mb-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+          <div className="text-[11px] uppercase tracking-wide font-bold text-emerald-800 flex items-center gap-1">
+            <Truck className="w-3 h-3" /> Rastreio
+          </div>
+          <div className="font-mono text-lg font-bold text-emerald-900 mt-0.5">
+            {row.trackingCode}
+          </div>
+          <div className="text-xs text-emerald-700">{row.carrier}</div>
         </section>
       )}
 
-      {/* Ações */}
-      <footer className="p-3 border-t border-slate-100 flex flex-col sm:flex-row gap-2">
+      {/* Ações — botões gigantes, fáceis de acertar com dedo */}
+      <footer className="p-3 border-t border-slate-100 bg-slate-50/60 flex flex-col sm:flex-row gap-2">
         {status === 'new' && (
           <button
             onClick={(e) => { e.stopPropagation(); onStart(); }}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded flex items-center justify-center gap-2"
+            className="flex-1 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
-            <PlayCircle className="w-5 h-5" /> Iniciar Separação
+            <PlayCircle className="w-6 h-6" /> Iniciar Separação
           </button>
         )}
         {status === 'separating' && (
           <button
             onClick={(e) => { e.stopPropagation(); onBip(); }}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded flex items-center justify-center gap-2"
+            className="flex-1 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
-            <Barcode className="w-5 h-5" /> Bipar peças
+            <Barcode className="w-6 h-6" /> Bipar peças
           </button>
         )}
         {(status === 'separated' || status === 'ready') && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
-            className="flex-1 bg-slate-900 hover:bg-black text-white font-semibold py-3 rounded flex items-center justify-center gap-2"
+            className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold py-4 rounded-lg flex items-center justify-center gap-2 text-base shadow-md transition"
           >
-            <Truck className="w-5 h-5" /> Enviar (rastreio)
+            <Truck className="w-6 h-6" /> Enviar c/ rastreio
           </button>
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onPrint(); }}
-          className="sm:w-auto bg-slate-200 hover:bg-slate-300 text-slate-800 font-medium py-3 px-4 rounded flex items-center justify-center gap-2"
-          title="Imprimir"
+          className="sm:w-auto bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-800 font-semibold py-4 px-5 rounded-lg flex items-center justify-center gap-2 border-2 border-slate-300 transition"
+          title="Imprimir cupom"
         >
-          <Printer className="w-4 h-4" /> Imprimir
+          <Printer className="w-5 h-5" /> Imprimir
         </button>
       </footer>
+      </div>
     </article>
   );
 }
