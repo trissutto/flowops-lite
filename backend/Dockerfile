@@ -22,5 +22,7 @@ RUN echo "==> conteudo de dist apos build:" && ls -la dist && find dist -name 'm
 
 EXPOSE 3001
 
-# 5) Script shell que acha o main.js onde estiver e executa
-CMD sh -c "MAIN=\$(find dist -name 'main.js' -not -path '*/node_modules/*' | head -1) && echo \"==> iniciando: \$MAIN\" && node \"\$MAIN\""
+# 5) No start: aplica schema no Postgres (db push) + sobe API
+#    --accept-data-loss=false (default) impede drops destrutivos
+#    --skip-generate evita regerar client (já gerado no build)
+CMD sh -c "echo '==> aplicando schema Prisma no Postgres...' && npx prisma db push --skip-generate && MAIN=\$(find dist -name 'main.js' -not -path '*/node_modules/*' | head -1) && echo \"==> iniciando: \$MAIN\" && node \"\$MAIN\""
