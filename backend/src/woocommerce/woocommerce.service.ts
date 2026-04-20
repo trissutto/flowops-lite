@@ -66,7 +66,12 @@ export class WooCommerceService {
   ) {
     const meta: Array<{ key: string; value: string }> = [];
     if (payload.trackingNumber !== undefined) {
+      // WooCommerce Shipment Tracking (Woo oficial)
       meta.push({ key: '_tracking_number', value: payload.trackingNumber });
+      // Correios (Claudio Sanches / Magenteiro) — o plugin mais comum no BR
+      meta.push({ key: '_correios_tracking_code', value: payload.trackingNumber });
+      // Melhor Envio
+      meta.push({ key: '_melhorenvio_tracking', value: payload.trackingNumber });
     }
     if (payload.trackingCarrier !== undefined) {
       meta.push({ key: '_tracking_carrier', value: payload.trackingCarrier });
