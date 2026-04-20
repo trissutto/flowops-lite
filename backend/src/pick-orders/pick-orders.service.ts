@@ -152,15 +152,13 @@ export class PickOrdersService {
             create: [
               {
                 sku: 'TESTE-SKU-1',
-                productName: 'Vestido Plus Size Exemplo',
-                variant: 'Tamanho G',
+                productName: 'Vestido Plus Size Exemplo (Tam G)',
                 quantity: 2,
                 assignedStoreId: store.id,
               },
               {
                 sku: 'TESTE-SKU-2',
-                productName: 'Blusa Manga Longa',
-                variant: 'Tamanho GG',
+                productName: 'Blusa Manga Longa (Tam GG)',
                 quantity: 1,
                 assignedStoreId: store.id,
               },
