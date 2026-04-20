@@ -6,12 +6,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name);
 
   async onModuleInit() {
-    // IMPORTANTE: connect em background. NAO bloquear o boot do Nest.
-    // Se o Postgres do Railway estiver lento pra responder, o await trava
-    // o startup e o healthcheck falha em 120s.
     this.$connect()
       .then(() => this.logger.log('Prisma conectado ao Postgres'))
-      .catch((e) => this.logger.warn(`Prisma nao conectou: ${(e as Error).message}`));
+      .catch((e) => this.logger.warn('Prisma nao conectou: ' + (e as Error).message));
   }
 
   async onModuleDestroy() {
