@@ -449,9 +449,11 @@ export default function BipModal({
                         <div className="font-medium text-slate-900 truncate">
                           {it.productName ?? '(sem descrição)'}
                         </div>
-                        {!it.ean && (
+                        {/* Só avisa se NEM EAN NEM SKU funcionam como barcode —
+                            na prática quase nunca acontece (SKU sempre é variante). */}
+                        {!it.ean && (!it.eanVariants || it.eanVariants.length === 0) && (
                           <div className="text-xs text-red-600 mt-1">
-                            ⚠ Sem EAN cadastrado no ERP — avisa o admin
+                            ⚠ Sem código cadastrado — avisa o admin
                           </div>
                         )}
                       </div>

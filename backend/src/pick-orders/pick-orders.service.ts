@@ -4,22 +4,25 @@ import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 
-// Status do pick-order:
+// Status LOGÍSTICO do pick-order (controlado pela loja):
 //   new          → chegou, filial não começou
 //   separating   → filial clicou "Iniciar Separação", bipagem em andamento
-//   separated    → filial bipou 100%, aguardando matriz aprovar baixa
-//   ready        → matriz aprovou baixa (estoque baixado no ERP), pronto pra postar
+//   separated    → filial bipou 100% → já pode postar (rastreio liberado)
+//   ready        → (legado) mantido por compatibilidade com dados antigos
 //   shipped      → filial postou e adicionou rastreio
+//
+// APROVAÇÃO DE BAIXA (matriz) = campo debitApprovedAt no PickOrder, INDEPENDENTE.
+// Loja não espera matriz pra postar. Matriz aprova em paralelo (pode ser depois de shipped).
 export type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
 const VALID_STATUSES: PickStatus[] = ['new', 'separating', 'separated', 'ready', 'shipped'];
 
-// Transições permitidas (não deixa voltar um status atrás, por segurança)
+// Transições permitidas. Agora separated pode ir direto pra shipped (sem esperar matriz).
 const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = {
-  new: ['separating', 'ready'],       // pode pular "separating" se quiser marcar já pronto
-  separating: ['separated', 'ready'], // ready direto é fallback manual do admin (pula bipagem)
-  separated: ['ready', 'separating'], // matriz aprova → ready; matriz rejeita → volta pra separating
-  ready: ['shipped'],
-  shipped: [],                        // ponto final
+  new: ['separating', 'separated', 'ready', 'shipped'], // admin pode pular tudo em casos raros
+  separating: ['separated', 'ready', 'shipped'],        // bipou ou marcou pronto
+  separated: ['shipped', 'separating', 'ready'],        // posta direto (rastreio), ou volta pra revisar
+  ready: ['shipped'],                                   // legado
+  shipped: [],                                          // ponto final
 };
 
 /**
@@ -314,7 +317,12 @@ export class PickOrdersService {
    */
   async listPendingApproval() {
     const rows = await this.prisma.pickOrder.findMany({
-      where: { status: 'separated' },
+      where: {
+        // Qualquer coisa já separada mas ainda sem baixa aprovada — inclui shipped
+        // (loja pode postar antes da matriz aprovar baixa no novo fluxo).
+        status: { in: ['separated', 'ready', 'shipped'] },
+        debitApprovedAt: null,
+      } as any,
       orderBy: [{ updatedAt: 'asc' }],
       include: {
         store: { select: { id: true, code: true, name: true, city: true } },
@@ -373,11 +381,19 @@ export class PickOrdersService {
   async approveDebit(pickOrderId: string, operatorUserId: string) {
     const po = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
-      select: { id: true, status: true, storeId: true, orderId: true },
+      select: { id: true, status: true, storeId: true, orderId: true, debitApprovedAt: true } as any,
     });
     if (!po) throw new NotFoundException('Pick-order não encontrado');
-    if (po.status !== 'separated') {
-      throw new BadRequestException(`Status atual é "${po.status}" — só aprova de "separated"`);
+    // Aceita aprovar em qualquer status DEPOIS que a loja bipou (separated, ready, shipped).
+    // Nunca antes — não dá pra aprovar baixa sem validação de itens.
+    const okStatuses: PickStatus[] = ['separated', 'ready', 'shipped'];
+    if (!okStatuses.includes(po.status as PickStatus)) {
+      throw new BadRequestException(
+        `Status atual é "${po.status}" — só aprova depois da separação bipada`,
+      );
+    }
+    if ((po as any).debitApprovedAt) {
+      throw new BadRequestException('Baixa já foi aprovada anteriormente');
     }
 
     const items = await this.prisma.orderItem.findMany({
@@ -402,20 +418,19 @@ export class PickOrdersService {
       },
     });
 
+    // Só seta o flag de aprovação. NÃO mexe em status logístico.
     const updated = await this.prisma.pickOrder.update({
       where: { id: pickOrderId },
-      data: { status: 'ready' },
-    });
-
-    // Notifica a loja em tempo real (card muda pra "Pronto" → botão Enviar libera)
-    this.gateway.emitPickOrderStatus(po.storeId, {
-      id: updated.id,
-      status: 'ready',
+      data: {
+        debitApprovedAt: new Date(),
+        debitApprovedBy: operatorUserId,
+      } as any,
     });
 
     return {
       id: updated.id,
       status: updated.status,
+      debitApprovedAt: (updated as any).debitApprovedAt,
       shadowMode: true,
       itemsCount: items.length,
     };
@@ -428,11 +443,17 @@ export class PickOrdersService {
   async rejectDebit(pickOrderId: string, operatorUserId: string, reason: string) {
     const po = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
-      select: { id: true, status: true, storeId: true },
+      select: { id: true, status: true, storeId: true, debitApprovedAt: true } as any,
     });
     if (!po) throw new NotFoundException('Pick-order não encontrado');
-    if (po.status !== 'separated') {
-      throw new BadRequestException(`Status atual é "${po.status}" — só rejeita de "separated"`);
+    // Só rejeita se loja ainda não postou (não faz sentido rejeitar algo que já foi).
+    if (po.status === 'shipped') {
+      throw new BadRequestException(
+        'Pedido já foi enviado — não dá pra rejeitar. Use ajuste manual no ERP.',
+      );
+    }
+    if (po.status !== 'separated' && po.status !== 'ready') {
+      throw new BadRequestException(`Status atual é "${po.status}" — só rejeita depois da bipagem`);
     }
 
     await this.prisma.integrationLog.create({

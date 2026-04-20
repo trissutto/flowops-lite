@@ -94,14 +94,14 @@ interface MeProfile {
 const STATUS_LABEL: Record<PickStatus, string> = {
   new: 'Novo',
   separating: 'Separando',
-  separated: 'Aguardando matriz',
+  separated: 'Pronto p/ postar',
   ready: 'Pronto',
   shipped: 'Enviado',
 };
 const STATUS_COLOR: Record<PickStatus, string> = {
   new: 'bg-amber-100 text-amber-900 border-amber-300',
   separating: 'bg-blue-100 text-blue-900 border-blue-300',
-  separated: 'bg-purple-100 text-purple-900 border-purple-300',
+  separated: 'bg-emerald-100 text-emerald-900 border-emerald-300',
   ready: 'bg-emerald-100 text-emerald-900 border-emerald-300',
   shipped: 'bg-slate-200 text-slate-700 border-slate-300',
 };
@@ -809,13 +809,7 @@ function PickOrderCard({
             <Barcode className="w-5 h-5" /> Bipar peças
           </button>
         )}
-        {status === 'separated' && (
-          <div className="flex-1 bg-purple-50 border border-purple-300 text-purple-800 font-medium py-3 rounded flex items-center justify-center gap-2 text-sm">
-            <Hourglass className="w-5 h-5" />
-            Aguardando matriz aprovar a baixa
-          </div>
-        )}
-        {status === 'ready' && (
+        {(status === 'separated' || status === 'ready') && (
           <button
             onClick={(e) => { e.stopPropagation(); onShip(); }}
             className="flex-1 bg-slate-900 hover:bg-black text-white font-semibold py-3 rounded flex items-center justify-center gap-2"

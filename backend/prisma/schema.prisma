@@ -116,6 +116,10 @@ model PickOrder {
   isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
   transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)
   customerSnapshot     String? @map("customer_snapshot")                        // JSON com nome/cpf/email/tel — cliente que vai retirar
+  // ── Aprovação de baixa (matriz) — independente do status logístico ──
+  // Loja posta (shipped + tracking) sem esperar esse campo. Matriz aprova em paralelo.
+  debitApprovedAt      DateTime? @map("debit_approved_at")
+  debitApprovedBy      String?   @map("debit_approved_by")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
