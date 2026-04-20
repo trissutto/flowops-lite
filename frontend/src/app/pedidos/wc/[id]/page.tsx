@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
 
@@ -93,6 +93,14 @@ export default function PedidoDetailPage() {
   const [sepError, setSepError] = useState<string | null>(null);
   /** Override manual: storeId → novo storeId selecionado */
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  // Confirmação (cria pick-order e dispara socket pra loja)
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [confirmResult, setConfirmResult] = useState<{
+    ok: boolean;
+    pickOrders?: Array<{ id: string; status: string; storeCode: string; storeName: string }>;
+    reason?: string;
+    message?: string;
+  } | null>(null);
 
   useEffect(() => { load(); /* eslint-disable-line */ }, [wcId]);
 
@@ -196,6 +204,59 @@ export default function PedidoDetailPage() {
       setSepError(e.message);
     } finally {
       setSepLoading(false);
+    }
+  }
+
+  /**
+   * CONFIRMA a separação no sistema: cria pick-order e dispara o socket
+   * pra loja receber em tempo real no app /minha-loja.
+   * Diferente do "Enviar WhatsApp" — esse aqui é o que faz o card aparecer
+   * no PC da loja com toast/notification.
+   */
+  async function confirmSeparation() {
+    if (!confirm(
+      'Vai criar a ordem de separação e mandar pro app das lojas envolvidas. Confirma?'
+    )) return;
+    setConfirmLoading(true);
+    setConfirmResult(null);
+    setSepError(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        pickOrders?: Array<{ id: string; status: string; storeCode: string; storeName: string }>;
+        reason?: string;
+        message?: string;
+      }>(`/orders/wc/${wcId}/confirm-separation`, { method: 'POST' });
+      setConfirmResult(res);
+      if (res.ok) {
+        setFlash(
+          `✓ Pedido enviado pra ${res.pickOrders?.length ?? 0} loja(s). ` +
+          `Já apareceu no app /minha-loja delas.`,
+        );
+        // Atualiza status no WC pra "separacao" também (best-effort)
+        if (order && order.status !== 'separacao') {
+          try {
+            await api(`/orders/wc/${wcId}`, {
+              method: 'PATCH',
+              body: JSON.stringify({
+                status: 'separacao',
+                addNote: {
+                  text: `Separação confirmada via FlowOps. Distribuído pra: ${res.pickOrders?.map((p) => p.storeName).join(', ')}.`,
+                  notifyCustomer: false,
+                },
+              }),
+            });
+            await load();
+          } catch (e: any) {
+            console.warn('Falha ao mudar status pra separacao no WC:', e.message);
+          }
+        }
+      }
+      setTimeout(() => setFlash(null), 5000);
+    } catch (e: any) {
+      setSepError(`Erro ao confirmar: ${e.message}`);
+    } finally {
+      setConfirmLoading(false);
     }
   }
 
@@ -421,6 +482,51 @@ export default function PedidoDetailPage() {
               )}
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
+
+            {/* BOTÃO PRINCIPAL — Confirma e dispara socket pras lojas */}
+            {separation.success && (
+              <div className="bg-gradient-to-r from-brand to-brand-dark rounded-lg p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
+                <div className="text-white">
+                  <div className="font-bold text-base flex items-center gap-2">
+                    <Zap className="w-5 h-5" />
+                    Confirmar separação
+                  </div>
+                  <div className="text-xs opacity-90 mt-0.5">
+                    Cria a ordem no sistema e <b>dispara alerta no PC</b> da{separation.groups.length > 1 ? 's lojas' : ' loja'}{' '}
+                    {separation.groups.map((g) => g.storeName).join(', ')}.
+                  </div>
+                </div>
+                <button
+                  onClick={confirmSeparation}
+                  disabled={confirmLoading || (confirmResult?.ok === true)}
+                  className="px-5 py-3 bg-white text-brand rounded font-semibold hover:bg-slate-100 disabled:opacity-60 flex items-center gap-2 shadow"
+                >
+                  {confirmLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  {confirmResult?.ok ? 'Já confirmado ✓' : confirmLoading ? 'Confirmando...' : 'Confirmar e enviar pras lojas'}
+                </button>
+              </div>
+            )}
+
+            {/* Resultado da confirmação */}
+            {confirmResult?.ok && confirmResult.pickOrders && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded p-3 mb-4 text-sm">
+                <div className="font-semibold text-emerald-800 flex items-center gap-2">
+                  <Check className="w-4 h-4" /> Distribuído pra {confirmResult.pickOrders.length} loja(s):
+                </div>
+                <ul className="mt-2 ml-6 list-disc text-emerald-700">
+                  {confirmResult.pickOrders.map((p) => (
+                    <li key={p.id}>
+                      <b>{p.storeName}</b> ({p.storeCode}) — pick-order <span className="font-mono text-xs">{p.id.slice(0, 8)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {confirmResult && !confirmResult.ok && (
+              <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-sm text-red-700">
+                <b>Não foi possível confirmar:</b> {confirmResult.message}
+              </div>
+            )}
 
             {/* Missing (ruptura) */}
             {separation.missing.length > 0 && (

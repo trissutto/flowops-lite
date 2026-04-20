@@ -15,7 +15,7 @@ setlocal EnableDelayedExpansion
 title FlowOps - Teste pick-order
 
 REM >>>>>> AJUSTA AQUI COM A URL DO TEU BACKEND NO RAILWAY <<<<<<
-set "FLOWOPS_API=https://flowops-backend-production.up.railway.app"
+set "FLOWOPS_API=https://flowops-lite-production.up.railway.app"
 
 if "%~1"=="" (
   echo Uso: test-pick-order.bat CODIGO-DA-LOJA

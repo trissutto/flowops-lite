@@ -309,6 +309,61 @@ export class OrdersController {
       },
     });
   }
+
+  /**
+   * CONFIRMA a separação de um pedido WC: persiste localmente, cria pick-orders
+   * pra cada loja roteada e EMITE socket pra elas (faz o card aparecer no app
+   * /minha-loja em tempo real).
+   *
+   * Body opcional:
+   *   - overrides?: { [skuOuStoreIdOriginal]: storeIdNovo }   // pra forçar loja diferente
+   *
+   * Retorna:
+   *   { ok, pickOrders: [{id, storeCode, storeName, items}], orderId }
+   */
+  @Post('wc/:wcId/confirm-separation')
+  async confirmSeparation(@Param('wcId') wcId: string) {
+    const wcOrderId = Number(wcId);
+    const o = await this.wc.getOrder(wcOrderId);
+
+    // 1) Upsert local do pedido (cria Order + items se ainda não existir)
+    const { orderId } = await this.orders.upsertFromWooCommerce(o);
+
+    // 2) Roda o preview oficial (consulta estoque e roteia)
+    const preview = await this.routing.previewRoute(orderId);
+
+    if (!preview.success) {
+      return {
+        ok: false,
+        reason: 'sem-estoque',
+        message: 'Nenhuma loja tem estoque suficiente. Verifica o estoque ou divide manualmente.',
+        missing: preview.missing,
+        orderId,
+      };
+    }
+
+    // 3) Confirma → cria PickOrders + emite socket pras lojas
+    await this.routing.confirmRoute(orderId, preview as any);
+
+    // 4) Re-lê os pick-orders criados pra retornar info detalhada
+    const pickOrders = await this.prisma.pickOrder.findMany({
+      where: { orderId },
+      include: { store: { select: { code: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      ok: true,
+      orderId,
+      strategy: preview.strategy,
+      pickOrders: pickOrders.map((p) => ({
+        id: p.id,
+        status: p.status,
+        storeCode: p.store.code,
+        storeName: p.store.name,
+      })),
+    };
+  }
 }
 
 /**
