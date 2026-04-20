@@ -267,7 +267,7 @@ export default function PedidoDetailPage() {
               body: JSON.stringify({
                 status: 'separacao',
                 addNote: {
-                  text: `Separação confirmada via FlowOps. Distribuído pra: ${res.pickOrders?.map((p) => p.storeName).join(', ')}.`,
+                  text: `Separação confirmada via LURDS ORDER ONE. Distribuído pra: ${res.pickOrders?.map((p) => p.storeName).join(', ')}.`,
                   notifyCustomer: false,
                 },
               }),

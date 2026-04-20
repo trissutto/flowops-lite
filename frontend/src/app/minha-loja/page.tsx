@@ -85,6 +85,8 @@ interface MeProfile {
   email: string;
   role: 'admin' | 'operator' | 'store';
   storeId: string | null;
+  storeCode: string | null;
+  storeName: string | null;
 }
 
 const STATUS_LABEL: Record<PickStatus, string> = {
@@ -112,7 +114,7 @@ export default function MinhaLojaPage() {
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
-  const originalTitleRef = useRef<string>('FlowOps');
+  const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
   // ---------- Auth + initial load ----------
   useEffect(() => {
@@ -130,6 +132,15 @@ export default function MinhaLojaPage() {
           return;
         }
         setMe(profile);
+        // Atualiza document.title com "LURDS ORDER ONE [NOME DA LOJA]"
+        // Aparece na aba do browser E na barra da janela Electron.
+        if (typeof document !== 'undefined') {
+          const fullTitle = profile.storeName
+            ? `LURDS ORDER ONE ${profile.storeName}`
+            : 'LURDS ORDER ONE';
+          document.title = fullTitle;
+          originalTitleRef.current = fullTitle;
+        }
         await loadRows();
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
@@ -245,7 +256,7 @@ export default function MinhaLojaPage() {
     // Notificação do SO
     if (typeof Notification !== 'undefined') {
       const show = () =>
-        new Notification('FlowOps — Pedido Novo', {
+        new Notification('LURDS ORDER ONE — Pedido Novo', {
           body: `Pedido #${orderNumber} chegou pra separar`,
           silent: true,
         });
@@ -373,8 +384,10 @@ export default function MinhaLojaPage() {
           <div className="flex items-center gap-2">
             <Package className="w-6 h-6" />
             <div>
-              <div className="font-bold leading-tight">FlowOps</div>
-              <div className="text-xs opacity-90">Minha Loja</div>
+              <div className="font-bold leading-tight tracking-wide">LURDS ORDER ONE</div>
+              <div className="text-xs opacity-90">
+                {me?.storeName ? me.storeName : 'Minha Loja'}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-3">

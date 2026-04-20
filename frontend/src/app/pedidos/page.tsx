@@ -230,7 +230,7 @@ export default function PedidosPage() {
                     <Link
                       href={`/pedidos/wc/${o.id}`}
                       className="text-brand font-semibold hover:underline"
-                      title="Abrir pedido no FlowOps"
+                      title="Abrir pedido"
                     >
                       #{o.number}
                     </Link>

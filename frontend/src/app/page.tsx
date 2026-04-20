@@ -115,7 +115,7 @@ export default function Dashboard() {
     try {
       const num = o.wcOrderNumber ?? o.number ?? o.id;
       const total = o.totalAmount ?? o.total ?? 0;
-      const n = new Notification('🛍 Novo pedido FlowOps', {
+      const n = new Notification('🛍 Novo pedido LURDS', {
         body: `#${num} — ${o.customerName}\nR$ ${Number(total || 0).toFixed(2)}`,
         tag: `order-${o.id}`,
         requireInteraction: true,
@@ -225,7 +225,7 @@ export default function Dashboard() {
                         <Link
                           href={`/pedidos/wc/${o.id}`}
                           className="text-brand font-semibold hover:underline"
-                          title="Abrir pedido no FlowOps"
+                          title="Abrir pedido"
                         >
                           #{o.number}
                         </Link>

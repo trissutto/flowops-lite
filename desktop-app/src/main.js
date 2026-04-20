@@ -1,8 +1,8 @@
 /**
- * FlowOps Desktop — main process.
+ * LURDS ORDER ONE Desktop — main process.
  *
  * O que faz:
- *  - Abre BrowserWindow apontando pra URL do FlowOps (Vercel) na tela /minha-loja
+ *  - Abre BrowserWindow apontando pra URL do sistema (Vercel) na tela /minha-loja
  *  - Cria tray icon perto do relógio (clicar abre/restaura janela)
  *  - Auto-start com Windows (registra em Run on login)
  *  - Impressão silenciosa (silent print) na térmica padrão da máquina
@@ -32,9 +32,10 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 
-// Argumentos CLI: --flowops-url=http://...
+// Argumentos CLI: --app-url=http://... (ou --flowops-url= legado)
 function parseUrlArg() {
   for (const a of process.argv) {
+    if (a.startsWith('--app-url=')) return a.slice('--app-url='.length);
     if (a.startsWith('--flowops-url=')) return a.slice('--flowops-url='.length);
   }
   return null;
@@ -77,7 +78,7 @@ function createWindow() {
     minHeight: 600,
     show: !startHidden,
     icon: path.join(__dirname, '..', 'build', 'icon.ico'),
-    title: 'FlowOps',
+    title: 'LURDS ORDER ONE',
     backgroundColor: '#0f172a',
     autoHideMenuBar: true,
     webPreferences: {
@@ -136,7 +137,7 @@ function createTray() {
     img = nativeImage.createFromBuffer(Buffer.alloc(0));
   }
   tray = new Tray(img);
-  tray.setToolTip('FlowOps — Pedidos da loja');
+  tray.setToolTip('LURDS ORDER ONE — Pedidos da loja');
   tray.setContextMenu(buildTrayMenu());
 
   tray.on('click', () => {
@@ -151,7 +152,7 @@ function createTray() {
 
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
-    { label: 'Abrir FlowOps', click: () => showWindow() },
+    { label: 'Abrir LURDS ORDER ONE', click: () => showWindow() },
     { type: 'separator' },
     {
       label: 'Iniciar com o Windows',
@@ -175,7 +176,7 @@ function buildTrayMenu() {
         const current = store.get('url');
         const { response, checkboxChecked } = await dialog.showMessageBox({
           type: 'info',
-          message: 'URL atual do FlowOps:',
+          message: 'URL atual do LURDS ORDER ONE:',
           detail: current,
           buttons: ['Trocar URL', 'Manter'],
           defaultId: 1,
@@ -202,7 +203,7 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: 'Sair do FlowOps',
+      label: 'Sair do LURDS ORDER ONE',
       click: () => {
         isQuitting = true;
         app.quit();
@@ -222,7 +223,7 @@ function promptUrl(currentUrl) {
       resizable: false,
       minimizable: false,
       maximizable: false,
-      title: 'URL do FlowOps',
+      title: 'URL do LURDS ORDER ONE',
       webPreferences: { contextIsolation: true, sandbox: false },
     });
     const html = `
@@ -232,7 +233,7 @@ function promptUrl(currentUrl) {
         button{padding:8px 14px;border:none;border-radius:4px;cursor:pointer;font-weight:600}
         .ok{background:#0f172a;color:#fff}.cancel{background:#e2e8f0;color:#0f172a;margin-right:8px}
       </style></head><body>
-        <label>Digite a URL do FlowOps:</label>
+        <label>Digite a URL do LURDS ORDER ONE:</label>
         <input id="u" value="${(currentUrl || '').replace(/"/g, '&quot;')}" autofocus />
         <div style="text-align:right;margin-top:8px">
           <button class="cancel" onclick="window.close()">Cancelar</button>

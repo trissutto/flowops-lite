@@ -60,7 +60,7 @@ export default function NewOrderAlert() {
   const isFirstPollRef = useRef(true);
 
   useEffect(() => {
-    originalTitleRef.current = document.title || 'FlowOps';
+    originalTitleRef.current = document.title || 'LURDS ORDER ONE';
     try {
       const pref = window.localStorage?.getItem('flowops.alertSoundOn');
       if (pref === '0') setSoundOn(false);

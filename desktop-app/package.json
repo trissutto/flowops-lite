@@ -1,20 +1,20 @@
 {
-  "name": "flowops-desktop",
+  "name": "lurds-order-one-desktop",
   "version": "1.0.0",
-  "description": "FlowOps — app de loja (tray + auto-start + impressao silenciosa)",
+  "description": "LURDS ORDER ONE — app de loja (tray + auto-start + impressao silenciosa)",
   "main": "src/main.js",
-  "author": "FlowOps",
+  "author": "LURDS",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --flowops-url=http://localhost:3000/minha-loja",
+    "dev": "electron . --app-url=http://localhost:3000/minha-loja",
     "build": "electron-builder --win --x64",
     "dist": "electron-builder --win --x64 --publish never"
   },
   "build": {
-    "appId": "com.flowops.desktop",
-    "productName": "FlowOps",
+    "appId": "com.lurds.orderone.desktop",
+    "productName": "LURDS ORDER ONE",
     "asar": true,
     "directories": {
       "output": "dist",
@@ -33,7 +33,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "FlowOps-Setup-${version}.${ext}"
+      "artifactName": "LURDS-ORDER-ONE-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -41,7 +41,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "FlowOps",
+      "shortcutName": "LURDS ORDER ONE",
       "runAfterFinish": true
     },
     "extraResources": [

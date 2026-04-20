@@ -194,7 +194,7 @@ export default function SeparacaoPage() {
               body: JSON.stringify({
                 status: targetSlug,
                 addNote: {
-                  text: `Status alterado em bloco pra "${targetLabel}" via FlowOps.`,
+                  text: `Status alterado em bloco pra "${targetLabel}" via LURDS ORDER ONE.`,
                   notifyCustomer: false,
                 },
               }),

@@ -4,8 +4,8 @@ import TopNav from '@/components/TopNav';
 import NewOrderAlert from '@/components/NewOrderAlert';
 
 export const metadata: Metadata = {
-  title: 'FlowOps',
-  description: 'Gestão operacional de pedidos',
+  title: 'LURDS ORDER ONE',
+  description: 'Gestão operacional de pedidos — LURDS',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

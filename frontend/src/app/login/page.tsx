@@ -43,7 +43,7 @@ export default function LoginPage() {
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
           <Package className="w-10 h-10 text-brand" />
-          <h1 className="text-2xl font-bold mt-2">FlowOps</h1>
+          <h1 className="text-2xl font-bold mt-2 tracking-wide">LURDS ORDER ONE</h1>
           <p className="text-sm text-slate-500">Gestão operacional de pedidos</p>
         </div>
 

@@ -310,7 +310,7 @@ export default function ImprimirCupomPage() {
         )}
 
         <div className="center" style={{ fontSize: 9, marginTop: 6 }}>
-          FlowOps · Pick #{pick.id.slice(0, 8)}
+          LURDS ORDER ONE · Pick #{pick.id.slice(0, 8)}
         </div>
       </div>
     </>

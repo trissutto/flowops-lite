@@ -141,9 +141,9 @@ ${itens}
 
 🚚 *Forma de envio:* ${formaEnvio}
 
-Por favor confirmar separação no FlowOps assim que finalizar.
+Por favor confirmar separação no sistema assim que finalizar.
 
-— FlowOps`;
+— LURDS ORDER ONE`;
   }
 
   function abrirWhatsApp(a: Assignment) {
@@ -180,7 +180,7 @@ Por favor confirmar separação no FlowOps assim que finalizar.
             <p className="text-slate-500 text-sm mt-1">
               Feito no site: {order.wcDateCreated ? new Date(order.wcDateCreated).toLocaleString('pt-BR') : '—'}
               <span className="ml-3 text-xs text-slate-400">
-                · chegou no FlowOps em {new Date(order.createdAt).toLocaleString('pt-BR')}
+                · chegou em {new Date(order.createdAt).toLocaleString('pt-BR')}
               </span>
             </p>
           </div>

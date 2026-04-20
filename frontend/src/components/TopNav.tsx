@@ -46,7 +46,7 @@ export default function TopNav() {
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-3 hover:opacity-90">
           <Package className="w-7 h-7" />
-          <h1 className="text-xl font-bold">FlowOps</h1>
+          <h1 className="text-xl font-bold tracking-wide">LURDS ORDER ONE</h1>
         </Link>
         <nav className="flex gap-5 text-sm">
           {NAV.map((n) => (
