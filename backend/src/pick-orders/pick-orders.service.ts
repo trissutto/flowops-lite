@@ -1,6 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { WooCommerceService } from '../woocommerce/woocommerce.service';
 
 export type PickStatus = 'new' | 'separating' | 'ready' | 'shipped';
 const VALID_STATUSES: PickStatus[] = ['new', 'separating', 'ready', 'shipped'];
@@ -13,11 +14,23 @@ const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = {
   shipped: [],                        // ponto final
 };
 
+/**
+ * Mapeamento do status INTERNO do pick-order (loja) → status no WooCommerce.
+ *   - separating/ready → 'separacao' (em separação no site)
+ *   - shipped (quando TODOS os pick-orders siblings já foram enviados) → 'enviado'
+ *     (se o WC não aceitar 'enviado', o retry no WooCommerceService cai pra 'completed')
+ */
+const WC_STATUS_SEPARATING = 'separacao';
+const WC_STATUS_SHIPPED = 'enviado';
+
 @Injectable()
 export class PickOrdersService {
+  private readonly logger = new Logger(PickOrdersService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly gateway: RealtimeGateway,
+    @Inject(forwardRef(() => WooCommerceService))
+    private readonly wc: WooCommerceService,
   ) {}
 
   /**
@@ -286,7 +299,10 @@ export class PickOrdersService {
           ? { trackingCode: input.trackingCode?.trim(), carrier: input.carrier?.trim() }
           : {}),
       },
-      include: { order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true } } },
+      include: {
+        order: { select: { wcOrderNumber: true, wcOrderId: true, customerName: true } },
+        store: { select: { code: true, name: true } },
+      },
     });
 
     // Histórico no pedido
@@ -304,16 +320,101 @@ export class PickOrdersService {
     });
 
     // Se todos os pick-orders do pedido foram shipped, marca order.status=shipped
+    let allSiblings: Array<{ status: string; trackingCode: string | null; carrier: string | null; storeId: string }> = [];
+    let allShipped = false;
     if (input.status === 'shipped') {
-      const siblings = await this.prisma.pickOrder.findMany({
+      allSiblings = await this.prisma.pickOrder.findMany({
         where: { orderId: current.orderId },
+        select: { status: true, trackingCode: true, carrier: true, storeId: true },
       });
-      const allShipped = siblings.every((p) => p.status === 'shipped');
+      allShipped = allSiblings.every((p) => p.status === 'shipped');
       if (allShipped) {
         await this.prisma.order.update({
           where: { id: current.orderId },
           data: { status: 'shipped', trackingCode: input.trackingCode, carrier: input.carrier },
         });
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  SYNC COM WOOCOMMERCE
+    //  Faz o site refletir o que a loja mudou:
+    //    separating/ready → WC status 'separacao' (Em Separação)
+    //    shipped          → push rastreio no meta_data; se TODOS siblings enviados
+    //                       → WC status 'enviado' (fallback 'completed' se inexistente)
+    //
+    //  Falha aqui NÃO derruba a ação da loja — só loga e anexa warning na resposta.
+    // ════════════════════════════════════════════════════════════════════════
+    const wcOrderId = updated.order?.wcOrderId ? Number(updated.order.wcOrderId) : null;
+    const storeLabel = updated.store
+      ? `${updated.store.name} (${updated.store.code})`
+      : 'Loja';
+    let wcSyncWarning: string | null = null;
+    let wcSyncApplied: string | null = null;
+
+    if (wcOrderId) {
+      try {
+        if (input.status === 'separating' || input.status === 'ready') {
+          // Não sobrescreve se já tá em separação ou adiante — evita voltar de 'enviado' pra 'separacao'
+          // se admin tiver adiantado manualmente. updateOrder é idempotente (WC aceita mesmo status).
+          await this.wc.updateOrder(wcOrderId, { status: WC_STATUS_SEPARATING });
+          await this.wc.addOrderNote(
+            wcOrderId,
+            `${storeLabel} iniciou a separação do pedido (FlowOps).`,
+            false, // nota interna, não notifica cliente
+          );
+          wcSyncApplied = `site marcado como "Em Separação"`;
+        } else if (input.status === 'shipped') {
+          const trackCode = (input.trackingCode ?? '').trim();
+          const trackCarrier = (input.carrier ?? '').trim();
+
+          // Pega todos os rastreios (multi-loja pode ter vários)
+          const allTracks = allSiblings
+            .filter((p) => p.trackingCode)
+            .map((p) => ({ code: p.trackingCode!, carrier: p.carrier || 'Correios' }));
+
+          const primaryTrack = allTracks[0] ?? { code: trackCode, carrier: trackCarrier };
+
+          // Monta payload pro WC
+          const wcPayload: Parameters<typeof this.wc.updateOrder>[1] = {
+            trackingNumber: primaryTrack.code,
+            trackingCarrier: primaryTrack.carrier,
+          };
+          if (allShipped) {
+            wcPayload.status = WC_STATUS_SHIPPED; // todos os siblings enviados → finaliza
+          }
+          await this.wc.updateOrder(wcOrderId, wcPayload);
+
+          // Nota interna no pedido com detalhes do envio
+          if (allTracks.length > 1) {
+            const listing = allTracks
+              .map((t) => `  • ${t.carrier}: ${t.code}`)
+              .join('\n');
+            await this.wc.addOrderNote(
+              wcOrderId,
+              `${storeLabel} enviou o pedido (FlowOps).\n` +
+                `Pedido multi-loja — ${allTracks.length} envios:\n${listing}\n` +
+                (allShipped
+                  ? 'Todos os envios concluídos — pedido marcado como Enviado.'
+                  : 'Aguardando envio das outras lojas pra finalizar.'),
+              false,
+            );
+          } else {
+            await this.wc.addOrderNote(
+              wcOrderId,
+              `${storeLabel} enviou o pedido (FlowOps). Rastreio: ${trackCode} (${trackCarrier}).`,
+              false,
+            );
+          }
+          wcSyncApplied = allShipped
+            ? `site marcado como "Enviado" + rastreio`
+            : `rastreio salvo no site (aguardando outras lojas)`;
+        }
+      } catch (e: any) {
+        this.logger.warn(
+          `Falha ao sincronizar pick-order ${id} com WC order ${wcOrderId}: ${e.message}`,
+        );
+        wcSyncWarning = `Não conseguiu atualizar o site: ${e.message}`;
       }
     }
 
@@ -334,6 +435,8 @@ export class PickOrdersService {
       trackingCode: updated.trackingCode,
       carrier: updated.carrier,
       updatedAt: updated.updatedAt,
+      wcSyncApplied,
+      wcSyncWarning,
     };
   }
 }

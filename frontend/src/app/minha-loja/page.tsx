@@ -296,6 +296,12 @@ export default function MinhaLojaPage() {
       });
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...updated } : r)));
       pushToast(`Pedido #${row.order.wcOrderNumber ?? '—'}${STATUS_LABEL[to].toLowerCase()}`);
+      if (updated?.wcSyncApplied) {
+        pushToast(`🌐 Site: ${updated.wcSyncApplied}`);
+      }
+      if (updated?.wcSyncWarning) {
+        pushToast(`⚠️ ${updated.wcSyncWarning}`);
+      }
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao atualizar'}`);
     }
@@ -311,6 +317,12 @@ export default function MinhaLojaPage() {
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...updated } : r)));
       setShowShippedModal(null);
       pushToast(`Pedido #${row.order.wcOrderNumber ?? '—'} enviado (${carrier})`);
+      if (updated?.wcSyncApplied) {
+        pushToast(`🌐 Site: ${updated.wcSyncApplied}`);
+      }
+      if (updated?.wcSyncWarning) {
+        pushToast(`⚠️ ${updated.wcSyncWarning}`);
+      }
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao enviar'}`);
     }
