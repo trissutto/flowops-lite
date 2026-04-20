@@ -23,8 +23,9 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
+import Logo from '@/components/Logo';
 import {
-  Package, Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
+  Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle,
 } from 'lucide-react';
 
@@ -116,6 +117,45 @@ export default function MinhaLojaPage() {
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
+  // Set de IDs de pick-orders já "vistos" nessa sessão — usado pra evitar
+  // que o popup de PEDIDO NOVO apareça de novo pro mesmo pedido em caso de
+  // reconexão do socket, eco duplicado, 2ª aba aberta, ou emit repetido do
+  // backend. Persistido em localStorage por loja+dia pra sobreviver a
+  // reload/restart do Electron (reseta toda manhã — então se o pedido ficar
+  // aberto virando o dia, no máximo notifica 1x por dia).
+  const seenPickIdsRef = useRef<Set<string>>(new Set());
+  const seenStorageKeyRef = useRef<string>('');
+
+  const loadSeenFromStorage = useCallback((storeId: string) => {
+    try {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const key = `flowops_seen_${storeId}_${today}`;
+      seenStorageKeyRef.current = key;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) seenPickIdsRef.current = new Set(arr);
+      }
+      // Limpa chaves de dias anteriores pra não vazar localStorage
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(`flowops_seen_${storeId}_`) && k !== key) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch {}
+  }, []);
+
+  const persistSeen = useCallback(() => {
+    try {
+      if (!seenStorageKeyRef.current) return;
+      localStorage.setItem(
+        seenStorageKeyRef.current,
+        JSON.stringify(Array.from(seenPickIdsRef.current)),
+      );
+    } catch {}
+  }, []);
+
   // ---------- Auth + initial load ----------
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -141,6 +181,8 @@ export default function MinhaLojaPage() {
           document.title = fullTitle;
           originalTitleRef.current = fullTitle;
         }
+        // Carrega IDs já notificados hoje — protege contra reload do Electron
+        if (profile.storeId) loadSeenFromStorage(profile.storeId);
         await loadRows();
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
@@ -160,10 +202,16 @@ export default function MinhaLojaPage() {
     try {
       const data = await api<PickOrderRow[]>('/pick-orders/mine');
       setRows(data);
+      // Tudo que vem no carregamento inicial é considerado "já visto" pra
+      // fins de popup — não dispara notificação sonora/title-flash pra pedido
+      // que o operador ABRE o app e já encontra na lista. Popup só pra evento
+      // socket REALMENTE novo (pick-order criado AGORA).
+      for (const r of data) seenPickIdsRef.current.add(r.id);
+      persistSeen();
     } catch (err: any) {
       setError(err?.message ?? 'Erro ao carregar pedidos');
     }
-  }, []);
+  }, [persistSeen]);
 
   // ---------- Socket ----------
   useEffect(() => {
@@ -174,6 +222,42 @@ export default function MinhaLojaPage() {
     const onDisconnect = () => setConnected(false);
     const onNew = (pickOrder: any) => {
       if (!pickOrder?.id) return;
+
+      // Guard anti-popup-fantasma: se esse pick-order JÁ foi visto
+      // nessa sessão (ou carregado pela lista inicial, ou notificado antes),
+      // não dispara popup de novo. Isso cobre:
+      //  - reconexão do socket reemitindo evento
+      //  - 2ª instância do Electron/aba aberta com mesmo JWT
+      //  - retry interno do socket.io
+      //  - qualquer reenvio do backend
+      if (seenPickIdsRef.current.has(pickOrder.id)) {
+        // Ainda sim garante que a lista está atualizada (caso status tenha mudado)
+        setRows((prev) =>
+          prev.map((r) =>
+            r.id === pickOrder.id
+              ? {
+                  ...r,
+                  status: (pickOrder.status as PickStatus) ?? r.status,
+                  trackingCode: pickOrder.trackingCode ?? r.trackingCode,
+                  carrier: pickOrder.carrier ?? r.carrier,
+                }
+              : r,
+          ),
+        );
+        return;
+      }
+
+      // Guard anti-pedido-antigo: se o pick-order foi criado há mais de 10 min,
+      // não faz sentido tocar alarme de "pedido novo" — provavelmente é eco.
+      // Ainda coloca na lista mas sem flash/notificação.
+      const createdAt = pickOrder.createdAt
+        ? new Date(pickOrder.createdAt).getTime()
+        : Date.now();
+      const isRecent = Date.now() - createdAt < 10 * 60 * 1000;
+
+      seenPickIdsRef.current.add(pickOrder.id);
+      persistSeen();
+
       setRows((prev) => {
         if (prev.some((r) => r.id === pickOrder.id)) return prev;
         const row: PickOrderRow = {
@@ -181,7 +265,7 @@ export default function MinhaLojaPage() {
           status: (pickOrder.status as PickStatus) ?? 'new',
           trackingCode: pickOrder.trackingCode ?? null,
           carrier: pickOrder.carrier ?? null,
-          createdAt: new Date().toISOString(),
+          createdAt: pickOrder.createdAt ?? new Date().toISOString(),
           order: pickOrder.order ?? {
             id: pickOrder.orderId,
             wcOrderId: null,
@@ -196,7 +280,13 @@ export default function MinhaLojaPage() {
         };
         return [row, ...prev];
       });
-      triggerNewOrderAlert(pickOrder);
+
+      if (isRecent) {
+        triggerNewOrderAlert(pickOrder);
+      } else {
+        // Pedido antigo chegando via socket (eco): só toast discreto, sem barulho
+        pushToast(`Pedido adicionado (eco): #${pickOrder?.order?.wcOrderNumber ?? '—'}`);
+      }
     };
     const onStatus = (pickOrder: any) => {
       if (!pickOrder?.id) return;
@@ -406,9 +496,9 @@ export default function MinhaLojaPage() {
       <header className="bg-brand text-white sticky top-0 z-30 shadow">
         <div className="px-4 py-3 flex items-center justify-between max-w-3xl mx-auto">
           <div className="flex items-center gap-2">
-            <Package className="w-6 h-6" />
+            <Logo height={32} className="brightness-0 invert" />
             <div>
-              <div className="font-bold leading-tight tracking-wide">LURDS ORDER ONE</div>
+              <div className="font-bold leading-tight tracking-wide">ORDER ONE</div>
               <div className="text-xs opacity-90">
                 {me?.storeName ? me.storeName : 'Minha Loja'}
               </div>

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -131,7 +132,69 @@ export default function PedidoDetailPage() {
   const [printState, setPrintState] = useState<Record<string, 'idle' | 'sending' | 'sent' | 'error'>>({});
   const [printError, setPrintError] = useState<Record<string, string>>({});
 
+  // ── Status ao vivo dos pick-orders (matriz vê o que a filial está fazendo) ──
+  // Carregado de /pick-orders/by-wc/:wcId + atualizado em tempo real pelo
+  // evento socket 'pick-order:status' (emitido pela sala 'admin' quando
+  // qualquer loja muda status ou põe rastreio).
+  const [liveStatus, setLiveStatus] = useState<Array<{
+    id: string;
+    status: 'new' | 'separating' | 'ready' | 'shipped';
+    trackingCode: string | null;
+    carrier: string | null;
+    storeId: string;
+    storeCode: string | null;
+    storeName: string | null;
+    storeCity: string | null;
+    updatedAt: string;
+  }>>([]);
+  const [liveStatusFlash, setLiveStatusFlash] = useState<Record<string, number>>({});
+
   useEffect(() => { load(); /* eslint-disable-line */ }, [wcId]);
+
+  // Carrega pick-orders atuais desse pedido WC quando a página abre
+  useEffect(() => {
+    if (!wcId) return;
+    api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+      .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+      .catch((e) => console.warn('Falha ao carregar pick-orders:', e?.message));
+  }, [wcId]);
+
+  // Escuta socket 'pick-order:status' pra atualizar em tempo real
+  useEffect(() => {
+    if (!wcId) return;
+    const socket = getSocket();
+    const onStatus = (payload: any) => {
+      if (!payload?.id) return;
+      // Filtra: só atualiza se o pick-order pertence ao pedido dessa tela
+      setLiveStatus((prev) => {
+        const match = prev.find((r) => r.id === payload.id);
+        if (!match) return prev; // não é desse pedido
+        return prev.map((r) =>
+          r.id === payload.id
+            ? {
+                ...r,
+                status: payload.status ?? r.status,
+                trackingCode: payload.trackingCode ?? r.trackingCode,
+                carrier: payload.carrier ?? r.carrier,
+                updatedAt: new Date().toISOString(),
+              }
+            : r,
+        );
+      });
+      // Flash visual (linha pisca verde por 3s)
+      setLiveStatusFlash((prev) => ({ ...prev, [payload.id]: Date.now() }));
+      setTimeout(() => {
+        setLiveStatusFlash((prev) => {
+          const { [payload.id]: _, ...rest } = prev;
+          return rest;
+        });
+      }, 3000);
+    };
+    socket.on('pick-order:status', onStatus);
+    return () => {
+      socket.off('pick-order:status', onStatus);
+    };
+  }, [wcId]);
 
   async function load() {
     setLoading(true);
@@ -262,6 +325,10 @@ export default function PedidoDetailPage() {
           `✓ Pedido enviado pra ${res.pickOrders?.length ?? 0} loja(s). ` +
           `Já apareceu no app /minha-loja delas.`,
         );
+        // Recarrega painel de status ao vivo pra ter os novos pick-orders
+        api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+          .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+          .catch(() => {});
         // Atualiza status no WC pra "separacao" também (best-effort)
         if (order && order.status !== 'separacao') {
           try {
@@ -732,6 +799,69 @@ export default function PedidoDetailPage() {
             {confirmResult && !confirmResult.ok && (
               <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-sm text-red-700">
                 <b>Não foi possível confirmar:</b> {confirmResult.message}
+              </div>
+            )}
+
+            {/* Painel Status AO VIVO — matriz vê o que cada loja está fazendo.
+                 Atualiza em tempo real via socket 'pick-order:status'. */}
+            {liveStatus.length > 0 && (
+              <div className="bg-slate-50 border border-slate-200 rounded p-3 mb-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
+                  <Zap className="w-4 h-4 text-emerald-500" />
+                  Status ao vivo das lojas
+                  <span className="text-xs text-slate-500 font-normal ml-auto">
+                    atualiza automático
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {liveStatus.map((r) => {
+                    const flash = !!liveStatusFlash[r.id];
+                    const badgeColor =
+                      r.status === 'shipped' ? 'bg-emerald-600 text-white'
+                      : r.status === 'ready' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                      : 'bg-amber-100 text-amber-900 border border-amber-300';
+                    const label =
+                      r.status === 'shipped' ? 'Enviado'
+                      : r.status === 'ready' ? 'Pronto pra envio'
+                      : r.status === 'separating' ? 'Separando'
+                      : 'Aguardando iniciar';
+                    return (
+                      <div
+                        key={r.id}
+                        className={`bg-white rounded border p-2 text-sm transition-colors ${
+                          flash ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <StoreIcon className="w-4 h-4 text-slate-500" />
+                          <span className="font-semibold">{r.storeName}</span>
+                          <span className="text-xs text-slate-500">({r.storeCode})</span>
+                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
+                            {label}
+                          </span>
+                          {flash && (
+                            <span className="text-xs text-emerald-600 font-semibold animate-pulse">
+                              ✓ atualizado agora
+                            </span>
+                          )}
+                        </div>
+                        {r.status === 'shipped' && r.trackingCode && (
+                          <div className="mt-1 pl-6 text-xs text-slate-700">
+                            <Truck className="w-3 h-3 inline mr-1" />
+                            <span className="font-mono font-semibold">{r.trackingCode}</span>
+                            {r.carrier && <span className="text-slate-500 ml-2">via {r.carrier}</span>}
+                          </div>
+                        )}
+                        {!!r.updatedAt && (
+                          <div className="pl-6 text-xs text-slate-400 mt-0.5">
+                            Última atualização: {new Date(r.updatedAt).toLocaleString('pt-BR')}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

@@ -130,6 +130,41 @@ export class PickOrdersService {
   }
 
   /**
+   * Lista TODOS os pick-orders de um pedido WC (matriz-only).
+   * Usado pela tela /pedidos/wc/[id] pra mostrar status de cada loja ao vivo,
+   * incluindo rastreio quando enviado. Join com store pra ter nome/code.
+   */
+  async listByWcOrderId(wcOrderId: number) {
+    const order = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      select: { id: true },
+    });
+    if (!order) return [];
+
+    const rows = await this.prisma.pickOrder.findMany({
+      where: { orderId: order.id },
+      orderBy: [{ createdAt: 'asc' }],
+      include: {
+        store: { select: { id: true, code: true, name: true, city: true } },
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      trackingCode: r.trackingCode,
+      carrier: r.carrier,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      storeId: r.storeId,
+      storeCode: r.store?.code ?? null,
+      storeName: r.store?.name ?? null,
+      storeCity: r.store?.city ?? null,
+      isTransfer: (r as any).isTransfer ?? false,
+      transferToStoreCode: (r as any).transferToStoreCode ?? null,
+    }));
+  }
+
+  /**
    * Detalhe de 1 pick-order. Valida que pertence à loja do user.
    */
   async getOne(id: string, storeId: string) {

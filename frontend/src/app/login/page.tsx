@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
-import { Package, LogIn } from 'lucide-react';
+import Logo from '@/components/Logo';
+import { LogIn } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -42,8 +43,8 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-brand-dark via-brand to-brand-light">
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
-          <Package className="w-10 h-10 text-brand" />
-          <h1 className="text-2xl font-bold mt-2 tracking-wide">LURDS ORDER ONE</h1>
+          <Logo height={64} />
+          <h1 className="text-xl font-bold mt-3 tracking-wide text-slate-700">ORDER ONE</h1>
           <p className="text-sm text-slate-500">Gestão operacional de pedidos</p>
         </div>
 

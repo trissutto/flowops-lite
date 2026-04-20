@@ -73,6 +73,24 @@ export class PickOrdersController {
   }
 
   /**
+   * Matriz consulta todos os pick-orders de um pedido WC (por wcOrderId).
+   * Usado na tela /pedidos/wc/[id] pra mostrar status ao vivo de cada loja,
+   * incluindo rastreio quando shipped. Retorna array vazio se não tem pick-orders.
+   */
+  @Get('by-wc/:wcOrderId')
+  byWcOrderId(@Req() req: any, @Param('wcOrderId') wcOrderId: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) acessa essa rota');
+    }
+    const id = Number(wcOrderId);
+    if (!Number.isFinite(id)) {
+      throw new ForbiddenException('wcOrderId inválido');
+    }
+    return this.svc.listByWcOrderId(id);
+  }
+
+  /**
    * Matriz dispara impressão REMOTA do cupom na térmica da loja.
    * Fluxo: backend valida → verifica presença → emite socket pro Electron da loja →
    * Electron abre hidden window /minha-loja/imprimir/{id}?autoprint=1 → print silencioso.

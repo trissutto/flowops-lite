@@ -151,6 +151,44 @@ function createTray() {
 }
 
 function buildTrayMenu() {
+  // Lista impressoras disponíveis (sync fallback se mainWindow não carregou)
+  const printers = (() => {
+    try {
+      if (mainWindow?.webContents?.getPrinters) {
+        return mainWindow.webContents.getPrinters();
+      }
+    } catch {}
+    return [];
+  })();
+  const currentPrinter = store.get('printer') || '';
+
+  const printerSubmenu = [
+    {
+      label: 'Impressora padrão do Windows',
+      type: 'radio',
+      checked: currentPrinter === '',
+      click: () => {
+        store.set('printer', '');
+        if (tray) tray.setContextMenu(buildTrayMenu());
+      },
+    },
+    { type: 'separator' },
+    ...printers.map((p) => ({
+      label: `${p.name}${p.isDefault ? ' (padrão)' : ''}`,
+      type: 'radio',
+      checked: currentPrinter === p.name,
+      click: () => {
+        store.set('printer', p.name);
+        if (tray) tray.setContextMenu(buildTrayMenu());
+      },
+    })),
+    { type: 'separator' },
+    {
+      label: 'Imprimir página de teste',
+      click: () => testPrint(),
+    },
+  ];
+
   return Menu.buildFromTemplate([
     { label: 'Abrir LURDS ORDER ONE', click: () => showWindow() },
     { type: 'separator' },
@@ -168,6 +206,10 @@ function buildTrayMenu() {
       type: 'checkbox',
       checked: !!store.get('silentPrint'),
       click: (item) => store.set('silentPrint', item.checked),
+    },
+    {
+      label: `Impressora: ${currentPrinter || '(padrão do Windows)'}`,
+      submenu: printerSubmenu,
     },
     { type: 'separator' },
     {
@@ -210,6 +252,60 @@ function buildTrayMenu() {
       },
     },
   ]);
+}
+
+// Imprime um cupom de TESTE pra validar que a térmica selecionada tá
+// respondendo. Útil na primeira instalação ou ao trocar impressora.
+async function testPrint() {
+  const printer = store.get('printer');
+  const silent = !!store.get('silentPrint');
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+    <style>
+      @page { size: 80mm auto; margin: 3mm 2mm; }
+      body { font-family: 'Courier New', monospace; font-size: 11px; padding: 0; margin: 0; }
+      .c { width: 72mm; margin: 0 auto; padding: 4mm 3mm; text-align: center; }
+      .big { font-size: 18px; font-weight: bold; margin: 8px 0; }
+      hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+    </style></head><body>
+    <div class="c">
+      <div class="big">LURDS ORDER ONE</div>
+      <hr/>
+      <div>TESTE DE IMPRESSORA</div>
+      <div>${new Date().toLocaleString('pt-BR')}</div>
+      <hr/>
+      <div>Impressora: ${printer || '(padrão do Windows)'}</div>
+      <div>Modo: ${silent ? 'silencioso' : 'com diálogo'}</div>
+      <hr/>
+      <div>Se você está lendo isso,</div>
+      <div>a impressão está funcionando.</div>
+      <div>&nbsp;</div>
+      <div>&nbsp;</div>
+    </div></body></html>`;
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: false } });
+  try {
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    await new Promise((resolve, reject) => {
+      win.webContents.print(
+        {
+          silent,
+          printBackground: true,
+          deviceName: printer || undefined,
+          margins: { marginType: 'none' },
+        },
+        (success, err) => success ? resolve() : reject(new Error(err || 'print failed')),
+      );
+    });
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Teste de impressão',
+      message: 'Comando enviado pra impressora!',
+      detail: `Impressora: ${printer || '(padrão do Windows)'}\n\nSe nada saiu, verifique:\n1. Impressora ligada e com papel\n2. Driver instalado no Windows\n3. Menu Impressora selecionou a térmica certa`,
+    });
+  } catch (err) {
+    dialog.showErrorBox('Falha no teste de impressão', err.message);
+  } finally {
+    setTimeout(() => { try { win.destroy(); } catch {} }, 1500);
+  }
 }
 
 // Prompt simples via janela transitória (Electron não tem dialog.prompt nativo)
@@ -313,13 +409,21 @@ ipcMain.handle('flowops:silent-print', async (_evt, html) => {
 
 /**
  * Impressão silenciosa VIA URL — usado quando a matriz dispara impressão remota.
- * Abre hidden BrowserWindow, carrega a URL, espera a página sinalizar pronto
- * (ou timeout de 6s), imprime silenciosamente e destrói a janela.
+ *
+ * Fluxo real:
+ *  1. Abre BrowserWindow hidden apontando pra /minha-loja/imprimir/{id}?autoprint=1
+ *  2. A página, ao terminar de buscar dados via API, chama
+ *     window.electronAPI.notifyPrintReady() (via preload → ipcRenderer.send)
+ *  3. Main recebe o evento, chama win.webContents.print() DIRETO (silent, deviceName
+ *     da térmica configurada), e destrói a janela quando terminar.
+ *  4. Se notifyPrintReady não vier em 8s (página travou, API lenta), imprime mesmo
+ *     assim como fallback pra não ficar janela órfã.
  *
  * A URL pode ser relativa ('/minha-loja/imprimir/...') → resolve em cima da URL
  * base configurada no electron-store.
  */
 ipcMain.handle('flowops:silent-print-url', async (_evt, inputUrl) => {
+  console.log('[silent-print-url] chamado com:', inputUrl);
   if (!inputUrl || typeof inputUrl !== 'string') {
     return { ok: false, error: 'URL vazia' };
   }
@@ -329,6 +433,8 @@ ipcMain.handle('flowops:silent-print-url', async (_evt, inputUrl) => {
     const base = (store.get('url') || '').replace(/\/minha-loja.*$/, '');
     absoluteUrl = base + inputUrl;
   }
+  console.log('[silent-print-url] URL absoluta:', absoluteUrl);
+
   const win = new BrowserWindow({
     show: false,
     webPreferences: {
@@ -340,20 +446,75 @@ ipcMain.handle('flowops:silent-print-url', async (_evt, inputUrl) => {
       partition: 'persist:default',
     },
   });
+
+  // Prepara listener de "ready" da página — resolve a promise quando a página
+  // avisar que terminou de carregar os dados do pick-order.
+  let printReadyResolve;
+  const printReadyPromise = new Promise((resolve) => { printReadyResolve = resolve; });
+  const readyListener = (evt) => {
+    if (evt.sender === win.webContents) {
+      console.log('[silent-print-url] página sinalizou READY');
+      printReadyResolve();
+    }
+  };
+  ipcMain.on('flowops:print-ready', readyListener);
+
+  const cleanup = () => {
+    ipcMain.removeListener('flowops:print-ready', readyListener);
+    try { win.destroy(); } catch {}
+  };
+
   try {
     await win.loadURL(absoluteUrl);
-    // Espera a página terminar de hidratar + renderizar dados fetchados.
-    // A página imprimir/[id] já chama window.electronAPI.silentPrintHTML() sozinha
-    // quando tem ?autoprint=1 — então NÃO imprimimos aqui, só deixamos a página fazer.
-    // Só usamos esse handler pra: abrir invisível + garantir que fecha.
-    // Timeout de segurança pra garantir que não fica janela órfã.
-    await new Promise((resolve) => setTimeout(resolve, 6000));
+    console.log('[silent-print-url] URL carregada, esperando READY...');
+
+    // Espera a página terminar de buscar dados (via notifyPrintReady) OU fallback 8s
+    await Promise.race([
+      printReadyPromise,
+      new Promise((resolve) => setTimeout(() => {
+        console.warn('[silent-print-url] timeout 8s — imprimindo mesmo assim');
+        resolve();
+      }, 8000)),
+    ]);
+
+    // Pequena folga pra garantir que o DOM renderizou CSS @page / @media print
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const printer = store.get('printer');
+    const silent = !!store.get('silentPrint');
+    console.log(`[silent-print-url] print silent=${silent} printer="${printer || '(padrão)'}"`);
+
+    await new Promise((resolve, reject) => {
+      win.webContents.print(
+        {
+          silent,
+          printBackground: true,
+          deviceName: printer || undefined,
+          margins: { marginType: 'none' },
+        },
+        (success, errorType) => {
+          if (success) { console.log('[silent-print-url] print OK'); resolve(); }
+          else { console.error('[silent-print-url] print falhou:', errorType); reject(new Error(errorType || 'print failed')); }
+        },
+      );
+    });
+
     return { ok: true };
   } catch (err) {
+    console.error('[silent-print-url] erro:', err);
     return { ok: false, error: err.message };
   } finally {
-    try { win.destroy(); } catch {}
+    // Atraso pra dar tempo do spooler receber antes de matar a janela
+    setTimeout(cleanup, 1500);
   }
+});
+
+// Listener do IPC "print-ready" — página /imprimir/[id] chama isso quando
+// termina de carregar. NÃO responde (handle), só consome (on).
+// O handler de silent-print-url adiciona seu próprio listener específico
+// por hidden window; esse aqui é só pra evitar warning de "unhandled event".
+ipcMain.on('flowops:print-ready', () => {
+  // no-op — listeners específicos por window já tratam
 });
 
 ipcMain.handle('flowops:list-printers', async () => {

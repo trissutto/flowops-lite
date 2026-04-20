@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Impressão silenciosa via URL — abre hidden window, carrega a URL, imprime e fecha.
   // Usado pela matriz p/ imprimir cupom remoto na térmica da loja.
   silentPrintUrl: (url) => ipcRenderer.invoke('flowops:silent-print-url', url),
+  // Chamado pela página /imprimir/[id] quando termina de buscar dados (com autoprint=1).
+  // Main process escuta e dispara webContents.print() direto na hidden window.
+  notifyPrintReady: () => ipcRenderer.send('flowops:print-ready'),
   listPrinters: () => ipcRenderer.invoke('flowops:list-printers'),
 
   openExternal: (url) => ipcRenderer.invoke('flowops:open-external', url),

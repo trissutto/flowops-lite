@@ -8,7 +8,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Package } from 'lucide-react';
+import Logo from './Logo';
 
 const NAV = [
   { href: '/',          label: 'Dashboard' },
@@ -45,8 +45,8 @@ export default function TopNav() {
     <header className="bg-brand text-white shadow sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-3 hover:opacity-90">
-          <Package className="w-7 h-7" />
-          <h1 className="text-xl font-bold tracking-wide">LURDS ORDER ONE</h1>
+          <Logo height={36} className="brightness-0 invert" />
+          <h1 className="text-xl font-bold tracking-wide">ORDER ONE</h1>
         </Link>
         <nav className="flex gap-5 text-sm">
           {NAV.map((n) => (

@@ -61,24 +61,29 @@ export default function ImprimirCupomPage() {
   }, [id]);
 
   // Quando os dados carregam, dispara a impressão.
-  // Se vier ?autoprint=1 E o Electron estiver disponível (silentPrintHTML),
-  // imprime SILENCIOSO na térmica configurada (sem preview). Senão faz window.print() normal.
+  //
+  // MODO 1 (remoto via Electron hidden window): autoprint=1 + electronAPI.notifyPrintReady
+  //   → só SINALIZA que os dados carregaram. O main process (silent-print-url)
+  //     chama webContents.print() direto na hidden window e fecha depois.
+  //     NÃO chamamos silentPrintHTML aqui porque renderizar numa 2ª hidden window
+  //     com data:URL perde CSS/fonts do Next.
+  //
+  // MODO 2 (popup browser ou impressão local): window.print() abre o diálogo
+  //   normal do sistema operacional.
   useEffect(() => {
     if (!pick) return;
     const t = setTimeout(async () => {
       const electron = (window as any).electronAPI;
-      if (autoprint && electron?.silentPrintHTML) {
+      if (autoprint && electron?.notifyPrintReady) {
         try {
-          await electron.silentPrintHTML(document.documentElement.outerHTML);
+          electron.notifyPrintReady();
+          // Main process vai imprimir a própria webContents e destruir a hidden window.
         } catch (e) {
-          console.warn('silentPrintHTML falhou, caindo pra window.print():', e);
+          console.warn('notifyPrintReady falhou, caindo pra window.print():', e);
           window.print();
         }
-        // Fecha a janela (hidden ou popup) depois do print silencioso
-        setTimeout(() => {
-          try { window.close(); } catch {}
-        }, 500);
       } else {
+        // Fora do Electron (popup browser ou impressão local) → diálogo do SO
         window.print();
       }
     }, 250);
@@ -233,7 +238,16 @@ export default function ImprimirCupomPage() {
 
       <div className="cupom">
         {/* Cabeçalho */}
-        <div className="center bold">FLOWOPS · SEPARAÇÃO</div>
+        <div className="center" style={{ marginBottom: 4 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/lurds-logo.png"
+            alt="Lurd's Plus Size"
+            style={{ height: 36, width: 'auto', filter: 'grayscale(100%) contrast(1.4)' }}
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          />
+        </div>
+        <div className="center bold">LURD'S PLUS SIZE · SEPARAÇÃO</div>
         <div className="center">{pick.store.name} ({pick.store.code})</div>
         <div className="center" style={{ fontSize: 9 }}>
           Impresso em {dataImpressao}
