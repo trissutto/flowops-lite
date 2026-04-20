@@ -325,28 +325,50 @@ export class OrdersController {
   @Get('wc/:wcId/routing-debug')
   async routingDebug(@Param('wcId') wcId: string) {
     const wcOrderId = Number(wcId);
-    const order = await this.prisma.order.findUnique({
+
+    // Tenta pelo banco local (pedido já confirmado)
+    let order = await this.prisma.order.findUnique({
       where: { wcOrderId },
       include: {
         items: { include: { assignedStore: { select: { code: true, name: true } } } },
         pickOrders: { include: { store: { select: { code: true, name: true } } } },
       },
     });
+
+    // FALLBACK: pedido não está no banco → busca ao vivo no WC e monta SKUs sem persistir
+    let liveMode = false;
+    let wcLineItems: Array<{ sku: string; quantity: number; name: string }> = [];
     if (!order) {
-      return { error: `Order wc=${wcId} não encontrado no banco local. Confirme a separação primeiro.` };
+      liveMode = true;
+      try {
+        const o = await this.wc.getOrder(wcOrderId);
+        wcLineItems = (o.line_items ?? []).map((li: any) => ({
+          sku: String(li.sku ?? '').trim(),
+          quantity: Number(li.quantity ?? 0),
+          name: String(li.name ?? ''),
+        }));
+      } catch (e: any) {
+        return {
+          error: `Order wc=${wcId} não está no banco local nem no WooCommerce: ${e?.message ?? e}`,
+        };
+      }
     }
 
     // routingResult é JSON string — parseia com cuidado
     let savedRouting: any = null;
-    try {
-      savedRouting = order.routingResult ? JSON.parse(order.routingResult) : null;
-    } catch {
-      savedRouting = { _parseError: true, raw: order.routingResult };
+    if (order) {
+      try {
+        savedRouting = order.routingResult ? JSON.parse(order.routingResult) : null;
+      } catch {
+        savedRouting = { _parseError: true, raw: order.routingResult };
+      }
     }
 
     const stores = await this.prisma.store.findMany({ where: { active: true } });
     const storeCodes = stores.map((s) => s.code);
-    const skus = [...new Set(order.items.map((i) => i.sku).filter((s) => s?.trim()))];
+    const skus = liveMode
+      ? [...new Set(wcLineItems.map((i) => i.sku).filter((s) => s?.trim()))]
+      : [...new Set((order?.items ?? []).map((i) => i.sku).filter((s) => s?.trim()))];
 
     // ERP ao vivo (filtro ESTOQUE>0 — o que a engine usaria agora)
     const liveStock = await this.stock.getStockLive(skus, storeCodes);
@@ -358,15 +380,23 @@ export class OrdersController {
     // Comparação por SKU
     const bySku = await Promise.all(
       skus.map(async (sku) => {
-        const orderItems = order.items.filter((i) => i.sku === sku);
-        const totalQty = orderItems.reduce((acc, i) => acc + i.quantity, 0);
-        const assignedStoreCodes = [
-          ...new Set(
-            orderItems
-              .map((i) => i.assignedStore?.code)
-              .filter((c): c is string => !!c),
-          ),
-        ];
+        let totalQty = 0;
+        let assignedStoreCodes: string[] = [];
+        if (liveMode) {
+          totalQty = wcLineItems
+            .filter((i) => i.sku === sku)
+            .reduce((acc, i) => acc + i.quantity, 0);
+        } else {
+          const orderItems = (order?.items ?? []).filter((i) => i.sku === sku);
+          totalQty = orderItems.reduce((acc, i) => acc + i.quantity, 0);
+          assignedStoreCodes = [
+            ...new Set(
+              orderItems
+                .map((i) => i.assignedStore?.code)
+                .filter((c): c is string => !!c),
+            ),
+          ];
+        }
 
         // RAW do ERP pra esse SKU — todas as linhas (inclusive negativas/zero)
         const rawRows = await this.erp.getStockRawBySku(sku);
@@ -409,21 +439,31 @@ export class OrdersController {
     );
 
     return {
-      order: {
-        id: order.id,
-        wcOrderId: order.wcOrderId,
-        wcOrderNumber: order.wcOrderNumber,
-        status: order.status,
-        createdAt: order.createdAt,
-      },
+      liveMode,
+      order: order
+        ? {
+            id: order.id,
+            wcOrderId: order.wcOrderId,
+            wcOrderNumber: order.wcOrderNumber,
+            status: order.status,
+            createdAt: order.createdAt,
+          }
+        : {
+            id: null,
+            wcOrderId,
+            wcOrderNumber: String(wcId),
+            status: 'NÃO-PERSISTIDO (pedido não passou pelo botão Confirmar separação)',
+            createdAt: new Date().toISOString(),
+          },
       savedRouting,
-      pickOrders: order.pickOrders.map((p) => ({
+      pickOrders: order?.pickOrders.map((p) => ({
         id: p.id,
         status: p.status,
         storeCode: p.store.code,
         storeName: p.store.name,
-      })),
+      })) ?? [],
       bySku,
+      wcLineItems: liveMode ? wcLineItems : undefined,
     };
   }
 

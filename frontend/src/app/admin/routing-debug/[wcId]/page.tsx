@@ -37,10 +37,12 @@ interface BySkuRow {
 }
 interface DebugResult {
   error?: string;
-  order?: { id: string; wcOrderId: number; wcOrderNumber: string | null; status: string; createdAt: string };
+  liveMode?: boolean;
+  order?: { id: string | null; wcOrderId: number; wcOrderNumber: string | null; status: string; createdAt: string };
   savedRouting?: any;
   pickOrders?: Array<{ id: string; status: string; storeCode: string; storeName: string }>;
   bySku?: BySkuRow[];
+  wcLineItems?: Array<{ sku: string; quantity: number; name: string }>;
 }
 
 export default function RoutingDebugPage() {
@@ -87,8 +89,47 @@ export default function RoutingDebugPage() {
         🔍 Diagnóstico routing — pedido #{data.order?.wcOrderNumber ?? data.order?.wcOrderId}
       </h1>
       <div className="text-xs text-slate-500">
-        Order ID: <code>{data.order?.id}</code> · Criado: {data.order && new Date(data.order.createdAt).toLocaleString('pt-BR')}
+        Order ID: <code>{data.order?.id ?? '(não persistido)'}</code> · Status:{' '}
+        <b>{data.order?.status}</b>
       </div>
+
+      {data.liveMode && (
+        <div className="bg-amber-50 border border-amber-300 rounded p-3 text-sm text-amber-900">
+          <b>⚠ Modo LIVE</b> — esse pedido ainda NÃO foi persistido via "Confirmar separação".
+          Mostrando consulta AO VIVO do WC + ERP (sem routingResult salvo nem pick-orders).
+          Mesmo assim dá pra ver o que a engine VERIA agora se rodar pra esse pedido.
+        </div>
+      )}
+
+      {/* Line items vindos do WC em modo live */}
+      {data.liveMode && data.wcLineItems && data.wcLineItems.length > 0 && (
+        <section className="bg-white border border-slate-200 rounded p-4">
+          <h2 className="font-bold mb-2">Line items no WooCommerce ({data.wcLineItems.length})</h2>
+          <table className="w-full text-xs border-collapse">
+            <thead className="bg-slate-100 text-left">
+              <tr>
+                <th className="px-2 py-1 border border-slate-200">SKU</th>
+                <th className="px-2 py-1 border border-slate-200">Nome</th>
+                <th className="px-2 py-1 border border-slate-200">Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.wcLineItems.map((li, idx) => (
+                <tr key={idx} className={!li.sku ? 'bg-red-50' : ''}>
+                  <td className="px-2 py-1 border border-slate-200">
+                    {li.sku ? <code>{li.sku}</code> : <span className="text-red-700">⚠ SKU vazio</span>}
+                  </td>
+                  <td className="px-2 py-1 border border-slate-200">{li.name}</td>
+                  <td className="px-2 py-1 border border-slate-200 text-right">{li.quantity}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-xs text-slate-500 mt-2">
+            👀 Confere se o SKU acima bate com o CODIGO no Gigasistemas. Se não bater, o routing vai consultar estoque errado.
+          </div>
+        </section>
+      )}
 
       {/* Pick orders criados */}
       <section className="bg-white border border-slate-200 rounded p-4">
