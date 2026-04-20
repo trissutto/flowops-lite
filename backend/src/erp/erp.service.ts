@@ -310,6 +310,54 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Resolve EAN13 (código de barras) para uma lista de SKUs do Gigasistemas.
+   *
+   * Tenta várias colunas conhecidas (EAN13, EAN, CODBARRAS, CODIGOBARRAS,
+   * COD_BARRAS, CODIGO_BARRAS) — a primeira que retornar dados válidos ganha.
+   *
+   * Retorna mapa sku → ean. SKUs sem EAN ficam fora do mapa (operador vai
+   * ter que bipar manualmente ou reportar).
+   *
+   * Usado pela tela de bipagem da filial — operador bipa EAN, sistema resolve
+   * qual SKU é via esse mapa invertido.
+   */
+  async getEansBySkus(skus: string[]): Promise<Record<string, string>> {
+    if (!skus.length || !this.pool) return {};
+
+    const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
+
+    for (const column of candidates) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, \`${column}\` AS ean FROM produtos WHERE CODIGO IN (?)`,
+          [skus],
+        );
+        const map: Record<string, string> = {};
+        let hits = 0;
+        for (const r of rows as any[]) {
+          const ean = r.ean ? String(r.ean).trim() : '';
+          if (ean && ean.length >= 8) {
+            map[String(r.CODIGO)] = ean;
+            hits++;
+          }
+        }
+        if (hits > 0) {
+          this.logger.log(`getEansBySkus: coluna ${column} resolveu ${hits}/${skus.length} SKUs`);
+          return map;
+        }
+      } catch (e: any) {
+        // Coluna não existe nessa tabela → tenta a próxima
+        if (!/Unknown column/i.test(e?.message ?? '')) {
+          this.logger.warn(`getEansBySkus(${column}) erro: ${e.message}`);
+        }
+      }
+    }
+
+    this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
+    return {};
+  }
+
   /** Retorna metadados de um produto (nome, preço) direto da tabela produtos. */
   async getProduct(sku: string): Promise<{ name: string; price: number } | null> {
     if (!this.pool) return null;

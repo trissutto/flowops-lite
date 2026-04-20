@@ -24,12 +24,13 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import Logo from '@/components/Logo';
+import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
-  Wifi, WifiOff, X, LogOut, AlertCircle,
+  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Hourglass,
 } from 'lucide-react';
 
-type PickStatus = 'new' | 'separating' | 'ready' | 'shipped';
+type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
 
 interface PickOrderItem {
   id?: string;
@@ -93,12 +94,14 @@ interface MeProfile {
 const STATUS_LABEL: Record<PickStatus, string> = {
   new: 'Novo',
   separating: 'Separando',
+  separated: 'Aguardando matriz',
   ready: 'Pronto',
   shipped: 'Enviado',
 };
 const STATUS_COLOR: Record<PickStatus, string> = {
   new: 'bg-amber-100 text-amber-900 border-amber-300',
   separating: 'bg-blue-100 text-blue-900 border-blue-300',
+  separated: 'bg-purple-100 text-purple-900 border-purple-300',
   ready: 'bg-emerald-100 text-emerald-900 border-emerald-300',
   shipped: 'bg-slate-200 text-slate-700 border-slate-300',
 };
@@ -113,6 +116,7 @@ export default function MinhaLojaPage() {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
+  const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
@@ -464,7 +468,7 @@ export default function MinhaLojaPage() {
     [rows],
   );
   const countByStatus = useMemo(() => {
-    const c: Record<PickStatus, number> = { new: 0, separating: 0, ready: 0, shipped: 0 };
+    const c: Record<PickStatus, number> = { new: 0, separating: 0, separated: 0, ready: 0, shipped: 0 };
     for (const r of rows) c[r.status] = (c[r.status] ?? 0) + 1;
     return c;
   }, [rows]);
@@ -540,7 +544,7 @@ export default function MinhaLojaPage() {
               key={row.id}
               row={row}
               onStart={() => transitionStatus(row, 'separating')}
-              onReady={() => transitionStatus(row, 'ready')}
+              onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
               onPrint={() => openPrintWindow(row.id)}
               onSeen={() => cancelAutoMaximize(row.id)}
@@ -555,6 +559,26 @@ export default function MinhaLojaPage() {
           row={showShippedModal}
           onClose={() => setShowShippedModal(null)}
           onSubmit={submitShipped}
+        />
+      )}
+
+      {/* Modal bipagem (EAN13) */}
+      {showBipModal && (
+        <BipModal
+          pickOrderId={showBipModal.id}
+          wcOrderNumber={showBipModal.order.wcOrderNumber ?? String(showBipModal.order.wcOrderId ?? '')}
+          customerName={showBipModal.order.customerName}
+          onClose={() => setShowBipModal(null)}
+          onFinished={() => {
+            // Atualiza status local pra 'separated' imediatamente (UX ágil)
+            setRows((prev) =>
+              prev.map((r) =>
+                r.id === showBipModal.id ? { ...r, status: 'separated' as PickStatus } : r,
+              ),
+            );
+            setShowBipModal(null);
+            pushToast(`Pedido enviado pra matriz pra aprovação da baixa`);
+          }}
         />
       )}
 
@@ -620,11 +644,11 @@ function EmptyState() {
 }
 
 function PickOrderCard({
-  row, onStart, onReady, onShip, onPrint, onSeen,
+  row, onStart, onBip, onShip, onPrint, onSeen,
 }: {
   row: PickOrderRow;
   onStart: () => void;
-  onReady: () => void;
+  onBip: () => void;
   onShip: () => void;
   onPrint: () => void;
   onSeen: () => void;
@@ -779,11 +803,17 @@ function PickOrderCard({
         )}
         {status === 'separating' && (
           <button
-            onClick={(e) => { e.stopPropagation(); onReady(); }}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 rounded flex items-center justify-center gap-2"
+            onClick={(e) => { e.stopPropagation(); onBip(); }}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded flex items-center justify-center gap-2"
           >
-            <CheckCircle2 className="w-5 h-5" /> Marcar como Pronto
+            <Barcode className="w-5 h-5" /> Bipar peças
           </button>
+        )}
+        {status === 'separated' && (
+          <div className="flex-1 bg-purple-50 border border-purple-300 text-purple-800 font-medium py-3 rounded flex items-center justify-center gap-2 text-sm">
+            <Hourglass className="w-5 h-5" />
+            Aguardando matriz aprovar a baixa
+          </div>
         )}
         {status === 'ready' && (
           <button

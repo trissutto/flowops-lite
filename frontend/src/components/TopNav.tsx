@@ -14,6 +14,7 @@ const NAV = [
   { href: '/',          label: 'Dashboard' },
   { href: '/pedidos',   label: 'Pedidos'   },
   { href: '/separacao', label: 'Separação' },
+  { href: '/retaguarda/baixa-estoque', label: 'Baixa Estoque' },
   { href: '/produtos',  label: 'Produtos'  },
   { href: '/auditoria-sku', label: 'Auditoria SKU' },
   { href: '/clientes',  label: 'Clientes'  },

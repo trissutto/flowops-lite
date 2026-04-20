@@ -4,9 +4,10 @@ import { PickOrdersService } from './pick-orders.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
+import { ErpModule } from '../erp/erp.module';
 
 @Module({
-  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule)],
+  imports: [PrismaModule, WebsocketModule, forwardRef(() => WooCommerceModule), ErpModule],
   controllers: [PickOrdersController],
   providers: [PickOrdersService],
   exports: [PickOrdersService],

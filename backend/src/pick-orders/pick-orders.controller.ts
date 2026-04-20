@@ -47,6 +47,50 @@ export class PickOrdersController {
     return this.svc.listMine(user.storeId, { all: all === 'true' });
   }
 
+  /**
+   * Matriz — lista pick-orders aguardando aprovação da baixa de estoque.
+   * Status `separated` = filial bipou tudo, aguardando operadora matriz aprovar.
+   * Ordenação FIFO (mais antigo primeiro).
+   */
+  @Get('pending-approval')
+  pendingApproval(@Req() req: any) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) aprova baixa de estoque');
+    }
+    return this.svc.listPendingApproval();
+  }
+
+  /**
+   * Matriz aprova baixa de estoque — transiciona separated → ready.
+   * SHADOW MODE: grava intenção em integration_logs, NÃO toca no Gigasistemas ainda.
+   */
+  @Post(':id/approve-debit')
+  approveDebit(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) aprova baixa');
+    }
+    return this.svc.approveDebit(id, user.userId);
+  }
+
+  /**
+   * Matriz rejeita baixa — volta pra separating, loja revisa.
+   * Body: { reason: string }
+   */
+  @Post(':id/reject-debit')
+  rejectDebit(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) rejeita baixa');
+    }
+    return this.svc.rejectDebit(id, user.userId, body?.reason ?? '');
+  }
+
   @Get(':id')
   getOne(@Req() req: any, @Param('id') id: string) {
     const user = req.user as AuthUser;
@@ -70,6 +114,38 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas usuários de loja atualizam pick-orders');
     }
     return this.svc.updateStatus(id, user.storeId, user.userId, body);
+  }
+
+  /**
+   * Retorna items do pick-order com EAN13 resolvido do Gigasistemas.
+   * Usado pela tela de bipagem — frontend monta mapa EAN→SKU pra validar bips.
+   */
+  @Get(':id/scan-data')
+  getScanData(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja acessam essa rota');
+    }
+    return this.svc.getScanData(id, user.storeId);
+  }
+
+  /**
+   * Filial terminou a bipagem — transiciona pick-order pra `separated`.
+   * Body: { scans: Array<{ sku, ean, timestamp }> }
+   * Valida que bipou tudo que era esperado antes de confirmar.
+   * NÃO toca em Gigasistemas. Apenas muda status + log de auditoria.
+   */
+  @Post(':id/finish-separation')
+  finishSeparation(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { scans: Array<{ sku: string; ean: string; timestamp: string }> },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja finalizam separação');
+    }
+    return this.svc.finishSeparation(id, user.storeId, user.userId, body.scans ?? []);
   }
 
   /**

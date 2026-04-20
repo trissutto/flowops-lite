@@ -2,14 +2,22 @@ import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, No
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
+import { ErpService } from '../erp/erp.service';
 
-export type PickStatus = 'new' | 'separating' | 'ready' | 'shipped';
-const VALID_STATUSES: PickStatus[] = ['new', 'separating', 'ready', 'shipped'];
+// Status do pick-order:
+//   new          → chegou, filial não começou
+//   separating   → filial clicou "Iniciar Separação", bipagem em andamento
+//   separated    → filial bipou 100%, aguardando matriz aprovar baixa
+//   ready        → matriz aprovou baixa (estoque baixado no ERP), pronto pra postar
+//   shipped      → filial postou e adicionou rastreio
+export type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
+const VALID_STATUSES: PickStatus[] = ['new', 'separating', 'separated', 'ready', 'shipped'];
 
 // Transições permitidas (não deixa voltar um status atrás, por segurança)
 const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = {
   new: ['separating', 'ready'],       // pode pular "separating" se quiser marcar já pronto
-  separating: ['ready'],
+  separating: ['separated', 'ready'], // ready direto é fallback manual do admin (pula bipagem)
+  separated: ['ready', 'separating'], // matriz aprova → ready; matriz rejeita → volta pra separating
   ready: ['shipped'],
   shipped: [],                        // ponto final
 };
@@ -31,7 +39,119 @@ export class PickOrdersService {
     private readonly gateway: RealtimeGateway,
     @Inject(forwardRef(() => WooCommerceService))
     private readonly wc: WooCommerceService,
+    private readonly erp: ErpService,
   ) {}
+
+  /**
+   * Retorna os items desse pick-order com o EAN resolvido do ERP.
+   * Usado pela tela de bipagem da filial — frontend monta mapa EAN→SKU.
+   */
+  async getScanData(pickOrderId: string, storeId: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: { id: true, storeId: true, status: true, orderId: true },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+
+    // Items atribuídos a essa loja (pedido multi-loja só retorna o pedaço dela)
+    const items = await this.prisma.orderItem.findMany({
+      where: { orderId: po.orderId, assignedStoreId: storeId },
+      select: { id: true, sku: true, productName: true, quantity: true },
+    });
+
+    const skus = items.map((i) => i.sku).filter(Boolean);
+    const eanMap = skus.length ? await this.erp.getEansBySkus(skus) : {};
+
+    return {
+      pickOrderId: po.id,
+      status: po.status,
+      items: items.map((i) => ({
+        id: i.id,
+        sku: i.sku,
+        productName: i.productName,
+        quantity: i.quantity,
+        ean: eanMap[i.sku] ?? null, // null = sem EAN no ERP → operador precisa reportar
+      })),
+    };
+  }
+
+  /**
+   * Transiciona pick-order de `separating` → `separated`.
+   * Recebe no body a lista de scans pra auditoria (armazena em integration_logs).
+   *
+   * IMPORTANTE: essa operação AINDA NÃO toca no Gigasistemas. Apenas muda
+   * status interno. A baixa real de estoque acontece na matriz, quando operadora
+   * da retaguarda aprova.
+   */
+  async finishSeparation(
+    pickOrderId: string,
+    storeId: string,
+    userId: string,
+    scans: Array<{ sku: string; ean: string; timestamp: string }>,
+  ) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: { id: true, storeId: true, status: true, orderId: true },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+    if (po.status !== 'separating' && po.status !== 'new') {
+      throw new BadRequestException(`Status atual é "${po.status}" — só pode finalizar de "separating"/"new"`);
+    }
+
+    // Valida que bipou tudo que era esperado
+    const items = await this.prisma.orderItem.findMany({
+      where: { orderId: po.orderId, assignedStoreId: storeId },
+      select: { sku: true, quantity: true },
+    });
+    const expected = new Map<string, number>();
+    for (const it of items) {
+      expected.set(it.sku, (expected.get(it.sku) ?? 0) + it.quantity);
+    }
+    const scannedCount = new Map<string, number>();
+    for (const s of scans) {
+      scannedCount.set(s.sku, (scannedCount.get(s.sku) ?? 0) + 1);
+    }
+    for (const [sku, qty] of expected.entries()) {
+      const got = scannedCount.get(sku) ?? 0;
+      if (got < qty) {
+        throw new BadRequestException(
+          `SKU ${sku}: esperado ${qty}, bipado ${got}. Bipa tudo antes de finalizar.`,
+        );
+      }
+    }
+
+    // Log de auditoria — fica pra sempre no integration_logs
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'separation.finished',
+        payload: JSON.stringify({ pickOrderId, userId, storeId, scans }),
+        status: 200,
+      },
+    });
+
+    const updated = await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { status: 'separated' },
+      include: { order: { select: { wcOrderId: true } } },
+    });
+
+    // Notifica matriz em tempo real — retaguarda vê a nova fila
+    this.gateway.emitPickOrderStatus(storeId, {
+      id: updated.id,
+      status: 'separated',
+    });
+
+    return {
+      id: updated.id,
+      status: updated.status,
+      wcOrderId: updated.order?.wcOrderId ?? null,
+      itemsScanned: scans.length,
+    };
+  }
 
   /**
    * Lista os pick-orders DA loja do user logado.
@@ -40,7 +160,7 @@ export class PickOrdersService {
   async listMine(storeId: string, opts?: { all?: boolean }) {
     const where: any = { storeId };
     if (!opts?.all) {
-      where.status = { in: ['new', 'separating', 'ready'] };
+      where.status = { in: ['new', 'separating', 'separated', 'ready'] };
     }
     const rows = await this.prisma.pickOrder.findMany({
       where,
@@ -127,6 +247,160 @@ export class PickOrdersService {
         },
       };
     });
+  }
+
+  /**
+   * Matriz — lista todos os pick-orders com status `separated` (aguardando aprovação).
+   * Ordenação: mais antigo primeiro (FIFO — quem separou primeiro, baixa primeiro).
+   */
+  async listPendingApproval() {
+    const rows = await this.prisma.pickOrder.findMany({
+      where: { status: 'separated' },
+      orderBy: [{ updatedAt: 'asc' }],
+      include: {
+        store: { select: { id: true, code: true, name: true, city: true } },
+        order: {
+          select: {
+            id: true,
+            wcOrderId: true,
+            wcOrderNumber: true,
+            customerName: true,
+            customerCpf: true,
+            customerEmail: true,
+            customerPhone: true,
+            shippingCep: true,
+            totalAmount: true,
+          },
+        },
+      },
+    });
+
+    const orderIds = [...new Set(rows.map((r) => r.orderId))];
+    const allItems = orderIds.length
+      ? await this.prisma.orderItem.findMany({
+          where: { orderId: { in: orderIds } },
+        })
+      : [];
+    const itemsByPickOrder = new Map<string, any[]>();
+    for (const r of rows) {
+      const its = allItems.filter(
+        (it) => it.orderId === r.orderId && it.assignedStoreId === r.storeId,
+      );
+      itemsByPickOrder.set(r.id, its);
+    }
+
+    return rows.map((r) => ({
+      id: r.id,
+      status: r.status,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+      waitingMinutes: Math.round((Date.now() - r.updatedAt.getTime()) / 60000),
+      store: r.store,
+      order: r.order,
+      items: itemsByPickOrder.get(r.id) ?? [],
+    }));
+  }
+
+  /**
+   * Matriz aprova a baixa — transiciona `separated` → `ready`.
+   *
+   * FASE 1 (SHADOW MODE): grava payload da baixa em integration_logs mas NÃO
+   * toca no Gigasistemas. Operadora continua fazendo baixa manual no PDV SITE.
+   * Comparação diária detecta divergências.
+   *
+   * FASE 3 (futuro): substituir o log por call real ao Gigasistemas (INSERT
+   * em movimento_estoque + UPDATE em estoque dentro de transação).
+   */
+  async approveDebit(pickOrderId: string, operatorUserId: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: { id: true, status: true, storeId: true, orderId: true },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.status !== 'separated') {
+      throw new BadRequestException(`Status atual é "${po.status}" — só aprova de "separated"`);
+    }
+
+    const items = await this.prisma.orderItem.findMany({
+      where: { orderId: po.orderId, assignedStoreId: po.storeId },
+      select: { sku: true, quantity: true, productName: true },
+    });
+
+    // SHADOW: grava intenção de baixa pra auditoria/comparação
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.approved.shadow',
+        payload: JSON.stringify({
+          pickOrderId,
+          approvedBy: operatorUserId,
+          storeId: po.storeId,
+          items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+          note: 'SHADOW MODE — baixa ainda não é aplicada no Gigasistemas',
+        }),
+        status: 200,
+      },
+    });
+
+    const updated = await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { status: 'ready' },
+    });
+
+    // Notifica a loja em tempo real (card muda pra "Pronto" → botão Enviar libera)
+    this.gateway.emitPickOrderStatus(po.storeId, {
+      id: updated.id,
+      status: 'ready',
+    });
+
+    return {
+      id: updated.id,
+      status: updated.status,
+      shadowMode: true,
+      itemsCount: items.length,
+    };
+  }
+
+  /**
+   * Matriz rejeita a baixa — volta pra `separating` pra loja revisar.
+   * Grava motivo no log pra loja consultar.
+   */
+  async rejectDebit(pickOrderId: string, operatorUserId: string, reason: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: { id: true, status: true, storeId: true },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.status !== 'separated') {
+      throw new BadRequestException(`Status atual é "${po.status}" — só rejeita de "separated"`);
+    }
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.rejected',
+        payload: JSON.stringify({
+          pickOrderId,
+          rejectedBy: operatorUserId,
+          reason: reason?.trim() || '(sem motivo informado)',
+        }),
+        status: 200,
+      },
+    });
+
+    const updated = await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { status: 'separating' },
+    });
+
+    this.gateway.emitPickOrderStatus(po.storeId, {
+      id: updated.id,
+      status: 'separating',
+    });
+
+    return { id: updated.id, status: updated.status, reason };
   }
 
   /**
