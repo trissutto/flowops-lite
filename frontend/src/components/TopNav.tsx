@@ -27,8 +27,9 @@ export default function TopNav() {
   const pathname = usePathname() || '/';
   const router = useRouter();
 
-  // Esconder na tela de login
+  // Esconder na tela de login e na operação de loja (UI dedicada com header próprio)
   if (pathname === '/login' || pathname.startsWith('/login')) return null;
+  if (pathname.startsWith('/minha-loja')) return null;
 
   function logout() {
     try { window.localStorage.removeItem('flowops_token'); } catch {}

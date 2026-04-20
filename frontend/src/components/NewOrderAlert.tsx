@@ -111,10 +111,11 @@ export default function NewOrderAlert() {
   }, []);
 
   const isLoginPage = pathname === '/login' || pathname?.startsWith('/login');
+  const isStorePage = !!pathname?.startsWith('/minha-loja');
 
   // ───── WEBSOCKET ─────
   useEffect(() => {
-    if (isLoginPage) return;
+    if (isLoginPage || isStorePage) return;
     const token =
       typeof window !== 'undefined' ? window.localStorage?.getItem('flowops_token') : null;
     if (!token) {
@@ -145,13 +146,13 @@ export default function NewOrderAlert() {
       socket.off('order:new', onNew);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoginPage]);
+  }, [isLoginPage, isStorePage]);
 
   // ───── POLLING FALLBACK ─────
   // Compara lista de pedidos em "processing" do WC a cada 30s.
   // Se apareceu ID que não estava antes → dispara popup.
   useEffect(() => {
-    if (isLoginPage) return;
+    if (isLoginPage || isStorePage) return;
     const token =
       typeof window !== 'undefined' ? window.localStorage?.getItem('flowops_token') : null;
     if (!token) return;

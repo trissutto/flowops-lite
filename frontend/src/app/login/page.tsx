@@ -17,12 +17,20 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api<{ accessToken: string }>('/auth/login', {
+      const res = await api<{
+        accessToken: string;
+        user: { id: string; email: string; name: string | null; role: string; storeId: string | null };
+      }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
       localStorage.setItem('flowops_token', res.accessToken);
-      router.push('/');
+      // Redireciona por papel: loja vai direto pra /minha-loja
+      if (res.user?.role === 'store') {
+        router.push('/minha-loja');
+      } else {
+        router.push('/');
+      }
     } catch (err: any) {
       setError('Credenciais inválidas.');
     } finally {

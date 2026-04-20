@@ -27,21 +27,50 @@ if not exist ".git" (
   exit /b 1
 )
 
+REM Limpa lock residual (caso tenha travado de edicao anterior)
+if exist ".git\index.lock" del /f /q ".git\index.lock"
+
 git add .
 git diff --cached --quiet
 if errorlevel 1 (
   set /p MSG=Mensagem curta do commit (ou ENTER pra usar 'update'):
   if "%MSG%"=="" set MSG=chore: update
   git commit -m "%MSG%"
+  if errorlevel 1 goto erro_commit
+
+  echo.
+  echo Sincronizando com o remoto antes de enviar...
+  git pull --rebase
+  if errorlevel 1 (
+    echo.
+    echo [ERRO] Conflito no pull --rebase. Resolve manualmente e roda de novo.
+    pause
+    exit /b 1
+  )
+
   git push
+  if errorlevel 1 goto erro_push
   echo.
   echo ============================================================
-  echo   ENVIADO! O Railway ja esta fazendo o redeploy sozinho.
+  echo   ENVIADO! Railway + Vercel ja estao fazendo redeploy.
   echo ============================================================
 ) else (
   echo.
   echo Nada pra commitar - tudo ja sincronizado.
 )
+goto fim
+
+:erro_commit
+echo [ERRO] Falhou no commit.
+pause
+exit /b 1
+
+:erro_push
+echo [ERRO] Falhou no push. Verifica credenciais e tenta de novo.
+pause
+exit /b 1
+
+:fim
 
 echo.
 pause

@@ -5,6 +5,7 @@ import { RoutingEngine } from './routing.engine';
 import { OrderStatus, PickStatus } from '../common/enums';
 import { RoutingResult } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
+import { RealtimeGateway } from '../websocket/realtime.gateway';
 
 @Injectable()
 export class RoutingService {
@@ -14,6 +15,7 @@ export class RoutingService {
     private readonly prisma: PrismaService,
     private readonly stock: StockService,
     private readonly engine: RoutingEngine,
+    private readonly gateway: RealtimeGateway,
   ) {}
 
   /**
@@ -84,15 +86,18 @@ export class RoutingService {
       return { persisted: false };
     }
 
+    const createdPickOrders: Array<{ id: string; storeId: string }> = [];
+
     await this.prisma.$transaction(async (tx) => {
       for (const a of result.assignments) {
-        await tx.pickOrder.create({
+        const po = await tx.pickOrder.create({
           data: {
             orderId,
             storeId: a.storeId,
             status: PickStatus.new,
           },
         });
+        createdPickOrders.push({ id: po.id, storeId: a.storeId });
         for (const item of a.items) {
           await tx.orderItem.updateMany({
             where: { orderId, sku: item.sku },
@@ -115,6 +120,47 @@ export class RoutingService {
         },
       });
     });
+
+    // Emite por socket pra cada loja — dispara notificação + impressão no app desktop
+    try {
+      const order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          id: true,
+          wcOrderId: true,
+          wcOrderNumber: true,
+          customerName: true,
+          customerPhone: true,
+          shippingCep: true,
+          shippingAddress: true,
+          totalAmount: true,
+          wcDateCreated: true,
+        },
+      });
+
+      for (const po of createdPickOrders) {
+        const assignment = result.assignments.find((a) => a.storeId === po.storeId);
+        const items = await this.prisma.orderItem.findMany({
+          where: { orderId, assignedStoreId: po.storeId },
+        });
+
+        this.gateway.emitPickOrderToStore(po.storeId, {
+          id: po.id,
+          status: PickStatus.new,
+          storeId: po.storeId,
+          orderId,
+          order: {
+            ...order,
+            items,
+          },
+          strategy: result.strategy,
+          storeCode: assignment?.storeCode,
+          storeName: assignment?.storeName,
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Falha ao emitir socket de pick-order novo: ${err?.message ?? err}`);
+    }
 
     return { persisted: true, assignments: result.assignments.length };
   }

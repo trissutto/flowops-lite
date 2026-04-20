@@ -19,6 +19,7 @@ import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { HealthModule } from './health/health.module';
 import { UsersModule } from './users/users.module';
+import { PickOrdersModule } from './pick-orders/pick-orders.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { UsersModule } from './users/users.module';
     AbandonedCartsModule,
     HealthModule,
     UsersModule,
+    PickOrdersModule,
   ],
 })
 export class AppModule {}

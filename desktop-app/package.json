@@ -1,0 +1,62 @@
+{
+  "name": "flowops-desktop",
+  "version": "1.0.0",
+  "description": "FlowOps — app de loja (tray + auto-start + impressao silenciosa)",
+  "main": "src/main.js",
+  "author": "FlowOps",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --flowops-url=http://localhost:3000/minha-loja",
+    "build": "electron-builder --win --x64",
+    "dist": "electron-builder --win --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.flowops.desktop",
+    "productName": "FlowOps",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "FlowOps-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "FlowOps",
+      "runAfterFinish": true
+    },
+    "extraResources": [
+      {
+        "from": "build/",
+        "to": "build/",
+        "filter": ["icon.ico", "icon-tray.png"]
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  }
+}

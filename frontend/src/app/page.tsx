@@ -48,6 +48,10 @@ export default function Dashboard() {
       router.push('/login');
       return;
     }
+    // Se for user de loja, manda direto pra /minha-loja (UI dedicada)
+    api<{ role: string }>('/auth/me')
+      .then((me) => { if (me.role === 'store') router.push('/minha-loja'); })
+      .catch(() => {});
     load();
 
     // Pede permissão para notificações do sistema

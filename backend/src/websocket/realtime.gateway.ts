@@ -1,9 +1,23 @@
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import {
   WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
+/**
+ * Gateway WebSocket do FlowOps.
+ *
+ * Papéis:
+ *  - admin/operator → entra na sala 'admin' e recebe updates de todas as lojas
+ *  - store         → entra na sala 'store:<storeId>' (e só enxerga o que é da loja dele)
+ *
+ * Autenticação: cliente envia JWT em `handshake.auth.token`. Se inválido, desconecta.
+ *
+ * Presença: mantemos um Map<storeId, Set<socketId>> pro endpoint /stores/presence
+ * poder mostrar quais lojas estão online em tempo real.
+ */
 @WebSocketGateway({ namespace: '/realtime', cors: { origin: '*' } })
 export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(RealtimeGateway.name);
@@ -11,21 +25,176 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   @WebSocketServer()
   server: Server;
 
+  // Presença: storeId → conjunto de socketIds conectados dessa loja
+  private readonly storeSockets = new Map<string, Set<string>>();
+  // Último visto por storeId (pra mostrar "offline há X min")
+  private readonly lastSeen = new Map<string, Date>();
+  // Usuários admin online (pode ser útil pra /pedidos ter lista de operadores)
+  private readonly adminSockets = new Set<string>();
+
+  constructor(
+    private readonly config: ConfigService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  // ---------- Conexão / desconexão ----------
+
   handleConnection(client: Socket) {
-    // TODO: validar JWT em client.handshake.auth.token
-    this.logger.log(`Socket conectado: ${client.id}`);
-  }
-  handleDisconnect(client: Socket) {
-    this.logger.log(`Socket desconectado: ${client.id}`);
+    try {
+      const token = this.extractToken(client);
+      if (!token) {
+        this.logger.warn(`[socket ${client.id}] sem token, desconectando`);
+        client.disconnect(true);
+        return;
+      }
+
+      const secret = this.config.get<string>('JWT_SECRET');
+      if (!secret) {
+        this.logger.error('JWT_SECRET não configurado — desconectando socket');
+        client.disconnect(true);
+        return;
+      }
+
+      const payload = this.jwtService.verify(token, { secret }) as any;
+      const role = String(payload.role || '');
+      const storeId = payload.storeId ? String(payload.storeId) : null;
+      const userId = String(payload.sub || '');
+
+      // Guarda infos no próprio socket pra uso posterior
+      (client.data as any).userId = userId;
+      (client.data as any).role = role;
+      (client.data as any).storeId = storeId;
+
+      if (role === 'store') {
+        if (!storeId) {
+          this.logger.warn(`[socket ${client.id}] role=store sem storeId, desconectando`);
+          client.disconnect(true);
+          return;
+        }
+        const room = `store:${storeId}`;
+        client.join(room);
+        this.registerStoreSocket(storeId, client.id);
+        this.logger.log(`[socket ${client.id}] entrou em ${room} (user=${userId})`);
+        // Notifica admins que essa loja ficou online
+        this.server.to('admin').emit('presence:update', {
+          storeId,
+          online: true,
+          lastSeen: new Date().toISOString(),
+        });
+      } else {
+        // admin | operator → sala 'admin'
+        client.join('admin');
+        this.adminSockets.add(client.id);
+        this.logger.log(`[socket ${client.id}] entrou em admin (role=${role}, user=${userId})`);
+      }
+    } catch (err) {
+      this.logger.warn(`[socket ${client.id}] handshake falhou: ${(err as Error).message}`);
+      client.disconnect(true);
+    }
   }
 
+  handleDisconnect(client: Socket) {
+    const storeId = (client.data as any)?.storeId as string | null;
+    const role = (client.data as any)?.role as string | undefined;
+
+    if (role === 'store' && storeId) {
+      this.unregisterStoreSocket(storeId, client.id);
+      const stillOnline = (this.storeSockets.get(storeId)?.size ?? 0) > 0;
+      if (!stillOnline) {
+        this.lastSeen.set(storeId, new Date());
+        this.server.to('admin').emit('presence:update', {
+          storeId,
+          online: false,
+          lastSeen: new Date().toISOString(),
+        });
+      }
+    } else {
+      this.adminSockets.delete(client.id);
+    }
+    this.logger.log(`[socket ${client.id}] desconectado`);
+  }
+
+  // ---------- API pra outros módulos chamarem ----------
+
+  /**
+   * Emite um evento pra SALA de UMA loja específica.
+   * Usar quando admin confirma roteamento → loja recebe pick-order novo em tempo real.
+   */
+  emitPickOrderToStore(storeId: string, pickOrder: any) {
+    this.server.to(`store:${storeId}`).emit('pick-order:new', pickOrder);
+  }
+
+  /**
+   * Emite mudança de status de um pick-order.
+   * Vai pra sala da loja (pra ela ver o eco) + pra sala admin (pra /pedidos refletir).
+   */
+  emitPickOrderStatus(storeId: string, pickOrder: any) {
+    this.server.to(`store:${storeId}`).emit('pick-order:status', pickOrder);
+    this.server.to('admin').emit('pick-order:status', pickOrder);
+  }
+
+  /**
+   * Retorna snapshot da presença (usado pelo endpoint /stores/presence).
+   */
+  getPresence(): Array<{ storeId: string; online: boolean; lastSeen: string | null }> {
+    const result: Array<{ storeId: string; online: boolean; lastSeen: string | null }> = [];
+    // Lojas atualmente online
+    for (const [storeId, set] of this.storeSockets) {
+      if (set.size > 0) {
+        result.push({ storeId, online: true, lastSeen: new Date().toISOString() });
+      }
+    }
+    // Lojas que já conectaram um dia e estão offline
+    for (const [storeId, ts] of this.lastSeen) {
+      if (!result.some((r) => r.storeId === storeId)) {
+        result.push({ storeId, online: false, lastSeen: ts.toISOString() });
+      }
+    }
+    return result;
+  }
+
+  // ---------- Eventos legados (mantêm compat com partes do app antigas) ----------
+
   emitOrderNew(order: any) {
-    this.server.emit('order:new', order);
+    this.server.to('admin').emit('order:new', order);
   }
   emitOrderStatusChanged(order: any) {
-    this.server.emit('order:status-changed', order);
+    this.server.to('admin').emit('order:status-changed', order);
   }
   emitStockAlert(payload: any) {
-    this.server.emit('stock:alert', payload);
+    this.server.to('admin').emit('stock:alert', payload);
+  }
+
+  // ---------- Helpers ----------
+
+  private extractToken(client: Socket): string | null {
+    const fromAuth = (client.handshake.auth as any)?.token;
+    if (fromAuth && typeof fromAuth === 'string') {
+      return fromAuth.startsWith('Bearer ') ? fromAuth.slice(7) : fromAuth;
+    }
+    const fromHeader = client.handshake.headers?.authorization;
+    if (fromHeader && typeof fromHeader === 'string') {
+      return fromHeader.startsWith('Bearer ') ? fromHeader.slice(7) : fromHeader;
+    }
+    const fromQuery = (client.handshake.query as any)?.token;
+    if (fromQuery && typeof fromQuery === 'string') return fromQuery;
+    return null;
+  }
+
+  private registerStoreSocket(storeId: string, socketId: string) {
+    let set = this.storeSockets.get(storeId);
+    if (!set) {
+      set = new Set<string>();
+      this.storeSockets.set(storeId, set);
+    }
+    set.add(socketId);
+  }
+
+  private unregisterStoreSocket(storeId: string, socketId: string) {
+    const set = this.storeSockets.get(storeId);
+    if (set) {
+      set.delete(socketId);
+      if (set.size === 0) this.storeSockets.delete(storeId);
+    }
   }
 }
