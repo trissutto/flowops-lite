@@ -681,11 +681,41 @@ export default function PedidoDetailPage() {
                   <Check className="w-4 h-4" /> Distribuído pra {confirmResult.pickOrders.length} loja(s):
                 </div>
                 <ul className="mt-2 ml-6 list-disc text-emerald-700">
-                  {confirmResult.pickOrders.map((p) => (
-                    <li key={p.id}>
-                      <b>{p.storeName}</b> ({p.storeCode}) — pick-order <span className="font-mono text-xs">{p.id.slice(0, 8)}</span>
-                    </li>
-                  ))}
+                  {confirmResult.pickOrders.map((p) => {
+                    const st = printState[p.id] ?? 'idle';
+                    const err = printError[p.id];
+                    return (
+                      <li key={p.id} className="mb-2">
+                        <div>
+                          <b>{p.storeName}</b> ({p.storeCode}) — pick-order <span className="font-mono text-xs">{p.id.slice(0, 8)}</span>
+                        </div>
+                        <div className="mt-1 ml-0">
+                          <button
+                            type="button"
+                            onClick={() => sendPrintRemote(p.id, p.storeName)}
+                            disabled={st === 'sending'}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border ${
+                              st === 'sent'
+                                ? 'bg-emerald-600 text-white border-emerald-700'
+                                : st === 'error'
+                                ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                                : st === 'sending'
+                                ? 'bg-gray-100 text-gray-500 border-gray-300 cursor-wait'
+                                : 'bg-white text-emerald-800 border-emerald-400 hover:bg-emerald-100'
+                            }`}
+                          >
+                            {st === 'sending' && 'Enviando...'}
+                            {st === 'sent' && '✓ Enviado pra impressora'}
+                            {st === 'error' && '⚠️ Erro — tentar novamente'}
+                            {st === 'idle' && '🖨️ Imprimir na loja (80mm)'}
+                          </button>
+                          {st === 'error' && err && (
+                            <div className="mt-1 text-xs text-red-700">{err}</div>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
                 <div className="mt-3 pt-2 border-t border-emerald-200">
                   <a
