@@ -130,6 +130,25 @@ export class PickOrdersController {
   }
 
   /**
+   * Fallback da bipagem — quando o EAN bipado não bateu no mapa local,
+   * filial chama esse endpoint pra resolver via busca ampla no ERP.
+   * Body: { ean: string }
+   * Resposta: { found: true, sku } | { found: false, debug: [...] }
+   */
+  @Post(':id/scan-resolve')
+  scanResolve(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { ean: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja acessam essa rota');
+    }
+    return this.svc.resolveScan(id, user.storeId, body?.ean ?? '');
+  }
+
+  /**
    * Filial terminou a bipagem — transiciona pick-order pra `separated`.
    * Body: { scans: Array<{ sku, ean, timestamp }> }
    * Valida que bipou tudo que era esperado antes de confirmar.

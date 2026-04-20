@@ -66,14 +66,67 @@ export class PickOrdersService {
     return {
       pickOrderId: po.id,
       status: po.status,
-      items: items.map((i) => ({
-        id: i.id,
-        sku: i.sku,
-        productName: i.productName,
-        quantity: i.quantity,
-        ean: eanMap[i.sku] ?? null, // null = sem EAN no ERP → operador precisa reportar
-      })),
+      items: items.map((i) => {
+        const ean = eanMap[i.sku] ?? null;
+        // Variantes pra tolerar zeros à esquerda do scanner (ex: "0789..." vs "789...")
+        const eanVariants: string[] = [];
+        if (ean) {
+          eanVariants.push(ean);
+          const stripped = ean.replace(/^0+/, '');
+          if (stripped && stripped !== ean) eanVariants.push(stripped);
+          if (/^\d+$/.test(ean)) {
+            const p13 = ean.padStart(13, '0');
+            const p14 = ean.padStart(14, '0');
+            if (!eanVariants.includes(p13)) eanVariants.push(p13);
+            if (!eanVariants.includes(p14)) eanVariants.push(p14);
+          }
+        }
+        return {
+          id: i.id,
+          sku: i.sku,
+          productName: i.productName,
+          quantity: i.quantity,
+          ean, // null = sem EAN no ERP → operador precisa reportar
+          eanVariants,
+        };
+      }),
     };
+  }
+
+  /**
+   * Fallback quando o EAN bipado não bateu no mapa local da tela de bipagem.
+   * Busca no ERP (todas as colunas candidatas, todas as variantes de zeros) e
+   * se encontrar um CODIGO que está nos SKUs desse pick-order, retorna o SKU.
+   *
+   * Também devolve debug dos SKUs do pedido (EANs por coluna) pra diagnóstico
+   * rápido na UI quando o EAN realmente não pertence ao pedido.
+   */
+  async resolveScan(pickOrderId: string, storeId: string, rawEan: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: { id: true, storeId: true, orderId: true },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+
+    const items = await this.prisma.orderItem.findMany({
+      where: { orderId: po.orderId, assignedStoreId: storeId },
+      select: { sku: true },
+    });
+    const pedidoSkus = new Set(items.map((i) => i.sku).filter(Boolean));
+
+    const hit = await this.erp.findSkuByAnyEan(rawEan);
+    if (hit && pedidoSkus.has(hit)) {
+      return { found: true, sku: hit, ean: rawEan, source: 'erp-wide' as const };
+    }
+
+    // Não achou — devolve dump dos SKUs do pedido pra UI exibir debug
+    const debug: Array<Record<string, any>> = [];
+    for (const sku of pedidoSkus) {
+      const d = await this.erp.debugProductEans(sku);
+      if (d) debug.push(d);
+    }
+    return { found: false, ean: rawEan, erpHit: hit, debug };
   }
 
   /**

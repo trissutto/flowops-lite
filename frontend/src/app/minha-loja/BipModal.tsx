@@ -29,6 +29,23 @@ interface ScanItem {
   productName: string | null;
   quantity: number;
   ean: string | null; // null = não achou EAN no ERP
+  eanVariants?: string[]; // variantes tolerando zeros à esquerda/padding
+}
+
+interface ResolveDebugRow {
+  sku: string;
+  columnsChecked?: string[];
+  row?: Record<string, any> | null;
+  error?: string;
+}
+
+interface ResolveResponse {
+  found: boolean;
+  sku?: string;
+  ean: string;
+  source?: string;
+  erpHit?: string | null;
+  debug?: ResolveDebugRow[];
 }
 
 interface ScanData {
@@ -69,6 +86,8 @@ export default function BipModal({
     ts: number;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [debug, setDebug] = useState<ResolveResponse | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const storageKey = `flowops_scan_${pickOrderId}`;
@@ -117,12 +136,25 @@ export default function BipModal({
     return () => clearTimeout(t);
   }, [feedback?.ts]); // eslint-disable-line
 
-  // Mapas derivados
+  // Mapas derivados: cada EAN e TODAS suas variantes (zeros à esquerda/padding)
+  // apontam pro mesmo SKU — tolera divergência entre scanner e cadastro do ERP.
   const eanToSku = useMemo(() => {
     const m = new Map<string, string>();
     if (data) {
       for (const it of data.items) {
-        if (it.ean) m.set(it.ean, it.sku);
+        const variants = it.eanVariants && it.eanVariants.length ? it.eanVariants : it.ean ? [it.ean] : [];
+        for (const v of variants) {
+          if (v) m.set(v, it.sku);
+        }
+        // Como fallback extra, indexa também sem zeros à esquerda e com padding
+        if (it.ean) {
+          const stripped = it.ean.replace(/^0+/, '');
+          if (stripped) m.set(stripped, it.sku);
+          if (/^\d+$/.test(it.ean)) {
+            m.set(it.ean.padStart(13, '0'), it.sku);
+            m.set(it.ean.padStart(14, '0'), it.sku);
+          }
+        }
       }
     }
     return m;
@@ -175,18 +207,16 @@ export default function BipModal({
     } catch {}
   }, []);
 
-  const handleBip = useCallback(
-    (rawEan: string) => {
-      const ean = rawEan.trim();
-      if (!ean || !data) return;
-      const sku = eanToSku.get(ean);
-      if (!sku) {
-        setFeedback({ type: 'err', msg: `EAN ${ean} não pertence a esse pedido`, ts: Date.now() });
+  // Aceita o bip pro SKU resolvido (de qualquer fonte — mapa local ou fallback).
+  const acceptScanForSku = useCallback(
+    (sku: string, ean: string) => {
+      const expected = expectedBySku.get(sku) ?? 0;
+      const got = scannedBySku.get(sku) ?? 0;
+      if (expected === 0) {
+        setFeedback({ type: 'err', msg: `SKU ${sku} não está na lista do pedido`, ts: Date.now() });
         beep('err');
         return;
       }
-      const expected = expectedBySku.get(sku) ?? 0;
-      const got = scannedBySku.get(sku) ?? 0;
       if (got >= expected) {
         setFeedback({
           type: 'warn',
@@ -207,7 +237,54 @@ export default function BipModal({
       });
       beep('ok');
     },
-    [data, eanToSku, expectedBySku, scannedBySku, scans, persistScans, beep],
+    [expectedBySku, scannedBySku, scans, persistScans, beep],
+  );
+
+  const handleBip = useCallback(
+    async (rawEan: string) => {
+      const ean = rawEan.trim();
+      if (!ean || !data) return;
+
+      // 1) Match direto no mapa local (inclui variantes de zeros à esquerda)
+      let sku = eanToSku.get(ean);
+
+      // 2) Match normalizado: sem zeros à esquerda e com padding 13/14
+      if (!sku) {
+        const stripped = ean.replace(/^0+/, '');
+        sku = eanToSku.get(stripped);
+        if (!sku && /^\d+$/.test(ean)) {
+          sku = eanToSku.get(ean.padStart(13, '0')) || eanToSku.get(ean.padStart(14, '0'));
+        }
+      }
+
+      if (sku) {
+        acceptScanForSku(sku, ean);
+        return;
+      }
+
+      // 3) Fallback: pergunta pro backend se esse EAN bate com algum SKU do pedido
+      //    no ERP (busca em TODAS as colunas + variantes). Se não bater, mostra debug.
+      setResolving(true);
+      try {
+        const res = await api<ResolveResponse>(`/pick-orders/${pickOrderId}/scan-resolve`, {
+          method: 'POST',
+          body: JSON.stringify({ ean }),
+        });
+        if (res.found && res.sku) {
+          acceptScanForSku(res.sku, ean);
+        } else {
+          setFeedback({ type: 'err', msg: `EAN ${ean} não pertence a esse pedido`, ts: Date.now() });
+          beep('err');
+          setDebug(res);
+        }
+      } catch (e: any) {
+        setFeedback({ type: 'err', msg: `Erro ao validar: ${e?.message ?? 'rede'}`, ts: Date.now() });
+        beep('err');
+      } finally {
+        setResolving(false);
+      }
+    },
+    [data, eanToSku, pickOrderId, acceptScanForSku, beep],
   );
 
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -287,16 +364,24 @@ export default function BipModal({
                 <label className="block text-xs font-medium text-slate-500 uppercase mb-1">
                   Bipe o código de barras
                 </label>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={bipInput}
-                  onChange={(e) => setBipInput(e.target.value)}
-                  onKeyDown={handleInputKeyDown}
-                  placeholder="Foque aqui e bipe a peça…"
-                  autoFocus
-                  className="w-full text-lg font-mono px-4 py-3 border-2 border-brand rounded focus:outline-none focus:ring-2 focus:ring-brand-light"
-                />
+                <div className="relative">
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={bipInput}
+                    onChange={(e) => setBipInput(e.target.value)}
+                    onKeyDown={handleInputKeyDown}
+                    placeholder="Foque aqui e bipe a peça…"
+                    autoFocus
+                    disabled={resolving}
+                    className="w-full text-lg font-mono px-4 py-3 border-2 border-brand rounded focus:outline-none focus:ring-2 focus:ring-brand-light disabled:opacity-50"
+                  />
+                  {resolving && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 animate-pulse">
+                      validando…
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Feedback visual */}
@@ -407,6 +492,84 @@ export default function BipModal({
           </button>
         </footer>
       </div>
+
+      {/* Modal de debug — só aparece quando o EAN bipado não bateu em nada */}
+      {debug && !debug.found && (
+        <div
+          className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-3"
+          onClick={() => setDebug(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl w-full max-w-xl max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="p-4 border-b flex items-center justify-between bg-red-50">
+              <div>
+                <div className="flex items-center gap-2 text-red-700">
+                  <AlertTriangle className="w-5 h-5" />
+                  <h3 className="font-bold">EAN {debug.ean} não casa com o pedido</h3>
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  {debug.erpHit ? (
+                    <>Esse EAN existe no Gigasistemas (SKU <strong>{debug.erpHit}</strong>) mas esse SKU NÃO está nesse pedido.</>
+                  ) : (
+                    <>Esse EAN não foi encontrado em nenhuma coluna da tabela produtos do Gigasistemas.</>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setDebug(null)}
+                className="p-2 hover:bg-red-100 rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto p-4 text-sm">
+              <div className="text-xs font-medium uppercase text-slate-500 mb-2">
+                Cadastro dos SKUs desse pedido no ERP
+              </div>
+              <div className="space-y-3">
+                {(debug.debug ?? []).map((d, idx) => (
+                  <div key={idx} className="border rounded p-2 bg-slate-50">
+                    <div className="font-mono text-xs text-slate-700 mb-1">SKU: {d.sku}</div>
+                    {d.row ? (
+                      <table className="w-full text-xs">
+                        <tbody>
+                          {Object.entries(d.row).map(([k, v]) => (
+                            <tr key={k} className="border-t border-slate-200">
+                              <td className="py-1 pr-2 text-slate-500 font-medium">{k}</td>
+                              <td className="py-1 font-mono">{v === null || v === '' ? <em className="text-slate-400">(vazio)</em> : String(v)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="text-xs text-red-600">SKU não encontrado na tabela produtos do Gigasistemas</div>
+                    )}
+                  </div>
+                ))}
+                {(!debug.debug || debug.debug.length === 0) && (
+                  <div className="text-slate-500 text-xs">Sem SKUs pra comparar.</div>
+                )}
+              </div>
+              <div className="mt-4 text-xs text-slate-600 bg-amber-50 border border-amber-200 rounded p-2">
+                <strong>O que fazer:</strong> conferir se o EAN impresso na etiqueta é o mesmo
+                que o Gigasistemas tem cadastrado pro SKU dessa peça. Se o cadastro estiver
+                errado, corrigir no ERP. Se a etiqueta está com EAN de outro produto, separar
+                a peça certa.
+              </div>
+            </div>
+            <footer className="p-3 border-t bg-slate-50">
+              <button
+                onClick={() => setDebug(null)}
+                className="w-full py-2 bg-slate-700 hover:bg-slate-800 text-white font-medium rounded"
+              >
+                Fechar e continuar
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

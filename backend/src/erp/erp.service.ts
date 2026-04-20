@@ -327,24 +327,29 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
+    // MERGE de TODAS as colunas (não para no primeiro hit — uma coluna pode ter 1 SKU
+    // preenchido e outra ter o resto). Primeira a preencher ganha a prioridade.
+    const map: Record<string, string> = {};
+    const totalSet = new Set<string>();
+
     for (const column of candidates) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO, \`${column}\` AS ean FROM produtos WHERE CODIGO IN (?)`,
           [skus],
         );
-        const map: Record<string, string> = {};
         let hits = 0;
         for (const r of rows as any[]) {
+          const codigo = String(r.CODIGO).trim();
           const ean = r.ean ? String(r.ean).trim() : '';
-          if (ean && ean.length >= 8) {
-            map[String(r.CODIGO)] = ean;
+          if (ean && ean.length >= 8 && !map[codigo]) {
+            map[codigo] = ean;
+            totalSet.add(codigo);
             hits++;
           }
         }
         if (hits > 0) {
-          this.logger.log(`getEansBySkus: coluna ${column} resolveu ${hits}/${skus.length} SKUs`);
-          return map;
+          this.logger.log(`getEansBySkus: coluna ${column} adicionou ${hits} SKUs (total ${totalSet.size}/${skus.length})`);
         }
       } catch (e: any) {
         // Coluna não existe nessa tabela → tenta a próxima
@@ -354,8 +359,91 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
-    return {};
+    if (totalSet.size === 0) {
+      this.logger.warn(`getEansBySkus: nenhuma coluna resolveu EANs pros SKUs ${skus.slice(0, 3).join(',')}...`);
+    }
+    return map;
+  }
+
+  /**
+   * Fallback pra bipagem: dado um EAN bipado, procura em TODAS as colunas candidatas
+   * da tabela produtos (EAN13, EAN, CODBARRAS, etc) + tenta com e sem zeros à esquerda.
+   * Retorna o CODIGO (SKU oficial do Gigasistemas) ou null.
+   *
+   * Usado quando o frontend bipa um EAN que não bateu no mapa local (eventualmente
+   * o SKU do WC não existe exatamente como CODIGO no Gigasistemas, ou tem padding
+   * diferente de zeros).
+   */
+  async findSkuByAnyEan(ean: string): Promise<string | null> {
+    if (!this.pool || !ean) return null;
+    const raw = ean.trim();
+    if (!raw) return null;
+
+    // Gera variantes: cru, sem zeros à esquerda, padded pra 13/14 dígitos
+    const stripped = raw.replace(/^0+/, '');
+    const variants = new Set<string>([raw, stripped]);
+    if (/^\d+$/.test(raw)) {
+      variants.add(raw.padStart(13, '0'));
+      variants.add(raw.padStart(14, '0'));
+    }
+    const list = Array.from(variants).filter(Boolean);
+    if (!list.length) return null;
+
+    const columns = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
+
+    for (const col of columns) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM produtos WHERE \`${col}\` IN (?) LIMIT 5`,
+          [list],
+        );
+        if ((rows as any[]).length) {
+          const codigo = String((rows as any[])[0].CODIGO).trim();
+          this.logger.log(`findSkuByAnyEan: EAN ${raw} encontrado em ${col} → ${codigo}`);
+          return codigo;
+        }
+      } catch (e: any) {
+        if (!/Unknown column/i.test(e?.message ?? '')) {
+          this.logger.warn(`findSkuByAnyEan(${col}) erro: ${e.message}`);
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * DIAGNÓSTICO: dump completo de um SKU na tabela produtos — todas as colunas
+   * candidatas de EAN. Usado pra debugar quando um bip não casa.
+   */
+  async debugProductEans(sku: string): Promise<Record<string, any> | null> {
+    if (!this.pool || !sku) return null;
+    const columns = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS', 'REF', 'REFERENCIA'];
+    const existing: string[] = [];
+    // Descobre quais colunas existem
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
+      const names = new Set((cols as any[]).map((c) => String(c.Field).toUpperCase()));
+      for (const c of columns) {
+        if (names.has(c)) existing.push(c);
+      }
+    } catch {
+      return null;
+    }
+    if (!existing.length) return { sku, columns: [], row: null };
+    const selectList = ['CODIGO', ...existing].map((c) => `\`${c}\``).join(', ');
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT ${selectList} FROM produtos WHERE CODIGO = ? LIMIT 1`,
+        [sku.trim()],
+      );
+      return {
+        sku,
+        columnsChecked: existing,
+        row: (rows as any[])[0] ?? null,
+      };
+    } catch (e: any) {
+      return { sku, error: e.message, columnsChecked: existing, row: null };
+    }
   }
 
   /** Retorna metadados de um produto (nome, preço) direto da tabela produtos. */
