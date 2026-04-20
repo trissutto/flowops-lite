@@ -28,11 +28,16 @@ export interface WhatsappMessageInput {
   items: WhatsappItem[];
   customerName: string;
   customerPhone?: string | null;
+  customerCpf?: string | null;
+  customerEmail?: string | null;
   shippingMethod: string;
   address: WhatsappAddress;
   storeName?: string;
   /** URL da página interna pra loja ver detalhes */
   orderUrl?: string;
+  /** Quando true, mensagem vai sinalizar que é TRANSFERÊNCIA pra outra loja. */
+  isTransfer?: boolean;
+  transferToStoreName?: string | null;
 }
 
 export function buildWhatsappMessage(i: WhatsappMessageInput): string {
@@ -42,29 +47,39 @@ export function buildWhatsappMessage(i: WhatsappMessageInput): string {
     .replace('.', ',');
   const date = fmtDatePtBR(i.orderDateIso);
 
-  L.push(`🛍️ *PEDIDO PRA SEPARAR — #${i.wcOrderNumber}*`);
+  // Cabeçalho muda em caso de transferência
+  if (i.isTransfer && i.transferToStoreName) {
+    L.push(`🚚 *TRANSFERÊNCIA PRA ${i.transferToStoreName.toUpperCase()} — Pedido #${i.wcOrderNumber}*`);
+    L.push(`⚠️ SEPARAR E ENVIAR PRA LOJA *${i.transferToStoreName}* — cliente vai retirar lá, NÃO é venda direta.`);
+  } else {
+    L.push(`🛍️ *PEDIDO PRA SEPARAR — #${i.wcOrderNumber}*`);
+  }
   L.push(`📅 ${date}  ·  ${i.paymentMethod || 'pagamento não informado'}  ·  R$ ${total}`);
   L.push('');
 
   L.push(`*👤 CLIENTE*`);
   L.push(i.customerName || '—');
+  if (i.customerCpf) L.push(`🪪 CPF ${i.customerCpf}`);
   if (i.customerPhone) L.push(`📱 ${formatPhone(i.customerPhone)}`);
+  if (i.customerEmail) L.push(`✉️ ${i.customerEmail}`);
   L.push('');
 
   L.push(`*📍 ENVIO*`);
   L.push(`🚚 ${i.shippingMethod || '—'}`);
-  const addrLine = [
-    i.address.street,
-    i.address.number ? `, ${i.address.number}` : '',
-  ]
-    .filter(Boolean)
-    .join('');
-  if (addrLine) L.push(addrLine);
-  if (i.address.complement) L.push(i.address.complement);
-  if (i.address.neighborhood) L.push(i.address.neighborhood);
-  const cityLine = [i.address.city, i.address.state].filter(Boolean).join(' / ');
-  if (cityLine) L.push(cityLine);
-  if (i.address.postcode) L.push(`CEP ${i.address.postcode}`);
+  if (!i.isTransfer) {
+    const addrLine = [
+      i.address.street,
+      i.address.number ? `, ${i.address.number}` : '',
+    ]
+      .filter(Boolean)
+      .join('');
+    if (addrLine) L.push(addrLine);
+    if (i.address.complement) L.push(i.address.complement);
+    if (i.address.neighborhood) L.push(i.address.neighborhood);
+    const cityLine = [i.address.city, i.address.state].filter(Boolean).join(' / ');
+    if (cityLine) L.push(cityLine);
+    if (i.address.postcode) L.push(`CEP ${i.address.postcode}`);
+  }
   L.push('');
 
   L.push(`*📦 PEÇAS (${i.items.length} item${i.items.length === 1 ? '' : 'ns'})*`);
@@ -76,7 +91,11 @@ export function buildWhatsappMessage(i: WhatsappMessageInput): string {
   }
   L.push('');
 
-  L.push('Por favor separar e me enviar o código de rastreio ao postar 🙏');
+  if (i.isTransfer && i.transferToStoreName) {
+    L.push(`⚠️ *Após separar, enviar pra LOJA ${i.transferToStoreName}.* Cliente vai buscar lá.`);
+  } else {
+    L.push('Por favor separar e me enviar o código de rastreio ao postar 🙏');
+  }
   if (i.orderUrl) {
     L.push('');
     L.push(`_Detalhes: ${i.orderUrl}_`);

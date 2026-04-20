@@ -43,6 +43,7 @@ export class RoutingService {
       })),
       stock,
       shippingCep: order.shippingCep,
+      pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)
@@ -66,9 +67,14 @@ export class RoutingService {
         wcOrderNumber: order.wcOrderNumber,
         customerName: order.customerName,
         customerPhone: order.customerPhone,
+        customerCpf: order.customerCpf,
+        customerEmail: order.customerEmail,
         shippingAddress: order.shippingAddress,
         shippingCep: order.shippingCep,
         totalAmount: order.totalAmount,
+        isPickup: order.isPickup,
+        pickupStoreCode: order.pickupStoreCode,
+        shippingMethod: order.shippingMethod,
       },
     };
   }
@@ -88,6 +94,31 @@ export class RoutingService {
 
     const createdPickOrders: Array<{ id: string; storeId: string }> = [];
 
+    // Snapshot do cliente pra loja fonte saber pra quem enviar (em caso de transferência)
+    const orderForSnapshot = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: {
+        wcOrderId: true,
+        wcOrderNumber: true,
+        customerName: true,
+        customerCpf: true,
+        customerEmail: true,
+        customerPhone: true,
+        pickupStoreCode: true,
+        shippingMethod: true,
+      },
+    });
+    const customerSnapshotJson = JSON.stringify({
+      name: orderForSnapshot.customerName,
+      cpf: orderForSnapshot.customerCpf,
+      email: orderForSnapshot.customerEmail,
+      phone: orderForSnapshot.customerPhone,
+      pickupStoreCode: orderForSnapshot.pickupStoreCode,
+      shippingMethod: orderForSnapshot.shippingMethod,
+      wcOrderId: orderForSnapshot.wcOrderId,
+      wcOrderNumber: orderForSnapshot.wcOrderNumber,
+    });
+
     await this.prisma.$transaction(async (tx) => {
       for (const a of result.assignments) {
         const po = await tx.pickOrder.create({
@@ -95,6 +126,10 @@ export class RoutingService {
             orderId,
             storeId: a.storeId,
             status: PickStatus.new,
+            isTransfer: a.isTransfer ?? false,
+            transferToStoreCode: a.transferToStoreCode ?? null,
+            // Snapshot pra loja fonte atender cliente que vai retirar em outra loja
+            customerSnapshot: a.isTransfer ? customerSnapshotJson : null,
           },
         });
         createdPickOrders.push({ id: po.id, storeId: a.storeId });
@@ -156,6 +191,12 @@ export class RoutingService {
           strategy: result.strategy,
           storeCode: assignment?.storeCode,
           storeName: assignment?.storeName,
+          // ── pickup / transferência ──
+          isTransfer: assignment?.isTransfer ?? false,
+          transferToStoreCode: assignment?.transferToStoreCode ?? null,
+          transferToStoreName: assignment?.transferToStoreName ?? null,
+          pickupStoreCode: result.pickupStoreCode ?? null,
+          pickupStoreName: result.pickupStoreName ?? null,
         });
       }
     } catch (err: any) {
@@ -191,7 +232,12 @@ export class RoutingService {
     items: Array<{ sku: string; quantity: number; productName: string; variant?: string }>;
     customerName: string;
     customerPhone?: string | null;
+    customerEmail?: string | null;
+    customerCpf?: string | null;
     shippingMethod: string;
+    /** Se preenchido, força retirada em loja nessa store (já resolvido pelo controller). */
+    pickupStoreCode?: string | null;
+    isPickup?: boolean;
     address: {
       street?: string | null;
       number?: string | null;
@@ -233,6 +279,7 @@ export class RoutingService {
       })),
       stock: stockEntries,
       shippingCep: input.address.postcode ?? undefined,
+      pickupStoreCode: input.pickupStoreCode ?? null,
     });
 
     // Enriquece cada grupo com dados da loja + itens completos + mensagem WhatsApp
@@ -263,7 +310,12 @@ export class RoutingService {
         address: input.address,
         storeName: store?.name,
         orderUrl: input.orderUrl,
-      });
+        // Sinaliza transferência na própria mensagem pra loja fonte saber
+        isTransfer: a.isTransfer ?? false,
+        transferToStoreName: a.transferToStoreName ?? null,
+        customerCpf: input.customerCpf ?? null,
+        customerEmail: input.customerEmail ?? null,
+      } as any);
 
       return {
         storeId: a.storeId,
@@ -276,6 +328,10 @@ export class RoutingService {
         items: groupItems,
         whatsappMessage: message,
         whatsappUrl: buildWhatsappUrl(store?.whatsapp, message),
+        // ── pickup / transferência ──
+        isTransfer: a.isTransfer ?? false,
+        transferToStoreCode: a.transferToStoreCode ?? null,
+        transferToStoreName: a.transferToStoreName ?? null,
       };
     });
 
@@ -301,6 +357,15 @@ export class RoutingService {
       success: result.success,
       strategy: result.strategy,
       shippingMethod: input.shippingMethod,
+      isPickup: input.isPickup ?? false,
+      pickupStoreCode: result.pickupStoreCode ?? input.pickupStoreCode ?? null,
+      pickupStoreName: result.pickupStoreName ?? null,
+      customer: {
+        name: input.customerName,
+        cpf: input.customerCpf ?? null,
+        email: input.customerEmail ?? null,
+        phone: input.customerPhone ?? null,
+      },
       groups,
       missing: result.missing.map((m) => {
         const full = itemBySku.get(m.sku);

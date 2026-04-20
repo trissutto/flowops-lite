@@ -66,12 +66,17 @@ model Order {
   customerName    String?  @map("customer_name")
   customerEmail   String?  @map("customer_email")
   customerPhone   String?  @map("customer_phone")
+  customerCpf     String?  @map("customer_cpf")     // CPF do cliente (extraído de meta_data do WC)
   shippingCep     String?  @map("shipping_cep")
   shippingAddress String   @map("shipping_address") // JSON serializado
   totalAmount     Float?   @map("total_amount")
   trackingCode    String?  @map("tracking_code")
   carrier         String?
   routingResult   String?  @map("routing_result") // JSON serializado
+  // ── Pickup (retirada em loja) ──
+  isPickup        Boolean  @default(false) @map("is_pickup")          // true quando WC shipping = "Retirar na loja X"
+  pickupStoreCode String?  @map("pickup_store_code")                   // código da loja onde cliente vai retirar (LJ05 etc)
+  shippingMethod  String?  @map("shipping_method")                      // título do método de envio do WC (pra UI)
   wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -107,6 +112,10 @@ model PickOrder {
   status       String   // new, separating, ready, shipped
   trackingCode String?  @map("tracking_code")
   carrier      String?
+  // ── Transferência entre lojas (quando pedido é retirada em loja e loja destino não tem estoque) ──
+  isTransfer           Boolean @default(false) @map("is_transfer")             // true = separar e enviar pra outra loja, não pro cliente
+  transferToStoreCode  String? @map("transfer_to_store_code")                   // loja que vai RECEBER a transferência (loja de retirada)
+  customerSnapshot     String? @map("customer_snapshot")                        // JSON com nome/cpf/email/tel — cliente que vai retirar
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

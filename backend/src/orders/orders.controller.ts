@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { extractAttribution } from '../woocommerce/attribution.util';
+import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -84,6 +85,14 @@ export class OrdersController {
     };
 
     const attribution = extractAttribution(o.meta_data ?? []);
+    const customerCpf = extractCpf(o);
+
+    // Detecta retirada em loja (pra UI mostrar badge + destacar loja)
+    const activeStores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+    });
+    const pickup = detectPickup(o, activeStores);
 
     return {
       id: o.id,
@@ -97,6 +106,7 @@ export class OrdersController {
       customerNote: o.customer_note,
       billing: o.billing ?? {},
       shipping: o.shipping ?? {},
+      customerCpf,
       lineItems: (o.line_items ?? []).map((li: any) => ({
         id: li.id,
         name: li.name,
@@ -114,6 +124,15 @@ export class OrdersController {
         number: getMeta('_tracking_number'),
         carrier: getMeta('_tracking_carrier') || getMeta('_tracking_provider'),
         url: getMeta('_tracking_url'),
+      },
+      pickup: {
+        isPickup: pickup.isPickup,
+        storeCode: pickup.pickupStoreCode,
+        storeName: pickup.pickupStoreCode
+          ? activeStores.find((s) => s.code === pickup.pickupStoreCode)?.name ?? null
+          : null,
+        shippingMethodTitle: pickup.shippingMethodTitle,
+        unresolvedCityName: pickup.unresolvedCityName ?? null,
       },
       attribution,
     };
@@ -290,6 +309,14 @@ export class OrdersController {
       .join(' ')
       .trim();
 
+    // Detecta retirada em loja e resolve storeCode
+    const activeStores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+    });
+    const pickup = detectPickup(o, activeStores);
+    const customerCpf = extractCpf(o);
+
     return this.routing.previewSeparationForWc({
       wcOrderId,
       wcOrderNumber: String(o.number ?? wcOrderId),
@@ -299,7 +326,11 @@ export class OrdersController {
       items,
       customerName,
       customerPhone: billing.phone ?? null,
+      customerEmail: billing.email ?? null,
+      customerCpf,
       shippingMethod,
+      isPickup: pickup.isPickup,
+      pickupStoreCode: pickup.pickupStoreCode,
       address: {
         street: shipping.address_1 ?? billing.address_1 ?? null,
         number: shipping.number ?? billing.number ?? null,

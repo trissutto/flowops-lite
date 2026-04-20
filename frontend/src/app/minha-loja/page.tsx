@@ -46,16 +46,36 @@ interface PickOrderRow {
   carrier: string | null;
   createdAt: string;
   updatedAt?: string;
+  isTransfer?: boolean;
+  transferToStoreCode?: string | null;
+  transferToStoreName?: string | null;
+  transferToStoreCity?: string | null;
+  customerSnapshot?: {
+    name?: string | null;
+    cpf?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    pickupStoreCode?: string | null;
+    pickupStoreName?: string | null;
+    shippingMethod?: string | null;
+    wcOrderNumber?: string | null;
+    wcOrderId?: number | null;
+  } | null;
   order: {
     id: string;
     wcOrderId: number | null;
     wcOrderNumber: string | null;
     customerName: string | null;
     customerPhone: string | null;
+    customerCpf?: string | null;
+    customerEmail?: string | null;
     shippingCep: string | null;
     shippingAddress: string | null;
     totalAmount: number | null;
     wcDateCreated?: string | null;
+    isPickup?: boolean;
+    pickupStoreCode?: string | null;
+    shippingMethod?: string | null;
     items?: PickOrderItem[];
   };
 }
@@ -473,11 +493,33 @@ function PickOrderCard({
   const { order, status } = row;
   const items = order.items ?? [];
 
+  const isTransfer = !!row.isTransfer;
+  const snap = row.customerSnapshot ?? null;
+  // Na transferência os dados-chave vêm do snapshot (cliente final), não do order.customerName
+  const customerName = isTransfer ? snap?.name ?? order.customerName : order.customerName;
+  const customerCpf = isTransfer ? snap?.cpf : order.customerCpf ?? null;
+  const customerEmail = isTransfer ? snap?.email : order.customerEmail ?? null;
+  const customerPhone = isTransfer ? snap?.phone : order.customerPhone;
+
   return (
     <article
-      className="bg-white rounded-lg border border-slate-200 shadow-sm"
+      className={`bg-white rounded-lg border shadow-sm ${
+        isTransfer ? 'border-orange-400 ring-2 ring-orange-200' : 'border-slate-200'
+      }`}
       onClick={onSeen}
     >
+      {/* Banner TRANSFERÊNCIA — alerta visual forte quando não é venda direta */}
+      {isTransfer && (
+        <div className="bg-orange-500 text-white px-3 py-2 rounded-t-lg">
+          <div className="font-bold text-sm flex items-center gap-2">
+            🚚 TRANSFERÊNCIA PRA LOJA {row.transferToStoreName ?? row.transferToStoreCode}
+          </div>
+          <div className="text-xs opacity-95 mt-0.5">
+            Separar e enviar pra essa loja — cliente vai retirar lá. Não é venda direta.
+          </div>
+        </div>
+      )}
+
       {/* Header do card */}
       <header className="flex items-center justify-between p-3 border-b border-slate-100">
         <div>
@@ -488,8 +530,13 @@ function PickOrderCard({
             >
               {STATUS_LABEL[status]}
             </span>
+            {isTransfer && (
+              <span className="text-xs px-2 py-0.5 rounded bg-orange-100 text-orange-800 border border-orange-300 font-semibold">
+                Transferência
+              </span>
+            )}
           </div>
-          <div className="text-sm text-slate-600 truncate">{order.customerName ?? '—'}</div>
+          <div className="text-sm text-slate-600 truncate">{customerName ?? '—'}</div>
         </div>
         <div className="text-right text-xs text-slate-500">
           {order.totalAmount != null && (
@@ -524,10 +571,29 @@ function PickOrderCard({
         )}
       </section>
 
-      {/* Endereço */}
-      {(() => {
+      {/* Dados do cliente (quando transferência — bloco em destaque com tudo que a loja precisa) */}
+      {isTransfer && (
+        <section className="px-3 pb-2 text-xs text-slate-700 leading-relaxed border-t border-orange-100 bg-orange-50/40 pt-2">
+          <div className="font-semibold text-orange-900 mb-1">
+            🧾 Dados do cliente final (quem vai retirar na LOJA {row.transferToStoreName ?? row.transferToStoreCode})
+          </div>
+          {customerName && <div className="text-slate-900 font-medium">{customerName}</div>}
+          {customerCpf && (
+            <div className="font-mono">🪪 CPF {customerCpf}</div>
+          )}
+          {customerEmail && <div>✉️ {customerEmail}</div>}
+          {customerPhone && <div>📱 {formatPhone(customerPhone)}</div>}
+          <div className="mt-1 text-orange-900 font-medium">
+            ⚠ Cliente vai retirar na loja {row.transferToStoreName ?? row.transferToStoreCode}
+            {row.transferToStoreCity ? ` (${row.transferToStoreCity})` : ''}.
+          </div>
+        </section>
+      )}
+
+      {/* Endereço / envio ao cliente — só em pedido de ENTREGA normal */}
+      {!isTransfer && (() => {
         const addr = parseShippingAddress(order.shippingAddress);
-        if (!addr && !order.shippingCep && !order.customerPhone) return null;
+        if (!addr && !order.shippingCep && !customerPhone) return null;
         return (
           <section className="px-3 pb-2 text-xs text-slate-600 leading-relaxed">
             <div className="font-medium text-slate-700 mb-0.5">Envio</div>
@@ -543,8 +609,11 @@ function PickOrderCard({
             {!addr?.streetLine && !addr?.recipientName && addr?.oneLiner && (
               <div className="text-slate-500 break-words">{addr.oneLiner}</div>
             )}
-            {order.customerPhone && (
-              <div className="mt-1">Tel: {formatPhone(order.customerPhone)}</div>
+            {customerCpf && (
+              <div className="mt-1 font-mono text-slate-700">CPF {customerCpf}</div>
+            )}
+            {customerPhone && (
+              <div className="mt-1">Tel: {formatPhone(customerPhone)}</div>
             )}
           </section>
         );

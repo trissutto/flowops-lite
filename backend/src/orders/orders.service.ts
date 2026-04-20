@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrderStatus } from '../common/enums';
+import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
 
 @Injectable()
 export class OrdersService {
@@ -30,6 +31,25 @@ export class OrdersService {
       ? new Date(wc.date_created)
       : null;
 
+    // CPF do cliente (extraído de meta_data do WC conforme plugin utilizado)
+    const customerCpf = extractCpf(wc);
+
+    // Detecta retirada em loja — precisa das stores ativas pra mapear a loja escolhida
+    const activeStores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+    });
+    const pickup = detectPickup(wc, activeStores);
+
+    if (pickup.isPickup && !pickup.pickupStoreCode) {
+      this.logger.warn(
+        `Pedido WC #${wc.id} é retirada em loja mas não mapeou store. ` +
+          `Cidade detectada: "${pickup.unresolvedCityName ?? 'nenhuma'}". ` +
+          `Método: "${pickup.shippingMethodTitle}". ` +
+          `Cadastre a Store correspondente em /lojas.`,
+      );
+    }
+
     const payload = {
       wcOrderNumber: String(wc.number ?? wc.id),
       status,
@@ -37,9 +57,13 @@ export class OrdersService {
                     `${wc.billing?.first_name ?? ''} ${wc.billing?.last_name ?? ''}`.trim(),
       customerEmail: wc.billing?.email,
       customerPhone: wc.billing?.phone,
+      customerCpf,
       shippingCep: (shipping.postcode ?? wc.billing?.postcode ?? '').replace(/\D/g, ''),
       shippingAddress: JSON.stringify(shipping),
       totalAmount: wc.total ? Number(wc.total) : null,
+      isPickup: pickup.isPickup,
+      pickupStoreCode: pickup.pickupStoreCode,
+      shippingMethod: pickup.shippingMethodTitle,
       wcDateCreated: wcCreated,
     };
 

@@ -40,14 +40,32 @@ interface SeparationGroup {
   items: Array<{ sku: string; quantity: number; productName: string; variant?: string }>;
   whatsappMessage: string;
   whatsappUrl: string | null;
+  isTransfer?: boolean;
+  transferToStoreCode?: string | null;
+  transferToStoreName?: string | null;
 }
 interface SeparationPreview {
   success: boolean;
-  strategy: 'single-store' | 'multi-store' | 'insufficient-stock';
+  strategy:
+    | 'single-store'
+    | 'multi-store'
+    | 'insufficient-stock'
+    | 'pickup-lock'
+    | 'pickup-transfer'
+    | 'pickup-blocked';
   shippingMethod: string;
   groups: SeparationGroup[];
   missing: Array<{ sku: string; quantity: number; productName: string }>;
   alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; whatsapp: string | null }>>;
+  isPickup?: boolean;
+  pickupStoreCode?: string | null;
+  pickupStoreName?: string | null;
+  customer?: {
+    name: string;
+    cpf: string | null;
+    email: string | null;
+    phone: string | null;
+  };
 }
 
 interface WcOrderDetail {
@@ -66,6 +84,14 @@ interface WcOrderDetail {
   shippingLines: Array<{ method: string; total: string }>;
   tracking: { number: string; carrier: string; url: string };
   attribution: { origem: string; source: string };
+  customerCpf?: string | null;
+  pickup?: {
+    isPickup: boolean;
+    storeCode: string | null;
+    storeName: string | null;
+    shippingMethodTitle: string | null;
+    unresolvedCityName: string | null;
+  };
 }
 
 export default function PedidoDetailPage() {
@@ -370,6 +396,45 @@ export default function PedidoDetailPage() {
       )}
       {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4 text-sm whitespace-pre-line">{error}</div>}
 
+      {/* Banner de RETIRADA EM LOJA — aparece só quando o método de envio é pickup */}
+      {order.pickup?.isPickup && (
+        <div
+          className={`mb-4 rounded-lg border-2 p-4 ${
+            order.pickup.storeCode
+              ? 'border-blue-300 bg-blue-50'
+              : 'border-amber-300 bg-amber-50'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="font-bold text-base flex items-center gap-2 text-slate-800">
+                🚶 RETIRADA EM LOJA
+                {order.pickup.storeName && (
+                  <span className="text-blue-700">— {order.pickup.storeName}</span>
+                )}
+              </div>
+              <div className="text-xs text-slate-600 mt-1">
+                Método: {order.pickup.shippingMethodTitle}
+              </div>
+              {!order.pickup.storeCode && (
+                <div className="text-xs text-amber-800 mt-2 font-medium">
+                  ⚠ Pickup detectado mas loja não mapeada
+                  {order.pickup.unresolvedCityName && (
+                    <> (cidade detectada: <b>{order.pickup.unresolvedCityName}</b>)</>
+                  )}
+                  . Cadastre a loja em <Link href="/lojas" className="underline">/lojas</Link>.
+                </div>
+              )}
+            </div>
+            {order.pickup.storeCode && (
+              <span className="px-2 py-1 bg-blue-200 text-blue-900 rounded text-xs font-mono">
+                {order.pickup.storeCode}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-4 mb-4">
         {/* Dados do cliente */}
         <div className="bg-white rounded shadow p-4">
@@ -378,8 +443,57 @@ export default function PedidoDetailPage() {
             <div className="font-medium">
               {order.billing.first_name} {order.billing.last_name}
             </div>
-            <div className="text-slate-600">{order.billing.email}</div>
-            <div className="text-slate-600">{order.billing.phone}</div>
+            {order.customerCpf && (
+              <div className="text-slate-700 flex items-center gap-2">
+                <span className="text-xs text-slate-500">🪪 CPF</span>
+                <span className="font-mono">{order.customerCpf}</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(order.customerCpf ?? '');
+                    setFlash('CPF copiado.');
+                    setTimeout(() => setFlash(null), 1500);
+                  }}
+                  className="text-xs text-brand hover:underline"
+                  title="Copiar CPF"
+                >
+                  copiar
+                </button>
+              </div>
+            )}
+            {order.billing.email && (
+              <div className="text-slate-600 flex items-center gap-2">
+                <span className="text-xs text-slate-500">✉️</span>
+                <span>{order.billing.email}</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(order.billing.email);
+                    setFlash('Email copiado.');
+                    setTimeout(() => setFlash(null), 1500);
+                  }}
+                  className="text-xs text-brand hover:underline"
+                  title="Copiar email"
+                >
+                  copiar
+                </button>
+              </div>
+            )}
+            {order.billing.phone && (
+              <div className="text-slate-600 flex items-center gap-2">
+                <span className="text-xs text-slate-500">📱</span>
+                <span>{order.billing.phone}</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(order.billing.phone);
+                    setFlash('Telefone copiado.');
+                    setTimeout(() => setFlash(null), 1500);
+                  }}
+                  className="text-xs text-brand hover:underline"
+                  title="Copiar telefone"
+                >
+                  copiar
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -462,7 +576,7 @@ export default function PedidoDetailPage() {
             <div
               className={`p-3 rounded text-sm mb-4 ${
                 separation.success
-                  ? separation.strategy === 'single-store'
+                  ? separation.strategy === 'single-store' || separation.strategy === 'pickup-lock'
                     ? 'bg-emerald-50 text-emerald-800'
                     : 'bg-amber-50 text-amber-800'
                   : 'bg-red-50 text-red-800'
@@ -474,7 +588,25 @@ export default function PedidoDetailPage() {
               {separation.success && separation.strategy === 'multi-store' && (
                 <>⚠ Nenhuma loja tem tudo. Pedido vai ser <b>dividido em {separation.groups.length} lojas</b>.</>
               )}
-              {!separation.success && (
+              {separation.success && separation.strategy === 'pickup-lock' && (
+                <>
+                  🚶 <b>RETIRADA EM LOJA</b> — {separation.pickupStoreName} tem todas as peças.
+                  Cliente vai buscar direto lá.
+                </>
+              )}
+              {separation.success && separation.strategy === 'pickup-transfer' && (
+                <>
+                  🚚 <b>RETIRADA EM LOJA com TRANSFERÊNCIA</b> — {separation.pickupStoreName} não tem tudo.
+                  {separation.groups.filter((g) => g.isTransfer).length} loja(s) vão <b>transferir</b> pra {separation.pickupStoreName}.
+                </>
+              )}
+              {!separation.success && separation.strategy === 'pickup-blocked' && (
+                <>
+                  <AlertTriangle className="inline w-4 h-4 mr-1" />
+                  <b>Retirada bloqueada:</b> faltam {separation.missing.length} SKU(s) sem estoque em nenhuma loja (nem na de retirada, nem nas que poderiam transferir).
+                </>
+              )}
+              {!separation.success && separation.strategy !== 'pickup-blocked' && (
                 <>
                   <AlertTriangle className="inline w-4 h-4 mr-1" />
                   <b>Ruptura:</b> {separation.missing.length} SKU(s) sem estoque em nenhuma loja ativa.
@@ -555,16 +687,33 @@ export default function PedidoDetailPage() {
             {/* Grupos: uma loja por bloco */}
             <div className="space-y-3">
               {separation.groups.map((g, idx) => (
-                <div key={g.storeId + idx} className="border rounded overflow-hidden">
-                  <div className="bg-slate-50 px-4 py-3 flex items-center justify-between">
+                <div
+                  key={g.storeId + idx}
+                  className={`border rounded overflow-hidden ${
+                    g.isTransfer ? 'border-orange-300 ring-1 ring-orange-200' : ''
+                  }`}
+                >
+                  <div className={`px-4 py-3 flex items-center justify-between ${
+                    g.isTransfer ? 'bg-orange-50' : 'bg-slate-50'
+                  }`}>
                     <div>
-                      <div className="font-semibold text-slate-800">
+                      <div className="font-semibold text-slate-800 flex items-center gap-2 flex-wrap">
                         {g.storeName} <span className="text-xs font-mono text-slate-500">({g.storeCode})</span>
+                        {g.isTransfer && g.transferToStoreName && (
+                          <span className="px-2 py-0.5 bg-orange-200 text-orange-900 rounded text-xs font-semibold">
+                            🚚 TRANSFERIR PRA {g.transferToStoreName}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-slate-500">
                         {[g.storeCity, g.storeState].filter(Boolean).join(' / ') || '—'}
                         {g.whatsapp ? ` · 📱 ${g.whatsapp}` : ' · sem WhatsApp cadastrado'}
                       </div>
+                      {g.isTransfer && (
+                        <div className="text-xs text-orange-800 mt-1 font-medium">
+                          ⚠ Separar e enviar pra loja {g.transferToStoreName} — cliente vai retirar lá.
+                        </div>
+                      )}
                     </div>
                     <button
                       onClick={() => sendWhatsapp(g)}

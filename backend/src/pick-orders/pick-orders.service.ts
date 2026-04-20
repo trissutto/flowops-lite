@@ -40,10 +40,15 @@ export class PickOrdersService {
             wcOrderNumber: true,
             customerName: true,
             customerPhone: true,
+            customerCpf: true,
+            customerEmail: true,
             shippingCep: true,
             shippingAddress: true,
             totalAmount: true,
             wcDateCreated: true,
+            isPickup: true,
+            pickupStoreCode: true,
+            shippingMethod: true,
           },
         },
       },
@@ -62,18 +67,53 @@ export class PickOrdersService {
       itemsByOrder.set(it.orderId, arr);
     }
 
-    return rows.map((r) => ({
-      id: r.id,
-      status: r.status,
-      trackingCode: r.trackingCode,
-      carrier: r.carrier,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-      order: {
-        ...r.order,
-        items: itemsByOrder.get(r.orderId) ?? [],
-      },
-    }));
+    // Resolve transferToStoreName para os pick-orders de transferência
+    const transferStoreCodes = [
+      ...new Set(
+        rows
+          .map((r) => r.transferToStoreCode)
+          .filter((c): c is string => !!c),
+      ),
+    ];
+    const transferStores = transferStoreCodes.length
+      ? await this.prisma.store.findMany({
+          where: { code: { in: transferStoreCodes } },
+          select: { code: true, name: true, city: true, state: true },
+        })
+      : [];
+    const storeByCode = new Map(transferStores.map((s) => [s.code, s]));
+
+    return rows.map((r) => {
+      const transferToStore = r.transferToStoreCode
+        ? storeByCode.get(r.transferToStoreCode) ?? null
+        : null;
+      // Parse do snapshot do cliente (só existe em transferências)
+      let customerSnapshotObj: any = null;
+      if (r.customerSnapshot) {
+        try {
+          customerSnapshotObj = JSON.parse(r.customerSnapshot);
+        } catch {
+          customerSnapshotObj = null;
+        }
+      }
+      return {
+        id: r.id,
+        status: r.status,
+        trackingCode: r.trackingCode,
+        carrier: r.carrier,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+        isTransfer: r.isTransfer,
+        transferToStoreCode: r.transferToStoreCode,
+        transferToStoreName: transferToStore?.name ?? null,
+        transferToStoreCity: transferToStore?.city ?? null,
+        customerSnapshot: customerSnapshotObj,
+        order: {
+          ...r.order,
+          items: itemsByOrder.get(r.orderId) ?? [],
+        },
+      };
+    });
   }
 
   /**

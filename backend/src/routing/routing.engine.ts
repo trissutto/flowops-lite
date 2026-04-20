@@ -68,6 +68,13 @@ export class RoutingEngine {
       (a, b) => b.finalScore - a.finalScore,
     );
 
+    // REGRA 0 — RETIRADA EM LOJA (pickup)
+    // Se cliente escolheu retirar em loja específica, essa loja tem prioridade TOTAL.
+    // Se tem estoque → separa lá. Se não tem → outras lojas transferem pra ela.
+    if (ctx.pickupStoreCode) {
+      return this.routePickup(ctx, activeStores, stockMap, allScores);
+    }
+
     // REGRA 1 — uma loja única cobre tudo?
     const fullCoverage = activeStores.filter((store) =>
       this.canFulfillAll(store.code, ctx.items, stockMap),
@@ -299,6 +306,164 @@ export class RoutingEngine {
       strategy: 'insufficient-stock',
       assignments: [],
       missing: items,
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  ROUTING DE PICKUP (retirada em loja)
+  //
+  //  Fluxo:
+  //   1. Se a loja de retirada tem TUDO    → strategy=pickup-lock  (1 assignment nela)
+  //   2. Se NÃO tem tudo mas outras lojas cobrem o que falta
+  //        → strategy=pickup-transfer (assignments nas outras lojas, TODAS com
+  //          isTransfer=true + transferToStoreCode=loja-de-retirada)
+  //   3. Se nem com outras dá pra cobrir → strategy=pickup-blocked
+  //
+  //  Decisão de qual loja FONTE vai fazer a transferência (desempate):
+  //   - Maior estoque disponível
+  //   - Empate → maior priorityScore (prioridade manual)
+  //   (Opção C — sem distância entre lojas porque ainda não temos essa tabela)
+  // ═══════════════════════════════════════════════════════════════════════════
+  private routePickup(
+    ctx: RoutingContext,
+    activeStores: StoreInput[],
+    stockMap: Map<string, number>,
+    allScores: RoutingResult['scoreBreakdown'],
+  ): RoutingResult {
+    const pickupStoreCode = ctx.pickupStoreCode!;
+    const pickupStore = activeStores.find((s) => s.code === pickupStoreCode);
+
+    if (!pickupStore) {
+      // Loja de retirada não está ativa ou não existe — bloqueia.
+      this.logger.warn(
+        `Pickup store ${pickupStoreCode} não encontrada/ativa. Rotando como blocked.`,
+      );
+      return {
+        success: false,
+        strategy: 'pickup-blocked',
+        assignments: [],
+        missing: ctx.items,
+        pickupStoreCode,
+        pickupStoreName: null,
+        scoreBreakdown: allScores,
+      };
+    }
+
+    // CASO 1 — pickup-lock: loja de retirada cobre TUDO sozinha.
+    if (this.canFulfillAll(pickupStore.code, ctx.items, stockMap)) {
+      return {
+        success: true,
+        strategy: 'pickup-lock',
+        assignments: [
+          {
+            ...this.buildAssignment(pickupStore, ctx.items),
+            isTransfer: false, // cliente retira direto lá, não é transferência
+            transferToStoreCode: null,
+            transferToStoreName: null,
+          },
+        ],
+        missing: [],
+        pickupStoreCode: pickupStore.code,
+        pickupStoreName: pickupStore.name,
+        scoreBreakdown: allScores,
+      };
+    }
+
+    // CASO 2 — pickup-transfer: outras lojas cobrem o que a pickup não tem.
+    // Greedy simples: pra cada SKU faltando, acha loja com maior estoque (> qty).
+    // Agrupa items por loja fonte escolhida.
+    const sourceStores = activeStores.filter((s) => s.code !== pickupStore.code);
+    const remaining = new Map<string, number>();
+    for (const item of ctx.items) {
+      const availAtPickup = stockMap.get(this.stockKey(pickupStore.code, item.sku)) ?? 0;
+      if (availAtPickup >= item.quantity) {
+        // Pickup já cobre esse SKU — continua, não precisa de transferência.
+        continue;
+      }
+      // Pickup não cobre esse item — precisa vir de outra loja.
+      remaining.set(item.sku, item.quantity);
+    }
+
+    // Agrupa assignments por loja fonte (evita criar múltiplos pick-orders na mesma loja).
+    const assignmentsByStore = new Map<string, { store: StoreInput; items: OrderItemInput[] }>();
+
+    // Quais SKUs a pickup cobre sozinha? Esses entram num assignment SEM transferência.
+    const pickupCoversItems: OrderItemInput[] = ctx.items.filter((i) => !remaining.has(i.sku));
+
+    for (const [sku, qty] of remaining.entries()) {
+      // Candidatas: lojas com estoque suficiente desse SKU
+      const candidates = sourceStores
+        .map((s) => ({
+          store: s,
+          avail: stockMap.get(this.stockKey(s.code, sku)) ?? 0,
+        }))
+        .filter((c) => c.avail >= qty)
+        .sort((a, b) => {
+          // Desempate opção C: mais estoque → maior prioridade manual
+          if (b.avail !== a.avail) return b.avail - a.avail;
+          return b.store.priorityScore - a.store.priorityScore;
+        });
+
+      if (candidates.length === 0) {
+        // Nenhuma loja cobre esse SKU — fica no missing.
+        continue;
+      }
+
+      const chosen = candidates[0].store;
+      const entry = assignmentsByStore.get(chosen.code) ?? { store: chosen, items: [] };
+      entry.items.push({ sku, quantity: qty });
+      assignmentsByStore.set(chosen.code, entry);
+    }
+
+    const coveredSkus = new Set<string>();
+    for (const i of pickupCoversItems) coveredSkus.add(i.sku);
+    for (const entry of assignmentsByStore.values()) {
+      for (const it of entry.items) coveredSkus.add(it.sku);
+    }
+    const missing = ctx.items.filter((i) => !coveredSkus.has(i.sku));
+
+    // Se sobrou item sem cobertura → PICKUP_BLOCKED
+    if (missing.length > 0) {
+      return {
+        success: false,
+        strategy: 'pickup-blocked',
+        assignments: [], // não persiste assignments parciais — operação precisa decidir
+        missing,
+        pickupStoreCode: pickupStore.code,
+        pickupStoreName: pickupStore.name,
+        scoreBreakdown: allScores,
+      };
+    }
+
+    // Monta assignments finais: pickup (sem transferência) + transferências vindas de outras lojas
+    const finalAssignments: PickAssignment[] = [];
+
+    if (pickupCoversItems.length > 0) {
+      finalAssignments.push({
+        ...this.buildAssignment(pickupStore, pickupCoversItems),
+        isTransfer: false,
+        transferToStoreCode: null,
+        transferToStoreName: null,
+      });
+    }
+
+    for (const entry of assignmentsByStore.values()) {
+      finalAssignments.push({
+        ...this.buildAssignment(entry.store, entry.items),
+        isTransfer: true,
+        transferToStoreCode: pickupStore.code,
+        transferToStoreName: pickupStore.name,
+      });
+    }
+
+    return {
+      success: true,
+      strategy: 'pickup-transfer',
+      assignments: finalAssignments,
+      missing: [],
+      pickupStoreCode: pickupStore.code,
+      pickupStoreName: pickupStore.name,
+      scoreBreakdown: allScores,
     };
   }
 }
