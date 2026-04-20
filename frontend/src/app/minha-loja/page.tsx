@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import {
   Package, Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle,
@@ -382,7 +383,7 @@ export default function MinhaLojaPage() {
               onStart={() => transitionStatus(row, 'separating')}
               onReady={() => transitionStatus(row, 'ready')}
               onShip={() => setShowShippedModal(row)}
-              onPrint={() => window.print()}
+              onPrint={() => openPrintWindow(row.id)}
               onSeen={() => cancelAutoMaximize(row.id)}
             />
           ))
@@ -424,6 +425,20 @@ function Loader() {
       <span>Carregando...</span>
     </div>
   );
+}
+
+/**
+ * Abre /minha-loja/imprimir/{id} em popup estreito.
+ * A página destino dispara window.print() automático e fecha sozinha.
+ * Compatível com impressora térmica 80mm (papel de cupom).
+ */
+function openPrintWindow(pickOrderId: string) {
+  const url = `/minha-loja/imprimir/${pickOrderId}`;
+  const w = window.open(url, `print-${pickOrderId}`, 'width=400,height=700,noopener=no');
+  if (!w) {
+    // Popup bloqueado — abre na mesma aba como fallback
+    window.location.href = url;
+  }
 }
 
 function Counter({ label, count, color }: { label: string; count: number; color: string }) {
@@ -510,14 +525,30 @@ function PickOrderCard({
       </section>
 
       {/* Endereço */}
-      {(order.shippingAddress || order.shippingCep) && (
-        <section className="px-3 pb-2 text-xs text-slate-600">
-          <div className="font-medium text-slate-700 mb-0.5">Envio</div>
-          <div>{order.shippingAddress}</div>
-          {order.shippingCep && <div>CEP: {order.shippingCep}</div>}
-          {order.customerPhone && <div>Tel: {order.customerPhone}</div>}
-        </section>
-      )}
+      {(() => {
+        const addr = parseShippingAddress(order.shippingAddress);
+        if (!addr && !order.shippingCep && !order.customerPhone) return null;
+        return (
+          <section className="px-3 pb-2 text-xs text-slate-600 leading-relaxed">
+            <div className="font-medium text-slate-700 mb-0.5">Envio</div>
+            {addr?.recipientName && <div className="text-slate-800">{addr.recipientName}</div>}
+            {addr?.streetLine && <div>{addr.streetLine}</div>}
+            {addr?.complement && <div>{addr.complement}</div>}
+            {addr?.neighborhood && <div>Bairro: {addr.neighborhood}</div>}
+            {addr?.cityState && <div>{addr.cityState}</div>}
+            {(addr?.cep || order.shippingCep) && (
+              <div>CEP: {addr?.cep ?? order.shippingCep}</div>
+            )}
+            {/* Fallback: texto cru se não deu pra parsear */}
+            {!addr?.streetLine && !addr?.recipientName && addr?.oneLiner && (
+              <div className="text-slate-500 break-words">{addr.oneLiner}</div>
+            )}
+            {order.customerPhone && (
+              <div className="mt-1">Tel: {formatPhone(order.customerPhone)}</div>
+            )}
+          </section>
+        );
+      })()}
 
       {/* Rastreio (se já enviado) */}
       {status === 'shipped' && row.trackingCode && (
