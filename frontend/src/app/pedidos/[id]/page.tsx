@@ -153,7 +153,8 @@ Por favor confirmar separação no FlowOps assim que finalizar.
     }
     const numero = a.whatsapp.replace(/\D/g, '');
     const mensagem = encodeURIComponent(montarMensagemWA(a));
-    window.open(`https://wa.me/${numero}?text=${mensagem}`, '_blank');
+    // Nome fixo → reusa a mesma aba do WhatsApp (sem re-login a cada clique)
+    window.open(`https://wa.me/${numero}?text=${mensagem}`, 'flowops-whatsapp');
   }
 
   if (!order) {

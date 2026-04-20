@@ -295,7 +295,9 @@ export default function PedidoDetailPage() {
       );
       return;
     }
-    window.open(url, '_blank', 'noopener,noreferrer');
+    // Nome fixo 'flowops-whatsapp' → cliques seguintes reusam a MESMA aba,
+    // não pedem login de novo no WhatsApp Web. Evita abrir 10 abas diferentes.
+    window.open(url, 'flowops-whatsapp', 'noopener,noreferrer');
 
     // Troca status pra "separacao" automaticamente (se ainda não estiver)
     if (order && order.status !== 'separacao') {

@@ -273,7 +273,8 @@ export default function SeparacaoPage() {
       );
       return;
     }
-    window.open(grupo.whatsappUrl, '_blank', 'noopener,noreferrer');
+    // Nome fixo → todas as chamadas WhatsApp reusam a MESMA aba (sem re-login)
+    window.open(grupo.whatsappUrl, 'flowops-whatsapp', 'noopener,noreferrer');
 
     // Marca como "Separação" no WC + nota interna
     setBusy((b) => ({ ...b, [wcId]: true }));

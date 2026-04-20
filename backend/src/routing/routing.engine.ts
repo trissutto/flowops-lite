@@ -14,22 +14,27 @@ import {
  *  Ver arquitetura §5 no docs/FlowOps-Arquitetura.docx
  *
  *  Regras, em ordem de prioridade:
- *    1. UMA LOJA SÓ (evitar fragmentação).
- *    2. MÍNIMO de lojas se nenhuma cobre tudo (greedy set cover).
- *    3. DESEMPATE: score ponderado composto (ver abaixo).
- *    4. ANTI-FRAG: um SKU nunca é dividido entre 2 lojas.
+ *    1. UMA LOJA SÓ (evitar fragmentação + minimiza frete).
+ *    2. MÍNIMO DE LOJAS se nenhuma cobre tudo (greedy set cover, minimiza frete).
+ *    3. ANTI-FRAG: um SKU nunca é dividido entre 2 lojas.
  *
- *  Score composto (desempate entre lojas elegíveis):
- *     finalScore = W_STOCK  × stockBufferScore  (0..1 — folga de estoque)
+ *  DESEMPATE (atualizado 20/04/26 conforme diretriz do CEO):
+ *    Quando várias lojas qualificam pra receber o pick, a ordem é:
+ *       1. Quantidade ABSOLUTA de peças dos SKUs do pedido (sem cap).
+ *          Ex: 1× SKU-X — A=5, B=3 → A ganha. Sempre.
+ *       2. Ratio (folga = mínimo de disponível/necessário entre SKUs cobertos).
+ *       3. priorityScore manual (cadastrado em /lojas).
+ *       4. Score composto finalScore (inclui distância CEP).
+ *
+ *  Score composto (usado APENAS como último desempate):
+ *     finalScore = W_STOCK  × stockBufferScore  (0..1 — folga de estoque, cap 3x)
  *                + W_DIST   × distanceScore     (0..1 — proximidade do cliente)
  *                + W_PRIO   × priorityScore     (0..1 — prioridade manual cadastrada)
  *
- *  stockBufferScore é o ELO MAIS FRACO: pra cada SKU do pedido calcula
- *  `disponível/necessário`, pega o MÍNIMO, e capa em 3x. Isso garante que
- *  uma loja com 3 unidades é MUITO preferida sobre uma com 1 unidade.
- *     buffer = 1 (tem exato) → score 0.33
- *     buffer = 2              → score 0.67
- *     buffer = 3+             → score 1.0 (caldeirão)
+ *  POR QUE QUANTIDADE ABSOLUTA PRIMEIRO:
+ *     A loja vende presencialmente. Se 2 lojas cobrem o pedido, a que tem mais
+ *     estoque desse SKU tem MENOR risco de zerar enquanto o pedido está na fila
+ *     (loja com 10 unidades aguenta 9 vendas concorrentes; loja com 3 não).
  *
  *  A engine é PURA: recebe contexto, retorna decisão. Sem IO.
  * ═══════════════════════════════════════════════════════════════════════════
@@ -205,10 +210,52 @@ export class RoutingEngine {
     return 0.2;
   }
 
+  /**
+   * DESEMPATE QUANDO VÁRIAS LOJAS COBREM TUDO (ou quando várias qualificam).
+   *
+   * Ordem de decisão — resolve o pedido do Thiago de 20/04/26:
+   *   1. TOTAL de peças DOS ITENS DO PEDIDO disponíveis (absoluto, sem cap).
+   *      Ex: pedido 1× SKU-X — A tem 5, B tem 3 → A ganha. Sempre.
+   *   2. Ratio (stockBufferRaw = elo mais fraco disponível/necessário).
+   *      Só diferencia quando o total absoluto empata, o que quase nunca acontece.
+   *   3. priorityScore manual (cadastrado em /lojas).
+   *   4. Último recurso: score composto (inclui distância CEP).
+   *
+   * Por que absoluto antes de ratio: pedido 1×X, A=10, B=3 — ambos cobrem.
+   * Ratio normalizado capa em 3, daria empate. Mas A tem MUITO mais estoque,
+   * reduz risco de loja ficar zerada após concorrência.
+   */
   private pickBestStore(stores: StoreInput[], ctx: RoutingContext, stockMap: Map<string, number>): StoreInput {
-    return [...stores].sort(
-      (x, y) => this.scoreStore(y, ctx, stockMap) - this.scoreStore(x, ctx, stockMap),
-    )[0];
+    return [...stores].sort((a, b) => {
+      // 1. Quantidade absoluta total das peças do pedido que a loja tem
+      const qtyA = this.totalRawQty(a, ctx.items, stockMap);
+      const qtyB = this.totalRawQty(b, ctx.items, stockMap);
+      if (qtyA !== qtyB) return qtyB - qtyA;
+
+      // 2. Ratio (elo mais fraco)
+      const ratioA = this.stockBufferRaw(a, ctx.items, stockMap);
+      const ratioB = this.stockBufferRaw(b, ctx.items, stockMap);
+      if (ratioA !== ratioB) return ratioB - ratioA;
+
+      // 3. Prioridade manual
+      if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
+
+      // 4. Score composto (distância CEP entra aqui)
+      return this.scoreStore(b, ctx, stockMap) - this.scoreStore(a, ctx, stockMap);
+    })[0];
+  }
+
+  /**
+   * Soma BRUTA do estoque que a loja tem dos SKUs do pedido (sem clamp).
+   * É o que define "quem tem mais". Útil também quando o pedido é de 1 SKU:
+   *   pedido 1× SKU-X, A=10, B=3 → totalRaw(A)=10, totalRaw(B)=3 → A ganha.
+   */
+  private totalRawQty(store: StoreInput, items: OrderItemInput[], stockMap: Map<string, number>): number {
+    let total = 0;
+    for (const item of items) {
+      total += stockMap.get(this.stockKey(store.code, item.sku)) ?? 0;
+    }
+    return total;
   }
 
   private buildAssignment(store: StoreInput, items: OrderItemInput[]): PickAssignment {
@@ -222,8 +269,17 @@ export class RoutingEngine {
 
   /**
    * REGRA 2: greedy set cover.
-   * Enquanto houver itens pendentes, escolhe a loja que cobre mais (em qty ponderada),
-   * com empate resolvido pelo score composto.
+   *
+   * OBJETIVO: MINIMIZAR GASTO COM FRETE (Sedex/PAC).
+   *   → Menos lojas envolvidas = menos pacotes postados.
+   *   → Sempre escolhe loja que cobre O MAIOR NÚMERO DE SKUs restantes.
+   *
+   * Desempate (quando 2 lojas cobrem o mesmo # de SKUs):
+   *   1. Maior quantidade ABSOLUTA dos SKUs que ela cobre (redundância = segurança
+   *      contra concorrência de venda direta na loja física)
+   *   2. Maior ratio (elo mais fraco / folga)
+   *   3. priorityScore manual
+   *   4. Score composto (distância CEP)
    */
   private greedySetCover(
     stores: StoreInput[],
@@ -239,6 +295,10 @@ export class RoutingEngine {
     while (remaining.size > 0) {
       let bestStore: StoreInput | null = null;
       let bestCovered: OrderItemInput[] = [];
+      let bestCoveredCount = -1;
+      let bestCoveredTotalQty = -1;
+      let bestRatio = -1;
+      let bestPriority = -1;
       let bestScore = -1;
 
       for (const store of stores) {
@@ -246,23 +306,39 @@ export class RoutingEngine {
 
         // O que essa loja cobre do restante?
         const covered: OrderItemInput[] = [];
+        let coveredTotalQty = 0;   // soma do estoque BRUTO dos SKUs cobertos
+        let minRatio = Infinity;    // folga do elo mais fraco entre cobertos
         for (const [sku, qty] of remaining.entries()) {
           const available = stockMap.get(this.stockKey(store.code, sku)) ?? 0;
           if (available >= qty) {
             // REGRA 4: um SKU é 100% atendido por uma única loja (sem split).
             covered.push({ sku, quantity: qty });
+            coveredTotalQty += available;
+            const r = available / Math.max(1, qty);
+            if (r < minRatio) minRatio = r;
           }
         }
         if (covered.length === 0) continue;
 
-        // métrica de decisão: primeiro quantidade de SKUs cobertos, depois score
         const storeScore = this.scoreStore(store, ctx, stockMap);
-        const candidateRank = covered.length * 10 + storeScore;
+        const ratioNorm = minRatio === Infinity ? 0 : minRatio;
 
-        if (candidateRank > bestScore) {
-          bestScore = candidateRank;
+        // Comparação hierárquica (early-return ao achar diferença num nível superior).
+        const isBetter =
+          covered.length > bestCoveredCount ||
+          (covered.length === bestCoveredCount && coveredTotalQty > bestCoveredTotalQty) ||
+          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm > bestRatio) ||
+          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore > bestPriority) ||
+          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore === bestPriority && storeScore > bestScore);
+
+        if (isBetter) {
           bestStore = store;
           bestCovered = covered;
+          bestCoveredCount = covered.length;
+          bestCoveredTotalQty = coveredTotalQty;
+          bestRatio = ratioNorm;
+          bestPriority = store.priorityScore;
+          bestScore = storeScore;
         }
       }
 
@@ -384,35 +460,65 @@ export class RoutingEngine {
       remaining.set(item.sku, item.quantity);
     }
 
-    // Agrupa assignments por loja fonte (evita criar múltiplos pick-orders na mesma loja).
-    const assignmentsByStore = new Map<string, { store: StoreInput; items: OrderItemInput[] }>();
-
     // Quais SKUs a pickup cobre sozinha? Esses entram num assignment SEM transferência.
     const pickupCoversItems: OrderItemInput[] = ctx.items.filter((i) => !remaining.has(i.sku));
 
-    for (const [sku, qty] of remaining.entries()) {
-      // Candidatas: lojas com estoque suficiente desse SKU
-      const candidates = sourceStores
-        .map((s) => ({
-          store: s,
-          avail: stockMap.get(this.stockKey(s.code, sku)) ?? 0,
-        }))
-        .filter((c) => c.avail >= qty)
-        .sort((a, b) => {
-          // Desempate opção C: mais estoque → maior prioridade manual
-          if (b.avail !== a.avail) return b.avail - a.avail;
-          return b.store.priorityScore - a.store.priorityScore;
-        });
+    // MINIMIZA FRETE DE TRANSFERÊNCIA: greedy — a cada rodada escolhe a loja fonte
+    // que cobre o MAIOR NÚMERO de SKUs faltantes. Tiebreak = mais estoque absoluto → ratio → prioridade.
+    const assignmentsByStore = new Map<string, { store: StoreInput; items: OrderItemInput[] }>();
+    const sourceItemsCtx: OrderItemInput[] = Array.from(remaining.entries()).map(
+      ([sku, quantity]) => ({ sku, quantity }),
+    );
 
-      if (candidates.length === 0) {
-        // Nenhuma loja cobre esse SKU — fica no missing.
-        continue;
+    while (sourceItemsCtx.length > 0) {
+      let bestStore: StoreInput | null = null;
+      let bestCovered: OrderItemInput[] = [];
+      let bestCoveredCount = -1;
+      let bestCoveredTotalQty = -1;
+      let bestRatio = -1;
+      let bestPriority = -1;
+
+      for (const store of sourceStores) {
+        if (assignmentsByStore.has(store.code)) continue; // uma loja fonte só entra 1x
+
+        const covered: OrderItemInput[] = [];
+        let coveredTotalQty = 0;
+        let minRatio = Infinity;
+        for (const it of sourceItemsCtx) {
+          const avail = stockMap.get(this.stockKey(store.code, it.sku)) ?? 0;
+          if (avail >= it.quantity) {
+            covered.push(it);
+            coveredTotalQty += avail;
+            const r = avail / Math.max(1, it.quantity);
+            if (r < minRatio) minRatio = r;
+          }
+        }
+        if (covered.length === 0) continue;
+
+        const ratioNorm = minRatio === Infinity ? 0 : minRatio;
+        const isBetter =
+          covered.length > bestCoveredCount ||
+          (covered.length === bestCoveredCount && coveredTotalQty > bestCoveredTotalQty) ||
+          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm > bestRatio) ||
+          (covered.length === bestCoveredCount && coveredTotalQty === bestCoveredTotalQty && ratioNorm === bestRatio && store.priorityScore > bestPriority);
+
+        if (isBetter) {
+          bestStore = store;
+          bestCovered = covered;
+          bestCoveredCount = covered.length;
+          bestCoveredTotalQty = coveredTotalQty;
+          bestRatio = ratioNorm;
+          bestPriority = store.priorityScore;
+        }
       }
 
-      const chosen = candidates[0].store;
-      const entry = assignmentsByStore.get(chosen.code) ?? { store: chosen, items: [] };
-      entry.items.push({ sku, quantity: qty });
-      assignmentsByStore.set(chosen.code, entry);
+      if (!bestStore || bestCovered.length === 0) break;
+
+      assignmentsByStore.set(bestStore.code, { store: bestStore, items: bestCovered });
+      const takenSkus = new Set(bestCovered.map((i) => i.sku));
+      for (let i = sourceItemsCtx.length - 1; i >= 0; i--) {
+        if (takenSkus.has(sourceItemsCtx[i].sku)) sourceItemsCtx.splice(i, 1);
+      }
     }
 
     const coveredSkus = new Set<string>();
