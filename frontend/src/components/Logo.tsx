@@ -29,21 +29,14 @@ export default function Logo({
   const [failed, setFailed] = useState(false);
 
   if (failed) {
-    // Fallback: texto estilizado quando o PNG não está disponível
+    // Fallback clean: só texto simples, sem fonte cursiva feia.
     return (
-      <div className={`flex flex-col leading-none ${className}`}>
-        <span
-          style={{ fontFamily: "'Brush Script MT', 'Lucida Handwriting', cursive", fontSize: height }}
-          className="italic font-semibold"
-        >
-          Lurd&apos;s
-        </span>
-        {withSubtitle && (
-          <span style={{ fontSize: height * 0.35 }} className="italic opacity-80 -mt-1">
-            Plus Size
-          </span>
-        )}
-      </div>
+      <span
+        style={{ fontSize: height * 0.7 }}
+        className={`font-bold tracking-wider ${className}`}
+      >
+        LURD&apos;S
+      </span>
     );
   }
 
