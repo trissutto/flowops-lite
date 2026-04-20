@@ -120,6 +120,92 @@ export class PickOrdersService {
   }
 
   /**
+   * TESTE: cria um pick-order forçado pra uma loja específica (ignora estoque/roteamento).
+   * Se orderId não for passado, cria um Order sintético (TESTE-<timestamp>) com 2 itens.
+   * Emite socket pra loja receber em tempo real na /minha-loja.
+   */
+  async forceCreateForStore(storeCode: string, orderId?: string) {
+    if (!storeCode?.trim()) throw new BadRequestException('storeCode obrigatório');
+    const store = await this.prisma.store.findUnique({ where: { code: storeCode.trim() } });
+    if (!store) throw new NotFoundException(`Loja com código "${storeCode}" não existe`);
+
+    let order: any;
+    if (orderId) {
+      order = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        include: { items: true },
+      });
+      if (!order) throw new NotFoundException(`Order ${orderId} não encontrado`);
+    } else {
+      const stamp = Date.now();
+      order = await this.prisma.order.create({
+        data: {
+          wcOrderId: stamp,
+          wcOrderNumber: `TESTE-${stamp}`,
+          customerName: 'Cliente TESTE',
+          customerPhone: '(11) 99999-0000',
+          shippingCep: '04077-000',
+          shippingAddress: 'Av. Ibirapuera, 3103 - Moema, São Paulo - SP',
+          totalAmount: 199.9,
+          status: 'separating',
+          items: {
+            create: [
+              {
+                sku: 'TESTE-SKU-1',
+                productName: 'Vestido Plus Size Exemplo',
+                variant: 'Tamanho G',
+                quantity: 2,
+                assignedStoreId: store.id,
+              },
+              {
+                sku: 'TESTE-SKU-2',
+                productName: 'Blusa Manga Longa',
+                variant: 'Tamanho GG',
+                quantity: 1,
+                assignedStoreId: store.id,
+              },
+            ],
+          },
+        },
+        include: { items: true },
+      });
+    }
+
+    const pickOrder = await this.prisma.pickOrder.create({
+      data: { orderId: order.id, storeId: store.id, status: 'new' },
+    });
+
+    this.gateway.emitPickOrderToStore(store.id, {
+      id: pickOrder.id,
+      status: 'new',
+      storeId: store.id,
+      orderId: order.id,
+      order: {
+        id: order.id,
+        wcOrderId: order.wcOrderId,
+        wcOrderNumber: order.wcOrderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        shippingCep: order.shippingCep,
+        shippingAddress: order.shippingAddress,
+        totalAmount: order.totalAmount,
+        wcDateCreated: order.wcDateCreated,
+        items: order.items,
+      },
+      storeCode: store.code,
+      storeName: store.name,
+      strategy: 'manual-test',
+    });
+
+    return {
+      ok: true,
+      pickOrderId: pickOrder.id,
+      store: { id: store.id, code: store.code, name: store.name },
+      order: { id: order.id, wcOrderNumber: order.wcOrderNumber },
+    };
+  }
+
+  /**
    * Transiciona o status. Valida que user é dono da loja.
    * Quando vai pra 'shipped', exige trackingCode + carrier.
    */
