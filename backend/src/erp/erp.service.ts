@@ -185,6 +185,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * DIAGNÓSTICO RAW: busca TODAS as linhas da tabela `estoque` para um SKU,
+   * sem filtrar ESTOQUE > 0 e sem agregar. Revela:
+   *   - duplicatas (mesma CODIGO+LOJA com linhas múltiplas)
+   *   - linhas negativas (devoluções pendentes)
+   *   - distribuição por loja COMPLETA (inclusive zeros)
+   * Usado pra investigar por que routing escolheu uma loja que ERP "diz" não ter peça.
+   */
+  async getStockRawBySku(sku: string): Promise<Array<{ sku: string; storeCode: string; qty: number }>> {
+    if (!sku || !this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
+           FROM estoque
+          WHERE CODIGO = ?
+          ORDER BY LOJA`,
+        [sku.trim()],
+      );
+      return (rows as any[]).map((r) => ({
+        sku: String(r.sku).trim(),
+        storeCode: String(r.storeCode).trim(),
+        qty: Number(r.qty) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getStockRawBySku falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
    * Diagnóstico: lista colunas da tabela `produtos` do Gigasistemas.
    * Usado pra descobrir qual coluna guarda o EAN13 (código de barras).
    * Retorna também 3 registros de amostra (com TODOS os campos preenchidos)

@@ -14,7 +14,7 @@
  *  - Auto-restore quando o backend manda pick-order:new (via timer no /minha-loja chamando focusWindow)
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell, session } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
 
@@ -326,7 +326,30 @@ ipcMain.handle('flowops:open-external', (_evt, url) => {
 });
 
 // ----------------- Lifecycle -----------------
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Limpa cache HTTP no startup pra evitar ChunkLoadError quando a Vercel
+  // faz redeploy (HTML cacheado pede chunks JS antigos que viraram 404).
+  // Faz isso só na 1ª inicialização — não atrasa muito o boot.
+  try {
+    await session.defaultSession.clearCache();
+    console.log('[startup] cache HTTP limpo');
+  } catch (err) {
+    console.warn('[startup] falha ao limpar cache:', err.message);
+  }
+
+  // Defesa extra: intercepta requests HTML e adiciona Cache-Control: no-store.
+  // Isso garante que o HTML do Next sempre vem fresco, mas mantém cache
+  // pros chunks JS/CSS (que tem hash no nome — cache safe).
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const isHtmlNav = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
+    const headers = { ...details.requestHeaders };
+    if (isHtmlNav) {
+      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+      headers['Pragma'] = 'no-cache';
+    }
+    callback({ requestHeaders: headers });
+  });
+
   applyAutoLaunch(!!store.get('autoLaunch'));
   createWindow();
   createTray();

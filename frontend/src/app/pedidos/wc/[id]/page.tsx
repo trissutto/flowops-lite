@@ -520,6 +520,16 @@ export default function PedidoDetailPage() {
                     </li>
                   ))}
                 </ul>
+                <div className="mt-3 pt-2 border-t border-emerald-200">
+                  <a
+                    href={`/admin/routing-debug/${wcId}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-emerald-800 underline hover:text-emerald-900"
+                  >
+                    🔍 Diagnosticar routing (ERP vs decisão salva)
+                  </a>
+                </div>
               </div>
             )}
             {confirmResult && !confirmResult.ok && (

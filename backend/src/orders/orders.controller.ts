@@ -6,6 +6,7 @@ import { StockService } from '../stock/stock.service';
 import { RoutingService } from '../routing/routing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
+import { ErpService } from '../erp/erp.service';
 import { extractAttribution } from '../woocommerce/attribution.util';
 
 @Controller('orders')
@@ -17,6 +18,7 @@ export class OrdersController {
     private readonly routing: RoutingService,
     private readonly prisma: PrismaService,
     private readonly wc: WooCommerceService,
+    private readonly erp: ErpService,
   ) {}
 
   // ---------- Rotas estáticas PRIMEIRO (senão o `:id` come) ----------
@@ -308,6 +310,121 @@ export class OrdersController {
         postcode: shipping.postcode ?? billing.postcode ?? null,
       },
     });
+  }
+
+  /**
+   * DIAGNÓSTICO: pra investigar pedido roteado pra loja "errada".
+   * Compara o que a engine VIU no momento (routingResult salvo) vs ERP AO VIVO agora.
+   * Mostra por SKU e por loja:
+   *  - Assignment persistido (qual loja pegou)
+   *  - scoreBreakdown salvo (por que cada loja ficou de fora)
+   *  - ERP AO VIVO agora (filtro ESTOQUE>0)
+   *  - Cache atual
+   * Com isso dá pra afirmar: foi bug da engine? ERP mudou depois? Dados duplicados?
+   */
+  @Get('wc/:wcId/routing-debug')
+  async routingDebug(@Param('wcId') wcId: string) {
+    const wcOrderId = Number(wcId);
+    const order = await this.prisma.order.findUnique({
+      where: { wcOrderId },
+      include: {
+        items: { include: { assignedStore: { select: { code: true, name: true } } } },
+        pickOrders: { include: { store: { select: { code: true, name: true } } } },
+      },
+    });
+    if (!order) {
+      return { error: `Order wc=${wcId} não encontrado no banco local. Confirme a separação primeiro.` };
+    }
+
+    // routingResult é JSON string — parseia com cuidado
+    let savedRouting: any = null;
+    try {
+      savedRouting = order.routingResult ? JSON.parse(order.routingResult) : null;
+    } catch {
+      savedRouting = { _parseError: true, raw: order.routingResult };
+    }
+
+    const stores = await this.prisma.store.findMany({ where: { active: true } });
+    const storeCodes = stores.map((s) => s.code);
+    const skus = [...new Set(order.items.map((i) => i.sku).filter((s) => s?.trim()))];
+
+    // ERP ao vivo (filtro ESTOQUE>0 — o que a engine usaria agora)
+    const liveStock = await this.stock.getStockLive(skus, storeCodes);
+    const liveMap = new Map<string, number>();
+    for (const e of liveStock) {
+      liveMap.set(`${e.storeCode}::${e.sku}`, e.availableQty);
+    }
+
+    // Comparação por SKU
+    const bySku = await Promise.all(
+      skus.map(async (sku) => {
+        const orderItems = order.items.filter((i) => i.sku === sku);
+        const totalQty = orderItems.reduce((acc, i) => acc + i.quantity, 0);
+        const assignedStoreCodes = [
+          ...new Set(
+            orderItems
+              .map((i) => i.assignedStore?.code)
+              .filter((c): c is string => !!c),
+          ),
+        ];
+
+        // RAW do ERP pra esse SKU — todas as linhas (inclusive negativas/zero)
+        const rawRows = await this.erp.getStockRawBySku(sku);
+        const rawByStore = new Map<string, { sum: number; rows: number; positive: number }>();
+        for (const r of rawRows) {
+          const cur = rawByStore.get(r.storeCode) ?? { sum: 0, rows: 0, positive: 0 };
+          cur.sum += r.qty;
+          cur.rows += 1;
+          if (r.qty > 0) cur.positive += r.qty;
+          rawByStore.set(r.storeCode, cur);
+        }
+
+        const perStore = stores.map((s) => {
+          const raw = rawByStore.get(s.code) ?? { sum: 0, rows: 0, positive: 0 };
+          const live = liveMap.get(`${s.code}::${sku}`) ?? 0;
+          const isAssigned = assignedStoreCodes.includes(s.code);
+          return {
+            storeCode: s.code,
+            storeName: s.name,
+            isAssigned,
+            erpRawSum: raw.sum, // soma de TODAS as linhas (inclusive negativas)
+            erpRawRows: raw.rows, // quantas linhas existem na tabela
+            erpPositiveQty: raw.positive, // só as positivas (o que ESTOQUE>0 retorna)
+            engineLiveSaw: live, // o que a engine receberia do stock service agora
+            // 🚨 red flag: engine acha que tem, mas soma real é zero/negativa
+            suspicious:
+              live > 0 && raw.sum <= 0
+                ? `engine vê ${live} mas soma real no ERP é ${raw.sum}`
+                : null,
+          };
+        });
+
+        return {
+          sku,
+          totalQtyInOrder: totalQty,
+          assignedStoreCodes,
+          perStore,
+        };
+      }),
+    );
+
+    return {
+      order: {
+        id: order.id,
+        wcOrderId: order.wcOrderId,
+        wcOrderNumber: order.wcOrderNumber,
+        status: order.status,
+        createdAt: order.createdAt,
+      },
+      savedRouting,
+      pickOrders: order.pickOrders.map((p) => ({
+        id: p.id,
+        status: p.status,
+        storeCode: p.store.code,
+        storeName: p.store.name,
+      })),
+      bySku,
+    };
   }
 
   /**

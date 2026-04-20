@@ -55,4 +55,29 @@ export class StockService {
   async invalidate(storeCode: string, sku: string) {
     this.cache.del(`stock:${storeCode}:${sku}`);
   }
+
+  /**
+   * DIAGNÓSTICO: consulta ERP AO VIVO sem usar cache e sem gravar no cache.
+   * Usado pra comparar "o que o sistema achou" vs "o que o ERP diz agora".
+   * Útil em suspeita de rota incorreta ou duplicata de linha em `estoque`.
+   */
+  async getStockLive(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
+    if (!skus.length || !storeCodes.length) return [];
+    return this.erp.getStock(skus, storeCodes);
+  }
+
+  /**
+   * Snapshot do cache em memória pra um conjunto de (sku, storeCode).
+   * Retorna [] se o item não estiver no cache (indica que será fetchado no próximo hit).
+   */
+  snapshotCache(skus: string[], storeCodes: string[]) {
+    const out: Array<{ sku: string; storeCode: string; cachedQty: number | null }> = [];
+    for (const sku of skus) {
+      for (const storeCode of storeCodes) {
+        const v = this.cache.get(`stock:${storeCode}:${sku}`);
+        out.push({ sku, storeCode, cachedQty: v === null ? null : Number(v) });
+      }
+    }
+    return out;
+  }
 }

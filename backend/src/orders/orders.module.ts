@@ -4,9 +4,10 @@ import { OrdersController } from './orders.controller';
 import { StockModule } from '../stock/stock.module';
 import { RoutingModule } from '../routing/routing.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
+import { ErpModule } from '../erp/erp.module';
 
 @Module({
-  imports: [StockModule, RoutingModule, forwardRef(() => WooCommerceModule)],
+  imports: [StockModule, RoutingModule, ErpModule, forwardRef(() => WooCommerceModule)],
   providers: [OrdersService],
   controllers: [OrdersController],
   exports: [OrdersService],
