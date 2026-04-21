@@ -828,19 +828,16 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         <CellLegend />
       </section>
 
-      {/* Outras lojas */}
-      {filteredOtherStores.length > 0 && (
+      {/* OUTRAS LOJAS — só aparece quando usuário clica em cor/tamanho/célula. */}
+      {(selectedColor || selectedSize) && filteredOtherStores.length > 0 && (
         <section className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
           <div className="text-[11px] uppercase tracking-wide font-bold text-slate-600 mb-2 mt-3 flex items-center gap-1 flex-wrap">
-            <Store className="w-3 h-3" /> Outras lojas
-            {(selectedColor || selectedSize) && (
-              <span className="text-brand normal-case tracking-normal font-bold">
-                · filtrado por{' '}
-                {selectedColor && <span className="underline">{selectedColor}</span>}
-                {selectedColor && selectedSize && ' · '}
-                {selectedSize && <span className="underline">tam {selectedSize}</span>}
-              </span>
-            )}
+            <Store className="w-3 h-3" /> Outras lojas com{' '}
+            <span className="text-brand normal-case tracking-normal font-bold">
+              {selectedColor && <span className="underline">{selectedColor}</span>}
+              {selectedColor && selectedSize && ' · '}
+              {selectedSize && <span className="underline">tam {selectedSize}</span>}
+            </span>
             <span className="ml-1">({filteredOtherStores.length})</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -857,7 +854,8 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         </section>
       )}
 
-      {filteredOtherStores.length === 0 && (selectedColor || selectedSize) && (
+      {/* Filtro aplicado mas zero lojas casam */}
+      {(selectedColor || selectedSize) && filteredOtherStores.length === 0 && (
         <section className="px-4 py-3 border-t border-slate-100 bg-red-50/60 text-sm text-red-800 flex items-center gap-2">
           <XCircle className="w-4 h-4 flex-shrink-0" />
           <div>
@@ -871,7 +869,18 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         </section>
       )}
 
-      {!hasInMyStore && filteredOtherStores.length === 0 && !selectedColor && !selectedSize && (
+      {/* Hint inicial — ainda não clicou em nada */}
+      {!selectedColor && !selectedSize && item.otherStores.length > 0 && (
+        <section className="px-4 py-3 border-t border-slate-100 bg-blue-50/60 text-xs text-blue-900 flex items-center gap-2">
+          <Store className="w-4 h-4 flex-shrink-0" />
+          <div>
+            <strong>{item.otherStores.length}</strong> outras lojas da rede têm essa REF.
+            Clique numa célula da grade (cor × tamanho) pra ver quais têm o que você precisa.
+          </div>
+        </section>
+      )}
+
+      {!hasInMyStore && item.otherStores.length === 0 && !selectedColor && !selectedSize && (
         <section className="px-4 py-3 border-t border-slate-100 bg-red-50/60 text-sm text-red-800 flex items-center gap-2">
           <XCircle className="w-4 h-4" />
           Sem estoque em nenhuma loja da rede no momento.

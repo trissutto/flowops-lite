@@ -2583,6 +2583,45 @@ export class ProductsService {
       });
     }
 
+    /**
+     * Normaliza a REF pra "base REF" — strippa sufixo tipo " P", " M", " VN"
+     * (código curto de cor depois de espaço) pra colapsar:
+     *   VMS-223 P + VMS-223 M + VMS-223 V + VMS-223 N → VMS-223
+     *
+     * Caso o usuário tenha buscado a REF JÁ com o sufixo (ex: "VMS-223 P"),
+     * preserva a REF original — ele quer só aquela cor específica.
+     */
+    const queryUpper = term.trim().toUpperCase();
+    const queryHasColorSuffix = /\s[A-Z]{1,3}$/.test(queryUpper);
+    const normalizeBaseRef = (ref: string): string => {
+      const s = String(ref).trim();
+      if (queryHasColorSuffix) return s; // user pediu a cor específica — não colapsa
+      if (s.toUpperCase() === queryUpper) return s;
+      const stripped = s.replace(/\s[A-Za-z]{1,3}$/, '').trim();
+      return stripped || s;
+    };
+
+    /**
+     * Remove nome de cor da descrição do produto pra virar um nome "genérico".
+     * Ex: "VESTIDO MID VMS-223 PRETO 46 MARRIE" → "VESTIDO MID VMS-223 MARRIE".
+     * Heurística simples — cobre as cores mais comuns da loja.
+     */
+    const KNOWN_COLORS = [
+      'PRETO', 'BRANCO', 'VERMELHO', 'ROSA', 'AZUL', 'MARINHO', 'MARROM',
+      'VINHO', 'VERDE', 'AMARELO', 'LARANJA', 'BEGE', 'CINZA', 'UVA',
+      'PINK', 'NUDE', 'CREME', 'CAQUI', 'CARAMELO', 'OFF', 'MOSTARDA',
+      'TERRACOTA', 'TIFANNY', 'SALMAO', 'SALMÃO', 'GRAFITE', 'PERVINCA',
+    ];
+    const cleanProductName = (name: string): string => {
+      let n = String(name || '').trim();
+      for (const c of KNOWN_COLORS) {
+        n = n.replace(new RegExp(`\\s+${c}\\b`, 'gi'), '');
+      }
+      // tira tamanho numérico isolado (40-80)
+      n = n.replace(/\s+\b(3[6-9]|[4-7]\d|80)\b/g, '');
+      return n.replace(/\s{2,}/g, ' ').trim();
+    };
+
     // 4. Pega estoque detalhado por loja pra todos os SKUs
     const detailed = await this.erp.getStockBySkusDetailed(skus);
 
@@ -2609,11 +2648,11 @@ export class ProductsService {
 
     for (const sku of skus) {
       const meta = skuToMeta.get(sku)!;
-      const ref = meta.ref;
+      const ref = normalizeBaseRef(meta.ref);
       if (!byRef.has(ref)) {
         byRef.set(ref, {
           ref,
-          name: meta.descricao || ref,
+          name: cleanProductName(meta.descricao) || ref,
           variants: new Map(),
           otherStoresMap: new Map(),
         });
