@@ -297,7 +297,8 @@ function SegmentDetail({
     }
   }
 
-  // Também exporta só telefones (E.164) pra colar no Meta Custom Audience
+  // Exporta no formato OFICIAL Meta Ads — Value-Based Audience (19 colunas).
+  // O campo `value` (LTV em R$) habilita Lookalike por valor no Meta.
   async function exportPhonesForMeta() {
     setExporting(true);
     try {
@@ -310,32 +311,48 @@ function SegmentDetail({
       if (search) q.set('search', search);
       const res = await api<ListResponse>(`/crm/segments/${segment}?${q}`);
 
-      // Normaliza telefone BR pra formato E.164 sem sinais
-      const rows = res.data
-        .map((c) => ({
-          phone: normalizePhoneE164(c.phone),
-          email: c.email,
-          name: c.name ?? '',
-        }))
-        .filter((r) => r.phone || r.email);
+      // Filtra quem não tem nem email nem telefone (sem chave de match no Meta)
+      const data = res.data.filter((c) => c.email || c.phone);
 
-      // CSV compatível com Meta Ads Custom Audience:
-      // phone,email,fn (first name)
-      const header = ['phone', 'email', 'fn'];
-      const csvRows = rows.map((r) => [
-        r.phone ?? '',
-        r.email,
-        (r.name.split(' ')[0] ?? '').toLowerCase(),
-      ]);
+      const header = [
+        'email','email','email',
+        'phone','phone','phone',
+        'madid','fn','ln','zip','ct','st','country',
+        'dob','doby','gen','age','uid','value',
+      ];
+
+      const csvRows = data.map((c) => {
+        const phone = normalizePhoneE164(c.phone) ?? '';
+        const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
+        const fn = (parts[0] ?? '').toLowerCase();
+        const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
+        const value = Number(c.totalSpent || 0).toFixed(2);
+        return [
+          c.email, '', '',
+          phone,   '', '',
+          '',
+          fn, ln,
+          '', '', '',
+          'BR',
+          '', '', '', '',
+          c.email,
+          value,
+        ];
+      });
+
       const csv = [header, ...csvRows]
-        .map((r) => r.map((f) => `"${String(f).replace(/"/g, '""')}"`).join(','))
+        .map((r) => r.map((f) => {
+          const s = String(f);
+          if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+          return s;
+        }).join(','))
         .join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const stamp = new Date().toISOString().slice(0, 10);
       a.href = url;
-      a.download = `meta_custom_audience_${segment}_${stamp}.csv`;
+      a.download = `meta_value_based_audience_${segment}_${stamp}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {

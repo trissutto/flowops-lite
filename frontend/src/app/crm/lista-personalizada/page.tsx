@@ -233,21 +233,52 @@ export default function ListaPersonalizadaPage() {
         body: JSON.stringify(payload),
       });
 
-      const header = ['phone', 'email', 'fn'];
-      const rows = res.data.map((c) => [
-        normalizePhoneE164(c.phone) ?? '',
-        c.email,
-        (c.name?.split(' ')[0] ?? '').toLowerCase(),
-      ]);
+      // Formato OFICIAL Meta Ads — Value-Based Audience (19 colunas).
+      // Ref: https://www.facebook.com/business/help/606443329504150
+      // O que importa pra nós: value (LTV) viabiliza Lookalike por valor;
+      // email/phone viram a chave de match; fn/ln melhoram taxa de cadastro.
+      const header = [
+        'email','email','email',
+        'phone','phone','phone',
+        'madid','fn','ln','zip','ct','st','country',
+        'dob','doby','gen','age','uid','value',
+      ];
+
+      const rows = res.data.map((c) => {
+        const phone = normalizePhoneE164(c.phone) ?? '';
+        const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
+        const fn = (parts[0] ?? '').toLowerCase();
+        const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
+        // value: usa . como separador decimal (formato que o Meta espera)
+        const value = Number(c.totalSpent || 0).toFixed(2);
+        return [
+          c.email, '', '',        // email x3 (só temos 1)
+          phone,   '', '',        // phone x3 (só temos 1)
+          '',                     // madid (não temos)
+          fn, ln,
+          '', '', '',             // zip, ct, st (não temos)
+          'BR',                   // country
+          '', '', '', '',         // dob, doby, gen, age (não temos)
+          c.email,                // uid estável = email
+          value,                  // value = LTV em R$
+        ];
+      });
+
+      // Meta exige CSV simples, sem BOM, vírgula, sem aspas se não precisar.
       const csv = [header, ...rows]
-        .map((r) => r.map((f) => `"${String(f).replace(/"/g, '""')}"`).join(','))
+        .map((r) => r.map((f) => {
+          const s = String(f);
+          // Só usa aspas se o campo contém vírgula, aspas ou quebra de linha
+          if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+          return s;
+        }).join(','))
         .join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const stamp = new Date().toISOString().slice(0, 10);
       a.href = url;
-      a.download = `meta_custom_audience_${stamp}.csv`;
+      a.download = `meta_value_based_audience_${stamp}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
