@@ -341,4 +341,126 @@ export class CrmService {
 
     return { data, total, page, limit, segment };
   }
+
+  /**
+   * Lista personalizada — construtor de filtros livre.
+   * Todos os filtros são opcionais e combináveis (AND).
+   */
+  async listCustom(filters: {
+    // Pedidos
+    minOrderCount?: number;
+    maxOrderCount?: number;
+    // Valor total gasto
+    minTotalSpent?: number;
+    maxTotalSpent?: number;
+    // Ticket médio
+    minAvgTicket?: number;
+    maxAvgTicket?: number;
+    // Data última compra (ISO strings)
+    lastOrderFrom?: string;
+    lastOrderTo?: string;
+    // Data primeira compra
+    firstOrderFrom?: string;
+    firstOrderTo?: string;
+    // Dias desde última compra (recência)
+    minDaysSinceLast?: number;
+    maxDaysSinceLast?: number;
+    // Filtrar por segmento RFM (combina com os demais)
+    segments?: SegmentKey[];
+    // Exige telefone / email preenchidos (útil pra campanha)
+    requirePhone?: boolean;
+    requireEmail?: boolean;
+    // Busca textual
+    search?: string;
+    // Ordenação
+    orderBy?: 'totalSpent' | 'orderCount' | 'avgTicket' | 'lastOrder' | 'name' | 'daysSinceLast';
+    order?: 'asc' | 'desc';
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    data: SegmentedCustomer[];
+    total: number;
+    totalValue: number;
+    page: number;
+    limit: number;
+    filtersApplied: typeof filters;
+  }> {
+    const { customers } = await this.computeAll();
+
+    const lastFrom = filters.lastOrderFrom ? new Date(filters.lastOrderFrom).getTime() : null;
+    const lastTo   = filters.lastOrderTo   ? new Date(filters.lastOrderTo).getTime()   : null;
+    const firstFrom = filters.firstOrderFrom ? new Date(filters.firstOrderFrom).getTime() : null;
+    const firstTo   = filters.firstOrderTo   ? new Date(filters.firstOrderTo).getTime()   : null;
+
+    let list = customers.filter((c) => {
+      // Pedidos
+      if (filters.minOrderCount != null && c.orderCount < filters.minOrderCount) return false;
+      if (filters.maxOrderCount != null && c.orderCount > filters.maxOrderCount) return false;
+      // Total gasto
+      if (filters.minTotalSpent != null && c.totalSpent < filters.minTotalSpent) return false;
+      if (filters.maxTotalSpent != null && c.totalSpent > filters.maxTotalSpent) return false;
+      // Ticket médio
+      if (filters.minAvgTicket != null && c.avgTicket < filters.minAvgTicket) return false;
+      if (filters.maxAvgTicket != null && c.avgTicket > filters.maxAvgTicket) return false;
+      // Data última
+      const lastMs = c.lastOrder.getTime();
+      if (lastFrom != null && lastMs < lastFrom) return false;
+      if (lastTo != null && lastMs > lastTo + 86400000 - 1) return false; // inclusivo no dia
+      // Data primeira
+      const firstMs = c.firstOrder.getTime();
+      if (firstFrom != null && firstMs < firstFrom) return false;
+      if (firstTo != null && firstMs > firstTo + 86400000 - 1) return false;
+      // Dias desde última
+      if (filters.minDaysSinceLast != null && c.daysSinceLast < filters.minDaysSinceLast) return false;
+      if (filters.maxDaysSinceLast != null && c.daysSinceLast > filters.maxDaysSinceLast) return false;
+      // Segmentos
+      if (filters.segments && filters.segments.length > 0 && !filters.segments.includes(c.segment)) return false;
+      // Contatos obrigatórios
+      if (filters.requirePhone && !c.phone) return false;
+      if (filters.requireEmail && !c.email) return false;
+      return true;
+    });
+
+    // Busca textual (só aplica DEPOIS dos filtros estruturados pra não distorcer)
+    if (filters.search && filters.search.trim()) {
+      const q = filters.search.toLowerCase().trim();
+      list = list.filter(
+        (c) =>
+          c.email.includes(q) ||
+          (c.name && c.name.toLowerCase().includes(q)) ||
+          (c.phone && c.phone.includes(q)),
+      );
+    }
+
+    const orderBy = filters.orderBy ?? 'totalSpent';
+    const order = filters.order ?? 'desc';
+    const dir = order === 'asc' ? 1 : -1;
+
+    list.sort((a, b) => {
+      switch (orderBy) {
+        case 'orderCount':    return (a.orderCount - b.orderCount) * dir;
+        case 'avgTicket':     return (a.avgTicket - b.avgTicket) * dir;
+        case 'lastOrder':     return (a.lastOrder.getTime() - b.lastOrder.getTime()) * dir;
+        case 'daysSinceLast': return (a.daysSinceLast - b.daysSinceLast) * dir;
+        case 'name': {
+          const av = (a.name ?? a.email).toLowerCase();
+          const bv = (b.name ?? b.email).toLowerCase();
+          if (av < bv) return -1 * dir;
+          if (av > bv) return 1 * dir;
+          return 0;
+        }
+        case 'totalSpent':
+        default:              return (a.totalSpent - b.totalSpent) * dir;
+      }
+    });
+
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100000, Math.max(1, filters.limit ?? 50));
+    const total = list.length;
+    const totalValue = list.reduce((s, c) => s + c.totalSpent, 0);
+    const start = (page - 1) * limit;
+    const data = list.slice(start, start + limit);
+
+    return { data, total, totalValue, page, limit, filtersApplied: filters };
+  }
 }

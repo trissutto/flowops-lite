@@ -1,5 +1,5 @@
 import {
-  Controller, ForbiddenException, Get, Param, Query, Req, UseGuards,
+  Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CrmService, SegmentKey } from './crm.service';
@@ -55,5 +55,14 @@ export class CrmController {
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
     });
+  }
+
+  /**
+   * Lista personalizada — filtros combináveis (POST pra caber JSON grande).
+   */
+  @Post('custom')
+  custom(@Req() req: any, @Body() filters: any): Promise<any> {
+    assertMatriz(req.user);
+    return this.svc.listCustom(filters ?? {});
   }
 }
