@@ -227,6 +227,19 @@ function ConsultarInner() {
     }
   }, []);
 
+  // AUTO-SKIP: se a busca por descrição retornou EXATAMENTE 1 REF, pula a
+  // tela intermediária e já carrega o detalhe. Economiza 1 clique pra quando
+  // a vendedora digita a REF direta (ex: "vlm-222" — é obviamente uma REF).
+  useEffect(() => {
+    if (mode !== 'desc') return;
+    if (!data) return;
+    if (pickedRefFromDesc) return;
+    if (loadingRefFromDesc) return;
+    const refs = data.refMatches ?? [];
+    if (refs.length !== 1) return;
+    loadRefDetail(refs[0].ref);
+  }, [data, mode, pickedRefFromDesc, loadingRefFromDesc, loadRefDetail]);
+
   const clearInput = () => {
     setQuery(''); setData(null); setSearchError(null); setPickedRefFromDesc(null);
     inputRef.current?.focus();
@@ -421,6 +434,19 @@ function DescResults({
 }) {
   const refs = data.refMatches ?? [];
   if (refs.length === 0) return null;
+
+  // Auto-skip em andamento: 1 REF + carregando → só mostra spinner central.
+  if (refs.length === 1 && loading) {
+    return (
+      <div className="mt-8 flex flex-col items-center gap-2 text-slate-500">
+        <RefreshCw className="w-7 h-7 animate-spin text-brand" />
+        <div className="text-sm">
+          Abrindo <span className="font-bold text-slate-800">REF {refs[0].ref}</span>...
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mt-3 space-y-2">
       <div className="text-xs uppercase tracking-wide font-bold text-slate-500 px-1">
