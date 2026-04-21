@@ -156,8 +156,8 @@ function OperacaoHubInner() {
 
       {/* Botões de navegação — estilo cards coloridos, não abas sublinhadas */}
       <div className="bg-white border-b shadow-sm sticky top-14 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-          <div className="grid grid-cols-3 gap-3">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 sm:py-4">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
             {TABS.map((t) => {
               const Icon = t.icon;
               const isActive = active === t.key;
@@ -167,25 +167,25 @@ function OperacaoHubInner() {
                   onClick={() => go(t.key)}
                   className={
                     isActive
-                      ? `group relative overflow-hidden rounded-xl bg-gradient-to-br ${t.gradient} p-4 text-white shadow-lg ring-4 ${t.activeRing} ring-opacity-40 scale-[1.02] transition-all text-left`
-                      : `group relative overflow-hidden rounded-xl bg-slate-50 hover:bg-white border-2 border-slate-200 hover:border-slate-300 p-4 text-slate-700 hover:shadow-md transition-all text-left`
+                      ? `group relative overflow-hidden rounded-xl bg-gradient-to-br ${t.gradient} p-2 sm:p-4 text-white shadow-lg ring-2 sm:ring-4 ${t.activeRing} ring-opacity-40 scale-[1.02] transition-all text-left`
+                      : `group relative overflow-hidden rounded-xl bg-slate-50 hover:bg-white border-2 border-slate-200 hover:border-slate-300 p-2 sm:p-4 text-slate-700 hover:shadow-md transition-all text-left`
                   }
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-col sm:flex-row items-center sm:items-start gap-1 sm:gap-3 text-center sm:text-left">
                     <div
-                      className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 transition ${
+                      className={`w-8 h-8 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center shrink-0 transition ${
                         isActive
                           ? 'bg-white/25 backdrop-blur'
                           : `bg-gradient-to-br ${t.gradient} text-white`
                       }`}
                     >
-                      <Icon className="w-5 h-5" />
+                      <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className={`font-bold text-base leading-tight ${isActive ? '' : 'text-slate-900'}`}>
+                      <div className={`font-bold text-xs sm:text-base leading-tight ${isActive ? '' : 'text-slate-900'}`}>
                         {t.label}
                       </div>
-                      <div className={`text-xs leading-snug mt-0.5 line-clamp-1 ${isActive ? 'opacity-90' : 'text-slate-500'}`}>
+                      <div className={`hidden sm:block text-xs leading-snug mt-0.5 line-clamp-1 ${isActive ? 'opacity-90' : 'text-slate-500'}`}>
                         {t.subtitle}
                       </div>
                     </div>

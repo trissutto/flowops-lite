@@ -19,10 +19,10 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
-  DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, Menu, X,
+  DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X,
 } from 'lucide-react';
 
 type NavItem = {
@@ -194,32 +194,27 @@ export default function SideNav() {
     });
   };
 
-  const activeLabel = useMemo(() => {
-    for (const g of GROUPS) {
-      for (const i of g.items) {
-        if (isActive(pathname, i.href)) return i.label;
-      }
-    }
-    return 'Operação';
-  }, [pathname]);
+  // Escuta o evento 'sidenav:open' disparado pelo hamburger do TopNav
+  useEffect(() => {
+    const handler = () => setDrawerOpen(true);
+    window.addEventListener('sidenav:open', handler);
+    return () => window.removeEventListener('sidenav:open', handler);
+  }, []);
+
+  // Fecha o drawer com ESC (UX — ajuda quem usa teclado)
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrawerOpen(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [drawerOpen]);
 
   if (hide) return null;
 
   return (
     <>
-      {/* Trigger hamburger — só mobile */}
-      <button
-        onClick={() => setDrawerOpen(true)}
-        className="md:hidden fixed top-3 left-3 z-40 p-2 bg-white border border-slate-300 rounded-lg shadow-md"
-        aria-label="Abrir menu"
-      >
-        <Menu className="w-5 h-5 text-slate-700" />
-      </button>
-      {/* Label da página ativa no mobile (serve como título) */}
-      <div className="md:hidden fixed top-3 left-14 z-40 h-9 flex items-center px-3 bg-white/90 backdrop-blur border border-slate-200 rounded-lg shadow-sm text-sm font-bold text-slate-800">
-        {activeLabel}
-      </div>
-
       {/* Overlay pra fechar drawer no mobile */}
       {drawerOpen && (
         <div

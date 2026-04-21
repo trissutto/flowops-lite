@@ -1,0 +1,63 @@
+==========================================
+  DIAGNÓSTICO ERP — Gigasistemas
+==========================================
+
+PRA QUE SERVE
+-------------
+Inspecionar o schema de uma tabela do Gigasistemas (MySQL on-premise)
+direto, SEM precisar do backend NestJS rodando. Útil pra descobrir
+estrutura de tabelas antes de escrever queries definitivas (ex: auto-match
+de VENDA CERTA via PRODUTOSVENDIDOS).
+
+
+COMO USAR
+---------
+1. Essa pasta precisa estar dentro de flowops-lite/tools/diagnostico-erp/
+   (no mesmo repo que tem backend/.env com as credenciais ERP_*)
+
+2. Dê duplo-clique em diagnostico-erp.bat
+   → Consulta a tabela PRODUTOSVENDIDOS por default
+
+3. Pra consultar OUTRA tabela, abra CMD na pasta e rode:
+   diagnostico-erp.bat NOME_DA_TABELA
+
+   Exemplos:
+     diagnostico-erp.bat PRODUTOS
+     diagnostico-erp.bat ESTOQUE
+     diagnostico-erp.bat CLIENTES
+
+
+O QUE O SCRIPT FAZ
+------------------
+1. Lê as credenciais ERP_HOST/PORT/USER/PASSWORD/DATABASE do backend/.env
+2. Conecta no MySQL do Gigasistemas
+3. Roda SHOW COLUMNS FROM <tabela>
+4. Roda SELECT * FROM <tabela> LIMIT 3
+5. Imprime o resultado no console
+6. Salva tudo em resultado.json pra facilitar copiar
+
+
+REQUISITOS
+----------
+- Node.js instalado (https://nodejs.org)
+- backend/.env preenchido com ERP_HOST, ERP_USER, ERP_PASSWORD, ERP_DATABASE
+- mysql2 instalado no backend (o .bat instala automaticamente se faltar)
+- Máquina onde roda precisa ter acesso de rede ao Gigasistemas
+
+
+PROBLEMAS COMUNS
+----------------
+[ECONNREFUSED / ETIMEDOUT]
+  Gigasistemas desligado ou fora da rede. Verifique ERP_HOST.
+
+[ER_ACCESS_DENIED_ERROR]
+  Usuário/senha errados no backend/.env.
+
+[ER_NO_SUCH_TABLE]
+  Nome da tabela errado. Confira no Gigasistemas.
+
+
+RESULTADO
+---------
+Gera resultado.json na mesma pasta. Copie esse arquivo inteiro pra
+compartilhar com quem precisar inspecionar o schema.
