@@ -82,7 +82,9 @@ export class CustomersService {
 
   async list(query: CustomersQuery = {}): Promise<CustomersResult> {
     const page = Math.max(1, query.page ?? 1);
-    const limit = Math.min(200, Math.max(1, query.limit ?? 50));
+    // Teto alto pra permitir export completo (CSV da tela /clientes).
+    // A UI usa limit=50 por padrão; só o export manda limit=total+margem.
+    const limit = Math.min(100000, Math.max(1, query.limit ?? 50));
     const orderBy = query.orderBy ?? 'totalSpent';
     const order = query.order ?? 'desc';
 

@@ -168,10 +168,12 @@ export default function ClientesPage() {
   async function exportCsv() {
     setExporting(true);
     try {
-      // Puxa TODOS (sem paginação) respeitando busca e ordenação atuais
+      // Puxa TODOS (sem paginação) respeitando busca e ordenação atuais.
+      // Usa o `total` atual + margem pra não cortar. Se busca ativa, reduz escopo.
+      const bulkLimit = Math.max(50000, (total || 0) + 1000);
       const q = new URLSearchParams();
       q.set('page', '1');
-      q.set('limit', '10000');
+      q.set('limit', String(bulkLimit));
       q.set('orderBy', orderBy);
       q.set('order', order);
       if (search) q.set('search', search);
