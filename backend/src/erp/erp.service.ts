@@ -242,6 +242,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Diagnóstico: descreve a tabela PRODUTOSVENDIDOS do Gigasistemas.
+   * Retorna colunas + 3 linhas de amostra. Usado pra descobrir qual coluna
+   * guarda SKU, loja e data de venda — depois que soubermos, o auto-match
+   * de VENDA CERTA pode ser ligado via query indexada.
+   */
+  async describeSalesTable(): Promise<{
+    columns: Array<{ field: string; type: string }>;
+    sample: any[];
+  }> {
+    if (!this.pool) return { columns: [], sample: [] };
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SHOW COLUMNS FROM PRODUTOSVENDIDOS',
+      );
+      // ORDER BY 1 DESC não funciona sem saber PK. Pega 3 quaisquer — vale só pra olhar schema.
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SELECT * FROM PRODUTOSVENDIDOS LIMIT 3',
+      );
+      return {
+        columns: cols.map((c: any) => ({ field: c.Field, type: c.Type })),
+        sample: rows as any[],
+      };
+    } catch (e) {
+      this.logger.error(`describeSalesTable falhou: ${(e as Error).message}`);
+      return { columns: [], sample: [] };
+    }
+  }
+
+  /**
    * Busca produtos no Gigasistemas por uma lista de códigos que podem estar
    * em QUALQUER campo (CODIGO, EAN13, CODBARRAS, etc). Retorna um mapa
    * codigo-procurado → CODIGO oficial do Gigasistemas.

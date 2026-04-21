@@ -1618,6 +1618,10 @@ export class ProductsService {
     return this.erp.describeProductsTable();
   }
 
+  describeErpSalesTable() {
+    return this.erp.describeSalesTable();
+  }
+
   searchErpProductsLike(q: string) {
     return this.erp.searchProductsLike(q || '');
   }

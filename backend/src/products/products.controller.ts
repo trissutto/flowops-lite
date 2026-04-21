@@ -126,6 +126,16 @@ export class ProductsController {
   }
 
   /**
+   * DIAGNÓSTICO: descreve a tabela PRODUTOSVENDIDOS do Gigasistemas.
+   * Usado pra descobrir quais colunas guardam SKU/loja/data de venda,
+   * antes de ligar o auto-match de VENDA CERTA.
+   */
+  @Get('erp-schema/produtos-vendidos')
+  erpSchemaProdutosVendidos() {
+    return this.products.describeErpSalesTable();
+  }
+
+  /**
    * DIAGNÓSTICO: busca produtos no ERP por termo (LIKE em CODIGO/REF/DESCRICAOCOMPLETA).
    * Temporário, pra investigação do padrão de SKU.
    */
