@@ -16,6 +16,7 @@ const NAV = [
   { href: '/retaguarda/venda-certa', label: 'Venda Certa' },
   { href: '/retaguarda/materiais', label: 'Materiais' },
   { href: '/retaguarda/almoxarifado', label: 'Almoxarifado' },
+  { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP' },
   { href: '/financeiro',    label: 'Financeiro'    },
   { href: '/produtos',      label: 'Produtos'     },
   { href: '/clientes',      label: 'Clientes'     },
