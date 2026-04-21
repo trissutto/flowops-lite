@@ -310,6 +310,123 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Consulta de loja — métodos específicos por tipo de busca.
+  // Cada método assume uma intenção diferente da vendedora, sem o LIMIT
+  // agressivo do searchProductsLike (que perdia "vestido azul 48" porque
+  // o ERP tem milhares de "vestido azul").
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Busca EXATA por REF. Retorna TODAS as variações da mesma referência —
+   * pouco volume (10 a 40 linhas) porque cada REF tem N tamanhos × cores.
+   * LIKE só pra cobrir diferença de maiúscula/espaço (não wildcard %).
+   */
+  async searchByRef(ref: string): Promise<any[]> {
+    if (!this.pool || !ref) return [];
+    const clean = String(ref).trim();
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
+           FROM produtos
+          WHERE REF = ? OR REF LIKE ?
+          ORDER BY COR, TAMANHO
+          LIMIT 500`,
+        [clean, `${clean}%`], // exata + começando com (ex: "123" pega "123A")
+      );
+      return rows as any[];
+    } catch (e) {
+      this.logger.error(`searchByRef falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Busca por SKU ou EAN (código da etiqueta). PRIMEIRO acha UMA linha que bate,
+   * pega a REF dela, e DEPOIS retorna TODAS as variações dessa REF — pra vendedora
+   * ver os outros tamanhos/cores sem precisar buscar de novo.
+   */
+  async searchByCodeAndExpandRef(code: string): Promise<any[]> {
+    if (!this.pool || !code) return [];
+    const clean = String(code).trim();
+    try {
+      // 1) Tenta achar em CODIGO direto (SKU bipado)
+      let [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT REF FROM produtos WHERE CODIGO = ? LIMIT 1`,
+        [clean],
+      );
+      let ref: string | null = (rows as any[])[0]?.REF ?? null;
+
+      // 2) Se não achou, tenta colunas de EAN/código de barras
+      if (!ref && /^\d{6,}$/.test(clean)) {
+        const eanCols = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
+        for (const col of eanCols) {
+          try {
+            const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+              `SELECT REF FROM produtos WHERE \`${col}\` = ? LIMIT 1`,
+              [clean],
+            );
+            const found = (r as any[])[0]?.REF;
+            if (found) { ref = String(found); break; }
+          } catch {
+            // coluna não existe nesse schema — ignora
+          }
+        }
+      }
+
+      if (!ref) return [];
+
+      // 3) Agora retorna TUDO da REF
+      return this.searchByRef(ref);
+    } catch (e) {
+      this.logger.error(`searchByCodeAndExpandRef falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Busca por descrição. Aqui o volume é grande — "vestido" pode retornar
+   * milhares de linhas. Estratégia:
+   *  - Quebra o termo em PALAVRAS (cada uma vira um LIKE que precisa bater — AND).
+   *    Ex: "vestido azul 48" → WHERE DESCRICAOCOMPLETA LIKE '%vestido%' AND ... '%azul%' AND ... '%48%'
+   *  - Agrupa por REF (DISTINCT) e traz uma amostra da descrição.
+   *  - Limite generoso (200 REFs) porque são só REFs únicas, não linhas.
+   */
+  async searchByDescriptionGrouped(
+    term: string,
+  ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>> {
+    if (!this.pool || !term) return [];
+    const words = String(term)
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w.length >= 2)
+      .slice(0, 6); // limite de palavras pra não explodir SQL
+    if (!words.length) return [];
+
+    const whereClauses = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
+    const params = words.map((w) => `%${w}%`);
+
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT REF,
+                MAX(DESCRICAOCOMPLETA) AS DESCRICAOCOMPLETA,
+                COUNT(*) AS VARIANT_COUNT
+           FROM produtos
+          WHERE ${whereClauses}
+            AND REF IS NOT NULL
+            AND REF <> ''
+          GROUP BY REF
+          ORDER BY VARIANT_COUNT DESC
+          LIMIT 200`,
+        params,
+      );
+      return rows as any[];
+    } catch (e) {
+      this.logger.error(`searchByDescriptionGrouped falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   /**
    * Resolve EAN13 (código de barras) para uma lista de SKUs do Gigasistemas.
    *

@@ -203,6 +203,22 @@ export default function MinhaLojaPage() {
     }
   }, [router]);
 
+  // Atalho global: F2 ou Ctrl+K → vai pra tela de consulta de produto.
+  // Ajuda MUITO no balcão — vendedora não precisa tirar a mão do leitor.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isSearchShortcut =
+        e.key === 'F2' ||
+        ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K'));
+      if (isSearchShortcut) {
+        e.preventDefault();
+        router.push('/minha-loja/consultar');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [router]);
+
   const loadRows = useCallback(async () => {
     try {
       const data = await api<PickOrderRow[]>('/pick-orders/mine');

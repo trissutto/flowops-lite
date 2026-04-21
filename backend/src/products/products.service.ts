@@ -2470,10 +2470,17 @@ export class ProductsService {
   //
   // IMPORTANTE: limite 20 resultados (evita travar a tela). Se vendedora
   // precisa mais específico, digita melhor.
-  async storeProductSearch(q: string, myStoreId: string): Promise<{
+  async storeProductSearch(
+    q: string,
+    myStoreId: string,
+    mode: 'ref' | 'desc' | 'sku' = 'ref',
+  ): Promise<{
     query: string;
+    mode: 'ref' | 'desc' | 'sku';
     detectedAs: 'ean' | 'text';
     myStore: { id: string; code: string; name: string };
+    /** Em modo desc, vem uma lista de REFs agrupadas pra vendedora escolher. */
+    refMatches?: Array<{ ref: string; name: string; variantCount: number }>;
     results: Array<{
       ref: string;
       name: string;
@@ -2484,6 +2491,8 @@ export class ProductsService {
         myStoreQty: number;
       }>;
       myStoreTotal: number;
+      /** Só no modo sku — marca qual variação bateu exata com o código bipado. */
+      matchedSku?: string | null;
       otherStores: Array<{
         code: string;
         name: string;
@@ -2504,29 +2513,56 @@ export class ProductsService {
       throw new BadRequestException('Loja não encontrada para o usuário logado.');
     }
 
-    // 1. Detecta se é EAN (só dígitos, 8-14 chars) e tenta resolver pra CODIGO
     const isLikelyEan = /^\d{8,14}$/.test(term);
-    let searchTerm = term;
     let detectedAs: 'ean' | 'text' = 'text';
+    let matchedSkuForResult: string | null = null;
 
-    if (isLikelyEan) {
-      try {
-        // getEansBySkus faz o contrário (sku → ean); pra ean → sku usamos findCodigosByAny.
-        // Como findCodigosByAny é private na ErpService, simulamos via query de varredura.
-        // Atalho: testa direto como código/ref (se vendedora bipou um SKU numérico,
-        // LIKE já pega) e marca como EAN só pra UI.
-        detectedAs = 'ean';
-        searchTerm = term;
-      } catch {
-        // ignore, cai no LIKE
-      }
+    // Modo DESC — retorna LISTA de REFs pra vendedora escolher (não expande tudo).
+    if (mode === 'desc') {
+      const grouped = await this.erp.searchByDescriptionGrouped(term);
+      return {
+        query: term,
+        mode,
+        detectedAs,
+        myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
+        refMatches: grouped.map((g) => ({
+          ref: String(g.REF),
+          name: String(g.DESCRICAOCOMPLETA ?? g.REF),
+          variantCount: Number(g.VARIANT_COUNT ?? 0),
+        })),
+        results: [],
+      };
     }
 
-    // 2. LIKE nos produtos do ERP (CODIGO/REF/DESCRICAOCOMPLETA, limite 20)
-    const rawRows = await this.erp.searchProductsLike(searchTerm);
+    // Modo SKU/COD — acha a linha, pega a REF, expande TODA a REF.
+    // Também dispara quando parece EAN puro no modo ref (fallback inteligente).
+    let rawRows: any[] = [];
+    if (mode === 'sku' || (mode === 'ref' && isLikelyEan)) {
+      if (isLikelyEan) detectedAs = 'ean';
+      // Guarda o código exato que a vendedora passou — marca a variante no resultado
+      matchedSkuForResult = term;
+      rawRows = await this.erp.searchByCodeAndExpandRef(term);
+      // Fallback: se não achou pelo código, tenta como REF direto
+      if (!rawRows.length) {
+        rawRows = await this.erp.searchByRef(term);
+      }
+    } else {
+      // Modo REF — busca exata + prefixo
+      rawRows = await this.erp.searchByRef(term);
+    }
     if (!rawRows.length) {
       return {
         query: term,
+        mode,
+        detectedAs,
+        myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
+        results: [],
+      };
+    }
+    if (!rawRows.length) {
+      return {
+        query: term,
+        mode,
         detectedAs,
         myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
         results: [],
@@ -2627,11 +2663,17 @@ export class ProductsService {
       });
       const myStoreTotal = variants.reduce((s, v) => s + v.myStoreQty, 0);
       const otherStores = Array.from(b.otherStoresMap.values()).sort((a, c) => c.qty - a.qty);
-      return { ref: b.ref, name: b.name, variants, myStoreTotal, otherStores };
+      // No modo sku, marca qual variante bateu exatamente com o código buscado
+      const matchedSku =
+        matchedSkuForResult && variants.some((v) => v.sku === matchedSkuForResult)
+          ? matchedSkuForResult
+          : null;
+      return { ref: b.ref, name: b.name, variants, myStoreTotal, matchedSku, otherStores };
     }).sort((a, b) => b.myStoreTotal - a.myStoreTotal);
 
     return {
       query: term,
+      mode,
       detectedAs,
       myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
       results,

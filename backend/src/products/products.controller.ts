@@ -243,7 +243,11 @@ export class ProductsController {
    * é interpretado como ID (integer) e cai no parsing.
    */
   @Get('store-search')
-  storeSearch(@Req() req: any, @Query('q') q?: string) {
+  storeSearch(
+    @Req() req: any,
+    @Query('q') q?: string,
+    @Query('mode') mode?: string,
+  ) {
     const user = req.user as { userId: string; role: string; storeId: string | null };
     if (user?.role !== 'store' || !user?.storeId) {
       throw new BadRequestException('Endpoint exclusivo de usuários de loja.');
@@ -251,7 +255,9 @@ export class ProductsController {
     if (!q || q.trim().length < 2) {
       throw new BadRequestException('Informe o parâmetro q com no mínimo 2 caracteres.');
     }
-    return this.products.storeProductSearch(q, user.storeId);
+    const normalizedMode: 'ref' | 'desc' | 'sku' =
+      mode === 'desc' || mode === 'sku' ? mode : 'ref';
+    return this.products.storeProductSearch(q, user.storeId, normalizedMode);
   }
 
   @Get(':id')
