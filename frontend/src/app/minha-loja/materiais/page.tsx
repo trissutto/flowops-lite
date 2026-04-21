@@ -11,7 +11,7 @@
  *  - Meus pedidos: lista pedidos anteriores com status (pending → delivered)
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -57,7 +57,16 @@ type SupplyRequest = {
 
 type Tab = 'novo' | 'historico';
 
+// Envolve em Suspense porque usa useSearchParams (exigido pelo Next 14 no build estático)
 export default function MateriaisPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 p-8 text-slate-400">Carregando…</div>}>
+      <MateriaisPageInner />
+    </Suspense>
+  );
+}
+
+function MateriaisPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialTab: Tab = searchParams.get('tab') === 'historico' ? 'historico' : 'novo';

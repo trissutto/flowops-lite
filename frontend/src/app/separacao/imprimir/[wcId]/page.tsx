@@ -19,7 +19,7 @@
  * Suporta ?wcIds=123,456,789 pra IMPRESSÃO EM BLOCO — uma folha por pedido.
  */
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 
@@ -64,7 +64,16 @@ interface OrderBundle {
   separation: SepPreview;
 }
 
+// Envolve em Suspense porque usa useSearchParams (exigido pelo Next 14 no build estático)
 export default function ImprimirSeparacaoPage() {
+  return (
+    <Suspense fallback={<div className="p-4 font-mono text-xs">Carregando…</div>}>
+      <ImprimirSeparacaoPageInner />
+    </Suspense>
+  );
+}
+
+function ImprimirSeparacaoPageInner() {
   const params = useParams<{ wcId: string }>();
   const sp = useSearchParams();
   const [bundles, setBundles] = useState<OrderBundle[]>([]);

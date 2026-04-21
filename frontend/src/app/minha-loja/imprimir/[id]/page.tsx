@@ -13,7 +13,7 @@
  * pra papel 80mm (Bematech MP-4200, Epson TM-T20, Elgin i9, Daruma DR800, etc).
  */
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
@@ -46,7 +46,16 @@ interface PickDetail {
   };
 }
 
+// Envolve em Suspense porque usa useSearchParams (exigido pelo Next 14 no build estático)
 export default function ImprimirCupomPage() {
+  return (
+    <Suspense fallback={<div className="p-4 font-mono text-xs">Carregando…</div>}>
+      <ImprimirCupomPageInner />
+    </Suspense>
+  );
+}
+
+function ImprimirCupomPageInner() {
   const params = useParams();
   const searchParams = useSearchParams();
   const id = params.id as string;
