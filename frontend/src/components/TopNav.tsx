@@ -11,17 +11,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import Logo from './Logo';
 
 const NAV = [
-  { href: '/',          label: 'Dashboard' },
-  { href: '/pedidos',   label: 'Pedidos'   },
-  { href: '/separacao', label: 'Separação' },
+  { href: '/',              label: 'Operação' },
   { href: '/retaguarda/baixa-estoque', label: 'Baixa Estoque' },
-  { href: '/produtos',  label: 'Produtos'  },
-  { href: '/auditoria-sku', label: 'Auditoria SKU' },
-  { href: '/clientes',  label: 'Clientes'  },
-  { href: '/marketing', label: 'Marketing' },
-  { href: '/lojas',     label: 'Lojas'     },
-  { href: '/usuarios',  label: 'Usuários'  },
-  { href: '/logs',      label: 'Logs'      },
+  { href: '/produtos',      label: 'Produtos'     },
+  { href: '/clientes',      label: 'Clientes'     },
+  { href: '/marketing',     label: 'Marketing'    },
+  { href: '/configuracoes', label: 'Configurações' },
 ];
 
 export default function TopNav() {

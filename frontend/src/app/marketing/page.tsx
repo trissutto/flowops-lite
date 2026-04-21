@@ -18,20 +18,22 @@
 
 import { Suspense, useMemo } from 'react';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { Users, ShoppingCart, MessageCircle } from 'lucide-react';
+import { Users, ShoppingCart, MessageCircle, Filter } from 'lucide-react';
 
 // Reaproveita os componentes default das telas existentes.
 // Todos são 'use client' e cuidam da própria busca de dados.
 import SegmentosPage from '../crm/segmentos/page';
+import ListaPersonalizadaPage from '../crm/lista-personalizada/page';
 import CarrinhosAbandonadosPage from '../carrinhos-abandonados/page';
 import RecuperacaoPage from './recuperacao/page';
 
-type TabKey = 'segmentos' | 'carrinhos' | 'recuperacao';
+type TabKey = 'segmentos' | 'personalizada' | 'carrinhos' | 'recuperacao';
 
 const TABS: { key: TabKey; label: string; icon: typeof Users }[] = [
-  { key: 'segmentos',   label: 'Segmentos (CRM)',         icon: Users },
-  { key: 'carrinhos',   label: 'Carrinhos Abandonados',   icon: ShoppingCart },
-  { key: 'recuperacao', label: 'Recuperação WhatsApp',    icon: MessageCircle },
+  { key: 'segmentos',     label: 'Segmentos (CRM)',       icon: Users },
+  { key: 'personalizada', label: 'Lista Personalizada',   icon: Filter },
+  { key: 'carrinhos',     label: 'Carrinhos Abandonados', icon: ShoppingCart },
+  { key: 'recuperacao',   label: 'Recuperação WhatsApp',  icon: MessageCircle },
 ];
 
 function MarketingHubInner() {
@@ -78,9 +80,10 @@ function MarketingHubInner() {
 
       {/* Conteúdo da aba */}
       <div>
-        {active === 'segmentos' && <SegmentosPage />}
-        {active === 'carrinhos' && <CarrinhosAbandonadosPage />}
-        {active === 'recuperacao' && <RecuperacaoPage />}
+        {active === 'segmentos'     && <SegmentosPage />}
+        {active === 'personalizada' && <ListaPersonalizadaPage />}
+        {active === 'carrinhos'     && <CarrinhosAbandonadosPage />}
+        {active === 'recuperacao'   && <RecuperacaoPage />}
       </div>
     </div>
   );
