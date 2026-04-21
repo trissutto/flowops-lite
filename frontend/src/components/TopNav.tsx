@@ -1,34 +1,24 @@
 'use client';
 
 /**
- * TopNav — Barra de navegação global fixa no topo.
- * Plugada em layout.tsx, fica visível em todas as telas exceto /login.
- * `sticky top-0` mantém o header visível mesmo com scroll longo.
+ * TopNav — Topbar slim (só logo + logout).
+ *
+ * A navegação mudou pra sidebar lateral (ver SideNav.tsx). Esse topbar ficou
+ * enxuto: só um botão de logout à direita. No mobile, o SideNav renderiza um
+ * hamburger + título da página ativa por cima desse topbar.
+ *
+ * `sticky top-0` mantém o header visível com scroll longo. Altura 56px (h-14).
+ * `md:pl-60` empurra o conteúdo pra não ficar embaixo da sidebar no desktop.
+ * Esconde em /login e /minha-loja (UI dedicada).
  */
 
-import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import Logo from './Logo';
-
-const NAV = [
-  { href: '/',              label: 'Operação' },
-  { href: '/retaguarda/baixa-estoque', label: 'Baixa Estoque' },
-  { href: '/retaguarda/venda-certa', label: 'Venda Certa' },
-  { href: '/retaguarda/materiais', label: 'Materiais' },
-  { href: '/retaguarda/almoxarifado', label: 'Almoxarifado' },
-  { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP' },
-  { href: '/financeiro',    label: 'Financeiro'    },
-  { href: '/produtos',      label: 'Produtos'     },
-  { href: '/clientes',      label: 'Clientes'     },
-  { href: '/marketing',     label: 'Marketing'    },
-  { href: '/configuracoes', label: 'Configurações' },
-];
+import { LogOut } from 'lucide-react';
 
 export default function TopNav() {
   const pathname = usePathname() || '/';
   const router = useRouter();
 
-  // Esconder na tela de login e na operação de loja (UI dedicada com header próprio)
   if (pathname === '/login' || pathname.startsWith('/login')) return null;
   if (pathname.startsWith('/minha-loja')) return null;
 
@@ -37,32 +27,19 @@ export default function TopNav() {
     router.push('/login');
   }
 
-  function isActive(href: string) {
-    if (href === '/') return pathname === '/';
-    return pathname === href || pathname.startsWith(href + '/');
-  }
-
   return (
     <header className="bg-brand text-white shadow sticky top-0 z-40">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-3 hover:opacity-90">
-          <Logo height={36} className="brightness-0 invert" />
-          <h1 className="text-xl font-bold tracking-wide">ORDER ONE</h1>
-        </Link>
-        <nav className="flex gap-5 text-sm">
-          {NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className={`hover:underline ${
-                isActive(n.href) ? 'font-bold underline underline-offset-4' : ''
-              }`}
-            >
-              {n.label}
-            </Link>
-          ))}
-          <button onClick={logout} className="hover:underline">Sair</button>
-        </nav>
+      <div className="h-14 px-4 md:px-6 flex items-center justify-end gap-3">
+        {/* Espaço reservado pro hamburger/título que o SideNav renderiza no mobile */}
+        <div className="flex-1 md:hidden" />
+        <button
+          onClick={logout}
+          className="flex items-center gap-1.5 text-sm px-3 py-1.5 hover:bg-white/10 rounded transition"
+          title="Sair"
+        >
+          <LogOut className="w-4 h-4" />
+          <span className="hidden sm:inline">Sair</span>
+        </button>
       </div>
     </header>
   );

@@ -72,7 +72,7 @@ function ConfiguracoesHubInner() {
   return (
     <div>
       {/* Tabs sticky abaixo do TopNav */}
-      <div className="bg-white border-b shadow-sm sticky top-[72px] z-30">
+      <div className="bg-white border-b shadow-sm sticky top-14 z-30">
         <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto">
           {TABS.map((t) => {
             const Icon = t.icon;

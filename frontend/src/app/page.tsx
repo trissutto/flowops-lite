@@ -155,7 +155,7 @@ function OperacaoHubInner() {
       )}
 
       {/* Botões de navegação — estilo cards coloridos, não abas sublinhadas */}
-      <div className="bg-white border-b shadow-sm sticky top-[72px] z-30">
+      <div className="bg-white border-b shadow-sm sticky top-14 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="grid grid-cols-3 gap-3">
             {TABS.map((t) => {
