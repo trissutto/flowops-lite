@@ -31,10 +31,10 @@ import { ConnectionProvider, ConnectionBadge, useConnection } from '@/lib/connec
 import Logo from '@/components/Logo';
 import {
   Search, ArrowLeft, RefreshCw, X, MessageCircle,
-  XCircle, AlertCircle, Store, Hash, Tag, Barcode, ChevronRight,
+  XCircle, AlertCircle, Store, Tag, Barcode, ChevronRight,
 } from 'lucide-react';
 
-type Mode = 'ref' | 'desc' | 'sku';
+type Mode = 'desc' | 'sku';
 
 interface MeProfile {
   userId: string;
@@ -93,7 +93,7 @@ function ConsultarInner() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<Mode>('ref');
+  const [mode, setMode] = useState<Mode>('desc');
   const [query, setQuery] = useState('');
   const [data, setData] = useState<StoreSearchResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -197,9 +197,8 @@ function ConsultarInner() {
         e.key === 'F2' || ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K'));
       if (focusShortcut) { e.preventDefault(); inputRef.current?.focus(); inputRef.current?.select(); return; }
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        if (e.key === '1') { e.preventDefault(); setMode('ref'); inputRef.current?.focus(); }
-        else if (e.key === '2') { e.preventDefault(); setMode('desc'); inputRef.current?.focus(); }
-        else if (e.key === '3') { e.preventDefault(); setMode('sku'); inputRef.current?.focus(); }
+        if (e.key === '1') { e.preventDefault(); setMode('desc'); inputRef.current?.focus(); }
+        else if (e.key === '2') { e.preventDefault(); setMode('sku'); inputRef.current?.focus(); }
       }
     };
     window.addEventListener('keydown', handler);
@@ -234,8 +233,7 @@ function ConsultarInner() {
   };
 
   const placeholder = useMemo(() => {
-    if (mode === 'ref') return 'Digite a referência do produto...';
-    if (mode === 'desc') return 'Digite palavras da descrição (ex: vestido midi azul)...';
+    if (mode === 'desc') return 'Digite REF, descrição ou palavras-chave (ex: vlm-222, vestido midi azul)...';
     return 'Bipe a etiqueta ou digite o código...';
   }, [mode]);
 
@@ -300,7 +298,7 @@ function ConsultarInner() {
           <div className="flex items-center gap-3 flex-wrap">
             <span>
               <kbd className="px-1.5 py-0.5 bg-slate-200 rounded font-mono text-[10px]">F2</kbd> focar ·{' '}
-              <kbd className="px-1.5 py-0.5 bg-slate-200 rounded font-mono text-[10px]">Alt+1/2/3</kbd> trocar aba
+              <kbd className="px-1.5 py-0.5 bg-slate-200 rounded font-mono text-[10px]">Alt+1/2</kbd> trocar aba
             </span>
           </div>
           {loading && <span className="flex items-center gap-1 text-slate-400"><RefreshCw className="w-3 h-3 animate-spin" /> Buscando...</span>}
@@ -384,9 +382,8 @@ function ConsultarInner() {
 // ============================================================
 function ModeTabs({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
   const tabs: Array<{ key: Mode; label: string; Icon: any; hint: string }> = [
-    { key: 'ref',  label: 'Referência',     Icon: Hash,    hint: 'Alt+1' },
-    { key: 'desc', label: 'Descrição',      Icon: Tag,     hint: 'Alt+2' },
-    { key: 'sku',  label: 'Cód. Etiqueta',  Icon: Barcode, hint: 'Alt+3' },
+    { key: 'desc', label: 'REF / Descrição', Icon: Tag,     hint: 'Alt+1' },
+    { key: 'sku',  label: 'Cód. Etiqueta',   Icon: Barcode, hint: 'Alt+2' },
   ];
   return (
     <div className="flex gap-1 mb-3 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
@@ -464,9 +461,8 @@ function DescResults({
 // ============================================================
 function Welcome({ storeName, mode }: { storeName: string; mode: Mode }) {
   const copy: Record<Mode, { title: string; body: string }> = {
-    ref:  { title: 'Busca por REFERÊNCIA',    body: 'Digite a referência do produto (ex: 1234, R5578). Retorna todos os tamanhos e cores da REF.' },
-    desc: { title: 'Busca por DESCRIÇÃO',     body: 'Digite palavras separadas pra refinar (ex: "vestido midi preto"). Todas as palavras precisam bater.' },
-    sku:  { title: 'Busca por CÓD. ETIQUETA', body: 'Bipe a etiqueta ou digite o código. Destacamos a variação exata E mostramos os outros tamanhos da mesma REF.' },
+    desc: { title: 'Busca por REF ou DESCRIÇÃO', body: 'Digite a referência (ex: VLM-222) ou palavras da descrição (ex: "vestido midi preto"). Todas as palavras precisam bater — quanto mais específica, mais refinada a lista.' },
+    sku:  { title: 'Busca por CÓD. ETIQUETA',    body: 'Bipe a etiqueta ou digite o código. Destacamos a variação exata E mostramos os outros tamanhos da mesma REF.' },
   };
   const c = copy[mode];
   return (
@@ -481,8 +477,7 @@ function Welcome({ storeName, mode }: { storeName: string; mode: Mode }) {
 
 function EmptyResult({ query, mode }: { query: string; mode: Mode }) {
   const tip: Record<Mode, string> = {
-    ref:  'Confere se digitou a REF certinho. REF geralmente é curta (3-6 caracteres/dígitos).',
-    desc: 'Tente palavras diferentes — ex: cor, tipo da peça, tamanho. Ou troca pra aba REFERÊNCIA se já sabe o código.',
+    desc: 'Tente outras palavras — REF (ex: VLM-222), cor, tipo da peça. Quanto mais específica a descrição, melhor.',
     sku:  'O código da etiqueta não bate com nenhum produto do ERP. Confere se bipou a etiqueta inteira.',
   };
   return (
@@ -579,21 +574,59 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
     return v ? (v.cor || '—').trim() : null;
   }, [highlightSku, item.variants]);
 
-  const [selectedColor, setSelectedColor] = useState<string | null>(highlightedColor);
-  useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
+  // Tamanho pré-selecionado: se tem SKU bipado, seleciona também o tamanho do SKU.
+  const highlightedSize = useMemo(() => {
+    if (!highlightSku) return null;
+    const v = item.variants.find((x) => x.sku === highlightSku);
+    return v ? (v.tamanho || '—').trim() : null;
+  }, [highlightSku, item.variants]);
 
-  // Filtro das outras lojas: se cor selecionada, só mostra quem tem essa cor.
+  const [selectedColor, setSelectedColor] = useState<string | null>(highlightedColor);
+  const [selectedSize, setSelectedSize] = useState<string | null>(highlightedSize);
+  useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
+  useEffect(() => { setSelectedSize(highlightedSize); }, [highlightedSize]);
+
+  // Clique numa célula (cor + tamanho): filtra outras lojas por essa combinação.
+  const handleCellClick = useCallback((cor: string, tam: string) => {
+    // Se clicou na mesma célula que já tá selecionada, limpa.
+    if (selectedColor === cor && selectedSize === tam) {
+      setSelectedColor(null); setSelectedSize(null);
+    } else {
+      setSelectedColor(cor); setSelectedSize(tam);
+    }
+  }, [selectedColor, selectedSize]);
+
+  // Clique na label da cor (primeira coluna): filtra só por cor, libera tamanho.
+  const handleColorClick = useCallback((cor: string) => {
+    if (selectedColor === cor && !selectedSize) {
+      setSelectedColor(null);
+    } else {
+      setSelectedColor(cor); setSelectedSize(null);
+    }
+  }, [selectedColor, selectedSize]);
+
+  const clearFilter = useCallback(() => {
+    setSelectedColor(null); setSelectedSize(null);
+  }, []);
+
+  // Filtro das outras lojas:
+  //  - só cor selecionada → qualquer variante dessa cor
+  //  - cor + tamanho → só variantes com AMBOS casando
   const filteredOtherStores = useMemo(() => {
-    if (!selectedColor) return item.otherStores;
+    if (!selectedColor && !selectedSize) return item.otherStores;
     return item.otherStores
       .map((s) => {
-        const matching = s.variants.filter((v) => (v.cor || '—').trim() === selectedColor);
+        const matching = s.variants.filter((v) => {
+          const corOk = !selectedColor || (v.cor || '—').trim() === selectedColor;
+          const tamOk = !selectedSize || (v.tamanho || '—').trim() === selectedSize;
+          return corOk && tamOk;
+        });
         if (!matching.length) return null;
         const qty = matching.reduce((acc, v) => acc + v.qty, 0);
         return { ...s, variants: matching, qty };
       })
       .filter((x): x is OtherStore => !!x);
-  }, [item.otherStores, selectedColor]);
+  }, [item.otherStores, selectedColor, selectedSize]);
 
   return (
     <article className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -615,16 +648,17 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
 
       {/* MATRIZ cor × tamanho */}
       <section className="p-3">
-        <div className="flex items-center justify-between mb-2 px-1">
+        <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
           <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500">
-            Grade de disponibilidade · clique na cor pra filtrar
+            Grade · clique na célula pra ver quem tem esse tamanho
           </div>
-          {selectedColor && (
+          {(selectedColor || selectedSize) && (
             <button
-              onClick={() => setSelectedColor(null)}
+              onClick={clearFilter}
               className="text-xs text-brand font-medium hover:underline flex items-center gap-1"
             >
               <X className="w-3 h-3" /> Limpar filtro
+              {selectedColor && <span className="font-normal">({selectedColor}{selectedSize ? ` · ${selectedSize}` : ''})</span>}
             </button>
           )}
         </div>
@@ -649,23 +683,26 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
             <tbody>
               {colors.map((cor) => {
                 const colorTotal = totalsByColor.get(cor) || 0;
-                const isSelected = selectedColor === cor;
-                const dimmed = selectedColor && !isSelected;
+                const isColorSel = selectedColor === cor;
+                const dimmed = selectedColor && !isColorSel;
                 return (
                   <tr
                     key={cor}
-                    onClick={() => setSelectedColor(isSelected ? null : cor)}
-                    className={`cursor-pointer transition border-b border-slate-100 ${
-                      isSelected
-                        ? 'bg-brand/10 ring-2 ring-brand/40'
+                    className={`transition border-b border-slate-100 ${
+                      isColorSel
+                        ? 'bg-brand/5'
                         : dimmed
-                        ? 'opacity-40 hover:opacity-70'
+                        ? 'opacity-50 hover:opacity-80'
                         : 'hover:bg-slate-50'
                     }`}
                   >
-                    <td className={`px-3 py-2 font-semibold text-slate-800 sticky left-0 z-10 ${
-                      isSelected ? 'bg-brand/10' : 'bg-white'
-                    } border-r border-slate-100`}>
+                    <td
+                      onClick={() => handleColorClick(cor)}
+                      className={`px-3 py-2 font-semibold text-slate-800 sticky left-0 z-10 cursor-pointer select-none ${
+                        isColorSel ? 'bg-brand/10' : 'bg-white'
+                      } border-r border-slate-100 hover:bg-brand/5`}
+                      title="Filtrar por esta cor"
+                    >
                       <div className="flex items-center gap-2">
                         <span className={`w-2 h-2 rounded-full ${
                           colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
@@ -677,9 +714,15 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
                       const v = cellByColorSize.get(cor)?.get(s);
                       const qty = v?.myStoreQty ?? 0;
                       const matched = !!v && highlightSku === v.sku;
+                      const isCellSel = isColorSel && selectedSize === s;
                       return (
                         <td key={s} className="p-0.5 text-center">
-                          <MatrixCell qty={qty} matched={matched} />
+                          <MatrixCell
+                            qty={qty}
+                            matched={matched}
+                            selected={isCellSel}
+                            onClick={() => handleCellClick(cor, s)}
+                          />
                         </td>
                       );
                     })}
@@ -720,29 +763,50 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
       {/* Outras lojas */}
       {filteredOtherStores.length > 0 && (
         <section className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
-          <div className="text-[11px] uppercase tracking-wide font-bold text-slate-600 mb-2 mt-3 flex items-center gap-1">
+          <div className="text-[11px] uppercase tracking-wide font-bold text-slate-600 mb-2 mt-3 flex items-center gap-1 flex-wrap">
             <Store className="w-3 h-3" /> Outras lojas
-            {selectedColor && (
+            {(selectedColor || selectedSize) && (
               <span className="text-brand normal-case tracking-normal font-bold">
-                · filtrado por <span className="underline">{selectedColor}</span>
+                · filtrado por{' '}
+                {selectedColor && <span className="underline">{selectedColor}</span>}
+                {selectedColor && selectedSize && ' · '}
+                {selectedSize && <span className="underline">tam {selectedSize}</span>}
               </span>
             )}
             <span className="ml-1">({filteredOtherStores.length})</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {filteredOtherStores.map((s) => (
-              <OtherStoreRow key={s.code} store={s} refCode={item.ref} selectedColor={selectedColor} />
+              <OtherStoreRow
+                key={s.code}
+                store={s}
+                refCode={item.ref}
+                selectedColor={selectedColor}
+                selectedSize={selectedSize}
+              />
             ))}
           </div>
         </section>
       )}
 
-      {!hasInMyStore && filteredOtherStores.length === 0 && (
+      {filteredOtherStores.length === 0 && (selectedColor || selectedSize) && (
+        <section className="px-4 py-3 border-t border-slate-100 bg-red-50/60 text-sm text-red-800 flex items-center gap-2">
+          <XCircle className="w-4 h-4 flex-shrink-0" />
+          <div>
+            Nenhuma outra loja tem{' '}
+            {selectedColor && <strong>{selectedColor}</strong>}
+            {selectedColor && selectedSize && ' no '}
+            {selectedSize && <strong>tamanho {selectedSize}</strong>}
+            {' '}disponível.{' '}
+            <button onClick={clearFilter} className="underline font-semibold">Limpar filtro</button>
+          </div>
+        </section>
+      )}
+
+      {!hasInMyStore && filteredOtherStores.length === 0 && !selectedColor && !selectedSize && (
         <section className="px-4 py-3 border-t border-slate-100 bg-red-50/60 text-sm text-red-800 flex items-center gap-2">
           <XCircle className="w-4 h-4" />
-          {selectedColor
-            ? <>Sem estoque da cor <strong>{selectedColor}</strong> em nenhuma loja da rede.</>
-            : 'Sem estoque em nenhuma loja da rede no momento.'}
+          Sem estoque em nenhuma loja da rede no momento.
         </section>
       )}
     </article>
@@ -750,32 +814,53 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
 }
 
 /**
- * Célula da matriz — compacta, visual.
+ * Célula da matriz — compacta, visual, CLICÁVEL.
  *  - verde (3+)
  *  - amarelo (1-2, avisa que tá acabando)
- *  - cinza "—" (sem estoque)
- *  - bordinha vinho + ring quando é a célula do SKU bipado
+ *  - cinza "—" (sem estoque na minha loja — MAS clicável pra ver quem tem)
+ *  - ring vinho quando é o SKU bipado
+ *  - ring vinho grosso quando selecionada (filtra outras lojas por essa combinação)
  */
-function MatrixCell({ qty, matched }: { qty: number; matched: boolean }) {
+function MatrixCell({
+  qty, matched, selected, onClick,
+}: { qty: number; matched: boolean; selected: boolean; onClick: () => void }) {
+  const base =
+    'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative cursor-pointer transition hover:scale-[1.04] active:scale-95 select-none';
+
   if (qty === 0) {
+    // ZERO: sem estoque aqui. Mas clicável — abre o filtro pra ver quem tem.
     return (
-      <div className={`mx-auto w-full h-10 rounded flex items-center justify-center text-slate-300 font-bold ${
-        matched ? 'ring-2 ring-brand bg-brand/10 text-brand' : 'bg-slate-50'
-      }`}>
-        {matched ? '0' : '—'}
-      </div>
+      <button
+        type="button"
+        onClick={onClick}
+        title="Sem estoque aqui — clique pra ver quem tem"
+        className={`${base} text-base ${
+          selected
+            ? 'ring-2 ring-brand bg-brand/10 text-brand'
+            : matched
+            ? 'ring-2 ring-brand bg-brand/5 text-brand'
+            : 'bg-slate-50 text-slate-300 hover:bg-slate-100 hover:text-slate-500'
+        }`}
+      >
+        {matched ? '0' : selected ? '?' : '—'}
+      </button>
     );
   }
   const low = qty <= 2;
   return (
-    <div className={`mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold text-base relative ${
-      low
-        ? 'bg-amber-100 text-amber-900 border border-amber-300'
-        : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
-    } ${matched ? 'ring-2 ring-brand shadow-md' : ''}`}>
+    <button
+      type="button"
+      onClick={onClick}
+      title="Clique pra filtrar outras lojas por este tamanho/cor"
+      className={`${base} text-base ${
+        low
+          ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
+          : 'bg-emerald-100 text-emerald-900 border border-emerald-300 hover:bg-emerald-200'
+      } ${selected ? 'ring-2 ring-brand shadow-md scale-[1.02]' : matched ? 'ring-2 ring-brand' : ''}`}
+    >
       {qty}
       {matched && <Barcode className="w-3 h-3 absolute top-0.5 right-0.5 text-brand" />}
-    </div>
+    </button>
   );
 }
 
@@ -802,35 +887,43 @@ function CellLegend() {
 }
 
 function OtherStoreRow({
-  store, refCode, selectedColor,
-}: { store: OtherStore; refCode: string; selectedColor?: string | null }) {
+  store, refCode, selectedColor, selectedSize,
+}: {
+  store: OtherStore;
+  refCode: string;
+  selectedColor?: string | null;
+  selectedSize?: string | null;
+}) {
   const [open, setOpen] = useState(false);
 
   const waHref = useMemo(() => {
     if (!store.whatsapp) return null;
     const onlyDigits = store.whatsapp.replace(/\D/g, '');
     if (onlyDigits.length < 10) return null;
-    // Mensagem mais específica quando tem cor filtrada
     const colorPart = selectedColor ? ` na cor ${selectedColor}` : '';
+    const sizePart = selectedSize ? ` no tamanho ${selectedSize}` : '';
     const tamsMsg = store.variants
       .slice()
       .sort((a, b) => sortSizes(a.tamanho, b.tamanho))
       .map((v) => `${v.tamanho} (×${v.qty})`)
       .join(', ');
     const msg = encodeURIComponent(
-      `Oi! Tem a REF ${refCode}${colorPart} pra transferir pra minha loja? Tamanhos: ${tamsMsg}`,
+      selectedSize
+        ? `Oi! Tem a REF ${refCode}${colorPart}${sizePart}? (${tamsMsg}) Pode transferir pra minha loja?`
+        : `Oi! Tem a REF ${refCode}${colorPart} pra transferir pra minha loja? Tamanhos: ${tamsMsg}`,
     );
     return `https://wa.me/${onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits}?text=${msg}`;
-  }, [store, refCode, selectedColor]);
+  }, [store, refCode, selectedColor, selectedSize]);
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-3">
+    <div className={`bg-white rounded-lg border p-3 ${selectedSize ? 'border-brand/40 ring-1 ring-brand/10' : 'border-slate-200'}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="font-bold text-slate-800 text-sm truncate">{store.name}</div>
           <div className="text-xs text-slate-500">
             <strong className="text-slate-800">{store.qty}</strong> peça(s)
             {selectedColor && <> · <span className="text-brand font-medium">{selectedColor}</span></>}
+            {selectedSize && <> · <span className="text-brand font-medium">tam {selectedSize}</span></>}
           </div>
         </div>
         {waHref ? (
@@ -846,11 +939,21 @@ function OtherStoreRow({
       </button>
       {open && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {store.variants.slice().sort((a, b) => sortSizes(a.tamanho, b.tamanho)).map((v) => (
-            <span key={v.sku} className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[11px] font-medium text-slate-700">
-              {v.tamanho || '—'}{!selectedColor && v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
-            </span>
-          ))}
+          {store.variants.slice().sort((a, b) => sortSizes(a.tamanho, b.tamanho)).map((v) => {
+            const isTheOne = selectedSize && (v.tamanho || '—').trim() === selectedSize;
+            return (
+              <span
+                key={v.sku}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                  isTheOne
+                    ? 'bg-brand/15 border border-brand/40 text-brand'
+                    : 'bg-slate-100 border border-slate-200 text-slate-700'
+                }`}
+              >
+                {v.tamanho || '—'}{!selectedColor && v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
