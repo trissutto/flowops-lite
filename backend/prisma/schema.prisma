@@ -323,8 +323,19 @@ model TransferOrder {
   createdByUserId   String?  @map("created_by_user_id")
   createdAt         DateTime @default(now()) @map("created_at")
 
+  // ── Controle de VENDA CERTA (anti-malandragem) ──
+  // Só é preenchido quando tipo=VENDA_CERTA. Loja destino tem prazo pra
+  // confirmar a venda — se não confirmar, matriz vê em vermelho e cobra.
+  saleStatus            String?   @map("sale_status")             // pending | confirmed | cancelled
+  saleDeadline          DateTime? @map("sale_deadline")            // prazo pra confirmar (default +7d)
+  saleConfirmedAt       DateTime? @map("sale_confirmed_at")
+  saleConfirmedByUserId String?   @map("sale_confirmed_by_user_id")
+  saleCancelReason      String?   @map("sale_cancel_reason")       // por que não rolou a venda
+  saleNote              String?   @map("sale_note")                // ex: número do pedido WC, valor
+
   @@index([lojaDestinoCode, createdAt(sort: Desc)])
   @@index([lojaOrigemCode, createdAt(sort: Desc)])
   @@index([refCode, createdAt(sort: Desc)])
+  @@index([tipo, saleStatus, createdAt(sort: Desc)])
   @@map("transfer_orders")
 }

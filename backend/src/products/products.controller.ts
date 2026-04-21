@@ -6,6 +6,7 @@ import {
   HttpCode,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -298,12 +299,17 @@ export class ProductsController {
   /**
    * Lista histórico. Por padrão filtra por loja do user (origem OU destino).
    * Passe scope=all pra ver a rede (somente admin/operator).
+   * Passe vendaCertaPending=1 pra filtrar só VENDA_CERTA com status pending.
+   *
+   * Cada item volta decorado com `direction: 'out' | 'in' | null` — resolvido
+   * server-side pelo storeCode do JWT. Frontend não precisa mais inferir.
    */
   @Get('transfer-orders')
   listTransferOrders(
     @Req() req: any,
     @Query('scope') scope?: string,
     @Query('limit') limit?: string,
+    @Query('vendaCertaPending') vendaCertaPending?: string,
   ) {
     const user = req.user as { userId: string; role: string; storeId: string | null };
     const isAdmin = user?.role === 'admin' || user?.role === 'operator';
@@ -313,7 +319,32 @@ export class ProductsController {
       userStoreId: user?.storeId ?? null,
       scope: useScope,
       limit: limit ? parseInt(limit, 10) : undefined,
+      onlyVendaCertaPending: vendaCertaPending === '1' || vendaCertaPending === 'true',
     });
+  }
+
+  /**
+   * Atualiza status de venda de uma VENDA_CERTA.
+   * Body: { status: 'confirmed' | 'cancelled', reason?, saleNote? }
+   * Só a loja destino (quem pediu) ou admin/operator pode.
+   */
+  @Patch('transfer-orders/:id/sale-status')
+  @HttpCode(200)
+  updateTransferSaleStatus(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      status: 'confirmed' | 'cancelled';
+      reason?: string;
+      saleNote?: string;
+    },
+  ) {
+    const user = req.user as { userId: string; role: string; storeId: string | null };
+    if (!body?.status || (body.status !== 'confirmed' && body.status !== 'cancelled')) {
+      throw new BadRequestException('status deve ser "confirmed" ou "cancelled".');
+    }
+    return this.products.updateSaleStatus(id, user, body);
   }
 
   @Get(':id')

@@ -2762,6 +2762,14 @@ export class ProductsService {
       throw new Error('refCode inválido.');
     }
 
+    // VENDA_CERTA abre como PENDING com prazo default de 7 dias.
+    // REPOSICAO não tem prazo/status de venda (fica null).
+    const saleStatus = tipo === 'VENDA_CERTA' ? 'pending' : null;
+    const saleDeadline =
+      tipo === 'VENDA_CERTA'
+        ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        : null;
+
     const created = await (this.prisma as any).transferOrder.create({
       data: {
         tipo,
@@ -2777,6 +2785,8 @@ export class ProductsService {
         clienteNome,
         mensagem: body.mensagem || '',
         createdByUserId: userId || null,
+        saleStatus,
+        saleDeadline,
       },
     });
     return created;
@@ -2786,25 +2796,90 @@ export class ProductsService {
     userStoreId?: string | null; // se passado, filtra por loja destino OU origem
     scope?: 'mine' | 'all';       // 'mine' = só da loja do usuário; 'all' = rede toda
     limit?: number;
+    onlyVendaCertaPending?: boolean; // filtro especial pra dashboard matriz
   }) {
     const limit = Math.min(Math.max(params.limit || 100, 1), 500);
     const where: any = {};
-    if (params.scope !== 'all' && params.userStoreId) {
-      // Pega a loja do usuário pra filtrar por code
+    let userStoreCode: string | null = null;
+    if (params.userStoreId) {
       const store = await this.prisma.store.findUnique({
         where: { id: params.userStoreId },
       });
-      if (!store) return { items: [] };
+      userStoreCode = store?.code ?? null;
+    }
+    if (params.scope !== 'all') {
+      if (!userStoreCode) return { items: [], myStoreCode: null };
       where.OR = [
-        { lojaDestinoCode: store.code },
-        { lojaOrigemCode: store.code },
+        { lojaDestinoCode: userStoreCode },
+        { lojaOrigemCode: userStoreCode },
       ];
     }
-    const items = await (this.prisma as any).transferOrder.findMany({
+    if (params.onlyVendaCertaPending) {
+      where.tipo = 'VENDA_CERTA';
+      where.saleStatus = 'pending';
+    }
+    const rows = await (this.prisma as any).transferOrder.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: limit,
     });
-    return { items };
+    // Decora cada item com direction ('out' = EU PEDI, 'in' = ME PEDIRAM)
+    // baseado no code da loja do user. Pra admin scope=all, direction=null.
+    const items = rows.map((r: any) => {
+      let direction: 'out' | 'in' | null = null;
+      if (userStoreCode) {
+        if (r.lojaDestinoCode === userStoreCode) direction = 'out';
+        else if (r.lojaOrigemCode === userStoreCode) direction = 'in';
+      }
+      return { ...r, direction };
+    });
+    return { items, myStoreCode: userStoreCode };
+  }
+
+  /**
+   * Atualiza status de venda de um TransferOrder tipo VENDA_CERTA.
+   * Loja destino (quem pediu) confirma/cancela. Matriz também pode intervir.
+   *
+   * status: 'confirmed' | 'cancelled'
+   */
+  async updateSaleStatus(
+    id: string,
+    user: { userId: string; role: string; storeId: string | null },
+    body: { status: 'confirmed' | 'cancelled'; reason?: string; saleNote?: string },
+  ) {
+    const order = await (this.prisma as any).transferOrder.findUnique({
+      where: { id },
+    });
+    if (!order) throw new Error('Pedido não encontrado.');
+    if (order.tipo !== 'VENDA_CERTA') {
+      throw new Error('Só VENDA_CERTA tem controle de status de venda.');
+    }
+    if (order.saleStatus && order.saleStatus !== 'pending') {
+      throw new Error(
+        `Pedido já está ${order.saleStatus === 'confirmed' ? 'confirmado' : 'cancelado'}.`,
+      );
+    }
+
+    // Permissão: loja destino (quem pediu) OU admin/operator
+    const isAdmin = user.role === 'admin' || user.role === 'operator';
+    if (!isAdmin) {
+      if (!user.storeId) throw new Error('Sem permissão.');
+      const store = await this.prisma.store.findUnique({ where: { id: user.storeId } });
+      if (!store || store.code !== order.lojaDestinoCode) {
+        throw new Error('Apenas a loja que pediu pode confirmar/cancelar a venda.');
+      }
+    }
+
+    const status = body.status === 'cancelled' ? 'cancelled' : 'confirmed';
+    return (this.prisma as any).transferOrder.update({
+      where: { id },
+      data: {
+        saleStatus: status,
+        saleConfirmedAt: status === 'confirmed' ? new Date() : null,
+        saleConfirmedByUserId: status === 'confirmed' ? user.userId : null,
+        saleCancelReason: status === 'cancelled' ? (body.reason?.trim() || null) : null,
+        saleNote: body.saleNote?.trim() || null,
+      },
+    });
   }
 }
