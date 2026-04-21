@@ -158,3 +158,62 @@ model IntegrationLog {
   @@index([source, event, createdAt(sort: Desc)])
   @@map("integration_logs")
 }
+
+// ==========================================================================
+// MARKETING — Recuperação de Carrinho via WhatsApp
+// ==========================================================================
+// Cada WaMessage representa 1 mensagem agendada OU enviada (manual ou
+// automática) no processo de recuperação. Chave natural de dedup:
+// (sourceType, sourceId, stepIndex) — não manda o mesmo estágio 2x pro mesmo
+// carrinho. Cross-reference com Order por (customerEmail OR customerPhone)
+// pra detectar conversão.
+
+model WaMessage {
+  id               String    @id @default(uuid())
+  stepIndex        Int       @map("step_index")       // 0 = T1 (1h), 1 = T2 (24h), 2 = T3 (72h)
+  // Identificação do destinatário
+  customerPhone    String    @map("customer_phone")    // E.164 sem +, ex 5511999999999
+  customerEmail    String?   @map("customer_email")
+  customerName     String?   @map("customer_name")
+  // Referência ao gatilho
+  sourceType       String    @map("source_type")       // "cart" | "wc-pending" (fallback)
+  sourceId         String    @map("source_id")         // id do abandoned cart OU wc order id
+  sourceAmount     Float?    @map("source_amount")     // valor do carrinho (pra KPI de R$ recuperado)
+  // Status
+  status           String    // queued | sent | delivered | read | failed | skipped | converted
+  scheduledFor     DateTime  @map("scheduled_for")
+  sentAt           DateTime? @map("sent_at")
+  deliveredAt      DateTime? @map("delivered_at")
+  readAt           DateTime? @map("read_at")
+  failedAt         DateTime? @map("failed_at")
+  failReason       String?   @map("fail_reason")
+  // Conteúdo
+  bodyRendered     String?   @map("body_rendered")     // texto renderizado final
+  templateKey      String?   @map("template_key")      // nome do template Meta (fase 2)
+  waMessageId      String?   @map("wa_message_id")     // id retornado pela Meta API
+  sendMode         String    @default("manual") @map("send_mode") // manual | auto
+  sentBy           String?   @map("sent_by")            // userId que disparou no modo manual
+  // Cupom
+  couponCode       String?   @map("coupon_code")
+  couponPct        Int?      @map("coupon_pct")
+  // Conversão
+  convertedAt      DateTime? @map("converted_at")
+  convertedOrderId String?   @map("converted_order_id") // Order.id local
+  convertedAmount  Float?    @map("converted_amount")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([customerPhone])
+  @@index([sourceType, sourceId, stepIndex])
+  @@index([status, scheduledFor])
+  @@map("wa_messages")
+}
+
+model WaOptOut {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("wa_opt_outs")
+}

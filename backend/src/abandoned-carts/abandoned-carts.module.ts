@@ -7,5 +7,6 @@ import { AbandonedCartsService } from './abandoned-carts.service';
   imports: [HttpModule],
   controllers: [AbandonedCartsController],
   providers: [AbandonedCartsService],
+  exports: [AbandonedCartsService],
 })
 export class AbandonedCartsModule {}

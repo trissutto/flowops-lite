@@ -20,6 +20,7 @@ import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { HealthModule } from './health/health.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
+import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { PickOrdersModule } from './pick-orders/pick-orders.module';
     HealthModule,
     UsersModule,
     PickOrdersModule,
+    MarketingRecoveryModule,
   ],
 })
 export class AppModule {}

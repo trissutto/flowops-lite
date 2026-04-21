@@ -19,6 +19,7 @@ const NAV = [
   { href: '/auditoria-sku', label: 'Auditoria SKU' },
   { href: '/clientes',  label: 'Clientes'  },
   { href: '/carrinhos-abandonados', label: 'Carrinhos' },
+  { href: '/marketing/recuperacao', label: 'Recuperação' },
   { href: '/lojas',     label: 'Lojas'     },
   { href: '/usuarios',  label: 'Usuários'  },
   { href: '/logs',      label: 'Logs'      },
