@@ -48,7 +48,6 @@ export default function TopNav() {
         <Link href="/" className="flex items-center gap-3 hover:opacity-90">
           <Logo height={36} className="brightness-0 invert" />
           <h1 className="text-xl font-bold tracking-wide">ORDER ONE</h1>
-          <span className="ml-2 px-2 py-1 text-xs font-bold bg-red-500 text-white rounded animate-pulse">BUILD-2104-B</span>
         </Link>
         <nav className="flex gap-5 text-sm">
           {NAV.map((n) => (

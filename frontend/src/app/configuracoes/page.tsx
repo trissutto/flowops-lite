@@ -27,8 +27,22 @@ import { Users, Store, FileText, ShieldCheck } from 'lucide-react';
 // Reaproveita os componentes default das telas existentes.
 import UsuariosPage from '../usuarios/page';
 import LojasPage from '../lojas/page';
-import LogsPage from '../logs/page';
 import AuditoriaSkuPage from '../auditoria-sku/page';
+
+// NOTA: /logs/page.tsx estava untrackeado no git (caiu no gitignore `logs/`)
+// e quebrava o build no Vercel. Inlinado aqui temporariamente até o arquivo
+// ser forçado pro remote com `git add -f frontend/src/app/logs/page.tsx`.
+function LogsPage() {
+  return (
+    <div className="max-w-4xl mx-auto p-8">
+      <h1 className="text-2xl font-bold mb-4">Logs de integração</h1>
+      <p className="text-slate-600">
+        Em breve: tabela com eventos in/out do WooCommerce e ERP, filtros por data e
+        destaque para erros.
+      </p>
+    </div>
+  );
+}
 
 type TabKey = 'usuarios' | 'lojas' | 'logs' | 'auditoria';
 
