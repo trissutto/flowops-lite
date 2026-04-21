@@ -260,6 +260,62 @@ export class ProductsController {
     return this.products.storeProductSearch(q, user.storeId, normalizedMode);
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // TRANSFER ORDERS (histórico de pedidos REPOSIÇÃO / VENDA CERTA)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Cria registro de pedido de transferência ANTES da filial abrir o WhatsApp.
+   * Só usuários de loja (role=store) podem criar.
+   */
+  @Post('transfer-orders')
+  @HttpCode(201)
+  createTransferOrder(
+    @Req() req: any,
+    @Body()
+    body: {
+      tipo: 'REPOSICAO' | 'VENDA_CERTA';
+      refCode: string;
+      cor?: string | null;
+      tamanho?: string | null;
+      qtyOrigem: number;
+      lojaOrigemCode: string;
+      solicitanteNome: string;
+      clienteNome?: string | null;
+      mensagem: string;
+    },
+  ) {
+    const user = req.user as { userId: string; role: string; storeId: string | null };
+    if (user?.role !== 'store' || !user?.storeId) {
+      throw new BadRequestException('Endpoint exclusivo de usuários de loja.');
+    }
+    if (!body?.tipo || !body?.refCode || !body?.lojaOrigemCode || !body?.solicitanteNome) {
+      throw new BadRequestException('Campos obrigatórios ausentes.');
+    }
+    return this.products.createTransferOrder(user.userId, user.storeId, body);
+  }
+
+  /**
+   * Lista histórico. Por padrão filtra por loja do user (origem OU destino).
+   * Passe scope=all pra ver a rede (somente admin/operator).
+   */
+  @Get('transfer-orders')
+  listTransferOrders(
+    @Req() req: any,
+    @Query('scope') scope?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const user = req.user as { userId: string; role: string; storeId: string | null };
+    const isAdmin = user?.role === 'admin' || user?.role === 'operator';
+    const useScope: 'mine' | 'all' =
+      scope === 'all' && isAdmin ? 'all' : 'mine';
+    return this.products.listTransferOrders({
+      userStoreId: user?.storeId ?? null,
+      scope: useScope,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+  }
+
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.products.getById(id);

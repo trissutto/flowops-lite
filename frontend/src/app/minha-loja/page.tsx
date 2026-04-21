@@ -28,7 +28,7 @@ import Logo from '@/components/Logo';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
-  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search,
+  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -542,6 +542,14 @@ export default function MinhaLojaPage() {
             >
               <Search className="w-4 h-4" />
               <span className="hidden sm:inline">Consultar</span>
+            </Link>
+            <Link
+              href="/minha-loja/historico"
+              className="flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-sm font-semibold"
+              title="Histórico de pedidos de transferência"
+            >
+              <History className="w-4 h-4" />
+              <span className="hidden sm:inline">Histórico</span>
             </Link>
             <button onClick={loadRows} className="p-2 hover:bg-white/10 rounded" title="Atualizar">
               <RefreshCw className="w-4 h-4" />

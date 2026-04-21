@@ -1106,8 +1106,10 @@ function TransferModal({
     return match?.qty ?? store.qty;
   })();
 
-  const submit = () => {
-    if (!canSubmit) return;
+  const [sending, setSending] = useState(false);
+
+  const submit = async () => {
+    if (!canSubmit || sending) return;
 
     try { localStorage.setItem(SOLICITANTE_LS_KEY, solicitante.trim()); } catch { /* ignore */ }
 
@@ -1136,7 +1138,34 @@ function TransferModal({
       return;
     }
     const phone = onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits;
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+
+    // 1) Salva histórico ANTES de abrir WA (best-effort — falha não bloqueia)
+    setSending(true);
+    try {
+      await api('/products/transfer-orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          tipo: tipo === 'reposicao' ? 'REPOSICAO' : 'VENDA_CERTA',
+          refCode,
+          cor: selectedColor,
+          tamanho: selectedSize,
+          qtyOrigem: qtyInfo,
+          lojaOrigemCode: store.code,
+          solicitanteNome: solicitante.trim(),
+          clienteNome: tipo === 'venda-certa' ? cliente.trim() : null,
+          mensagem: msg,
+        }),
+      });
+    } catch (err) {
+      // Não bloqueia o envio — apenas loga. Usuário consegue mandar mesmo offline.
+      console.warn('[TransferOrder] POST falhou, abrindo WhatsApp mesmo assim:', err);
+    } finally {
+      setSending(false);
+    }
+
+    // 2) Abre WhatsApp DIRETO (web.whatsapp.com/send pula a splash do wa.me)
+    //    Se o user já tá logado no WA Web, cai direto na conversa com texto prefilled.
+    const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`;
     window.open(url, 'lurds_whatsapp'); // nome fixo — reusa mesma aba
     onClose();
   };
@@ -1259,10 +1288,11 @@ function TransferModal({
           </button>
           <button
             onClick={submit}
-            disabled={!canSubmit}
+            disabled={!canSubmit || sending}
             className="flex-[1.4] px-4 py-3 rounded-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm"
           >
-            <MessageCircle className="w-4 h-4" /> Abrir WhatsApp
+            <MessageCircle className="w-4 h-4" />
+            {sending ? 'Registrando…' : 'Abrir WhatsApp'}
           </button>
         </div>
       </div>

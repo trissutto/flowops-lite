@@ -217,3 +217,44 @@ model WaOptOut {
 
   @@map("wa_opt_outs")
 }
+
+// ==========================================================================
+// TRANSFER ORDERS — Histórico de pedidos de transferência entre lojas
+// ==========================================================================
+// Cada vez que a filial aperta "Pedir" na tela /minha-loja/consultar pra
+// pedir uma peça de outra loja, a gente registra aqui ANTES de abrir o
+// WhatsApp. Serve de histórico pra gerência acompanhar giro de pedidos,
+// identificar lojas que mais transferem, cliente que tá comprando muito
+// sem estoque local, etc.
+//
+// Não temos ainda confirmação de "foi transferido de fato" — isso fica
+// pra uma fase 2 (matriz aprova + baixa no ERP). Aqui é só o log do
+// pedido que saiu via WhatsApp.
+
+model TransferOrder {
+  id                String   @id @default(uuid())
+  tipo              String   // REPOSICAO | VENDA_CERTA
+  refCode           String   @map("ref_code")           // ex: VMS-223
+  cor               String?                                // ex: PRETO (null = cor não especificada no pedido)
+  tamanho           String?                                // ex: 46    (null = tamanho não especificado)
+  qtyOrigem         Int      @map("qty_origem")          // qtd na loja de origem no momento do pedido
+  // Loja que VAI MANDAR (origem)
+  lojaOrigemCode    String   @map("loja_origem_code")
+  lojaOrigemName    String   @map("loja_origem_name")
+  // Loja que PEDIU (destino / minha loja)
+  lojaDestinoCode   String   @map("loja_destino_code")
+  lojaDestinoName   String   @map("loja_destino_name")
+  // Quem solicitou
+  solicitanteNome   String   @map("solicitante_nome")
+  clienteNome       String?  @map("cliente_nome")         // só pra VENDA_CERTA
+  // Mensagem enviada via WhatsApp (pra auditoria)
+  mensagem          String
+  // Quem criou no sistema (do JWT)
+  createdByUserId   String?  @map("created_by_user_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([lojaDestinoCode, createdAt(sort: Desc)])
+  @@index([lojaOrigemCode, createdAt(sort: Desc)])
+  @@index([refCode, createdAt(sort: Desc)])
+  @@map("transfer_orders")
+}

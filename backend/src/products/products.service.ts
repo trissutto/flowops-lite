@@ -2718,4 +2718,93 @@ export class ProductsService {
       results,
     };
   }
+
+  // ============================================================
+  // TRANSFER ORDERS — Histórico de pedidos de transferência
+  // ============================================================
+  // Cada clique em "Pedir" na tela /minha-loja/consultar grava um registro
+  // ANTES de abrir o WhatsApp. Depois dá pra listar o histórico na tela
+  // /minha-loja/historico (loja vê os próprios) ou no painel matriz.
+
+  async createTransferOrder(
+    userId: string | null,
+    userStoreId: string,
+    body: {
+      tipo: 'REPOSICAO' | 'VENDA_CERTA';
+      refCode: string;
+      cor?: string | null;
+      tamanho?: string | null;
+      qtyOrigem: number;
+      lojaOrigemCode: string;
+      solicitanteNome: string;
+      clienteNome?: string | null;
+      mensagem: string;
+    },
+  ) {
+    // Valida e resolve lojas (origem por code, destino = loja do user)
+    const [origem, destino] = await Promise.all([
+      this.prisma.store.findUnique({ where: { code: body.lojaOrigemCode } }),
+      this.prisma.store.findUnique({ where: { id: userStoreId } }),
+    ]);
+    if (!origem) throw new Error(`Loja origem ${body.lojaOrigemCode} não encontrada.`);
+    if (!destino) throw new Error('Loja destino (sua loja) não encontrada.');
+
+    const tipo = body.tipo === 'VENDA_CERTA' ? 'VENDA_CERTA' : 'REPOSICAO';
+    const clienteNome =
+      tipo === 'VENDA_CERTA' ? (body.clienteNome ?? '').trim() || null : null;
+    if (tipo === 'VENDA_CERTA' && !clienteNome) {
+      throw new Error('Nome da cliente obrigatório em VENDA_CERTA.');
+    }
+    if (!body.solicitanteNome || body.solicitanteNome.trim().length < 2) {
+      throw new Error('Nome do solicitante obrigatório.');
+    }
+    if (!body.refCode || body.refCode.trim().length < 2) {
+      throw new Error('refCode inválido.');
+    }
+
+    const created = await (this.prisma as any).transferOrder.create({
+      data: {
+        tipo,
+        refCode: body.refCode.trim().toUpperCase(),
+        cor: body.cor?.trim() || null,
+        tamanho: body.tamanho?.trim() || null,
+        qtyOrigem: Number(body.qtyOrigem) || 0,
+        lojaOrigemCode: origem.code,
+        lojaOrigemName: origem.name,
+        lojaDestinoCode: destino.code,
+        lojaDestinoName: destino.name,
+        solicitanteNome: body.solicitanteNome.trim(),
+        clienteNome,
+        mensagem: body.mensagem || '',
+        createdByUserId: userId || null,
+      },
+    });
+    return created;
+  }
+
+  async listTransferOrders(params: {
+    userStoreId?: string | null; // se passado, filtra por loja destino OU origem
+    scope?: 'mine' | 'all';       // 'mine' = só da loja do usuário; 'all' = rede toda
+    limit?: number;
+  }) {
+    const limit = Math.min(Math.max(params.limit || 100, 1), 500);
+    const where: any = {};
+    if (params.scope !== 'all' && params.userStoreId) {
+      // Pega a loja do usuário pra filtrar por code
+      const store = await this.prisma.store.findUnique({
+        where: { id: params.userStoreId },
+      });
+      if (!store) return { items: [] };
+      where.OR = [
+        { lojaDestinoCode: store.code },
+        { lojaOrigemCode: store.code },
+      ];
+    }
+    const items = await (this.prisma as any).transferOrder.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    return { items };
+  }
 }
