@@ -326,7 +326,10 @@ function SegmentDetail({
         const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
         const fn = (parts[0] ?? '').toLowerCase();
         const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
-        const value = Number(c.totalSpent || 0).toFixed(2);
+        // value = TICKET MÉDIO (AOV), não LTV. Treina Lookalike em cima de
+        // quem gasta alto POR PEDIDO (lead qualificado), não só de quem
+        // compra muitas vezes barato.
+        const value = Number(c.avgTicket || 0).toFixed(2);
         return [
           c.email, '', '',
           phone,   '', '',

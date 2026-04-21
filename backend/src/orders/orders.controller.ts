@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
@@ -27,6 +27,26 @@ export class OrdersController {
   @Get('stats/counts')
   counts() {
     return this.orders.countByStatus();
+  }
+
+  /**
+   * Financeiro/analítico: KPIs + breakdowns no intervalo [from, to].
+   * Ex: GET /orders/analytics?from=2026-04-01&to=2026-04-21
+   * Sem defaults: se um dos dois faltar, retorna 400.
+   */
+  @Get('analytics')
+  async analytics(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('Parâmetros "from" e "to" são obrigatórios (YYYY-MM-DD).');
+    }
+    try {
+      return await this.orders.analytics(from, to);
+    } catch (e: any) {
+      throw new BadRequestException(e?.message ?? 'Falha ao gerar analítico');
+    }
   }
 
   /**

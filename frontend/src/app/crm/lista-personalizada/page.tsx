@@ -249,8 +249,12 @@ export default function ListaPersonalizadaPage() {
         const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
         const fn = (parts[0] ?? '').toLowerCase();
         const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
-        // value: usa . como separador decimal (formato que o Meta espera)
-        const value = Number(c.totalSpent || 0).toFixed(2);
+        // value = TICKET MÉDIO (não LTV). Por quê:
+        // LTV premia cliente que compra MUITAS vezes (frequência > valor).
+        // Ticket médio premia cliente que gasta ALTO POR PEDIDO — melhor
+        // pra Lookalike de lead qualificado (quem converte em compra cheia).
+        // Formato . decimal (obrigatório pro Meta).
+        const value = Number(c.avgTicket || 0).toFixed(2);
         return [
           c.email, '', '',        // email x3 (só temos 1)
           phone,   '', '',        // phone x3 (só temos 1)
@@ -260,7 +264,7 @@ export default function ListaPersonalizadaPage() {
           'BR',                   // country
           '', '', '', '',         // dob, doby, gen, age (não temos)
           c.email,                // uid estável = email
-          value,                  // value = LTV em R$
+          value,                  // value = TICKET MÉDIO em R$
         ];
       });
 
