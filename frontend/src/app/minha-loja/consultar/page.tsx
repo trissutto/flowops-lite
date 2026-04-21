@@ -972,67 +972,300 @@ function OtherStoreRow({
   selectedSize?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
-  const waHref = useMemo(() => {
-    if (!store.whatsapp) return null;
-    const onlyDigits = store.whatsapp.replace(/\D/g, '');
-    if (onlyDigits.length < 10) return null;
-    const colorPart = selectedColor ? ` na cor ${selectedColor}` : '';
-    const sizePart = selectedSize ? ` no tamanho ${selectedSize}` : '';
-    const tamsMsg = store.variants
-      .slice()
-      .sort((a, b) => sortSizes(a.tamanho, b.tamanho))
-      .map((v) => `${v.tamanho} (×${v.qty})`)
-      .join(', ');
-    const msg = encodeURIComponent(
-      selectedSize
-        ? `Oi! Tem a REF ${refCode}${colorPart}${sizePart}? (${tamsMsg}) Pode transferir pra minha loja?`
-        : `Oi! Tem a REF ${refCode}${colorPart} pra transferir pra minha loja? Tamanhos: ${tamsMsg}`,
-    );
-    return `https://wa.me/${onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits}?text=${msg}`;
-  }, [store, refCode, selectedColor, selectedSize]);
+  const hasWhatsapp = useMemo(() => {
+    if (!store.whatsapp) return false;
+    return store.whatsapp.replace(/\D/g, '').length >= 10;
+  }, [store.whatsapp]);
 
   return (
-    <div className={`bg-white rounded-lg border p-3 ${selectedSize ? 'border-brand/40 ring-1 ring-brand/10' : 'border-slate-200'}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="font-bold text-slate-800 text-sm truncate">{store.name}</div>
-          <div className="text-xs text-slate-500">
-            <strong className="text-slate-800">{store.qty}</strong> peça(s)
-            {selectedColor && <> · <span className="text-brand font-medium">{selectedColor}</span></>}
-            {selectedSize && <> · <span className="text-brand font-medium">tam {selectedSize}</span></>}
+    <>
+      <div className={`bg-white rounded-lg border p-3 ${selectedSize ? 'border-brand/40 ring-1 ring-brand/10' : 'border-slate-200'}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="font-bold text-slate-800 text-sm truncate">{store.name}</div>
+            <div className="text-xs text-slate-500">
+              <strong className="text-slate-800">{store.qty}</strong> peça(s)
+              {selectedColor && <> · <span className="text-brand font-medium">{selectedColor}</span></>}
+              {selectedSize && <> · <span className="text-brand font-medium">tam {selectedSize}</span></>}
+            </div>
           </div>
+          {hasWhatsapp ? (
+            <button
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm"
+              title={`Pedir transferência da ${store.name}`}
+            >
+              <MessageCircle className="w-3.5 h-3.5" /> Pedir
+            </button>
+          ) : (
+            <span className="text-[10px] text-slate-400 italic self-center">sem WhatsApp</span>
+          )}
         </div>
-        {waHref ? (
-          <a href={waHref} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm" title={`WhatsApp da ${store.name}`}>
-            <MessageCircle className="w-3.5 h-3.5" /> Pedir
-          </a>
-        ) : (
-          <span className="text-[10px] text-slate-400 italic self-center">sem WhatsApp</span>
+        <button onClick={() => setOpen((v) => !v)} className="mt-2 text-[11px] text-slate-500 hover:text-slate-700 underline underline-offset-2">
+          {open ? 'Ocultar detalhes' : 'Ver tamanhos'}
+        </button>
+        {open && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {store.variants.slice().sort((a, b) => sortSizes(a.tamanho, b.tamanho)).map((v) => {
+              const isTheOne = selectedSize && (v.tamanho || '—').trim() === selectedSize;
+              return (
+                <span
+                  key={v.sku}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                    isTheOne
+                      ? 'bg-brand/15 border border-brand/40 text-brand'
+                      : 'bg-slate-100 border border-slate-200 text-slate-700'
+                  }`}
+                >
+                  {v.tamanho || '—'}{!selectedColor && v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
+                </span>
+              );
+            })}
+          </div>
         )}
       </div>
-      <button onClick={() => setOpen((v) => !v)} className="mt-2 text-[11px] text-slate-500 hover:text-slate-700 underline underline-offset-2">
-        {open ? 'Ocultar detalhes' : 'Ver tamanhos'}
-      </button>
-      {open && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {store.variants.slice().sort((a, b) => sortSizes(a.tamanho, b.tamanho)).map((v) => {
-            const isTheOne = selectedSize && (v.tamanho || '—').trim() === selectedSize;
-            return (
-              <span
-                key={v.sku}
-                className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                  isTheOne
-                    ? 'bg-brand/15 border border-brand/40 text-brand'
-                    : 'bg-slate-100 border border-slate-200 text-slate-700'
-                }`}
-              >
-                {v.tamanho || '—'}{!selectedColor && v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
-              </span>
-            );
-          })}
+
+      <TransferModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        store={store}
+        refCode={refCode}
+        selectedColor={selectedColor ?? null}
+        selectedSize={selectedSize ?? null}
+      />
+    </>
+  );
+}
+
+// ============================================================
+// Modal de pedido — REPOSIÇÃO vs VENDA CERTA
+// ============================================================
+type PedidoTipo = 'reposicao' | 'venda-certa';
+const SOLICITANTE_LS_KEY = 'lurds_solicitante_nome';
+
+function TransferModal({
+  open, onClose, store, refCode, selectedColor, selectedSize,
+}: {
+  open: boolean;
+  onClose: () => void;
+  store: OtherStore;
+  refCode: string;
+  selectedColor: string | null;
+  selectedSize: string | null;
+}) {
+  const [tipo, setTipo] = useState<PedidoTipo>('reposicao');
+  const [solicitante, setSolicitante] = useState('');
+  const [cliente, setCliente] = useState('');
+  const clienteInputRef = useRef<HTMLInputElement>(null);
+  const solicitanteInputRef = useRef<HTMLInputElement>(null);
+
+  // Prefill solicitante do localStorage, reset cliente ao abrir.
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem(SOLICITANTE_LS_KEY) || '' : '';
+      setSolicitante(saved);
+    } catch { /* ignore */ }
+    setCliente('');
+    setTipo('reposicao');
+    // autofocus
+    setTimeout(() => solicitanteInputRef.current?.focus(), 80);
+  }, [open]);
+
+  // Autofocus no cliente quando trocar pra venda-certa
+  useEffect(() => {
+    if (tipo === 'venda-certa' && open) {
+      setTimeout(() => clienteInputRef.current?.focus(), 50);
+    }
+  }, [tipo, open]);
+
+  // Fecha no Esc
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const canSubmit =
+    solicitante.trim().length >= 2 &&
+    (tipo === 'reposicao' || cliente.trim().length >= 2);
+
+  // Quantidade específica da célula (se cor+tamanho definidos) ou total da loja
+  const qtyInfo = (() => {
+    if (!selectedSize && !selectedColor) return store.qty;
+    const match = store.variants.find((v) => {
+      const corOk = !selectedColor || (v.cor || '—').trim() === selectedColor;
+      const tamOk = !selectedSize || (v.tamanho || '—').trim() === selectedSize;
+      return corOk && tamOk;
+    });
+    return match?.qty ?? store.qty;
+  })();
+
+  const submit = () => {
+    if (!canSubmit) return;
+
+    try { localStorage.setItem(SOLICITANTE_LS_KEY, solicitante.trim()); } catch { /* ignore */ }
+
+    // Monta mensagem
+    const corPart = selectedColor ? ` cor ${selectedColor}` : '';
+    const tamPart = selectedSize ? ` tam ${selectedSize}` : '';
+    const lines: string[] = [];
+
+    if (tipo === 'reposicao') {
+      lines.push(`Oi! Reposição de estoque.`);
+      lines.push(`Vc tem a REF ${refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
+      lines.push(`Solicitante: ${solicitante.trim()}`);
+      lines.push(`Posso pedir transferência?`);
+    } else {
+      lines.push(`Oi! Venda certa pra cliente ${cliente.trim()}.`);
+      lines.push(`Vc tem a REF ${refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
+      lines.push(`Solicitante: ${solicitante.trim()}`);
+      lines.push(`Pode transferir pra minha loja?`);
+    }
+
+    const msg = lines.join('\n');
+
+    const onlyDigits = (store.whatsapp || '').replace(/\D/g, '');
+    if (onlyDigits.length < 10) {
+      alert('Loja sem WhatsApp cadastrado.');
+      return;
+    }
+    const phone = onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits;
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+    window.open(url, 'lurds_whatsapp'); // nome fixo — reusa mesma aba
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-slate-800 leading-tight">Pedir transferência</h3>
+            <p className="text-xs text-slate-500 mt-1 truncate">
+              <span className="font-semibold text-slate-700">{store.name}</span> · REF {refCode}
+              {selectedColor && ` · ${selectedColor}`}
+              {selectedSize && ` · tam ${selectedSize}`}
+              {' '}
+              <span className="text-slate-400">({qtyInfo} peça{qtyInfo === 1 ? '' : 's'})</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 text-slate-500 flex-shrink-0" title="Fechar (Esc)">
+            <X className="w-5 h-5" />
+          </button>
         </div>
-      )}
+
+        {/* Tipo */}
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-2">
+            Motivo da transferência
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setTipo('reposicao')}
+              className={`p-3 rounded-lg border-2 text-sm font-bold transition ${
+                tipo === 'reposicao'
+                  ? 'bg-brand/10 border-brand text-brand'
+                  : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              Reposição
+              <div className={`text-[10px] font-normal mt-0.5 ${tipo === 'reposicao' ? 'text-brand/70' : 'text-slate-400'}`}>
+                repor estoque
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTipo('venda-certa')}
+              className={`p-3 rounded-lg border-2 text-sm font-bold transition ${
+                tipo === 'venda-certa'
+                  ? 'bg-amber-50 border-amber-500 text-amber-800'
+                  : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              Venda certa
+              <div className={`text-[10px] font-normal mt-0.5 ${tipo === 'venda-certa' ? 'text-amber-700' : 'text-slate-400'}`}>
+                cliente esperando
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Solicitante */}
+        <div>
+          <label className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1 block">
+            Solicitante (você) <span className="text-red-500">*</span>
+          </label>
+          <input
+            ref={solicitanteInputRef}
+            type="text"
+            value={solicitante}
+            onChange={(e) => setSolicitante(e.target.value)}
+            placeholder="Seu nome"
+            autoComplete="off"
+            className="w-full p-3 rounded-lg border-2 border-slate-200 focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none text-base"
+          />
+        </div>
+
+        {/* Cliente (só pra venda certa) */}
+        {tipo === 'venda-certa' && (
+          <div>
+            <label className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1 block">
+              Nome da cliente <span className="text-red-500">*</span>
+            </label>
+            <input
+              ref={clienteInputRef}
+              type="text"
+              value={cliente}
+              onChange={(e) => setCliente(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) submit(); }}
+              placeholder="Nome da cliente que está esperando"
+              autoComplete="off"
+              className="w-full p-3 rounded-lg border-2 border-amber-300 bg-amber-50/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-none text-base"
+            />
+          </div>
+        )}
+
+        {/* Preview da mensagem */}
+        {canSubmit && (
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">
+              Prévia da mensagem
+            </div>
+            <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-mono">
+              {tipo === 'reposicao'
+                ? `Oi! Reposição de estoque.\nVc tem a REF ${refCode}${selectedColor ? ` cor ${selectedColor}` : ''}${selectedSize ? ` tam ${selectedSize}` : ''}? (${qtyInfo} na sua loja)\nSolicitante: ${solicitante.trim()}\nPosso pedir transferência?`
+                : `Oi! Venda certa pra cliente ${cliente.trim()}.\nVc tem a REF ${refCode}${selectedColor ? ` cor ${selectedColor}` : ''}${selectedSize ? ` tam ${selectedSize}` : ''}? (${qtyInfo} na sua loja)\nSolicitante: ${solicitante.trim()}\nPode transferir pra minha loja?`}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onClose}
+            className="flex-1 px-4 py-3 rounded-lg font-bold text-slate-700 bg-slate-100 hover:bg-slate-200"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="flex-[1.4] px-4 py-3 rounded-lg font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm"
+          >
+            <MessageCircle className="w-4 h-4" /> Abrir WhatsApp
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
