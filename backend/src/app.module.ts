@@ -21,6 +21,7 @@ import { HealthModule } from './health/health.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
+import { CrmModule } from './crm/crm.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery
     UsersModule,
     PickOrdersModule,
     MarketingRecoveryModule,
+    CrmModule,
   ],
 })
 export class AppModule {}
