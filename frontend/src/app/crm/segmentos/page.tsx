@@ -90,6 +90,13 @@ export default function SegmentosPage() {
 
   useEffect(() => { loadSummary(); }, []);
 
+  // IMPORTANTE: todos os hooks precisam rodar ANTES de qualquer early-return,
+  // senão o React quebra (rules of hooks).
+  const totalValueAllSegments = useMemo(
+    () => summary?.segments.reduce((s, x) => s + x.totalValue, 0) ?? 0,
+    [summary],
+  );
+
   async function loadSummary() {
     setLoading(true);
     try {
@@ -111,11 +118,6 @@ export default function SegmentosPage() {
       />
     );
   }
-
-  const totalValueAllSegments = useMemo(
-    () => summary?.segments.reduce((s, x) => s + x.totalValue, 0) ?? 0,
-    [summary],
-  );
 
   return (
     <div className="max-w-7xl mx-auto p-6">
