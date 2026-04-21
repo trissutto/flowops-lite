@@ -37,6 +37,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+# Exceção: a rota /logs do frontend NÃO é log de runtime, é código-fonte.
+!frontend/src/app/logs/
+!frontend/src/app/logs/**
 
 # --- Backups e artefatos de operação ---------------------------------------
 backend/backups/
