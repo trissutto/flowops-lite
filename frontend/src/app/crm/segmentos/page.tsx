@@ -297,8 +297,11 @@ function SegmentDetail({
     }
   }
 
-  // Exporta no formato OFICIAL Meta Ads — Value-Based Audience (19 colunas).
-  // O campo `value` (LTV em R$) habilita Lookalike por valor no Meta.
+  // Exporta no formato Meta Ads — Value-Based Audience.
+  // REGRA: só mandamos colunas que REALMENTE temos dados. Coluna vazia
+  // vira "Ação necessária" no wizard do Meta e o upload falha. Ficamos
+  // com 7 colunas populadas: email, phone, fn, ln, country, uid, value.
+  // `value` = TICKET MÉDIO (AOV) → Lookalike de lead qualificado.
   async function exportPhonesForMeta() {
     setExporting(true);
     try {
@@ -314,31 +317,21 @@ function SegmentDetail({
       // Filtra quem não tem nem email nem telefone (sem chave de match no Meta)
       const data = res.data.filter((c) => c.email || c.phone);
 
-      const header = [
-        'email','email','email',
-        'phone','phone','phone',
-        'madid','fn','ln','zip','ct','st','country',
-        'dob','doby','gen','age','uid','value',
-      ];
+      const header = ['email','phone','fn','ln','country','uid','value'];
 
       const csvRows = data.map((c) => {
         const phone = normalizePhoneE164(c.phone) ?? '';
         const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
         const fn = (parts[0] ?? '').toLowerCase();
         const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
-        // value = TICKET MÉDIO (AOV), não LTV. Treina Lookalike em cima de
-        // quem gasta alto POR PEDIDO (lead qualificado), não só de quem
-        // compra muitas vezes barato.
         const value = Number(c.avgTicket || 0).toFixed(2);
         return [
-          c.email, '', '',
-          phone,   '', '',
-          '',
-          fn, ln,
-          '', '', '',
-          'BR',
-          '', '', '', '',
           c.email,
+          phone,
+          fn,
+          ln,
+          'BR',
+          c.email, // uid = email (estável, dedupe)
           value,
         ];
       });

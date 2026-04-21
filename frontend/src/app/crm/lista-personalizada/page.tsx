@@ -233,38 +233,39 @@ export default function ListaPersonalizadaPage() {
         body: JSON.stringify(payload),
       });
 
-      // Formato OFICIAL Meta Ads — Value-Based Audience (19 colunas).
+      // Formato Meta Ads — Value-Based Audience.
       // Ref: https://www.facebook.com/business/help/606443329504150
-      // O que importa pra nós: value (LTV) viabiliza Lookalike por valor;
-      // email/phone viram a chave de match; fn/ln melhoram taxa de cadastro.
-      const header = [
-        'email','email','email',
-        'phone','phone','phone',
-        'madid','fn','ln','zip','ct','st','country',
-        'dob','doby','gen','age','uid','value',
-      ];
+      //
+      // REGRA: só mandamos colunas que REALMENTE temos dados. Se mandamos
+      // coluna vazia, o Meta marca como "Ação necessária" e obriga o usuário
+      // a mapear manualmente (o que ele não consegue fazer com coluna vazia).
+      //
+      // Colunas válidas pro nosso caso (dados que temos garantidos):
+      //   email  → chave de match principal
+      //   phone  → chave de match secundária (E.164)
+      //   fn/ln  → primeiro/último nome (melhora taxa de match)
+      //   country→ BR (fixo)
+      //   uid    → id estável (usamos email de novo pra deduplicação)
+      //   value  → TICKET MÉDIO em R$ (viabiliza Lookalike por valor).
+      //            Por quê ticket médio e não LTV: LTV premia quem compra
+      //            MUITAS vezes; ticket médio premia quem gasta ALTO POR
+      //            PEDIDO — melhor pra Lookalike de lead qualificado.
+      const header = ['email','phone','fn','ln','country','uid','value'];
 
       const rows = res.data.map((c) => {
         const phone = normalizePhoneE164(c.phone) ?? '';
         const parts = (c.name ?? '').trim().split(/\s+/).filter(Boolean);
         const fn = (parts[0] ?? '').toLowerCase();
         const ln = parts.length > 1 ? parts.slice(1).join(' ').toLowerCase() : '';
-        // value = TICKET MÉDIO (não LTV). Por quê:
-        // LTV premia cliente que compra MUITAS vezes (frequência > valor).
-        // Ticket médio premia cliente que gasta ALTO POR PEDIDO — melhor
-        // pra Lookalike de lead qualificado (quem converte em compra cheia).
-        // Formato . decimal (obrigatório pro Meta).
         const value = Number(c.avgTicket || 0).toFixed(2);
         return [
-          c.email, '', '',        // email x3 (só temos 1)
-          phone,   '', '',        // phone x3 (só temos 1)
-          '',                     // madid (não temos)
-          fn, ln,
-          '', '', '',             // zip, ct, st (não temos)
-          'BR',                   // country
-          '', '', '', '',         // dob, doby, gen, age (não temos)
-          c.email,                // uid estável = email
-          value,                  // value = TICKET MÉDIO em R$
+          c.email,
+          phone,
+          fn,
+          ln,
+          'BR',
+          c.email, // uid = email (estável, dedupe)
+          value,
         ];
       });
 
