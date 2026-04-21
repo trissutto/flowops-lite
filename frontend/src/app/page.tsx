@@ -32,10 +32,38 @@ import SeparacaoPage from './separacao/page';
 
 type TabKey = 'visao-geral' | 'pedidos' | 'separacao';
 
-const TABS: { key: TabKey; label: string; icon: typeof LayoutDashboard }[] = [
-  { key: 'visao-geral', label: 'Visão Geral', icon: LayoutDashboard },
-  { key: 'pedidos',     label: 'Pedidos',     icon: ListOrdered },
-  { key: 'separacao',   label: 'Separação',   icon: Truck },
+const TABS: {
+  key: TabKey;
+  label: string;
+  subtitle: string;
+  icon: typeof LayoutDashboard;
+  gradient: string;     // cor do botão quando ATIVO (gradiente cheio)
+  activeRing: string;   // cor do ring/glow do ativo
+}[] = [
+  {
+    key: 'visao-geral',
+    label: 'Visão Geral',
+    subtitle: 'KPIs e últimos pedidos',
+    icon: LayoutDashboard,
+    gradient: 'from-sky-500 to-blue-600',
+    activeRing: 'ring-blue-300',
+  },
+  {
+    key: 'pedidos',
+    label: 'Pedidos',
+    subtitle: 'Lista + filtros WooCommerce',
+    icon: ListOrdered,
+    gradient: 'from-violet-500 to-purple-600',
+    activeRing: 'ring-purple-300',
+  },
+  {
+    key: 'separacao',
+    label: 'Separação',
+    subtitle: 'Enviar pedido pra loja',
+    icon: Truck,
+    gradient: 'from-emerald-500 to-teal-600',
+    activeRing: 'ring-emerald-300',
+  },
 ];
 
 function OperacaoHubInner() {
@@ -126,27 +154,49 @@ function OperacaoHubInner() {
         </div>
       )}
 
-      {/* Tabs sticky abaixo do TopNav */}
+      {/* Botões de navegação — estilo cards coloridos, não abas sublinhadas */}
       <div className="bg-white border-b shadow-sm sticky top-[72px] z-30">
-        <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const isActive = active === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => go(t.key)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm whitespace-nowrap border-b-2 transition ${
-                  isActive
-                    ? 'border-brand text-brand font-bold'
-                    : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {t.label}
-              </button>
-            );
-          })}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
+          <div className="grid grid-cols-3 gap-3">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const isActive = active === t.key;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => go(t.key)}
+                  className={
+                    isActive
+                      ? `group relative overflow-hidden rounded-xl bg-gradient-to-br ${t.gradient} p-4 text-white shadow-lg ring-4 ${t.activeRing} ring-opacity-40 scale-[1.02] transition-all text-left`
+                      : `group relative overflow-hidden rounded-xl bg-slate-50 hover:bg-white border-2 border-slate-200 hover:border-slate-300 p-4 text-slate-700 hover:shadow-md transition-all text-left`
+                  }
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 transition ${
+                        isActive
+                          ? 'bg-white/25 backdrop-blur'
+                          : `bg-gradient-to-br ${t.gradient} text-white`
+                      }`}
+                    >
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className={`font-bold text-base leading-tight ${isActive ? '' : 'text-slate-900'}`}>
+                        {t.label}
+                      </div>
+                      <div className={`text-xs leading-snug mt-0.5 line-clamp-1 ${isActive ? 'opacity-90' : 'text-slate-500'}`}>
+                        {t.subtitle}
+                      </div>
+                    </div>
+                  </div>
+                  {isActive && (
+                    <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/15 blur-xl" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
