@@ -31,7 +31,7 @@ import { ConnectionProvider, ConnectionBadge, useConnection } from '@/lib/connec
 import Logo from '@/components/Logo';
 import {
   Search, ArrowLeft, RefreshCw, X, MessageCircle,
-  CheckCircle2, XCircle, AlertCircle, Store, Hash, Tag, Barcode, ChevronRight,
+  XCircle, AlertCircle, Store, Hash, Tag, Barcode, ChevronRight,
 } from 'lucide-react';
 
 type Mode = 'ref' | 'desc' | 'sku';
@@ -508,20 +508,92 @@ function ErrorBox({ message, onRetry }: { message: string; onRetry: () => void }
 }
 
 // ============================================================
-// Product card — detalhe de UMA ref
+// Helpers de ordenação de tamanhos
+// ============================================================
+const SIZE_LETTER_ORDER = [
+  'PP', 'P', 'M', 'G', 'GG', 'XG', 'XGG', 'EG', 'EGG',
+  'XXG', 'XXGG', '2G', '3G', '4G', '5G', '6G',
+  'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7',
+];
+function sortSizes(a: string, b: string): number {
+  const ua = (a || '').toUpperCase().trim();
+  const ub = (b || '').toUpperCase().trim();
+  const ai = SIZE_LETTER_ORDER.indexOf(ua);
+  const bi = SIZE_LETTER_ORDER.indexOf(ub);
+  if (ai !== -1 && bi !== -1) return ai - bi;
+  if (ai !== -1) return -1;
+  if (bi !== -1) return 1;
+  const na = Number(ua); const nb = Number(ub);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return ua.localeCompare(ub);
+}
+
+// ============================================================
+// Product card — matriz cor × tamanho
 // ============================================================
 function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku: string | null }) {
   const hasInMyStore = item.myStoreTotal > 0;
 
-  const byColor = useMemo(() => {
-    const m = new Map<string, Variant[]>();
+  // Monta a matriz: lista de tamanhos únicos (colunas) × lista de cores (linhas)
+  const { sizes, colors, cellsByColor, totalsBySize, totalsByColor, cellByColorSize } = useMemo(() => {
+    const sizeSet = new Set<string>();
+    const colorSet = new Set<string>();
+    const cellByColorSize = new Map<string, Map<string, Variant>>(); // cor → tamanho → variant
+    const totalsByColor = new Map<string, number>();
+    const totalsBySize = new Map<string, number>();
+
     for (const v of item.variants) {
-      const key = v.cor || '—';
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(v);
+      const cor = (v.cor || '—').trim();
+      const tam = (v.tamanho || '—').trim();
+      sizeSet.add(tam);
+      colorSet.add(cor);
+      if (!cellByColorSize.has(cor)) cellByColorSize.set(cor, new Map());
+      cellByColorSize.get(cor)!.set(tam, v);
+      totalsByColor.set(cor, (totalsByColor.get(cor) || 0) + v.myStoreQty);
+      totalsBySize.set(tam, (totalsBySize.get(tam) || 0) + v.myStoreQty);
     }
-    return Array.from(m.entries());
+
+    const sizes = Array.from(sizeSet).sort(sortSizes);
+    // cores: primeiro as que têm estoque (desc), depois as zeradas (alfa)
+    const colors = Array.from(colorSet).sort((a, b) => {
+      const ta = totalsByColor.get(a) || 0;
+      const tb = totalsByColor.get(b) || 0;
+      if (ta !== tb) return tb - ta;
+      return a.localeCompare(b);
+    });
+
+    const cellsByColor = new Map<string, Variant[]>();
+    for (const c of colors) {
+      cellsByColor.set(c, sizes.map((s) => cellByColorSize.get(c)?.get(s) || {
+        sku: '', cor: c, tamanho: s, myStoreQty: 0,
+      }));
+    }
+
+    return { sizes, colors, cellsByColor, totalsBySize, totalsByColor, cellByColorSize };
   }, [item.variants]);
+
+  // Cor pré-selecionada: se tem SKU bipado, seleciona a cor do SKU.
+  const highlightedColor = useMemo(() => {
+    if (!highlightSku) return null;
+    const v = item.variants.find((x) => x.sku === highlightSku);
+    return v ? (v.cor || '—').trim() : null;
+  }, [highlightSku, item.variants]);
+
+  const [selectedColor, setSelectedColor] = useState<string | null>(highlightedColor);
+  useEffect(() => { setSelectedColor(highlightedColor); }, [highlightedColor]);
+
+  // Filtro das outras lojas: se cor selecionada, só mostra quem tem essa cor.
+  const filteredOtherStores = useMemo(() => {
+    if (!selectedColor) return item.otherStores;
+    return item.otherStores
+      .map((s) => {
+        const matching = s.variants.filter((v) => (v.cor || '—').trim() === selectedColor);
+        if (!matching.length) return null;
+        const qty = matching.reduce((acc, v) => acc + v.qty, 0);
+        return { ...s, variants: matching, qty };
+      })
+      .filter((x): x is OtherStore => !!x);
+  }, [item.otherStores, selectedColor]);
 
   return (
     <article className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -530,6 +602,9 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
           <div className="min-w-0">
             <div className="text-xs uppercase tracking-wide text-slate-500 font-medium">REF {item.ref}</div>
             <h2 className="font-bold text-slate-900 text-lg leading-tight mt-0.5">{item.name}</h2>
+            <div className="text-xs text-slate-500 mt-0.5">
+              {colors.length} cor{colors.length === 1 ? '' : 'es'} · {sizes.length} tamanho{sizes.length === 1 ? '' : 's'}
+            </div>
           </div>
           <div className={`text-right flex-shrink-0 ${hasInMyStore ? 'text-emerald-700' : 'text-slate-400'}`}>
             <div className="text-3xl font-extrabold leading-none">{item.myStoreTotal}</div>
@@ -538,114 +613,225 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         </div>
       </header>
 
-      <section className="p-4">
-        <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-2">
-          Tamanhos & cores na minha loja
+      {/* MATRIZ cor × tamanho */}
+      <section className="p-3">
+        <div className="flex items-center justify-between mb-2 px-1">
+          <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500">
+            Grade de disponibilidade · clique na cor pra filtrar
+          </div>
+          {selectedColor && (
+            <button
+              onClick={() => setSelectedColor(null)}
+              className="text-xs text-brand font-medium hover:underline flex items-center gap-1"
+            >
+              <X className="w-3 h-3" /> Limpar filtro
+            </button>
+          )}
         </div>
-        <div className="space-y-3">
-          {byColor.map(([cor, vs]) => (
-            <div key={cor}>
-              {byColor.length > 1 && (
-                <div className="text-xs font-medium text-slate-600 mb-1">
-                  Cor: <span className="font-bold text-slate-800">{cor}</span>
-                </div>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {vs.map((v) => (
-                  <VariantChip
-                    key={v.sku}
-                    variant={v}
-                    highlight={highlightSku === v.sku}
-                  />
+
+        <div className="overflow-x-auto border border-slate-200 rounded-lg">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-slate-100 border-b border-slate-200">
+                <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[90px]">
+                  Cor
+                </th>
+                {sizes.map((s) => (
+                  <th key={s} className="px-2 py-2 text-center font-bold text-slate-700 min-w-[48px]">
+                    {s}
+                  </th>
                 ))}
-              </div>
-            </div>
-          ))}
+                <th className="px-2 py-2 text-center font-bold text-slate-700 min-w-[48px] bg-slate-200">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {colors.map((cor) => {
+                const colorTotal = totalsByColor.get(cor) || 0;
+                const isSelected = selectedColor === cor;
+                const dimmed = selectedColor && !isSelected;
+                return (
+                  <tr
+                    key={cor}
+                    onClick={() => setSelectedColor(isSelected ? null : cor)}
+                    className={`cursor-pointer transition border-b border-slate-100 ${
+                      isSelected
+                        ? 'bg-brand/10 ring-2 ring-brand/40'
+                        : dimmed
+                        ? 'opacity-40 hover:opacity-70'
+                        : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <td className={`px-3 py-2 font-semibold text-slate-800 sticky left-0 z-10 ${
+                      isSelected ? 'bg-brand/10' : 'bg-white'
+                    } border-r border-slate-100`}>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${
+                          colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
+                        }`} />
+                        <span className="truncate max-w-[100px]" title={cor}>{cor}</span>
+                      </div>
+                    </td>
+                    {sizes.map((s) => {
+                      const v = cellByColorSize.get(cor)?.get(s);
+                      const qty = v?.myStoreQty ?? 0;
+                      const matched = !!v && highlightSku === v.sku;
+                      return (
+                        <td key={s} className="p-0.5 text-center">
+                          <MatrixCell qty={qty} matched={matched} />
+                        </td>
+                      );
+                    })}
+                    <td className={`px-2 py-2 text-center font-bold ${
+                      colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'
+                    } bg-slate-50`}>
+                      {colorTotal}
+                    </td>
+                  </tr>
+                );
+              })}
+              {/* Linha totais por tamanho */}
+              <tr className="bg-slate-100 border-t-2 border-slate-300">
+                <td className="px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 border-r border-slate-200">
+                  Total
+                </td>
+                {sizes.map((s) => {
+                  const t = totalsBySize.get(s) || 0;
+                  return (
+                    <td key={s} className={`px-2 py-2 text-center font-bold ${
+                      t > 0 ? 'text-slate-800' : 'text-slate-400'
+                    }`}>
+                      {t}
+                    </td>
+                  );
+                })}
+                <td className="px-2 py-2 text-center font-extrabold text-emerald-700 bg-slate-200">
+                  {item.myStoreTotal}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+
+        <CellLegend />
       </section>
 
-      {item.otherStores.length > 0 && (
+      {/* Outras lojas */}
+      {filteredOtherStores.length > 0 && (
         <section className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
           <div className="text-[11px] uppercase tracking-wide font-bold text-slate-600 mb-2 mt-3 flex items-center gap-1">
-            <Store className="w-3 h-3" /> Outras lojas com essa REF ({item.otherStores.length})
+            <Store className="w-3 h-3" /> Outras lojas
+            {selectedColor && (
+              <span className="text-brand normal-case tracking-normal font-bold">
+                · filtrado por <span className="underline">{selectedColor}</span>
+              </span>
+            )}
+            <span className="ml-1">({filteredOtherStores.length})</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {item.otherStores.map((s) => (
-              <OtherStoreRow key={s.code} store={s} refCode={item.ref} />
+            {filteredOtherStores.map((s) => (
+              <OtherStoreRow key={s.code} store={s} refCode={item.ref} selectedColor={selectedColor} />
             ))}
           </div>
         </section>
       )}
 
-      {!hasInMyStore && item.otherStores.length === 0 && (
+      {!hasInMyStore && filteredOtherStores.length === 0 && (
         <section className="px-4 py-3 border-t border-slate-100 bg-red-50/60 text-sm text-red-800 flex items-center gap-2">
-          <XCircle className="w-4 h-4" /> Sem estoque em nenhuma loja da rede no momento.
+          <XCircle className="w-4 h-4" />
+          {selectedColor
+            ? <>Sem estoque da cor <strong>{selectedColor}</strong> em nenhuma loja da rede.</>
+            : 'Sem estoque em nenhuma loja da rede no momento.'}
         </section>
       )}
     </article>
   );
 }
 
-function VariantChip({ variant, highlight }: { variant: Variant; highlight: boolean }) {
-  const has = variant.myStoreQty > 0;
-  const low = variant.myStoreQty > 0 && variant.myStoreQty <= 2;
-
-  // Variante "bipada" — destaque bem forte mesmo quando não tem estoque,
-  // pra vendedora ver claramente qual é "a etiqueta" e comparar com as outras.
-  const base = 'flex items-center gap-2 px-3 py-2 rounded-lg border-2 font-medium text-sm transition';
-  let style = '';
-  if (highlight) {
-    style = has
-      ? 'bg-brand text-white border-brand shadow-lg ring-2 ring-brand/30 scale-105'
-      : 'bg-red-500 text-white border-red-600 shadow-lg ring-2 ring-red-300 scale-105';
-  } else if (has) {
-    style = low
-      ? 'bg-amber-50 border-amber-300 text-amber-900'
-      : 'bg-emerald-50 border-emerald-400 text-emerald-900';
-  } else {
-    style = 'bg-slate-50 border-slate-200 text-slate-400 line-through';
+/**
+ * Célula da matriz — compacta, visual.
+ *  - verde (3+)
+ *  - amarelo (1-2, avisa que tá acabando)
+ *  - cinza "—" (sem estoque)
+ *  - bordinha vinho + ring quando é a célula do SKU bipado
+ */
+function MatrixCell({ qty, matched }: { qty: number; matched: boolean }) {
+  if (qty === 0) {
+    return (
+      <div className={`mx-auto w-full h-10 rounded flex items-center justify-center text-slate-300 font-bold ${
+        matched ? 'ring-2 ring-brand bg-brand/10 text-brand' : 'bg-slate-50'
+      }`}>
+        {matched ? '0' : '—'}
+      </div>
+    );
   }
-
+  const low = qty <= 2;
   return (
-    <div
-      className={`${base} ${style} ${highlight ? 'text-base font-bold' : ''}`}
-      title={`SKU ${variant.sku}${highlight ? ' · código bipado' : ''}`}
-    >
-      {highlight ? (
-        <Barcode className="w-4 h-4" />
-      ) : has ? (
-        <CheckCircle2 className={`w-4 h-4 ${low ? 'text-amber-600' : 'text-emerald-600'}`} />
-      ) : (
-        <XCircle className="w-4 h-4 text-slate-300" />
-      )}
-      <span className="font-bold">{variant.tamanho || '—'}</span>
-      <span className="text-xs font-mono opacity-70">×{variant.myStoreQty}</span>
-      {highlight && <span className="text-[10px] uppercase font-bold opacity-90 ml-1">etiqueta</span>}
+    <div className={`mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold text-base relative ${
+      low
+        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+        : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+    } ${matched ? 'ring-2 ring-brand shadow-md' : ''}`}>
+      {qty}
+      {matched && <Barcode className="w-3 h-3 absolute top-0.5 right-0.5 text-brand" />}
+    </div>
+  );
+}
+
+function CellLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-3 mt-2 px-1 text-[11px] text-slate-500">
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300 inline-block" />
+        disponível
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
+        acabando (≤2)
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
+        sem estoque
+      </span>
+      <span className="inline-flex items-center gap-1 text-brand">
+        <Barcode className="w-3 h-3" /> etiqueta bipada
+      </span>
     </div>
   );
 }
 
 function OtherStoreRow({
-  store, refCode,
-}: { store: OtherStore; refCode: string }) {
+  store, refCode, selectedColor,
+}: { store: OtherStore; refCode: string; selectedColor?: string | null }) {
   const [open, setOpen] = useState(false);
 
   const waHref = useMemo(() => {
     if (!store.whatsapp) return null;
     const onlyDigits = store.whatsapp.replace(/\D/g, '');
     if (onlyDigits.length < 10) return null;
+    // Mensagem mais específica quando tem cor filtrada
+    const colorPart = selectedColor ? ` na cor ${selectedColor}` : '';
+    const tamsMsg = store.variants
+      .slice()
+      .sort((a, b) => sortSizes(a.tamanho, b.tamanho))
+      .map((v) => `${v.tamanho} (×${v.qty})`)
+      .join(', ');
     const msg = encodeURIComponent(
-      `Oi! Tem disponível a REF ${refCode} pra transferir pra minha loja? ${store.variants.map((v) => `${v.tamanho}${v.cor ? ` ${v.cor}` : ''} (×${v.qty})`).join(', ')}`,
+      `Oi! Tem a REF ${refCode}${colorPart} pra transferir pra minha loja? Tamanhos: ${tamsMsg}`,
     );
     return `https://wa.me/${onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits}?text=${msg}`;
-  }, [store, refCode]);
+  }, [store, refCode, selectedColor]);
 
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="font-bold text-slate-800 text-sm truncate">{store.name}</div>
-          <div className="text-xs text-slate-500">Tem <strong className="text-slate-800">{store.qty}</strong> peça(s) da ref</div>
+          <div className="text-xs text-slate-500">
+            <strong className="text-slate-800">{store.qty}</strong> peça(s)
+            {selectedColor && <> · <span className="text-brand font-medium">{selectedColor}</span></>}
+          </div>
         </div>
         {waHref ? (
           <a href={waHref} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm" title={`WhatsApp da ${store.name}`}>
@@ -660,13 +846,9 @@ function OtherStoreRow({
       </button>
       {open && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {store.variants.slice().sort((a, b) => {
-            const na = Number(a.tamanho); const nb = Number(b.tamanho);
-            if (!isNaN(na) && !isNaN(nb)) return na - nb;
-            return String(a.tamanho).localeCompare(String(b.tamanho));
-          }).map((v) => (
+          {store.variants.slice().sort((a, b) => sortSizes(a.tamanho, b.tamanho)).map((v) => (
             <span key={v.sku} className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[11px] font-medium text-slate-700">
-              {v.tamanho || '—'}{v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
+              {v.tamanho || '—'}{!selectedColor && v.cor ? ` · ${v.cor}` : ''} <span className="text-slate-400">×{v.qty}</span>
             </span>
           ))}
         </div>
