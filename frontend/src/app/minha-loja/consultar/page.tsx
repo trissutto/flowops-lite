@@ -134,6 +134,25 @@ function ConsultarInner() {
   }, [router]);
 
   // ---------- busca ----------
+  /**
+   * Detecta padrão óbvio de REF — pra pular a etapa de lista e ir direto pra matriz.
+   * Casos cobertos:
+   *  - "vlm-222", "r-100", "abc-1234"       (letras-números)
+   *  - "r5578", "v002"                      (1-5 letras + dígitos)
+   *  - "12345"                              (só dígitos, 3-6)
+   * Descartado:
+   *  - Qualquer coisa com espaço (descrição multi-palavra)
+   *  - Menos de 3 chars
+   */
+  const looksLikeRef = (s: string): boolean => {
+    const c = s.trim().toLowerCase();
+    if (!c || c.includes(' ')) return false;
+    if (c.length < 3) return false;
+    if (/^\d{3,6}$/.test(c)) return true;
+    if (/^[a-z]{1,5}-?\d{2,6}[a-z0-9]*$/.test(c)) return true;
+    return false;
+  };
+
   const runSearch = useCallback(async (m: Mode, term: string) => {
     const clean = term.trim();
     if (clean.length < 2) {
@@ -151,13 +170,35 @@ function ConsultarInner() {
     setLoading(true);
     setSearchError(null);
     setPickedRefFromDesc(null);
+
+    // FAST-PATH: no modo desc, se o query parece uma REF, chama mode=ref direto.
+    // Economiza 1 roundtrip (desc → escolher REF → detail) e já mostra a matriz.
+    const tryRefFirst = m === 'desc' && looksLikeRef(clean);
+    const firstMode: 'ref' | Mode = tryRefFirst ? 'ref' : m;
+
     try {
-      const resp = await apiRetry<StoreSearchResult>(
-        `/products/store-search?mode=${m}&q=${encodeURIComponent(clean)}`,
+      let resp = await apiRetry<StoreSearchResult>(
+        `/products/store-search?mode=${firstMode}&q=${encodeURIComponent(clean)}`,
         { signal: ac.signal },
       );
       if (lastKeyRef.current !== key) return;
+
+      // Atalho REF não bateu nada → tenta desc (fallback 1 roundtrip extra).
+      if (tryRefFirst && resp.results.length === 0) {
+        resp = await apiRetry<StoreSearchResult>(
+          `/products/store-search?mode=desc&q=${encodeURIComponent(clean)}`,
+          { signal: ac.signal },
+        );
+        if (lastKeyRef.current !== key) return;
+      }
+
       setData(resp);
+
+      // Se veio pelo atalho REF com pelo menos 1 resultado, já joga pra matriz.
+      // O user continua no modo DESC (pra conseguir voltar), mas vê o detalhe.
+      if (tryRefFirst && resp.results.length >= 1) {
+        setPickedRefFromDesc(resp.results[0]);
+      }
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
       if (lastKeyRef.current !== key) return;
@@ -168,10 +209,11 @@ function ConsultarInner() {
     }
   }, [data]);
 
-  // debounce — DESC precisa mais tempo (busca mais cara)
+  // debounce — DESC com palavra livre precisa mais tempo; REF-like responde rápido.
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    const delay = mode === 'desc' ? 450 : 250;
+    const isRefLike = mode === 'desc' && looksLikeRef(query);
+    const delay = isRefLike ? 200 : mode === 'desc' ? 450 : 250;
     debounceRef.current = window.setTimeout(() => {
       runSearch(mode, query);
     }, delay);
