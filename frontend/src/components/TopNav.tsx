@@ -13,6 +13,7 @@ import Logo from './Logo';
 const NAV = [
   { href: '/',              label: 'Operação' },
   { href: '/retaguarda/baixa-estoque', label: 'Baixa Estoque' },
+  { href: '/financeiro',    label: 'Financeiro'    },
   { href: '/produtos',      label: 'Produtos'     },
   { href: '/clientes',      label: 'Clientes'     },
   { href: '/marketing',     label: 'Marketing'    },
