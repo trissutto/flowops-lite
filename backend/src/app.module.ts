@@ -22,6 +22,7 @@ import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
 import { CrmModule } from './crm/crm.module';
+import { SuppliesModule } from './supplies/supplies.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { CrmModule } from './crm/crm.module';
     PickOrdersModule,
     MarketingRecoveryModule,
     CrmModule,
+    SuppliesModule,
   ],
 })
 export class AppModule {}

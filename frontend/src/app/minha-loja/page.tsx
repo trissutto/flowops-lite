@@ -29,6 +29,7 @@ import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
+  Package2, ClipboardList,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -525,7 +526,7 @@ export default function MinhaLojaPage() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <span
               className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
                 connected ? 'bg-emerald-500/20' : 'bg-red-500/30'
@@ -533,24 +534,8 @@ export default function MinhaLojaPage() {
               title={connected ? 'Conectado em tempo real' : 'Desconectado — sem tempo real'}
             >
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              {connected ? 'Online' : 'Offline'}
+              <span className="hidden sm:inline">{connected ? 'Online' : 'Offline'}</span>
             </span>
-            <Link
-              href="/minha-loja/consultar"
-              className="flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-sm font-semibold"
-              title="Consultar produto (F2)"
-            >
-              <Search className="w-4 h-4" />
-              <span className="hidden sm:inline">Consultar</span>
-            </Link>
-            <Link
-              href="/minha-loja/historico"
-              className="flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-sm font-semibold"
-              title="Histórico de pedidos de transferência"
-            >
-              <History className="w-4 h-4" />
-              <span className="hidden sm:inline">Histórico</span>
-            </Link>
             <button onClick={loadRows} className="p-2 hover:bg-white/10 rounded" title="Atualizar">
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -570,6 +555,11 @@ export default function MinhaLojaPage() {
           />
         </div>
       </header>
+
+      {/* Quick-action grid — acesso rápido às funções da filial */}
+      <div className="max-w-3xl mx-auto px-3 pt-3">
+        <QuickActionGrid />
+      </div>
 
       {/* Lista */}
       <main className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
@@ -659,6 +649,77 @@ function openPrintWindow(pickOrderId: string) {
     // Popup bloqueado — abre na mesma aba como fallback
     window.location.href = url;
   }
+}
+
+// ──────────────────────────────────────────────────────────────
+// QuickActionGrid — grid de botões grandes pra ações rápidas
+// ──────────────────────────────────────────────────────────────
+// Cada botão é um gradiente colorido com ícone e label. Pensado pra click
+// rápido no mobile (alvo grande) e pra destacar visualmente as funções
+// importantes da filial.
+function QuickActionGrid() {
+  const actions: Array<{
+    href: string;
+    icon: React.ReactNode;
+    label: string;
+    subtitle: string;
+    gradient: string;
+  }> = [
+    {
+      href: '/minha-loja/consultar',
+      icon: <Search className="w-6 h-6" />,
+      label: 'Consultar',
+      subtitle: 'Buscar produto na rede',
+      gradient: 'from-sky-500 to-blue-600',
+    },
+    {
+      href: '/minha-loja/historico',
+      icon: <History className="w-6 h-6" />,
+      label: 'Transferências',
+      subtitle: 'Histórico de pedidos',
+      gradient: 'from-violet-500 to-purple-600',
+    },
+    {
+      href: '/minha-loja/materiais',
+      icon: <Package2 className="w-6 h-6" />,
+      label: 'Materiais',
+      subtitle: 'Pedir saquinho, bobina...',
+      gradient: 'from-amber-500 to-orange-600',
+    },
+    {
+      href: '/minha-loja/materiais?tab=historico',
+      icon: <ClipboardList className="w-6 h-6" />,
+      label: 'Meus pedidos',
+      subtitle: 'Status dos materiais',
+      gradient: 'from-emerald-500 to-teal-600',
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-2.5">
+      {actions.map((a) => (
+        <Link
+          key={a.href}
+          href={a.href}
+          className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${a.gradient} p-4 text-white shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all`}
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
+              {a.icon}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="font-bold text-base leading-tight">{a.label}</div>
+              <div className="text-[11px] opacity-90 leading-snug mt-0.5 line-clamp-2">
+                {a.subtitle}
+              </div>
+            </div>
+          </div>
+          {/* Decorative glow */}
+          <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/10 blur-xl group-hover:bg-white/20 transition" />
+        </Link>
+      ))}
+    </div>
+  );
 }
 
 function Counter({ label, count, color }: { label: string; count: number; color: string }) {

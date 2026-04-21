@@ -51,9 +51,10 @@ model Store {
   priorityScore Int      @default(50) @map("priority_score")
   createdAt     DateTime @default(now()) @map("created_at")
 
-  users      User[]
-  pickOrders PickOrder[]
-  orderItems OrderItem[]
+  users          User[]
+  pickOrders     PickOrder[]
+  orderItems     OrderItem[]
+  supplyRequests SupplyRequest[]
 
   @@map("stores")
 }
@@ -230,6 +231,75 @@ model WaOptOut {
 // Não temos ainda confirmação de "foi transferido de fato" — isso fica
 // pra uma fase 2 (matriz aprova + baixa no ERP). Aqui é só o log do
 // pedido que saiu via WhatsApp.
+
+// ==========================================================================
+// SUPPLIES — Almoxarifado (materiais de uso diário das filiais)
+// ==========================================================================
+// Filial pede saquinho, durex, bobina, etiqueta, etc pra matriz. Matriz cadastra
+// o catálogo em SupplyItem, recebe SupplyRequest, aprova e envia.
+//
+// Workflow de status do pedido:
+//   pending → approved → separating → shipped → delivered
+//     └→ cancelled (em qualquer momento antes de shipped)
+
+model SupplyItem {
+  id          String   @id @default(uuid())
+  sku         String?  @unique               // opcional, código interno da matriz
+  name        String                          // ex: "Saquinho 30x40 transparente"
+  category    String?                         // ex: Embalagem, Impressão, Limpeza
+  unit        String   @default("un")         // un, kg, m, pacote, rolo, caixa
+  description String?
+  imageUrl    String?  @map("image_url")
+  active      Boolean  @default(true)
+  minQty      Int?     @map("min_qty")        // estoque mínimo de referência (futuro)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  requestItems SupplyRequestItem[]
+
+  @@index([active, category])
+  @@map("supply_items")
+}
+
+model SupplyRequest {
+  id              String   @id @default(uuid())
+  requestNumber   Int      @unique @default(autoincrement()) @map("request_number") // #SR-001
+  storeId         String   @map("store_id")
+  status          String   // pending | approved | separating | shipped | delivered | cancelled
+  note            String?                                     // observação da filial
+  adminNote       String?  @map("admin_note")                  // observação da matriz
+  // Rastreio do envio
+  trackingCode    String?  @map("tracking_code")
+  carrier         String?
+  shippedAt       DateTime? @map("shipped_at")
+  deliveredAt     DateTime? @map("delivered_at")
+  // Quem criou (user da filial)
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  store Store @relation(fields: [storeId], references: [id])
+  items SupplyRequestItem[]
+
+  @@index([storeId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("supply_requests")
+}
+
+model SupplyRequestItem {
+  id              String  @id @default(uuid())
+  requestId       String  @map("request_id")
+  supplyItemId    String  @map("supply_item_id")
+  qtyRequested    Int     @map("qty_requested")
+  qtyApproved     Int?    @map("qty_approved")   // matriz pode aprovar qtd menor
+  qtyShipped      Int?    @map("qty_shipped")    // efetivamente enviado
+
+  request SupplyRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  supply  SupplyItem    @relation(fields: [supplyItemId], references: [id])
+
+  @@index([requestId])
+  @@map("supply_request_items")
+}
 
 model TransferOrder {
   id                String   @id @default(uuid())
