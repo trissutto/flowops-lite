@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
@@ -27,7 +28,7 @@ import Logo from '@/components/Logo';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
-  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode,
+  Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -518,6 +519,14 @@ export default function MinhaLojaPage() {
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               {connected ? 'Online' : 'Offline'}
             </span>
+            <Link
+              href="/minha-loja/consultar"
+              className="flex items-center gap-1 px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-sm font-semibold"
+              title="Consultar produto (F2)"
+            >
+              <Search className="w-4 h-4" />
+              <span className="hidden sm:inline">Consultar</span>
+            </Link>
             <button onClick={loadRows} className="p-2 hover:bg-white/10 rounded" title="Atualizar">
               <RefreshCw className="w-4 h-4" />
             </button>

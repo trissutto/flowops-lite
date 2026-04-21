@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,6 +8,7 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -227,6 +229,29 @@ export class ProductsController {
       return { error: 'Arquivo vazio.' };
     }
     return this.products.restoreStockFromBackup(buffer);
+  }
+
+  /**
+   * Busca rápida de produto pra tela /minha-loja/consultar (filial).
+   *
+   * Campo único — detecta sozinho se é EAN (só dígitos 8-14) ou texto
+   * (ref/código/descrição). Retorna agrupado por REF com:
+   *  - estoque na MINHA loja (resolvida via JWT.storeId)
+   *  - outras lojas que têm a ref (com WhatsApp pra pedir transferência)
+   *
+   * CRÍTICO: endpoint precisa vir ANTES de @Get(':id'), senão 'store-search'
+   * é interpretado como ID (integer) e cai no parsing.
+   */
+  @Get('store-search')
+  storeSearch(@Req() req: any, @Query('q') q?: string) {
+    const user = req.user as { userId: string; role: string; storeId: string | null };
+    if (user?.role !== 'store' || !user?.storeId) {
+      throw new BadRequestException('Endpoint exclusivo de usuários de loja.');
+    }
+    if (!q || q.trim().length < 2) {
+      throw new BadRequestException('Informe o parâmetro q com no mínimo 2 caracteres.');
+    }
+    return this.products.storeProductSearch(q, user.storeId);
   }
 
   @Get(':id')

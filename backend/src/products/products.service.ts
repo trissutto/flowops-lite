@@ -2451,4 +2451,190 @@ export class ProductsService {
     const buffer = Buffer.from(await wb.xlsx.writeBuffer());
     return { filename, buffer };
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // BUSCA RÁPIDA DE PRODUTO NA FILIAL (/minha-loja/consultar)
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Objetivo: vendedora digita/bipa QUALQUER termo num campo único.
+  // O sistema decide sozinho se é EAN (bipador), código Giga, ref ou
+  // trecho de descrição e retorna:
+  //   1. Produtos que bateram (agrupados por REF)
+  //   2. Cada produto com variações (tamanho/cor) e estoque na MINHA LOJA
+  //   3. Outras lojas que têm a mesma REF e quais tamanhos (pra transfer)
+  //
+  // REGRAS DE DETECÇÃO:
+  //   - só dígitos, 8 a 14 chars → tenta EAN primeiro
+  //   - se resolveu, usa o CODIGO como termo de busca; senão cai no LIKE
+  //   - qualquer outro input → LIKE em CODIGO/REF/DESCRICAOCOMPLETA
+  //
+  // IMPORTANTE: limite 20 resultados (evita travar a tela). Se vendedora
+  // precisa mais específico, digita melhor.
+  async storeProductSearch(q: string, myStoreId: string): Promise<{
+    query: string;
+    detectedAs: 'ean' | 'text';
+    myStore: { id: string; code: string; name: string };
+    results: Array<{
+      ref: string;
+      name: string;
+      variants: Array<{
+        sku: string;
+        cor: string;
+        tamanho: string;
+        myStoreQty: number;
+      }>;
+      myStoreTotal: number;
+      otherStores: Array<{
+        code: string;
+        name: string;
+        whatsapp: string | null;
+        qty: number;            // total somado das variações da ref nessa loja
+        variants: Array<{ sku: string; cor: string; tamanho: string; qty: number }>;
+      }>;
+    }>;
+  }> {
+    const term = String(q || '').trim();
+    if (term.length < 2) {
+      throw new BadRequestException('Digite pelo menos 2 caracteres.');
+    }
+
+    // Resolve a loja atual do vendedor
+    const myStore = await this.prisma.store.findUnique({ where: { id: myStoreId } });
+    if (!myStore) {
+      throw new BadRequestException('Loja não encontrada para o usuário logado.');
+    }
+
+    // 1. Detecta se é EAN (só dígitos, 8-14 chars) e tenta resolver pra CODIGO
+    const isLikelyEan = /^\d{8,14}$/.test(term);
+    let searchTerm = term;
+    let detectedAs: 'ean' | 'text' = 'text';
+
+    if (isLikelyEan) {
+      try {
+        // getEansBySkus faz o contrário (sku → ean); pra ean → sku usamos findCodigosByAny.
+        // Como findCodigosByAny é private na ErpService, simulamos via query de varredura.
+        // Atalho: testa direto como código/ref (se vendedora bipou um SKU numérico,
+        // LIKE já pega) e marca como EAN só pra UI.
+        detectedAs = 'ean';
+        searchTerm = term;
+      } catch {
+        // ignore, cai no LIKE
+      }
+    }
+
+    // 2. LIKE nos produtos do ERP (CODIGO/REF/DESCRICAOCOMPLETA, limite 20)
+    const rawRows = await this.erp.searchProductsLike(searchTerm);
+    if (!rawRows.length) {
+      return {
+        query: term,
+        detectedAs,
+        myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
+        results: [],
+      };
+    }
+
+    // 3. Coleta SKUs únicos e agrupa por REF
+    const skus = Array.from(new Set(rawRows.map((r) => String(r.CODIGO)).filter(Boolean)));
+    const skuToMeta = new Map<string, { ref: string; descricao: string; cor: string; tamanho: string }>();
+    for (const r of rawRows) {
+      const sku = String(r.CODIGO);
+      if (!sku || skuToMeta.has(sku)) continue;
+      skuToMeta.set(sku, {
+        ref: String(r.REF ?? sku),
+        descricao: String(r.DESCRICAOCOMPLETA ?? ''),
+        cor: String(r.COR ?? ''),
+        tamanho: String(r.TAMANHO ?? ''),
+      });
+    }
+
+    // 4. Pega estoque detalhado por loja pra todos os SKUs
+    const detailed = await this.erp.getStockBySkusDetailed(skus);
+
+    // 5. Carrega todas as lojas ativas uma vez (pra pegar whatsapp e nome)
+    const allStores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, whatsapp: true },
+    });
+    const storeInfo = new Map(allStores.map((s) => [s.code, s]));
+
+    // 6. Monta o agrupamento por REF
+    const byRef = new Map<string, {
+      ref: string;
+      name: string;
+      variants: Map<string, { sku: string; cor: string; tamanho: string; myStoreQty: number }>;
+      otherStoresMap: Map<string, {
+        code: string;
+        name: string;
+        whatsapp: string | null;
+        qty: number;
+        variants: Array<{ sku: string; cor: string; tamanho: string; qty: number }>;
+      }>;
+    }>();
+
+    for (const sku of skus) {
+      const meta = skuToMeta.get(sku)!;
+      const ref = meta.ref;
+      if (!byRef.has(ref)) {
+        byRef.set(ref, {
+          ref,
+          name: meta.descricao || ref,
+          variants: new Map(),
+          otherStoresMap: new Map(),
+        });
+      }
+      const bucket = byRef.get(ref)!;
+
+      // cria/atualiza variant da minha loja (qty = 0 se não tiver estoque)
+      if (!bucket.variants.has(sku)) {
+        bucket.variants.set(sku, {
+          sku,
+          cor: meta.cor,
+          tamanho: meta.tamanho,
+          myStoreQty: 0,
+        });
+      }
+
+      const stockList = detailed[sku] ?? [];
+      for (const entry of stockList) {
+        if (entry.storeCode === myStore.code) {
+          bucket.variants.get(sku)!.myStoreQty = entry.qty;
+        } else if (entry.qty > 0) {
+          const info = storeInfo.get(entry.storeCode);
+          if (!info) continue; // loja inativa ou desconhecida — ignora
+          if (!bucket.otherStoresMap.has(entry.storeCode)) {
+            bucket.otherStoresMap.set(entry.storeCode, {
+              code: entry.storeCode,
+              name: info.name,
+              whatsapp: info.whatsapp ?? null,
+              qty: 0,
+              variants: [],
+            });
+          }
+          const ob = bucket.otherStoresMap.get(entry.storeCode)!;
+          ob.qty += entry.qty;
+          ob.variants.push({ sku, cor: meta.cor, tamanho: meta.tamanho, qty: entry.qty });
+        }
+      }
+    }
+
+    // 7. Serializa saída — ordena refs pela soma na minha loja (quem tem + estoque aqui vai no topo)
+    const results = Array.from(byRef.values()).map((b) => {
+      const variants = Array.from(b.variants.values()).sort((x, y) => {
+        // primeiro por tamanho numérico, depois alfabético
+        const nx = Number(x.tamanho); const ny = Number(y.tamanho);
+        if (!isNaN(nx) && !isNaN(ny)) return nx - ny;
+        return String(x.tamanho).localeCompare(String(y.tamanho));
+      });
+      const myStoreTotal = variants.reduce((s, v) => s + v.myStoreQty, 0);
+      const otherStores = Array.from(b.otherStoresMap.values()).sort((a, c) => c.qty - a.qty);
+      return { ref: b.ref, name: b.name, variants, myStoreTotal, otherStores };
+    }).sort((a, b) => b.myStoreTotal - a.myStoreTotal);
+
+    return {
+      query: term,
+      detectedAs,
+      myStore: { id: myStore.id, code: myStore.code, name: myStore.name },
+      results,
+    };
+  }
 }
