@@ -90,7 +90,6 @@ export class CustomersService {
 
     // 1) Puxa SOMENTE pedidos CONCLUÍDOS (delivered = completed do WC).
     //    Cliente só conta se efetivamente comprou e recebeu.
-    //    Ordena desc por data pra pegar o nome/telefone mais recente quando agrupar.
     const orders = await this.prisma.order.findMany({
       where: {
         customerEmail: { not: null },
@@ -102,8 +101,8 @@ export class CustomersService {
         customerPhone: true,
         totalAmount: true,
         createdAt: true,
+        wcDateCreated: true, // data real do pedido no WC (não do sync local)
       },
-      orderBy: { createdAt: 'desc' },
     });
 
     // 2) Agrupa por email normalizado (lowercase + trim)
@@ -114,6 +113,10 @@ export class CustomersService {
       const email = o.customerEmail.toLowerCase().trim();
       if (!email) continue;
 
+      // Usa wcDateCreated (data real no WC) com fallback pra createdAt.
+      // Essencial: sync de histórico popula createdAt = data do import, o que quebra lastOrder/firstOrder.
+      const orderDate: Date = o.wcDateCreated ?? o.createdAt;
+
       let c = byEmail.get(email);
       if (!c) {
         c = {
@@ -123,8 +126,8 @@ export class CustomersService {
           orderCount: 0,
           totalSpent: 0,
           avgTicket: 0,
-          firstOrder: o.createdAt,
-          lastOrder: o.createdAt,
+          firstOrder: orderDate,
+          lastOrder: orderDate,
         };
         byEmail.set(email, c);
       }
@@ -132,11 +135,9 @@ export class CustomersService {
       c.orderCount += 1;
       c.totalSpent += Number(o.totalAmount ?? 0);
 
-      if (o.createdAt > c.lastOrder) c.lastOrder = o.createdAt;
-      if (o.createdAt < c.firstOrder) c.firstOrder = o.createdAt;
+      if (orderDate > c.lastOrder) c.lastOrder = orderDate;
+      if (orderDate < c.firstOrder) c.firstOrder = orderDate;
 
-      // Nome/telefone: já que orders estão em ordem desc, o primeiro registro
-      // que cai aqui (quando não tinha) é o mais recente. Mantém se não estiver vazio.
       if (!c.name && o.customerName?.trim()) c.name = o.customerName.trim();
       if (!c.phone && o.customerPhone?.trim()) c.phone = o.customerPhone.trim();
     }

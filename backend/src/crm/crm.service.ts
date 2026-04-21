@@ -81,8 +81,8 @@ export class CrmService {
         customerPhone: true,
         totalAmount: true,
         createdAt: true,
+        wcDateCreated: true, // data REAL do pedido no WC (não do registro local)
       },
-      orderBy: { createdAt: 'desc' },
     });
 
     // Agrega por email normalizado
@@ -104,6 +104,11 @@ export class CrmService {
       const email = o.customerEmail.toLowerCase().trim();
       if (!email) continue;
 
+      // Usa wcDateCreated (data real do pedido) com fallback pra createdAt.
+      // wcDateCreated é essencial porque o sync de histórico popula createdAt = hoje,
+      // o que quebraria completamente a classificação RFM.
+      const orderDate: Date = o.wcDateCreated ?? o.createdAt;
+
       let c = map.get(email);
       if (!c) {
         c = {
@@ -112,15 +117,15 @@ export class CrmService {
           phone: o.customerPhone?.trim() || null,
           orderCount: 0,
           totalSpent: 0,
-          firstOrder: o.createdAt,
-          lastOrder: o.createdAt,
+          firstOrder: orderDate,
+          lastOrder: orderDate,
         };
         map.set(email, c);
       }
       c.orderCount += 1;
       c.totalSpent += Number(o.totalAmount ?? 0);
-      if (o.createdAt > c.lastOrder) c.lastOrder = o.createdAt;
-      if (o.createdAt < c.firstOrder) c.firstOrder = o.createdAt;
+      if (orderDate > c.lastOrder) c.lastOrder = orderDate;
+      if (orderDate < c.firstOrder) c.firstOrder = orderDate;
       if (!c.name && o.customerName?.trim()) c.name = o.customerName.trim();
       if (!c.phone && o.customerPhone?.trim()) c.phone = o.customerPhone.trim();
     }
