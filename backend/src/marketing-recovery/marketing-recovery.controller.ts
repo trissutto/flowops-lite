@@ -28,7 +28,7 @@ export class MarketingRecoveryController {
     @Req() req: any,
     @Query('step') step?: 'all' | 'T1' | 'T2' | 'T3' | 'pending' | 'sent',
     @Query('limit') limit?: string,
-  ) {
+  ): Promise<any> {
     assertMatriz(req.user);
     return this.svc.listCandidates({
       stepFilter: step,
@@ -38,7 +38,7 @@ export class MarketingRecoveryController {
 
   /** Templates + tempos da campanha (FASE 1: hardcoded, pode evoluir pra config editável). */
   @Get('config')
-  config(@Req() req: any) {
+  config(@Req() req: any): any {
     assertMatriz(req.user);
     return { steps: this.svc.getStepsConfig() };
   }
@@ -56,7 +56,7 @@ export class MarketingRecoveryController {
       coupon?: string | null;
       link?: string | null;
     },
-  ) {
+  ): any {
     assertMatriz(req.user);
     return {
       stepIndex: body.stepIndex,
@@ -84,7 +84,7 @@ export class MarketingRecoveryController {
       couponCode?: string | null;
       couponPct?: number | null;
     },
-  ) {
+  ): Promise<any> {
     const user = req.user as AuthUser;
     assertMatriz(user);
     return this.svc.registerManualSent({ ...body, sentByUserId: user.userId });
@@ -92,21 +92,21 @@ export class MarketingRecoveryController {
 
   /** KPIs de recuperação (janela em dias, default 30). */
   @Get('stats')
-  stats(@Req() req: any, @Query('window') window?: string) {
+  stats(@Req() req: any, @Query('window') window?: string): Promise<any> {
     assertMatriz(req.user);
     return this.svc.stats(window ? Number(window) : 30);
   }
 
   /** Histórico de mensagens enviadas (auditoria). */
   @Get('history')
-  history(@Req() req: any, @Query('limit') limit?: string) {
+  history(@Req() req: any, @Query('limit') limit?: string): Promise<any> {
     assertMatriz(req.user);
     return this.svc.history(limit ? Number(limit) : 100);
   }
 
   /** Rodar manualmente o scan de conversão (cruzamento com Orders novos). */
   @Post('scan-conversions')
-  scanConversions(@Req() req: any) {
+  scanConversions(@Req() req: any): Promise<any> {
     assertMatriz(req.user);
     return this.svc.scanConversions();
   }
@@ -114,19 +114,19 @@ export class MarketingRecoveryController {
   // ── Opt-out ────────────────────────────────────────────────────────────────
 
   @Get('opt-outs')
-  listOptOuts(@Req() req: any) {
+  listOptOuts(@Req() req: any): Promise<any> {
     assertMatriz(req.user);
     return this.svc.listOptOuts();
   }
 
   @Post('opt-outs')
-  addOptOut(@Req() req: any, @Body() body: { phone: string; reason?: string }) {
+  addOptOut(@Req() req: any, @Body() body: { phone: string; reason?: string }): Promise<any> {
     assertMatriz(req.user);
     return this.svc.addOptOut(body.phone, body.reason);
   }
 
   @Delete('opt-outs/:phone')
-  removeOptOut(@Req() req: any, @Param('phone') phone: string) {
+  removeOptOut(@Req() req: any, @Param('phone') phone: string): Promise<any> {
     assertMatriz(req.user);
     return this.svc.removeOptOut(phone);
   }
