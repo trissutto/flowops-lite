@@ -1058,6 +1058,7 @@ function TransferModal({
   const [tipo, setTipo] = useState<PedidoTipo>('reposicao');
   const [solicitante, setSolicitante] = useState('');
   const [cliente, setCliente] = useState('');
+  const [sending, setSending] = useState(false);
   const clienteInputRef = useRef<HTMLInputElement>(null);
   const solicitanteInputRef = useRef<HTMLInputElement>(null);
 
@@ -1105,8 +1106,6 @@ function TransferModal({
     });
     return match?.qty ?? store.qty;
   })();
-
-  const [sending, setSending] = useState(false);
 
   const submit = async () => {
     if (!canSubmit || sending) return;
