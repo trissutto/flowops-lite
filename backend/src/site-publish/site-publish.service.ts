@@ -441,8 +441,11 @@ export class SitePublishService {
     }
     const precoPromo = item.wcPrecoPromo ? Number(item.wcPrecoPromo) : undefined;
 
-    // SKU do pai = refCode + cor (normalizado)
-    const sku = `${item.refCode}-${item.cor}`.replace(/\s+/g, '-').toUpperCase();
+    // SKU do pai = só refCode (normalizado). Sem concatenar a cor — o SKU
+    // do pai é o agrupador do produto variável; a cor aparece como
+    // atributo + no título, não no SKU. A variação carrega o código EAN
+    // como SKU próprio (bipagem encontra direto).
+    const sku = String(item.refCode).replace(/\s+/g, '-').toUpperCase();
 
     // Checa duplicidade
     if (!opts.force) {
