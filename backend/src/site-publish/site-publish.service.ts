@@ -537,4 +537,49 @@ export class SitePublishService {
       throw new BadRequestException(`Falha ao publicar: ${msg}`);
     }
   }
+
+  /**
+   * Re-aplica o código Giga (EAN de etiqueta) em cada variação já criada no
+   * WC. Útil pra produtos publicados antes da correção que inclui o
+   * global_unique_id no payload de criação.
+   *
+   * Só roda em itens com status=published e wcProductId/wcVariationIds
+   * preenchidos. Usa o snapshot do Wincred (tamanhos) como fonte do código.
+   */
+  async syncEansOnWc(id: string): Promise<{ updated: number; failed: any[] }> {
+    const item = await this.getQueueItem(id);
+    if (!item.wcProductId) {
+      throw new BadRequestException('Item não publicado no WC (sem wcProductId).');
+    }
+    const variationIdsMeta = Array.isArray(item.wcVariationIds)
+      ? (item.wcVariationIds as any[])
+      : [];
+    if (!variationIdsMeta.length) {
+      throw new BadRequestException('Item sem variações registradas no WC.');
+    }
+    // Monta {variationId, codigo} cruzando o snapshot dos tamanhos com as
+    // variações do WC — match por `tamanho` (case-insensitive).
+    const snapshot = Array.isArray(item.tamanhos) ? (item.tamanhos as any[]) : [];
+    const payload = variationIdsMeta
+      .map((v: any) => {
+        const tam = String(v?.tamanho || '').trim().toUpperCase();
+        const fromSnapshot = snapshot.find(
+          (s: any) => String(s?.tamanho || '').trim().toUpperCase() === tam,
+        );
+        const codigo = v?.codigo || fromSnapshot?.codigo || '';
+        return { variationId: Number(v?.variationId), codigo: String(codigo).trim() };
+      })
+      .filter((p) => p.variationId && p.codigo);
+
+    if (!payload.length) {
+      throw new BadRequestException(
+        'Não foi possível mapear códigos EAN — snapshot ou variationIds incompletos.',
+      );
+    }
+    const res = await this.wc.syncVariationCodes(Number(item.wcProductId), payload);
+    this.logger.log(
+      `Sync EAN ${item.refCode}/${item.cor} → WC #${item.wcProductId}: ${res.updated}/${payload.length} atualizadas.`,
+    );
+    return res;
+  }
 }

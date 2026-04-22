@@ -353,14 +353,19 @@ export class WcCatalogService {
       const varSku = `${input.sku}-${tam.tamanho}`;
       const varPayload: any = {
         sku: varSku,
+        // Campo nativo WC 8.3+ — aparece na UI como "GTIN, UPC, EAN ou ISBN"
+        // (é o campo da etiqueta de código de barras).
+        global_unique_id: tam.codigo,
         regular_price: String(tam.preco),
         manage_stock: true,
         stock_quantity: tam.estoque,
         stock_status: tam.estoque > 0 ? 'instock' : 'outofstock',
         attributes: [{ name: 'Tamanho', option: tam.tamanho }],
         meta_data: [
-          // Plugin WooCommerce EAN (common)
+          // Plugin WooCommerce EAN (compat com instalações antigas)
           { key: '_alg_ean', value: tam.codigo },
+          // Plugin Barcode for WC
+          { key: '_barcode', value: tam.codigo },
           // Lurds — rastro pra auditoria
           { key: '_lurds_giga_codigo', value: tam.codigo },
         ],
@@ -393,5 +398,49 @@ export class WcCatalogService {
     }
 
     return { productId, variationIds };
+  }
+
+  /**
+   * Atualiza o EAN/código de barras de variações já existentes no WC.
+   * Útil pra corrigir produtos publicados antes de a gente setar o
+   * global_unique_id no payload de criação.
+   *
+   * Atualiza 3 campos pra cobrir quaisquer plugins EAN/Barcode:
+   *  - global_unique_id (WC nativo 8.3+, aparece como GTIN/UPC/EAN/ISBN)
+   *  - meta_data _alg_ean (plugin WooCommerce EAN)
+   *  - meta_data _barcode (plugin Barcode for WC)
+   */
+  async syncVariationCodes(
+    productId: number,
+    variations: Array<{ variationId: number; codigo: string }>,
+  ): Promise<{ updated: number; failed: Array<{ variationId: number; reason: string }> }> {
+    let updated = 0;
+    const failed: Array<{ variationId: number; reason: string }> = [];
+    for (const v of variations) {
+      if (!v.variationId || !v.codigo) continue;
+      const payload = {
+        global_unique_id: v.codigo,
+        meta_data: [
+          { key: '_alg_ean', value: v.codigo },
+          { key: '_barcode', value: v.codigo },
+          { key: '_lurds_giga_codigo', value: v.codigo },
+        ],
+      };
+      try {
+        await firstValueFrom(
+          this.http.put(
+            `${this.wcBase}/products/${productId}/variations/${v.variationId}`,
+            payload,
+            { auth: this.wcAuth, timeout: 30000 },
+          ),
+        );
+        updated++;
+      } catch (e: any) {
+        const reason = `${e?.response?.status || ''} ${JSON.stringify(e?.response?.data || {}).slice(0, 200)}`;
+        failed.push({ variationId: v.variationId, reason });
+        this.logger.error(`Sync EAN variation #${v.variationId} falhou: ${reason}`);
+      }
+    }
+    return { updated, failed };
   }
 }

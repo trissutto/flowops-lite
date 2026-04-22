@@ -246,4 +246,15 @@ export class SitePublishController {
     this.assertAdmin(req);
     return this.service.publishToWc(id, { force: !!body?.force });
   }
+
+  /**
+   * Re-aplica o código Giga (EAN da etiqueta) em cada variação já criada no
+   * WC. Corrige produtos publicados antes da gente setar o global_unique_id
+   * no payload de criação — evita apagar e re-publicar.
+   */
+  @Post('queue/:id/sync-eans')
+  async syncEans(@Req() req: any, @Param('id') id: string) {
+    this.assertAdmin(req);
+    return this.service.syncEansOnWc(id);
+  }
 }

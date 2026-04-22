@@ -107,6 +107,7 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [aiRunning, setAiRunning] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [syncingEans, setSyncingEans] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [integration, setIntegration] = useState<IntegrationStatus | null>(null);
@@ -495,8 +496,42 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
             {item.status === 'published' && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800 flex items-start gap-2">
                 <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-                <div>
-                  Produto publicado como RASCUNHO no WC (id {item.wcProductId}). Revise no admin e clique em "Publish".
+                <div className="flex-1">
+                  <div>
+                    Produto publicado como RASCUNHO no WC (id {item.wcProductId}). Revise no admin
+                    e clique em "Publish".
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      onClick={async () => {
+                        if (syncingEans) return;
+                        setSyncingEans(true);
+                        try {
+                          const res = await api<{ updated: number; failed: any[] }>(
+                            `/site-publish/queue/${itemId}/sync-eans`,
+                            { method: 'POST', body: JSON.stringify({}) },
+                          );
+                          setToast(
+                            res.failed?.length
+                              ? `EANs: ${res.updated} OK, ${res.failed.length} falhas`
+                              : `✓ ${res.updated} EANs sincronizados no WC`,
+                          );
+                        } catch (e: any) {
+                          setToast(`Erro sync EAN: ${e?.message || e}`);
+                        } finally {
+                          setSyncingEans(false);
+                          setTimeout(() => setToast(null), 5000);
+                        }
+                      }}
+                      disabled={syncingEans}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 text-white rounded text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      {syncingEans ? 'Sincronizando...' : 'Sincronizar EANs no WC'}
+                    </button>
+                    <span className="text-xs text-emerald-700 ml-2">
+                      (preenche o campo GTIN/UPC/EAN das variações com o código Giga)
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
