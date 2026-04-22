@@ -721,6 +721,34 @@ export class OrdersController {
    * Retorna:
    *   { ok, pickOrders: [{id, storeCode, storeName, items}], orderId }
    */
+  /**
+   * RECALCULA a separação de um pedido WC já roteado.
+   *
+   * Quando usar: matriz percebe que a loja roteada não tem estoque (race condition,
+   * peça quebrada, etc.) e quer reatribuir. Diferente do `confirm-separation` que é
+   * idempotente, esse aqui CANCELA pick-orders ativos e cria novos.
+   *
+   * Bloqueio: se algum pick-order já está em separated/ready/shipped, retorna 200
+   * com `ok: false, reason: 'advanced-status'` — a matriz precisa rejeitar manualmente
+   * antes de poder reatribuir.
+   *
+   * Ganho extra: o roteamento agora desconta `committed` (peças prometidas em outros
+   * pick-orders ativos), então não vai realocar pra mesma loja sem estoque.
+   */
+  @Post('wc/:wcId/recalculate-separation')
+  async recalculateSeparation(@Param('wcId') wcId: string) {
+    const wcOrderId = Number(wcId);
+    const local = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      select: { id: true },
+    });
+    if (!local) {
+      // Sem Order local ainda → cai no fluxo normal de criar do zero
+      return this.confirmSeparation(wcId);
+    }
+    return this.routing.recalculateForWc(local.id);
+  }
+
   @Post('wc/:wcId/confirm-separation')
   async confirmSeparation(@Param('wcId') wcId: string) {
     const wcOrderId = Number(wcId);

@@ -190,9 +190,26 @@ export default function PedidoDetailPage() {
         });
       }, 3000);
     };
+    // Recalcular separação cancela pick-order(s) e cria novo(s) — atualiza painel.
+    const onRemoved = () => {
+      // Refetch — o backend pode ter cancelado N e criado M; mais simples re-puxar tudo.
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    };
+    const onNew = () => {
+      // Idem — pick-order novo apareceu (recalcular ou primeira confirmação)
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    };
     socket.on('pick-order:status', onStatus);
+    socket.on('pick-order:removed', onRemoved);
+    socket.on('pick-order:new', onNew);
     return () => {
       socket.off('pick-order:status', onStatus);
+      socket.off('pick-order:removed', onRemoved);
+      socket.off('pick-order:new', onNew);
     };
   }, [wcId]);
 
@@ -285,10 +302,58 @@ export default function PedidoDetailPage() {
     }
   }
 
+  /**
+   * Comportamento dinâmico do botão:
+   *  - SEM pick-order ainda → faz preview (GET prepare-separation)
+   *  - COM pick-order ativo → RECALCULA de verdade (POST recalculate-separation)
+   *    cancela o atual, reroda o routing (já considerando estoque virtual de outros
+   *    pedidos ativos) e cria novo pick-order na loja correta.
+   *  - Se algum pick-order já passou de "separating" → bloqueia com mensagem clara.
+   */
   async function loadSeparation() {
     setSepLoading(true);
     setSepError(null);
+    setConfirmResult(null);
     try {
+      const hasActivePickOrder = liveStatus.some((p) =>
+        ['new', 'separating'].includes(p.status),
+      );
+      if (hasActivePickOrder) {
+        // RECALCULAR DE VERDADE
+        if (!confirm(
+          'Vai cancelar o pick-order atual e rerodar o roteamento. ' +
+          'A loja antiga vai perder o card no app /minha-loja. Confirma?'
+        )) {
+          setSepLoading(false);
+          return;
+        }
+        const res = await api<{
+          ok: boolean;
+          reason?: string;
+          message?: string;
+          cancelledCount?: number;
+          strategy?: string;
+          pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
+        }>(`/orders/wc/${wcId}/recalculate-separation`, { method: 'POST' });
+
+        if (!res.ok) {
+          setSepError(res.message ?? 'Não foi possível recalcular.');
+          setSepLoading(false);
+          return;
+        }
+        setFlash(
+          `✓ Recalculado: ${res.cancelledCount ?? 0} pick-order(s) antigo(s) cancelado(s), ` +
+          `${res.pickOrders?.length ?? 0} novo(s) criado(s) em ${res.pickOrders?.map((p) => p.storeCode).join(', ')}.`,
+        );
+        setTimeout(() => setFlash(null), 5000);
+        // Recarrega painel ao vivo
+        api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+          .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+          .catch(() => {});
+        return;
+      }
+
+      // PRIMEIRA VEZ: só preview pra mostrar grupos antes de confirmar
       const res = await api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`);
       setSeparation(res);
       setOverrides({});

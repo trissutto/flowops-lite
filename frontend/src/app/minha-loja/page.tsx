@@ -326,6 +326,13 @@ export default function MinhaLojaPage() {
       );
     };
 
+    // Matriz cancelou esse pedido pra reatribuir loja → some o card.
+    const onRemoved = (payload: { orderId: string; pickOrderId?: string }) => {
+      if (!payload?.orderId) return;
+      setRows((prev) => prev.filter((r) => r.order?.id !== payload.orderId));
+      pushToast('Matriz reatribuiu este pedido a outra loja.');
+    };
+
     // Impressão remota disparada pela matriz: abre hidden window (Electron)
     // ou janela pop-up (browser) apontando pro cupom com ?autoprint=1.
     // A página de impressão se auto-imprime e se fecha.
@@ -352,6 +359,7 @@ export default function MinhaLojaPage() {
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
     socket.on('pick-order:status', onStatus);
+    socket.on('pick-order:removed', onRemoved);
     socket.on('pick-order:print', onPrintRequest);
     if (socket.connected) setConnected(true);
 
@@ -360,6 +368,7 @@ export default function MinhaLojaPage() {
       socket.off('disconnect', onDisconnect);
       socket.off('pick-order:new', onNew);
       socket.off('pick-order:status', onStatus);
+      socket.off('pick-order:removed', onRemoved);
       socket.off('pick-order:print', onPrintRequest);
     };
   }, [me]);

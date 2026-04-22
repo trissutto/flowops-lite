@@ -369,19 +369,34 @@ export class PickOrdersService {
   }
 
   /**
-   * Matriz aprova a baixa — transiciona `separated` → `ready`.
+   * Matriz aprova a baixa do pick-order.
    *
-   * FASE 1 (SHADOW MODE): grava payload da baixa em integration_logs mas NÃO
-   * toca no Gigasistemas. Operadora continua fazendo baixa manual no PDV SITE.
-   * Comparação diária detecta divergências.
+   * Modos (controlado por env `ERP_WRITE_ENABLED`):
    *
-   * FASE 3 (futuro): substituir o log por call real ao Gigasistemas (INSERT
-   * em movimento_estoque + UPDATE em estoque dentro de transação).
+   *  REAL (ERP_WRITE_ENABLED=true):
+   *    - Chama `erp.decreaseStock(items)` que executa UPDATE estoque em transação.
+   *    - Se falhar (ex: estoque insuficiente, SKU não existe, timeout), bloqueia
+   *      a aprovação e lança BadRequestException — operadora vê o erro e decide.
+   *    - Sucesso → grava log `debit.real.applied` em integration_logs.
+   *
+   *  SHADOW (default):
+   *    - Apenas grava `debit.approved.shadow` em integration_logs.
+   *    - Não toca no Gigasistemas. Operadora ainda precisa passar no PDV manualmente.
+   *
+   * Em ambos os casos, marca `debitApprovedAt` no pick-order. O status logístico
+   * (separated/shipped) fica intacto — baixa é independente do fluxo de envio.
    */
   async approveDebit(pickOrderId: string, operatorUserId: string) {
     const po = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
-      select: { id: true, status: true, storeId: true, orderId: true, debitApprovedAt: true } as any,
+      select: {
+        id: true,
+        status: true,
+        storeId: true,
+        orderId: true,
+        debitApprovedAt: true,
+        store: { select: { code: true, name: true } },
+      } as any,
     });
     if (!po) throw new NotFoundException('Pick-order não encontrado');
     // Aceita aprovar em qualquer status DEPOIS que a loja bipou (separated, ready, shipped).
@@ -401,22 +416,81 @@ export class PickOrdersService {
       select: { sku: true, quantity: true, productName: true },
     });
 
-    // SHADOW: grava intenção de baixa pra auditoria/comparação
-    await this.prisma.integrationLog.create({
-      data: {
-        source: 'pick-order',
-        direction: 'internal',
-        event: 'debit.approved.shadow',
-        payload: JSON.stringify({
-          pickOrderId,
-          approvedBy: operatorUserId,
-          storeId: po.storeId,
-          items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
-          note: 'SHADOW MODE — baixa ainda não é aplicada no Gigasistemas',
-        }),
-        status: 200,
-      },
-    });
+    const storeCode = String(((po as any).store?.code) ?? '').trim();
+    const writeEnabled = this.erp.isWriteEnabled;
+    let realApplied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> | null = null;
+
+    if (writeEnabled) {
+      // Validação: sem código de loja (LJ01/01) não dá pra baixar no Giga
+      if (!storeCode) {
+        throw new BadRequestException(
+          'Loja sem código configurado (store.code vazio) — não é possível baixar no Gigasistemas',
+        );
+      }
+
+      const result = await this.erp.decreaseStock(
+        items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
+      );
+
+      if (!result.success) {
+        // Log de falha pra auditoria (tabela integration_logs)
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'erp',
+            direction: 'out',
+            event: 'debit.real.failed',
+            payload: JSON.stringify({
+              pickOrderId,
+              approvedBy: operatorUserId,
+              storeCode,
+              items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+              error: result.error,
+            }),
+            status: 500,
+            error: result.error?.slice(0, 500),
+          },
+        });
+        throw new BadRequestException(
+          `Falha ao baixar estoque no Gigasistemas: ${result.error ?? 'erro desconhecido'}`,
+        );
+      }
+
+      realApplied = result.applied;
+
+      // Log de sucesso com o antes/depois de cada SKU pra auditoria
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'debit.real.applied',
+          payload: JSON.stringify({
+            pickOrderId,
+            approvedBy: operatorUserId,
+            storeCode,
+            applied: result.applied,
+          }),
+          status: 200,
+        },
+      });
+    } else {
+      // SHADOW: grava intenção de baixa pra auditoria/comparação
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'pick-order',
+          direction: 'internal',
+          event: 'debit.approved.shadow',
+          payload: JSON.stringify({
+            pickOrderId,
+            approvedBy: operatorUserId,
+            storeId: po.storeId,
+            storeCode,
+            items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+            note: 'SHADOW MODE — ERP_WRITE_ENABLED=false. Baixa manual no PDV ainda é necessária.',
+          }),
+          status: 200,
+        },
+      });
+    }
 
     // Só seta o flag de aprovação. NÃO mexe em status logístico.
     const updated = await this.prisma.pickOrder.update({
@@ -431,7 +505,8 @@ export class PickOrdersService {
       id: updated.id,
       status: updated.status,
       debitApprovedAt: (updated as any).debitApprovedAt,
-      shadowMode: true,
+      shadowMode: !writeEnabled,
+      realApplied,
       itemsCount: items.length,
     };
   }
@@ -473,12 +548,14 @@ export class PickOrdersService {
       }
     }
 
-    // Log agregado pro auditoria rápida do batch
+    const writeEnabled = this.erp.isWriteEnabled;
+
+    // Log agregado pro auditoria rápida do batch. Event reflete o modo.
     await this.prisma.integrationLog.create({
       data: {
-        source: 'pick-order',
-        direction: 'internal',
-        event: 'debit.bulk-approved.shadow',
+        source: writeEnabled ? 'erp' : 'pick-order',
+        direction: writeEnabled ? 'out' : 'internal',
+        event: writeEnabled ? 'debit.bulk-approved.real' : 'debit.bulk-approved.shadow',
         payload: JSON.stringify({
           approvedBy: operatorUserId,
           total: ids.length,
@@ -498,7 +575,7 @@ export class PickOrdersService {
       skipped,
       errors,
       total: ids.length,
-      shadowMode: true,
+      shadowMode: !writeEnabled,
     };
   }
 

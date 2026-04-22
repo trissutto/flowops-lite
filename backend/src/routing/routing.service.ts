@@ -27,11 +27,21 @@ export class RoutingService {
   async previewRoute(orderId: string) {
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
-      include: { items: true },
+      include: {
+        items: true,
+        pickOrders: { select: { id: true } }, // pra excluir do `committed` ao recalcular
+      },
     });
     const stores = await this.prisma.store.findMany({ where: { active: true } });
     const skus = order.items.map((i) => i.sku);
-    const stock = await this.stock.getStockFor(skus, stores.map((s) => s.code));
+    const storeCodes = stores.map((s) => s.code);
+    const stock = await this.stock.getStockFor(skus, storeCodes);
+
+    // Estoque comprometido em pick-orders ativos de OUTROS pedidos (exclui o próprio,
+    // pra não descontar a si mesmo se já tinha sido roteado antes — caso de recalcular).
+    const ownPickOrderIds = order.pickOrders.map((p) => p.id);
+    const committed = await this.getCommittedStock(skus, storeCodes, ownPickOrderIds);
+    const liquidStock = this.subtractCommitted(stock, committed);
 
     const result = this.engine.route({
       items: order.items.map((i) => ({ sku: i.sku, quantity: i.quantity })),
@@ -43,7 +53,7 @@ export class RoutingService {
         priorityScore: s.priorityScore,
         active: s.active,
       })),
-      stock,
+      stock: liquidStock,
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
     });
@@ -218,6 +228,231 @@ export class RoutingService {
   }
 
   /**
+   * RECALCULA a separação de um pedido já roteado.
+   *
+   * Por que existe: o `confirmSeparation` é idempotente (se já tem pick-order, retorna ele).
+   * Quando a matriz quer reatribuir loja (ex: estoque sumiu, peça quebrada, loja offline),
+   * precisamos:
+   *   1. Cancelar pick-orders ATIVOS (status new/separating) — não mexe em separated/ready/shipped
+   *   2. Limpar assignedStoreId dos items
+   *   3. Rerodar routing (já considera estoque virtual de OUTROS pedidos)
+   *   4. Criar novos pick-orders + emitir socket pras lojas
+   *
+   * Se o pick-order já estiver em `separated`/`ready`/`shipped` (loja já bipou ou
+   * postou), bloqueia recalcular — não dá pra reatribuir uma peça que já saiu.
+   *
+   * Retorna { ok, cancelledCount, ... } ou { ok: false, reason }.
+   */
+  async recalculateForWc(orderId: string) {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: {
+        pickOrders: { select: { id: true, status: true, storeId: true } },
+      },
+    });
+
+    // Bloqueio: tem pick-order que já passou de "ativo"
+    const advanced = order.pickOrders.filter(
+      (p) => !['new', 'separating'].includes(p.status),
+    );
+    if (advanced.length > 0) {
+      return {
+        ok: false as const,
+        reason: 'advanced-status',
+        message:
+          `Não dá pra recalcular: ${advanced.length} pick-order(s) já passaram de "separando" ` +
+          `(status: ${[...new Set(advanced.map((a) => a.status))].join(', ')}). ` +
+          `Cancele/rejeite manualmente antes de reatribuir.`,
+      };
+    }
+
+    const cancellableIds = order.pickOrders
+      .filter((p) => ['new', 'separating'].includes(p.status))
+      .map((p) => p.id);
+
+    // Notifica lojas afetadas pra retirar o card do app /minha-loja
+    const oldStoreIds = [...new Set(order.pickOrders.map((p) => p.storeId))];
+
+    // 1) Cancela pick-orders + limpa assignedStoreId + volta order pra pending
+    await this.prisma.$transaction(async (tx) => {
+      if (cancellableIds.length > 0) {
+        await tx.pickOrder.deleteMany({ where: { id: { in: cancellableIds } } });
+      }
+      await tx.orderItem.updateMany({
+        where: { orderId },
+        data: { assignedStoreId: null },
+      });
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: OrderStatus.pending, routingResult: null },
+      });
+      await tx.orderHistory.create({
+        data: {
+          orderId,
+          fromStatus: OrderStatus.separating,
+          toStatus: OrderStatus.pending,
+          note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir.`,
+        },
+      });
+    });
+
+    // 2) Emite socket pras lojas antigas pra remover o card
+    for (const storeId of oldStoreIds) {
+      try {
+        this.gateway.emitPickOrderRemoved?.(storeId, { orderId });
+      } catch (err: any) {
+        this.logger.warn(`Falha ao emitir remoção de pick-order: ${err?.message ?? err}`);
+      }
+    }
+
+    // 3) Roda routing fresco (já considera commited de OUTROS pedidos)
+    const preview = await this.previewRoute(orderId);
+
+    if (!preview.success) {
+      return {
+        ok: false as const,
+        reason: 'sem-estoque',
+        message:
+          'Recalculei e nenhuma loja tem estoque suficiente agora. ' +
+          'O pedido voltou pra pending — verifique estoque ou divida manualmente.',
+        missing: preview.missing,
+        cancelledCount: cancellableIds.length,
+      };
+    }
+
+    // 4) Confirma → cria novos pick-orders + emite socket pras lojas novas
+    await this.confirmRoute(orderId, preview as any);
+
+    const newPickOrders = await this.prisma.pickOrder.findMany({
+      where: { orderId },
+      include: { store: { select: { code: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      ok: true as const,
+      cancelledCount: cancellableIds.length,
+      strategy: preview.strategy,
+      pickOrders: newPickOrders.map((p) => ({
+        id: p.id,
+        status: p.status,
+        storeCode: p.store.code,
+        storeName: p.store.name,
+      })),
+    };
+  }
+
+  /**
+   * ESTOQUE COMPROMETIDO em pick-orders ATIVOS (status new/separating/separated).
+   *
+   * Pra cada (storeCode, sku), retorna a soma de quantidades já alocadas em
+   * pick-orders que ainda NÃO foram baixados (separated ainda aguarda matriz aprovar).
+   * Quando pick-order vai pra `ready` (após approve-debit) ou `shipped`, o estoque já
+   * caiu no Giga (ou cai logo, se ERP_WRITE_ENABLED), então não conta mais.
+   *
+   * `excludePickOrderIds` permite ignorar pick-orders do próprio pedido sendo recalculado
+   * (pra não descontar a si mesmo do estoque disponível).
+   *
+   * RETORNO: Map com chave `${storeCode}::${sku}` → qty comprometida
+   */
+  async getCommittedStock(
+    skus: string[],
+    storeCodes: string[],
+    excludePickOrderIds: string[] = [],
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!skus.length || !storeCodes.length) return out;
+
+    // Map storeId → storeCode (engine trabalha com storeCode mas FK é storeId)
+    const stores = await this.prisma.store.findMany({
+      where: { code: { in: storeCodes } },
+      select: { id: true, code: true },
+    });
+    const codeByStoreId = new Map(stores.map((s) => [s.id, s.code]));
+    const storeIds = stores.map((s) => s.id);
+    if (storeIds.length === 0) return out;
+
+    // Pick-orders ATIVOS (não enviados / não baixados)
+    const activePickOrders = await this.prisma.pickOrder.findMany({
+      where: {
+        storeId: { in: storeIds },
+        status: { in: ['new', 'separating', 'separated'] },
+        ...(excludePickOrderIds.length > 0 ? { id: { notIn: excludePickOrderIds } } : {}),
+      },
+      select: { id: true, orderId: true, storeId: true },
+    });
+    if (activePickOrders.length === 0) return out;
+
+    const orderIds = [...new Set(activePickOrders.map((p) => p.orderId))];
+
+    // Items desses pedidos com SKU dentro do conjunto pedido
+    const items = await this.prisma.orderItem.findMany({
+      where: {
+        orderId: { in: orderIds },
+        sku: { in: skus },
+      },
+      select: { orderId: true, sku: true, quantity: true, assignedStoreId: true },
+    });
+
+    // Agrupa por (storeCode, sku):
+    //   - se item tem assignedStoreId → usa esse (split pode ter ido pra outra loja)
+    //   - senão, usa storeId do pick-order daquele orderId (fallback)
+    const pickStoreByOrderId = new Map<string, string>();
+    for (const po of activePickOrders) {
+      // Quando o pedido está em múltiplas lojas, mantemos o último (ou primeiro), o
+      // ramo abaixo só é usado quando assignedStoreId está null — e nesse caso o pedido
+      // não foi splitado (1 loja só), então qualquer pick-order serve.
+      pickStoreByOrderId.set(po.orderId, po.storeId);
+    }
+
+    for (const it of items) {
+      const targetStoreId = it.assignedStoreId ?? pickStoreByOrderId.get(it.orderId) ?? null;
+      if (!targetStoreId) continue;
+      const code = codeByStoreId.get(targetStoreId);
+      if (!code) continue;
+      const key = `${code}::${it.sku}`;
+      out.set(key, (out.get(key) ?? 0) + it.quantity);
+    }
+
+    return out;
+  }
+
+  /**
+   * Aplica `committed` num array de StockEntry, retornando estoque LÍQUIDO (real - reservado).
+   * Linhas que ficariam com qty <= 0 são removidas pra não confundir o engine.
+   */
+  private subtractCommitted(
+    stockEntries: StockEntry[],
+    committed: Map<string, number>,
+  ): StockEntry[] {
+    if (committed.size === 0) return stockEntries;
+    const out: StockEntry[] = [];
+    for (const e of stockEntries) {
+      const reserved = committed.get(`${e.storeCode}::${e.sku}`) ?? 0;
+      const liquid = e.availableQty - reserved;
+      if (liquid > 0) out.push({ ...e, availableQty: liquid });
+    }
+    return out;
+  }
+
+  /**
+   * Pick-orders ATIVOS do pedido WC informado (pode não existir Order local ainda → []).
+   * Usado pra excluir o próprio pedido do `committed` ao rodar preview/recalcular.
+   */
+  private async findOwnPickOrderIdsForWc(wcOrderId: number): Promise<string[]> {
+    const order = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      select: {
+        pickOrders: {
+          where: { status: { in: ['new', 'separating', 'separated'] } },
+          select: { id: true },
+        },
+      },
+    });
+    return order?.pickOrders.map((p) => p.id) ?? [];
+  }
+
+  /**
    * Preview de separação para um pedido que veio direto do WooCommerce
    * (sem passar pelo banco local). Usa a mesma engine: tenta 1 loja só,
    * se não der, divide entre múltiplas lojas.
@@ -269,6 +504,14 @@ export class RoutingService {
     const storeCodes = stores.map((s) => s.code);
     const stockEntries = await this.stock.getStockFor(skus, storeCodes);
 
+    // Estoque comprometido em pick-orders ativos de OUTROS pedidos (mesma engine
+    // do previewRoute pra evitar prometer a mesma peça duas vezes). Quando esse
+    // preview é pra recalcular um pedido WC já roteado, descontamos os pick-orders
+    // do próprio (vão ser cancelados/recriados pelo recalcular).
+    const ownPickOrderIds = await this.findOwnPickOrderIdsForWc(input.wcOrderId);
+    const committed = await this.getCommittedStock(skus, storeCodes, ownPickOrderIds);
+    const liquidStock = this.subtractCommitted(stockEntries, committed);
+
     const result = this.engine.route({
       items: validItems.map((i) => ({ sku: i.sku, quantity: i.quantity })),
       stores: stores.map((s) => ({
@@ -279,7 +522,7 @@ export class RoutingService {
         priorityScore: s.priorityScore,
         active: s.active,
       })),
-      stock: stockEntries,
+      stock: liquidStock,
       shippingCep: input.address.postcode ?? undefined,
       pickupStoreCode: input.pickupStoreCode ?? null,
     });
@@ -421,10 +664,25 @@ export class RoutingService {
     }
     const stockEntries = await this.stock.getStockFor([...allSkus], storeCodes);
 
-    // 2) stockMap (storeCode+sku → qty) mutável — decrementa a cada alocação
+    // Estoque comprometido em pick-orders ativos de pedidos FORA da batelada (excluindo
+    // os pick-orders dos próprios pedidos WC sendo recalculados, se existirem).
+    const ownPickOrderIdsArr = await Promise.all(
+      orders.map((o) => this.findOwnPickOrderIdsForWc(o.wcOrderId)),
+    );
+    const ownPickOrderIds = ownPickOrderIdsArr.flat();
+    const committedExternal = await this.getCommittedStock(
+      [...allSkus],
+      storeCodes,
+      ownPickOrderIds,
+    );
+
+    // 2) stockMap (storeCode+sku → qty) mutável — decrementa a cada alocação INTERNA
+    //    da batelada. O baseline JÁ vem reduzido pelo committed externo.
     const stockMap = new Map<string, number>();
     for (const e of stockEntries) {
-      stockMap.set(`${e.storeCode}::${e.sku}`, e.availableQty);
+      const reserved = committedExternal.get(`${e.storeCode}::${e.sku}`) ?? 0;
+      const liquid = Math.max(0, e.availableQty - reserved);
+      stockMap.set(`${e.storeCode}::${e.sku}`, liquid);
     }
     const getStock = (storeCode: string, sku: string) =>
       stockMap.get(`${storeCode}::${sku}`) ?? 0;

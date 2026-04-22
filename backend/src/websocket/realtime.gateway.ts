@@ -134,6 +134,15 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   /**
+   * Pick-order foi removido (matriz cancelou pra reatribuir loja).
+   * Loja remove o card do app /minha-loja. Admin atualiza /pedidos.
+   */
+  emitPickOrderRemoved(storeId: string, payload: { orderId: string; pickOrderId?: string }) {
+    this.server.to(`store:${storeId}`).emit('pick-order:removed', payload);
+    this.server.to('admin').emit('pick-order:removed', payload);
+  }
+
+  /**
    * Dispara comando de impressão remota pro Electron da loja.
    * /minha-loja escuta esse evento e abre a tela imprimir/[id]?autoprint=1 que
    * chama window.electronAPI.silentPrintHTML e fecha sozinha.

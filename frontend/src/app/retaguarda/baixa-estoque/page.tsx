@@ -7,12 +7,14 @@
  * Fluxo:
  *   filial bipa 100% → status `separated` → aparece aqui
  *   operadora matriz revisa itens + dados da cliente
- *   → clica "Dar baixa (SHADOW)" → grava flag + log
+ *   → clica "Dar baixa" → backend executa modo (SHADOW ou LIVE)
  *   → pode revisar 1 por 1 OU selecionar vários e dar baixa em massa
  *
- * MODO SHADOW: backend apenas loga a intenção de baixa em integration_logs.
- * NÃO toca no Gigasistemas ainda. Operadora continua fazendo baixa manual no PDV SITE.
- * Quando a comparação (log × PDV) estiver estável por 2+ semanas, plugamos a call real.
+ * MODO dinâmico — controlado pelo backend (env var ERP_WRITE_ENABLED):
+ *   SHADOW → só loga intenção em integration_logs (NÃO toca no Gigasistemas)
+ *   LIVE   → UPDATE estoque -1 no Gigasistemas dentro de transação ACID
+ *
+ * Frontend pergunta `/pick-orders/erp-mode` no load e ajusta banner/botões/modal.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -74,6 +76,9 @@ export default function BaixaEstoquePage() {
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
 
+  // Modo do ERP (shadow vs live) — descoberto em runtime
+  const [writeEnabled, setWriteEnabled] = useState<boolean | null>(null);
+
   const load = useCallback(async () => {
     try {
       setError(null);
@@ -96,6 +101,13 @@ export default function BaixaEstoquePage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Descobre modo do ERP — só faz uma vez (env não muda em runtime)
+  useEffect(() => {
+    api<{ writeEnabled: boolean }>('/pick-orders/erp-mode')
+      .then((r) => setWriteEnabled(!!r.writeEnabled))
+      .catch(() => setWriteEnabled(false)); // fallback conservador: assume shadow
+  }, []);
 
   // Socket: sempre que qualquer pick-order muda status, recarrega a fila
   useEffect(() => {
@@ -247,18 +259,32 @@ export default function BaixaEstoquePage() {
         </button>
       </div>
 
-      {/* Banner shadow mode — critico não esconder */}
-      <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded mb-4">
-        <div className="flex gap-3">
-          <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={22} />
-          <div className="text-sm text-amber-900">
-            <strong>Modo Shadow ativo.</strong> Ao aprovar, o sistema apenas registra a intenção
-            de baixa em log de auditoria — <strong>não</strong> baixa no Gigasistemas ainda.
-            Continue fazendo a venda no PDV SITE como de costume. Quando a comparação
-            (log × PDV) estiver consistente, ativamos a baixa automática.
+      {/* Banner do modo — muda com base em /pick-orders/erp-mode */}
+      {writeEnabled === true ? (
+        <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded mb-4">
+          <div className="flex gap-3">
+            <Zap className="text-emerald-600 flex-shrink-0 mt-0.5" size={22} />
+            <div className="text-sm text-emerald-900">
+              <strong>Modo LIVE ativo.</strong> Ao aprovar, o sistema baixa o estoque
+              <strong> direto no Gigasistemas</strong> (UPDATE estoque -1 por SKU).
+              <strong> Não passe esses pedidos no PDV SITE</strong> — vai dar baixa duplicada.
+              Cada baixa é gravada em log de auditoria com estoque antes/depois.
+            </div>
           </div>
         </div>
-      </div>
+      ) : writeEnabled === false ? (
+        <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded mb-4">
+          <div className="flex gap-3">
+            <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={22} />
+            <div className="text-sm text-amber-900">
+              <strong>Modo Shadow ativo.</strong> Ao aprovar, o sistema apenas registra a intenção
+              de baixa em log de auditoria — <strong>não</strong> baixa no Gigasistemas ainda.
+              Continue fazendo a venda no PDV SITE como de costume. Quando a comparação
+              (log × PDV) estiver consistente, ativamos a baixa automática.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* KPIs */}
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -550,7 +576,15 @@ export default function BaixaEstoquePage() {
                 </section>
               )}
 
-              {action === 'approve' && (
+              {action === 'approve' && writeEnabled === true && (
+                <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-sm text-emerald-900">
+                  <strong>Modo LIVE:</strong> ao confirmar, o sistema vai aplicar
+                  <strong> UPDATE estoque -1</strong> direto no Gigasistemas, dentro de
+                  uma transação ACID. Se algum SKU ficar com estoque negativo, a operação
+                  inteira é abortada (rollback). <strong>Não passe esse pedido no PDV SITE.</strong>
+                </div>
+              )}
+              {action === 'approve' && writeEnabled === false && (
                 <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
                   <strong>Shadow mode:</strong> clicar em confirmar só registra a intenção
                   em log e libera a loja pra postar. Baixa no Gigasistemas continua manual
@@ -580,7 +614,9 @@ export default function BaixaEstoquePage() {
                 {submitting
                   ? 'Processando…'
                   : action === 'approve'
-                  ? 'Confirmar baixa (Shadow)'
+                  ? writeEnabled
+                    ? 'Confirmar baixa REAL no Giga'
+                    : 'Confirmar baixa (Shadow)'
                   : 'Confirmar rejeição'}
               </button>
             </div>
@@ -618,11 +654,21 @@ export default function BaixaEstoquePage() {
             <div className="p-4 space-y-4">
               {!bulkResult && (
                 <>
-                  <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
-                    <strong>Shadow mode:</strong> vai gravar a intenção de baixa dos{' '}
-                    <strong>{selectedCount}</strong> pedidos em log e liberar as lojas pra postar.{' '}
-                    <strong>Nenhum estoque é baixado no Gigasistemas.</strong>
-                  </div>
+                  {writeEnabled === true ? (
+                    <div className="bg-emerald-50 border border-emerald-300 rounded p-3 text-sm text-emerald-900">
+                      <strong>Modo LIVE:</strong> vai aplicar <strong>UPDATE estoque -1</strong>{' '}
+                      direto no Gigasistemas pra cada SKU dos{' '}
+                      <strong>{selectedCount}</strong> pedidos. Cada pedido roda em transação
+                      própria (se um falhar, os outros seguem). <strong>Não passe esses pedidos
+                      no PDV SITE</strong> — vai dar baixa duplicada.
+                    </div>
+                  ) : (
+                    <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-900">
+                      <strong>Shadow mode:</strong> vai gravar a intenção de baixa dos{' '}
+                      <strong>{selectedCount}</strong> pedidos em log e liberar as lojas pra postar.{' '}
+                      <strong>Nenhum estoque é baixado no Gigasistemas.</strong>
+                    </div>
+                  )}
 
                   <div>
                     <h3 className="text-sm font-semibold text-gray-700 mb-2">
@@ -735,6 +781,8 @@ export default function BaixaEstoquePage() {
                     <Zap size={16} />
                     {bulkSubmitting
                       ? `Aprovando ${selectedCount}…`
+                      : writeEnabled
+                      ? `Baixar REAL ${selectedCount} pedidos no Giga`
                       : `Confirmar baixa de ${selectedCount} pedidos (Shadow)`}
                   </button>
                 </>

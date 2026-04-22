@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PickOrdersService, PickStatus } from './pick-orders.service';
+import { ErpService } from '../erp/erp.service';
 
 interface AuthUser {
   userId: string;
@@ -14,7 +15,25 @@ interface AuthUser {
 @Controller('pick-orders')
 @UseGuards(JwtAuthGuard)
 export class PickOrdersController {
-  constructor(private readonly svc: PickOrdersService) {}
+  constructor(
+    private readonly svc: PickOrdersService,
+    private readonly erp: ErpService,
+  ) {}
+
+  /**
+   * Retorna o modo atual de escrita no ERP (Gigasistemas).
+   * - writeEnabled=false → SHADOW (só log, não toca no estoque)
+   * - writeEnabled=true  → LIVE (UPDATE real em estoque)
+   * Frontend usa pra trocar banner/cor/copy do modal de confirmação.
+   */
+  @Get('erp-mode')
+  erpMode(@Req() req: any) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz acessa essa rota');
+    }
+    return { writeEnabled: this.erp.isWriteEnabled };
+  }
 
   /**
    * TESTE: força a criação de um pick-order pra uma loja específica, sem passar pelo

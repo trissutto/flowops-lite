@@ -5,7 +5,12 @@ import { StockEntry } from '../routing/types';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
- * SOMENTE LEITURA. Usa pool de 5 conexões para proteger o banco do ERP.
+ *
+ * LEITURA: sempre habilitada.
+ * ESCRITA (baixa de estoque): controlada pelo env var ERP_WRITE_ENABLED='true'.
+ *   Quando OFF (default), qualquer chamada a `decreaseStock` retorna erro
+ *   sem tocar no MySQL — sistema fica em SHADOW MODE.
+ *   Quando ON, o UPDATE acontece em transação ACID com rollback em falha.
  *
  * Schema real (confirmado via inspect-erp):
  *   tabela `estoque`  (266k registros — estoque consolidado)
@@ -57,6 +62,127 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy() {
     if (this.pool) await this.pool.end();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BAIXA DE ESTOQUE (WRITE) — controlado por env var ERP_WRITE_ENABLED.
+  //
+  // Kill-switch rápido: setar ERP_WRITE_ENABLED=false no Railway e dar
+  // redeploy (ou restart) volta o sistema pro shadow mode sem mudar código.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** Retorna true se o env var ERP_WRITE_ENABLED='true' (case-insensitive). */
+  get isWriteEnabled(): boolean {
+    const v = String(this.config.get('ERP_WRITE_ENABLED') ?? '').trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
+  }
+
+  /**
+   * Baixa estoque no Gigasistemas — executa UPDATE em `estoque` dentro de
+   * uma transação MySQL. Todos os itens caem ou nada cai (ACID).
+   *
+   * Regras:
+   *  - ERP_WRITE_ENABLED precisa ser 'true'. Senão retorna erro sem tocar no DB.
+   *  - Cada item: SELECT FOR UPDATE (pra travar linha durante a transação)
+   *    → checa se existe → checa se não fica negativo → UPDATE.
+   *  - Se qualquer item falhar, rollback da transação inteira.
+   *  - Sempre retorna { success, applied, error? } — nunca lança exception
+   *    (pra quem chama poder logar e decidir sem try/catch).
+   *
+   * O `storeCode` deve estar padronizado no formato Giga: 2 dígitos (01..20).
+   * A função normaliza strings tipo "LJ01" → "01" automaticamente.
+   */
+  async decreaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+  }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, applied: [], error: 'Pool ERP não inicializado' };
+    }
+    if (!items.length) {
+      return { success: true, applied: [] };
+    }
+
+    // Normaliza storeCode: "LJ01" ou "1" → "01"
+    const normalizeStoreCode = (raw: string): string => {
+      const s = String(raw || '').trim().toUpperCase().replace(/^LJ/i, '');
+      const n = parseInt(s, 10);
+      if (Number.isNaN(n) || n < 1 || n > 99) return s; // devolve cru se não for número
+      return String(n).padStart(2, '0');
+    };
+
+    const conn = await this.pool.getConnection();
+    const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
+
+    try {
+      await conn.beginTransaction();
+
+      for (const it of items) {
+        const sku = String(it.sku || '').trim();
+        const storeCode = normalizeStoreCode(it.storeCode);
+        const qty = Math.max(1, Number(it.qty) || 1);
+
+        if (!sku || !storeCode) {
+          throw new Error(`Item inválido: sku='${sku}' storeCode='${storeCode}'`);
+        }
+
+        // SELECT FOR UPDATE — trava a linha durante a transação pra evitar
+        // que outra conexão (ex: PDV do Giga) leia valor desatualizado.
+        const [beforeRows] = await conn.query<mysql.RowDataPacket[]>(
+          `SELECT ESTOQUE FROM estoque WHERE CODIGO = ? AND LOJA = ? LIMIT 1 FOR UPDATE`,
+          [sku, storeCode],
+        );
+
+        if (!beforeRows.length) {
+          throw new Error(`Registro não encontrado em estoque: SKU=${sku} LOJA=${storeCode}`);
+        }
+
+        const previousStock = Number(beforeRows[0].ESTOQUE) || 0;
+        const newStock = previousStock - qty;
+
+        // BLOQUEIO DURO: não deixar estoque negativo. Se acontecer, abortar a
+        // transação inteira — operadora vê o erro e investiga (provavelmente
+        // divergência com o físico).
+        if (newStock < 0) {
+          throw new Error(
+            `Estoque insuficiente: SKU=${sku} LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
+          );
+        }
+
+        const [result]: any = await conn.query(
+          `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
+          [newStock, sku, storeCode],
+        );
+
+        if (!result || result.affectedRows !== 1) {
+          throw new Error(
+            `UPDATE não afetou linha esperada: SKU=${sku} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
+          );
+        }
+
+        applied.push({ sku, storeCode, qty, previousStock, newStock });
+      }
+
+      await conn.commit();
+      this.logger.log(
+        `ERP baixa OK: ${applied.length} item(ns) baixado(s). ` +
+          applied.map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', '),
+      );
+      return { success: true, applied };
+    } catch (e: any) {
+      try { await conn.rollback(); } catch { /* ignore */ }
+      const msg = String(e?.message || e);
+      this.logger.error(`ERP baixa FALHOU (rollback): ${msg}`);
+      return { success: false, applied: [], error: msg };
+    } finally {
+      conn.release();
+    }
   }
 
   /**
