@@ -46,6 +46,43 @@ function emitConnection(ev: ConnectionEvent) {
   window.dispatchEvent(new CustomEvent<ConnectionEvent>('flowops:connection', { detail: ev }));
 }
 
+/**
+ * Flag pra não disparar múltiplos alertas/redirect quando várias chamadas
+ * paralelas em um bulk recebem 401 ao mesmo tempo.
+ */
+let unauthorizedHandled = false;
+
+function handleUnauthorized() {
+  if (typeof window === 'undefined') return;
+  if (unauthorizedHandled) return;
+  unauthorizedHandled = true;
+
+  try {
+    localStorage.removeItem('flowops_token');
+  } catch {}
+
+  // Dispara evento pra qualquer listener (ex.: layout) e também mostra alert
+  // crú como fallback, garantindo que o user SEMPRE veja que a sessão caiu.
+  window.dispatchEvent(new CustomEvent('flowops:unauthorized'));
+
+  // Avisa o user na hora e redireciona pra login mantendo a rota atual
+  // pra voltar depois do login. setTimeout pra não bloquear o throw da chamada.
+  setTimeout(() => {
+    const here =
+      window.location.pathname + window.location.search + window.location.hash;
+    alert(
+      'Sua sessão expirou.\n\n' +
+        'Algumas operações em lote podem ter sido interrompidas. ' +
+        'Você vai ser redirecionado pro login — ao voltar, confira o que foi processado ' +
+        'antes de reprocessar.',
+    );
+    const target = here && here !== '/login'
+      ? `/login?redirect=${encodeURIComponent(here)}`
+      : '/login';
+    window.location.href = target;
+  }, 50);
+}
+
 export async function api<T = any>(
   path: string,
   opts: RequestInit = {},
@@ -62,6 +99,12 @@ export async function api<T = any>(
     });
     if (!res.ok) {
       const msg = await res.text();
+      // 401 = sessão expirou → força logout com alerta (1x só, mesmo em paralelo)
+      // Isola o endpoint /auth/me pois ele é usado pelo ping de heartbeat e
+      // não queremos disparar alerta em ping silencioso.
+      if (res.status === 401 && !path.startsWith('/auth/me')) {
+        handleUnauthorized();
+      }
       // 5xx = servidor com problema → marca offline pra UI reagir
       if (res.status >= 500) emitConnection({ status: 'offline', detail: `HTTP ${res.status}` });
       throw new Error(`${res.status}: ${msg}`);

@@ -13,7 +13,9 @@ import { PrismaModule } from '../prisma/prisma.module';
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => ({
         secret: cfg.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: cfg.get<string>('JWT_ACCESS_TTL') ?? '15m' },
+        // TTL default 12h — bulks longos de separação (40+ pedidos) estouravam
+        // o antigo 15m no meio da operação. Sessão de 12h cobre um dia operacional.
+        signOptions: { expiresIn: cfg.get<string>('JWT_ACCESS_TTL') ?? '12h' },
       }),
     }),
   ],
