@@ -657,15 +657,127 @@ export default function PedidoDetailPage() {
             className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-sm disabled:opacity-50 flex items-center gap-2"
           >
             {sepLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            {separation ? 'Recalcular separação' : 'Gerar separação'}
+            {separation ? 'Recalcular separação' : liveStatus.length > 0 ? 'Recalcular separação' : 'Gerar separação'}
           </button>
         </div>
+
+        {/* Header de resumo — aparece SEMPRE que já houver pick-order criado, mesmo
+             que o user não tenha clicado em "Gerar separação" nessa aba (ex: chegou
+             via bulk WhatsApp). Mostra em qual loja o pedido ficou alocado. */}
+        {liveStatus.length > 0 && !separation && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded p-3 mb-3 text-sm">
+            <div className="flex items-start gap-2">
+              <Check className="w-4 h-4 text-emerald-700 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold text-emerald-900">
+                  Separação já criada — {liveStatus.length} loja{liveStatus.length === 1 ? '' : 's'} responsável{liveStatus.length === 1 ? '' : 'is'}
+                </div>
+                <div className="text-emerald-800 text-xs mt-0.5">
+                  {liveStatus.map((r) => `${r.storeName} (${r.storeCode})`).join(' · ')}
+                </div>
+                <div className="text-emerald-700 text-xs mt-1">
+                  Veja status em tempo real abaixo. Clica em <b>Recalcular separação</b> só se quiser reatribuir (ex: loja original sem estoque).
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {sepError && (
           <div className="bg-red-50 text-red-700 p-3 rounded text-sm mb-3">{sepError}</div>
         )}
 
-        {!separation && !sepLoading && !sepError && (
+        {/* Painel Status AO VIVO — SEMPRE visível quando existem pick-orders, indepen-
+             dente de o user ter gerado preview na aba atual. Atualiza em tempo real
+             via socket 'pick-order:status'. Fonte de verdade única: matriz sempre sabe
+             em qual loja o pedido caiu. */}
+        {liveStatus.length > 0 && (
+          <div className="bg-slate-50 border border-slate-200 rounded p-3 mb-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
+              <Zap className="w-4 h-4 text-emerald-500" />
+              Status ao vivo das lojas
+              <span className="text-xs text-slate-500 font-normal ml-auto">
+                atualiza automático
+              </span>
+            </div>
+            <div className="space-y-2">
+              {liveStatus.map((r) => {
+                const flash = !!liveStatusFlash[r.id];
+                const badgeColor =
+                  r.status === 'shipped' ? 'bg-emerald-600 text-white'
+                  : r.status === 'ready' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                  : 'bg-amber-100 text-amber-900 border border-amber-300';
+                const label =
+                  r.status === 'shipped' ? 'Enviado'
+                  : r.status === 'ready' ? 'Pronto pra envio'
+                  : r.status === 'separating' ? 'Separando'
+                  : 'Aguardando iniciar';
+                const st = printState[r.id] ?? 'idle';
+                const err = printError[r.id];
+                return (
+                  <div
+                    key={r.id}
+                    className={`bg-white rounded border p-2 text-sm transition-colors ${
+                      flash ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StoreIcon className="w-4 h-4 text-slate-500" />
+                      <span className="font-semibold">{r.storeName}</span>
+                      <span className="text-xs text-slate-500">({r.storeCode})</span>
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
+                        {label}
+                      </span>
+                      {flash && (
+                        <span className="text-xs text-emerald-600 font-semibold animate-pulse">
+                          ✓ atualizado agora
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => sendPrintRemote(r.id, r.storeName || '')}
+                        disabled={st === 'sending'}
+                        className={`ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-xs border ${
+                          st === 'sent'
+                            ? 'bg-emerald-600 text-white border-emerald-700'
+                            : st === 'error'
+                            ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                            : st === 'sending'
+                            ? 'bg-gray-100 text-gray-500 border-gray-300 cursor-wait'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                        }`}
+                        title="Imprimir na térmica da loja"
+                      >
+                        {st === 'sending' && '…'}
+                        {st === 'sent' && '✓ Impresso'}
+                        {st === 'error' && '⚠ Reimprimir'}
+                        {st === 'idle' && '🖨️ Imprimir'}
+                      </button>
+                    </div>
+                    {r.status === 'shipped' && r.trackingCode && (
+                      <div className="mt-1 pl-6 text-xs text-slate-700">
+                        <Truck className="w-3 h-3 inline mr-1" />
+                        <span className="font-mono font-semibold">{r.trackingCode}</span>
+                        {r.carrier && <span className="text-slate-500 ml-2">via {r.carrier}</span>}
+                      </div>
+                    )}
+                    {!!r.updatedAt && (
+                      <div className="pl-6 text-xs text-slate-400 mt-0.5">
+                        Última atualização: {new Date(r.updatedAt).toLocaleString('pt-BR')}
+                      </div>
+                    )}
+                    {st === 'error' && err && (
+                      <div className="mt-1 pl-6 text-xs text-red-700">{err}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {!separation && !sepLoading && !sepError && liveStatus.length === 0 && (
           <p className="text-sm text-slate-500">
             Clica em <b>Gerar separação</b> pra o sistema consultar o estoque de cada loja
             e sugerir quem vai separar o pedido.
@@ -799,69 +911,6 @@ export default function PedidoDetailPage() {
             {confirmResult && !confirmResult.ok && (
               <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-sm text-red-700">
                 <b>Não foi possível confirmar:</b> {confirmResult.message}
-              </div>
-            )}
-
-            {/* Painel Status AO VIVO — matriz vê o que cada loja está fazendo.
-                 Atualiza em tempo real via socket 'pick-order:status'. */}
-            {liveStatus.length > 0 && (
-              <div className="bg-slate-50 border border-slate-200 rounded p-3 mb-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
-                  <Zap className="w-4 h-4 text-emerald-500" />
-                  Status ao vivo das lojas
-                  <span className="text-xs text-slate-500 font-normal ml-auto">
-                    atualiza automático
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {liveStatus.map((r) => {
-                    const flash = !!liveStatusFlash[r.id];
-                    const badgeColor =
-                      r.status === 'shipped' ? 'bg-emerald-600 text-white'
-                      : r.status === 'ready' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                      : 'bg-amber-100 text-amber-900 border border-amber-300';
-                    const label =
-                      r.status === 'shipped' ? 'Enviado'
-                      : r.status === 'ready' ? 'Pronto pra envio'
-                      : r.status === 'separating' ? 'Separando'
-                      : 'Aguardando iniciar';
-                    return (
-                      <div
-                        key={r.id}
-                        className={`bg-white rounded border p-2 text-sm transition-colors ${
-                          flash ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <StoreIcon className="w-4 h-4 text-slate-500" />
-                          <span className="font-semibold">{r.storeName}</span>
-                          <span className="text-xs text-slate-500">({r.storeCode})</span>
-                          <span className={`text-xs px-2 py-0.5 rounded font-medium ${badgeColor}`}>
-                            {label}
-                          </span>
-                          {flash && (
-                            <span className="text-xs text-emerald-600 font-semibold animate-pulse">
-                              ✓ atualizado agora
-                            </span>
-                          )}
-                        </div>
-                        {r.status === 'shipped' && r.trackingCode && (
-                          <div className="mt-1 pl-6 text-xs text-slate-700">
-                            <Truck className="w-3 h-3 inline mr-1" />
-                            <span className="font-mono font-semibold">{r.trackingCode}</span>
-                            {r.carrier && <span className="text-slate-500 ml-2">via {r.carrier}</span>}
-                          </div>
-                        )}
-                        {!!r.updatedAt && (
-                          <div className="pl-6 text-xs text-slate-400 mt-0.5">
-                            Última atualização: {new Date(r.updatedAt).toLocaleString('pt-BR')}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
             )}
 

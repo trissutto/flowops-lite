@@ -161,6 +161,13 @@ export class OrdersController {
   /**
    * Atualiza um pedido no WooCommerce (grava direto no site).
    * Body: { status?, trackingNumber?, trackingCarrier?, trackingUrl?, customerNote?, addNote? }
+   *
+   * ⚠ Hook importante: quando status === 'separacao' e ainda NÃO existe pick-order
+   * local, este endpoint dispara o roteamento automático (cria pick-order, aloca loja
+   * e emite socket). Isso é fonte única — todos os caminhos do front (bulk WhatsApp,
+   * botão individual, wa.me, mudança manual de status) passam por aqui e ganham o
+   * registro de qual loja é responsável. Sem este hook, pedido vira "Separação" sem
+   * loja associada e o painel "Status ao vivo" fica vazio.
    */
   @Patch('wc/:wcId')
   async wcUpdate(
@@ -176,6 +183,30 @@ export class OrdersController {
     },
   ) {
     const wcOrderId = Number(wcId);
+
+    // 1) Se está indo pra 'separacao', garante pick-orders criados ANTES.
+    //    Se não conseguir (sem estoque etc), aborta sem mexer no WC — não faz
+    //    sentido marcar "separação" se ninguém vai separar.
+    let ensuredPickOrders: Array<{ id: string; storeCode: string; storeName: string }> | undefined;
+    let alreadyHadPickOrders = false;
+    if (body.status === 'separacao') {
+      const ensured = await this.ensurePickOrdersForWc(wcOrderId);
+      if (!ensured.ok) {
+        return {
+          ok: false,
+          id: wcOrderId,
+          status: null,
+          requestedStatus: body.status,
+          statusApplied: false,
+          warning:
+            `Não foi possível gerar a ordem de separação: ${ensured.message}. ` +
+            `O status no site NÃO foi alterado. Abra o pedido e clique em "Gerar separação" ` +
+            `pra ver o diagnóstico (SKU sem estoque, ruptura, etc).`,
+        };
+      }
+      ensuredPickOrders = ensured.pickOrders;
+      alreadyHadPickOrders = !!ensured.already;
+    }
 
     const updated = await this.wc.updateOrder(wcOrderId, {
       status: body.status,
@@ -214,7 +245,73 @@ export class OrdersController {
       requestedStatus,
       statusApplied: statusApplied && !rejectedStatus,
       warning,
+      pickOrdersCreated: ensuredPickOrders && !alreadyHadPickOrders ? ensuredPickOrders : undefined,
+      pickOrdersAlreadyExisted: alreadyHadPickOrders,
     };
+  }
+
+  /**
+   * Idempotente: garante que existem pick-orders locais pro wcOrderId.
+   *  - Se já existe → retorna { ok: true, already: true } sem refazer nada.
+   *  - Se não existe → puxa do WC, upsert, roda routing, cria pick-orders e emite socket.
+   *  - Se routing falhar (sem estoque etc) → retorna { ok: false, message }.
+   */
+  private async ensurePickOrdersForWc(wcOrderId: number): Promise<{
+    ok: boolean;
+    already?: boolean;
+    pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
+    message?: string;
+  }> {
+    // Já tem?
+    const existing = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      include: {
+        pickOrders: {
+          include: { store: { select: { code: true, name: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+    if (existing && existing.pickOrders.length > 0) {
+      return {
+        ok: true,
+        already: true,
+        pickOrders: existing.pickOrders.map((p) => ({
+          id: p.id,
+          storeCode: p.store.code,
+          storeName: p.store.name,
+        })),
+      };
+    }
+
+    // Não tem — puxa do WC e roteia
+    try {
+      const o = await this.wc.getOrder(wcOrderId);
+      const { orderId } = await this.orders.upsertFromWooCommerce(o);
+      const preview = await this.routing.previewRoute(orderId);
+      if (!preview.success) {
+        const missingLabel = preview.missing?.length
+          ? `${preview.missing.length} SKU(s) sem estoque (${preview.missing.slice(0, 3).map((m: any) => m.sku).join(', ')}${preview.missing.length > 3 ? '…' : ''})`
+          : `estratégia ${preview.strategy}`;
+        return { ok: false, message: missingLabel };
+      }
+      await this.routing.confirmRoute(orderId, preview as any);
+      const pickOrders = await this.prisma.pickOrder.findMany({
+        where: { orderId },
+        include: { store: { select: { code: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return {
+        ok: true,
+        pickOrders: pickOrders.map((p) => ({
+          id: p.id,
+          storeCode: p.store.code,
+          storeName: p.store.name,
+        })),
+      };
+    } catch (e: any) {
+      return { ok: false, message: e?.message || 'erro desconhecido no routing' };
+    }
   }
 
   // ---------- Rotas de listagem geral ----------
@@ -627,6 +724,31 @@ export class OrdersController {
   @Post('wc/:wcId/confirm-separation')
   async confirmSeparation(@Param('wcId') wcId: string) {
     const wcOrderId = Number(wcId);
+
+    // Idempotente: se já rodou (via PATCH→hook, botão anterior, etc), retorna o que existe.
+    const existing = await this.prisma.order.findFirst({
+      where: { wcOrderId },
+      include: {
+        pickOrders: {
+          include: { store: { select: { code: true, name: true } } },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+    if (existing && existing.pickOrders.length > 0) {
+      return {
+        ok: true,
+        orderId: existing.id,
+        alreadyExisted: true,
+        pickOrders: existing.pickOrders.map((p) => ({
+          id: p.id,
+          status: p.status,
+          storeCode: p.store.code,
+          storeName: p.store.name,
+        })),
+      };
+    }
+
     const o = await this.wc.getOrder(wcOrderId);
 
     // 1) Upsert local do pedido (cria Order + items se ainda não existir)
