@@ -24,6 +24,7 @@ import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery
 import { CrmModule } from './crm/crm.module';
 import { SuppliesModule } from './supplies/supplies.module';
 import { SitePublishModule } from './site-publish/site-publish.module';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { SitePublishModule } from './site-publish/site-publish.module';
     CrmModule,
     SuppliesModule,
     SitePublishModule,
+    WhatsappModule,
   ],
 })
 export class AppModule {}

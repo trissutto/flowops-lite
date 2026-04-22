@@ -238,12 +238,16 @@ export default function SeparacaoPage() {
    * dentro de um clique. Por isso abrimos com pequeno delay entre cada uma
    * E avisamos o user pra liberar popups do site.
    */
+  /**
+   * Dispara WhatsApp em bloco via backend Baileys — uma chamada única pra
+   * /whatsapp/send-bulk. Backend envia cada mensagem com delay de 2.5s.
+   * Se a sessão não estiver ativa, redireciona pra /retaguarda/whatsapp.
+   */
   async function bulkDispararWhatsapp() {
     if (selected.size === 0) return;
 
     const ids = Array.from(selected);
 
-    // Classifica cada pedido pra montar o resumo antes de confirmar
     type Task = { wcId: number; group: SeparationGroup };
     const tasks: Task[] = [];
     const semPreview: number[] = [];
@@ -255,7 +259,7 @@ export default function SeparacaoPage() {
       if (!p) { semPreview.push(id); continue; }
       if (!p.success) { comRuptura.push(id); continue; }
       for (const g of p.groups) {
-        if (g.whatsappUrl) {
+        if (g.whatsapp && g.whatsappMessage) {
           tasks.push({ wcId: id, group: g });
         } else {
           semWhatsapp.push({ wcId: id, storeName: g.storeName });
@@ -273,59 +277,85 @@ export default function SeparacaoPage() {
       return;
     }
 
+    // Confere se a sessão WhatsApp está ativa antes de disparar
+    try {
+      const st = await api<{ connected: boolean }>('/whatsapp/status');
+      if (!st.connected) {
+        if (window.confirm(
+          'A integração WhatsApp não está conectada.\n\n' +
+          'Quer abrir a tela de conexão agora? (você escaneia 1 QR code e volta aqui)',
+        )) {
+          window.location.href = '/retaguarda/whatsapp';
+        }
+        return;
+      }
+    } catch (e: any) {
+      alert('Falha ao consultar status do WhatsApp: ' + (e?.message || e));
+      return;
+    }
+
     const resumoExtras =
       (semPreview.length ? `\n· ${semPreview.length} sem separação calculada (serão ignorados)` : '') +
       (comRuptura.length ? `\n· ${comRuptura.length} em ruptura (serão ignorados)` : '') +
       (semWhatsapp.length ? `\n· ${semWhatsapp.length} loja(s) sem WhatsApp (serão ignoradas)` : '');
 
     if (!window.confirm(
-      `Abrir ${tasks.length} aba(s) do WhatsApp e marcar os pedidos como "Separação"?` +
+      `Disparar ${tasks.length} mensagem(ns) de WhatsApp e marcar os pedidos como "Separação"?` +
       resumoExtras +
-      `\n\n⚠ Se o navegador bloquear popups, libera no ícone da barra de endereço e tenta de novo.`,
+      `\n\n⏳ Uma mensagem a cada ~3 segundos pra evitar spam. ${tasks.length} msgs ≈ ${Math.ceil(tasks.length * 3 / 60)} min.`,
     )) return;
 
     setBulkRunning(true);
     setBulkProgress({ done: 0, total: tasks.length, fails: 0 });
 
-    // Abre as abas com 120ms de intervalo pra reduzir chance de popup-block.
-    // Cada aba com nome ÚNICO: não sobrescreve as anteriores.
-    const abertasOk: Task[] = [];
-    const bloqueadas: Task[] = [];
-    for (let i = 0; i < tasks.length; i++) {
-      const t = tasks[i];
-      const windowName = `flowops-wa-${t.wcId}-${t.group.storeCode}`;
-      const w = window.open(t.group.whatsappUrl!, windowName, 'noopener,noreferrer');
-      if (w) {
-        abertasOk.push(t);
-      } else {
-        bloqueadas.push(t);
-      }
-      setBulkProgress((p) => (p ? { ...p, done: i + 1, fails: bloqueadas.length } : p));
-      // Pequeno delay só entre abas; não trava a UI
-      await new Promise((r) => setTimeout(r, 120));
+    // Monta payload pro backend: 1 item por (pedido × loja)
+    const items = tasks.map((t) => ({
+      number: t.group.whatsapp!,
+      text: t.group.whatsappMessage!,
+      tag: `${t.wcId}/${t.group.storeCode}`,
+    }));
+
+    let sendResult: { total: number; sent: number; failed: Array<{ tag?: string; error: string }> };
+    try {
+      sendResult = await api('/whatsapp/send-bulk', {
+        method: 'POST',
+        body: JSON.stringify({ items, delayMs: 2800 }),
+      });
+    } catch (e: any) {
+      setBulkRunning(false);
+      setBulkProgress(null);
+      alert('Erro no envio em bloco: ' + (e?.message || e));
+      return;
     }
 
-    if (bloqueadas.length > 0) {
-      alert(
-        `${bloqueadas.length} aba(s) foram bloqueadas pelo navegador.\n\n` +
-        `Libera popups pra este site (ícone à direita da URL) e tenta de novo só com esses pedidos. ` +
-        `Os ${abertasOk.length} que abriram já foram marcados como Separação.`,
-      );
+    setBulkProgress({ done: sendResult.total, total: sendResult.total, fails: sendResult.failed.length });
+
+    // Pros pedidos cuja TODAS as lojas receberam OK, PATCH status → 'separacao' no WC
+    const failedTags = new Set((sendResult.failed || []).map((f) => f.tag || ''));
+    const wcIdsOk: number[] = [];
+    const wcIdsPartialFail: number[] = [];
+
+    // Agrupa por wcId e verifica se alguma task desse pedido falhou
+    const byWcId: Record<number, Task[]> = {};
+    for (const t of tasks) {
+      (byWcId[t.wcId] ||= []).push(t);
+    }
+    for (const wcIdStr of Object.keys(byWcId)) {
+      const wcId = Number(wcIdStr);
+      const anyFailed = byWcId[wcId].some((t) => failedTags.has(`${t.wcId}/${t.group.storeCode}`));
+      if (anyFailed) wcIdsPartialFail.push(wcId);
+      else wcIdsOk.push(wcId);
     }
 
-    // Pros que abriram de fato: PATCH status → 'separacao' no WC (4 em paralelo).
-    // Agrupa por wcId pra não chamar 2x o mesmo pedido quando tem múltiplas lojas.
-    const wcIdsOk = Array.from(new Set(abertasOk.map((t) => t.wcId)));
+    // Muda status no WC pros que foram 100% OK (4 em paralelo)
     const queue = [...wcIdsOk];
     let patchFails = 0;
-
     async function patchWorker() {
       while (queue.length > 0) {
         const wcId = queue.shift();
         if (wcId == null) break;
         try {
-          const lojas = abertasOk
-            .filter((t) => t.wcId === wcId)
+          const lojas = byWcId[wcId]
             .map((t) => `${t.group.storeName} (${t.group.storeCode})`)
             .join(', ');
           await api(`/orders/wc/${wcId}`, {
@@ -343,7 +373,6 @@ export default function SeparacaoPage() {
         }
       }
     }
-
     await Promise.all(Array.from({ length: Math.min(4, wcIdsOk.length) }, patchWorker));
 
     setBulkRunning(false);
@@ -356,14 +385,23 @@ export default function SeparacaoPage() {
     }
     setSelected(new Set());
 
-    if (bloqueadas.length === 0 && patchFails === 0) {
-      setBulkProgress({ done: tasks.length, total: tasks.length, fails: 0 });
-      setTimeout(() => setBulkProgress(null), 2500);
+    if (sendResult.failed.length === 0 && patchFails === 0) {
+      setBulkProgress({ done: sendResult.total, total: sendResult.total, fails: 0 });
+      setTimeout(() => setBulkProgress(null), 3500);
     } else {
       setBulkProgress(null);
-      if (patchFails > 0) {
-        alert(`Aviso: ${patchFails} pedido(s) abriram o WhatsApp mas falharam ao marcar como Separação no WC. Confere manualmente.`);
+      const detalhes: string[] = [];
+      if (sendResult.sent > 0) detalhes.push(`✓ ${sendResult.sent} mensagem(ns) enviada(s)`);
+      if (sendResult.failed.length > 0) {
+        detalhes.push(`✗ ${sendResult.failed.length} falha(s) de envio:`);
+        for (const f of sendResult.failed.slice(0, 5)) {
+          detalhes.push(`  · ${f.tag || '?'}: ${f.error}`);
+        }
+        if (sendResult.failed.length > 5) detalhes.push(`  · … e +${sendResult.failed.length - 5}`);
       }
+      if (wcIdsPartialFail.length > 0) detalhes.push(`⚠ ${wcIdsPartialFail.length} pedido(s) com envio parcial — status NÃO foi alterado`);
+      if (patchFails > 0) detalhes.push(`⚠ ${patchFails} status falhou(aram) ao atualizar no WC`);
+      alert(detalhes.join('\n'));
     }
   }
 
@@ -474,18 +512,40 @@ export default function SeparacaoPage() {
   }
 
   async function dispararWhatsapp(wcId: number, grupo: SeparationGroup) {
-    if (!grupo.whatsappUrl) {
+    if (!grupo.whatsapp || !grupo.whatsappMessage) {
       alert(
         `A loja "${grupo.storeName}" não tem WhatsApp. Cadastra em /lojas antes de disparar.`,
       );
       return;
     }
-    // Nome fixo → todas as chamadas WhatsApp reusam a MESMA aba (sem re-login)
-    window.open(grupo.whatsappUrl, 'flowops-whatsapp', 'noopener,noreferrer');
 
-    // Marca como "Separação" no WC + nota interna
+    // Usa a integração backend (Baileys). Se não estiver conectada, oferece
+    // abrir a tela de conexão pra escanear QR code.
     setBusy((b) => ({ ...b, [wcId]: true }));
     try {
+      // Verifica sessão ativa antes de mandar
+      const st = await api<{ connected: boolean }>('/whatsapp/status');
+      if (!st.connected) {
+        if (window.confirm(
+          'A integração WhatsApp não está conectada.\n\n' +
+          'Quer abrir a tela de conexão agora?',
+        )) {
+          window.location.href = '/retaguarda/whatsapp';
+        }
+        return;
+      }
+
+      // Envia
+      const r = await api<{ ok: boolean; error?: string }>('/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify({ number: grupo.whatsapp, text: grupo.whatsappMessage }),
+      });
+      if (!r.ok) {
+        alert(`Falha no envio: ${r.error || 'erro desconhecido'}`);
+        return;
+      }
+
+      // Marca como "Separação" no WC + nota interna
       await api(`/orders/wc/${wcId}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -496,14 +556,14 @@ export default function SeparacaoPage() {
           },
         }),
       });
-      // Remove da lista se estava em processing/pending/on-hold
+
       if (status !== 'separacao') {
         setOrders((prev) => prev.filter((o) => o.id !== wcId));
       } else {
         await load();
       }
     } catch (e: any) {
-      console.warn('Falha ao atualizar status:', e.message);
+      alert('Erro ao disparar WhatsApp: ' + (e?.message || e));
     } finally {
       setBusy((b) => ({ ...b, [wcId]: false }));
     }
@@ -731,11 +791,12 @@ export default function SeparacaoPage() {
                       {p && p.success && p.groups.length === 1 && (
                         <button
                           onClick={() => dispararWhatsapp(o.id, p.groups[0])}
-                          disabled={isBusy || !p.groups[0].whatsappUrl}
+                          disabled={isBusy || !p.groups[0].whatsapp}
                           className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5"
-                          title={p.groups[0].whatsappUrl ? `Enviar pra ${p.groups[0].storeName}` : 'Loja sem WhatsApp cadastrado'}
+                          title={p.groups[0].whatsapp ? `Enviar pra ${p.groups[0].storeName}` : 'Loja sem WhatsApp cadastrado'}
                         >
-                          <Send className="w-3.5 h-3.5" /> WhatsApp → {p.groups[0].storeName}
+                          {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                          WhatsApp → {p.groups[0].storeName}
                         </button>
                       )}
                       {p && p.success && p.groups.length > 1 && (
@@ -958,7 +1019,7 @@ export default function SeparacaoPage() {
                 onClick={bulkDispararWhatsapp}
                 disabled={bulkRunning}
                 className="px-3 py-1.5 rounded text-sm font-semibold text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 flex items-center gap-1.5"
-                title="Abre uma aba do WhatsApp por pedido (precisa ter Gerado separação antes)"
+                title="Dispara as mensagens direto pelo backend (precisa ter Gerado separação antes e WhatsApp conectado em /retaguarda/whatsapp)"
               >
                 {bulkRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                 Disparar WhatsApp ({selected.size})
