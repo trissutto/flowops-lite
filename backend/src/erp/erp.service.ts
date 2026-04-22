@@ -986,8 +986,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         .filter((r) => r.length > 0)
         .slice(0, 200);
       if (clean.length) {
-        wheres.push('p.REF IN (?)');
-        params.push(clean);
+        // Wincred às vezes cadastra cada cor como uma REF separada com sufixo
+        // de espaço + letras (ex: "VMS-223" vira "VMS-223 P", "VMS-223 A",
+        // "VMS-223 V", "VMS-223 N"). Pra o CEO não precisar conhecer esse
+        // detalhe de cadastro, a busca por "VMS-223" precisa pegar também
+        // "VMS-223 X". Mesma lógica já usada em products.service (task #107).
+        const orParts: string[] = [];
+        for (const r of clean) {
+          orParts.push('p.REF = ?');
+          params.push(r);
+          orParts.push('p.REF LIKE ?');
+          params.push(`${r} %`); // espaço + qualquer sufixo de cor
+        }
+        wheres.push(`(${orParts.join(' OR ')})`);
       }
     }
     if (filters.term) {
@@ -1021,12 +1032,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const limitRefs = Math.max(1, Math.min(500, Number(filters.limit) || 200));
     // Primeiro descobre quais REFs batem (pra limitar); depois busca TODAS
     // as linhas dessas REFs (pra mostrar as cores/tamanhos completos).
+    // IMPORTANTE: usamos limite inflado (x5) pra compensar sub-REFs — o limit
+    // final vira pelo nº de REFs BASE únicas após normalização.
     const sqlRefs = `
       SELECT DISTINCT p.REF AS ref
         FROM produtos p
        WHERE ${wheres.join(' AND ')}
        ORDER BY p.REF
-       LIMIT ${limitRefs + 1}
+       LIMIT ${limitRefs * 5 + 1}
     `;
 
     let refList: string[] = [];
@@ -1049,8 +1062,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         },
       };
     }
-    const truncated = refList.length > limitRefs;
-    if (truncated) refList = refList.slice(0, limitRefs);
+    // Deduplica pela REF base pra contar corretamente quantos produtos únicos
+    // existem. Mantém TODOS os sub-REFs na refList (passados pro IN), mas o
+    // truncate fica baseado no nº de bases únicas.
+    const uniqBaseRefs = new Set<string>();
+    for (const r of refList) {
+      const base = r.replace(/\s[A-Za-z]{1,3}$/, '').trim() || r;
+      uniqBaseRefs.add(base);
+    }
+    const truncated = uniqBaseRefs.size > limitRefs;
 
     // Agora busca TODAS as linhas dessas REFs pra montar cor/tamanho.
     const sqlDetails = `
@@ -1068,11 +1088,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return empty as any;
     }
 
-    // Agrupa por REF → COR → tamanhos.
+    // Normaliza REF pra base — Wincred cadastra cada cor como sub-REF com
+    // sufixo (ex: "VMS-223 P", "VMS-223 A"). O CEO pensa "VMS-223" e espera
+    // ver todas as 4 cores embaixo dessa referência única. Mesma regex usada
+    // em products.service (task #107) pra manter consistência.
+    const normalizeBaseRef = (ref: string): string => {
+      const s = String(ref).trim();
+      return s.replace(/\s[A-Za-z]{1,3}$/, '').trim() || s;
+    };
+
+    // Agrupa por REF BASE → COR → tamanhos.
     const byRef = new Map<string, any>();
     for (const r of detailRows) {
-      const refCode = String(r.ref).trim();
-      if (!refCode) continue;
+      const rawRef = String(r.ref).trim();
+      if (!rawRef) continue;
+      const refCode = normalizeBaseRef(rawRef);
       let refEntry = byRef.get(refCode);
       if (!refEntry) {
         refEntry = {
@@ -1160,8 +1190,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     preco: number | null;
     tamanhos: Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>;
   } | null> {
-    const res = await this.searchRefsForPublish({ refs: [refCode] });
-    const ref = res.refs.find((r) => r.refCode === refCode);
+    // Normaliza caso o caller mande sub-REF ("VMS-223 P") — a busca expande
+    // sozinha, mas o matching na Map é sempre pela base.
+    const baseRef = String(refCode).trim().replace(/\s[A-Za-z]{1,3}$/, '').trim() || String(refCode).trim();
+    const res = await this.searchRefsForPublish({ refs: [baseRef] });
+    const ref = res.refs.find((r) => r.refCode === baseRef);
     if (!ref) return null;
     const corUpper = String(cor).trim().toUpperCase();
     const corEntry =
