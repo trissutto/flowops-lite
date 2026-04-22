@@ -122,6 +122,22 @@ export class PickOrdersController {
   }
 
   /**
+   * Reabre baixa em LOTE — aceita array de pickOrderIds e devolve cada um pra fila.
+   * Rota estática — vem ANTES da rota dinâmica `:id/reopen-debit`.
+   */
+  @Post('bulk-reopen-debit')
+  bulkReopenDebit(
+    @Req() req: any,
+    @Body() body: { pickOrderIds: string[]; reason?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) reabre baixa em lote');
+    }
+    return this.svc.bulkReopenDebit(body?.pickOrderIds ?? [], user.userId, body?.reason);
+  }
+
+  /**
    * Matriz rejeita baixa — volta pra separating, loja revisa.
    * Body: { reason: string }
    */
@@ -136,6 +152,24 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas matriz (admin/operator) rejeita baixa');
     }
     return this.svc.rejectDebit(id, user.userId, body?.reason ?? '');
+  }
+
+  /**
+   * Reabre baixa aprovada — devolve o pick-order pra fila /baixa-estoque.
+   * Usado quando baixa foi SHADOW e precisa re-tentar em LIVE.
+   * Bloqueia se já existe log `debit.real.applied` pra evitar baixa dupla.
+   */
+  @Post(':id/reopen-debit')
+  reopenDebit(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) reabre baixa');
+    }
+    return this.svc.reopenDebit(id, user.userId, body?.reason);
   }
 
   @Get(':id')

@@ -25,6 +25,7 @@ import { CrmModule } from './crm/crm.module';
 import { SuppliesModule } from './supplies/supplies.module';
 import { SitePublishModule } from './site-publish/site-publish.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     SuppliesModule,
     SitePublishModule,
     WhatsappModule,
+    IntegrationLogsModule,
   ],
 })
 export class AppModule {}

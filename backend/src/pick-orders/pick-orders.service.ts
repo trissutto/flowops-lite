@@ -674,6 +674,147 @@ export class PickOrdersService {
   }
 
   /**
+   * Reabre a baixa de um pick-order aprovado (seta debitApprovedAt=null).
+   * Serve pra devolver o pick-order pra tela /baixa-estoque quando a baixa foi
+   * aprovada em modo SHADOW e agora o ERP_WRITE_ENABLED foi ativado — a operadora
+   * quer tentar de novo LIVE.
+   *
+   * PROTEÇÕES (evita baixa dupla):
+   *   - Bloqueia se já existe log `debit.real.applied` pra esse pickOrderId
+   *     (ERP já foi tocado de verdade — reabrir causaria estoque -2 em vez de -1)
+   *   - Bloqueia se debitApprovedAt é null (já está na fila)
+   *   - Bloqueia se pick-order não existe
+   *
+   * Grava log `debit.reopened` com motivo pra auditoria.
+   */
+  async reopenDebit(pickOrderId: string, operatorUserId: string, reason?: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: {
+        id: true, status: true, storeId: true,
+        debitApprovedAt: true,
+        store: { select: { code: true, name: true } },
+      } as any,
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (!(po as any).debitApprovedAt) {
+      throw new BadRequestException('Baixa ainda não foi aprovada — não tem o que reabrir');
+    }
+
+    // PROTEÇÃO CRÍTICA: procura log de debit.real.applied pra esse pickOrderId.
+    // Se existir, ERP já foi tocado — reabrir baixaria de novo (estoque dobrado).
+    // Procuramos via `contains` no payload JSON porque event/source é comum.
+    const liveLog = await this.prisma.integrationLog.findFirst({
+      where: {
+        source: 'erp',
+        event: 'debit.real.applied',
+        payload: { contains: `"pickOrderId":"${pickOrderId}"` },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    });
+    if (liveLog) {
+      throw new BadRequestException(
+        `Este pick-order já foi baixado no Gigasistemas em modo LIVE (log #${liveLog.id}). ` +
+        'Reabrir causaria baixa dupla. Se precisar ajustar, faça direto no ERP.',
+      );
+    }
+
+    // Audit: log da reabertura
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.reopened',
+        payload: JSON.stringify({
+          pickOrderId,
+          reopenedBy: operatorUserId,
+          storeCode: (po as any).store?.code ?? null,
+          storeName: (po as any).store?.name ?? null,
+          previousApprovedAt: (po as any).debitApprovedAt,
+          reason: reason?.trim() || null,
+        }),
+        status: 200,
+      },
+    });
+
+    // Reseta a aprovação → volta pra fila de /baixa-estoque
+    const updated = await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: {
+        debitApprovedAt: null,
+        debitApprovedBy: null,
+      } as any,
+    });
+
+    return {
+      id: updated.id,
+      status: updated.status,
+      debitApprovedAt: null,
+      reopened: true,
+    };
+  }
+
+  /**
+   * Reabre baixa em LOTE. Itera sobre os IDs chamando reopenDebit.
+   * Retorna summary (reopened/skipped/blocked/errors) — blocked separa os casos
+   * "já foi LIVE" pra operadora entender por que alguns não voltaram.
+   *
+   * Grava log agregado `debit.bulk-reopened` com contadores.
+   */
+  async bulkReopenDebit(pickOrderIds: string[], operatorUserId: string, reason?: string) {
+    const ids = Array.from(new Set((pickOrderIds ?? []).filter(Boolean)));
+    if (ids.length === 0) {
+      return { reopened: [], skipped: [], blocked: [], errors: [], total: 0 };
+    }
+
+    const reopened: Array<{ id: string }> = [];
+    const skipped: Array<{ id: string; reason: string }> = [];
+    const blocked: Array<{ id: string; reason: string }> = [];
+    const errors: Array<{ id: string; error: string }> = [];
+
+    for (const id of ids) {
+      try {
+        await this.reopenDebit(id, operatorUserId, reason);
+        reopened.push({ id });
+      } catch (e: any) {
+        const msg = String(e?.message ?? 'erro desconhecido');
+        if (msg.includes('não encontrado') || msg.includes('ainda não foi aprovada')) {
+          skipped.push({ id, reason: msg });
+        } else if (msg.includes('baixa dupla') || msg.includes('LIVE')) {
+          blocked.push({ id, reason: msg });
+        } else {
+          errors.push({ id, error: msg });
+        }
+      }
+    }
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.bulk-reopened',
+        payload: JSON.stringify({
+          reopenedBy: operatorUserId,
+          reason: reason?.trim() || null,
+          total: ids.length,
+          reopenedCount: reopened.length,
+          skippedCount: skipped.length,
+          blockedCount: blocked.length,
+          errorCount: errors.length,
+          reopenedIds: reopened.map((r) => r.id),
+          skipped,
+          blocked,
+          errors,
+        }),
+        status: 200,
+      },
+    });
+
+    return { reopened, skipped, blocked, errors, total: ids.length };
+  }
+
+  /**
    * Lista TODOS os pick-orders de um pedido WC (matriz-only).
    * Usado pela tela /pedidos/wc/[id] pra mostrar status de cada loja ao vivo,
    * incluindo rastreio quando enviado. Join com store pra ter nome/code.
