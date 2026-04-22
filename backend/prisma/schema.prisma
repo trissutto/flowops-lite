@@ -339,3 +339,73 @@ model TransferOrder {
   @@index([tipo, saleStatus, createdAt(sort: Desc)])
   @@map("transfer_orders")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Publicação de produtos Wincred → WooCommerce
+//
+// Fluxo de 3 fases:
+//   Fase 1 (queued)      — CEO filtra REFs no LURDS ORDER ONE e marca pra subir.
+//                          Cada cor da REF vira UMA linha aqui (regra: cada
+//                          cor é um produto separado no site).
+//   Fase 2 (enriched)    — CEO adiciona descrição, categorias WC, tags,
+//                          imagens. Sistema guarda tudo aqui antes de subir.
+//   Fase 3 (published)   — Sistema posta no WC via REST, cria produto variável
+//                          com variações (1 por tamanho), linka wcProductId.
+//
+// Por que separar por COR:
+//   O site vende PRETO e AZUL como 2 cards distintos na categoria — o cliente
+//   enxerga duas peças, não uma com swatch. Isso é decisão de visual/UX do
+//   site. No Wincred eles dividem a mesma referência em cores pra controle
+//   interno, mas no site cada cor vira um SKU próprio.
+//
+// Idempotência:
+//   Unique (refCode, cor) — não deixa duplicar. Se CEO marcar a mesma
+//   REF+COR duas vezes, a segunda é ignorada/atualizada (upsert).
+// ═══════════════════════════════════════════════════════════════════════════
+model SitePublishQueue {
+  id              String   @id @default(uuid())
+
+  // Identificação Wincred
+  refCode         String   @map("ref_code")           // ex: 01010101 (REFERENCIA do Wincred)
+  cor             String                                 // ex: PRETO (uma linha por cor)
+  gigaCodes       Json     @map("giga_codes")          // ["5394104","5394111",...] códigos da variação por tamanho
+  fornecedor      String?
+  grupo           String?                                // ex: BLUSA FEMININA
+  subgrupo        String?                                // ex: MANGA CURTA
+  ncm             String?                                // ex: 61062000
+  cfop            String?                                // ex: 5102
+  custoMedio      Decimal? @map("custo_medio")         @db.Decimal(10, 2)
+  precoSugerido   Decimal? @map("preco_sugerido")      @db.Decimal(10, 2)
+  estoqueTotal    Int?     @map("estoque_total")       // soma de todas as lojas no momento da marcação
+  tamanhos        Json                                    // [{tamanho:"46", codigo:"5394104", estoque:9}, ...]
+
+  // Status do pipeline
+  status          String   @default("queued")          // queued | enriched | publishing | published | failed
+
+  // Fase 2 — enriquecimento pra WC
+  wcCategoryIds   Json?    @map("wc_category_ids")     // [123, 456]
+  wcTags          Json?    @map("wc_tags")             // ["vestido plus size","verão"]
+  wcDescricao     String?  @map("wc_descricao")        @db.Text
+  wcDescricaoCurta String? @map("wc_descricao_curta")  @db.Text
+  wcImagens       Json?    @map("wc_imagens")          // [{url:"...",alt:"..."},{...}] ordem = ordem no site
+  wcPesoKg        Decimal? @map("wc_peso_kg")          @db.Decimal(6, 3)
+  wcDimensoesCm   Json?    @map("wc_dimensoes_cm")     // {comprimento:7,largura:20,altura:30}
+  wcPrecoVenda    Decimal? @map("wc_preco_venda")      @db.Decimal(10, 2) // sobrescreve precoSugerido se quiser
+  wcPrecoPromo    Decimal? @map("wc_preco_promo")      @db.Decimal(10, 2)
+
+  // Fase 3 — resultado da publicação
+  wcProductId     Int?     @map("wc_product_id")
+  wcVariationIds  Json?    @map("wc_variation_ids")    // [{codigo:"5394104",variationId:189091},...]
+  publishedAt     DateTime? @map("published_at")
+  errorMessage    String?  @map("error_message")       @db.Text
+
+  // Auditoria
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([refCode, cor], name: "uniq_ref_cor")
+  @@index([status, createdAt(sort: Desc)])
+  @@index([refCode])
+  @@map("site_publish_queue")
+}

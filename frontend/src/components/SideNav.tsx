@@ -22,7 +22,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
-  DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X,
+  DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
 } from 'lucide-react';
 
 type NavItem = {
@@ -59,6 +59,7 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/venda-certa',     label: 'Venda Certa',      icon: CheckCircle2 },
       { href: '/retaguarda/materiais',       label: 'Materiais',        icon: Package2 },
       { href: '/retaguarda/almoxarifado',    label: 'Almoxarifado',     icon: Boxes },
+      { href: '/retaguarda/publicar-site',   label: 'Publicar no Site', icon: Globe },
       { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
     ],
   },

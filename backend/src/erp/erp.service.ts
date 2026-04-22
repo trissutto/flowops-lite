@@ -750,4 +750,434 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PUBLICAÇÃO NO SITE — busca de referências pra enfileirar no LURDS ORDER ONE
+  //
+  // Este bloco existe pra alimentar a tela /retaguarda/publicar-site (Fase 1
+  // da integração Wincred→WooCommerce). A estratégia é DEFENSIVA: nem todo
+  // Gigasistemas tem as mesmas colunas (GRUPO, SUBGRUPO, FORNECEDOR, NCM,
+  // CFOP, DATACADASTRO variam por versão/customização). Então detectamos o
+  // schema em tempo de execução via `SHOW COLUMNS` e montamos as queries
+  // só com as colunas que existem.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Cache do schema da tabela `produtos` (conjunto de colunas em UPPER).
+  // Evita rodar SHOW COLUMNS a cada request da tela.
+  private _productsColsCache: Set<string> | null = null;
+  private async getProductsColumns(): Promise<Set<string>> {
+    if (this._productsColsCache) return this._productsColsCache;
+    if (!this.pool) return new Set();
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
+        'SHOW COLUMNS FROM produtos',
+      );
+      const set = new Set<string>(
+        (cols as any[]).map((c) => String(c.Field).toUpperCase()),
+      );
+      this._productsColsCache = set;
+      return set;
+    } catch (e) {
+      this.logger.warn(`getProductsColumns falhou: ${(e as Error).message}`);
+      return new Set();
+    }
+  }
+
+  /**
+   * Resolve o nome REAL da coluna no schema, dado um conjunto de candidatos
+   * comuns. Retorna o primeiro que existe, ou null. Útil pra campos que
+   * variam entre versões do Gigasistemas (ex: CUSTOUN / CUSTO / CUSTOMEDIO).
+   */
+  private async pickCol(candidates: string[]): Promise<string | null> {
+    const cols = await this.getProductsColumns();
+    for (const cand of candidates) {
+      if (cols.has(cand.toUpperCase())) return cand;
+    }
+    return null;
+  }
+
+  /**
+   * FACETS — valores distintos de GRUPO, SUBGRUPO, FORNECEDOR pra popular
+   * dropdowns no frontend. Cada um só é retornado se a coluna existir no
+   * schema. Limita 500 valores por facet (o CEO tem poucos por natureza).
+   */
+  async getGigaFacetsForPublish(): Promise<{
+    grupos: string[];
+    subgrupos: string[];
+    fornecedores: string[];
+    hasGrupo: boolean;
+    hasSubgrupo: boolean;
+    hasFornecedor: boolean;
+  }> {
+    const emptyResult = {
+      grupos: [] as string[],
+      subgrupos: [] as string[],
+      fornecedores: [] as string[],
+      hasGrupo: false,
+      hasSubgrupo: false,
+      hasFornecedor: false,
+    };
+    if (!this.pool) return emptyResult;
+
+    const grupoCol = await this.pickCol(['GRUPO', 'GRUPODESC', 'GRUPO_DESC', 'NOMEGRUPO']);
+    const subgrupoCol = await this.pickCol(['SUBGRUPO', 'SUB_GRUPO', 'SUBGRUPODESC', 'NOMESUBGRUPO']);
+    const fornecedorCol = await this.pickCol(['FORNECEDOR', 'NOMEFORNECEDOR', 'FORNECEDORNOME', 'FORN']);
+
+    const result = { ...emptyResult };
+    result.hasGrupo = !!grupoCol;
+    result.hasSubgrupo = !!subgrupoCol;
+    result.hasFornecedor = !!fornecedorCol;
+
+    // Faz as 3 queries em paralelo, tolerando erro em cada uma.
+    const tasks: Promise<void>[] = [];
+    if (grupoCol) {
+      tasks.push(
+        this.pool
+          .query<mysql.RowDataPacket[]>(
+            `SELECT DISTINCT \`${grupoCol}\` AS v
+               FROM produtos
+              WHERE \`${grupoCol}\` IS NOT NULL AND \`${grupoCol}\` <> ''
+              ORDER BY v
+              LIMIT 500`,
+          )
+          .then(([rows]) => {
+            result.grupos = (rows as any[]).map((r) => String(r.v).trim()).filter(Boolean);
+          })
+          .catch((e) => this.logger.warn(`facet grupo falhou: ${e?.message ?? e}`)),
+      );
+    }
+    if (subgrupoCol) {
+      tasks.push(
+        this.pool
+          .query<mysql.RowDataPacket[]>(
+            `SELECT DISTINCT \`${subgrupoCol}\` AS v
+               FROM produtos
+              WHERE \`${subgrupoCol}\` IS NOT NULL AND \`${subgrupoCol}\` <> ''
+              ORDER BY v
+              LIMIT 500`,
+          )
+          .then(([rows]) => {
+            result.subgrupos = (rows as any[]).map((r) => String(r.v).trim()).filter(Boolean);
+          })
+          .catch((e) => this.logger.warn(`facet subgrupo falhou: ${e?.message ?? e}`)),
+      );
+    }
+    if (fornecedorCol) {
+      tasks.push(
+        this.pool
+          .query<mysql.RowDataPacket[]>(
+            `SELECT DISTINCT \`${fornecedorCol}\` AS v
+               FROM produtos
+              WHERE \`${fornecedorCol}\` IS NOT NULL AND \`${fornecedorCol}\` <> ''
+              ORDER BY v
+              LIMIT 500`,
+          )
+          .then(([rows]) => {
+            result.fornecedores = (rows as any[]).map((r) => String(r.v).trim()).filter(Boolean);
+          })
+          .catch((e) => this.logger.warn(`facet fornecedor falhou: ${e?.message ?? e}`)),
+      );
+    }
+    await Promise.all(tasks);
+    return result;
+  }
+
+  /**
+   * BUSCA PARA PUBLICAÇÃO — retorna referências agrupadas por REF+COR.
+   *
+   * Filtros (todos opcionais, combinam com AND):
+   *   - refs:         lista de REFs exatas (fast-path, usa IN). Máx 200.
+   *   - term:         busca LIKE em DESCRICAOCOMPLETA (múltiplas palavras = AND).
+   *   - grupo/subgrupo/fornecedor: exatos. Só aplicam se a coluna existir.
+   *   - diasCadastro: últimos N dias (usa DATACADASTRO/DATA_CADASTRO/DT_CADASTRO
+   *                   se existir; caso contrário ignora).
+   *
+   * Formato de retorno: array de REFs, cada uma com array de cores, cada cor
+   * com array de tamanhos (CODIGO+TAMANHO+ESTOQUE). Tudo que o frontend precisa
+   * pra mostrar o card e deixar o CEO marcar as cores que quer subir.
+   *
+   * Limite: 200 REFs distintas por chamada (pra não travar a tela).
+   */
+  async searchRefsForPublish(filters: {
+    refs?: string[];
+    term?: string;
+    grupo?: string;
+    subgrupo?: string;
+    fornecedor?: string;
+    diasCadastro?: number;
+    limit?: number;
+  }): Promise<{
+    refs: Array<{
+      refCode: string;
+      descricao: string;
+      grupo: string | null;
+      subgrupo: string | null;
+      fornecedor: string | null;
+      ncm: string | null;
+      cfop: string | null;
+      custo: number | null;
+      preco: number | null;
+      cores: Array<{
+        cor: string;
+        tamanhos: Array<{
+          tamanho: string | null;
+          codigo: string;
+          estoque: number;
+          ean: string | null;
+        }>;
+        estoqueTotal: number;
+      }>;
+      totalVariations: number;
+      estoqueTotal: number;
+    }>;
+    truncated: boolean;
+    schema: {
+      hasGrupo: boolean;
+      hasSubgrupo: boolean;
+      hasFornecedor: boolean;
+      hasDataCadastro: boolean;
+    };
+  }> {
+    const empty = {
+      refs: [] as any[],
+      truncated: false,
+      schema: { hasGrupo: false, hasSubgrupo: false, hasFornecedor: false, hasDataCadastro: false },
+    };
+    if (!this.pool) return empty as any;
+
+    // Descobre colunas reais
+    const cols = await this.getProductsColumns();
+    const grupoCol = (await this.pickCol(['GRUPO', 'GRUPODESC', 'GRUPO_DESC', 'NOMEGRUPO'])) as string | null;
+    const subgrupoCol = (await this.pickCol(['SUBGRUPO', 'SUB_GRUPO', 'SUBGRUPODESC', 'NOMESUBGRUPO'])) as string | null;
+    const fornecedorCol = (await this.pickCol(['FORNECEDOR', 'NOMEFORNECEDOR', 'FORNECEDORNOME', 'FORN'])) as string | null;
+    const ncmCol = (await this.pickCol(['NCM', 'CODNCM', 'CODIGONCM', 'COD_NCM'])) as string | null;
+    const cfopCol = (await this.pickCol(['CFOP', 'CODCFOP'])) as string | null;
+    const custoCol = (await this.pickCol(['CUSTOUN', 'CUSTO', 'CUSTO_UN', 'CUSTOMEDIO', 'CUSTO_MEDIO'])) as string | null;
+    const precoCol = (await this.pickCol(['VENDAUN', 'PRECO', 'PRECOVENDA', 'PRECO_VENDA'])) as string | null;
+    const dataCol = (await this.pickCol(['DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO', 'DATACRIACAO', 'DT_CRIACAO', 'CREATED_AT'])) as string | null;
+    const eanCol = (await this.pickCol(['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'])) as string | null;
+
+    // Monta SELECT dinâmico
+    const selects = [
+      'p.CODIGO AS codigo',
+      'p.REF AS ref',
+      'p.DESCRICAOCOMPLETA AS descricao',
+      'p.COR AS cor',
+      'p.TAMANHO AS tamanho',
+      'p.ESTOQUE AS estoqueLinha',
+    ];
+    if (grupoCol) selects.push(`p.\`${grupoCol}\` AS grupo`);
+    if (subgrupoCol) selects.push(`p.\`${subgrupoCol}\` AS subgrupo`);
+    if (fornecedorCol) selects.push(`p.\`${fornecedorCol}\` AS fornecedor`);
+    if (ncmCol) selects.push(`p.\`${ncmCol}\` AS ncm`);
+    if (cfopCol) selects.push(`p.\`${cfopCol}\` AS cfop`);
+    if (custoCol) selects.push(`p.\`${custoCol}\` AS custo`);
+    if (precoCol) selects.push(`p.\`${precoCol}\` AS preco`);
+    if (eanCol) selects.push(`p.\`${eanCol}\` AS ean`);
+    if (dataCol) selects.push(`p.\`${dataCol}\` AS dataCadastro`);
+
+    // WHERE
+    const wheres: string[] = ["p.REF IS NOT NULL", "p.REF <> ''"];
+    const params: any[] = [];
+
+    if (filters.refs && filters.refs.length) {
+      const clean = filters.refs
+        .map((r) => String(r).trim())
+        .filter((r) => r.length > 0)
+        .slice(0, 200);
+      if (clean.length) {
+        wheres.push('p.REF IN (?)');
+        params.push(clean);
+      }
+    }
+    if (filters.term) {
+      const words = String(filters.term)
+        .trim()
+        .split(/\s+/)
+        .filter((w) => w.length >= 2);
+      for (const w of words) {
+        wheres.push('p.DESCRICAOCOMPLETA LIKE ?');
+        params.push(`%${w}%`);
+      }
+    }
+    if (filters.grupo && grupoCol) {
+      wheres.push(`p.\`${grupoCol}\` = ?`);
+      params.push(filters.grupo);
+    }
+    if (filters.subgrupo && subgrupoCol) {
+      wheres.push(`p.\`${subgrupoCol}\` = ?`);
+      params.push(filters.subgrupo);
+    }
+    if (filters.fornecedor && fornecedorCol) {
+      wheres.push(`p.\`${fornecedorCol}\` = ?`);
+      params.push(filters.fornecedor);
+    }
+    if (filters.diasCadastro && dataCol) {
+      const n = Math.max(1, Math.min(3650, Number(filters.diasCadastro) || 30));
+      wheres.push(`p.\`${dataCol}\` >= DATE_SUB(CURDATE(), INTERVAL ? DAY)`);
+      params.push(n);
+    }
+
+    const limitRefs = Math.max(1, Math.min(500, Number(filters.limit) || 200));
+    // Primeiro descobre quais REFs batem (pra limitar); depois busca TODAS
+    // as linhas dessas REFs (pra mostrar as cores/tamanhos completos).
+    const sqlRefs = `
+      SELECT DISTINCT p.REF AS ref
+        FROM produtos p
+       WHERE ${wheres.join(' AND ')}
+       ORDER BY p.REF
+       LIMIT ${limitRefs + 1}
+    `;
+
+    let refList: string[] = [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlRefs, params);
+      refList = (rows as any[]).map((r) => String(r.ref).trim()).filter(Boolean);
+    } catch (e) {
+      this.logger.error(`searchRefsForPublish (refs step) falhou: ${(e as Error).message}`);
+      return empty as any;
+    }
+    if (!refList.length) {
+      return {
+        refs: [],
+        truncated: false,
+        schema: {
+          hasGrupo: !!grupoCol,
+          hasSubgrupo: !!subgrupoCol,
+          hasFornecedor: !!fornecedorCol,
+          hasDataCadastro: !!dataCol,
+        },
+      };
+    }
+    const truncated = refList.length > limitRefs;
+    if (truncated) refList = refList.slice(0, limitRefs);
+
+    // Agora busca TODAS as linhas dessas REFs pra montar cor/tamanho.
+    const sqlDetails = `
+      SELECT ${selects.join(', ')}
+        FROM produtos p
+       WHERE p.REF IN (?)
+       ORDER BY p.REF, p.COR, p.TAMANHO
+    `;
+    let detailRows: any[] = [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlDetails, [refList]);
+      detailRows = rows as any[];
+    } catch (e) {
+      this.logger.error(`searchRefsForPublish (details) falhou: ${(e as Error).message}`);
+      return empty as any;
+    }
+
+    // Agrupa por REF → COR → tamanhos.
+    const byRef = new Map<string, any>();
+    for (const r of detailRows) {
+      const refCode = String(r.ref).trim();
+      if (!refCode) continue;
+      let refEntry = byRef.get(refCode);
+      if (!refEntry) {
+        refEntry = {
+          refCode,
+          descricao: String(r.descricao ?? '').trim(),
+          grupo: r.grupo != null ? String(r.grupo).trim() : null,
+          subgrupo: r.subgrupo != null ? String(r.subgrupo).trim() : null,
+          fornecedor: r.fornecedor != null ? String(r.fornecedor).trim() : null,
+          ncm: r.ncm != null ? String(r.ncm).trim() : null,
+          cfop: r.cfop != null ? String(r.cfop).trim() : null,
+          custo: r.custo != null ? Number(r.custo) : null,
+          preco: r.preco != null ? Number(r.preco) : null,
+          coresMap: new Map<string, any>(),
+          totalVariations: 0,
+          estoqueTotal: 0,
+        };
+        byRef.set(refCode, refEntry);
+      }
+      const corKey = (r.cor == null ? '' : String(r.cor).trim()).toUpperCase() || 'SEM_COR';
+      let corEntry = refEntry.coresMap.get(corKey);
+      if (!corEntry) {
+        corEntry = {
+          cor: r.cor != null ? String(r.cor).trim() : '',
+          tamanhos: [] as any[],
+          estoqueTotal: 0,
+        };
+        refEntry.coresMap.set(corKey, corEntry);
+      }
+      const est = Number(r.estoqueLinha) || 0;
+      corEntry.tamanhos.push({
+        tamanho: r.tamanho != null ? String(r.tamanho).trim() : null,
+        codigo: String(r.codigo).trim(),
+        estoque: est,
+        ean: r.ean != null ? String(r.ean).trim() : null,
+      });
+      corEntry.estoqueTotal += est;
+      refEntry.totalVariations += 1;
+      refEntry.estoqueTotal += est;
+    }
+
+    // Transforma Map → Array
+    const refs = Array.from(byRef.values()).map((r: any) => ({
+      refCode: r.refCode as string,
+      descricao: r.descricao as string,
+      grupo: (r.grupo ?? null) as string | null,
+      subgrupo: (r.subgrupo ?? null) as string | null,
+      fornecedor: (r.fornecedor ?? null) as string | null,
+      ncm: (r.ncm ?? null) as string | null,
+      cfop: (r.cfop ?? null) as string | null,
+      custo: (r.custo ?? null) as number | null,
+      preco: (r.preco ?? null) as number | null,
+      cores: (Array.from(r.coresMap.values()) as any[]).map((c: any) => ({
+        cor: c.cor as string,
+        tamanhos: c.tamanhos as Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>,
+        estoqueTotal: c.estoqueTotal as number,
+      })),
+      totalVariations: r.totalVariations as number,
+      estoqueTotal: r.estoqueTotal as number,
+    }));
+
+    return {
+      refs,
+      truncated,
+      schema: {
+        hasGrupo: !!grupoCol,
+        hasSubgrupo: !!subgrupoCol,
+        hasFornecedor: !!fornecedorCol,
+        hasDataCadastro: !!dataCol,
+      },
+    };
+  }
+
+  /**
+   * Retorna os dados crus de UMA REF+COR (todos os tamanhos) — usado no
+   * momento de enfileirar pra congelar o snapshot no banco local.
+   */
+  async getRefColorForQueue(refCode: string, cor: string): Promise<{
+    descricao: string;
+    grupo: string | null;
+    subgrupo: string | null;
+    fornecedor: string | null;
+    ncm: string | null;
+    cfop: string | null;
+    custo: number | null;
+    preco: number | null;
+    tamanhos: Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>;
+  } | null> {
+    const res = await this.searchRefsForPublish({ refs: [refCode] });
+    const ref = res.refs.find((r) => r.refCode === refCode);
+    if (!ref) return null;
+    const corUpper = String(cor).trim().toUpperCase();
+    const corEntry =
+      ref.cores.find((c) => String(c.cor).trim().toUpperCase() === corUpper) ??
+      (corUpper === 'SEM_COR' ? ref.cores.find((c) => !c.cor) : undefined);
+    if (!corEntry) return null;
+    return {
+      descricao: ref.descricao,
+      grupo: ref.grupo,
+      subgrupo: ref.subgrupo,
+      fornecedor: ref.fornecedor,
+      ncm: ref.ncm,
+      cfop: ref.cfop,
+      custo: ref.custo,
+      preco: ref.preco,
+      tamanhos: corEntry.tamanhos,
+    };
+  }
 }

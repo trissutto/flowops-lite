@@ -23,6 +23,7 @@ import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
 import { CrmModule } from './crm/crm.module';
 import { SuppliesModule } from './supplies/supplies.module';
+import { SitePublishModule } from './site-publish/site-publish.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { SuppliesModule } from './supplies/supplies.module';
     MarketingRecoveryModule,
     CrmModule,
     SuppliesModule,
+    SitePublishModule,
   ],
 })
 export class AppModule {}
