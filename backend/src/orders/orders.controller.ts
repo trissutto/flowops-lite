@@ -67,19 +67,67 @@ export class OrdersController {
       search,
     });
 
-    const data = res.data.map((o: any) => ({
-      id: o.id,
-      number: o.number,
-      status: o.status,
-      dateCreatedGmt: o.date_created_gmt ?? o.date_created,
-      total: o.total,
-      currency: o.currency,
-      customerName: `${o.billing?.first_name ?? ''} ${o.billing?.last_name ?? ''}`.trim(),
-      // Título do método de envio (SEDEX / PAC / Retirar na Loja de X / etc)
-      // — lido direto do shipping_lines que o WC já devolve na listagem.
-      shippingMethod: o.shipping_lines?.[0]?.method_title ?? null,
-      ...extractAttribution(o.meta_data ?? []),
-    }));
+    // Enriquecimento: pra cada pedido retornado, anexa
+    //   - loja(s) responsável(is) pela separação (via PickOrder local)
+    //   - rastreio (trackingCode/carrier) do pick-order (quem enviou bota aqui)
+    //   - flag `shipped` se TODOS os pick-orders do pedido já foram enviados
+    // Tudo em 1 query só (batch) — não faz N+1.
+    const wcIds = res.data.map((o: any) => Number(o.id)).filter(Boolean);
+    const ordersWithPicks =
+      wcIds.length > 0
+        ? await (this.prisma as any).order.findMany({
+            where: { wcOrderId: { in: wcIds } },
+            select: {
+              wcOrderId: true,
+              pickOrders: {
+                select: {
+                  status: true,
+                  trackingCode: true,
+                  carrier: true,
+                  store: { select: { code: true, name: true } },
+                },
+              },
+            },
+          })
+        : [];
+    const picksByWcId = new Map<number, any[]>();
+    for (const ord of ordersWithPicks) {
+      picksByWcId.set(ord.wcOrderId, ord.pickOrders || []);
+    }
+
+    const data = res.data.map((o: any) => {
+      const picks = picksByWcId.get(Number(o.id)) || [];
+      const pickOrders = picks.map((p: any) => ({
+        storeCode: p.store?.code ?? null,
+        storeName: p.store?.name ?? null,
+        status: p.status,
+        trackingCode: p.trackingCode ?? null,
+        carrier: p.carrier ?? null,
+      }));
+      // "shipped" = TODOS os pick-orders enviados (quando há >1 loja, todas precisam marcar shipped)
+      const allShipped =
+        pickOrders.length > 0 && pickOrders.every((p) => p.status === 'shipped');
+      // 1º tracking disponível (normalmente só há 1 loja por pedido)
+      const firstTracking = pickOrders.find((p) => !!p.trackingCode);
+      return {
+        id: o.id,
+        number: o.number,
+        status: o.status,
+        dateCreatedGmt: o.date_created_gmt ?? o.date_created,
+        total: o.total,
+        currency: o.currency,
+        customerName: `${o.billing?.first_name ?? ''} ${o.billing?.last_name ?? ''}`.trim(),
+        // Título do método de envio (SEDEX / PAC / Retirar na Loja de X / etc)
+        // — lido direto do shipping_lines que o WC já devolve na listagem.
+        shippingMethod: o.shipping_lines?.[0]?.method_title ?? null,
+        // NOVO: loja responsável + rastreio + flag enviado
+        pickOrders,
+        shipped: allShipped,
+        trackingCode: firstTracking?.trackingCode ?? null,
+        trackingCarrier: firstTracking?.carrier ?? null,
+        ...extractAttribution(o.meta_data ?? []),
+      };
+    });
 
     return { data, total: res.total, totalPages: res.totalPages };
   }

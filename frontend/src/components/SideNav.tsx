@@ -57,7 +57,12 @@ const GROUPS: NavGroup[] = [
     color: 'amber',
     items: [
       { href: '/retaguarda/enviados-hoje',   label: 'Enviados por Loja', icon: Truck },
-      { href: '/retaguarda/baixa-estoque',   label: 'Baixa Estoque',    icon: PackageMinus },
+      // "Baixa Estoque" foi REMOVIDA do menu — a baixa no Giga hoje acontece
+      // automaticamente quando a loja bate 'shipped' + rastreio (autoDebitOnShipped).
+      // Quando dá errado, a operadora cai direto em "Log de Baixas" (fallback).
+      // A tela /retaguarda/baixa-estoque segue existindo pra casos extremos
+      // (ex: pedido que precisa de baixa manual sem envio real), mas não é
+      // mais parte do fluxo normal — sem link no menu.
       { href: '/retaguarda/baixas-log',      label: 'Log de Baixas',    icon: FileSearch },
       { href: '/retaguarda/venda-certa',     label: 'Venda Certa',      icon: CheckCircle2 },
       { href: '/retaguarda/materiais',       label: 'Materiais',        icon: Package2 },

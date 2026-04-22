@@ -45,6 +45,14 @@ import {
   Zap,
 } from 'lucide-react';
 
+interface PickOrderLite {
+  storeCode: string | null;
+  storeName: string | null;
+  status: string;
+  trackingCode: string | null;
+  carrier: string | null;
+}
+
 interface WcOrderListItem {
   id: number;
   number: string;
@@ -53,6 +61,11 @@ interface WcOrderListItem {
   total: string;
   customerName: string;
   shippingMethod?: string | null;
+  // Enriquecimento vindo do backend: loja(s) responsável(is) + rastreio
+  pickOrders?: PickOrderLite[];
+  shipped?: boolean;
+  trackingCode?: string | null;
+  trackingCarrier?: string | null;
 }
 
 interface SeparationGroup {
@@ -1020,6 +1033,47 @@ export default function SeparacaoPage() {
                         );
                       })()}
                       {o.customerName || '—'}
+
+                      {/* Badge ENVIADO + rastreio — quando TODOS os pick-orders estão shipped */}
+                      {o.shipped && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded align-middle"
+                          title={
+                            o.trackingCode
+                              ? `Enviado · ${o.trackingCarrier || ''} ${o.trackingCode}`
+                              : 'Enviado pela loja'
+                          }
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          ENVIADO
+                          {o.trackingCode && (
+                            <span className="font-mono font-normal opacity-90">
+                              · {o.trackingCode}
+                            </span>
+                          )}
+                        </span>
+                      )}
+
+                      {/* Badge da(s) loja(s) responsável(is) pela separação */}
+                      {o.pickOrders && o.pickOrders.length > 0 && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-semibold rounded align-middle"
+                          title={o.pickOrders
+                            .map(
+                              (p) =>
+                                `${p.storeName || p.storeCode || '?'}${
+                                  p.trackingCode ? ` · ${p.carrier || ''} ${p.trackingCode}` : ''
+                                } · ${p.status}`,
+                            )
+                            .join('\n')}
+                        >
+                          <StoreIcon className="w-3 h-3" />
+                          {o.pickOrders.length === 1
+                            ? o.pickOrders[0].storeCode || o.pickOrders[0].storeName
+                            : `${o.pickOrders.length} lojas`}
+                        </span>
+                      )}
+
                       {hasIssue && (
                         <span
                           className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-800 text-xs font-semibold rounded-full align-middle"

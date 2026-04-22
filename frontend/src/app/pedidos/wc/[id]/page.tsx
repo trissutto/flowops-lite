@@ -151,6 +151,12 @@ export default function PedidoDetailPage() {
     issueReasonLabel?: string | null;
     issueNote?: string | null;
     issueReportedAt?: string | null;
+    // Baixa no Gigasistemas — backend retorna debitApprovedAt + debitStatus derivado.
+    // 'applied' = baixa já dada no Giga (autoDebitOnShipped rodou OK)
+    // 'missing' = status=shipped mas sem baixa (falhou, cair em /retaguarda/baixas-log)
+    // 'pending' = ainda não deveria ter baixa (status=new/separating/ready)
+    debitApprovedAt?: string | null;
+    debitStatus?: 'applied' | 'pending' | 'missing';
   }>>([]);
   const [liveStatusFlash, setLiveStatusFlash] = useState<Record<string, number>>({});
 
@@ -969,6 +975,38 @@ export default function PedidoDetailPage() {
                         <Truck className="w-3 h-3 inline mr-1" />
                         <span className="font-mono font-semibold">{r.trackingCode}</span>
                         {r.carrier && <span className="text-slate-500 ml-2">via {r.carrier}</span>}
+                      </div>
+                    )}
+                    {/* Baixa no Gigasistemas — garante ao usuário que o estoque físico
+                        já foi debitado no ERP. O autoDebitOnShipped() roda quando
+                        a loja marca 'shipped' com rastreio. Se falhou (missing),
+                        redireciona pro log de baixas pra resolver manualmente. */}
+                    {r.debitStatus === 'applied' && (
+                      <div className="mt-1 pl-6 text-xs text-emerald-700 flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        <span className="font-medium">Baixa aplicada no Gigasistemas</span>
+                        {r.debitApprovedAt && (
+                          <span className="text-emerald-600 ml-1">
+                            ({new Date(r.debitApprovedAt).toLocaleString('pt-BR')})
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {r.debitStatus === 'missing' && (
+                      <div className="mt-1 pl-6 text-xs text-red-700 flex items-center gap-1.5">
+                        <AlertCircle className="w-3 h-3" />
+                        <span className="font-semibold">Baixa no Giga falhou</span>
+                        <Link
+                          href="/retaguarda/baixas-log"
+                          className="underline hover:text-red-900 font-medium"
+                        >
+                          resolver em Log de Baixas →
+                        </Link>
+                      </div>
+                    )}
+                    {r.debitStatus === 'pending' && r.status !== 'new' && (
+                      <div className="mt-1 pl-6 text-xs text-slate-500">
+                        Baixa no Giga: aguardando envio
                       </div>
                     )}
                     {!!r.updatedAt && (

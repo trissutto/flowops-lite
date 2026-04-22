@@ -988,6 +988,17 @@ export class PickOrdersService {
     };
     return rows.map((r) => {
       const issueReason = (r as any).issueReason ?? null;
+      const debitApprovedAt = (r as any).debitApprovedAt ?? null;
+      // Status da baixa ERP (Gigasistemas):
+      //   applied  = baixa LIVE aplicada (debitApprovedAt preenchido)
+      //   pending  = ainda não é hora (pick-order não enviado)
+      //   missing  = foi enviado (shipped) MAS sem baixa aprovada → auto-baixa pode ter falhado
+      //             → operadora deve ir em /retaguarda/baixas-log pra diagnosticar
+      let debitStatus: 'applied' | 'pending' | 'missing';
+      if (debitApprovedAt) debitStatus = 'applied';
+      else if (r.status === 'shipped') debitStatus = 'missing';
+      else debitStatus = 'pending';
+
       return {
         id: r.id,
         status: r.status,
@@ -1005,6 +1016,9 @@ export class PickOrdersService {
         issueReasonLabel: issueReason ? reasonLabels[issueReason] ?? issueReason : null,
         issueNote: (r as any).issueNote ?? null,
         issueReportedAt: (r as any).issueReportedAt ?? null,
+        // Status de baixa no ERP (Gigasistemas)
+        debitApprovedAt,
+        debitStatus,
       };
     });
   }
