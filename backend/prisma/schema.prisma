@@ -383,15 +383,19 @@ model SitePublishQueue {
   status          String   @default("queued")          // queued | enriched | publishing | published | failed
 
   // Fase 2 — enriquecimento pra WC
-  wcCategoryIds   Json?    @map("wc_category_ids")     // [123, 456]
-  wcTags          Json?    @map("wc_tags")             // ["vestido plus size","verão"]
-  wcDescricao     String?  @map("wc_descricao")        @db.Text
-  wcDescricaoCurta String? @map("wc_descricao_curta")  @db.Text
-  wcImagens       Json?    @map("wc_imagens")          // [{url:"...",alt:"..."},{...}] ordem = ordem no site
-  wcPesoKg        Decimal? @map("wc_peso_kg")          @db.Decimal(6, 3)
-  wcDimensoesCm   Json?    @map("wc_dimensoes_cm")     // {comprimento:7,largura:20,altura:30}
-  wcPrecoVenda    Decimal? @map("wc_preco_venda")      @db.Decimal(10, 2) // sobrescreve precoSugerido se quiser
-  wcPrecoPromo    Decimal? @map("wc_preco_promo")      @db.Decimal(10, 2)
+  wcTitulo         String?  @map("wc_titulo")          @db.Text
+  wcCategoryIds    Json?    @map("wc_category_ids")    // [123, 456]
+  wcTags           Json?    @map("wc_tags")            // ["vestido plus size","verão"]
+  wcAtributos      Json?    @map("wc_atributos")       // [{nome:"Tecido",valor:"Viscose"},...]
+  wcDescricao      String?  @map("wc_descricao")       @db.Text
+  wcDescricaoCurta String?  @map("wc_descricao_curta") @db.Text
+  wcImagens        Json?    @map("wc_imagens")         // [{url:"...",alt:"..."},...]
+  wcPesoKg         Decimal? @map("wc_peso_kg")         @db.Decimal(6, 3)
+  wcDimensoesCm    Json?    @map("wc_dimensoes_cm")    // {comprimento:7,largura:20,altura:30}
+  wcPrecoVenda     Decimal? @map("wc_preco_venda")     @db.Decimal(10, 2)
+  wcPrecoPromo     Decimal? @map("wc_preco_promo")     @db.Decimal(10, 2)
+  aiGeneratedAt    DateTime? @map("ai_generated_at")
+  aiModel          String?  @map("ai_model")           // ex: claude-sonnet-4-6
 
   // Fase 3 — resultado da publicação
   wcProductId     Int?     @map("wc_product_id")

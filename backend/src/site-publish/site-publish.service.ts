@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { AiEnrichmentService } from './ai-enrichment.service';
+import { WcCatalogService } from './wc-catalog.service';
 
 /**
  * SitePublishService — Fase 1 da integração Wincred → WooCommerce.
@@ -33,6 +35,8 @@ export class SitePublishService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly ai: AiEnrichmentService,
+    private readonly wc: WcCatalogService,
   ) {}
 
   /**
@@ -132,19 +136,25 @@ export class SitePublishService {
   async addToQueueBatch(
     items: Array<{ refCode: string; cor: string }>,
     userId?: string,
-  ): Promise<{ added: number; errors: Array<{ refCode: string; cor: string; reason: string }> }> {
-    if (!items.length) return { added: 0, errors: [] };
+  ): Promise<{
+    added: number;
+    ids: string[];
+    errors: Array<{ refCode: string; cor: string; reason: string }>;
+  }> {
+    if (!items.length) return { added: 0, ids: [], errors: [] };
     const errors: Array<{ refCode: string; cor: string; reason: string }> = [];
+    const ids: string[] = [];
     let added = 0;
     for (const it of items) {
       try {
-        await this.addToQueue({ refCode: it.refCode, cor: it.cor, userId });
+        const row = await this.addToQueue({ refCode: it.refCode, cor: it.cor, userId });
+        if (row?.id) ids.push(row.id);
         added++;
       } catch (e: any) {
         errors.push({ refCode: it.refCode, cor: it.cor, reason: e?.message ?? String(e) });
       }
     }
-    return { added, errors };
+    return { added, ids, errors };
   }
 
   /** Lista a fila com filtro opcional por status. */
@@ -186,5 +196,311 @@ export class SitePublishService {
     }
     await (this.prisma as any).sitePublishQueue.delete({ where: { id } });
     return { ok: true };
+  }
+
+  // ============================================================
+  // FASE 2 — ENRIQUECIMENTO
+  // ============================================================
+
+  /**
+   * Salva edição manual do enriquecimento de UM item.
+   * Aceita qualquer subconjunto dos campos — só sobrescreve os que vierem.
+   * Se algum campo chave estiver preenchido, promove status de queued pra enriched.
+   */
+  async saveEnrichment(
+    id: string,
+    patch: {
+      wcTitulo?: string | null;
+      wcCategoryIds?: number[] | null;
+      wcTags?: string[] | null;
+      wcAtributos?: Array<{ nome: string; valor: string }> | null;
+      wcDescricao?: string | null;
+      wcDescricaoCurta?: string | null;
+      wcImagens?: Array<{ id?: number; url: string; alt?: string }> | null;
+      wcPesoKg?: number | null;
+      wcDimensoesCm?: { comprimento?: number; largura?: number; altura?: number } | null;
+      wcPrecoVenda?: number | null;
+      wcPrecoPromo?: number | null;
+    },
+  ) {
+    const existing = await this.getQueueItem(id);
+    if (existing.status === 'published') {
+      throw new BadRequestException('Item já publicado — não pode ser editado.');
+    }
+
+    const data: any = {};
+    if (patch.wcTitulo !== undefined) data.wcTitulo = patch.wcTitulo;
+    if (patch.wcCategoryIds !== undefined) data.wcCategoryIds = patch.wcCategoryIds;
+    if (patch.wcTags !== undefined) data.wcTags = patch.wcTags;
+    if (patch.wcAtributos !== undefined) data.wcAtributos = patch.wcAtributos;
+    if (patch.wcDescricao !== undefined) data.wcDescricao = patch.wcDescricao;
+    if (patch.wcDescricaoCurta !== undefined) data.wcDescricaoCurta = patch.wcDescricaoCurta;
+    if (patch.wcImagens !== undefined) data.wcImagens = patch.wcImagens;
+    if (patch.wcPesoKg !== undefined) data.wcPesoKg = patch.wcPesoKg;
+    if (patch.wcDimensoesCm !== undefined) data.wcDimensoesCm = patch.wcDimensoesCm;
+    if (patch.wcPrecoVenda !== undefined) data.wcPrecoVenda = patch.wcPrecoVenda;
+    if (patch.wcPrecoPromo !== undefined) data.wcPrecoPromo = patch.wcPrecoPromo;
+
+    // Promove status automaticamente: se já tem título + descrição + alguma
+    // categoria/imagem, considera "enriched" (pronto pra publicar).
+    const hasTitulo = (data.wcTitulo ?? existing.wcTitulo) ?? null;
+    const hasDesc = (data.wcDescricao ?? existing.wcDescricao) ?? null;
+    const hasCat = (data.wcCategoryIds ?? existing.wcCategoryIds) as any;
+    const ready = !!hasTitulo && !!hasDesc && Array.isArray(hasCat) && hasCat.length > 0;
+    if (existing.status === 'queued' && ready) {
+      data.status = 'enriched';
+    }
+
+    return (this.prisma as any).sitePublishQueue.update({
+      where: { id },
+      data,
+    });
+  }
+
+  /**
+   * Chama Claude pra gerar título, descrição, tags e atributos pra UM item.
+   * Salva no banco automaticamente (não pisa em campos já editados manualmente
+   * — só preenche o que estiver vazio).
+   *
+   * Parâmetro force=true sobrescreve mesmo se já houver conteúdo.
+   */
+  async aiGenerate(id: string, opts: { force?: boolean } = {}): Promise<any> {
+    const item = await this.getQueueItem(id);
+
+    const tamanhos = Array.isArray(item.tamanhos)
+      ? (item.tamanhos as any[]).map((t) => String(t?.tamanho || '')).filter(Boolean)
+      : [];
+
+    // Busca descrição atual do Wincred (pode ter mudado desde o snapshot)
+    const snap = await this.erp.getRefColorForQueue(item.refCode, item.cor);
+    const descricaoWincred = (snap?.descricao || item.refCode).trim();
+
+    const gen = await this.ai.generateForProduct({
+      refCode: item.refCode,
+      cor: item.cor,
+      descricaoWincred,
+      grupo: item.grupo,
+      subgrupo: item.subgrupo,
+      tamanhos,
+    });
+
+    // Monta o patch — só preenche campos vazios (a menos que force).
+    const data: any = {
+      aiGeneratedAt: new Date(),
+      aiModel: this.ai['model'] || 'claude-sonnet-4-6',
+    };
+    if (opts.force || !item.wcTitulo) data.wcTitulo = gen.titulo;
+    if (opts.force || !item.wcDescricao) data.wcDescricao = gen.descricaoLonga;
+    if (opts.force || !item.wcDescricaoCurta) data.wcDescricaoCurta = gen.descricaoCurta;
+    if (opts.force || !item.wcTags || (Array.isArray(item.wcTags) && (item.wcTags as any[]).length === 0)) {
+      data.wcTags = gen.tags;
+    }
+    if (
+      opts.force ||
+      !item.wcAtributos ||
+      (Array.isArray(item.wcAtributos) && (item.wcAtributos as any[]).length === 0)
+    ) {
+      data.wcAtributos = gen.atributos;
+    }
+
+    const updated = await (this.prisma as any).sitePublishQueue.update({
+      where: { id },
+      data,
+    });
+    this.logger.log(`AI gerou pra ${item.refCode}/${item.cor} — ${gen.titulo.slice(0, 60)}`);
+    return { item: updated, generated: gen };
+  }
+
+  /** Categorias do WC (live). */
+  async wcCategories() {
+    return this.wc.listCategories();
+  }
+
+  /** Tags do WC (live). */
+  async wcTags(search?: string) {
+    return this.wc.listTags(search);
+  }
+
+  /** Status dos serviços de suporte (pra UI mostrar se IA/upload tão habilitados). */
+  async integrationStatus(): Promise<{
+    aiEnabled: boolean;
+    mediaUploadEnabled: boolean;
+  }> {
+    return {
+      aiEnabled: this.ai.isEnabled(),
+      mediaUploadEnabled: this.wc.isMediaUploadEnabled(),
+    };
+  }
+
+  /**
+   * Sobe uma imagem pra o WP a partir de URL externa (ex: link efêmero do
+   * frontend após o CEO arrastar o arquivo pra tela).
+   *
+   * O frontend é responsável por converter File → URL (ex: upload em bucket
+   * temporário ou data-URL) antes de chamar este endpoint. MVP: aceita URL
+   * direta.
+   */
+  async uploadImage(id: string, params: { sourceUrl: string; alt?: string }) {
+    const item = await this.getQueueItem(id);
+    const filename = `${item.refCode}-${item.cor}-${Date.now()}.jpg`
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+    const media = await this.wc.uploadMediaFromUrl(params.sourceUrl, filename, params.alt);
+    // Anexa na lista existente
+    const existing = Array.isArray(item.wcImagens) ? (item.wcImagens as any[]) : [];
+    const updated = [...existing, { id: media.id, url: media.source_url, alt: params.alt || '' }];
+    await (this.prisma as any).sitePublishQueue.update({
+      where: { id },
+      data: { wcImagens: updated },
+    });
+    return { wcImagens: updated };
+  }
+
+  // ============================================================
+  // FASE 3 — PUBLICAÇÃO NO WOOCOMMERCE
+  // ============================================================
+
+  /**
+   * Publica UM item como rascunho (draft) no WooCommerce.
+   *
+   * Valida:
+   *  - campos obrigatórios preenchidos
+   *  - SKU não existe no WC (evita duplicata — se já existe, aborta e pede
+   *    confirmação pra sobrescrever numa chamada com force=true — não
+   *    implementado ainda, MVP aborta)
+   *  - pelo menos 1 tamanho com estoque
+   *
+   * Passos:
+   *  - marca status=publishing
+   *  - chama WcCatalogService.createDraftVariableProduct
+   *  - em sucesso: status=published, grava wcProductId + variationIds
+   *  - em falha: status=failed, grava errorMessage (para CEO reexecutar)
+   *
+   * O produto vai como DRAFT — CEO precisa revisar no WC admin e clicar em
+   * "Publish". Isso é intencional: evita que produto mal configurado vá ao
+   * ar direto.
+   */
+  async publishToWc(id: string, opts: { force?: boolean } = {}): Promise<any> {
+    const item = await this.getQueueItem(id);
+    if (item.status === 'published') {
+      throw new BadRequestException('Item já publicado.');
+    }
+    if (item.status === 'publishing') {
+      throw new BadRequestException('Item já está sendo publicado (outra execução em andamento).');
+    }
+
+    // Valida campos obrigatórios
+    const titulo = (item.wcTitulo || '').trim();
+    const descricao = (item.wcDescricao || '').trim();
+    const descricaoCurta = (item.wcDescricaoCurta || '').trim();
+    const categoryIds = Array.isArray(item.wcCategoryIds) ? (item.wcCategoryIds as any[]).map(Number) : [];
+    const tags = Array.isArray(item.wcTags) ? (item.wcTags as any[]).map(String) : [];
+    const atributos = Array.isArray(item.wcAtributos) ? (item.wcAtributos as any[]) : [];
+    const imagens = Array.isArray(item.wcImagens) ? (item.wcImagens as any[]) : [];
+    const tamanhosSnapshot = Array.isArray(item.tamanhos) ? (item.tamanhos as any[]) : [];
+
+    const missing: string[] = [];
+    if (!titulo) missing.push('título');
+    if (!descricao) missing.push('descrição');
+    if (categoryIds.length === 0) missing.push('categoria');
+    if (imagens.length === 0) missing.push('pelo menos 1 imagem');
+    if (tamanhosSnapshot.length === 0) missing.push('tamanhos (snapshot Wincred vazio)');
+    if (missing.length) {
+      throw new BadRequestException(`Campos obrigatórios faltando: ${missing.join(', ')}.`);
+    }
+
+    // Preço: usa wcPrecoVenda se setado, senão precoSugerido
+    const precoBase = Number(item.wcPrecoVenda ?? item.precoSugerido ?? 0);
+    if (!precoBase || precoBase <= 0) {
+      throw new BadRequestException('Preço inválido (wcPrecoVenda ou precoSugerido).');
+    }
+    const precoPromo = item.wcPrecoPromo ? Number(item.wcPrecoPromo) : undefined;
+
+    // SKU do pai = refCode + cor (normalizado)
+    const sku = `${item.refCode}-${item.cor}`.replace(/\s+/g, '-').toUpperCase();
+
+    // Checa duplicidade
+    if (!opts.force) {
+      const existing = await this.wc.findProductIdBySku(sku);
+      if (existing) {
+        throw new BadRequestException(
+          `Já existe produto no WC com SKU ${sku} (id ${existing}). Revise no WC admin ou use force=true pra sobrescrever (não implementado — MVP recusa).`,
+        );
+      }
+    }
+
+    // Marca publishing
+    await (this.prisma as any).sitePublishQueue.update({
+      where: { id },
+      data: { status: 'publishing', errorMessage: null },
+    });
+
+    try {
+      const result = await this.wc.createDraftVariableProduct({
+        sku,
+        titulo,
+        descricao,
+        descricaoCurta,
+        categoryIds,
+        tags,
+        imagens,
+        atributos,
+        tamanhos: tamanhosSnapshot.map((t: any) => ({
+          tamanho: String(t.tamanho || '').trim(),
+          codigo: String(t.codigo || '').trim(),
+          estoque: Number(t.estoque) || 0,
+          preco: precoBase,
+          precoPromo,
+        })),
+        pesoKg: item.wcPesoKg ? Number(item.wcPesoKg) : undefined,
+        dimensoesCm: item.wcDimensoesCm ? (item.wcDimensoesCm as any) : undefined,
+        cor: item.cor,
+      });
+
+      const updated = await (this.prisma as any).sitePublishQueue.update({
+        where: { id },
+        data: {
+          status: 'published',
+          wcProductId: result.productId,
+          wcVariationIds: result.variationIds,
+          publishedAt: new Date(),
+          errorMessage: null,
+        },
+      });
+
+      // Log de auditoria (reutiliza integration_logs)
+      await (this.prisma as any).integrationLog
+        .create({
+          data: {
+            direction: 'out',
+            type: 'site_publish.publish',
+            payload: {
+              queueItemId: id,
+              refCode: item.refCode,
+              cor: item.cor,
+              wcProductId: result.productId,
+              variationCount: result.variationIds.length,
+            },
+            httpStatus: 201,
+          },
+        })
+        .catch(() => {}); // nunca deixa log quebrar o fluxo
+
+      this.logger.log(
+        `Publish OK: ${item.refCode}/${item.cor} → WC #${result.productId} (${result.variationIds.length} variações)`,
+      );
+      return updated;
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      await (this.prisma as any).sitePublishQueue.update({
+        where: { id },
+        data: {
+          status: 'failed',
+          errorMessage: msg.slice(0, 500),
+        },
+      });
+      this.logger.error(`Publish FAIL ${item.refCode}/${item.cor}: ${msg}`);
+      throw new BadRequestException(`Falha ao publicar: ${msg}`);
+    }
   }
 }

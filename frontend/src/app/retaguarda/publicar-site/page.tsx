@@ -25,9 +25,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Globe, Search, Plus, Trash2, Check, RefreshCw,
   Layers, Package, Loader2, AlertCircle, CheckCircle2,
-  X, Filter,
+  X, Filter, Edit3, Sparkles, ExternalLink,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import EditProductModal from './EditProductModal';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────
 
@@ -128,6 +129,16 @@ export default function PublicarSitePage() {
   const [toast, setToast] = useState<string | null>(null);
   const [selectedCors, setSelectedCors] = useState<Set<string>>(new Set());
   const [showQueue, setShowQueue] = useState(true);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [autoAi, setAutoAi] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('lurds.publicar-site.autoAi') === '1';
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('lurds.publicar-site.autoAi', autoAi ? '1' : '0');
+  }, [autoAi]);
 
   // ─── Carga inicial: facets + fila ────────────────────────────────────
   useEffect(() => {
@@ -219,11 +230,22 @@ export default function PublicarSitePage() {
     const k = keyRefCor(refCode, cor);
     setAddingKey(k);
     try {
-      await api('/site-publish/queue', {
+      const res = await api<{ id: string; status: string }>('/site-publish/queue', {
         method: 'POST',
         body: JSON.stringify({ refCode, cor }),
       });
       setToast(`✓ ${refCode} / ${cor} enfileirado.`);
+      // Auto-gerar IA em background (não bloqueia UI) — Etapa 7
+      if (autoAi && res?.id) {
+        api(`/site-publish/queue/${res.id}/ai`, {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }).then(() => {
+          loadQueue();
+        }).catch((err) => {
+          console.warn('auto-ai falhou', err);
+        });
+      }
       loadQueue();
     } catch (e: any) {
       setToast(`Erro: ${e?.message || e}`);
@@ -242,12 +264,25 @@ export default function PublicarSitePage() {
         const [refCode, cor] = k.split('__');
         return { refCode, cor };
       });
-      const res = await api<{ added: number; errors: any[] }>('/site-publish/queue/batch', {
+      const res = await api<{ added: number; errors: any[]; ids?: string[] }>('/site-publish/queue/batch', {
         method: 'POST',
         body: JSON.stringify({ items }),
       });
       setToast(`${res.added} itens enfileirados${res.errors.length ? `, ${res.errors.length} erros` : ''}.`);
       clearSelection();
+      // Auto-gerar IA em background para todos os novos itens
+      if (autoAi && Array.isArray(res.ids) && res.ids.length) {
+        (async () => {
+          for (const id of res.ids!) {
+            try {
+              await api(`/site-publish/queue/${id}/ai`, { method: 'POST', body: JSON.stringify({}) });
+            } catch (err) {
+              console.warn('auto-ai batch falhou', id, err);
+            }
+          }
+          loadQueue();
+        })();
+      }
       loadQueue();
     } catch (e: any) {
       setToast(`Erro batch: ${e?.message || e}`);
@@ -434,6 +469,20 @@ export default function PublicarSitePage() {
                 Limpar filtros
               </button>
 
+              <label
+                className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-xs font-medium text-amber-800 cursor-pointer select-none"
+                title="Ao enfileirar, dispara a IA em background pra gerar título, descrição e tags"
+              >
+                <input
+                  type="checkbox"
+                  checked={autoAi}
+                  onChange={(e) => setAutoAi(e.target.checked)}
+                  className="w-4 h-4 accent-amber-600"
+                />
+                <Sparkles className="w-3.5 h-3.5" />
+                Auto-gerar IA ao enfileirar
+              </label>
+
               {selectedCors.size > 0 && (
                 <div className="flex items-center gap-2 ml-auto">
                   <span className="text-sm text-gray-600">
@@ -538,7 +587,12 @@ export default function PublicarSitePage() {
 
               <div className="space-y-2 max-h-[70vh] overflow-y-auto">
                 {queue.map((q) => (
-                  <QueueRow key={q.id} item={q} onRemove={removeQueue} />
+                  <QueueRow
+                    key={q.id}
+                    item={q}
+                    onRemove={removeQueue}
+                    onEdit={() => setEditingItemId(q.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -551,6 +605,17 @@ export default function PublicarSitePage() {
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2 rounded-lg shadow-lg z-50">
           {toast}
         </div>
+      )}
+
+      {/* Modal de edição */}
+      {editingItemId && (
+        <EditProductModal
+          itemId={editingItemId}
+          onClose={() => setEditingItemId(null)}
+          onSaved={() => {
+            loadQueue();
+          }}
+        />
       )}
     </div>
   );
@@ -694,19 +759,39 @@ function RefCard({
   );
 }
 
-function QueueRow({ item, onRemove }: { item: QueueItem; onRemove: (id: string) => void }) {
+function QueueRow({
+  item,
+  onRemove,
+  onEdit,
+}: {
+  item: QueueItem;
+  onRemove: (id: string) => void;
+  onEdit: () => void;
+}) {
   const statusLabel: Record<string, { label: string; color: string }> = {
     queued: { label: 'Aguardando', color: 'bg-gray-100 text-gray-700' },
-    enriched: { label: 'Enriquecido', color: 'bg-blue-100 text-blue-700' },
-    publishing: { label: 'Publicando', color: 'bg-yellow-100 text-yellow-700' },
+    enriched: { label: 'Pronto pra publicar', color: 'bg-blue-100 text-blue-700' },
+    publishing: { label: 'Publicando...', color: 'bg-yellow-100 text-yellow-700' },
     published: { label: 'No ar', color: 'bg-green-100 text-green-700' },
     failed: { label: 'Erro', color: 'bg-red-100 text-red-700' },
   };
   const s = statusLabel[item.status] ?? { label: item.status, color: 'bg-gray-100 text-gray-700' };
-  const canRemove = item.status !== 'published';
+  const canRemove = item.status !== 'published' && item.status !== 'publishing';
+  const isPublished = item.status === 'published';
+  const wcAdminUrl =
+    isPublished && item.wcProductId && process.env.NEXT_PUBLIC_WC_ADMIN_URL
+      ? `${process.env.NEXT_PUBLIC_WC_ADMIN_URL.replace(/\/+$/, '')}/wp-admin/post.php?post=${item.wcProductId}&action=edit`
+      : null;
 
   return (
-    <div className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+    <div
+      onClick={(e) => {
+        // Só abre modal se não clicou em botão
+        if ((e.target as HTMLElement).closest('button,a')) return;
+        onEdit();
+      }}
+      className="border border-gray-200 rounded-lg p-3 hover:bg-purple-50 hover:border-purple-200 cursor-pointer transition-colors"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -721,15 +806,43 @@ function QueueRow({ item, onRemove }: { item: QueueItem; onRemove: (id: string) 
             {item.precoSugerido && ` · R$ ${Number(item.precoSugerido).toFixed(2)}`}
           </div>
         </div>
-        {canRemove && (
-          <button
-            onClick={() => onRemove(item.id)}
-            className="text-gray-400 hover:text-red-600 p-1"
-            title="Remover da fila"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <div className="flex items-center gap-1">
+          {wcAdminUrl && (
+            <a
+              href={wcAdminUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-gray-400 hover:text-green-600 p-1"
+              title="Abrir no WC"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+          {!isPublished && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+              }}
+              className="text-purple-500 hover:text-purple-700 p-1"
+              title="Editar / Enriquecer"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {canRemove && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(item.id);
+              }}
+              className="text-gray-400 hover:text-red-600 p-1"
+              title="Remover da fila"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
