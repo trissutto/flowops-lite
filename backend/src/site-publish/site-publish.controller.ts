@@ -257,4 +257,92 @@ export class SitePublishController {
     this.assertAdmin(req);
     return this.service.syncEansOnWc(id);
   }
+
+  // ============================================================
+  // BULK — agilizar quando são muitas cores
+  // ============================================================
+
+  /**
+   * Publica vários itens de uma vez. Body: { ids: string[], force?: boolean }.
+   * Sequencial pra não bater em rate-limit do WC/WP.
+   */
+  @Post('queue/publish-batch')
+  async publishBatch(@Req() req: any, @Body() body: any) {
+    this.assertAdmin(req);
+    const ids: string[] = Array.isArray(body?.ids)
+      ? body.ids.map((x: any) => String(x)).filter(Boolean)
+      : [];
+    if (!ids.length) throw new BadRequestException('ids[] vazio.');
+    return this.service.publishBatch(ids, { force: !!body?.force });
+  }
+
+  /**
+   * Dispara IA em vários itens de uma vez. Body: { ids: string[], force?: boolean }.
+   * Útil pra gerar conteúdo pra 10 cores da mesma REF num único clique.
+   */
+  @Post('queue/ai-batch')
+  async aiBatch(@Req() req: any, @Body() body: any) {
+    this.assertAdmin(req);
+    const ids: string[] = Array.isArray(body?.ids)
+      ? body.ids.map((x: any) => String(x)).filter(Boolean)
+      : [];
+    if (!ids.length) throw new BadRequestException('ids[] vazio.');
+    return this.service.aiGenerateBatch(ids, { force: !!body?.force });
+  }
+
+  /**
+   * Edição em bloco. Body: { ids: string[], patch: {...} }
+   * Aplica o mesmo patch em todos os itens (campos aceitos = PATCH /queue/:id).
+   * NÃO afeta itens já publicados.
+   */
+  @Patch('queue/bulk')
+  async bulkPatch(@Req() req: any, @Body() body: any) {
+    this.assertAdmin(req);
+    const ids: string[] = Array.isArray(body?.ids)
+      ? body.ids.map((x: any) => String(x)).filter(Boolean)
+      : [];
+    if (!ids.length) throw new BadRequestException('ids[] vazio.');
+    const raw = body?.patch || {};
+    const patch: any = {};
+    if (raw.wcTitulo !== undefined) patch.wcTitulo = raw.wcTitulo ? String(raw.wcTitulo).trim() : null;
+    if (raw.wcCategoryIds !== undefined) {
+      patch.wcCategoryIds = Array.isArray(raw.wcCategoryIds)
+        ? raw.wcCategoryIds.map(Number).filter((n: number) => Number.isInteger(n) && n > 0)
+        : null;
+    }
+    if (raw.wcTags !== undefined) {
+      patch.wcTags = Array.isArray(raw.wcTags)
+        ? raw.wcTags.map((t: any) => String(t).trim()).filter(Boolean).slice(0, 30)
+        : null;
+    }
+    if (raw.wcAtributos !== undefined) {
+      patch.wcAtributos = Array.isArray(raw.wcAtributos)
+        ? raw.wcAtributos
+            .map((a: any) => ({
+              nome: String(a?.nome || '').trim(),
+              valor: String(a?.valor || '').trim(),
+            }))
+            .filter((a: any) => a.nome && a.valor)
+            .slice(0, 20)
+        : null;
+    }
+    if (raw.wcDescricao !== undefined) patch.wcDescricao = raw.wcDescricao ? String(raw.wcDescricao) : null;
+    if (raw.wcDescricaoCurta !== undefined) {
+      patch.wcDescricaoCurta = raw.wcDescricaoCurta ? String(raw.wcDescricaoCurta) : null;
+    }
+    if (raw.wcPesoKg !== undefined) patch.wcPesoKg = raw.wcPesoKg ? Number(raw.wcPesoKg) : null;
+    if (raw.wcDimensoesCm !== undefined) {
+      const d = raw.wcDimensoesCm;
+      patch.wcDimensoesCm = d
+        ? {
+            comprimento: d.comprimento ? Number(d.comprimento) : undefined,
+            largura: d.largura ? Number(d.largura) : undefined,
+            altura: d.altura ? Number(d.altura) : undefined,
+          }
+        : null;
+    }
+    if (raw.wcPrecoVenda !== undefined) patch.wcPrecoVenda = raw.wcPrecoVenda ? Number(raw.wcPrecoVenda) : null;
+    if (raw.wcPrecoPromo !== undefined) patch.wcPrecoPromo = raw.wcPrecoPromo ? Number(raw.wcPrecoPromo) : null;
+    return this.service.bulkPatchQueue(ids, patch);
+  }
 }

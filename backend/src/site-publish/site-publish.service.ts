@@ -585,4 +585,120 @@ export class SitePublishService {
     );
     return res;
   }
+
+  /**
+   * Publica vários itens em sequência. Rodar em paralelo dá rate-limit no
+   * WC (media upload + create product) e WP costuma morrer. Sequencial é
+   * mais lento mas não quebra.
+   *
+   * Retorna resumo: quantos OK, quantos falharam (e por quê).
+   */
+  async publishBatch(
+    ids: string[],
+    opts: { force?: boolean } = {},
+  ): Promise<{
+    total: number;
+    published: number;
+    failed: Array<{ id: string; refCode?: string; cor?: string; reason: string }>;
+  }> {
+    const failed: Array<{ id: string; refCode?: string; cor?: string; reason: string }> = [];
+    let published = 0;
+    for (const id of ids) {
+      try {
+        await this.publishToWc(id, opts);
+        published++;
+      } catch (e: any) {
+        // Lê o item pra incluir refCode/cor no retorno (ajuda o CEO a ver qual falhou).
+        let refCode: string | undefined;
+        let cor: string | undefined;
+        try {
+          const it = await (this.prisma as any).sitePublishQueue.findUnique({ where: { id } });
+          refCode = it?.refCode;
+          cor = it?.cor;
+        } catch {}
+        failed.push({ id, refCode, cor, reason: String(e?.message || e).slice(0, 300) });
+      }
+    }
+    return { total: ids.length, published, failed };
+  }
+
+  /**
+   * Edição em bloco — aplica o MESMO patch em vários itens.
+   *
+   * Uso típico: CEO tem 8 cores da mesma REF na fila. Monta 1 vez título
+   * base, descrição, categorias, tags, atributos — salva em todas. Depois
+   * ajusta particularidades de cada cor (título com "Preto", "Azul", etc.)
+   * abrindo o modal individual de cada uma se quiser.
+   *
+   * Campos suportados (todos opcionais — só aplica o que estiver no patch):
+   *   wcTitulo, wcDescricao, wcDescricaoCurta, wcCategoryIds, wcTags,
+   *   wcAtributos, wcPesoKg, wcDimensoesCm, wcPrecoVenda, wcPrecoPromo.
+   *
+   * NÃO aplica em itens já publicados (status=published) — evita mexer em
+   * produto vivo por engano.
+   */
+  async bulkPatchQueue(
+    ids: string[],
+    patch: any,
+  ): Promise<{
+    total: number;
+    updated: number;
+    skipped: Array<{ id: string; reason: string }>;
+  }> {
+    const skipped: Array<{ id: string; reason: string }> = [];
+    let updated = 0;
+    for (const id of ids) {
+      try {
+        const item = await (this.prisma as any).sitePublishQueue.findUnique({ where: { id } });
+        if (!item) {
+          skipped.push({ id, reason: 'não encontrado' });
+          continue;
+        }
+        if (item.status === 'published') {
+          skipped.push({ id, reason: 'já publicado' });
+          continue;
+        }
+        await this.saveEnrichment(id, patch);
+        updated++;
+      } catch (e: any) {
+        skipped.push({ id, reason: String(e?.message || e).slice(0, 200) });
+      }
+    }
+    return { total: ids.length, updated, skipped };
+  }
+
+  /**
+   * Dispara IA pra vários itens em sequência. Útil quando o CEO enfileira
+   * 10 cores e quer gerar tudo de uma vez.
+   *
+   * Sequencial pra não estourar rate-limit do Claude (batch lá = 5 rps).
+   * Retorna resumo com sucesso/falha por item.
+   */
+  async aiGenerateBatch(
+    ids: string[],
+    opts: { force?: boolean } = {},
+  ): Promise<{
+    total: number;
+    generated: number;
+    failed: Array<{ id: string; refCode?: string; cor?: string; reason: string }>;
+  }> {
+    const failed: Array<{ id: string; refCode?: string; cor?: string; reason: string }> = [];
+    let generated = 0;
+    for (const id of ids) {
+      try {
+        await this.aiGenerate(id, opts);
+        generated++;
+      } catch (e: any) {
+        let refCode: string | undefined;
+        let cor: string | undefined;
+        try {
+          const it = await (this.prisma as any).sitePublishQueue.findUnique({ where: { id } });
+          refCode = it?.refCode;
+          cor = it?.cor;
+        } catch {}
+        failed.push({ id, refCode, cor, reason: String(e?.message || e).slice(0, 300) });
+      }
+    }
+    return { total: ids.length, generated, failed };
+  }
 }

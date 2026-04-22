@@ -25,10 +25,11 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Globe, Search, Plus, Trash2, Check, RefreshCw,
   Layers, Package, Loader2, AlertCircle, CheckCircle2,
-  X, Filter, Edit3, Sparkles, ExternalLink,
+  X, Filter, Edit3, Sparkles, ExternalLink, Send, Pencil,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import EditProductModal from './EditProductModal';
+import BulkEditModal from './BulkEditModal';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────
 
@@ -130,6 +131,10 @@ export default function PublicarSitePage() {
   const [selectedCors, setSelectedCors] = useState<Set<string>>(new Set());
   const [showQueue, setShowQueue] = useState(true);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  // Seleção múltipla na fila (pra publicar em massa / editar em bloco)
+  const [selectedQueueIds, setSelectedQueueIds] = useState<Set<string>>(new Set());
+  const [bulkEditing, setBulkEditing] = useState(false);
+  const [bulkRunning, setBulkRunning] = useState<null | 'publish' | 'ai'>(null);
   const [autoAi, setAutoAi] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem('lurds.publicar-site.autoAi') === '1';
@@ -223,7 +228,116 @@ export default function PublicarSitePage() {
     });
   };
 
+  // Atalho: marca TODAS as cores pendentes da REF e já enfileira em batch.
+  // Evita o fluxo "expandir > selecionar > clicar enfileirar" quando são
+  // muitas cores (tipo 8+ num mesmo refCode).
+  const queueAllCores = async (ref: GigaRef) => {
+    const items = ref.cores
+      .map((c) => ({ refCode: ref.refCode, cor: c.cor }))
+      .filter((it) => !queuedKeys.has(keyRefCor(it.refCode, it.cor)));
+    if (!items.length) {
+      setToast(`${ref.refCode}: todas as cores já estão na fila.`);
+      setTimeout(() => setToast(null), 2500);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api<{ added: number; errors: any[]; ids?: string[] }>(
+        '/site-publish/queue/batch',
+        { method: 'POST', body: JSON.stringify({ items }) },
+      );
+      setToast(`✓ ${res.added} cores de ${ref.refCode} enfileiradas${autoAi ? ' — gerando IA...' : ''}`);
+      if (autoAi && Array.isArray(res.ids) && res.ids.length) {
+        api<{ generated: number; total: number; failed: any[] }>(
+          '/site-publish/queue/ai-batch',
+          { method: 'POST', body: JSON.stringify({ ids: res.ids }) },
+        ).then((r) => {
+          const failMsg = r.failed?.length ? ` · ${r.failed.length} erro(s) — ${r.failed[0]?.reason || ''}` : '';
+          setToast(`✨ IA gerou ${r.generated}/${r.total}${failMsg}`);
+          setTimeout(() => setToast(null), 6000);
+          loadQueue();
+        }).catch((err) => {
+          setToast(`⚠ IA batch falhou: ${String(err?.message || err).slice(0, 200)}`);
+          setTimeout(() => setToast(null), 6000);
+        });
+      }
+      loadQueue();
+    } catch (e: any) {
+      setToast(`Erro: ${e?.message || e}`);
+    } finally {
+      setLoading(false);
+      setTimeout(() => setToast(null), 5000);
+    }
+  };
+
   const clearSelection = () => setSelectedCors(new Set());
+
+  // ─── Seleção múltipla na FILA ────────────────────────────────────────
+  const toggleQueueSelect = (id: string) => {
+    setSelectedQueueIds((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  };
+
+  // Só seleciona itens ainda não publicados — os publicados não fazem sentido
+  // entrar em bulk publish/edit.
+  const selectAllQueue = () => {
+    const editable = queue.filter((q) => q.status !== 'published' && q.status !== 'publishing');
+    setSelectedQueueIds(new Set(editable.map((q) => q.id)));
+  };
+  const clearQueueSelection = () => setSelectedQueueIds(new Set());
+
+  // ─── Publicar em massa ───────────────────────────────────────────────
+  const publishSelected = async () => {
+    const ids = Array.from(selectedQueueIds);
+    if (!ids.length) return;
+    if (!confirm(`Publicar ${ids.length} ${ids.length > 1 ? 'itens' : 'item'} no WC como rascunho? Vai rodar sequencial (pode demorar alguns min).`)) return;
+    setBulkRunning('publish');
+    try {
+      const res = await api<{ total: number; published: number; failed: any[] }>(
+        '/site-publish/queue/publish-batch',
+        { method: 'POST', body: JSON.stringify({ ids }) },
+      );
+      const failMsg = res.failed?.length
+        ? ` · ${res.failed.length} erro(s): ${res.failed.slice(0, 2).map((f: any) => `${f.refCode || ''}/${f.cor || ''} (${f.reason})`).join('; ')}`
+        : '';
+      setToast(`✓ ${res.published}/${res.total} publicado${res.published !== 1 ? 's' : ''}${failMsg}`);
+      clearQueueSelection();
+      loadQueue();
+    } catch (e: any) {
+      setToast(`Erro bulk publish: ${e?.message || e}`);
+    } finally {
+      setBulkRunning(null);
+      setTimeout(() => setToast(null), 8000);
+    }
+  };
+
+  // ─── Gerar IA em massa ───────────────────────────────────────────────
+  const aiSelected = async () => {
+    const ids = Array.from(selectedQueueIds);
+    if (!ids.length) return;
+    setBulkRunning('ai');
+    try {
+      const res = await api<{ total: number; generated: number; failed: any[] }>(
+        '/site-publish/queue/ai-batch',
+        { method: 'POST', body: JSON.stringify({ ids }) },
+      );
+      const failMsg = res.failed?.length
+        ? ` · ${res.failed.length} erro(s) — ${res.failed[0]?.reason || ''}`
+        : '';
+      setToast(`✨ ${res.generated}/${res.total} gerado${res.generated !== 1 ? 's' : ''} pela IA${failMsg}`);
+      clearQueueSelection();
+      loadQueue();
+    } catch (e: any) {
+      setToast(`Erro bulk IA: ${e?.message || e}`);
+    } finally {
+      setBulkRunning(null);
+      setTimeout(() => setToast(null), 6000);
+    }
+  };
 
   // ─── Enfileirar individual (botão + por cor) ─────────────────────────
   const addOne = async (refCode: string, cor: string) => {
@@ -234,15 +348,21 @@ export default function PublicarSitePage() {
         method: 'POST',
         body: JSON.stringify({ refCode, cor }),
       });
-      setToast(`✓ ${refCode} / ${cor} enfileirado.`);
+      setToast(`✓ ${refCode} / ${cor} enfileirado${autoAi ? ' — gerando IA...' : ''}`);
       // Auto-gerar IA em background (não bloqueia UI) — Etapa 7
       if (autoAi && res?.id) {
         api(`/site-publish/queue/${res.id}/ai`, {
           method: 'POST',
           body: JSON.stringify({}),
         }).then(() => {
+          setToast(`✨ ${refCode} / ${cor} — IA gerou conteúdo.`);
+          setTimeout(() => setToast(null), 3000);
           loadQueue();
         }).catch((err) => {
+          // Mostra o erro real — ajuda a diagnosticar ANTHROPIC_API_KEY faltando
+          const msg = String(err?.message || err).slice(0, 200);
+          setToast(`⚠ IA falhou em ${refCode}/${cor}: ${msg}`);
+          setTimeout(() => setToast(null), 6000);
           console.warn('auto-ai falhou', err);
         });
       }
@@ -270,18 +390,21 @@ export default function PublicarSitePage() {
       });
       setToast(`${res.added} itens enfileirados${res.errors.length ? `, ${res.errors.length} erros` : ''}.`);
       clearSelection();
-      // Auto-gerar IA em background para todos os novos itens
+      // Auto-gerar IA em background para todos os novos itens — usa o endpoint
+      // batch pra ter resumo consolidado em vez de N chamadas soltas
       if (autoAi && Array.isArray(res.ids) && res.ids.length) {
-        (async () => {
-          for (const id of res.ids!) {
-            try {
-              await api(`/site-publish/queue/${id}/ai`, { method: 'POST', body: JSON.stringify({}) });
-            } catch (err) {
-              console.warn('auto-ai batch falhou', id, err);
-            }
-          }
+        api<{ total: number; generated: number; failed: any[] }>(
+          '/site-publish/queue/ai-batch',
+          { method: 'POST', body: JSON.stringify({ ids: res.ids }) },
+        ).then((r) => {
+          const failMsg = r.failed?.length ? ` · ${r.failed.length} erro(s) — ${r.failed[0]?.reason || ''}` : '';
+          setToast(`✨ IA gerou ${r.generated}/${r.total}${failMsg}`);
+          setTimeout(() => setToast(null), 6000);
           loadQueue();
-        })();
+        }).catch((err) => {
+          setToast(`⚠ IA batch falhou: ${String(err?.message || err).slice(0, 200)}`);
+          setTimeout(() => setToast(null), 6000);
+        });
       }
       loadQueue();
     } catch (e: any) {
@@ -533,6 +656,7 @@ export default function PublicarSitePage() {
                   selectedCors={selectedCors}
                   toggleSelect={toggleSelect}
                   selectAllCores={selectAllCores}
+                  queueAllCores={queueAllCores}
                   addOne={addOne}
                   addingKey={addingKey}
                 />
@@ -570,6 +694,64 @@ export default function PublicarSitePage() {
                 )}
               </div>
 
+              {/* Barra de ações em massa — aparece quando tem itens editáveis */}
+              {queue.some((q) => q.status !== 'published' && q.status !== 'publishing') && (
+                <div className="mb-3 bg-gray-50 border border-gray-200 rounded-lg p-2 flex items-center gap-2 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs font-medium text-gray-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedQueueIds.size > 0 &&
+                        selectedQueueIds.size === queue.filter((q) => q.status !== 'published' && q.status !== 'publishing').length
+                      }
+                      onChange={(e) => (e.target.checked ? selectAllQueue() : clearQueueSelection())}
+                      className="w-4 h-4 accent-purple-600"
+                    />
+                    Selecionar tudo
+                  </label>
+                  {selectedQueueIds.size > 0 && (
+                    <>
+                      <span className="text-xs text-gray-500">({selectedQueueIds.size})</span>
+                      <div className="ml-auto flex items-center gap-1 flex-wrap">
+                        <button
+                          onClick={aiSelected}
+                          disabled={bulkRunning !== null}
+                          className="flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded text-[11px] font-semibold hover:opacity-90 disabled:opacity-60"
+                          title="Dispara IA em todos os selecionados (sequencial)"
+                        >
+                          {bulkRunning === 'ai' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                          IA
+                        </button>
+                        <button
+                          onClick={() => setBulkEditing(true)}
+                          disabled={bulkRunning !== null}
+                          className="flex items-center gap-1 px-2 py-1 bg-blue-600 text-white rounded text-[11px] font-semibold hover:bg-blue-700 disabled:opacity-60"
+                          title="Edita categorias/tags/descrição comum pra todos"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          Editar
+                        </button>
+                        <button
+                          onClick={publishSelected}
+                          disabled={bulkRunning !== null}
+                          className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-[11px] font-semibold hover:bg-green-700 disabled:opacity-60"
+                          title="Publica todos no WC como rascunho"
+                        >
+                          {bulkRunning === 'publish' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                          Publicar
+                        </button>
+                        <button
+                          onClick={clearQueueSelection}
+                          className="text-[10px] text-gray-500 hover:text-gray-700 px-1"
+                        >
+                          limpar
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
               {queueLoading && queue.length === 0 && (
                 <div className="text-center py-8 text-sm text-gray-500">
                   <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
@@ -590,6 +772,8 @@ export default function PublicarSitePage() {
                   <QueueRow
                     key={q.id}
                     item={q}
+                    selected={selectedQueueIds.has(q.id)}
+                    onToggleSelect={() => toggleQueueSelect(q.id)}
                     onRemove={removeQueue}
                     onEdit={() => setEditingItemId(q.id)}
                   />
@@ -617,6 +801,20 @@ export default function PublicarSitePage() {
           }}
         />
       )}
+
+      {/* Modal de edição em bloco */}
+      {bulkEditing && selectedQueueIds.size > 0 && (
+        <BulkEditModal
+          ids={Array.from(selectedQueueIds)}
+          onClose={() => setBulkEditing(false)}
+          onSaved={() => {
+            setBulkEditing(false);
+            clearQueueSelection();
+            loadQueue();
+            setToast('Edição em bloco aplicada');
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -631,6 +829,7 @@ function RefCard({
   selectedCors,
   toggleSelect,
   selectAllCores,
+  queueAllCores,
   addOne,
   addingKey,
 }: {
@@ -639,11 +838,13 @@ function RefCard({
   selectedCors: Set<string>;
   toggleSelect: (ref: string, cor: string) => void;
   selectAllCores: (ref: GigaRef) => void;
+  queueAllCores: (ref: GigaRef) => void;
   addOne: (ref: string, cor: string) => void;
   addingKey: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const allColorsQueued = ref_.cores.every((c) => queuedKeys.has(keyRefCor(ref_.refCode, c.cor)));
+  const pendingCount = ref_.cores.filter((c) => !queuedKeys.has(keyRefCor(ref_.refCode, c.cor))).length;
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -676,6 +877,16 @@ function RefCard({
           </div>
         </div>
         <div className="flex flex-col items-end gap-2">
+          {!allColorsQueued && (
+            <button
+              onClick={() => queueAllCores(ref_)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white hover:bg-purple-700 rounded-lg text-xs font-semibold shadow-sm"
+              title={`Enfileira todas as ${pendingCount} cores pendentes desta REF num único clique`}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Enfileirar TODAS ({pendingCount})
+            </button>
+          )}
           <button
             onClick={() => setExpanded(!expanded)}
             className="text-xs font-medium text-purple-600 hover:text-purple-800"
@@ -685,7 +896,8 @@ function RefCard({
           {!allColorsQueued && (
             <button
               onClick={() => selectAllCores(ref_)}
-              className="text-xs text-gray-500 hover:text-gray-700"
+              className="text-[11px] text-gray-400 hover:text-gray-600"
+              title="Só marca — não enfileira"
             >
               marcar todas
             </button>
@@ -761,10 +973,14 @@ function RefCard({
 
 function QueueRow({
   item,
+  selected,
+  onToggleSelect,
   onRemove,
   onEdit,
 }: {
   item: QueueItem;
+  selected: boolean;
+  onToggleSelect: () => void;
   onRemove: (id: string) => void;
   onEdit: () => void;
 }) {
@@ -790,9 +1006,22 @@ function QueueRow({
         if ((e.target as HTMLElement).closest('button,a')) return;
         onEdit();
       }}
-      className="border border-gray-200 rounded-lg p-3 hover:bg-purple-50 hover:border-purple-200 cursor-pointer transition-colors"
+      className={`border rounded-lg p-3 hover:bg-purple-50 hover:border-purple-200 cursor-pointer transition-colors ${selected ? 'bg-purple-50 border-purple-300' : 'border-gray-200'}`}
     >
       <div className="flex items-start justify-between gap-2">
+        {!isPublished && item.status !== 'publishing' && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => {
+              e.stopPropagation();
+              onToggleSelect();
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-4 h-4 accent-purple-600 mt-0.5 shrink-0"
+            title="Selecionar pra ação em massa"
+          />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-xs font-semibold text-gray-900">{item.refCode}</span>
