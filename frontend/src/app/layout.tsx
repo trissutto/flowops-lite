@@ -3,6 +3,7 @@ import './globals.css';
 import TopNav from '@/components/TopNav';
 import SideNav from '@/components/SideNav';
 import NewOrderAlert from '@/components/NewOrderAlert';
+import PilotoAutomaticoRunner from '@/components/PilotoAutomaticoRunner';
 
 export const metadata: Metadata = {
   title: 'LURDS ORDER ONE',
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
         </div>
         <NewOrderAlert />
+        <PilotoAutomaticoRunner />
       </body>
     </html>
   );

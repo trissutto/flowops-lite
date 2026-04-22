@@ -1,84 +1,52 @@
 'use client';
 
 /**
- * / — Hub de Operação (Visão Geral + Pedidos + Separação).
+ * / — Hub unificado de Operação.
  *
- * Antes essas 3 telas viviam como links separados no TopNav. Agora ficam
- * unificadas em /?tab=visao-geral|pedidos|separacao. Cada aba renderiza o
- * componente default da tela original (sem refatoração).
+ * ANTES: 3 abas (Visão Geral · Pedidos · Separação) — virou redundante.
+ * AGORA: tela ÚNICA. A "operação do dia" é a lista de Separação (1 clique envia
+ * pra loja e dispara o WhatsApp). Em cima, uma faixa compacta mostra:
+ *   - KPIs por status (Separação / Processando / Pgto pendente / Aguardando)
+ *   - Toggle PILOTO AUTOMÁTICO — se ligado, pedidos NOVOS caem pra loja sozinhos
  *
- * URLs antigas (/visao-geral, /pedidos, /separacao) continuam funcionando —
- * só o ponto de entrada padrão virou este hub.
+ * O componente <PilotoAutomaticoRunner /> (montado no layout.tsx) é quem faz o
+ * envio automático em si — essa página só renderiza o toggle.
  *
- * Responsabilidades do HUB (não das abas):
+ * Responsabilidades do HUB:
  *  1. Redirect pra /login se não tem token, ou pra /minha-loja se role=store.
- *  2. Socket listener GLOBAL de order:new → dispara alerta sonoro + Notification
- *     desktop. Fica aqui pra tocar em qualquer aba ativa (se ficasse só na
- *     Visão Geral, perdia o alerta quando o user estivesse em Pedidos/Separação).
+ *  2. Faixa KPI + toggle Piloto Automático.
+ *  3. Renderiza <SeparacaoPage />. Pronto.
  *
- * As abas continuam fazendo seu próprio fetch e auto-refresh.
+ * Rotas antigas (/visao-geral, /pedidos, /separacao) seguem funcionando —
+ * mas a "porta da frente" do operador virou essa.
  */
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
-import { useSearchParams, useRouter, usePathname } from 'next/navigation';
-import { LayoutDashboard, ListOrdered, Truck, Bell } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Zap, Bot } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
-
-// Reaproveita os componentes default das telas existentes.
-import VisaoGeralPage from './visao-geral/page';
-import PedidosPage from './pedidos/page';
+import { isPilotOn, setPilotOn } from '@/lib/auto-send-order';
 import SeparacaoPage from './separacao/page';
 
-type TabKey = 'visao-geral' | 'pedidos' | 'separacao';
+interface CountsResp {
+  byStatus: Record<string, { name: string; total: number }>;
+  grand: number;
+}
 
-const TABS: {
-  key: TabKey;
-  label: string;
-  subtitle: string;
-  icon: typeof LayoutDashboard;
-  gradient: string;     // cor do botão quando ATIVO (gradiente cheio)
-  activeRing: string;   // cor do ring/glow do ativo
-}[] = [
-  {
-    key: 'visao-geral',
-    label: 'Visão Geral',
-    subtitle: 'KPIs e últimos pedidos',
-    icon: LayoutDashboard,
-    gradient: 'from-sky-500 to-blue-600',
-    activeRing: 'ring-blue-300',
-  },
-  {
-    key: 'pedidos',
-    label: 'Pedidos',
-    subtitle: 'Lista + filtros WooCommerce',
-    icon: ListOrdered,
-    gradient: 'from-violet-500 to-purple-600',
-    activeRing: 'ring-purple-300',
-  },
-  {
-    key: 'separacao',
-    label: 'Separação',
-    subtitle: 'Enviar pedido pra loja',
-    icon: Truck,
-    gradient: 'from-emerald-500 to-teal-600',
-    activeRing: 'ring-emerald-300',
-  },
+const KPI_CARDS: Array<{ slug: string; label: string; color: string }> = [
+  { slug: 'processing', label: 'Processando',    color: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+  { slug: 'separacao',  label: 'Em separação',   color: 'bg-blue-50 text-blue-800 border-blue-200' },
+  { slug: 'pending',    label: 'Pgto pendente',  color: 'bg-amber-50 text-amber-800 border-amber-200' },
+  { slug: 'on-hold',    label: 'Aguardando',     color: 'bg-yellow-50 text-yellow-800 border-yellow-200' },
 ];
 
-function OperacaoHubInner() {
-  const params = useSearchParams();
+export default function OperacaoHub() {
   const router = useRouter();
-  const pathname = usePathname();
+  const [counts, setCounts] = useState<Record<string, { name: string; total: number }>>({});
+  const [pilot, setPilot] = useState(false);
 
-  const raw = params?.get('tab') ?? 'visao-geral';
-  const active: TabKey = useMemo(() => {
-    return (TABS.find((t) => t.key === raw)?.key ?? 'visao-geral') as TabKey;
-  }, [raw]);
-
-  const [flash, setFlash] = useState<string | null>(null);
-
-  // Guard + listener global (ver header do arquivo)
+  // Guard de sessão + role
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
@@ -88,132 +56,101 @@ function OperacaoHubInner() {
     api<{ role: string }>('/auth/me')
       .then((me) => { if (me.role === 'store') router.push('/minha-loja'); })
       .catch(() => {});
-
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-
-    const socket = getSocket();
-    const onNewOrder = (o: any) => {
-      setFlash(`Novo pedido: #${o.wcOrderNumber ?? o.number}`);
-      playAlert();
-      notifyDesktop(o);
-      setTimeout(() => setFlash(null), 4000);
-    };
-    socket.on('order:new', onNewOrder);
-
-    return () => {
-      socket.off('order:new', onNewOrder);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function go(tab: TabKey) {
-    const qs = new URLSearchParams(params?.toString() ?? '');
-    qs.set('tab', tab);
-    router.replace(`${pathname}?${qs.toString()}`);
-  }
+  // Estado do Piloto Automático — sincroniza via CustomEvent
+  useEffect(() => {
+    setPilot(isPilotOn());
+    const onChange = (e: Event) => {
+      const det = (e as CustomEvent).detail;
+      setPilot(!!det?.on);
+    };
+    window.addEventListener('lurds:pilot-changed', onChange);
+    return () => window.removeEventListener('lurds:pilot-changed', onChange);
+  }, []);
 
-  function playAlert() {
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      osc.start(); osc.stop(ctx.currentTime + 0.5);
-    } catch {}
-  }
+  // KPIs — carrega + atualiza a cada 30s + on socket events
+  useEffect(() => {
+    let cancelled = false;
 
-  function notifyDesktop(o: any) {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    try {
-      const num = o.wcOrderNumber ?? o.number ?? o.id;
-      const total = o.totalAmount ?? o.total ?? 0;
-      const n = new Notification('🛍 Novo pedido LURDS', {
-        body: `#${num} — ${o.customerName}\nR$ ${Number(total || 0).toFixed(2)}`,
-        tag: `order-${o.id}`,
-        requireInteraction: true,
-      });
-      n.onclick = () => {
-        window.focus();
-        window.location.href = `/?tab=pedidos`;
-        n.close();
-      };
-    } catch {}
+    async function loadCounts() {
+      try {
+        const cnt = await api<CountsResp>('/orders/wc/counts');
+        if (!cancelled) setCounts(cnt.byStatus);
+      } catch {}
+    }
+
+    loadCounts();
+    const timer = setInterval(loadCounts, 30_000);
+
+    const sock = getSocket();
+    const onAny = () => loadCounts();
+    sock.on('order:new', onAny);
+    sock.on('order:status-changed', onAny);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      sock.off('order:new', onAny);
+      sock.off('order:status-changed', onAny);
+    };
+  }, []);
+
+  function togglePilot() {
+    const next = !pilot;
+    setPilotOn(next);
+    setPilot(next);
   }
 
   return (
     <div>
-      {flash && (
-        <div className="bg-green-500 text-white px-6 py-3 flex items-center gap-3 animate-pulse">
-          <Bell className="w-5 h-5" />
-          <span className="font-medium">{flash}</span>
-        </div>
-      )}
-
-      {/* Botões de navegação — estilo cards coloridos, não abas sublinhadas */}
+      {/* Faixa compacta: KPIs + Piloto Automático — fica sticky logo abaixo do topnav */}
       <div className="bg-white border-b shadow-sm sticky top-14 z-30">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 sm:py-4">
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              const isActive = active === t.key;
-              return (
-                <button
-                  key={t.key}
-                  onClick={() => go(t.key)}
-                  className={
-                    isActive
-                      ? `group relative overflow-hidden rounded-xl bg-gradient-to-br ${t.gradient} p-2 sm:p-4 text-white shadow-lg ring-2 sm:ring-4 ${t.activeRing} ring-opacity-40 scale-[1.02] transition-all text-left`
-                      : `group relative overflow-hidden rounded-xl bg-slate-50 hover:bg-white border-2 border-slate-200 hover:border-slate-300 p-2 sm:p-4 text-slate-700 hover:shadow-md transition-all text-left`
-                  }
-                >
-                  <div className="flex flex-col sm:flex-row items-center sm:items-start gap-1 sm:gap-3 text-center sm:text-left">
-                    <div
-                      className={`w-8 h-8 sm:w-11 sm:h-11 rounded-lg flex items-center justify-center shrink-0 transition ${
-                        isActive
-                          ? 'bg-white/25 backdrop-blur'
-                          : `bg-gradient-to-br ${t.gradient} text-white`
-                      }`}
-                    >
-                      <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className={`font-bold text-xs sm:text-base leading-tight ${isActive ? '' : 'text-slate-900'}`}>
-                        {t.label}
-                      </div>
-                      <div className={`hidden sm:block text-xs leading-snug mt-0.5 line-clamp-1 ${isActive ? 'opacity-90' : 'text-slate-500'}`}>
-                        {t.subtitle}
-                      </div>
-                    </div>
-                  </div>
-                  {isActive && (
-                    <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/15 blur-xl" />
-                  )}
-                </button>
-              );
-            })}
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-3 flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap gap-2 flex-1">
+            {KPI_CARDS.map((c) => (
+              <div
+                key={c.slug}
+                className={`px-3 py-1.5 rounded-lg border text-sm font-semibold flex items-baseline gap-2 ${c.color}`}
+                title={c.label}
+              >
+                <span className="text-lg leading-none">
+                  {(counts[c.slug]?.total ?? 0).toLocaleString('pt-BR')}
+                </span>
+                <span className="text-xs font-medium opacity-80">{c.label}</span>
+              </div>
+            ))}
           </div>
+
+          {/* Toggle Piloto Automático — grande e visível pra o user saber que tá ON */}
+          <button
+            onClick={togglePilot}
+            className={`relative overflow-hidden rounded-xl px-4 py-2 text-sm font-bold flex items-center gap-2 transition shadow-md ring-2 ${
+              pilot
+                ? 'bg-gradient-to-br from-fuchsia-500 to-purple-600 text-white ring-fuchsia-300 ring-opacity-60 hover:from-fuchsia-600 hover:to-purple-700'
+                : 'bg-white text-slate-700 ring-slate-200 hover:bg-slate-50'
+            }`}
+            title={
+              pilot
+                ? 'PILOTO AUTOMÁTICO LIGADO — pedidos novos caem pra loja sozinhos (WhatsApp + status). Clique pra DESLIGAR.'
+                : 'PILOTO AUTOMÁTICO DESLIGADO — você envia manual. Clique pra LIGAR.'
+            }
+          >
+            {pilot ? <Zap className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+            <span className="leading-tight">
+              <span className="block text-[10px] uppercase opacity-80 tracking-wider">Piloto automático</span>
+              <span className="block text-sm">{pilot ? 'LIGADO' : 'DESLIGADO'}</span>
+            </span>
+            {pilot && (
+              <span className="ml-1 w-2 h-2 rounded-full bg-green-300 animate-pulse" />
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Conteúdo da aba */}
-      <div>
-        {active === 'visao-geral' && <VisaoGeralPage />}
-        {active === 'pedidos'     && <PedidosPage />}
-        {active === 'separacao'   && <SeparacaoPage />}
-      </div>
+      {/* Conteúdo: Separação é a operação do dia */}
+      <SeparacaoPage />
     </div>
-  );
-}
-
-export default function OperacaoHub() {
-  return (
-    <Suspense fallback={<div className="p-8 text-slate-400">Carregando…</div>}>
-      <OperacaoHubInner />
-    </Suspense>
   );
 }

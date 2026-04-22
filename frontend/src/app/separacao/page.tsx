@@ -24,6 +24,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import { autoSendOrderToStore } from '@/lib/auto-send-order';
 import {
   RefreshCw,
   Send,
@@ -41,6 +42,7 @@ import {
   X,
   Printer,
   AlertCircle,
+  Zap,
 } from 'lucide-react';
 
 interface WcOrderListItem {
@@ -650,6 +652,59 @@ export default function SeparacaoPage() {
     }
   }
 
+  /**
+   * 1-CLIQUE — faz TUDO pra 1 pedido só:
+   *   - checa WA conectado
+   *   - calcula separação (routing)
+   *   - dispara WhatsApp pra loja escolhida
+   *   - PATCH status → 'separacao' no WC
+   *
+   * Usa o helper compartilhado `autoSendOrderToStore` (o mesmo do Piloto Automático).
+   * Diferença do bulk "Enviar separação": aqui é 1 linha e abre alert detalhado.
+   */
+  async function umClique(wcId: number) {
+    setBusy((b) => ({ ...b, [wcId]: true }));
+    setErrorByOrder((e) => ({ ...e, [wcId]: '' }));
+    try {
+      const outcome = await autoSendOrderToStore(wcId, { skipWaStatusCheck: false });
+      if (outcome.ok) {
+        // Se o filtro atual != separacao, tira da lista (já foi)
+        if (status !== 'separacao') {
+          setOrders((prev) => prev.filter((o) => o.id !== wcId));
+        } else {
+          await load();
+        }
+        const lojas = outcome.groups.map((g) => `${g.storeName} (${g.storeCode})`).join(', ');
+        alert(`✓ Enviado!\n\nLoja(s): ${lojas}\nStatus atualizado pra Separação.`);
+      } else {
+        if (outcome.reason === 'wa-disconnected') {
+          if (window.confirm(outcome.message + '\n\nAbrir tela de conexão WhatsApp?')) {
+            window.location.href = '/retaguarda/whatsapp';
+          }
+        } else {
+          setErrorByOrder((er) => ({ ...er, [wcId]: outcome.message }));
+          // Se o helper já calculou a prévia, cacheia pra usuário ver
+          if (outcome.groups) {
+            setPreview((p) => ({
+              ...p,
+              [wcId]: {
+                success: outcome.reason !== 'no-stock',
+                strategy: 'single-store',
+                shippingMethod: '',
+                groups: outcome.groups as any,
+                missing: [],
+              } as SeparationPreview,
+            }));
+            setExpanded((x) => ({ ...x, [wcId]: true }));
+          }
+          alert(`⚠ Falha: ${outcome.message}`);
+        }
+      }
+    } finally {
+      setBusy((b) => ({ ...b, [wcId]: false }));
+    }
+  }
+
   async function dispararWhatsapp(wcId: number, grupo: SeparationGroup) {
     if (!grupo.whatsapp || !grupo.whatsappMessage) {
       alert(
@@ -1016,10 +1071,20 @@ export default function SeparacaoPage() {
                           <button
                             onClick={() => calcular(o.id)}
                             disabled={isBusy}
-                            className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-sm disabled:opacity-50 flex items-center gap-1.5"
+                            className="px-2.5 py-1.5 bg-white border border-slate-300 text-slate-700 rounded hover:bg-slate-50 text-sm disabled:opacity-50 flex items-center gap-1.5"
+                            title="Só calcula e mostra qual loja separaria (prévia, sem enviar)"
                           >
                             {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StoreIcon className="w-3.5 h-3.5" />}
-                            Preparar separação
+                            Prévia
+                          </button>
+                          <button
+                            onClick={() => umClique(o.id)}
+                            disabled={isBusy}
+                            className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold shadow-sm ring-1 ring-green-500"
+                            title="1 clique faz TUDO: calcula loja → envia WhatsApp → muda status pra Separação"
+                          >
+                            {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                            1-CLIQUE
                           </button>
                         </>
                       )}
