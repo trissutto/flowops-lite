@@ -499,6 +499,16 @@ export default function MinhaLojaPage() {
       if (updated?.wcSyncWarning) {
         pushToast(`⚠️ ${updated.wcSyncWarning}`);
       }
+      // Auto-baixa no ERP Gigasistemas (dispara no shipped quando ERP_WRITE_ENABLED=true).
+      // Mostra só se houve ação real — sucesso, shadow ou falha.
+      const ad = updated?.autoDebit;
+      if (ad?.applied) {
+        pushToast(`📦 Estoque baixado no ERP Gigasistemas`);
+      } else if (ad?.shadow) {
+        pushToast(`⏳ Baixa em shadow — matriz vai liberar`);
+      } else if (ad?.attempted && ad?.reason) {
+        pushToast(`⚠️ Baixa ERP falhou: ${ad.reason}. Matriz reabre em /baixas-log.`);
+      }
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao enviar'}`);
     }

@@ -1151,6 +1151,30 @@ export class PickOrdersService {
       }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  AUTO-BAIXA NO ERP GIGASISTEMAS (gatilho = shipped + rastreio)
+    //
+    //  Assim que a filial confirma o envio com rastreio, disparamos a baixa
+    //  real no `estoque` do Gigasistemas — sem esperar a matriz aprovar
+    //  manualmente em /baixa-estoque. Matriz só atua como fallback quando
+    //  algo falhou (cai em /retaguarda/baixas-log e pode reabrir pra re-tentar).
+    //
+    //  Qualquer falha aqui NÃO derruba o envio: rastreio já foi salvo, pedido
+    //  já subiu pro WC, cliente já foi notificado. O erro vira log pra você
+    //  tratar depois.
+    // ════════════════════════════════════════════════════════════════════════
+    let autoDebit: {
+      attempted: boolean;
+      applied: boolean;
+      skipped: boolean;
+      shadow: boolean;
+      reason: string | null;
+    } = { attempted: false, applied: false, skipped: false, shadow: false, reason: null };
+
+    if (input.status === 'shipped') {
+      autoDebit = await this.autoDebitOnShipped(id, userId);
+    }
+
     // Emite via socket pra loja (eco) e pro admin (dashboard)
     this.gateway.emitPickOrderStatus(storeId, {
       id: updated.id,
@@ -1170,7 +1194,193 @@ export class PickOrdersService {
       updatedAt: updated.updatedAt,
       wcSyncApplied,
       wcSyncWarning,
+      autoDebit,
     };
+  }
+
+  /**
+   * AUTO-BAIXA disparada pelo `shipped`.
+   *
+   * Diferente de approveDebit (que é a rota manual da matriz), esse método:
+   *  - NUNCA lança exception — envio da filial não pode ser bloqueado por
+   *    problema de ERP. Em falha, só loga e devolve `{ reason }` pra auditoria.
+   *  - Verifica dupla-baixa por 2 caminhos: debitApprovedAt já marcado OU
+   *    log `debit.real.applied` já existente pro mesmo pickOrderId.
+   *  - Respeita `ERP_WRITE_ENABLED` — se SHADOW, grava log de intenção e
+   *    devolve `shadow:true` sem marcar o flag de aprovação (operadora ainda
+   *    tem que passar no PDV manualmente nesse modo).
+   */
+  private async autoDebitOnShipped(
+    pickOrderId: string,
+    operatorUserId: string,
+  ): Promise<{
+    attempted: boolean;
+    applied: boolean;
+    skipped: boolean;
+    shadow: boolean;
+    reason: string | null;
+  }> {
+    try {
+      const po = await this.prisma.pickOrder.findUnique({
+        where: { id: pickOrderId },
+        select: {
+          id: true,
+          storeId: true,
+          orderId: true,
+          debitApprovedAt: true,
+          store: { select: { code: true } },
+        } as any,
+      });
+      if (!po) {
+        return { attempted: false, applied: false, skipped: true, shadow: false, reason: 'pick-order não encontrado após update' };
+      }
+
+      // GUARD 1: flag local já marcado
+      if ((po as any).debitApprovedAt) {
+        this.logger.log(`autoDebit(${pickOrderId}): já aprovado anteriormente — skip`);
+        return { attempted: false, applied: false, skipped: true, shadow: false, reason: 'baixa já aprovada' };
+      }
+
+      // GUARD 2: procura log histórico (cobre caso de flag ter sido limpo via reopen)
+      const prior = await this.prisma.integrationLog.findFirst({
+        where: {
+          source: 'erp',
+          event: 'debit.real.applied',
+          payload: { contains: `"pickOrderId":"${pickOrderId}"` },
+        },
+        select: { id: true },
+      });
+      if (prior) {
+        this.logger.log(`autoDebit(${pickOrderId}): já tem log debit.real.applied — skip anti-dupla`);
+        return { attempted: false, applied: false, skipped: true, shadow: false, reason: 'baixa já aplicada em log anterior' };
+      }
+
+      const storeCode = String(((po as any).store?.code) ?? '').trim();
+      const items = await this.prisma.orderItem.findMany({
+        where: { orderId: po.orderId, assignedStoreId: po.storeId },
+        select: { sku: true, quantity: true, productName: true },
+      });
+
+      if (!items.length) {
+        this.logger.warn(`autoDebit(${pickOrderId}): nenhum item atribuído — skip`);
+        return { attempted: false, applied: false, skipped: true, shadow: false, reason: 'sem items atribuídos' };
+      }
+
+      const writeEnabled = this.erp.isWriteEnabled;
+
+      // SHADOW — só grava intenção
+      if (!writeEnabled) {
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'pick-order',
+            direction: 'internal',
+            event: 'debit.auto.shadow',
+            payload: JSON.stringify({
+              pickOrderId,
+              trigger: 'shipped',
+              approvedBy: operatorUserId,
+              storeId: po.storeId,
+              storeCode,
+              items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+              note: 'SHADOW — envio confirmado mas ERP_WRITE_ENABLED=false. Baixa manual ainda é necessária.',
+            }),
+            status: 200,
+          },
+        });
+        return { attempted: true, applied: false, skipped: false, shadow: true, reason: 'shadow mode' };
+      }
+
+      // LIVE — precisa de storeCode válido pra bater no Giga
+      if (!storeCode) {
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'erp',
+            direction: 'out',
+            event: 'debit.real.failed',
+            payload: JSON.stringify({
+              pickOrderId,
+              trigger: 'shipped',
+              approvedBy: operatorUserId,
+              error: 'store.code vazio',
+            }),
+            status: 500,
+            error: 'store.code vazio',
+          },
+        });
+        return { attempted: true, applied: false, skipped: false, shadow: false, reason: 'loja sem código configurado' };
+      }
+
+      const result = await this.erp.decreaseStock(
+        items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
+      );
+
+      if (!result.success) {
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'erp',
+            direction: 'out',
+            event: 'debit.real.failed',
+            payload: JSON.stringify({
+              pickOrderId,
+              trigger: 'shipped',
+              approvedBy: operatorUserId,
+              storeCode,
+              items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+              error: result.error,
+            }),
+            status: 500,
+            error: result.error?.slice(0, 500),
+          },
+        });
+        this.logger.error(`autoDebit(${pickOrderId}) FALHOU: ${result.error}`);
+        return { attempted: true, applied: false, skipped: false, shadow: false, reason: result.error ?? 'erro desconhecido no ERP' };
+      }
+
+      // SUCESSO — grava log + marca flag
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'debit.real.applied',
+          payload: JSON.stringify({
+            pickOrderId,
+            trigger: 'shipped',
+            approvedBy: operatorUserId,
+            storeCode,
+            applied: result.applied,
+          }),
+          status: 200,
+        },
+      });
+
+      await this.prisma.pickOrder.update({
+        where: { id: pickOrderId },
+        data: {
+          debitApprovedAt: new Date(),
+          debitApprovedBy: operatorUserId,
+        } as any,
+      });
+
+      this.logger.log(`autoDebit(${pickOrderId}) OK — ${result.applied.length} item(ns) baixado(s) no Giga`);
+      return { attempted: true, applied: true, skipped: false, shadow: false, reason: null };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`autoDebit(${pickOrderId}) exception: ${msg}`);
+      // Melhor esforço pra logar (sem jogar exception pra cima)
+      try {
+        await this.prisma.integrationLog.create({
+          data: {
+            source: 'erp',
+            direction: 'out',
+            event: 'debit.real.failed',
+            payload: JSON.stringify({ pickOrderId, trigger: 'shipped', approvedBy: operatorUserId, error: msg }),
+            status: 500,
+            error: msg.slice(0, 500),
+          },
+        });
+      } catch { /* ignore */ }
+      return { attempted: true, applied: false, skipped: false, shadow: false, reason: msg };
+    }
   }
 
   /**
