@@ -2743,6 +2743,19 @@ export class ProductsService {
       solicitanteNome: string;
       clienteNome?: string | null;
       mensagem: string;
+      // Envio direto pra cliente (só VENDA_CERTA)
+      entregaDireto?: boolean;
+      clienteCpf?: string | null;
+      clienteTelefone?: string | null;
+      enderecoCep?: string | null;
+      enderecoLogradouro?: string | null;
+      enderecoNumero?: string | null;
+      enderecoComplemento?: string | null;
+      enderecoBairro?: string | null;
+      enderecoCidade?: string | null;
+      enderecoUf?: string | null;
+      formaEnvio?: string | null;
+      bundleId?: string | null;
     },
   ) {
     // Valida e resolve lojas (origem por code, destino = loja do user)
@@ -2774,6 +2787,28 @@ export class ProductsService {
         ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
         : null;
 
+    // Envio direto: normaliza e valida. Se direto mas faltam campos obrigatórios,
+    // rejeita (controller já pré-valida, mas defendemos aqui também).
+    const entregaDireto = !!body.entregaDireto && tipo === 'VENDA_CERTA';
+    const formaEnvioNorm = entregaDireto
+      ? (body.formaEnvio || '').trim().toUpperCase() || null
+      : null;
+    if (entregaDireto) {
+      const req: Array<[string, string | null | undefined]> = [
+        ['CEP',        body.enderecoCep],
+        ['logradouro', body.enderecoLogradouro],
+        ['número',     body.enderecoNumero],
+        ['bairro',     body.enderecoBairro],
+        ['cidade',     body.enderecoCidade],
+        ['UF',         body.enderecoUf],
+        ['forma de envio', formaEnvioNorm],
+      ];
+      const missing = req.filter(([, v]) => !v || !String(v).trim()).map(([k]) => k);
+      if (missing.length) {
+        throw new Error(`Envio direto: preencha ${missing.join(', ')}.`);
+      }
+    }
+
     const created = await (this.prisma as any).transferOrder.create({
       data: {
         tipo,
@@ -2791,6 +2826,19 @@ export class ProductsService {
         createdByUserId: userId || null,
         saleStatus,
         saleDeadline,
+        // Envio direto
+        entregaDireto,
+        clienteCpf:          entregaDireto ? (body.clienteCpf?.trim() || null) : null,
+        clienteTelefone:     entregaDireto ? (body.clienteTelefone?.trim() || null) : null,
+        enderecoCep:         entregaDireto ? (body.enderecoCep?.trim() || null) : null,
+        enderecoLogradouro:  entregaDireto ? (body.enderecoLogradouro?.trim() || null) : null,
+        enderecoNumero:      entregaDireto ? (body.enderecoNumero?.trim() || null) : null,
+        enderecoComplemento: entregaDireto ? (body.enderecoComplemento?.trim() || null) : null,
+        enderecoBairro:      entregaDireto ? (body.enderecoBairro?.trim() || null) : null,
+        enderecoCidade:      entregaDireto ? (body.enderecoCidade?.trim() || null) : null,
+        enderecoUf:          entregaDireto ? (body.enderecoUf?.trim().toUpperCase() || null) : null,
+        formaEnvio:          formaEnvioNorm,
+        bundleId:            entregaDireto ? (body.bundleId?.trim() || null) : null,
       },
     });
     return created;

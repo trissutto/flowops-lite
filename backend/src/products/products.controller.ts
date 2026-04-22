@@ -298,6 +298,19 @@ export class ProductsController {
       solicitanteNome: string;
       clienteNome?: string | null;
       mensagem: string;
+      // VENDA CERTA direto pra cliente (opcionais)
+      entregaDireto?: boolean;
+      clienteCpf?: string | null;
+      clienteTelefone?: string | null;
+      enderecoCep?: string | null;
+      enderecoLogradouro?: string | null;
+      enderecoNumero?: string | null;
+      enderecoComplemento?: string | null;
+      enderecoBairro?: string | null;
+      enderecoCidade?: string | null;
+      enderecoUf?: string | null;
+      formaEnvio?: string | null;
+      bundleId?: string | null;
     },
   ) {
     const user = req.user as { userId: string; role: string; storeId: string | null };
@@ -306,6 +319,24 @@ export class ProductsController {
     }
     if (!body?.tipo || !body?.refCode || !body?.lojaOrigemCode || !body?.solicitanteNome) {
       throw new BadRequestException('Campos obrigatórios ausentes.');
+    }
+    // Se é envio direto, exige os campos mínimos de endereço + forma de envio
+    if (body.entregaDireto) {
+      if (body.tipo !== 'VENDA_CERTA') {
+        throw new BadRequestException('Envio direto só é permitido em VENDA_CERTA.');
+      }
+      const missing: string[] = [];
+      if (!body.enderecoCep)         missing.push('CEP');
+      if (!body.enderecoLogradouro)  missing.push('logradouro');
+      if (!body.enderecoNumero)      missing.push('número');
+      if (!body.enderecoBairro)      missing.push('bairro');
+      if (!body.enderecoCidade)      missing.push('cidade');
+      if (!body.enderecoUf)          missing.push('UF');
+      if (!body.formaEnvio)          missing.push('forma de envio');
+      if (!body.clienteNome)         missing.push('nome da cliente');
+      if (missing.length) {
+        throw new BadRequestException(`Envio direto: preencha ${missing.join(', ')}.`);
+      }
     }
     return this.products.createTransferOrder(user.userId, user.storeId, body);
   }

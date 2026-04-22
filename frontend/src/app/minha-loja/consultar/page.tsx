@@ -32,6 +32,7 @@ import Logo from '@/components/Logo';
 import {
   Search, ArrowLeft, RefreshCw, X, MessageCircle,
   XCircle, AlertCircle, Store, Tag, Barcode, ChevronRight,
+  Plus, Trash2, Truck, Home, MapPin,
 } from 'lucide-react';
 
 type Mode = 'desc' | 'sku';
@@ -1042,8 +1043,28 @@ function OtherStoreRow({
 // ============================================================
 // Modal de pedido — REPOSIÇÃO vs VENDA CERTA
 // ============================================================
+// VENDA CERTA tem duas rotas de entrega:
+//  - 'loja':   a peça vem pra loja e a cliente retira ali. Fluxo antigo.
+//  - 'direto': a peça vai SEDEX/PAC/MOTOBOY direto pro endereço da cliente.
+//              Nesse modo a gente exige endereço completo, forma de envio e
+//              pode agrupar MÚLTIPLAS peças no mesmo "bundle" (pacote) pra
+//              não ter que criar pedido separado peça por peça. Todas as
+//              peças do bundle compartilham cliente/endereço/frete.
+// ============================================================
 type PedidoTipo = 'reposicao' | 'venda-certa';
+type EntregaMode = 'loja' | 'direto';
+type FormaEnvio = 'SEDEX' | 'PAC' | 'MOTOBOY' | 'OUTRO';
 const SOLICITANTE_LS_KEY = 'lurds_solicitante_nome';
+
+// Peça adicional que a cliente quer no mesmo pacote (mesmo bundle).
+// A peça principal vem do card clicado; aqui são as extras.
+type ExtraPiece = {
+  id: string;              // uuid local, só pra list key
+  refCode: string;
+  cor: string;
+  tamanho: string;
+  qty: number;             // qtd pedida
+};
 
 function TransferModal({
   open, onClose, store, refCode, selectedColor, selectedSize,
@@ -1056,13 +1077,31 @@ function TransferModal({
   selectedSize: string | null;
 }) {
   const [tipo, setTipo] = useState<PedidoTipo>('reposicao');
+  const [entrega, setEntrega] = useState<EntregaMode>('loja');
   const [solicitante, setSolicitante] = useState('');
   const [cliente, setCliente] = useState('');
+  const [clienteCpf, setClienteCpf] = useState('');
+  const [clienteTelefone, setClienteTelefone] = useState('');
+  // Endereço
+  const [cep, setCep] = useState('');
+  const [logradouro, setLogradouro] = useState('');
+  const [numero, setNumero] = useState('');
+  const [complemento, setComplemento] = useState('');
+  const [bairro, setBairro] = useState('');
+  const [cidade, setCidade] = useState('');
+  const [uf, setUf] = useState('');
+  const [formaEnvio, setFormaEnvio] = useState<FormaEnvio>('SEDEX');
+  // Peças extras (mesmo bundle)
+  const [extras, setExtras] = useState<ExtraPiece[]>([]);
+  // Status
   const [sending, setSending] = useState(false);
+  const [cepLoading, setCepLoading] = useState(false);
+  const [cepError, setCepError] = useState<string | null>(null);
+
   const clienteInputRef = useRef<HTMLInputElement>(null);
   const solicitanteInputRef = useRef<HTMLInputElement>(null);
 
-  // Prefill solicitante do localStorage, reset cliente ao abrir.
+  // Prefill solicitante do localStorage, reset o resto ao abrir.
   useEffect(() => {
     if (!open) return;
     try {
@@ -1070,7 +1109,20 @@ function TransferModal({
       setSolicitante(saved);
     } catch { /* ignore */ }
     setCliente('');
+    setClienteCpf('');
+    setClienteTelefone('');
+    setCep('');
+    setLogradouro('');
+    setNumero('');
+    setComplemento('');
+    setBairro('');
+    setCidade('');
+    setUf('');
+    setFormaEnvio('SEDEX');
+    setExtras([]);
     setTipo('reposicao');
+    setEntrega('loja');
+    setCepError(null);
     // autofocus
     setTimeout(() => solicitanteInputRef.current?.focus(), 80);
   }, [open]);
@@ -1080,6 +1132,8 @@ function TransferModal({
     if (tipo === 'venda-certa' && open) {
       setTimeout(() => clienteInputRef.current?.focus(), 50);
     }
+    // Se sair de venda-certa, força entrega=loja
+    if (tipo === 'reposicao') setEntrega('loja');
   }, [tipo, open]);
 
   // Fecha no Esc
@@ -1090,11 +1144,39 @@ function TransferModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  if (!open) return null;
+  // ViaCEP autofill quando user termina de digitar CEP (8 dígitos).
+  // Best-effort — se falhar a gente deixa o user preencher manualmente.
+  useEffect(() => {
+    if (entrega !== 'direto') return;
+    const digits = cep.replace(/\D/g, '');
+    if (digits.length !== 8) return;
+    let cancelled = false;
+    setCepLoading(true);
+    setCepError(null);
+    fetch(`https://viacep.com.br/ws/${digits}/json/`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data?.erro) {
+          setCepError('CEP não encontrado — preencha manual.');
+          return;
+        }
+        if (data?.logradouro && !logradouro) setLogradouro(data.logradouro);
+        if (data?.bairro     && !bairro)     setBairro(data.bairro);
+        if (data?.localidade && !cidade)     setCidade(data.localidade);
+        if (data?.uf         && !uf)         setUf(data.uf);
+      })
+      .catch(() => {
+        if (!cancelled) setCepError('Falha ao consultar CEP — preencha manual.');
+      })
+      .finally(() => {
+        if (!cancelled) setCepLoading(false);
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cep, entrega]);
 
-  const canSubmit =
-    solicitante.trim().length >= 2 &&
-    (tipo === 'reposicao' || cliente.trim().length >= 2);
+  if (!open) return null;
 
   // Quantidade específica da célula (se cor+tamanho definidos) ou total da loja
   const qtyInfo = (() => {
@@ -1107,29 +1189,109 @@ function TransferModal({
     return match?.qty ?? store.qty;
   })();
 
+  // Validação
+  const baseOk = solicitante.trim().length >= 2 &&
+                 (tipo === 'reposicao' || cliente.trim().length >= 2);
+  const enderecoOk = entrega !== 'direto' || (
+    cep.replace(/\D/g, '').length === 8 &&
+    logradouro.trim().length >= 2 &&
+    numero.trim().length >= 1 &&
+    bairro.trim().length >= 2 &&
+    cidade.trim().length >= 2 &&
+    uf.trim().length === 2 &&
+    !!formaEnvio
+  );
+  const extrasOk = extras.every(
+    (e) => e.refCode.trim().length >= 2 && e.qty >= 1,
+  );
+  const canSubmit = baseOk && enderecoOk && extrasOk;
+
+  // ── Helpers extras ──
+  const addExtra = () => {
+    setExtras((arr) => [
+      ...arr,
+      {
+        id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+          ? crypto.randomUUID()
+          : `tmp-${Date.now()}-${Math.random()}`,
+        refCode: '',
+        cor: '',
+        tamanho: '',
+        qty: 1,
+      },
+    ]);
+  };
+  const updateExtra = (id: string, patch: Partial<ExtraPiece>) => {
+    setExtras((arr) => arr.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  };
+  const removeExtra = (id: string) => {
+    setExtras((arr) => arr.filter((e) => e.id !== id));
+  };
+
+  // ── Monta mensagem WhatsApp ──
+  const buildMensagem = (allPieces: Array<{ refCode: string; cor: string; tamanho: string; qty: number }>) => {
+    const lines: string[] = [];
+    if (tipo === 'reposicao') {
+      const corPart = selectedColor ? ` cor ${selectedColor}` : '';
+      const tamPart = selectedSize ? ` tam ${selectedSize}` : '';
+      lines.push(`Oi! Reposição de estoque.`);
+      lines.push(`Vc tem a REF ${refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
+      lines.push(`Solicitante: ${solicitante.trim()}`);
+      lines.push(`Posso pedir transferência?`);
+      return lines.join('\n');
+    }
+    // venda-certa
+    lines.push(`Oi! Venda certa pra cliente ${cliente.trim()}.`);
+    if (allPieces.length === 1) {
+      const p = allPieces[0];
+      const corPart = p.cor ? ` cor ${p.cor}` : '';
+      const tamPart = p.tamanho ? ` tam ${p.tamanho}` : '';
+      lines.push(`Vc tem a REF ${p.refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
+    } else {
+      lines.push(`Peças:`);
+      for (const p of allPieces) {
+        const corPart = p.cor ? ` cor ${p.cor}` : '';
+        const tamPart = p.tamanho ? ` tam ${p.tamanho}` : '';
+        lines.push(`  • REF ${p.refCode}${corPart}${tamPart} · ${p.qty}x`);
+      }
+    }
+    lines.push(`Solicitante: ${solicitante.trim()}`);
+    if (entrega === 'direto') {
+      lines.push(``);
+      lines.push(`*ENVIO DIRETO PRA CLIENTE* (${formaEnvio})`);
+      if (clienteTelefone.trim()) lines.push(`Tel: ${clienteTelefone.trim()}`);
+      if (clienteCpf.trim())      lines.push(`CPF: ${clienteCpf.trim()}`);
+      lines.push(`Endereço:`);
+      lines.push(`  ${logradouro.trim()}, ${numero.trim()}${complemento.trim() ? ` · ${complemento.trim()}` : ''}`);
+      lines.push(`  ${bairro.trim()} · ${cidade.trim()}/${uf.trim().toUpperCase()} · CEP ${cep.trim()}`);
+      lines.push(``);
+      lines.push(`Pode postar pro endereço acima?`);
+    } else {
+      lines.push(`Pode transferir pra minha loja?`);
+    }
+    return lines.join('\n');
+  };
+
   const submit = async () => {
     if (!canSubmit || sending) return;
 
     try { localStorage.setItem(SOLICITANTE_LS_KEY, solicitante.trim()); } catch { /* ignore */ }
 
-    // Monta mensagem
-    const corPart = selectedColor ? ` cor ${selectedColor}` : '';
-    const tamPart = selectedSize ? ` tam ${selectedSize}` : '';
-    const lines: string[] = [];
+    // Peça principal (vinda do card) + extras
+    const mainPiece = {
+      refCode,
+      cor: selectedColor ?? '',
+      tamanho: selectedSize ?? '',
+      qty: 1,
+    };
+    const allPieces = [mainPiece, ...extras.map((e) => ({
+      refCode: e.refCode.trim().toUpperCase(),
+      cor: e.cor.trim(),
+      tamanho: e.tamanho.trim(),
+      qty: e.qty,
+    }))];
 
-    if (tipo === 'reposicao') {
-      lines.push(`Oi! Reposição de estoque.`);
-      lines.push(`Vc tem a REF ${refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
-      lines.push(`Solicitante: ${solicitante.trim()}`);
-      lines.push(`Posso pedir transferência?`);
-    } else {
-      lines.push(`Oi! Venda certa pra cliente ${cliente.trim()}.`);
-      lines.push(`Vc tem a REF ${refCode}${corPart}${tamPart}? (${qtyInfo} na sua loja)`);
-      lines.push(`Solicitante: ${solicitante.trim()}`);
-      lines.push(`Pode transferir pra minha loja?`);
-    }
-
-    const msg = lines.join('\n');
+    const msg = buildMensagem(allPieces);
 
     const onlyDigits = (store.whatsapp || '').replace(/\D/g, '');
     if (onlyDigits.length < 10) {
@@ -1138,23 +1300,53 @@ function TransferModal({
     }
     const phone = onlyDigits.startsWith('55') ? onlyDigits : '55' + onlyDigits;
 
-    // 1) Salva histórico ANTES de abrir WA (best-effort — falha não bloqueia)
+    // bundleId só existe pra envio direto (agrupa N transfer-orders no mesmo pacote)
+    const bundleId =
+      entrega === 'direto'
+        ? ((typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+            ? crypto.randomUUID()
+            : `bundle-${Date.now()}-${Math.random()}`)
+        : null;
+
+    // Payload base (compartilhado entre todas as peças do bundle)
+    const basePayload = {
+      tipo: tipo === 'reposicao' ? 'REPOSICAO' : 'VENDA_CERTA',
+      lojaOrigemCode: store.code,
+      solicitanteNome: solicitante.trim(),
+      clienteNome: tipo === 'venda-certa' ? cliente.trim() : null,
+      mensagem: msg,
+      entregaDireto: entrega === 'direto',
+      clienteCpf:          entrega === 'direto' ? (clienteCpf.trim() || null) : null,
+      clienteTelefone:     entrega === 'direto' ? (clienteTelefone.trim() || null) : null,
+      enderecoCep:         entrega === 'direto' ? cep.replace(/\D/g, '') : null,
+      enderecoLogradouro:  entrega === 'direto' ? logradouro.trim() : null,
+      enderecoNumero:      entrega === 'direto' ? numero.trim() : null,
+      enderecoComplemento: entrega === 'direto' ? (complemento.trim() || null) : null,
+      enderecoBairro:      entrega === 'direto' ? bairro.trim() : null,
+      enderecoCidade:      entrega === 'direto' ? cidade.trim() : null,
+      enderecoUf:          entrega === 'direto' ? uf.trim().toUpperCase() : null,
+      formaEnvio:          entrega === 'direto' ? formaEnvio : null,
+      bundleId,
+    };
+
     setSending(true);
     try {
-      await api('/products/transfer-orders', {
-        method: 'POST',
-        body: JSON.stringify({
-          tipo: tipo === 'reposicao' ? 'REPOSICAO' : 'VENDA_CERTA',
-          refCode,
-          cor: selectedColor,
-          tamanho: selectedSize,
-          qtyOrigem: qtyInfo,
-          lojaOrigemCode: store.code,
-          solicitanteNome: solicitante.trim(),
-          clienteNome: tipo === 'venda-certa' ? cliente.trim() : null,
-          mensagem: msg,
-        }),
-      });
+      // Cria 1 TransferOrder pra peça principal + 1 pra cada extra. Todas
+      // compartilham o mesmo bundleId quando envio direto.
+      await Promise.all(
+        allPieces.map((p, idx) =>
+          api('/products/transfer-orders', {
+            method: 'POST',
+            body: JSON.stringify({
+              ...basePayload,
+              refCode: p.refCode,
+              cor: p.cor || null,
+              tamanho: p.tamanho || null,
+              qtyOrigem: idx === 0 ? qtyInfo : (p.qty || 1),
+            }),
+          }),
+        ),
+      );
     } catch (err) {
       // Não bloqueia o envio — apenas loga. Usuário consegue mandar mesmo offline.
       console.warn('[TransferOrder] POST falhou, abrindo WhatsApp mesmo assim:', err);
@@ -1163,18 +1355,29 @@ function TransferModal({
     }
 
     // 2) Abre WhatsApp DIRETO (web.whatsapp.com/send pula a splash do wa.me)
-    //    Se o user já tá logado no WA Web, cai direto na conversa com texto prefilled.
     const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`;
     window.open(url, 'lurds_whatsapp'); // nome fixo — reusa mesma aba
     onClose();
   };
+
+  const previewMsg = canSubmit
+    ? buildMensagem([
+        { refCode, cor: selectedColor ?? '', tamanho: selectedSize ?? '', qty: 1 },
+        ...extras.map((e) => ({
+          refCode: e.refCode.trim().toUpperCase(),
+          cor: e.cor.trim(),
+          tamanho: e.tamanho.trim(),
+          qty: e.qty,
+        })),
+      ])
+    : '';
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl max-w-lg w-full p-5 space-y-4 max-h-[92vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <h3 className="text-lg font-bold text-slate-800 leading-tight">Pedir transferência</h3>
@@ -1228,6 +1431,41 @@ function TransferModal({
           </div>
         </div>
 
+        {/* Entrega — só aparece em venda-certa */}
+        {tipo === 'venda-certa' && (
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-2">
+              Como a cliente recebe?
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setEntrega('loja')}
+                className={`p-3 rounded-lg border-2 text-sm font-bold transition flex items-center justify-center gap-2 ${
+                  entrega === 'loja'
+                    ? 'bg-sky-50 border-sky-500 text-sky-800'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                <Home className="w-4 h-4" />
+                Envia p/ loja
+              </button>
+              <button
+                type="button"
+                onClick={() => setEntrega('direto')}
+                className={`p-3 rounded-lg border-2 text-sm font-bold transition flex items-center justify-center gap-2 ${
+                  entrega === 'direto'
+                    ? 'bg-purple-50 border-purple-500 text-purple-800'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                }`}
+              >
+                <Truck className="w-4 h-4" />
+                Direto p/ cliente
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Solicitante */}
         <div>
           <label className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1 block">
@@ -1246,20 +1484,239 @@ function TransferModal({
 
         {/* Cliente (só pra venda certa) */}
         {tipo === 'venda-certa' && (
-          <div>
-            <label className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1 block">
-              Nome da cliente <span className="text-red-500">*</span>
-            </label>
-            <input
-              ref={clienteInputRef}
-              type="text"
-              value={cliente}
-              onChange={(e) => setCliente(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) submit(); }}
-              placeholder="Nome da cliente que está esperando"
-              autoComplete="off"
-              className="w-full p-3 rounded-lg border-2 border-amber-300 bg-amber-50/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-none text-base"
-            />
+          <div className="space-y-3">
+            <div>
+              <label className="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1 block">
+                Nome da cliente <span className="text-red-500">*</span>
+              </label>
+              <input
+                ref={clienteInputRef}
+                type="text"
+                value={cliente}
+                onChange={(e) => setCliente(e.target.value)}
+                placeholder="Nome da cliente que está esperando"
+                autoComplete="off"
+                className="w-full p-3 rounded-lg border-2 border-amber-300 bg-amber-50/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-none text-base"
+              />
+            </div>
+            {entrega === 'direto' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
+                    Telefone
+                  </label>
+                  <input
+                    type="tel"
+                    value={clienteTelefone}
+                    onChange={(e) => setClienteTelefone(e.target.value)}
+                    placeholder="(11) 99999-9999"
+                    className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
+                    CPF (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={clienteCpf}
+                    onChange={(e) => setClienteCpf(e.target.value)}
+                    placeholder="000.000.000-00"
+                    className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Endereço — só pra venda-certa + direto */}
+        {tipo === 'venda-certa' && entrega === 'direto' && (
+          <div className="space-y-3 p-3 rounded-lg bg-purple-50/40 border border-purple-200">
+            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-purple-800">
+              <MapPin className="w-3.5 h-3.5" />
+              Endereço de entrega <span className="text-red-500">*</span>
+            </div>
+
+            {/* CEP */}
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
+                CEP {cepLoading && <span className="text-purple-600 normal-case font-normal">(buscando...)</span>}
+              </label>
+              <input
+                type="text"
+                value={cep}
+                onChange={(e) => setCep(e.target.value)}
+                placeholder="00000-000"
+                inputMode="numeric"
+                className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+              />
+              {cepError && <div className="text-[10px] text-amber-700 mt-1">{cepError}</div>}
+            </div>
+
+            {/* Logradouro + Número */}
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">Rua / Logradouro</label>
+                <input
+                  type="text"
+                  value={logradouro}
+                  onChange={(e) => setLogradouro(e.target.value)}
+                  placeholder="Av. Paulista"
+                  className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">Nº</label>
+                <input
+                  type="text"
+                  value={numero}
+                  onChange={(e) => setNumero(e.target.value)}
+                  placeholder="123"
+                  className="w-20 p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Complemento */}
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">Complemento (opcional)</label>
+              <input
+                type="text"
+                value={complemento}
+                onChange={(e) => setComplemento(e.target.value)}
+                placeholder="Apto 42, Bloco B"
+                className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+              />
+            </div>
+
+            {/* Bairro */}
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">Bairro</label>
+              <input
+                type="text"
+                value={bairro}
+                onChange={(e) => setBairro(e.target.value)}
+                placeholder="Bela Vista"
+                className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+              />
+            </div>
+
+            {/* Cidade + UF */}
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">Cidade</label>
+                <input
+                  type="text"
+                  value={cidade}
+                  onChange={(e) => setCidade(e.target.value)}
+                  placeholder="São Paulo"
+                  className="w-full p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">UF</label>
+                <input
+                  type="text"
+                  value={uf}
+                  onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
+                  placeholder="SP"
+                  maxLength={2}
+                  className="w-16 p-2.5 rounded-lg border-2 border-slate-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none text-sm uppercase"
+                />
+              </div>
+            </div>
+
+            {/* Forma de envio */}
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
+                Forma de envio <span className="text-red-500">*</span>
+              </label>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(['SEDEX', 'PAC', 'MOTOBOY', 'OUTRO'] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setFormaEnvio(f)}
+                    className={`p-2 rounded-lg border-2 text-xs font-bold transition ${
+                      formaEnvio === f
+                        ? 'bg-purple-500 border-purple-600 text-white'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-purple-300'
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Peças extras no mesmo bundle — só pra direto (mesma cliente, mais peças) */}
+        {tipo === 'venda-certa' && entrega === 'direto' && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                Outras peças p/ essa cliente
+              </div>
+              <button
+                type="button"
+                onClick={addExtra}
+                className="text-xs font-bold text-purple-700 hover:text-purple-900 flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-50"
+              >
+                <Plus className="w-3.5 h-3.5" /> Adicionar peça
+              </button>
+            </div>
+            {extras.length === 0 && (
+              <div className="text-[11px] text-slate-400 italic">
+                A peça principal (REF {refCode}{selectedColor ? ` · ${selectedColor}` : ''}{selectedSize ? ` · ${selectedSize}` : ''}) vai no mesmo pacote.
+              </div>
+            )}
+            {extras.map((e, idx) => (
+              <div key={e.id} className="p-2 rounded-lg border border-slate-200 bg-slate-50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold uppercase text-slate-500">Peça #{idx + 2}</div>
+                  <button
+                    type="button"
+                    onClick={() => removeExtra(e.id)}
+                    className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50"
+                    title="Remover peça"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-[2fr_1fr_1fr_auto] gap-1.5">
+                  <input
+                    type="text"
+                    value={e.refCode}
+                    onChange={(ev) => updateExtra(e.id, { refCode: ev.target.value })}
+                    placeholder="REF"
+                    className="p-2 rounded border border-slate-200 text-xs uppercase font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={e.cor}
+                    onChange={(ev) => updateExtra(e.id, { cor: ev.target.value })}
+                    placeholder="Cor"
+                    className="p-2 rounded border border-slate-200 text-xs"
+                  />
+                  <input
+                    type="text"
+                    value={e.tamanho}
+                    onChange={(ev) => updateExtra(e.id, { tamanho: ev.target.value })}
+                    placeholder="Tam"
+                    className="p-2 rounded border border-slate-200 text-xs"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    value={e.qty}
+                    onChange={(ev) => updateExtra(e.id, { qty: Math.max(1, Number(ev.target.value) || 1) })}
+                    className="w-14 p-2 rounded border border-slate-200 text-xs text-center"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -1270,9 +1727,7 @@ function TransferModal({
               Prévia da mensagem
             </div>
             <div className="text-xs text-slate-700 whitespace-pre-line leading-relaxed font-mono">
-              {tipo === 'reposicao'
-                ? `Oi! Reposição de estoque.\nVc tem a REF ${refCode}${selectedColor ? ` cor ${selectedColor}` : ''}${selectedSize ? ` tam ${selectedSize}` : ''}? (${qtyInfo} na sua loja)\nSolicitante: ${solicitante.trim()}\nPosso pedir transferência?`
-                : `Oi! Venda certa pra cliente ${cliente.trim()}.\nVc tem a REF ${refCode}${selectedColor ? ` cor ${selectedColor}` : ''}${selectedSize ? ` tam ${selectedSize}` : ''}? (${qtyInfo} na sua loja)\nSolicitante: ${solicitante.trim()}\nPode transferir pra minha loja?`}
+              {previewMsg}
             </div>
           </div>
         )}

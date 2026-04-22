@@ -339,10 +339,32 @@ model TransferOrder {
   saleCancelReason      String?   @map("sale_cancel_reason")       // por que não rolou a venda
   saleNote              String?   @map("sale_note")                // ex: número do pedido WC, valor
 
+  // ── VENDA CERTA com envio DIRETO PRA CLIENTE ──
+  // Quando entregaDireto=true, a peça não vai pra loja destino: vai SEDEX/PAC/
+  // MOTOBOY direto pro endereço da cliente. Evita a cliente ter que passar
+  // na loja pra retirar. bundleId agrupa várias peças de um mesmo pedido
+  // (mesma cliente, mesmo endereço, mesmo frete) pra permitir "adicionar mais
+  // uma peça nesse mesmo pacote".
+  entregaDireto         Boolean   @default(false) @map("entrega_direto")
+  clienteCpf            String?   @map("cliente_cpf")
+  clienteTelefone       String?   @map("cliente_telefone")
+  enderecoCep           String?   @map("endereco_cep")
+  enderecoLogradouro    String?   @map("endereco_logradouro")
+  enderecoNumero        String?   @map("endereco_numero")
+  enderecoComplemento   String?   @map("endereco_complemento")
+  enderecoBairro        String?   @map("endereco_bairro")
+  enderecoCidade        String?   @map("endereco_cidade")
+  enderecoUf            String?   @map("endereco_uf")
+  formaEnvio            String?   @map("forma_envio")              // SEDEX | PAC | MOTOBOY | OUTRO
+  // bundleId agrupa N peças do mesmo pedido (mesma cliente, mesmo endereço).
+  // Preenchido só quando entregaDireto=true. UI mostra todas as peças juntas.
+  bundleId              String?   @map("bundle_id")
+
   @@index([lojaDestinoCode, createdAt(sort: Desc)])
   @@index([lojaOrigemCode, createdAt(sort: Desc)])
   @@index([refCode, createdAt(sort: Desc)])
   @@index([tipo, saleStatus, createdAt(sort: Desc)])
+  @@index([bundleId])
   @@map("transfer_orders")
 }
 
