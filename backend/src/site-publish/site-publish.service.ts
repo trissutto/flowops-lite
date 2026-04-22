@@ -235,7 +235,13 @@ export class SitePublishService {
     if (patch.wcAtributos !== undefined) data.wcAtributos = patch.wcAtributos;
     if (patch.wcDescricao !== undefined) data.wcDescricao = patch.wcDescricao;
     if (patch.wcDescricaoCurta !== undefined) data.wcDescricaoCurta = patch.wcDescricaoCurta;
-    if (patch.wcImagens !== undefined) data.wcImagens = patch.wcImagens;
+    if (patch.wcImagens !== undefined) {
+      // Filtra URLs inválidas (caminho local do PC, file://, etc.) — senão
+      // acumula lixo que só vai estourar na hora de publicar.
+      data.wcImagens = Array.isArray(patch.wcImagens)
+        ? patch.wcImagens.filter((i) => i?.url && /^https?:\/\//i.test(String(i.url).trim()))
+        : patch.wcImagens;
+    }
     if (patch.wcPesoKg !== undefined) data.wcPesoKg = patch.wcPesoKg;
     if (patch.wcDimensoesCm !== undefined) data.wcDimensoesCm = patch.wcDimensoesCm;
     if (patch.wcPrecoVenda !== undefined) data.wcPrecoVenda = patch.wcPrecoVenda;
@@ -342,10 +348,16 @@ export class SitePublishService {
    */
   async uploadImage(id: string, params: { sourceUrl: string; alt?: string }) {
     const item = await this.getQueueItem(id);
+    const src = String(params.sourceUrl || '').trim();
+    if (!/^https?:\/\//i.test(src)) {
+      throw new BadRequestException(
+        'URL de imagem inválida: só aceito https://… público. Caminho local do PC (C:\\…, file://, /Users/) não funciona — o WP não consegue fetchar da sua máquina.',
+      );
+    }
     const filename = `${item.refCode}-${item.cor}-${Date.now()}.jpg`
       .replace(/\s+/g, '-')
       .toLowerCase();
-    const media = await this.wc.uploadMediaFromUrl(params.sourceUrl, filename, params.alt);
+    const media = await this.wc.uploadMediaFromUrl(src, filename, params.alt);
     // Anexa na lista existente
     const existing = Array.isArray(item.wcImagens) ? (item.wcImagens as any[]) : [];
     const updated = [...existing, { id: media.id, url: media.source_url, alt: params.alt || '' }];
@@ -396,14 +408,27 @@ export class SitePublishService {
     const categoryIds = Array.isArray(item.wcCategoryIds) ? (item.wcCategoryIds as any[]).map(Number) : [];
     const tags = Array.isArray(item.wcTags) ? (item.wcTags as any[]).map(String) : [];
     const atributos = Array.isArray(item.wcAtributos) ? (item.wcAtributos as any[]) : [];
-    const imagens = Array.isArray(item.wcImagens) ? (item.wcImagens as any[]) : [];
+    const imagensBrutas = Array.isArray(item.wcImagens) ? (item.wcImagens as any[]) : [];
+    // Só mantém imagens com URL pública acessível pelo WC. Caminho local do
+    // CEO (C:\...) não serve porque WP fica em outro servidor — rejeitar aqui
+    // pra não quebrar o createDraftVariableProduct com 400 genérico.
+    const imagens = imagensBrutas.filter(
+      (i) => i?.url && /^https?:\/\//i.test(String(i.url).trim()),
+    );
+    const imagensRejeitadas = imagensBrutas.length - imagens.length;
     const tamanhosSnapshot = Array.isArray(item.tamanhos) ? (item.tamanhos as any[]) : [];
 
     const missing: string[] = [];
     if (!titulo) missing.push('título');
     if (!descricao) missing.push('descrição');
     if (categoryIds.length === 0) missing.push('categoria');
-    if (imagens.length === 0) missing.push('pelo menos 1 imagem');
+    // Imagem é OPCIONAL — produto vai como draft, CEO pode anexar foto depois
+    // no WC admin. Se imagens foram rejeitadas (URL local ou AVIF), loga só.
+    if (imagensRejeitadas > 0) {
+      this.logger.warn(
+        `Publish ${item.refCode}/${item.cor}: ${imagensRejeitadas} imagem(s) ignorada(s) por URL inválida/formato não suportado.`,
+      );
+    }
     if (tamanhosSnapshot.length === 0) missing.push('tamanhos (snapshot Wincred vazio)');
     if (missing.length) {
       throw new BadRequestException(`Campos obrigatórios faltando: ${missing.join(', ')}.`);
@@ -491,7 +516,16 @@ export class SitePublishService {
       );
       return updated;
     } catch (e: any) {
-      const msg = e?.message || String(e);
+      const raw = e?.message || String(e);
+      // Enriquece erros comuns pra orientação prática do CEO.
+      let msg = raw;
+      const hasAvif = imagens.some((i) => /\.(avif|heic|heif)(\?|$)/i.test(String(i?.url || '')));
+      if (hasAvif && /permiss[aã]o|tipo de arquivo|file type/i.test(raw)) {
+        msg =
+          'WordPress rejeitou a imagem .avif/.heic. Solução: abre a imagem no WP Admin → Mídia, copia a URL da versão .jpg (ou sobe a imagem de novo como .jpg/.webp) e substitui aqui.';
+      } else if (/permiss[aã]o|tipo de arquivo|file type/i.test(raw)) {
+        msg = `WP rejeitou o tipo do arquivo. Use .jpg, .jpeg, .png ou .webp. Erro bruto: ${raw}`;
+      }
       await (this.prisma as any).sitePublishQueue.update({
         where: { id },
         data: {
@@ -499,7 +533,7 @@ export class SitePublishService {
           errorMessage: msg.slice(0, 500),
         },
       });
-      this.logger.error(`Publish FAIL ${item.refCode}/${item.cor}: ${msg}`);
+      this.logger.error(`Publish FAIL ${item.refCode}/${item.cor}: ${raw}`);
       throw new BadRequestException(`Falha ao publicar: ${msg}`);
     }
   }

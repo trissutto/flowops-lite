@@ -270,6 +270,30 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
   const addImage = async () => {
     const url = imgUrlInput.trim();
     if (!url) return;
+
+    // Valida: só aceita URL pública (http/https). Caminho local (C:\, file://,
+    // /Users/, etc.) NUNCA funciona — WC não consegue fetchar arquivo da máquina
+    // do CEO. Mensagem clara pra evitar a confusão de publicar e dar erro 400.
+    const isPublicUrl = /^https?:\/\//i.test(url);
+    if (!isPublicUrl) {
+      setToast(
+        'Só funciona URL pública (https://...). Caminho local (C:\\... ou arquivo no PC) não dá — suba a imagem num host público ou configure WP_APP_USER no .env pra upload direto.',
+      );
+      setTimeout(() => setToast(null), 7000);
+      return;
+    }
+    // Formatos que o WP padrão NÃO aceita (AVIF/HEIC exigem suporte GD/Imagick
+    // específico — a maioria dos hosts não tem). Avisa mas deixa o CEO escolher.
+    if (/\.(avif|heic|heif)(\?|$)/i.test(url)) {
+      const ok = confirm(
+        'Essa imagem é .avif/.heic — o WordPress geralmente NÃO aceita esse formato.\n\n' +
+          'Vai provavelmente falhar na hora de publicar com "Sem permissão para enviar esse tipo de arquivo".\n\n' +
+          'Recomendo usar a versão .jpg que o WP gera automaticamente (miniaturas).\n\n' +
+          'Quer adicionar mesmo assim?',
+      );
+      if (!ok) return;
+    }
+
     // Se upload habilitado, tenta fazer upload; senão salva URL direta
     if (integration?.mediaUploadEnabled) {
       try {
@@ -361,7 +385,8 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
     failed: 'bg-rose-100 text-rose-700',
   };
 
-  const ready = titulo.trim() && descricao.trim() && categoryIds.length > 0 && imagens.length > 0;
+  // Imagem é opcional — vai como draft, CEO pode anexar depois no WC admin.
+  const ready = titulo.trim() && descricao.trim() && categoryIds.length > 0;
 
   return (
     <div className="fixed inset-0 z-[100] flex">
@@ -670,9 +695,21 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
               </div>
               <div className="border border-dashed border-gray-300 rounded-lg p-3">
                 <div className="text-xs text-gray-500 mb-2">
-                  {integration?.mediaUploadEnabled
-                    ? 'Cole URL da imagem (será uploadada pro WP Media)'
-                    : 'Cole URL da imagem (upload WP desabilitado — configure WP_APP_USER/PASSWORD no .env pra upload direto)'}
+                  {integration?.mediaUploadEnabled ? (
+                    <span>
+                      Cole URL <strong>pública</strong> (https://…) — será uploadada pro WP Media.
+                    </span>
+                  ) : (
+                    <span>
+                      Upload direto do PC <strong>desligado</strong>. Cole URL pública (https://…)
+                      ou configure <code className="bg-gray-100 px-1 rounded">WP_APP_USER</code> +{' '}
+                      <code className="bg-gray-100 px-1 rounded">WP_APP_PASSWORD</code> no .env pra
+                      subir arquivo direto.{' '}
+                      <strong className="text-rose-700">
+                        Caminho local do PC (C:\…) não funciona.
+                      </strong>
+                    </span>
+                  )}
                 </div>
                 <div className="flex gap-2 mb-2">
                   <input
