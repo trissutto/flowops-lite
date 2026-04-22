@@ -22,6 +22,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { classifyShipping } from '@/lib/shipping-method';
 
 interface SepItem {
   sku: string;
@@ -430,9 +431,34 @@ function Folha({
       <div>{addrCity}</div>
       {cep && <div>CEP: {cep}</div>}
 
-      {/* ENVIO */}
+      {/* ENVIO — destacado em caixa preta invertida (alto contraste pra térmica) */}
       <h2>Forma de Envio</h2>
-      <div style={{ fontWeight: 700 }}>{shippingMethod}</div>
+      {(() => {
+        const m = classifyShipping(shippingMethod);
+        const isKnown = m.kind !== 'other';
+        return (
+          <div
+            style={{
+              textAlign: 'center',
+              background: '#000',
+              color: '#fff',
+              padding: '6px 4px',
+              fontWeight: 900,
+              fontSize: isKnown ? '14pt' : '11pt',
+              letterSpacing: '0.5px',
+              marginTop: 2,
+            }}
+          >
+            {m.label}
+          </div>
+        );
+      })()}
+      {/* Linha original (raw) como sub-info — ajuda o cliente a identificar o serviço completo */}
+      {shippingMethod && shippingMethod !== classifyShipping(shippingMethod).label && (
+        <div className="muted" style={{ textAlign: 'center', marginTop: 2 }}>
+          {shippingMethod}
+        </div>
+      )}
       {order.customerNote && (
         <>
           <h2>Observação do cliente</h2>

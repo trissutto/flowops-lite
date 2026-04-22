@@ -24,6 +24,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
+import { classifyShipping } from '@/lib/shipping-method';
 import Logo from '@/components/Logo';
 import BipModal from './BipModal';
 import {
@@ -913,6 +914,21 @@ function PickOrderCard({
                 Transferência
               </span>
             )}
+            {(() => {
+              // Badge de forma de envio — destaque colorido pra filial identificar de longe.
+              // Fonte: order.shippingMethod (preenchido pelo backend no pick-order).
+              const raw = order.shippingMethod ?? null;
+              if (!raw) return null;
+              const m = classifyShipping(raw);
+              return (
+                <span
+                  className={`text-xs font-bold uppercase tracking-wide px-2 py-1 rounded ${m.colorBold}`}
+                  title={m.raw}
+                >
+                  {m.label}
+                </span>
+              );
+            })()}
           </div>
           <div className="text-sm text-slate-700 font-medium mt-1 truncate">
             {customerName ?? '—'}

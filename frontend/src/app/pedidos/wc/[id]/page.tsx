@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import { classifyShipping } from '@/lib/shipping-method';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -546,7 +547,26 @@ export default function PedidoDetailPage() {
 
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Pedido #{order.number}</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl font-bold">Pedido #{order.number}</h1>
+            {(() => {
+              // Badge de forma de envio em destaque — ao lado do número do pedido.
+              // Fonte: shipping_lines do WC (via order.pickup.shippingMethodTitle) ou
+              // fallback pra separation.shippingMethod quando o pickup não foi detectado.
+              const raw =
+                order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
+              if (!raw) return null;
+              const m = classifyShipping(raw);
+              return (
+                <span
+                  className={`px-3 py-1 text-sm font-bold rounded shadow-sm ${m.colorBold}`}
+                  title={m.raw}
+                >
+                  {m.label}
+                </span>
+              );
+            })()}
+          </div>
           <p className="text-sm text-slate-500 mt-1">
             Criado em {fmtDate(order.dateCreatedGmt)}
             {order.dateModifiedGmt && order.dateModifiedGmt !== order.dateCreatedGmt &&

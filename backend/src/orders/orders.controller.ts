@@ -75,6 +75,9 @@ export class OrdersController {
       total: o.total,
       currency: o.currency,
       customerName: `${o.billing?.first_name ?? ''} ${o.billing?.last_name ?? ''}`.trim(),
+      // Título do método de envio (SEDEX / PAC / Retirar na Loja de X / etc)
+      // — lido direto do shipping_lines que o WC já devolve na listagem.
+      shippingMethod: o.shipping_lines?.[0]?.method_title ?? null,
       ...extractAttribution(o.meta_data ?? []),
     }));
 

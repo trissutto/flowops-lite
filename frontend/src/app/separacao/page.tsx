@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import { classifyShipping } from '@/lib/shipping-method';
 import {
   RefreshCw,
   Send,
@@ -49,6 +50,7 @@ interface WcOrderListItem {
   dateCreatedGmt: string;
   total: string;
   customerName: string;
+  shippingMethod?: string | null;
 }
 
 interface SeparationGroup {
@@ -950,6 +952,18 @@ export default function SeparacaoPage() {
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                     </div>
                     <div className="col-span-4 truncate">
+                      {(() => {
+                        const shipBadge = classifyShipping(o.shippingMethod);
+                        if (!o.shippingMethod) return null;
+                        return (
+                          <span
+                            className={`mr-2 inline-flex items-center px-2 py-0.5 text-[10px] font-bold rounded align-middle ${shipBadge.colorBold}`}
+                            title={shipBadge.raw}
+                          >
+                            {shipBadge.short}
+                          </span>
+                        );
+                      })()}
                       {o.customerName || '—'}
                       {hasIssue && (
                         <span
