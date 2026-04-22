@@ -56,6 +56,11 @@ interface ListResp {
 
 interface DetailResp extends LogRow {
   payload: any; // parsed JSON do payload (ou string crua se não for JSON)
+  // Preenchido pelo backend quando o log é SHADOW/FALHA mas já existe
+  // `debit.real.applied` posterior pro mesmo pickOrderId — indica que a
+  // baixa JÁ foi feita depois (auto-debit no shipped, por exemplo) e
+  // reabrir seria duplicidade.
+  resolvedByLog?: { id: number; event: string; createdAt: string } | null;
 }
 
 interface StatsBucket {
@@ -85,6 +90,7 @@ function eventKind(event: string): {
   if (event === 'debit.real.applied') return { kind: 'real-ok', label: 'LIVE OK', color: 'bg-green-100 text-green-800 border-green-300' };
   if (event === 'debit.real.failed') return { kind: 'real-fail', label: 'LIVE FALHOU', color: 'bg-red-100 text-red-800 border-red-300' };
   if (event === 'debit.approved.shadow') return { kind: 'shadow', label: 'SHADOW', color: 'bg-amber-100 text-amber-800 border-amber-300' };
+  if (event === 'debit.auto.shadow') return { kind: 'shadow', label: 'AUTO SHADOW', color: 'bg-amber-100 text-amber-800 border-amber-300' };
   if (event === 'debit.bulk-approved.real') return { kind: 'bulk-real', label: 'BATCH LIVE', color: 'bg-blue-100 text-blue-800 border-blue-300' };
   if (event === 'debit.bulk-approved.shadow') return { kind: 'bulk-shadow', label: 'BATCH SHADOW', color: 'bg-amber-100 text-amber-800 border-amber-300' };
   return { kind: 'other', label: event, color: 'bg-gray-100 text-gray-700 border-gray-300' };
@@ -620,12 +626,19 @@ function DetailModal({
   onReopen: (pickOrderId: string) => void;
   reopening: boolean;
 }) {
+  // Já foi resolvido? (shadow/falha mas existe debit.real.applied posterior)
+  const alreadyResolved = !!detail?.resolvedByLog;
+
   // Exibe botão Reabrir somente se:
-  //  - é shadow OU failed
+  //  - é shadow OU failed (incluindo auto.shadow do auto-debit)
   //  - tem pickOrderId individual (não batch agregado)
+  //  - NÃO foi resolvido posteriormente (anti-dupla-baixa)
   const canReopen =
     !!detail?.pickOrderId &&
-    (detail.event === 'debit.approved.shadow' || detail.event === 'debit.real.failed');
+    (detail.event === 'debit.approved.shadow' ||
+      detail.event === 'debit.auto.shadow' ||
+      detail.event === 'debit.real.failed') &&
+    !alreadyResolved;
   const kind = detail ? eventKind(detail.event) : null;
   const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> =
     detail?.payload?.applied ?? [];
@@ -666,6 +679,40 @@ function DetailModal({
             <div className="text-center py-8 text-gray-500">Sem dados</div>
           ) : (
             <>
+              {/* Banner JÁ RESOLVIDO — aparece se o pick-order deste log (shadow/falha)
+                  já foi baixado posteriormente em modo LIVE via auto-debit (shipped)
+                  ou aprovação manual. Nessa situação reabrir seria dupla baixa, então
+                  explicamos positivamente que está resolvido e apontamos o log LIVE. */}
+              {alreadyResolved && detail.resolvedByLog && (
+                <div className="bg-emerald-50 border-2 border-emerald-300 rounded-lg p-3 flex items-start gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-700 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 text-sm">
+                    <div className="font-bold text-emerald-900">
+                      ✅ JÁ BAIXADO NO GIGASISTEMAS
+                    </div>
+                    <div className="text-emerald-800 mt-1">
+                      Este pick-order foi baixado posteriormente em modo <b>LIVE</b> no log{' '}
+                      <button
+                        onClick={() => {
+                          const id = detail.resolvedByLog!.id;
+                          // re-abre modal no log resolvido clicando num event programático
+                          // (setSelectedId é escopo da Page, mas já estamos dentro do Modal;
+                          // mais simples: fecha modal e o usuário clica; ou recarrega a linha)
+                          window.location.hash = `#log-${id}`;
+                        }}
+                        className="font-mono font-bold underline hover:text-emerald-600"
+                      >
+                        #{detail.resolvedByLog.id}
+                      </button>{' '}
+                      em {formatDateTime(detail.resolvedByLog.createdAt)}.
+                    </div>
+                    <div className="text-xs text-emerald-700 mt-1">
+                      Nada a fazer — o estoque já foi debitado do ERP. O botão de reabrir foi escondido pra evitar baixa dupla.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Metadata */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm bg-gray-50 rounded p-3">
                 <div>
@@ -798,13 +845,15 @@ function DetailModal({
           )}
         </div>
 
-        {/* Footer — ação de reabrir (só pra shadow/failed) */}
+        {/* Footer — ação de reabrir (só pra shadow/failed AINDA NÃO resolvidos) */}
         {canReopen && detail?.pickOrderId && (
           <div className="border-t bg-amber-50 p-3 flex items-center justify-between gap-3">
             <div className="text-xs text-amber-800">
               {detail.event === 'debit.approved.shadow'
                 ? 'Baixa feita em SHADOW — não tocou o ERP. Reabrir devolve o pick-order pra fila.'
-                : 'Baixa falhou no ERP. Reabrir devolve o pick-order pra fila pra tentar novamente.'}
+                : detail.event === 'debit.auto.shadow'
+                  ? 'Auto-baixa (shipped) foi em SHADOW — não tocou o ERP. Reabrir devolve pra fila.'
+                  : 'Baixa falhou no ERP. Reabrir devolve o pick-order pra fila pra tentar novamente.'}
             </div>
             <button
               onClick={() => onReopen(detail.pickOrderId!)}
@@ -813,6 +862,24 @@ function DetailModal({
             >
               <RotateCcw className="w-4 h-4" />
               Reabrir p/ baixar de novo
+            </button>
+          </div>
+        )}
+
+        {/* Footer alternativo — quando log é SHADOW/FALHA mas JÁ foi resolvido depois */}
+        {alreadyResolved && detail?.resolvedByLog && (
+          <div className="border-t bg-emerald-50 p-3 flex items-center justify-between gap-3">
+            <div className="text-xs text-emerald-800 flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" />
+              <span>
+                Resolvido posteriormente no log <b className="font-mono">#{detail.resolvedByLog.id}</b>. Nada a fazer aqui.
+              </span>
+            </div>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-semibold rounded bg-emerald-600 text-white hover:bg-emerald-700 whitespace-nowrap"
+            >
+              Fechar
             </button>
           </div>
         )}

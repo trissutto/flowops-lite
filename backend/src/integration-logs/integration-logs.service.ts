@@ -100,7 +100,10 @@ export class IntegrationLogsService {
   }
 
   async findOne(id: number): Promise<
-    | (IntegrationLogRow & { payload: any })
+    | (IntegrationLogRow & {
+        payload: any;
+        resolvedByLog: { id: number; event: string; createdAt: Date } | null;
+      })
     | null
   > {
     const row = await this.prisma.integrationLog.findUnique({ where: { id } });
@@ -112,7 +115,30 @@ export class IntegrationLogsService {
     } catch {
       parsed = row.payload; // se não for JSON válido, devolve o raw string
     }
-    return { ...decorated, payload: parsed };
+
+    // Se for log SHADOW/FALHA e já existir log posterior `debit.real.applied`
+    // pro mesmo pickOrderId, devolve essa referência pra UI indicar
+    // "JÁ FOI RESOLVIDO" e esconder botão de reabrir.
+    let resolvedByLog: { id: number; event: string; createdAt: Date } | null = null;
+    const isResolvableSource =
+      row.event === 'debit.approved.shadow' ||
+      row.event === 'debit.auto.shadow' ||
+      row.event === 'debit.real.failed';
+    if (isResolvableSource && decorated.pickOrderId) {
+      const later = await this.prisma.integrationLog.findFirst({
+        where: {
+          source: 'erp',
+          event: 'debit.real.applied',
+          createdAt: { gte: row.createdAt },
+          payload: { contains: `"pickOrderId":"${decorated.pickOrderId}"` },
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, event: true, createdAt: true },
+      });
+      if (later) resolvedByLog = later;
+    }
+
+    return { ...decorated, payload: parsed, resolvedByLog };
   }
 
   /**
