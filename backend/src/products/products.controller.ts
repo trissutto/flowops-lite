@@ -15,12 +15,16 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ProductsService } from './products.service';
+import { VendaCertaAutoMatchService } from './venda-certa-auto-match.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 
 @Controller('products')
 @UseGuards(JwtAuthGuard)
 export class ProductsController {
-  constructor(private readonly products: ProductsService) {}
+  constructor(
+    private readonly products: ProductsService,
+    private readonly vendaCertaAutoMatch: VendaCertaAutoMatchService,
+  ) {}
 
   @Get()
   list(
@@ -126,7 +130,7 @@ export class ProductsController {
   }
 
   /**
-   * DIAGNÓSTICO: descreve a tabela PRODUTOSVENDIDOS do Gigasistemas.
+   * DIAGNÓSTICO: descreve a tabela PRODVENDIDOS do Gigasistemas.
    * Usado pra descobrir quais colunas guardam SKU/loja/data de venda,
    * antes de ligar o auto-match de VENDA CERTA.
    */
@@ -338,6 +342,22 @@ export class ProductsController {
    * Body: { status: 'confirmed' | 'cancelled', reason?, saleNote? }
    * Só a loja destino (quem pediu) ou admin/operator pode.
    */
+  /**
+   * Dispara manualmente o cron de auto-match VENDA_CERTA via PDV (tabela caixa).
+   * Pra QA / retaguarda forçar uma passada sem esperar 30min do scheduler.
+   * Só admin/operator.
+   */
+  @Post('transfer-orders/auto-match/run')
+  @HttpCode(200)
+  async runAutoMatch(@Req() req: any) {
+    const user = req.user as { role: string };
+    const isAdmin = user?.role === 'admin' || user?.role === 'operator';
+    if (!isAdmin) {
+      throw new BadRequestException('Somente admin/operator pode disparar auto-match.');
+    }
+    return this.vendaCertaAutoMatch.runManual();
+  }
+
   @Patch('transfer-orders/:id/sale-status')
   @HttpCode(200)
   updateTransferSaleStatus(

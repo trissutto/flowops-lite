@@ -6,7 +6,7 @@ REM  Conecta direto no MySQL usando credenciais do backend/.env
 REM  e cospe o schema + amostra de linhas da tabela informada.
 REM
 REM  Uso:
-REM    - Duplo clique: inspeciona PRODUTOSVENDIDOS (default)
+REM    - Duplo clique: inspeciona PRODVENDIDOS (default)
 REM    - diagnostico-erp.bat NOME_DA_TABELA: inspeciona outra
 REM ============================================================
 

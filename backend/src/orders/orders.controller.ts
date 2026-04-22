@@ -364,6 +364,101 @@ export class OrdersController {
   }
 
   /**
+   * BATELADA: preview de separação pra VÁRIOS pedidos WC de uma vez.
+   * Aplica:
+   *   - ESTOQUE VIRTUAL compartilhado (a mesma peça não cai em 2 pedidos)
+   *   - PROPORCIONALIDADE INVERSA (loja que vendeu mais nos últimos 30d cede menos)
+   *
+   * Body:
+   *   { wcOrderIds: number[] }   // Array de IDs WC a rotear em sequência
+   *
+   * Retorna: { previews: [...], cedeSummary: { byStore, totalCedeSoFar } }
+   *
+   * Não persiste — é preview. Pra commit, matriz chama confirmSeparation por pedido.
+   */
+  @Post('wc/prepare-separation-batch')
+  async prepareSeparationBatch(@Body() body: { wcOrderIds: number[] }) {
+    const ids = Array.isArray(body?.wcOrderIds) ? body.wcOrderIds.map(Number).filter((n) => n > 0) : [];
+    if (ids.length === 0) {
+      throw new BadRequestException('wcOrderIds vazio.');
+    }
+    // Cap de segurança — bateladas gigantes travariam a UI e o ERP.
+    if (ids.length > 60) {
+      throw new BadRequestException('Máximo de 60 pedidos por batelada.');
+    }
+
+    const activeStores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+    });
+
+    const orderInputs: any[] = [];
+    for (const wcOrderId of ids) {
+      try {
+        const o = await this.wc.getOrder(wcOrderId);
+        const items = (o.line_items ?? []).map((li: any) => {
+          const variant = extractVariantFromLineItem(li);
+          return {
+            sku: String(li.sku ?? '').trim(),
+            quantity: Number(li.quantity ?? 0),
+            productName: String(li.name ?? ''),
+            variant,
+          };
+        });
+        const shipping = o.shipping ?? {};
+        const billing = o.billing ?? {};
+        const shippingMethod = (o.shipping_lines ?? [])[0]?.method_title ?? 'Não informado';
+        const customerName = [shipping.first_name || billing.first_name, shipping.last_name || billing.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const pickup = detectPickup(o, activeStores);
+        const customerCpf = extractCpf(o);
+
+        orderInputs.push({
+          wcOrderId,
+          wcOrderNumber: String(o.number ?? wcOrderId),
+          orderDateIso: o.date_created_gmt ?? o.date_created ?? new Date().toISOString(),
+          totalAmount: Number(o.total ?? 0),
+          paymentMethod: o.payment_method_title ?? '',
+          items,
+          customerName,
+          customerPhone: billing.phone ?? null,
+          customerEmail: billing.email ?? null,
+          customerCpf,
+          shippingMethod,
+          isPickup: pickup.isPickup,
+          pickupStoreCode: pickup.pickupStoreCode,
+          address: {
+            street: shipping.address_1 ?? billing.address_1 ?? null,
+            number: shipping.number ?? billing.number ?? null,
+            complement: shipping.address_2 ?? billing.address_2 ?? null,
+            neighborhood: shipping.neighborhood ?? billing.neighborhood ?? null,
+            city: shipping.city ?? billing.city ?? null,
+            state: shipping.state ?? billing.state ?? null,
+            postcode: shipping.postcode ?? billing.postcode ?? null,
+          },
+        });
+      } catch (e: any) {
+        orderInputs.push({
+          wcOrderId,
+          wcOrderNumber: String(wcOrderId),
+          orderDateIso: new Date().toISOString(),
+          totalAmount: 0,
+          paymentMethod: '',
+          items: [],
+          customerName: '',
+          shippingMethod: '',
+          address: {},
+          _fetchError: e?.message ?? String(e),
+        } as any);
+      }
+    }
+
+    return this.routing.previewBatchForWc(orderInputs);
+  }
+
+  /**
    * DIAGNÓSTICO: pra investigar pedido roteado pra loja "errada".
    * Compara o que a engine VIU no momento (routingResult salvo) vs ERP AO VIVO agora.
    * Mostra por SKU e por loja:

@@ -6,7 +6,7 @@
  * Tela utilitária pra inspecionar o schema de tabelas do Gigasistemas.
  * Usado pra descobrir estrutura antes de escrever queries definitivas.
  *
- * Hoje expõe: tabela PRODUTOSVENDIDOS (pra auto-match de VENDA CERTA).
+ * Hoje expõe: tabela PRODVENDIDOS (pra auto-match de VENDA CERTA).
  * Fácil expandir pra outras tabelas depois.
  */
 
@@ -74,7 +74,7 @@ export default function DiagnosticoErpPage() {
 
       <main className="max-w-5xl mx-auto p-4 space-y-4">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <div className="font-bold text-slate-800 mb-1">Tabela PRODUTOSVENDIDOS</div>
+          <div className="font-bold text-slate-800 mb-1">Tabela PRODVENDIDOS</div>
           <div className="text-sm text-slate-600 mb-3">
             Usado pra montar o auto-match de VENDA CERTA.
             Clique em &quot;Executar&quot; pra ver as colunas e 3 linhas de amostra.

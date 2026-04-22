@@ -242,10 +242,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Diagnóstico: descreve a tabela PRODUTOSVENDIDOS do Gigasistemas.
-   * Retorna colunas + 3 linhas de amostra. Usado pra descobrir qual coluna
-   * guarda SKU, loja e data de venda — depois que soubermos, o auto-match
-   * de VENDA CERTA pode ser ligado via query indexada.
+   * Diagnóstico: descreve a tabela `caixa` do Gigasistemas.
+   * Tabela `caixa` é o registro linha-a-linha de tudo que passa pelo PDV —
+   * usada tanto pra proporcionalidade (vendas por loja × últimos 30d) quanto
+   * pra auto-baixa de VENDA CERTA (match SKU+LOJA+DATA).
+   *
+   * Schema real (confirmado via LURDS ANÁLISES em 21/04/26):
+   *   DATA         — data da venda
+   *   LOJA         — código da loja (FK → lojas.CODIGO)
+   *   NUMERO       — número do cupom (DISTINCT = pedido)
+   *   CODIGO       — SKU do produto
+   *   DESCRICAO    — nome do produto
+   *   QUANTIDADE   — qty vendida
+   *   VALOR        — preço unitário
+   *   VALORTOTAL   — total da linha
+   *   VENDEDOR     — vendedor
+   *   MARCADO      — se ='SIM' → linha inválida (já validada pelo WinCred)
    */
   async describeSalesTable(): Promise<{
     columns: Array<{ field: string; type: string }>;
@@ -254,11 +266,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return { columns: [], sample: [] };
     try {
       const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
-        'SHOW COLUMNS FROM PRODUTOSVENDIDOS',
+        'SHOW COLUMNS FROM caixa',
       );
-      // ORDER BY 1 DESC não funciona sem saber PK. Pega 3 quaisquer — vale só pra olhar schema.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        'SELECT * FROM PRODUTOSVENDIDOS LIMIT 3',
+        `SELECT * FROM caixa
+           WHERE (MARCADO IS NULL OR MARCADO <> 'SIM')
+           ORDER BY DATA DESC
+           LIMIT 3`,
       );
       return {
         columns: cols.map((c: any) => ({ field: c.Field, type: c.Type })),
@@ -268,6 +282,130 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`describeSalesTable falhou: ${(e as Error).message}`);
       return { columns: [], sample: [] };
     }
+  }
+
+  /**
+   * VENDAS POR LOJA — últimos N dias (default 30), em UNIDADES.
+   * Usado pra calcular a proporcionalidade inversa no routing:
+   *   loja que vendeu MAIS tem meta de cessão MENOR.
+   *
+   * Ignora linhas com MARCADO='SIM' (já liquidadas no WinCred).
+   * Retorna sempre todas as lojas que tiveram VENDA no período — quem não
+   * aparece no array é porque não vendeu nada (share=0).
+   */
+  async getSalesByStoreLastDays(
+    days: number = 30,
+  ): Promise<Array<{ storeCode: string; units: number; orders: number }>> {
+    if (!this.pool) return [];
+    const n = Math.max(1, Math.min(365, Number(days) || 30));
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT c.LOJA       AS storeCode,
+                SUM(c.QUANTIDADE) AS units,
+                COUNT(DISTINCT c.NUMERO) AS orders
+           FROM caixa c
+          WHERE c.DATA >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+          GROUP BY c.LOJA`,
+        [n],
+      );
+      return (rows as any[]).map((r) => ({
+        storeCode: String(r.storeCode).trim(),
+        units: Number(r.units) || 0,
+        orders: Number(r.orders) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getSalesByStoreLastDays falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * AUTO-MATCH VENDA CERTA — procura na tabela `caixa` se a peça enviada
+   * pra uma loja destino JÁ foi vendida no PDV de lá.
+   *
+   * A engine recebe um array de "candidatos" (cada VENDA CERTA pending tem
+   * refCode + cor + tamanho + lojaDestino + dataEnvio). Como a `caixa` indexa
+   * pelo CODIGO (SKU) do Gigasistemas e não pela REF, faço JOIN com `produtos`
+   * pra resolver REF+COR+TAMANHO → CODIGO.
+   *
+   * Retorna um mapa `{ [indiceDoCandidato]: { numero, data, codigo, quantidade } }`
+   * — só preenche quando bateu. Se não bateu, não tem entrada no mapa.
+   *
+   * Processamento em batch (LOOP de queries pequenas) — o volume é baixo
+   * (dezenas a centenas de VENDA CERTA pending no máximo), então não vale
+   * a pena montar uma query gigante com UNION.
+   */
+  async findVendaCertaMatches(
+    candidates: Array<{
+      lojaDestinoCode: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      dataEnvio: Date;
+    }>,
+  ): Promise<Record<number, { numero: string; data: Date; codigo: string; quantidade: number }>> {
+    if (!this.pool || !candidates.length) return {};
+
+    const out: Record<number, { numero: string; data: Date; codigo: string; quantidade: number }> = {};
+
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      if (!c.lojaDestinoCode || !c.refCode) continue;
+
+      // SQL dinâmico — cor/tamanho podem ser null no nosso lado (pedido veio
+      // sem variação especificada). Nesse caso não filtra por esses campos.
+      const conds: string[] = [
+        'c.LOJA = ?',
+        'p.REF = ?',
+        'c.DATA >= ?',
+        "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      ];
+      const vals: any[] = [
+        c.lojaDestinoCode.trim(),
+        c.refCode.trim().toUpperCase(),
+        c.dataEnvio,
+      ];
+      if (c.cor && c.cor.trim()) {
+        conds.push('p.COR = ?');
+        vals.push(c.cor.trim());
+      }
+      if (c.tamanho && c.tamanho.trim()) {
+        conds.push('p.TAMANHO = ?');
+        vals.push(c.tamanho.trim());
+      }
+
+      const sql = `
+        SELECT c.NUMERO     AS numero,
+               c.DATA       AS data,
+               c.CODIGO     AS codigo,
+               c.QUANTIDADE AS quantidade
+          FROM caixa c
+          JOIN produtos p ON p.CODIGO = c.CODIGO
+         WHERE ${conds.join(' AND ')}
+         ORDER BY c.DATA ASC
+         LIMIT 1
+      `;
+
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
+        const row = (rows as any[])[0];
+        if (row) {
+          out[i] = {
+            numero: String(row.numero),
+            data: new Date(row.data),
+            codigo: String(row.codigo).trim(),
+            quantidade: Number(row.quantidade) || 1,
+          };
+        }
+      } catch (e) {
+        this.logger.warn(
+          `findVendaCertaMatches(#${i}) falhou (loja=${c.lojaDestinoCode} ref=${c.refCode}): ${(e as Error).message}`,
+        );
+      }
+    }
+
+    return out;
   }
 
   /**

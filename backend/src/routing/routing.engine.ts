@@ -6,6 +6,7 @@ import {
   StockEntry,
   StoreInput,
   PickAssignment,
+  RoutingCedeStats,
 } from './types';
 
 /**
@@ -58,6 +59,27 @@ export class RoutingEngine {
    * "caldeirão" (score maximo). 3 = ter o triplo já dá score máximo.
    */
   private readonly STOCK_BUFFER_CAP = 3;
+
+  /**
+   * Pesos do score PROPORCIONAL (só ativado quando cedeStats está presente).
+   * Regra do CEO 21/04/26: peso da meta de cessão deve ser FORTE mas não
+   * sobreporespa aos empates anteriores (qty absoluta / ratio).
+   *
+   *   score = qty_match * 10 + delta_meta * 50
+   *     + (ratio)        * 3      (desempate secundário)
+   *     + (priority)     * 5      (prioridade manual)
+   *     + (distance)     * 2      (só quebra empate fino)
+   *
+   * Onde:
+   *   qty_match  = quantidade coberta desse pedido (0..N) — peça é peça
+   *   delta_meta = targetQuota[i] - (currentCede[i] / (totalCede+1))  → "quanto essa
+   *                loja DEVE ceder mais". Positivo = está abaixo da meta = ganha.
+   */
+  private readonly W_PROP_QTY = 10;
+  private readonly W_PROP_DELTA = 50;
+  private readonly W_PROP_RATIO = 3;
+  private readonly W_PROP_PRIORITY = 5;
+  private readonly W_PROP_DISTANCE = 2;
 
   route(ctx: RoutingContext): RoutingResult {
     const activeStores = ctx.stores.filter((s) => s.active);
@@ -226,6 +248,22 @@ export class RoutingEngine {
    * reduz risco de loja ficar zerada após concorrência.
    */
   private pickBestStore(stores: StoreInput[], ctx: RoutingContext, stockMap: Map<string, number>): StoreInput {
+    // MODO V2 — proporcionalidade inversa ativa (batelada de pedidos).
+    // Quando ctx.cedeStats está presente, usa o score composto V2 com pesos do CEO.
+    if (ctx.cedeStats) {
+      return [...stores].sort((a, b) => {
+        // 1. Quantidade absoluta do pedido ainda manda (uma loja com 10 peças desse
+        //    SKU sempre vai ser melhor que 3 — protege contra concorrência física).
+        const qtyA = this.totalRawQty(a, ctx.items, stockMap);
+        const qtyB = this.totalRawQty(b, ctx.items, stockMap);
+        if (qtyA !== qtyB) return qtyB - qtyA;
+
+        // 2. Score proporcional V2 (entra pesado quando qtys empatam)
+        return this.scoreStoreV2(b, ctx, stockMap) - this.scoreStoreV2(a, ctx, stockMap);
+      })[0];
+    }
+
+    // MODO LEGADO (sem cedeStats) — mantém comportamento hierárquico anterior.
     return [...stores].sort((a, b) => {
       // 1. Quantidade absoluta total das peças do pedido que a loja tem
       const qtyA = this.totalRawQty(a, ctx.items, stockMap);
@@ -243,6 +281,53 @@ export class RoutingEngine {
       // 4. Score composto (distância CEP entra aqui)
       return this.scoreStore(b, ctx, stockMap) - this.scoreStore(a, ctx, stockMap);
     })[0];
+  }
+
+  /**
+   * Score V2 — proporcionalidade inversa (ativa quando ctx.cedeStats presente).
+   *
+   * Calcula:
+   *   qty_match  = totalRawQty da loja (peças do pedido disponíveis)
+   *   delta_meta = targetQuota - currentShareCede  (positivo = loja deve ceder mais)
+   *   ratio      = stockBufferRaw (elo mais fraco)
+   *   priority   = priorityScore/100
+   *   distance   = distanceScore (0..1)
+   *
+   * Retorna soma ponderada — quanto maior, melhor.
+   */
+  private scoreStoreV2(store: StoreInput, ctx: RoutingContext, stockMap: Map<string, number>): number {
+    const qtyMatch = this.totalRawQty(store, ctx.items, stockMap);
+    const ratio = Math.min(this.STOCK_BUFFER_CAP, this.stockBufferRaw(store, ctx.items, stockMap));
+    const priority = store.priorityScore / 100;
+    const distance = this.distanceScore(store.cep, ctx.shippingCep);
+    const deltaMeta = this.computeDeltaMeta(store.code, ctx.cedeStats);
+
+    return (
+      this.W_PROP_QTY * qtyMatch +
+      this.W_PROP_DELTA * deltaMeta +
+      this.W_PROP_RATIO * ratio +
+      this.W_PROP_PRIORITY * priority +
+      this.W_PROP_DISTANCE * distance
+    );
+  }
+
+  /**
+   * deltaMeta = quota ideal - share atual de cessão.
+   *
+   *   share atual = currentCede[loja] / (totalCede + 1)
+   *     → divide por (total+1) pra NUNCA dar infinito no primeiro pedido.
+   *
+   *   Se totalCede=0 (batelada virgem): share=0 pra todos, delta=quota (exato).
+   *   Se loja já cedeu muito: share alto → delta negativo → score menor.
+   *   Se loja ainda não cedeu: share 0 → delta = quota → score maior.
+   */
+  private computeDeltaMeta(storeCode: string, cedeStats?: RoutingCedeStats): number {
+    if (!cedeStats) return 0;
+    const quota = cedeStats.targetQuotaByStore[storeCode] ?? 0;
+    const ceded = cedeStats.currentCedeByStore[storeCode] ?? 0;
+    const denom = cedeStats.totalCedeSoFar + 1; // +1 pra evitar div/0 no 1º pedido
+    const share = ceded / denom;
+    return quota - share;
   }
 
   /**
@@ -320,7 +405,11 @@ export class RoutingEngine {
         }
         if (covered.length === 0) continue;
 
-        const storeScore = this.scoreStore(store, ctx, stockMap);
+        // Se cedeStats está presente, usa score V2 (inclui delta_meta). Senão,
+        // usa scoreStore legado pra compatibilidade total com routing atual.
+        const storeScore = ctx.cedeStats
+          ? this.scoreStoreV2(store, ctx, stockMap)
+          : this.scoreStore(store, ctx, stockMap);
         const ratioNorm = minRatio === Infinity ? 0 : minRatio;
 
         // Comparação hierárquica (early-return ao achar diferença num nível superior).
@@ -362,7 +451,7 @@ export class RoutingEngine {
       const stockBufferScore = this.stockBufferScore(s, ctx, stockMap);
       const distance = this.distanceScore(s.cep, ctx.shippingCep);
       const finalScore = this.scoreStore(s, ctx, stockMap);
-      return {
+      const base = {
         storeCode: s.code,
         storeName: s.name,
         priorityScore: Number(priority.toFixed(4)),
@@ -372,6 +461,18 @@ export class RoutingEngine {
         finalScore: Number(finalScore.toFixed(4)),
         fullCoverage: this.canFulfillAll(s.code, ctx.items, stockMap),
       };
+      if (ctx.cedeStats) {
+        const quota = ctx.cedeStats.targetQuotaByStore[s.code] ?? 0;
+        const ceded = ctx.cedeStats.currentCedeByStore[s.code] ?? 0;
+        const delta = this.computeDeltaMeta(s.code, ctx.cedeStats);
+        return {
+          ...base,
+          targetQuota: Number(quota.toFixed(4)),
+          currentCede: ceded,
+          proportionalityDelta: Number(delta.toFixed(4)),
+        };
+      }
+      return base;
     });
   }
 

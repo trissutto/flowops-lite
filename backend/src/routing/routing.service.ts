@@ -2,8 +2,9 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StockService } from '../stock/stock.service';
 import { RoutingEngine } from './routing.engine';
+import { SalesStatsService } from './sales-stats.service';
 import { OrderStatus, PickStatus } from '../common/enums';
-import { RoutingResult } from './types';
+import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 
@@ -16,6 +17,7 @@ export class RoutingService {
     private readonly stock: StockService,
     private readonly engine: RoutingEngine,
     private readonly gateway: RealtimeGateway,
+    private readonly salesStats: SalesStatsService,
   ) {}
 
   /**
@@ -378,5 +380,236 @@ export class RoutingService {
       alternativesBySku,
       scoreBreakdown: result.scoreBreakdown ?? [],
     };
+  }
+
+  /**
+   * BATELADA DE PEDIDOS — rota N pedidos de uma vez com:
+   *   1. ESTOQUE VIRTUAL compartilhado (a mesma peça não é alocada pra 2 pedidos)
+   *   2. PROPORCIONALIDADE INVERSA baseada em venda 30d (cede quem vendeu menos)
+   *
+   * Uso esperado: matriz clica "Separar todos os pedidos de hoje" na tela da fila
+   * WC. Em vez de chamar previewSeparationForWc N vezes (cada uma com estoque
+   * fresco), esse método roda N em sequência mantendo:
+   *   - um `stockMap` que decrementa a cada assignment feito (memoria local)
+   *   - um `cedeStats` que incrementa `currentCedeByStore` a cada peça alocada
+   *
+   * Retorna uma lista de preview[] — cada item é estruturalmente igual ao
+   * retorno de previewSeparationForWc (groups/missing/scoreBreakdown...).
+   *
+   * Não persiste — preview pra aprovação manual antes de chamar confirmRoute
+   * batch ou confirmSeparationForWc por pedido.
+   */
+  async previewBatchForWc(
+    orders: Array<Parameters<RoutingService['previewSeparationForWc']>[0]>,
+  ) {
+    if (!orders?.length) return { previews: [], cedeSummary: null };
+
+    const stores = await this.prisma.store.findMany({ where: { active: true } });
+    if (stores.length === 0) {
+      throw new BadRequestException(
+        'Nenhuma loja ativa cadastrada. Cadastra pelo menos uma em /lojas.',
+      );
+    }
+    const storeCodes = stores.map((s) => s.code);
+
+    // 1) coleta TODOS os SKUs da batelada pra fazer UM fetch só de estoque
+    const allSkus = new Set<string>();
+    for (const o of orders) {
+      for (const it of o.items) {
+        if (it.sku && it.sku.trim()) allSkus.add(it.sku.trim());
+      }
+    }
+    const stockEntries = await this.stock.getStockFor([...allSkus], storeCodes);
+
+    // 2) stockMap (storeCode+sku → qty) mutável — decrementa a cada alocação
+    const stockMap = new Map<string, number>();
+    for (const e of stockEntries) {
+      stockMap.set(`${e.storeCode}::${e.sku}`, e.availableQty);
+    }
+    const getStock = (storeCode: string, sku: string) =>
+      stockMap.get(`${storeCode}::${sku}`) ?? 0;
+
+    // 3) calcula targetQuota por loja (elegíveis = todas ativas)
+    const quotas = await this.salesStats.getCedeQuotas(storeCodes, 30);
+    const cedeStats: RoutingCedeStats = {
+      targetQuotaByStore: quotas.targetQuotaByStore,
+      salesShareByStore: quotas.salesShareByStore,
+      currentCedeByStore: Object.fromEntries(storeCodes.map((c) => [c, 0])),
+      totalCedeSoFar: 0,
+      windowDays: quotas.windowDays,
+    };
+
+    const previews: any[] = [];
+
+    // 4) roda pedido por pedido usando o mesmo stockMap + cedeStats
+    for (const input of orders) {
+      const validItems = input.items.filter((i) => i.sku?.trim());
+      if (validItems.length === 0) {
+        previews.push({
+          wcOrderNumber: input.wcOrderNumber,
+          success: false,
+          strategy: 'insufficient-stock',
+          missing: input.items.map((i) => ({
+            sku: i.sku,
+            quantity: i.quantity,
+            productName: i.productName,
+          })),
+          groups: [],
+          error: 'Nenhum item tem SKU.',
+        });
+        continue;
+      }
+
+      // reconstrói stock entries a partir do stockMap ATUALIZADO (pra esse pedido
+      // enxergar as baixas virtuais dos pedidos anteriores da batelada).
+      const skusThis = [...new Set(validItems.map((i) => i.sku.trim()))];
+      const stockForEngine: StockEntry[] = [];
+      for (const sku of skusThis) {
+        for (const code of storeCodes) {
+          const qty = getStock(code, sku);
+          if (qty > 0) {
+            stockForEngine.push({ storeCode: code, sku, availableQty: qty });
+          }
+        }
+      }
+
+      const result = this.engine.route({
+        items: validItems.map((i) => ({ sku: i.sku, quantity: i.quantity })),
+        stores: stores.map((s) => ({
+          id: s.id,
+          code: s.code,
+          name: s.name,
+          cep: s.cep,
+          priorityScore: s.priorityScore,
+          active: s.active,
+        })),
+        stock: stockForEngine,
+        shippingCep: input.address?.postcode ?? undefined,
+        pickupStoreCode: input.pickupStoreCode ?? null,
+        cedeStats, // <-- HABILITA proporcionalidade
+      });
+
+      // 5) DECREMENTA stock virtual + incrementa cede counters
+      //    (só faz isso nos assignments que são VENDA SITE = não-transfer pickup;
+      //    transfer-to-pickup também debita porque a peça sai do estoque da loja fonte)
+      for (const a of result.assignments) {
+        for (const it of a.items) {
+          const key = `${a.storeCode}::${it.sku}`;
+          const cur = stockMap.get(key) ?? 0;
+          const next = Math.max(0, cur - it.quantity);
+          stockMap.set(key, next);
+        }
+
+        // Só conta como "cessão" quando a loja está atendendo pedido de ENVIO (site),
+        // não quando o cliente escolheu RETIRAR na própria loja (pickup-lock),
+        // porque nesse caso a peça é vendida LOCALMENTE, não cedida ao e-commerce.
+        const isPickupLockAtSelf = result.strategy === 'pickup-lock';
+        if (!isPickupLockAtSelf) {
+          const qtyCedida = a.items.reduce((s, it) => s + it.quantity, 0);
+          cedeStats.currentCedeByStore[a.storeCode] =
+            (cedeStats.currentCedeByStore[a.storeCode] ?? 0) + qtyCedida;
+          cedeStats.totalCedeSoFar += qtyCedida;
+        }
+      }
+
+      // 6) monta preview igual ao previewSeparationForWc
+      const storeById = new Map(stores.map((s) => [s.id, s]));
+      const itemBySku = new Map(validItems.map((i) => [i.sku, i]));
+      const groups = result.assignments.map((a) => {
+        const store = storeById.get(a.storeId);
+        const groupItems = a.items.map((ai) => {
+          const full = itemBySku.get(ai.sku);
+          return {
+            sku: ai.sku,
+            quantity: ai.quantity,
+            productName: full?.productName ?? '',
+            variant: full?.variant,
+          };
+        });
+        const message = buildWhatsappMessage({
+          wcOrderNumber: input.wcOrderNumber,
+          orderDateIso: input.orderDateIso,
+          totalAmount: input.totalAmount,
+          paymentMethod: input.paymentMethod,
+          items: groupItems,
+          customerName: input.customerName,
+          customerPhone: input.customerPhone,
+          shippingMethod: input.shippingMethod,
+          address: input.address,
+          storeName: store?.name,
+          orderUrl: input.orderUrl,
+          isTransfer: a.isTransfer ?? false,
+          transferToStoreName: a.transferToStoreName ?? null,
+          customerCpf: input.customerCpf ?? null,
+          customerEmail: input.customerEmail ?? null,
+        } as any);
+        return {
+          storeId: a.storeId,
+          storeCode: a.storeCode,
+          storeName: a.storeName,
+          storeCity: store?.city ?? null,
+          storeState: store?.state ?? null,
+          whatsapp: store?.whatsapp ?? null,
+          contactName: store?.contactName ?? null,
+          items: groupItems,
+          whatsappMessage: message,
+          whatsappUrl: buildWhatsappUrl(store?.whatsapp, message),
+          isTransfer: a.isTransfer ?? false,
+          transferToStoreCode: a.transferToStoreCode ?? null,
+          transferToStoreName: a.transferToStoreName ?? null,
+        };
+      });
+
+      previews.push({
+        wcOrderId: input.wcOrderId,
+        wcOrderNumber: input.wcOrderNumber,
+        success: result.success,
+        strategy: result.strategy,
+        shippingMethod: input.shippingMethod,
+        isPickup: input.isPickup ?? false,
+        pickupStoreCode: result.pickupStoreCode ?? input.pickupStoreCode ?? null,
+        pickupStoreName: result.pickupStoreName ?? null,
+        customer: {
+          name: input.customerName,
+          cpf: input.customerCpf ?? null,
+          email: input.customerEmail ?? null,
+          phone: input.customerPhone ?? null,
+        },
+        groups,
+        missing: result.missing.map((m) => {
+          const full = itemBySku.get(m.sku);
+          return {
+            sku: m.sku,
+            quantity: m.quantity,
+            productName: full?.productName ?? '',
+          };
+        }),
+        scoreBreakdown: result.scoreBreakdown ?? [],
+      });
+    }
+
+    // 7) Snapshot final do cedeStats pra UI mostrar equilíbrio alcançado
+    const cedeSummary = {
+      windowDays: cedeStats.windowDays ?? 30,
+      totalCedeSoFar: cedeStats.totalCedeSoFar,
+      byStore: storeCodes.map((code) => {
+        const ceded = cedeStats.currentCedeByStore[code] ?? 0;
+        const quota = cedeStats.targetQuotaByStore[code] ?? 0;
+        const salesShare = cedeStats.salesShareByStore?.[code] ?? 0;
+        const actualShare = cedeStats.totalCedeSoFar > 0 ? ceded / cedeStats.totalCedeSoFar : 0;
+        const store = stores.find((s) => s.code === code);
+        return {
+          storeCode: code,
+          storeName: store?.name ?? code,
+          salesShare: Number(salesShare.toFixed(4)),
+          targetQuota: Number(quota.toFixed(4)),
+          ceded,
+          actualShare: Number(actualShare.toFixed(4)),
+          delta: Number((quota - actualShare).toFixed(4)),
+        };
+      }),
+    };
+
+    return { previews, cedeSummary };
   }
 }

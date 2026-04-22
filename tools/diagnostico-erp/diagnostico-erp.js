@@ -6,7 +6,7 @@
  *
  * Uso:
  *   1. Garanta que o backend tem .env com ERP_HOST/PORT/USER/PASSWORD/DATABASE
- *   2. node diagnostico-erp.js                  → tabela PRODUTOSVENDIDOS (default)
+ *   2. node diagnostico-erp.js                  → tabela PRODVENDIDOS (default)
  *   3. node diagnostico-erp.js NOME_DA_TABELA   → qualquer outra tabela
  *
  * Gera resultado.json no mesmo diretório.
@@ -61,7 +61,17 @@ async function main() {
   }
   const mysql = require(MYSQL_PATH);
 
-  const tabela = (process.argv[2] || 'PRODUTOSVENDIDOS').trim();
+  // Primeiro arg: nome da tabela OU comando especial ("--list" / "--find <padrao>")
+  const arg1 = (process.argv[2] || '').trim();
+  const arg2 = (process.argv[3] || '').trim();
+
+  // Modo especial: listar tabelas
+  const modoListar = arg1 === '--list' || arg1 === '-l' || arg1.toUpperCase() === 'LIST';
+  // Modo especial: procurar tabelas por padrão
+  const modoBuscar = arg1 === '--find' || arg1 === '-f' || arg1.toUpperCase() === 'FIND';
+  const padraoBusca = modoBuscar ? arg2 : '';
+
+  const tabela = (!arg1 || modoListar || modoBuscar) ? 'PRODVENDIDOS' : arg1;
 
   console.log(`\n==============================================`);
   console.log(`  DIAGNÓSTICO ERP — Gigasistemas`);
@@ -69,7 +79,13 @@ async function main() {
   console.log(`  Host     : ${env.ERP_HOST}:${env.ERP_PORT || 3306}`);
   console.log(`  Database : ${env.ERP_DATABASE}`);
   console.log(`  User     : ${env.ERP_USER}`);
-  console.log(`  Tabela   : ${tabela}`);
+  if (modoListar) {
+    console.log(`  Modo     : LISTAR TODAS AS TABELAS`);
+  } else if (modoBuscar) {
+    console.log(`  Modo     : BUSCAR TABELAS com "${padraoBusca}"`);
+  } else {
+    console.log(`  Tabela   : ${tabela}`);
+  }
   console.log(`==============================================\n`);
 
   let pool;
@@ -90,6 +106,53 @@ async function main() {
     conn.release();
     console.log('      OK — MySQL respondendo\n');
 
+    // ============ MODO LISTAR TABELAS ============
+    if (modoListar || modoBuscar) {
+      const termos = modoBuscar
+        ? padraoBusca.split(/[,\s]+/).filter(Boolean)
+        : [];
+
+      let sql = 'SHOW TABLES';
+      const params = [];
+      if (termos.length === 1) {
+        sql = `SHOW TABLES LIKE ?`;
+        params.push(`%${termos[0]}%`);
+      }
+
+      console.log(`[2/2] Listando tabelas...`);
+      const [rows] = await pool.query(sql, params);
+      // SHOW TABLES retorna um objeto tipo { Tables_in_<db>: 'NOME' }
+      let tabelas = rows.map((r) => Object.values(r)[0]);
+
+      // Se tem múltiplos termos, filtra localmente (OR entre eles)
+      if (termos.length > 1) {
+        const up = termos.map((t) => t.toUpperCase());
+        tabelas = tabelas.filter((n) => up.some((t) => String(n).toUpperCase().includes(t)));
+      }
+
+      console.log(`      OK — ${tabelas.length} tabela(s)\n`);
+
+      console.log(`TABELAS:`);
+      console.log(`------------------------------------------`);
+      for (const t of tabelas) console.log(`  ${t}`);
+      console.log('');
+
+      const outPath = path.join(__dirname, 'resultado.json');
+      fs.writeFileSync(outPath, JSON.stringify({ modo: modoListar ? 'list' : 'find', padrao: padraoBusca, total: tabelas.length, tabelas }, null, 2), 'utf8');
+
+      console.log(`==============================================`);
+      console.log(`  JSON salvo em:`);
+      console.log(`  ${outPath}`);
+      console.log(``);
+      console.log(`  Pra inspecionar uma tabela específica:`);
+      console.log(`    diagnostico-erp.bat NOME_DA_TABELA`);
+      console.log(`==============================================\n`);
+
+      await pool.end();
+      process.exit(0);
+    }
+
+    // ============ MODO INSPECIONAR TABELA ============
     console.log(`[2/3] Lendo colunas de ${tabela}...`);
     const [cols] = await pool.query(`SHOW COLUMNS FROM ${tabela}`);
     const columns = cols.map((c) => ({ field: c.Field, type: c.Type, null: c.Null, key: c.Key }));
@@ -132,7 +195,9 @@ async function main() {
       console.error('      Gigasistemas precisa estar ligado e na mesma rede.');
     }
     if (err.code === 'ER_NO_SUCH_TABLE') {
-      console.error(`\nDica: tabela '${tabela}' não existe. Confira o nome no Gigasistemas.`);
+      console.error(`\nDica: tabela '${tabela}' não existe.`);
+      console.error(`      Rode:  diagnostico-erp.bat --list           (lista TODAS as tabelas)`);
+      console.error(`             diagnostico-erp.bat --find VEND      (procura por palavra-chave)`);
     }
     if (err.code === 'ER_ACCESS_DENIED_ERROR') {
       console.error('\nDica: usuário/senha do ERP_USER/ERP_PASSWORD não batem.');

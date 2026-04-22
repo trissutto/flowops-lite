@@ -7,7 +7,7 @@ PRA QUE SERVE
 Inspecionar o schema de uma tabela do Gigasistemas (MySQL on-premise)
 direto, SEM precisar do backend NestJS rodando. Útil pra descobrir
 estrutura de tabelas antes de escrever queries definitivas (ex: auto-match
-de VENDA CERTA via PRODUTOSVENDIDOS).
+de VENDA CERTA via PRODVENDIDOS).
 
 
 COMO USAR
@@ -15,16 +15,27 @@ COMO USAR
 1. Essa pasta precisa estar dentro de flowops-lite/tools/diagnostico-erp/
    (no mesmo repo que tem backend/.env com as credenciais ERP_*)
 
-2. Dê duplo-clique em diagnostico-erp.bat
-   → Consulta a tabela PRODUTOSVENDIDOS por default
+2. LISTAR TODAS AS TABELAS do banco (quando não sabe o nome certo):
+   diagnostico-erp.bat --list
 
-3. Pra consultar OUTRA tabela, abra CMD na pasta e rode:
+3. BUSCAR tabelas por palavra-chave:
+   diagnostico-erp.bat --find VEND
+   diagnostico-erp.bat --find PROD
+   diagnostico-erp.bat --find VEND,CUPOM   (vários termos separados por vírgula)
+
+4. Pra INSPECIONAR uma tabela específica (colunas + 3 linhas de amostra):
    diagnostico-erp.bat NOME_DA_TABELA
 
    Exemplos:
      diagnostico-erp.bat PRODUTOS
      diagnostico-erp.bat ESTOQUE
      diagnostico-erp.bat CLIENTES
+
+5. Duplo-clique no .bat (sem args) → tenta tabela PRODVENDIDOS por default
+
+FLUXO RECOMENDADO quando não sabe o nome:
+   1. diagnostico-erp.bat --find VEND       → vê candidatos que têm "VEND"
+   2. diagnostico-erp.bat NOME_ESCOLHIDO    → inspeciona colunas + amostra
 
 
 O QUE O SCRIPT FAZ

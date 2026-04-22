@@ -392,7 +392,12 @@ function HistoricoCard({
             </span>
           )}
           {isVendaCerta && (
-            <SaleStatusBadge status={saleStatus} isOverdue={!!isOverdue} deadline={item.saleDeadline} />
+            <SaleStatusBadge
+              status={saleStatus}
+              isOverdue={!!isOverdue}
+              deadline={item.saleDeadline}
+              isAuto={!!(item.saleNote && item.saleNote.startsWith('AUTO:'))}
+            />
           )}
         </div>
         <div className="text-[11px] text-slate-500 font-mono">
@@ -427,11 +432,44 @@ function HistoricoCard({
 
       {/* Info extra do status de venda */}
       {isConfirmed && item.saleConfirmedAt && (
-        <div className="mt-2 text-xs bg-emerald-100 text-emerald-800 rounded px-2 py-1.5 flex items-center gap-1.5">
-          <CheckCircle2 className="w-3.5 h-3.5" />
-          Venda confirmada em {formatDate(item.saleConfirmedAt)}
-          {item.saleNote && <span className="text-emerald-700">· {item.saleNote}</span>}
-        </div>
+        (() => {
+          const note = item.saleNote || '';
+          const isAuto = note.startsWith('AUTO:');
+          const cupomMatch = note.match(/AUTO:cupom_(.+)/);
+          const cupom = cupomMatch ? cupomMatch[1] : null;
+          return (
+            <div
+              className={`mt-2 text-xs rounded px-2 py-1.5 flex items-center gap-1.5 ${
+                isAuto
+                  ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                  : 'bg-emerald-100 text-emerald-800'
+              }`}
+            >
+              {isAuto ? (
+                <>
+                  <span aria-hidden className="text-base leading-none">🤖</span>
+                  <div className="flex-1">
+                    <span className="font-bold">Vendida automaticamente</span>
+                    {cupom && (
+                      <span className="ml-1 font-mono text-blue-700">
+                        · Cupom PDV {cupom}
+                      </span>
+                    )}
+                    <span className="ml-1 text-blue-700/80">
+                      · baixa em {formatDate(item.saleConfirmedAt)}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Venda confirmada em {formatDate(item.saleConfirmedAt)}
+                  {note && <span className="text-emerald-700">· {note}</span>}
+                </>
+              )}
+            </div>
+          );
+        })()
       )}
       {isCancelled && (
         <div className="mt-2 text-xs bg-slate-200 text-slate-700 rounded px-2 py-1.5 flex items-center gap-1.5">
@@ -509,13 +547,24 @@ function HistoricoCard({
 }
 
 function SaleStatusBadge({
-  status, isOverdue, deadline,
+  status, isOverdue, deadline, isAuto = false,
 }: {
   status: 'pending' | 'confirmed' | 'cancelled' | null;
   isOverdue: boolean;
   deadline: string | null;
+  isAuto?: boolean;
 }) {
   if (status === 'confirmed') {
+    if (isAuto) {
+      return (
+        <span
+          className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border bg-blue-100 text-blue-800 border-blue-300 inline-flex items-center gap-1"
+          title="Confirmada automaticamente pelo PDV"
+        >
+          <span aria-hidden className="leading-none">🤖</span> Vendida auto
+        </span>
+      );
+    }
     return (
       <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border bg-emerald-100 text-emerald-800 border-emerald-300 inline-flex items-center gap-1">
         <CheckCircle2 className="w-3 h-3" /> Vendida
