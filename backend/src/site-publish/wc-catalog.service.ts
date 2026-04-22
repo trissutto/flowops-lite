@@ -239,11 +239,13 @@ export class WcCatalogService {
    *   2) Cria cada variação (POST /products/{id}/variations) com SKU,
    *      código da variação como EAN (meta_data _alg_ean), estoque e preço.
    *
-   * SKU do pai = refCode (ex: "VMS-223")
-   * SKU da variação = refCode + "-" + cor + "-" + tamanho (ex: "VMS-223-PRETO-46")
+   * SKU do pai = refCode + cor (ex: "VMS-223-PRETO")
+   * SKU da variação = código EAN da etiqueta Giga (ex: "11499497")
+   *   → mesmo valor do global_unique_id. Retail bipa o código de barras
+   *     e já acha o produto direto pelo SKU.
    *
-   * EAN de cada variação vai em meta_data _alg_ean (plugin WooCommerce EAN)
-   * E TAMBÉM em _sku pra busca por bipagem se preferir.
+   * Se a Giga não enviar codigo, cai pro fallback refCode-cor-tamanho
+   * (nunca deve acontecer em produção, mas previne crash).
    */
   async createDraftVariableProduct(input: {
     sku: string; // normalmente refCode + cor (ex: VMS-223-PRETO)
@@ -350,11 +352,13 @@ export class WcCatalogService {
     // 2) Cria cada variação
     const variationIds: Array<{ tamanho: string; codigo: string; variationId: number; sku: string }> = [];
     for (const tam of input.tamanhos) {
-      const varSku = `${input.sku}-${tam.tamanho}`;
+      // SKU da variação = código EAN da Giga (bipa o código de barras → acha o produto).
+      // Fallback pro padrão antigo se por algum motivo o codigo vier vazio.
+      const varSku = tam.codigo ? String(tam.codigo).trim() : `${input.sku}-${tam.tamanho}`;
       const varPayload: any = {
         sku: varSku,
         // Campo nativo WC 8.3+ — aparece na UI como "GTIN, UPC, EAN ou ISBN"
-        // (é o campo da etiqueta de código de barras).
+        // (é o campo da etiqueta de código de barras). Mesmo valor do SKU.
         global_unique_id: tam.codigo,
         regular_price: String(tam.preco),
         manage_stock: true,
@@ -401,14 +405,18 @@ export class WcCatalogService {
   }
 
   /**
-   * Atualiza o EAN/código de barras de variações já existentes no WC.
+   * Atualiza o EAN/código de barras + SKU de variações já existentes no WC.
    * Útil pra corrigir produtos publicados antes de a gente setar o
-   * global_unique_id no payload de criação.
+   * global_unique_id/sku=codigo no payload de criação.
    *
-   * Atualiza 3 campos pra cobrir quaisquer plugins EAN/Barcode:
+   * Atualiza 4 campos pra cobrir todos os casos:
+   *  - sku (SKU nativo do WC = código EAN da etiqueta Giga)
    *  - global_unique_id (WC nativo 8.3+, aparece como GTIN/UPC/EAN/ISBN)
    *  - meta_data _alg_ean (plugin WooCommerce EAN)
    *  - meta_data _barcode (plugin Barcode for WC)
+   *
+   * Atenção: se já existe variação com mesmo SKU (de outro produto) o WC
+   * retorna 400 e a variação entra em `failed`. Normal — retail não repete EAN.
    */
   async syncVariationCodes(
     productId: number,
@@ -419,6 +427,7 @@ export class WcCatalogService {
     for (const v of variations) {
       if (!v.variationId || !v.codigo) continue;
       const payload = {
+        sku: v.codigo,
         global_unique_id: v.codigo,
         meta_data: [
           { key: '_alg_ean', value: v.codigo },
