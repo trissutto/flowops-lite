@@ -249,7 +249,24 @@ export class RoutingService {
    *
    * Retorna { ok, cancelledCount, ... } ou { ok: false, reason }.
    */
-  async recalculateForWc(orderId: string, opts?: { excludeStoreIds?: string[] }) {
+  async recalculateForWc(
+    orderId: string,
+    opts?: { excludeStoreIds?: string[]; excludeStoreCodes?: string[] },
+  ) {
+    // Se o caller passou codes (ex: ["MOEMA"]), converte pra IDs antes de seguir.
+    // Mantemos o parâmetro original excludeStoreIds pra compat com chamadas internas.
+    let extraExcludeIds: string[] = [];
+    if (opts?.excludeStoreCodes && opts.excludeStoreCodes.length > 0) {
+      const stores = await this.prisma.store.findMany({
+        where: { code: { in: opts.excludeStoreCodes } },
+        select: { id: true },
+      });
+      extraExcludeIds = stores.map((s) => s.id);
+    }
+    const mergedExcludeIds = Array.from(
+      new Set([...(opts?.excludeStoreIds ?? []), ...extraExcludeIds]),
+    );
+    opts = { ...(opts ?? {}), excludeStoreIds: mergedExcludeIds };
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {

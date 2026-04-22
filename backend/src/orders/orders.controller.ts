@@ -739,7 +739,10 @@ export class OrdersController {
    * pick-orders ativos), então não vai realocar pra mesma loja sem estoque.
    */
   @Post('wc/:wcId/recalculate-separation')
-  async recalculateSeparation(@Param('wcId') wcId: string) {
+  async recalculateSeparation(
+    @Param('wcId') wcId: string,
+    @Body() body?: { excludeStoreCodes?: string[] },
+  ) {
     const wcOrderId = Number(wcId);
     const local = await this.prisma.order.findFirst({
       where: { wcOrderId },
@@ -749,7 +752,11 @@ export class OrdersController {
       // Sem Order local ainda → cai no fluxo normal de criar do zero
       return this.confirmSeparation(wcId);
     }
-    return this.routing.recalculateForWc(local.id);
+    return this.routing.recalculateForWc(local.id, {
+      excludeStoreCodes: Array.isArray(body?.excludeStoreCodes)
+        ? body!.excludeStoreCodes
+        : undefined,
+    });
   }
 
   @Post('wc/:wcId/confirm-separation')

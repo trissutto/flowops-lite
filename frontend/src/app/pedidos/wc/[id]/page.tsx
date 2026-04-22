@@ -370,6 +370,72 @@ export default function PedidoDetailPage() {
   }
 
   /**
+   * Troca manual da loja de origem — usuário escolhe pular uma loja específica
+   * (ex: "não quero MOEMA enviar, quero outra loja"). Chama o mesmo
+   * recalculate-separation mas forçando `excludeStoreCodes: [storeCode]`.
+   *
+   * O routing engine re-escolhe entre as OUTRAS lojas que têm estoque. Se
+   * nenhuma outra tiver, devolve sem-estoque-excluindo-loja e a matriz decide.
+   *
+   * Só habilita se o pick-order ainda está em new/separating (não pode trocar
+   * depois que a loja já bipou — isso seria perda de trabalho).
+   */
+  async function swapStore(storeCode: string, storeName: string | null) {
+    const displayName = storeName || storeCode;
+    const hasAdvanced = liveStatus.some(
+      (p) => !['new', 'separating'].includes(p.status),
+    );
+    if (hasAdvanced) {
+      alert(
+        'Não dá pra trocar loja: alguma já passou de "separando" (bipou/enviou). ' +
+        'Rejeite manualmente pela tela de baixa antes.',
+      );
+      return;
+    }
+    if (!confirm(
+      `Trocar a loja ${displayName} (${storeCode}) por outra?\n\n` +
+      `O sistema vai rerodar o roteamento excluindo ${storeCode} e escolher outra loja ` +
+      `com estoque. O card atual vai sumir do /minha-loja da ${storeCode}.\n\n` +
+      `Se nenhuma outra loja tiver estoque suficiente, o pedido fica pending.`,
+    )) return;
+
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        reason?: string;
+        message?: string;
+        cancelledCount?: number;
+        excludedStoreCodes?: string[];
+        pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
+      }>(`/orders/wc/${wcId}/recalculate-separation`, {
+        method: 'POST',
+        body: JSON.stringify({ excludeStoreCodes: [storeCode] }),
+      });
+
+      if (!res.ok) {
+        setSepError(res.message ?? 'Não foi possível trocar a loja.');
+        setSepLoading(false);
+        return;
+      }
+      const novaLoja = res.pickOrders?.map((p) => `${p.storeName} (${p.storeCode})`).join(', ');
+      setFlash(
+        `✓ Loja trocada. ${storeCode} saiu, nova(s) loja(s): ${novaLoja}.`,
+      );
+      setTimeout(() => setFlash(null), 6000);
+      // Recarrega painel ao vivo
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e.message);
+    } finally {
+      setSepLoading(false);
+    }
+  }
+
+  /**
    * CONFIRMA a separação no sistema: cria pick-order e dispara o socket
    * pra loja receber em tempo real no app /minha-loja.
    * Diferente do "Enviar WhatsApp" — esse aqui é o que faz o card aparecer
@@ -817,6 +883,18 @@ export default function PedidoDetailPage() {
                 atualiza automático
               </span>
             </div>
+            {/* Dica: troca manual de loja (só faz sentido enquanto alguma ainda
+                está em new/separating — depois que bipou não dá mais) */}
+            {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
+              <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5">
+                <span className="text-amber-700">💡</span>
+                <span>
+                  Quer trocar a loja que vai enviar/transferir? Clica em{' '}
+                  <b>↔ Trocar loja</b> no card da loja e o sistema escolhe outra com
+                  estoque automaticamente.
+                </span>
+              </div>
+            )}
             <div className="space-y-2">
               {liveStatus.map((r) => {
                 const flash = !!liveStatusFlash[r.id];
@@ -874,6 +952,17 @@ export default function PedidoDetailPage() {
                         {st === 'error' && '⚠ Reimprimir'}
                         {st === 'idle' && '🖨️ Imprimir'}
                       </button>
+                      {['new', 'separating'].includes(r.status) && r.storeCode && (
+                        <button
+                          type="button"
+                          onClick={() => swapStore(r.storeCode!, r.storeName)}
+                          disabled={sepLoading}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60"
+                          title={`Escolher outra loja no lugar de ${r.storeCode}. Só funciona se a loja ainda não bipou.`}
+                        >
+                          ↔ Trocar loja
+                        </button>
+                      )}
                     </div>
                     {r.status === 'shipped' && r.trackingCode && (
                       <div className="mt-1 pl-6 text-xs text-slate-700">
