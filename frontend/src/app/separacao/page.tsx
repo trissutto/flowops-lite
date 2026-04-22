@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
+import { getSocket } from '@/lib/socket';
 import {
   RefreshCw,
   Send,
@@ -38,6 +39,7 @@ import {
   Square,
   X,
   Printer,
+  AlertCircle,
 } from 'lucide-react';
 
 interface WcOrderListItem {
@@ -80,6 +82,22 @@ interface SeparationPreview {
   scoreBreakdown?: ScoreRow[];
 }
 
+/**
+ * Issue reportado pela filial num pick-order (sem estoque físico, defeito, etc).
+ * Matriz vê badge vermelho nas linhas afetadas e clica "Recalcular" pra reroteiar.
+ */
+interface ActiveIssue {
+  pickOrderId: string;
+  wcOrderId: number | null;
+  wcOrderNumber: string | null;
+  storeCode: string | null;
+  storeName: string | null;
+  reason: string;
+  reasonLabel: string;
+  note: string | null;
+  reportedAt: string | null;
+}
+
 const FILTROS = [
   { slug: 'processing',  label: 'Processando',         color: 'bg-emerald-100 text-emerald-800' },
   { slug: 'pending',     label: 'Pagto pendente',      color: 'bg-amber-100 text-amber-800' },
@@ -112,12 +130,94 @@ export default function SeparacaoPage() {
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; fails: number } | null>(null);
 
+  // Issues ativos reportados pelas lojas — mapa wcOrderId → array de issues
+  // Alimenta o badge vermelho nas linhas e o banner no topo.
+  const [issuesByWcId, setIssuesByWcId] = useState<Record<number, ActiveIssue[]>>({});
+  const [recalculating, setRecalculating] = useState<Record<number, boolean>>({});
+
   useEffect(() => {
     load();
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, search]);
+
+  // Fetch inicial + socket listener pra issues reportados pelas lojas
+  useEffect(() => {
+    loadIssues();
+    const sock = getSocket();
+    const onIssue = () => loadIssues();
+    const onIssueResolved = () => loadIssues();
+    sock.on('pick-order:issue', onIssue);
+    sock.on('pick-order:issue-resolved', onIssueResolved);
+    sock.on('pick-order:created', onIssue); // após recalcular, novos pick-orders aparecem
+    return () => {
+      sock.off('pick-order:issue', onIssue);
+      sock.off('pick-order:issue-resolved', onIssueResolved);
+      sock.off('pick-order:created', onIssue);
+    };
+  }, []);
+
+  async function loadIssues() {
+    try {
+      const rows = await api<ActiveIssue[]>('/pick-orders/issues-active');
+      const map: Record<number, ActiveIssue[]> = {};
+      for (const r of rows) {
+        if (r.wcOrderId == null) continue;
+        (map[r.wcOrderId] ||= []).push(r);
+      }
+      setIssuesByWcId(map);
+    } catch (e) {
+      console.error('Falha ao carregar issues ativos', e);
+    }
+  }
+
+  /**
+   * Recalcula rota do pedido excluindo automaticamente as lojas que reportaram
+   * problema. Backend lê issueReason dos pick-orders e auto-exclui.
+   * Resolve os issues atuais — aí badge some e WA pode ser disparado pra nova loja.
+   */
+  async function recalcularRota(wcId: number) {
+    setRecalculating((r) => ({ ...r, [wcId]: true }));
+    try {
+      const res = await api<{
+        ok: boolean;
+        reason?: string;
+        message?: string;
+        excludedStoreCodes?: string[];
+        pickOrders?: Array<{ storeCode: string; storeName: string }>;
+      }>(`/orders/wc/${wcId}/recalculate-separation`, { method: 'POST' });
+
+      if (res.ok) {
+        const lojas = (res.pickOrders || [])
+          .map((g) => `${g.storeName} (${g.storeCode})`)
+          .join(', ');
+        const excl = (res.excludedStoreCodes || []).join(', ');
+        alert(
+          `✓ Rota recalculada!\n\n` +
+          `Nova(s) loja(s): ${lojas || '—'}\n` +
+          (excl ? `Excluídas: ${excl}\n\n` : '\n') +
+          `Pedido pronto pra novo disparo de WhatsApp.`,
+        );
+        // Limpa preview em cache pra forçar recálculo na UI
+        setPreview((p) => {
+          const { [wcId]: _, ...rest } = p;
+          return rest;
+        });
+        await loadIssues();
+        await load();
+      } else {
+        alert(
+          `⚠ Não foi possível rotear.\n\n` +
+          (res.message || `Motivo: ${res.reason || 'desconhecido'}`),
+        );
+      }
+    } catch (e: any) {
+      alert('Erro ao recalcular: ' + (e?.message || e));
+    } finally {
+      setRecalculating((r) => ({ ...r, [wcId]: false }));
+    }
+  }
 
   // Limpa seleção ao trocar filtro/busca — IDs mudam
   useEffect(() => {
@@ -693,6 +793,49 @@ export default function SeparacaoPage() {
         )}
       </form>
 
+      {/* Banner de issues ativos — alerta matriz que lojas reportaram problema */}
+      {Object.keys(issuesByWcId).length > 0 && (
+        <div className="mb-4 bg-red-50 border-2 border-red-300 rounded-lg p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-bold text-red-900 mb-1">
+                {Object.keys(issuesByWcId).length} pedido(s) com problema reportado pela filial
+              </div>
+              <div className="text-sm text-red-800 mb-2">
+                Alguma loja bateu &quot;sem estoque / defeito / divergência&quot;. Clique <b>Recalcular</b> na linha vermelha pra reroteiar automaticamente (a loja que reportou é excluída).
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {Object.entries(issuesByWcId).map(([wcId, issues]) => {
+                  const first = issues[0];
+                  return (
+                    <Link
+                      key={wcId}
+                      href={`/pedidos/wc/${wcId}`}
+                      className="px-2 py-1 bg-white border border-red-300 rounded hover:bg-red-100 transition"
+                      title={issues
+                        .map(
+                          (i) =>
+                            `${i.storeCode}: ${i.reasonLabel}${i.note ? ` — ${i.note}` : ''}`,
+                        )
+                        .join('\n')}
+                    >
+                      <span className="font-mono font-semibold text-red-900">
+                        #{first.wcOrderNumber || wcId}
+                      </span>{' '}
+                      <span className="text-red-700">
+                        · {first.storeCode} · {first.reasonLabel}
+                        {issues.length > 1 && ` (+${issues.length - 1})`}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Barra de seleção em bloco — SEMPRE VISÍVEL quando há pedidos */}
       {orders.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3 bg-white border rounded-lg p-3 shadow-sm">
@@ -762,12 +905,15 @@ export default function SeparacaoPage() {
             const isExpanded = expanded[o.id];
 
             const isChecked = selected.has(o.id);
+            const orderIssues = issuesByWcId[o.id] || [];
+            const hasIssue = orderIssues.length > 0;
+            const isRecalculating = recalculating[o.id];
 
             return (
               <div
                 key={o.id}
                 className={`bg-white rounded shadow overflow-hidden transition ${
-                  isChecked ? 'ring-2 ring-brand' : ''
+                  hasIssue ? 'ring-2 ring-red-400' : isChecked ? 'ring-2 ring-brand' : ''
                 }`}
               >
                 {/* Linha principal */}
@@ -803,10 +949,48 @@ export default function SeparacaoPage() {
                       </Link>
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                     </div>
-                    <div className="col-span-4 truncate">{o.customerName || '—'}</div>
+                    <div className="col-span-4 truncate">
+                      {o.customerName || '—'}
+                      {hasIssue && (
+                        <span
+                          className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-800 text-xs font-semibold rounded-full align-middle"
+                          title={orderIssues
+                            .map(
+                              (i) =>
+                                `${i.storeCode || '?'}: ${i.reasonLabel}${
+                                  i.note ? ` — ${i.note}` : ''
+                                }`,
+                            )
+                            .join('\n')}
+                        >
+                          <AlertCircle className="w-3 h-3" />
+                          {orderIssues.length === 1
+                            ? orderIssues[0].reasonLabel
+                            : `${orderIssues.length} problemas`}
+                        </span>
+                      )}
+                    </div>
                     <div className="col-span-2 font-mono text-right">{fmtMoney(o.total)}</div>
                     <div className="col-span-4 flex justify-end gap-2">
-                      {!p && (
+                      {hasIssue && (
+                        <button
+                          onClick={() => recalcularRota(o.id)}
+                          disabled={isRecalculating}
+                          className="px-3 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 text-sm disabled:opacity-50 flex items-center gap-1.5 font-semibold"
+                          title={`Recalcular excluindo: ${orderIssues
+                            .map((i) => i.storeCode)
+                            .filter(Boolean)
+                            .join(', ')}`}
+                        >
+                          {isRecalculating ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3.5 h-3.5" />
+                          )}
+                          Recalcular
+                        </button>
+                      )}
+                      {!p && !hasIssue && (
                         <>
                           <button
                             onClick={() => imprimirPedido(o.id)}
@@ -825,7 +1009,7 @@ export default function SeparacaoPage() {
                           </button>
                         </>
                       )}
-                      {p && p.success && p.groups.length === 1 && (
+                      {!hasIssue && p && p.success && p.groups.length === 1 && (
                         <button
                           onClick={() => dispararWhatsapp(o.id, p.groups[0])}
                           disabled={isBusy || !p.groups[0].whatsapp}
@@ -836,12 +1020,12 @@ export default function SeparacaoPage() {
                           WhatsApp → {p.groups[0].storeName}
                         </button>
                       )}
-                      {p && p.success && p.groups.length > 1 && (
+                      {!hasIssue && p && p.success && p.groups.length > 1 && (
                         <span className="px-3 py-1.5 bg-amber-100 text-amber-800 rounded text-xs font-medium">
                           Dividido em {p.groups.length} lojas (expande pra ver)
                         </span>
                       )}
-                      {p && !p.success && (
+                      {!hasIssue && p && !p.success && (
                         <span className="px-3 py-1.5 bg-red-100 text-red-800 rounded text-xs font-medium flex items-center gap-1">
                           <AlertTriangle className="w-3.5 h-3.5" /> Ruptura
                         </span>

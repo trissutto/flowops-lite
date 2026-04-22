@@ -119,6 +119,7 @@ export default function MinhaLojaPage() {
   const [connected, setConnected] = useState(false);
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
   const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
+  const [showIssueModal, setShowIssueModal] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
@@ -463,6 +464,24 @@ export default function MinhaLojaPage() {
     }
   }
 
+  async function submitReportIssue(row: PickOrderRow, reason: string, note: string) {
+    cancelAutoMaximize(row.id);
+    try {
+      const res = await api(`/pick-orders/${row.id}/report-issue`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, note }),
+      });
+      // Remove o card da fila da loja imediatamente (backend vai confirmar via socket)
+      setRows((prev) => prev.filter((r) => r.id !== row.id));
+      setShowIssueModal(null);
+      pushToast(
+        `Problema reportado: ${res?.reasonLabel ?? reason}. A matriz foi avisada e vai reatribuir pra outra loja.`,
+      );
+    } catch (err: any) {
+      pushToast(`Erro ao reportar: ${err?.message ?? 'falha'}`);
+    }
+  }
+
   async function submitShipped(row: PickOrderRow, trackingCode: string, carrier: string) {
     cancelAutoMaximize(row.id);
     try {
@@ -583,6 +602,7 @@ export default function MinhaLojaPage() {
               onBip={() => setShowBipModal(row)}
               onShip={() => setShowShippedModal(row)}
               onPrint={() => openPrintWindow(row.id)}
+              onReportIssue={() => setShowIssueModal(row)}
               onSeen={() => cancelAutoMaximize(row.id)}
             />
           ))
@@ -595,6 +615,15 @@ export default function MinhaLojaPage() {
           row={showShippedModal}
           onClose={() => setShowShippedModal(null)}
           onSubmit={submitShipped}
+        />
+      )}
+
+      {/* Modal reportar problema */}
+      {showIssueModal && (
+        <ReportIssueModal
+          row={showIssueModal}
+          onClose={() => setShowIssueModal(null)}
+          onSubmit={submitReportIssue}
         />
       )}
 
@@ -820,13 +849,14 @@ function PipelineSteps({ status }: { status: PickStatus }) {
 }
 
 function PickOrderCard({
-  row, onStart, onBip, onShip, onPrint, onSeen,
+  row, onStart, onBip, onShip, onPrint, onReportIssue, onSeen,
 }: {
   row: PickOrderRow;
   onStart: () => void;
   onBip: () => void;
   onShip: () => void;
   onPrint: () => void;
+  onReportIssue: () => void;
   onSeen: () => void;
 }) {
   const { order, status } = row;
@@ -1022,6 +1052,15 @@ function PickOrderCard({
         >
           <Printer className="w-5 h-5" /> Imprimir
         </button>
+        {(status === 'new' || status === 'separating') && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onReportIssue(); }}
+            className="sm:w-auto bg-white hover:bg-red-50 active:scale-[0.98] text-red-700 font-semibold py-4 px-5 rounded-lg flex items-center justify-center gap-2 border-2 border-red-300 transition"
+            title="Reportar problema (sem estoque, defeito, divergência)"
+          >
+            <AlertCircle className="w-5 h-5" /> Reportar
+          </button>
+        )}
       </footer>
       </div>
     </article>
@@ -1114,6 +1153,134 @@ function ShippedModal({
             Confirmar envio
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ReportIssueModal — loja sinaliza problema no pick-order
+// ============================================================
+
+const ISSUE_REASONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'out_of_stock', label: 'Sem estoque físico', hint: 'O sistema mostrava, mas a peça não está na loja' },
+  { value: 'defective', label: 'Peça com defeito', hint: 'Furo, mancha, costura ruim, etc.' },
+  { value: 'divergence', label: 'Divergência', hint: 'Cor ou tamanho diferente do pedido' },
+  { value: 'other', label: 'Outro', hint: 'Descreva na observação abaixo' },
+];
+
+function ReportIssueModal({
+  row, onClose, onSubmit,
+}: {
+  row: PickOrderRow;
+  onClose: () => void;
+  onSubmit: (row: PickOrderRow, reason: string, note: string) => Promise<void> | void;
+}) {
+  const [reason, setReason] = useState<string>('');
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const canSubmit = reason && (reason !== 'other' || note.trim().length >= 5);
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      await onSubmit(row, reason, note.trim());
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-2 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
+        <header className="bg-red-600 text-white px-4 py-3 flex items-center gap-2">
+          <AlertCircle className="w-5 h-5" />
+          <div className="flex-1">
+            <div className="font-bold">Reportar problema</div>
+            <div className="text-xs opacity-90">
+              Pedido #{row.order.wcOrderNumber ?? row.order.wcOrderId ?? '—'}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-white/90 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </header>
+
+        <div className="p-4 space-y-3">
+          <p className="text-sm text-slate-600">
+            Ao confirmar, o pedido <b>some da sua fila</b> e a matriz é avisada pra reatribuir pra outra loja.
+          </p>
+
+          <div className="space-y-2">
+            {ISSUE_REASONS.map((r) => (
+              <label
+                key={r.value}
+                className={`block border-2 rounded-lg p-3 cursor-pointer transition ${
+                  reason === r.value
+                    ? 'border-red-500 bg-red-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="reason"
+                  value={r.value}
+                  checked={reason === r.value}
+                  onChange={() => setReason(r.value)}
+                  className="sr-only"
+                />
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
+                      reason === r.value ? 'border-red-500' : 'border-slate-400'
+                    }`}
+                  >
+                    {reason === r.value && (
+                      <div className="w-2 h-2 rounded-full bg-red-500" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-slate-900">{r.label}</div>
+                    <div className="text-xs text-slate-600">{r.hint}</div>
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-700 block mb-1">
+              Observação {reason === 'other' ? '(obrigatório)' : '(opcional)'}
+            </label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              maxLength={500}
+              placeholder="Ex: cheguei na arara e a peça não estava lá."
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500"
+            />
+          </div>
+        </div>
+
+        <footer className="p-3 border-t border-slate-100 bg-slate-50 flex gap-2">
+          <button
+            onClick={onClose}
+            className="flex-1 bg-white hover:bg-slate-100 text-slate-700 font-semibold py-3 rounded-lg border-2 border-slate-300"
+            disabled={submitting}
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={submit}
+            disabled={!canSubmit || submitting}
+            className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg disabled:bg-slate-300 disabled:cursor-not-allowed shadow-md"
+          >
+            {submitting ? 'Enviando...' : 'Confirmar problema'}
+          </button>
+        </footer>
       </div>
     </div>
   );

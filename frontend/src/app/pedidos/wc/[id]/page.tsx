@@ -4,7 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
-import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, Zap } from 'lucide-react';
+import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
 
@@ -146,6 +146,10 @@ export default function PedidoDetailPage() {
     storeName: string | null;
     storeCity: string | null;
     updatedAt: string;
+    issueReason?: string | null;
+    issueReasonLabel?: string | null;
+    issueNote?: string | null;
+    issueReportedAt?: string | null;
   }>>([]);
   const [liveStatusFlash, setLiveStatusFlash] = useState<Record<string, number>>({});
 
@@ -756,6 +760,34 @@ export default function PedidoDetailPage() {
              dente de o user ter gerado preview na aba atual. Atualiza em tempo real
              via socket 'pick-order:status'. Fonte de verdade única: matriz sempre sabe
              em qual loja o pedido caiu. */}
+        {/* Alerta de issue no topo — vermelho forte quando alguma loja reportou problema */}
+        {liveStatus.some((r) => r.issueReason) && (
+          <div className="bg-red-50 border-2 border-red-400 rounded-lg p-3 mb-3">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">
+                <div className="font-bold text-red-900">
+                  Loja reportou problema neste pedido
+                </div>
+                {liveStatus
+                  .filter((r) => r.issueReason)
+                  .map((r) => (
+                    <div key={r.id} className="mt-1 text-red-800">
+                      <b>{r.storeName} ({r.storeCode})</b>: {r.issueReasonLabel ?? r.issueReason}
+                      {r.issueNote && (
+                        <span className="text-red-700 italic"> — "{r.issueNote}"</span>
+                      )}
+                    </div>
+                  ))}
+                <div className="mt-2 text-red-800 text-xs">
+                  Clique em <b>Recalcular separação</b> acima pra reatribuir pra outra loja
+                  (a loja que reportou será <b>excluída automaticamente</b>).
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {liveStatus.length > 0 && (
           <div className="bg-slate-50 border border-slate-200 rounded p-3 mb-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800 mb-2">
@@ -768,13 +800,16 @@ export default function PedidoDetailPage() {
             <div className="space-y-2">
               {liveStatus.map((r) => {
                 const flash = !!liveStatusFlash[r.id];
-                const badgeColor =
-                  r.status === 'shipped' ? 'bg-emerald-600 text-white'
+                const hasIssue = !!r.issueReason;
+                const badgeColor = hasIssue
+                  ? 'bg-red-600 text-white'
+                  : r.status === 'shipped' ? 'bg-emerald-600 text-white'
                   : r.status === 'ready' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                   : r.status === 'separating' ? 'bg-blue-100 text-blue-800 border border-blue-300'
                   : 'bg-amber-100 text-amber-900 border border-amber-300';
-                const label =
-                  r.status === 'shipped' ? 'Enviado'
+                const label = hasIssue
+                  ? `⚠ ${r.issueReasonLabel ?? 'Problema reportado'}`
+                  : r.status === 'shipped' ? 'Enviado'
                   : r.status === 'ready' ? 'Pronto pra envio'
                   : r.status === 'separating' ? 'Separando'
                   : 'Aguardando iniciar';

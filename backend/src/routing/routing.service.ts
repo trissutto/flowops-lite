@@ -24,7 +24,7 @@ export class RoutingService {
    * Calcula o roteamento SEM persistir (preview para aprovação manual).
    * Retorna também info de contato das lojas para montar mensagens WhatsApp.
    */
-  async previewRoute(orderId: string) {
+  async previewRoute(orderId: string, opts?: { excludeStoreCodes?: string[] }) {
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
@@ -32,7 +32,13 @@ export class RoutingService {
         pickOrders: { select: { id: true } }, // pra excluir do `committed` ao recalcular
       },
     });
-    const stores = await this.prisma.store.findMany({ where: { active: true } });
+    const excludeCodes = (opts?.excludeStoreCodes ?? []).filter(Boolean);
+    const stores = await this.prisma.store.findMany({
+      where: {
+        active: true,
+        ...(excludeCodes.length ? { code: { notIn: excludeCodes } } : {}),
+      },
+    });
     const skus = order.items.map((i) => i.sku);
     const storeCodes = stores.map((s) => s.code);
     const stock = await this.stock.getStockFor(skus, storeCodes);
@@ -243,11 +249,18 @@ export class RoutingService {
    *
    * Retorna { ok, cancelledCount, ... } ou { ok: false, reason }.
    */
-  async recalculateForWc(orderId: string) {
+  async recalculateForWc(orderId: string, opts?: { excludeStoreIds?: string[] }) {
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
-        pickOrders: { select: { id: true, status: true, storeId: true } },
+        pickOrders: {
+          select: {
+            id: true,
+            status: true,
+            storeId: true,
+            issueReason: true,
+          } as any,
+        },
       },
     });
 
@@ -265,6 +278,23 @@ export class RoutingService {
           `Cancele/rejeite manualmente antes de reatribuir.`,
       };
     }
+
+    // AUTO-EXCLUSÃO: lojas que reportaram problema NESTE pedido são excluídas
+    // do recalc (pra não mandar de volta pra mesma loja que disse "sem estoque").
+    // Combina com excludeStoreIds opcional vindo do admin (reforço manual).
+    const issueReporterStoreIds = order.pickOrders
+      .filter((p) => (p as any).issueReason)
+      .map((p) => p.storeId);
+    const allExcludedStoreIds = Array.from(
+      new Set([...(opts?.excludeStoreIds ?? []), ...issueReporterStoreIds]),
+    );
+    const excludedStores = allExcludedStoreIds.length
+      ? await this.prisma.store.findMany({
+          where: { id: { in: allExcludedStoreIds } },
+          select: { id: true, code: true },
+        })
+      : [];
+    const excludeStoreCodes = excludedStores.map((s) => s.code).filter(Boolean);
 
     const cancellableIds = order.pickOrders
       .filter((p) => ['new', 'separating'].includes(p.status))
@@ -305,18 +335,23 @@ export class RoutingService {
       }
     }
 
-    // 3) Roda routing fresco (já considera commited de OUTROS pedidos)
-    const preview = await this.previewRoute(orderId);
+    // 3) Roda routing fresco (já considera commited de OUTROS pedidos) + exclui
+    // lojas que reportaram problema nesse pedido
+    const preview = await this.previewRoute(orderId, { excludeStoreCodes });
 
     if (!preview.success) {
       return {
         ok: false as const,
-        reason: 'sem-estoque',
-        message:
-          'Recalculei e nenhuma loja tem estoque suficiente agora. ' +
-          'O pedido voltou pra pending — verifique estoque ou divida manualmente.',
+        reason: excludeStoreCodes.length ? 'sem-estoque-excluindo-loja' : 'sem-estoque',
+        message: excludeStoreCodes.length
+          ? `Recalculei excluindo ${excludeStoreCodes.join(', ')} (que reportaram problema) ` +
+            `e nenhuma OUTRA loja tem estoque suficiente. Pedido ficou pending — ` +
+            `verifique estoque ou divida manualmente.`
+          : 'Recalculei e nenhuma loja tem estoque suficiente agora. ' +
+            'O pedido voltou pra pending — verifique estoque ou divida manualmente.',
         missing: preview.missing,
         cancelledCount: cancellableIds.length,
+        excludedStoreCodes: excludeStoreCodes,
       };
     }
 
@@ -333,6 +368,7 @@ export class RoutingService {
       ok: true as const,
       cancelledCount: cancellableIds.length,
       strategy: preview.strategy,
+      excludedStoreCodes: excludeStoreCodes,
       pickOrders: newPickOrders.map((p) => ({
         id: p.id,
         status: p.status,

@@ -143,6 +143,26 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   /**
+   * Loja sinalizou problema no pick-order (sem estoque físico, defeito, divergência).
+   * Loja remove card da fila. Admin destaca pedido em /pedidos e /separacao.
+   */
+  emitPickOrderIssue(storeId: string, payload: {
+    pickOrderId: string;
+    orderId: string;
+    wcOrderId?: number | null;
+    storeId: string;
+    storeCode?: string | null;
+    storeName?: string | null;
+    reason: string;
+    reasonLabel: string;
+    note?: string | null;
+    reportedAt: string;
+  }) {
+    this.server.to(`store:${storeId}`).emit('pick-order:issue', payload);
+    this.server.to('admin').emit('pick-order:issue', payload);
+  }
+
+  /**
    * Dispara comando de impressão remota pro Electron da loja.
    * /minha-loja escuta esse evento e abre a tela imprimir/[id]?autoprint=1 que
    * chama window.electronAPI.silentPrintHTML e fecha sozinha.

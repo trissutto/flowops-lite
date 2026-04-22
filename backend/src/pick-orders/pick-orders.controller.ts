@@ -81,6 +81,20 @@ export class PickOrdersController {
   }
 
   /**
+   * Matriz — lista compacta de pick-orders com issueReason ativo (problema reportado
+   * pela filial: sem estoque físico, defeito, divergência). Consumida pela /separacao
+   * pra badge vermelho nas linhas afetadas. Rota estática — fica antes das dinâmicas.
+   */
+  @Get('issues-active')
+  issuesActive(@Req() req: any) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) acessa essa rota');
+    }
+    return this.svc.listIssuesActive();
+  }
+
+  /**
    * Matriz aprova baixa de estoque — transiciona separated → ready.
    * SHADOW MODE: grava intenção em integration_logs, NÃO toca no Gigasistemas ainda.
    */
@@ -198,6 +212,27 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas usuários de loja finalizam separação');
     }
     return this.svc.finishSeparation(id, user.storeId, user.userId, body.scans ?? []);
+  }
+
+  /**
+   * LOJA reporta problema no pick-order (sem estoque físico, defeito, divergência).
+   * Body: { reason: 'out_of_stock' | 'defective' | 'divergence' | 'other', note?: string }
+   *
+   * Card some da fila da loja (listMine filtra issueReason != null).
+   * Matriz vê badge em /pedidos e /separacao e clica "Recalcular" → reroteia
+   * auto-excluindo a loja que reportou.
+   */
+  @Post(':id/report-issue')
+  reportIssue(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason: string; note?: string },
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'store' || !user.storeId) {
+      throw new ForbiddenException('Apenas usuários de loja reportam problema');
+    }
+    return this.svc.reportIssue(id, user.storeId, user.userId, body ?? { reason: '' });
   }
 
   /**

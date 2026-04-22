@@ -121,6 +121,12 @@ model PickOrder {
   // Loja posta (shipped + tracking) sem esperar esse campo. Matriz aprova em paralelo.
   debitApprovedAt      DateTime? @map("debit_approved_at")
   debitApprovedBy      String?   @map("debit_approved_by")
+  // ── Sinalização de problema pela loja (sem estoque físico, peça c/ defeito, divergência) ──
+  // Loja reporta → card sai da fila dela → matriz vê flag + motivo e recalcula p/ outra loja
+  issueReason          String?   @map("issue_reason")                              // out_of_stock | defective | divergence | other
+  issueNote            String?   @map("issue_note")
+  issueReportedAt      DateTime? @map("issue_reported_at")
+  issueReportedBy      String?   @map("issue_reported_by")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

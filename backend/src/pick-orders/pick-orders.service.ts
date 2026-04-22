@@ -223,6 +223,9 @@ export class PickOrdersService {
     const where: any = { storeId };
     if (!opts?.all) {
       where.status = { in: ['new', 'separating', 'separated', 'ready'] };
+      // Esconde pick-orders sinalizados com problema — card sai da fila da loja
+      // assim que ela reporta; matriz vê a flag em /pedidos e /separacao e reroteia.
+      where.issueReason = null;
     }
     const rows = await this.prisma.pickOrder.findMany({
       where,
@@ -366,6 +369,50 @@ export class PickOrdersService {
       order: r.order,
       items: itemsByPickOrder.get(r.id) ?? [],
     }));
+  }
+
+  /**
+   * Matriz — lista compacta de todos os pick-orders com issue REPORTADO e
+   * ainda não resolvido (status new|separating, issueReason != null).
+   *
+   * Usado pela /separacao pra pintar badge vermelho no pedido da fila que
+   * tem problema reportado por alguma loja. Resposta pequena pra ficar barato
+   * cross-referenciar com a lista do WC (que pode ter centenas de itens).
+   */
+  async listIssuesActive() {
+    const rows = await this.prisma.pickOrder.findMany({
+      where: {
+        issueReason: { not: null },
+        status: { in: ['new', 'separating'] },
+      } as any,
+      orderBy: { issueReportedAt: 'desc' } as any,
+      include: {
+        store: { select: { code: true, name: true } },
+        order: { select: { wcOrderId: true, wcOrderNumber: true } },
+      },
+    });
+
+    const reasonLabels: Record<string, string> = {
+      out_of_stock: 'Sem estoque físico',
+      defective: 'Peça com defeito',
+      divergence: 'Divergência (cor/tamanho)',
+      other: 'Outro',
+    };
+
+    return rows.map((r) => {
+      const reason = (r as any).issueReason as string;
+      return {
+        pickOrderId: r.id,
+        wcOrderId: r.order?.wcOrderId ?? null,
+        wcOrderNumber: r.order?.wcOrderNumber ?? null,
+        storeCode: r.store?.code ?? null,
+        storeName: r.store?.name ?? null,
+        reason,
+        reasonLabel: reasonLabels[reason] ?? reason,
+        note: (r as any).issueNote ?? null,
+        reportedAt: (r as any).issueReportedAt ?? null,
+      };
+    });
   }
 
   /**
@@ -645,20 +692,33 @@ export class PickOrdersService {
         store: { select: { id: true, code: true, name: true, city: true } },
       },
     });
-    return rows.map((r) => ({
-      id: r.id,
-      status: r.status,
-      trackingCode: r.trackingCode,
-      carrier: r.carrier,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-      storeId: r.storeId,
-      storeCode: r.store?.code ?? null,
-      storeName: r.store?.name ?? null,
-      storeCity: r.store?.city ?? null,
-      isTransfer: (r as any).isTransfer ?? false,
-      transferToStoreCode: (r as any).transferToStoreCode ?? null,
-    }));
+    const reasonLabels: Record<string, string> = {
+      out_of_stock: 'Sem estoque físico',
+      defective: 'Peça com defeito',
+      divergence: 'Divergência (cor/tamanho)',
+      other: 'Outro',
+    };
+    return rows.map((r) => {
+      const issueReason = (r as any).issueReason ?? null;
+      return {
+        id: r.id,
+        status: r.status,
+        trackingCode: r.trackingCode,
+        carrier: r.carrier,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+        storeId: r.storeId,
+        storeCode: r.store?.code ?? null,
+        storeName: r.store?.name ?? null,
+        storeCity: r.store?.city ?? null,
+        isTransfer: (r as any).isTransfer ?? false,
+        transferToStoreCode: (r as any).transferToStoreCode ?? null,
+        issueReason,
+        issueReasonLabel: issueReason ? reasonLabels[issueReason] ?? issueReason : null,
+        issueNote: (r as any).issueNote ?? null,
+        issueReportedAt: (r as any).issueReportedAt ?? null,
+      };
+    });
   }
 
   /**
@@ -969,6 +1029,127 @@ export class PickOrdersService {
       updatedAt: updated.updatedAt,
       wcSyncApplied,
       wcSyncWarning,
+    };
+  }
+
+  /**
+   * Loja sinaliza PROBLEMA no pick-order (sem estoque físico, defeito, divergência).
+   *
+   *  - Só aceita em status ATIVOS (new, separating). Se já bipou/separou/postou,
+   *    não faz sentido "reportar problema" — manda nota interna em vez disso.
+   *  - Seta issueReason + issueNote + reportedAt/By. NÃO deleta o pick-order.
+   *  - Card some da fila da loja (listMine filtra issueReason != null).
+   *  - Matriz vê badge vermelho em /pedidos e /separacao com motivo.
+   *  - Matriz clica "Recalcular" → recalculateForWc auto-exclui a loja que reportou.
+   */
+  async reportIssue(
+    pickOrderId: string,
+    storeId: string,
+    userId: string,
+    input: { reason: string; note?: string },
+  ) {
+    const validReasons = ['out_of_stock', 'defective', 'divergence', 'other'];
+    const reason = String(input.reason ?? '').trim();
+    if (!validReasons.includes(reason)) {
+      throw new BadRequestException(
+        `reason inválido. Use: ${validReasons.join(' | ')}`,
+      );
+    }
+
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: { select: { code: true, name: true } },
+        order: { select: { id: true, wcOrderId: true, wcOrderNumber: true } },
+      },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+    if (po.storeId !== storeId) throw new ForbiddenException('Pick-order não é da sua loja');
+
+    const activeStatuses: PickStatus[] = ['new', 'separating'];
+    if (!activeStatuses.includes(po.status as PickStatus)) {
+      throw new BadRequestException(
+        `Status atual é "${po.status}" — só dá pra reportar problema em "new" ou "separating". ` +
+          `Se já separou/postou, fale com a matriz direto.`,
+      );
+    }
+
+    if ((po as any).issueReason) {
+      throw new BadRequestException('Problema já reportado anteriormente');
+    }
+
+    const note = (input.note ?? '').toString().trim().slice(0, 500) || null;
+    const now = new Date();
+
+    const updated = await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: {
+        issueReason: reason,
+        issueNote: note,
+        issueReportedAt: now,
+        issueReportedBy: userId,
+      } as any,
+    });
+
+    await this.prisma.orderHistory.create({
+      data: {
+        orderId: po.orderId,
+        userId,
+        fromStatus: po.status,
+        toStatus: po.status,
+        note: `Loja ${po.store?.code ?? ''} reportou problema: ${reason}${note ? ' — ' + note : ''}`,
+      },
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'issue.reported',
+        payload: JSON.stringify({
+          pickOrderId,
+          reportedBy: userId,
+          storeId,
+          storeCode: po.store?.code,
+          reason,
+          note,
+        }),
+        status: 200,
+      },
+    });
+
+    const reasonLabels: Record<string, string> = {
+      out_of_stock: 'Sem estoque físico',
+      defective: 'Peça com defeito',
+      divergence: 'Divergência (cor/tamanho)',
+      other: 'Outro',
+    };
+
+    this.gateway.emitPickOrderIssue(storeId, {
+      pickOrderId,
+      orderId: po.orderId,
+      wcOrderId: po.order?.wcOrderId ?? null,
+      storeId,
+      storeCode: po.store?.code ?? null,
+      storeName: po.store?.name ?? null,
+      reason,
+      reasonLabel: reasonLabels[reason],
+      note,
+      reportedAt: now.toISOString(),
+    });
+
+    // Dispara também :removed pra loja limpar o card na hora (sem refetch)
+    this.gateway.emitPickOrderRemoved(storeId, {
+      orderId: po.orderId,
+      pickOrderId,
+    });
+
+    return {
+      id: updated.id,
+      issueReason: (updated as any).issueReason,
+      issueNote: (updated as any).issueNote,
+      reasonLabel: reasonLabels[reason],
+      reportedAt: now.toISOString(),
     };
   }
 
