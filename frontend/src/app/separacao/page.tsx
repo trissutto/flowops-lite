@@ -3,10 +3,18 @@
 /**
  * Central de Emissão de Separações.
  *
- * Quem cuida de enviar as separações pras lojas usa esta tela:
- *  1. Vê todos os pedidos pendentes (status configurável)
- *  2. Clica em "Preparar" num pedido → sistema calcula qual loja separa
- *  3. Clica em "WhatsApp" → abre wa.me com a mensagem pronta e muda status pra "Separação"
+ * FLUXO SIMPLIFICADO (1 clique faz tudo):
+ *  1. Seleciona os pedidos (checkbox)
+ *  2. Clica em "Enviar separação" → sistema faz:
+ *     a) Calcula a loja responsável (routing por estoque/distância/prioridade)
+ *     b) Registra pick-order no backend (Separação oficial)
+ *     c) Dispara WhatsApp pra loja via Baileys
+ *     d) Muda status do pedido pra "Separação" no WC
+ *
+ * Ações auxiliares:
+ *  - "Só calcular prévia" (bulk) → mostra qual loja vai pegar, sem disparar
+ *  - "Calcular loja" (individual) → mesma prévia, um pedido só
+ *  - "Imprimir" → gera ordem 80mm pra térmica
  *
  * Atualiza sozinho a cada 30s.
  */
@@ -223,61 +231,22 @@ export default function SeparacaoPage() {
   }
 
   /**
-   * Dispara WhatsApp em bloco pros selecionados que já têm preview calculado.
+   * FLUXO UNIFICADO — "Enviar separação" faz tudo em 1 clique:
+   *  1. Confere sessão WhatsApp ativa (se não, redireciona pra conectar)
+   *  2. Auto-calcula prévia pros pedidos que ainda não têm (chama prepare-separation)
+   *  3. Dispara as mensagens em bloco via backend Baileys (/whatsapp/send-bulk, delay 2.8s)
+   *  4. PATCH status → 'separacao' no WC pros pedidos 100% OK
+   *     (o backend cria pick-order automaticamente no hook do PATCH — idempotente)
    *
-   * Regras importantes:
-   *  - Só dispara pra pedidos com preview.success = true
-   *  - Pedido dividido em N lojas → abre N abas (uma por loja)
-   *  - Cada aba tem NOME ÚNICO (flowops-wa-{wcId}-{storeCode}) pra NÃO sobrescrever
-   *    (no individual a gente usa 'flowops-whatsapp' fixo, mas em bulk isso
-   *    destruiria a aba anterior antes do user apertar enviar)
-   *  - Loja sem WhatsApp cadastrado: pula e conta como falha
-   *  - Depois de abrir todas as abas, PATCH status → 'separacao' no WC em paralelo
-   *
-   * Popup blocker: Chrome geralmente bloqueia o 2º window.open em diante mesmo
-   * dentro de um clique. Por isso abrimos com pequeno delay entre cada uma
-   * E avisamos o user pra liberar popups do site.
-   */
-  /**
-   * Dispara WhatsApp em bloco via backend Baileys — uma chamada única pra
-   * /whatsapp/send-bulk. Backend envia cada mensagem com delay de 2.5s.
-   * Se a sessão não estiver ativa, redireciona pra /retaguarda/whatsapp.
+   * Por que mudou: antes o operador precisava clicar "Gerar separação" e DEPOIS
+   * "Disparar WhatsApp". Confundia e travava o fluxo. Agora é 1 botão só.
    */
   async function bulkDispararWhatsapp() {
     if (selected.size === 0) return;
 
     const ids = Array.from(selected);
 
-    type Task = { wcId: number; group: SeparationGroup };
-    const tasks: Task[] = [];
-    const semPreview: number[] = [];
-    const comRuptura: number[] = [];
-    const semWhatsapp: Array<{ wcId: number; storeName: string }> = [];
-
-    for (const id of ids) {
-      const p = preview[id];
-      if (!p) { semPreview.push(id); continue; }
-      if (!p.success) { comRuptura.push(id); continue; }
-      for (const g of p.groups) {
-        if (g.whatsapp && g.whatsappMessage) {
-          tasks.push({ wcId: id, group: g });
-        } else {
-          semWhatsapp.push({ wcId: id, storeName: g.storeName });
-        }
-      }
-    }
-
-    if (tasks.length === 0) {
-      alert(
-        'Nenhum pedido apto pra disparo.\n\n' +
-        (semPreview.length ? `· ${semPreview.length} sem separação calculada (clica em "Gerar separação" antes)\n` : '') +
-        (comRuptura.length ? `· ${comRuptura.length} em ruptura (sem estoque)\n` : '') +
-        (semWhatsapp.length ? `· ${semWhatsapp.length} com loja sem WhatsApp cadastrado` : ''),
-      );
-      return;
-    }
-
-    // Confere se a sessão WhatsApp está ativa antes de disparar
+    // PASSO 0 — confere sessão WA antes de calcular nada (poupa trabalho se cair)
     try {
       const st = await api<{ connected: boolean }>('/whatsapp/status');
       if (!st.connected) {
@@ -294,18 +263,86 @@ export default function SeparacaoPage() {
       return;
     }
 
+    setBulkRunning(true);
+
+    // PASSO 1 — auto-calcula prévia pros IDs que ainda não têm preview em memória.
+    // Uso um mapa local porque setState é async e preciso do resultado imediato
+    // pra montar as tasks logo abaixo.
+    const previewMap: Record<number, SeparationPreview> = { ...preview };
+    const missingIds = ids.filter((id) => !previewMap[id]);
+    const calcFails: number[] = [];
+
+    if (missingIds.length > 0) {
+      setBulkProgress({ done: 0, total: missingIds.length, fails: 0 });
+      const CONCURRENCY = 4;
+      const queue = [...missingIds];
+      async function calcWorker() {
+        while (queue.length > 0) {
+          const id = queue.shift();
+          if (id == null) break;
+          try {
+            const res = await api<SeparationPreview>(`/orders/wc/${id}/prepare-separation`);
+            previewMap[id] = res;
+            setPreview((p) => ({ ...p, [id]: res }));
+            setExpanded((x) => ({ ...x, [id]: true }));
+            setErrorByOrder((e) => ({ ...e, [id]: '' }));
+          } catch (e: any) {
+            calcFails.push(id);
+            setErrorByOrder((er) => ({ ...er, [id]: e?.message || 'Falha ao calcular' }));
+          } finally {
+            setBulkProgress((p) => (p ? { ...p, done: p.done + 1, fails: calcFails.length } : p));
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, missingIds.length) }, calcWorker));
+    }
+
+    // PASSO 2 — monta tasks com base no mapa atualizado
+    type Task = { wcId: number; group: SeparationGroup };
+    const tasks: Task[] = [];
+    const comRuptura: number[] = [];
+    const semWhatsapp: Array<{ wcId: number; storeName: string }> = [];
+
+    for (const id of ids) {
+      const p = previewMap[id];
+      if (!p) continue; // falhou no cálculo — já contado em calcFails
+      if (!p.success) { comRuptura.push(id); continue; }
+      for (const g of p.groups) {
+        if (g.whatsapp && g.whatsappMessage) {
+          tasks.push({ wcId: id, group: g });
+        } else {
+          semWhatsapp.push({ wcId: id, storeName: g.storeName });
+        }
+      }
+    }
+
+    if (tasks.length === 0) {
+      setBulkRunning(false);
+      setBulkProgress(null);
+      alert(
+        'Nenhum pedido apto pra disparo.\n\n' +
+        (calcFails.length ? `· ${calcFails.length} falhou(aram) no cálculo de separação\n` : '') +
+        (comRuptura.length ? `· ${comRuptura.length} em ruptura (sem estoque)\n` : '') +
+        (semWhatsapp.length ? `· ${semWhatsapp.length} com loja sem WhatsApp cadastrado` : ''),
+      );
+      return;
+    }
+
     const resumoExtras =
-      (semPreview.length ? `\n· ${semPreview.length} sem separação calculada (serão ignorados)` : '') +
-      (comRuptura.length ? `\n· ${comRuptura.length} em ruptura (serão ignorados)` : '') +
-      (semWhatsapp.length ? `\n· ${semWhatsapp.length} loja(s) sem WhatsApp (serão ignoradas)` : '');
+      (calcFails.length ? `\n· ${calcFails.length} falhou(aram) no cálculo (ignorados)` : '') +
+      (comRuptura.length ? `\n· ${comRuptura.length} em ruptura (ignorados)` : '') +
+      (semWhatsapp.length ? `\n· ${semWhatsapp.length} loja(s) sem WhatsApp (ignoradas)` : '');
 
     if (!window.confirm(
       `Disparar ${tasks.length} mensagem(ns) de WhatsApp e marcar os pedidos como "Separação"?` +
       resumoExtras +
       `\n\n⏳ Uma mensagem a cada ~3 segundos pra evitar spam. ${tasks.length} msgs ≈ ${Math.ceil(tasks.length * 3 / 60)} min.`,
-    )) return;
+    )) {
+      setBulkRunning(false);
+      setBulkProgress(null);
+      return;
+    }
 
-    setBulkRunning(true);
     setBulkProgress({ done: 0, total: tasks.length, fails: 0 });
 
     // Monta payload pro backend: 1 item por (pedido × loja)
@@ -596,7 +633,7 @@ export default function SeparacaoPage() {
             <Package className="w-6 h-6" /> Emissão de Separações
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Central de roteamento — cada pedido é direcionado pra loja que tem estoque e disparado via WhatsApp.
+            Selecione os pedidos e clique em <b className="text-green-700">Enviar separação</b> — em 1 clique o sistema calcula a loja, registra a separação e dispara o WhatsApp.
           </p>
         </div>
         <button
@@ -1005,24 +1042,26 @@ export default function SeparacaoPage() {
 
               <div className="h-6 w-px bg-slate-700 hidden sm:block" />
 
-              <button
-                onClick={bulkPrepareSeparation}
-                disabled={bulkRunning}
-                className="px-3 py-1.5 rounded text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1.5"
-                title="Calcula a loja que vai separar cada pedido selecionado"
-              >
-                {bulkRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StoreIcon className="w-3.5 h-3.5" />}
-                Gerar separação ({selected.size})
-              </button>
-
+              {/* AÇÃO PRIMÁRIA — faz tudo (calcula loja + registra separação + envia WA + muda status) */}
               <button
                 onClick={bulkDispararWhatsapp}
                 disabled={bulkRunning}
-                className="px-3 py-1.5 rounded text-sm font-semibold text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 flex items-center gap-1.5"
-                title="Dispara as mensagens direto pelo backend (precisa ter Gerado separação antes e WhatsApp conectado em /retaguarda/whatsapp)"
+                className="px-4 py-2 rounded text-sm font-bold text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 ring-2 ring-green-400 shadow-lg"
+                title="1 clique faz tudo: calcula a loja → registra separação → envia WhatsApp → muda status do pedido pra Separação"
               >
-                {bulkRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                Disparar WhatsApp ({selected.size})
+                {bulkRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Enviar separação ({selected.size})
+              </button>
+
+              {/* AÇÃO SECUNDÁRIA — só pré-visualiza qual loja pegaria, sem disparar nada */}
+              <button
+                onClick={bulkPrepareSeparation}
+                disabled={bulkRunning}
+                className="px-3 py-1.5 rounded text-sm font-medium text-slate-200 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 flex items-center gap-1.5"
+                title="Só calcula qual loja separa cada pedido (prévia, sem enviar WhatsApp nem mudar status)"
+              >
+                {bulkRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <StoreIcon className="w-3.5 h-3.5" />}
+                Só calcular prévia
               </button>
 
               <button

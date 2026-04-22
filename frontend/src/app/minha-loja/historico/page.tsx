@@ -6,14 +6,16 @@
  * Histórico de pedidos REPOSIÇÃO e VENDA CERTA da loja.
  *
  * A direção (EU PEDI / ME PEDIRAM) vem calculada do backend pelo campo
- * `direction` ('out' | 'in'), baseado no storeCode do JWT. Não é mais
- * inferido no frontend (fallback anterior causava bug quando a loja
- * origem logava e nunca tinha pedidos com ela como destino).
+ * `direction` ('out' | 'in'), baseado no storeCode do JWT.
  *
- * VENDA CERTA abre com status=pending + prazo de 7 dias. A loja destino
- * (quem pediu) tem que confirmar "Vendi" ou "Não vendi" pra matriz poder
- * auditar. Enquanto pendente, card fica em vermelho pulsante com
- * contagem regressiva — pressão visual pra combater abuso do recurso.
+ * VENDA CERTA: NÃO tem mais botão manual "Vendi / Não vendeu". A baixa
+ * acontece SÓ automaticamente, via cron que lê a tabela caixa do PDV
+ * Gigasistemas da loja solicitante — se o produto apareceu em venda
+ * lá, o status vira 'confirmed' com nota "AUTO:cupom_XXX". Se passar
+ * do prazo de 7 dias sem venda, a matriz decide manualmente.
+ *
+ * Essa tela é só informativa pro lojista. Botão manual foi removido
+ * pra impedir "burla" (lojista marcar como vendido sem ter passado no PDV).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -22,7 +24,7 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, RefreshCw, Search, Package, ShoppingBag,
   ArrowDownLeft, ArrowUpRight, User, MessageCircle, History,
-  AlertTriangle, CheckCircle2, XCircle, Clock, Check, X,
+  CheckCircle2, XCircle, Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -117,47 +119,13 @@ export default function HistoricoPage() {
   const kpis = useMemo(() => {
     const out = items.filter((i) => i.direction === 'out');
     const inc = items.filter((i) => i.direction === 'in');
-    // Vendas certas PENDENTES que EU pedi (tenho que confirmar)
-    const vcPendingMine = out.filter(
-      (i) => i.tipo === 'VENDA_CERTA' && (i.saleStatus || 'pending') === 'pending',
-    );
     return {
       totalOut: out.length,
       totalIn: inc.length,
       reposicao: items.filter((i) => i.tipo === 'REPOSICAO').length,
       vendaCerta: items.filter((i) => i.tipo === 'VENDA_CERTA').length,
-      vcPendingMine: vcPendingMine.length,
     };
   }, [items]);
-
-  async function updateSale(
-    id: string,
-    status: 'confirmed' | 'cancelled',
-    body: { reason?: string; saleNote?: string } = {},
-  ) {
-    try {
-      await api(`/products/transfer-orders/${id}/sale-status`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status, ...body }),
-      });
-      // Atualiza local sem recarregar tudo
-      setItems((cur) =>
-        cur.map((it) =>
-          it.id === id
-            ? {
-                ...it,
-                saleStatus: status,
-                saleConfirmedAt: status === 'confirmed' ? new Date().toISOString() : null,
-                saleCancelReason: status === 'cancelled' ? body.reason || null : null,
-                saleNote: body.saleNote || null,
-              }
-            : it,
-        ),
-      );
-    } catch (err: any) {
-      alert('Erro ao atualizar: ' + String(err?.message || err));
-    }
-  }
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -187,43 +155,12 @@ export default function HistoricoPage() {
       </header>
 
       <main className="max-w-5xl mx-auto p-3 sm:p-4 space-y-3">
-        {/* Alerta de VENDA CERTA pendente */}
-        {kpis.vcPendingMine > 0 && (
-          <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex items-start gap-3 animate-pulse-slow">
-            <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" />
-            <div className="flex-1">
-              <div className="font-bold text-red-800 text-sm">
-                Você tem {kpis.vcPendingMine} venda{kpis.vcPendingMine > 1 ? 's' : ''} certa{kpis.vcPendingMine > 1 ? 's' : ''} pendente{kpis.vcPendingMine > 1 ? 's' : ''} de confirmação
-              </div>
-              <div className="text-xs text-red-700 mt-0.5">
-                Confirme &quot;Vendi&quot; ou &quot;Não vendi&quot; em cada card abaixo. A matriz está monitorando.
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                setTipoFiltro('VENDA_CERTA');
-                setDirecaoFiltro('out');
-                setStatusFiltro('pending');
-              }}
-              className="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded hover:bg-red-700 flex-shrink-0"
-            >
-              Ver só pendentes
-            </button>
-          </div>
-        )}
-
         {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <Kpi icon={<ArrowUpRight className="w-4 h-4" />} label="Eu pedi" value={kpis.totalOut} color="text-sky-700 bg-sky-50 border-sky-200" />
           <Kpi icon={<ArrowDownLeft className="w-4 h-4" />} label="Me pediram" value={kpis.totalIn} color="text-violet-700 bg-violet-50 border-violet-200" />
           <Kpi icon={<Package className="w-4 h-4" />} label="Reposição" value={kpis.reposicao} color="text-brand bg-brand/5 border-brand/20" />
           <Kpi icon={<ShoppingBag className="w-4 h-4" />} label="Venda certa" value={kpis.vendaCerta} color="text-amber-700 bg-amber-50 border-amber-200" />
-          <Kpi
-            icon={<AlertTriangle className="w-4 h-4" />}
-            label="VC pendentes"
-            value={kpis.vcPendingMine}
-            color={kpis.vcPendingMine > 0 ? 'text-red-800 bg-red-50 border-red-300' : 'text-slate-500 bg-slate-50 border-slate-200'}
-          />
         </div>
 
         {/* Filtros */}
@@ -263,9 +200,9 @@ export default function HistoricoPage() {
               className="border border-slate-200 rounded-lg text-sm py-2 px-2 bg-white"
             >
               <option value="all">Todos os status</option>
-              <option value="pending">VC Pendente</option>
-              <option value="confirmed">VC Confirmada</option>
-              <option value="cancelled">VC Cancelada</option>
+              <option value="pending">VC Aguardando PDV</option>
+              <option value="confirmed">VC Baixada</option>
+              <option value="cancelled">VC Não vendida</option>
             </select>
           </div>
         </div>
@@ -290,21 +227,12 @@ export default function HistoricoPage() {
                 key={it.id}
                 item={it}
                 myStoreCode={myStoreCode}
-                onConfirm={(saleNote) => updateSale(it.id, 'confirmed', { saleNote })}
-                onCancel={(reason) => updateSale(it.id, 'cancelled', { reason })}
               />
             ))}
           </div>
         )}
       </main>
 
-      <style jsx global>{`
-        @keyframes pulse-slow {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.75; }
-        }
-        .animate-pulse-slow { animation: pulse-slow 2.5s ease-in-out infinite; }
-      `}</style>
     </div>
   );
 }
@@ -324,16 +252,11 @@ function Kpi({
 }
 
 function HistoricoCard({
-  item, myStoreCode, onConfirm, onCancel,
+  item, myStoreCode,
 }: {
   item: TransferOrder;
   myStoreCode: string;
-  onConfirm: (saleNote?: string) => void;
-  onCancel: (reason: string) => void;
 }) {
-  const [showCancelForm, setShowCancelForm] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
-
   const isOutgoing = item.direction === 'out';
   const isIncoming = item.direction === 'in';
   const outraLojaName = isOutgoing ? item.lojaOrigemName : item.lojaDestinoName;
@@ -348,14 +271,14 @@ function HistoricoCard({
   const isOverdue =
     isPending && item.saleDeadline && new Date(item.saleDeadline).getTime() < Date.now();
 
-  // Só a loja destino (quem pediu = outgoing) pode confirmar/cancelar
-  const canAct = isVendaCerta && isPending && isOutgoing;
-
-  // Cores do card — VENDA CERTA pendente = vermelho pulsante
+  // Cores do card — VENDA CERTA aguardando PDV = âmbar discreto (antes era vermelho
+  // pulsante porque existia botão manual "Vendi/Não vendeu" e queria chamar a
+  // atenção do lojista. Com a baixa 100% automática via PDV, ele não tem o que
+  // fazer — só aguardar. Cor suave pra não poluir a tela).
   const cardClass = isPending
     ? isOverdue
-      ? 'bg-red-50 border-2 border-red-500 shadow-lg shadow-red-200 animate-pulse-slow'
-      : 'bg-red-50 border-2 border-red-300 shadow-md shadow-red-100'
+      ? 'bg-amber-50 border border-amber-300'
+      : 'bg-amber-50/60 border border-amber-200'
     : isConfirmed
       ? 'bg-emerald-50 border border-emerald-200'
       : isCancelled
@@ -364,7 +287,7 @@ function HistoricoCard({
 
   const tipoColor = isVendaCerta
     ? isPending
-      ? 'bg-red-200 text-red-900 border-red-400'
+      ? 'bg-amber-100 text-amber-900 border-amber-300'
       : isConfirmed
         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
         : 'bg-slate-200 text-slate-700 border-slate-300'
@@ -383,7 +306,7 @@ function HistoricoCard({
       <div className="flex items-start justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${tipoColor}`}>
-            {isVendaCerta ? (isPending ? '⚠️ Venda certa' : isConfirmed ? '✅ Venda certa' : '❌ Venda certa') : '📦 Reposição'}
+            {isVendaCerta ? (isPending ? '⏳ Venda certa' : isConfirmed ? '✅ Venda certa' : '❌ Venda certa') : '📦 Reposição'}
           </span>
           {direcaoLabel && (
             <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${direcaoColor}`}>
@@ -479,55 +402,13 @@ function HistoricoCard({
         </div>
       )}
 
-      {/* Botões de ação (só loja destino com pedido pendente) */}
-      {canAct && !showCancelForm && (
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={() => {
-              const note = window.prompt('Número do pedido WC ou observação (opcional):') || '';
-              onConfirm(note.trim() || undefined);
-            }}
-            className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-sm flex items-center justify-center gap-1.5"
-          >
-            <Check className="w-4 h-4" /> Vendi (confirmar)
-          </button>
-          <button
-            onClick={() => setShowCancelForm(true)}
-            className="px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold rounded-lg text-sm flex items-center justify-center gap-1.5"
-          >
-            <X className="w-4 h-4" /> Não vendeu
-          </button>
-        </div>
-      )}
-      {canAct && showCancelForm && (
-        <div className="mt-3 space-y-2 bg-white border border-slate-300 rounded-lg p-2">
-          <div className="text-xs font-semibold text-slate-700">Por que não se concretizou?</div>
-          <textarea
-            value={cancelReason}
-            onChange={(e) => setCancelReason(e.target.value)}
-            placeholder="Ex: cliente desistiu, cor errada, não compareceu..."
-            rows={2}
-            className="w-full border border-slate-200 rounded text-sm px-2 py-1.5 focus:outline-none focus:border-brand"
-          />
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                if (!cancelReason.trim()) {
-                  alert('Informe o motivo (a matriz precisa dessa info).');
-                  return;
-                }
-                onCancel(cancelReason.trim());
-              }}
-              className="flex-1 px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white font-semibold rounded text-xs"
-            >
-              Confirmar cancelamento
-            </button>
-            <button
-              onClick={() => { setShowCancelForm(false); setCancelReason(''); }}
-              className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold rounded text-xs"
-            >
-              Voltar
-            </button>
+      {/* Nota informativa quando VC está aguardando PDV — explica pro lojista
+           que não precisa fazer nada, o sistema baixa sozinho quando passar no caixa. */}
+      {isPending && isOutgoing && (
+        <div className="mt-2 text-xs bg-amber-100 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5">
+          <Clock className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <div>
+            <b>Aguardando PDV Gigasistemas.</b> A baixa é automática — assim que o produto passar no caixa da loja, esse pedido vira &quot;Vendida auto&quot;. Nada pra fazer aqui.
           </div>
         </div>
       )}
@@ -578,22 +459,24 @@ function SaleStatusBadge({
       </span>
     );
   }
-  // pending
+  // pending — aguardando baixa via PDV. Não é mais "ameaça vermelha" porque
+  // lojista não tem ação manual; só visual informativo.
   const remaining = deadline ? Math.ceil((new Date(deadline).getTime() - Date.now()) / (24 * 60 * 60 * 1000)) : null;
   return (
     <span
       className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${
         isOverdue
-          ? 'bg-red-600 text-white border-red-700'
-          : 'bg-red-100 text-red-800 border-red-300'
+          ? 'bg-amber-200 text-amber-900 border-amber-400'
+          : 'bg-amber-50 text-amber-800 border-amber-200'
       }`}
+      title="Aguardando baixa automática via PDV Gigasistemas"
     >
       <Clock className="w-3 h-3" />
       {isOverdue
-        ? `ATRASADO ${remaining !== null ? Math.abs(remaining) + 'd' : ''}`
+        ? `Prazo venceu ${remaining !== null ? Math.abs(remaining) + 'd' : ''}`
         : remaining !== null && remaining >= 0
-          ? `Pendente ${remaining}d`
-          : 'Pendente'}
+          ? `Aguardando PDV · ${remaining}d`
+          : 'Aguardando PDV'}
     </span>
   );
 }
