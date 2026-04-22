@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
-  Smartphone, FileSearch,
+  Smartphone, FileSearch, Truck,
 } from 'lucide-react';
 
 type NavItem = {
@@ -56,6 +56,7 @@ const GROUPS: NavGroup[] = [
     label: 'Retaguarda',
     color: 'amber',
     items: [
+      { href: '/retaguarda/enviados-hoje',   label: 'Enviados por Loja', icon: Truck },
       { href: '/retaguarda/baixa-estoque',   label: 'Baixa Estoque',    icon: PackageMinus },
       { href: '/retaguarda/baixas-log',      label: 'Log de Baixas',    icon: FileSearch },
       { href: '/retaguarda/venda-certa',     label: 'Venda Certa',      icon: CheckCircle2 },

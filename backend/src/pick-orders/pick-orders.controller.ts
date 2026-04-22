@@ -95,6 +95,28 @@ export class PickOrdersController {
   }
 
   /**
+   * Matriz — lista pick-orders com status=shipped num intervalo (default HOJE),
+   * agrupados por loja. Cada grupo traz: storeCode/Name, total, totalPeças, valorTotal
+   * e rows[] com dados do pedido WC (#numero, cliente, rastreio, carrier, valor,
+   * horário envio, forma envio, transferência). Fonte da verdade pra cobrar "o que
+   * cada filial enviou hoje?".
+   *
+   * Query: ?from=YYYY-MM-DD&to=YYYY-MM-DD (ambos opcionais — default HOJE SP)
+   */
+  @Get('shipped-by-store')
+  shippedByStore(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) acessa essa rota');
+    }
+    return this.svc.listShippedByStore({ from, to });
+  }
+
+  /**
    * Matriz aprova baixa de estoque — transiciona separated → ready.
    * SHADOW MODE: grava intenção em integration_logs, NÃO toca no Gigasistemas ainda.
    */

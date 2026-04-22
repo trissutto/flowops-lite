@@ -379,6 +379,153 @@ export class PickOrdersService {
    * tem problema reportado por alguma loja. Resposta pequena pra ficar barato
    * cross-referenciar com a lista do WC (que pode ter centenas de itens).
    */
+  /**
+   * Lista pick-orders com status=shipped num intervalo, agrupados por loja.
+   *
+   * Usado pela tela /retaguarda/enviados-hoje pra matriz ver em tempo real o que
+   * cada filial despachou no dia. O "shipped at" não tem coluna dedicada — usamos
+   * `updatedAt` que é tocado quando a loja muda pra shipped (updateStatus).
+   *
+   * Default period: HOJE em horário SP (-03:00). Retorna agrupado + total geral.
+   */
+  async listShippedByStore(params: { from?: string; to?: string }) {
+    // Se não veio data, usa HOJE (00:00 → 23:59:59.999 no fuso SP)
+    // Guarda margem de 3h pra não perder cliente que enviou perto da meia-noite.
+    const now = new Date();
+    // Hoje em SP → pega timestamp UTC do 00:00 SP e do 23:59:59 SP
+    const spMidnightLocal = new Date(now);
+    spMidnightLocal.setHours(0, 0, 0, 0);
+    // spMidnight em UTC = spMidnightLocal (trust server tz) — se servidor é UTC,
+    // 00:00 SP == 03:00 UTC. Fazemos overlap generoso (24h anteriores).
+    const defaultFrom = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const defaultTo = new Date(Date.now() + 1 * 60 * 60 * 1000);
+
+    const from = params.from ? new Date(params.from) : defaultFrom;
+    let to = params.to ? new Date(params.to) : defaultTo;
+    // Se veio só data (YYYY-MM-DD), o to fica 00:00 — empurra pro final do dia
+    if (params.to && /^\d{4}-\d{2}-\d{2}$/.test(params.to)) {
+      to = new Date(params.to + 'T23:59:59.999Z');
+    }
+
+    const rows = await this.prisma.pickOrder.findMany({
+      where: {
+        status: { in: ['shipped', 'delivered'] },
+        updatedAt: { gte: from, lte: to },
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        store: { select: { code: true, name: true } },
+        order: {
+          select: {
+            id: true,
+            wcOrderId: true,
+            wcOrderNumber: true,
+            customerName: true,
+            customerPhone: true,
+            totalAmount: true,
+            isPickup: true,
+            shippingMethod: true,
+            trackingCode: true,
+            carrier: true,
+            items: {
+              select: { sku: true, quantity: true, productName: true },
+            },
+          } as any,
+        },
+      },
+    });
+
+    // Agrupa por storeCode
+    const byStoreMap = new Map<string, {
+      storeCode: string;
+      storeName: string;
+      count: number;
+      totalItems: number;
+      totalRevenue: number;
+      transferCount: number;
+      pickupCount: number;
+      rows: Array<{
+        pickOrderId: string;
+        wcOrderId: number | null;
+        wcOrderNumber: string | null;
+        customerName: string | null;
+        customerPhone: string | null;
+        totalAmount: number | null;
+        shippingMethod: string | null;
+        // rastreio: prioriza do pick-order (que a loja preencheu no shipped),
+        // senão cai pro order (WC).
+        trackingCode: string | null;
+        carrier: string | null;
+        shippedAt: Date;
+        itemsCount: number;
+        isPickup: boolean;
+        isTransfer: boolean;
+        transferToStoreCode: string | null;
+      }>;
+    }>();
+
+    for (const r of rows) {
+      const code = r.store?.code ?? 'SEM_LOJA';
+      const name = r.store?.name ?? 'Sem loja';
+      const o: any = r.order;
+      const itemsCount = Array.isArray(o?.items)
+        ? o.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 0), 0)
+        : 0;
+      const amount = Number(o?.totalAmount ?? 0);
+      const isTransfer = (r as any).isTransfer === true;
+      const isPickup = o?.isPickup === true;
+
+      const cur = byStoreMap.get(code) ?? {
+        storeCode: code,
+        storeName: name,
+        count: 0,
+        totalItems: 0,
+        totalRevenue: 0,
+        transferCount: 0,
+        pickupCount: 0,
+        rows: [],
+      };
+      cur.count++;
+      cur.totalItems += itemsCount;
+      cur.totalRevenue += amount;
+      if (isTransfer) cur.transferCount++;
+      if (isPickup) cur.pickupCount++;
+      cur.rows.push({
+        pickOrderId: r.id,
+        wcOrderId: o?.wcOrderId ?? null,
+        wcOrderNumber: o?.wcOrderNumber ?? null,
+        customerName: o?.customerName ?? null,
+        customerPhone: o?.customerPhone ?? null,
+        totalAmount: amount || null,
+        shippingMethod: o?.shippingMethod ?? null,
+        trackingCode: r.trackingCode ?? o?.trackingCode ?? null,
+        carrier: r.carrier ?? o?.carrier ?? null,
+        shippedAt: r.updatedAt,
+        itemsCount,
+        isPickup,
+        isTransfer,
+        transferToStoreCode: (r as any).transferToStoreCode ?? null,
+      });
+      byStoreMap.set(code, cur);
+    }
+
+    const byStore = Array.from(byStoreMap.values()).sort((a, b) => b.count - a.count);
+    const grand = {
+      count: rows.length,
+      totalItems: byStore.reduce((acc, s) => acc + s.totalItems, 0),
+      totalRevenue: byStore.reduce((acc, s) => acc + s.totalRevenue, 0),
+      storesCount: byStore.length,
+      transferCount: byStore.reduce((acc, s) => acc + s.transferCount, 0),
+      pickupCount: byStore.reduce((acc, s) => acc + s.pickupCount, 0),
+    };
+
+    return {
+      period: { from: from.toISOString(), to: to.toISOString() },
+      grand,
+      byStore,
+    };
+  }
+
   async listIssuesActive() {
     const rows = await this.prisma.pickOrder.findMany({
       where: {
