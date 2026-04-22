@@ -1019,8 +1019,12 @@ export default function PedidoDetailPage() {
               )}
               {separation.success && separation.strategy === 'pickup-transfer' && (
                 <>
-                  🚚 <b>RETIRADA EM LOJA com TRANSFERÊNCIA</b> — {separation.pickupStoreName} não tem tudo.
+                  🚚 <b>RETIRADA EM LOJA com TRANSFERÊNCIA</b> — {separation.pickupStoreName} não tem TUDO em estoque (sistema já priorizou a própria loja de retirada).
+                  {' '}
                   {separation.groups.filter((g) => g.isTransfer).length} loja(s) vão <b>transferir</b> pra {separation.pickupStoreName}.
+                  <div className="text-xs mt-1 opacity-80">
+                    Pra trocar qual loja transfere: clica em <b>↔ Trocar loja</b> no card laranja abaixo.
+                  </div>
                 </>
               )}
               {!separation.success && separation.strategy === 'pickup-blocked' && (
@@ -1168,14 +1172,30 @@ export default function PedidoDetailPage() {
                         </div>
                       )}
                     </div>
-                    <button
-                      onClick={() => sendWhatsapp(g)}
-                      disabled={!g.whatsapp}
-                      className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-40 flex items-center gap-2"
-                      title={g.whatsapp ? 'Abrir WhatsApp com mensagem pronta' : 'Cadastra o WhatsApp em /lojas'}
-                    >
-                      <Send className="w-4 h-4" /> Enviar WhatsApp
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                      {/* Botão trocar loja: só faz sentido pra loja FONTE de transferência.
+                          Na pickup-lock, trocar não adianta (loja destino é fixa).
+                          Na multi-store/single-store, também oferecemos porque pode ser
+                          ruptura local, divergência, etc. */}
+                      {g.isTransfer && g.storeCode && (
+                        <button
+                          onClick={() => swapStore(g.storeCode!, g.storeName)}
+                          disabled={sepLoading}
+                          className="inline-flex items-center gap-1 px-3 py-2 rounded text-sm border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60"
+                          title={`Escolher outra loja no lugar de ${g.storeCode}. O sistema re-roteia excluindo esta.`}
+                        >
+                          ↔ Trocar loja
+                        </button>
+                      )}
+                      <button
+                        onClick={() => sendWhatsapp(g)}
+                        disabled={!g.whatsapp}
+                        className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm disabled:opacity-40 flex items-center gap-2"
+                        title={g.whatsapp ? 'Abrir WhatsApp com mensagem pronta' : 'Cadastra o WhatsApp em /lojas'}
+                      >
+                        <Send className="w-4 h-4" /> Enviar WhatsApp
+                      </button>
+                    </div>
                   </div>
 
                   <div className="p-4">
