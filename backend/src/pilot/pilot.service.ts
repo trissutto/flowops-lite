@@ -4,8 +4,7 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { RoutingService } from '../routing/routing.service';
 import { OrdersService } from '../orders/orders.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
-import { extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
-import { detectPickup, extractCpf } from '../woocommerce/attribution.util';
+import { extractVariantFromLineItem, detectPickup, extractCpf } from '../woocommerce/wc-order-extract.util';
 
 /**
  * PilotService — Piloto Automático server-side.
@@ -239,7 +238,8 @@ export class PilotService {
     // 5) Dispara WhatsApp — se qualquer um falhar, aborta antes do PATCH
     const sendFailures: Array<{ store: string; error: string }> = [];
     for (const g of groupsWithWa) {
-      const r = await this.whatsapp.sendText(g.whatsapp, g.whatsappMessage);
+      // filter acima já garantiu que whatsapp e whatsappMessage são strings.
+      const r = await this.whatsapp.sendText(g.whatsapp as string, g.whatsappMessage as string);
       if (!r.ok) sendFailures.push({ store: g.storeCode, error: r.error || 'falha' });
     }
 
