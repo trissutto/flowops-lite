@@ -29,6 +29,7 @@ import { IntegrationLogsModule } from './integration-logs/integration-logs.modul
 import { TrackingModule } from './tracking/tracking.module';
 import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
+import { RealignmentModule } from './realignment/realignment.module';
 
 @Module({
   imports: [
@@ -61,6 +62,7 @@ import { SellersModule } from './sellers/sellers.module';
     TrackingModule,
     PilotModule,
     SellersModule,
+    RealignmentModule,
   ],
 })
 export class AppModule {}

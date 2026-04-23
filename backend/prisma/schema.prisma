@@ -349,7 +349,7 @@ model SupplyRequestItem {
 
 model TransferOrder {
   id                String   @id @default(uuid())
-  tipo              String   // REPOSICAO | VENDA_CERTA
+  tipo              String   // REPOSICAO | VENDA_CERTA | REALINHAMENTO
   refCode           String   @map("ref_code")           // ex: VMS-223
   cor               String?                                // ex: PRETO (null = cor não especificada no pedido)
   tamanho           String?                                // ex: 46    (null = tamanho não especificado)

@@ -31,7 +31,7 @@ import { useRouter } from 'next/navigation';
 import {
   LayoutDashboard, Truck, FileSearch, CheckCircle2, Package2, Boxes,
   Globe, Smartphone, Database, DollarSign, ShoppingBag, Users,
-  Megaphone, Settings, Zap, Bot, ArrowRight, TrendingUp,
+  Megaphone, Settings, Zap, Bot, ArrowRight, TrendingUp, Shuffle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -80,6 +80,7 @@ const RETAGUARDA_CARDS: ModuleCard[] = [
   { href: '/retaguarda/whatsapp',        label: 'WhatsApp',          subtitle: 'Conexão + bulk',         icon: Smartphone },
   { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',   subtitle: 'Auditoria SKU',          icon: Database },
   { href: '/retaguarda/vendedoras',      label: 'Vendedoras',        subtitle: 'Karine, Manu, …',        icon: Users },
+  { href: '/retaguarda/realinhamento',   label: 'Realinhamento',     subtitle: 'Rebalancear estoque entre lojas', icon: Shuffle },
 ];
 
 const GESTAO_CARDS: ModuleCard[] = [
