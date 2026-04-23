@@ -98,12 +98,10 @@ model Order {
   @@map("orders")
 }
 
-/**
- * Vendedoras — cadastro de atendentes que iniciam vendas online (exemplos: Karine, Manu).
- * Cliente que tira dúvida com a vendedora via WhatsApp e depois fecha no site fica marcado
- * com o sellerId — relatório mensal mostra performance de cada uma.
- * Soft-delete via `active=false`. Nome é único case-insensitive (validação na service).
- */
+// Vendedoras — cadastro de atendentes que iniciam vendas online (exemplos: Karine, Manu).
+// Cliente que tira dúvida com a vendedora via WhatsApp e depois fecha no site fica marcado
+// com o sellerId — relatório mensal mostra performance de cada uma.
+// Soft-delete via `active=false`. Nome é único case-insensitive (validação na service).
 model Seller {
   id        String   @id @default(uuid())
   name      String   @unique
