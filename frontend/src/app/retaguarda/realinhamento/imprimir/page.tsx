@@ -46,13 +46,19 @@ export default function ImprimirRealinhamentoPage() {
 
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem('realinhamento_print_payload');
+      // Tenta localStorage primeiro (compartilhado entre abas), depois sessionStorage
+      // como fallback pra compatibilidade.
+      const raw =
+        localStorage.getItem('realinhamento_print_payload') ||
+        sessionStorage.getItem('realinhamento_print_payload');
       if (!raw) {
         setError('Nenhum plano encontrado. Volte pra tela de realinhamento e clique em "Gerar PDF" novamente.');
         return;
       }
       const data = JSON.parse(raw) as Payload;
       setPayload(data);
+      // Não apago o storage aqui — assim o usuário pode dar F5 ou reimprimir
+      // sem precisar gerar de novo. Ele é sobrescrito na próxima geração.
     } catch (e: any) {
       setError(`Erro lendo plano: ${e?.message || e}`);
     }

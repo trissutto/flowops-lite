@@ -247,10 +247,12 @@ export default function RealinhamentoPage() {
       lines: editedPlan.filter((l) => l.qty > 0),
     };
     try {
-      sessionStorage.setItem('realinhamento_print_payload', JSON.stringify(payload));
+      // localStorage é compartilhado entre abas — sessionStorage NÃO herda via window.open
+      localStorage.setItem('realinhamento_print_payload', JSON.stringify(payload));
     } catch {}
     // Abre nova aba com print page (auto-aciona window.print)
-    window.open('/retaguarda/realinhamento/imprimir', '_blank', 'noopener');
+    // Sem noopener pra garantir que a nova aba tenha acesso ao storage
+    window.open('/retaguarda/realinhamento/imprimir', '_blank');
   }
 
   const editedTotals = useMemo(() => {
