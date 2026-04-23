@@ -4,20 +4,17 @@
  * /retaguarda/realinhamento — Rebalanceia estoque entre lojas.
  *
  * Fluxo (3 etapas):
- *   1) CONFIG: usuário cola SKUs (1 por linha), marca lojas origem, lojas destino,
- *      define "alvo mínimo por destino" e "manter mínimo na origem".
+ *   1) CONFIG: usuário cola REFERÊNCIAS (1 por linha, ex: VMS-223), marca lojas origem,
+ *      lojas destino, define "alvo mínimo por destino" e "manter mínimo na origem".
+ *      Backend consulta Giga e expande cada REF em todas as suas variações (cor × tamanho),
+ *      então o algoritmo trabalha por SKU granular internamente (cada variação tem
+ *      seu próprio déficit/excedente).
  *   2) PREVIEW: chama POST /realignment/preview → mostra plano completo em tabela
- *      com antes/depois por loja, total de movimentações, SKUs sem cobertura total.
- *      Usuário pode editar quantidades linha a linha (ex: reduzir qty=5 pra 3).
+ *      com REF · COR · TAMANHO · antes/depois por loja. Usuário pode editar qtd ou
+ *      remover linhas.
  *   3) CONFIRM: chama POST /realignment/confirm → cria TransferOrder tipo=REALINHAMENTO
- *      e opcionalmente dispara WhatsApp consolidado por loja origem.
- *
- * Racional de UX:
- *   - "Alvo mínimo" é o conceito chave (cada destino precisa ter X peças de cada SKU).
- *   - "Manter mínimo na origem" evita desabastecer quem manda (default = alvo mínimo).
- *   - Checkbox "Toggle All" em origem e destino pra casos "todas pra todas".
- *   - Preview mostra linha vermelha se ficar parcial (não cobriu o mínimo por falta
- *     de excedente total).
+ *      (refCode=REF, cor/tamanho preenchidos) e opcionalmente dispara WhatsApp
+ *      consolidado por loja origem.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -35,6 +32,10 @@ interface Store {
 
 interface PlanLine {
   sku: string;
+  ref: string | null;
+  cor: string | null;
+  tamanho: string | null;
+  desc: string;
   fromCode: string;
   fromName: string;
   toCode: string;
@@ -53,8 +54,17 @@ interface PerSkuReport {
   note?: string;
 }
 
+interface PerRefReport {
+  ref: string;
+  desc: string;
+  variants: number;
+  totalMoved: number;
+  stillMissing: number;
+}
+
 interface PreviewResponse {
   input: {
+    refs: string[];
     skus: string[];
     origins: string[];
     dests: string[];
@@ -64,18 +74,22 @@ interface PreviewResponse {
   stores: Array<{ code: string; name: string; active: boolean; city?: string | null; state?: string | null }>;
   plan: PlanLine[];
   perSku: PerSkuReport[];
+  perRef: PerRefReport[];
+  notFoundRefs: string[];
   totals: {
     totalMoves: number;
     totalUnits: number;
     skusWithFullCoverage: number;
     skusPartial: number;
     skusUnchanged: number;
+    refsScanned: number;
+    skusScanned: number;
   };
 }
 
 export default function RealinhamentoPage() {
   const [stores, setStores] = useState<Store[]>([]);
-  const [skusText, setSkusText] = useState('');
+  const [refsText, setRefsText] = useState('');
   const [originCodes, setOriginCodes] = useState<Set<string>>(new Set());
   const [destCodes, setDestCodes] = useState<Set<string>>(new Set());
   const [minPerDest, setMinPerDest] = useState(2);
@@ -99,7 +113,6 @@ export default function RealinhamentoPage() {
       .catch((e) => setError(`Erro carregando lojas: ${e?.message || e}`));
   }, []);
 
-  // Sync keepMinOrigin com minPerDest quando usuário só mexe no alvo
   useEffect(() => {
     setKeepMinOrigin(minPerDest);
   }, [minPerDest]);
@@ -129,13 +142,13 @@ export default function RealinhamentoPage() {
     setPreview(null);
     setConfirmResult(null);
 
-    const skus = skusText
+    const refs = refsText
       .split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (skus.length === 0) {
-      setError('Cole ao menos um SKU (1 por linha).');
+    if (refs.length === 0) {
+      setError('Cole ao menos uma REFERÊNCIA (1 por linha).');
       return;
     }
     if (originCodes.size === 0) {
@@ -152,7 +165,7 @@ export default function RealinhamentoPage() {
       const data = await api<PreviewResponse>('/realignment/preview', {
         method: 'POST',
         body: JSON.stringify({
-          skus,
+          refs,
           originStoreCodes: Array.from(originCodes),
           destStoreCodes: Array.from(destCodes),
           minPerDest,
@@ -203,6 +216,10 @@ export default function RealinhamentoPage() {
           body: JSON.stringify({
             plan: editedPlan.filter((l) => l.qty > 0).map((l) => ({
               sku: l.sku,
+              ref: l.ref,
+              cor: l.cor,
+              tamanho: l.tamanho,
+              desc: l.desc,
               fromCode: l.fromCode,
               toCode: l.toCode,
               qty: l.qty,
@@ -214,7 +231,6 @@ export default function RealinhamentoPage() {
         },
       );
       setConfirmResult(res);
-      // Limpa pra próximo uso
       setPreview(null);
       setEditedPlan([]);
     } catch (e: any) {
@@ -230,6 +246,17 @@ export default function RealinhamentoPage() {
     return { totalUnits, totalMoves };
   }, [editedPlan]);
 
+  // Agrupa plano por REF pra exibir visualmente em blocos
+  const planByRef = useMemo(() => {
+    const map = new Map<string, PlanLine[]>();
+    for (const line of editedPlan) {
+      const key = line.ref || line.sku;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(line);
+    }
+    return Array.from(map.entries());
+  }, [editedPlan]);
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       {/* Header */}
@@ -240,7 +267,7 @@ export default function RealinhamentoPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Realinhamento de Estoque</h1>
           <p className="text-sm text-slate-500">
-            Gera ordens de transferência entre lojas pra rebalancear estoque. Consulta ao vivo o Gigasistemas.
+            Informe as referências, o sistema busca todas as variações no Gigasistemas e gera as ordens de transferência.
           </p>
         </div>
       </div>
@@ -286,25 +313,24 @@ export default function RealinhamentoPage() {
           </div>
         </div>
 
-        {/* SKUs */}
+        {/* Refs */}
         <div>
           <label className="block text-sm font-semibold text-slate-700 mb-1">
-            SKUs do Gigasistemas (1 por linha)
+            Referências do Gigasistemas (1 por linha)
           </label>
           <textarea
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-400 min-h-[140px]"
-            placeholder={`Ex:\nVMS-223-PRETO-M\nVMS-223-PRETO-G\nVMS-224-AZUL-UN`}
-            value={skusText}
-            onChange={(e) => setSkusText(e.target.value)}
+            placeholder={`Ex:\nVMS-223\nVMS-224\nBL-5512`}
+            value={refsText}
+            onChange={(e) => setRefsText(e.target.value)}
           />
           <div className="text-xs text-slate-500 mt-1">
-            {skusText.split('\n').filter((s) => s.trim()).length} SKU(s) na lista.
+            {refsText.split('\n').filter((s) => s.trim()).length} referência(s). O sistema expande automaticamente em todas as cores e tamanhos.
           </div>
         </div>
 
         {/* Lojas */}
         <div className="grid md:grid-cols-2 gap-5">
-          {/* Origem */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-semibold text-slate-700">
@@ -343,7 +369,6 @@ export default function RealinhamentoPage() {
             </div>
           </div>
 
-          {/* Destino */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-semibold text-slate-700">
@@ -383,7 +408,6 @@ export default function RealinhamentoPage() {
           </div>
         </div>
 
-        {/* Parâmetros numéricos */}
         <div className="grid md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">
@@ -396,7 +420,7 @@ export default function RealinhamentoPage() {
               onChange={(e) => setMinPerDest(Math.max(0, Number(e.target.value) || 0))}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
             />
-            <div className="text-xs text-slate-500 mt-1">Cada destino precisa ter ≥ este valor por SKU.</div>
+            <div className="text-xs text-slate-500 mt-1">Cada destino precisa ter ≥ este valor por variação.</div>
           </div>
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">
@@ -436,120 +460,139 @@ export default function RealinhamentoPage() {
               <span className="bg-indigo-50 text-indigo-800 px-2.5 py-1 rounded-full font-semibold">
                 {editedTotals.totalUnits} unidades
               </span>
-              <span className="bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-full">
-                {preview.totals.skusWithFullCoverage} SKU(s) totalmente cobertos
+              <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">
+                {preview.totals.refsScanned} REF(s) · {preview.totals.skusScanned} variações
               </span>
-              {preview.totals.skusPartial > 0 && (
+              {preview.notFoundRefs.length > 0 && (
                 <span className="bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full">
-                  {preview.totals.skusPartial} SKU(s) parciais
-                </span>
-              )}
-              {preview.totals.skusUnchanged > 0 && (
-                <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">
-                  {preview.totals.skusUnchanged} SKU(s) sem movimentação
+                  {preview.notFoundRefs.length} REF(s) não encontrada(s)
                 </span>
               )}
             </div>
           </div>
 
-          {/* Tabela de movimentações */}
-          {editedPlan.length === 0 ? (
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 text-center text-sm text-slate-600">
-              Nenhuma movimentação necessária para os SKUs/lojas selecionados.
-            </div>
-          ) : (
-            <div className="overflow-x-auto -mx-5 px-5">
-              <table className="w-full text-sm border-separate border-spacing-y-1">
-                <thead>
-                  <tr className="text-left text-xs text-slate-500 uppercase tracking-wide">
-                    <th className="px-2 py-1.5">SKU</th>
-                    <th className="px-2 py-1.5">Origem</th>
-                    <th className="px-2 py-1.5 text-center">Estoque</th>
-                    <th className="px-2 py-1.5 text-center">Qty</th>
-                    <th className="px-2 py-1.5 text-center">Destino</th>
-                    <th className="px-2 py-1.5 text-center">Estoque dest</th>
-                    <th className="px-2 py-1.5"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {editedPlan.map((line, idx) => (
-                    <tr key={idx} className="bg-slate-50 hover:bg-slate-100 transition">
-                      <td className="px-2 py-2 font-mono text-xs font-semibold rounded-l-lg">
-                        {line.sku}
-                      </td>
-                      <td className="px-2 py-2">
-                        <div className="flex flex-col">
-                          <span className="font-semibold">{line.fromCode}</span>
-                          <span className="text-xs text-slate-500">{line.fromName}</span>
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 text-center tabular-nums">
-                        <span className="text-slate-500">{line.stockFromBefore}</span>
-                        <ArrowRight className="inline w-3 h-3 mx-1 text-slate-400" />
-                        <span className={`font-semibold ${line.stockFromAfter < (preview.input.keepMinOrigin || 0) ? 'text-red-600' : 'text-slate-800'}`}>
-                          {line.stockFromAfter}
-                        </span>
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <input
-                          type="number"
-                          min={0}
-                          max={line.stockFromBefore - (preview.input.keepMinOrigin || 0)}
-                          value={line.qty}
-                          onChange={(e) => updateLineQty(idx, Number(e.target.value) || 0)}
-                          className="w-16 border border-slate-300 rounded px-2 py-1 text-center font-bold text-indigo-700"
-                        />
-                      </td>
-                      <td className="px-2 py-2 text-center">
-                        <div className="flex flex-col items-center">
-                          <span className="font-semibold">{line.toCode}</span>
-                          <span className="text-xs text-slate-500">{line.toName}</span>
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 text-center tabular-nums">
-                        <span className="text-slate-500">{line.stockToBefore}</span>
-                        <ArrowRight className="inline w-3 h-3 mx-1 text-slate-400" />
-                        <span className="font-semibold text-emerald-700">{line.stockToAfter}</span>
-                      </td>
-                      <td className="px-2 py-2 text-right rounded-r-lg">
-                        <button
-                          onClick={() => removeLine(idx)}
-                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
-                          title="Remover linha"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {preview.notFoundRefs.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-xs">
+              <b>Não encontradas no Giga:</b> {preview.notFoundRefs.join(', ')}
             </div>
           )}
 
-          {/* Relatório por SKU */}
-          {preview.perSku.some((p) => p.stillMissing > 0 || p.note) && (
-            <details className="border border-slate-200 rounded-lg">
-              <summary className="px-3 py-2 text-sm font-semibold text-slate-700 cursor-pointer hover:bg-slate-50">
-                Detalhamento por SKU ({preview.perSku.length})
-              </summary>
-              <div className="border-t border-slate-200 divide-y divide-slate-100">
-                {preview.perSku.map((p, i) => (
-                  <div key={i} className="px-3 py-2 text-sm flex items-center justify-between gap-2">
-                    <span className="font-mono font-semibold">{p.sku}</span>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-slate-600">movidas: {p.totalMoved}</span>
-                      {p.stillMissing > 0 && (
-                        <span className="text-amber-700 font-semibold">
-                          faltaram: {p.stillMissing}
-                        </span>
-                      )}
-                      {p.note && <span className="text-slate-500 italic">· {p.note}</span>}
+          {/* Resumo por REF */}
+          {preview.perRef.length > 0 && (
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {preview.perRef.map((r, i) => {
+                const statusColor =
+                  r.totalMoved === 0
+                    ? 'bg-slate-100 text-slate-600 border-slate-200'
+                    : r.stillMissing > 0
+                    ? 'bg-amber-50 text-amber-900 border-amber-200'
+                    : 'bg-emerald-50 text-emerald-900 border-emerald-200';
+                return (
+                  <div key={i} className={`border rounded-lg px-3 py-2 text-xs ${statusColor}`}>
+                    <div className="font-mono font-bold text-sm">{r.ref}</div>
+                    {r.desc && <div className="truncate">{r.desc}</div>}
+                    <div className="mt-1 flex gap-2 tabular-nums">
+                      <span>{r.variants} variação(ões)</span>
+                      <span>·</span>
+                      <span>movidas: {r.totalMoved}</span>
+                      {r.stillMissing > 0 && <span>· faltam: {r.stillMissing}</span>}
                     </div>
                   </div>
-                ))}
-              </div>
-            </details>
+                );
+              })}
+            </div>
+          )}
+
+          {editedPlan.length === 0 ? (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 text-center text-sm text-slate-600">
+              Nenhuma movimentação necessária para as REFs/lojas selecionadas.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {planByRef.map(([refKey, lines]) => {
+                const desc = lines[0]?.desc || '';
+                const totalQty = lines.reduce((a, l) => a + l.qty, 0);
+                return (
+                  <div key={refKey} className="border border-slate-200 rounded-lg overflow-hidden">
+                    <div className="bg-slate-50 px-3 py-2 flex items-center justify-between">
+                      <div>
+                        <span className="font-mono font-bold text-sm text-slate-800">{refKey}</span>
+                        {desc && <span className="ml-2 text-xs text-slate-500">{desc}</span>}
+                      </div>
+                      <span className="text-xs bg-white border border-slate-200 rounded-full px-2 py-0.5 font-semibold text-slate-700">
+                        {lines.length} linha(s) · {totalQty}un
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-slate-500 bg-white border-b border-slate-100">
+                            <th className="px-2 py-1.5">Cor</th>
+                            <th className="px-2 py-1.5">Tam</th>
+                            <th className="px-2 py-1.5">Origem</th>
+                            <th className="px-2 py-1.5 text-center">Estoque</th>
+                            <th className="px-2 py-1.5 text-center">Qty</th>
+                            <th className="px-2 py-1.5">Destino</th>
+                            <th className="px-2 py-1.5 text-center">Estoque dest</th>
+                            <th className="px-2 py-1.5"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {lines.map((line) => {
+                            const idx = editedPlan.indexOf(line);
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50 transition">
+                                <td className="px-2 py-1.5 text-xs font-semibold text-slate-700">{line.cor || '—'}</td>
+                                <td className="px-2 py-1.5 text-xs font-semibold text-slate-700">{line.tamanho || '—'}</td>
+                                <td className="px-2 py-1.5">
+                                  <span className="font-semibold">{line.fromCode}</span>
+                                  <span className="text-xs text-slate-500 ml-1 hidden sm:inline">{line.fromName}</span>
+                                </td>
+                                <td className="px-2 py-1.5 text-center tabular-nums">
+                                  <span className="text-slate-500">{line.stockFromBefore}</span>
+                                  <ArrowRight className="inline w-3 h-3 mx-1 text-slate-400" />
+                                  <span className={`font-semibold ${line.stockFromAfter < (preview.input.keepMinOrigin || 0) ? 'text-red-600' : 'text-slate-800'}`}>
+                                    {line.stockFromAfter}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={line.stockFromBefore - (preview.input.keepMinOrigin || 0)}
+                                    value={line.qty}
+                                    onChange={(e) => updateLineQty(idx, Number(e.target.value) || 0)}
+                                    className="w-14 border border-slate-300 rounded px-2 py-0.5 text-center font-bold text-indigo-700"
+                                  />
+                                </td>
+                                <td className="px-2 py-1.5">
+                                  <span className="font-semibold">{line.toCode}</span>
+                                  <span className="text-xs text-slate-500 ml-1 hidden sm:inline">{line.toName}</span>
+                                </td>
+                                <td className="px-2 py-1.5 text-center tabular-nums">
+                                  <span className="text-slate-500">{line.stockToBefore}</span>
+                                  <ArrowRight className="inline w-3 h-3 mx-1 text-slate-400" />
+                                  <span className="font-semibold text-emerald-700">{line.stockToAfter}</span>
+                                </td>
+                                <td className="px-2 py-1.5 text-right">
+                                  <button
+                                    onClick={() => removeLine(idx)}
+                                    className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
+                                    title="Remover"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </section>
       )}

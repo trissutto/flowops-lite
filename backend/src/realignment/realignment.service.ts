@@ -45,21 +45,53 @@ export class RealignmentService {
    * @param keepMinOrigin Mínimo que origem mantém (default = minPerDest).
    */
   async preview(input: {
-    skus: string[];
+    refs?: string[];         // referências (ex: VMS-223) — sistema expande nas variações
+    skus?: string[];         // legado/power user: SKUs granulares direto (ex: VMS-223-PRETO-M)
     originStoreCodes: string[];
     destStoreCodes: string[];
     minPerDest: number;
     keepMinOrigin?: number;
   }) {
-    const skus = Array.from(
+    // 1) Expande REFs → SKUs via Giga (searchByRef retorna todas as variações de cor/tamanho)
+    const refsIn = Array.from(
+      new Set((input.refs || []).map((s) => s.trim()).filter(Boolean)),
+    );
+    const skusDirect = Array.from(
       new Set((input.skus || []).map((s) => s.trim()).filter(Boolean)),
     );
+
+    // Mapa REF → lista de SKUs (CODIGO) + metadados pra exibição
+    // Ex: { 'VMS-223': [{sku:'VMS-223-PRETO-M', cor:'PRETO', tamanho:'M', desc:'...'}, ...] }
+    const refMap: Record<string, Array<{ sku: string; cor: string | null; tamanho: string | null; desc: string }>> = {};
+    const notFoundRefs: string[] = [];
+
+    for (const ref of refsIn) {
+      const rows = await this.erp.searchByRef(ref);
+      if (!rows || rows.length === 0) {
+        notFoundRefs.push(ref);
+        continue;
+      }
+      refMap[ref] = rows.map((r: any) => ({
+        sku: String(r.CODIGO || '').trim(),
+        cor: r.COR ? String(r.COR).trim() : null,
+        tamanho: r.TAMANHO ? String(r.TAMANHO).trim() : null,
+        desc: r.DESCRICAOCOMPLETA ? String(r.DESCRICAOCOMPLETA).trim() : '',
+      })).filter((x) => x.sku);
+    }
+
+    const expandedSkus = Object.values(refMap).flat().map((x) => x.sku);
+    const skus = Array.from(new Set([...expandedSkus, ...skusDirect]));
+
     const origins = Array.from(new Set(input.originStoreCodes || []));
     const dests = Array.from(new Set(input.destStoreCodes || []));
     const minPerDest = Math.max(0, Number(input.minPerDest) || 0);
     const keepMinOrigin = Math.max(0, Number(input.keepMinOrigin ?? minPerDest));
 
-    if (skus.length === 0) throw new BadRequestException('Nenhum SKU informado.');
+    if (skus.length === 0) throw new BadRequestException(
+      notFoundRefs.length > 0
+        ? `Nenhuma variação encontrada para: ${notFoundRefs.join(', ')}`
+        : 'Nenhuma referência ou SKU informado.',
+    );
     if (origins.length === 0)
       throw new BadRequestException('Selecione pelo menos uma loja de origem.');
     if (dests.length === 0)
@@ -88,8 +120,20 @@ export class RealignmentService {
     // Carrega estoque detalhado do Giga pra todos os SKUs de uma vez
     const stockMap = await this.erp.getStockBySkusDetailed(skus);
 
+    // Índice reverso: SKU → metadados (ref/cor/tamanho/desc) pra enriquecer o plano
+    const skuMeta: Record<string, { ref: string; cor: string | null; tamanho: string | null; desc: string }> = {};
+    for (const [ref, variants] of Object.entries(refMap)) {
+      for (const v of variants) {
+        skuMeta[v.sku] = { ref, cor: v.cor, tamanho: v.tamanho, desc: v.desc };
+      }
+    }
+
     type PlanLine = {
       sku: string;
+      ref: string | null;     // enriquecido via Giga
+      cor: string | null;
+      tamanho: string | null;
+      desc: string;
       fromCode: string;
       fromName: string;
       toCode: string;
@@ -181,8 +225,13 @@ export class RealignmentService {
           currentAfter.set(orig.code, stockFromBefore - qty);
           currentAfter.set(dest.code, stockToBefore + qty);
 
+          const meta = skuMeta[sku];
           plan.push({
             sku,
+            ref: meta?.ref ?? null,
+            cor: meta?.cor ?? null,
+            tamanho: meta?.tamanho ?? null,
+            desc: meta?.desc ?? '',
             fromCode: orig.code,
             fromName: storeByCode.get(orig.code)!.name,
             toCode: dest.code,
@@ -213,8 +262,22 @@ export class RealignmentService {
     const skusWithFullCoverage = perSku.filter((p) => p.stillMissing === 0 && p.totalMoved > 0).length;
     const skusUnchanged = perSku.filter((p) => p.totalMoved === 0).length;
 
+    // Resumo por REF (agrupa todas as variações movimentadas de cada referência)
+    const perRef: Array<{ ref: string; desc: string; variants: number; totalMoved: number; stillMissing: number }> = [];
+    for (const [ref, variants] of Object.entries(refMap)) {
+      const skusOfRef = new Set(variants.map((v) => v.sku));
+      const related = perSku.filter((p) => skusOfRef.has(p.sku));
+      perRef.push({
+        ref,
+        desc: variants[0]?.desc || '',
+        variants: variants.length,
+        totalMoved: related.reduce((a, r) => a + r.totalMoved, 0),
+        stillMissing: related.reduce((a, r) => a + r.stillMissing, 0),
+      });
+    }
+
     return {
-      input: { skus, origins, dests, minPerDest, keepMinOrigin },
+      input: { refs: refsIn, skus, origins, dests, minPerDest, keepMinOrigin },
       stores: stores.map((s) => ({
         code: s.code,
         name: s.name,
@@ -224,12 +287,16 @@ export class RealignmentService {
       })),
       plan,
       perSku,
+      perRef,
+      notFoundRefs,
       totals: {
         totalMoves,
         totalUnits,
         skusWithFullCoverage,
         skusPartial: perSku.filter((p) => p.totalMoved > 0 && p.stillMissing > 0).length,
         skusUnchanged,
+        refsScanned: refsIn.length,
+        skusScanned: skus.length,
       },
     };
   }
@@ -245,6 +312,10 @@ export class RealignmentService {
   async confirm(input: {
     plan: Array<{
       sku: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      desc?: string;
       fromCode: string;
       toCode: string;
       qty: number;
@@ -268,13 +339,22 @@ export class RealignmentService {
     });
     const storeByCode = new Map(stores.map((s) => [s.code, s]));
 
+    // Label humanizado da peça pra WhatsApp e mensagem:
+    // Ex: "VMS-223 · PRETO · M (vestido midi plissado)"  — fallback pro SKU cru se faltar metadata
+    const labelOf = (p: { sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null }) => {
+      const parts = [p.ref || p.sku];
+      if (p.cor) parts.push(p.cor);
+      if (p.tamanho) parts.push(p.tamanho);
+      return parts.join(' · ');
+    };
+
     // Mensagem base por origem (consolidada)
-    // Ex: "🔁 REALINHAMENTO\nSeparar e enviar:\n• LJ05 (Centro): VMS-223-P (2un)\n• LJ02 (Shopping): VMS-223-M (1un)"
-    type Line = { sku: string; toCode: string; toName: string; qty: number };
+    type Line = { label: string; sku: string; toCode: string; toName: string; qty: number };
     const byOrigin = new Map<string, Line[]>();
     for (const p of lines) {
       if (!byOrigin.has(p.fromCode)) byOrigin.set(p.fromCode, []);
       byOrigin.get(p.fromCode)!.push({
+        label: labelOf(p),
         sku: p.sku,
         toCode: p.toCode,
         toName: storeByCode.get(p.toCode)?.name || p.toCode,
@@ -287,17 +367,18 @@ export class RealignmentService {
     const whatsappResults: Array<{ storeCode: string; ok: boolean; error?: string }> = [];
 
     // Cria TransferOrder linha-a-linha (1 por movimentação)
-    // Usa o refCode como o próprio SKU (já é granular: inclui cor/tamanho)
+    // refCode = REF (ex: VMS-223), cor/tamanho preenchidos separados — bate com padrão de REPOSICAO/VENDA_CERTA.
     for (const p of lines) {
+      const label = labelOf(p);
       const msgLine =
-        `🔁 REALINHAMENTO — enviar pra ${storeByCode.get(p.toCode)?.name || p.toCode}: ${p.sku} (${p.qty}un)` +
+        `🔁 REALINHAMENTO — enviar pra ${storeByCode.get(p.toCode)?.name || p.toCode}: ${label} (${p.qty}un)` +
         (input.note ? ` · ${input.note}` : '');
       const t = await this.prisma.transferOrder.create({
         data: {
           tipo: 'REALINHAMENTO',
-          refCode: p.sku,
-          cor: null,
-          tamanho: null,
+          refCode: p.ref || p.sku,  // prioriza REF quando vier do fluxo Giga
+          cor: p.cor ?? null,
+          tamanho: p.tamanho ?? null,
           qtyOrigem: p.stockFromBefore ?? 0,
           lojaOrigemCode: p.fromCode,
           lojaOrigemName: storeByCode.get(p.fromCode)?.name || p.fromCode,
@@ -328,7 +409,7 @@ export class RealignmentService {
           `🔁 *REALINHAMENTO DE ESTOQUE*\n\n` +
           `Por favor separar e enviar as peças abaixo pras lojas indicadas:\n`;
         const body = items
-          .map((it) => `• *${it.sku}* → ${it.toCode} ${it.toName} · *${it.qty}un*`)
+          .map((it) => `• *${it.label}* → ${it.toCode} ${it.toName} · *${it.qty}un*`)
           .join('\n');
         const footer =
           (input.note ? `\n\nObs: ${input.note}` : '') +

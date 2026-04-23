@@ -35,7 +35,8 @@ export class RealignmentController {
   preview(
     @Body()
     body: {
-      skus: string[];
+      refs?: string[];
+      skus?: string[];
       originStoreCodes: string[];
       destStoreCodes: string[];
       minPerDest: number;
@@ -51,6 +52,10 @@ export class RealignmentController {
     body: {
       plan: Array<{
         sku: string;
+        ref?: string | null;
+        cor?: string | null;
+        tamanho?: string | null;
+        desc?: string;
         fromCode: string;
         toCode: string;
         qty: number;
