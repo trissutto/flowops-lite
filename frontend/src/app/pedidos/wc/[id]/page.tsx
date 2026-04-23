@@ -659,6 +659,35 @@ export default function PedidoDetailPage() {
       )}
       {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4 text-sm whitespace-pre-line">{error}</div>}
 
+      {/* BANNER DE FORMA DE ENVIO — grande, cor sólida, sempre no topo.
+           A retaguarda precisa bater o olho e já saber SEDEX/PAC/RETIRADA
+           antes de decidir como separar. Fallback: se for pickup, o banner
+           azul/âmbar específico abaixo já cobre o caso (mais informativo),
+           então aqui renderiza só pra não-pickup. */}
+      {(() => {
+        const raw =
+          order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
+        if (!raw) return null;
+        const m = classifyShipping(raw);
+        if (m.kind === 'pickup') return null; // já tem banner próprio abaixo
+        const icon =
+          m.kind === 'sedex' ? '⚡' :
+          m.kind === 'pac' ? '📦' :
+          m.kind === 'transportadora' ? '🚚' : '📨';
+        return (
+          <div className={`mb-4 rounded-lg p-4 shadow-sm ${m.colorBold} flex items-center gap-3`}>
+            <div className="text-3xl">{icon}</div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs uppercase tracking-widest opacity-80">Forma de envio</div>
+              <div className="text-2xl font-black leading-tight">{m.label}</div>
+              {m.raw && m.raw.toUpperCase() !== m.label && (
+                <div className="text-xs opacity-90 mt-0.5 truncate">{m.raw}</div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Banner de RETIRADA EM LOJA — aparece só quando o método de envio é pickup */}
       {order.pickup?.isPickup && (
         <div
@@ -958,17 +987,31 @@ export default function PedidoDetailPage() {
                         {st === 'error' && '⚠ Reimprimir'}
                         {st === 'idle' && '🖨️ Imprimir'}
                       </button>
-                      {['new', 'separating'].includes(r.status) && r.storeCode && (
-                        <button
-                          type="button"
-                          onClick={() => swapStore(r.storeCode!, r.storeName)}
-                          disabled={sepLoading}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60"
-                          title={`Escolher outra loja no lugar de ${r.storeCode}. Só funciona se a loja ainda não bipou.`}
-                        >
-                          ↔ Trocar loja
-                        </button>
-                      )}
+                      {/* Trocar loja — SEMPRE visível pra retaguarda ter essa opção
+                          na cara, mas desabilita (com tooltip) se já avançou de
+                          "separating" pra "ready/shipped". Nesses estágios trocar
+                          desperdiça trabalho da loja. */}
+                      {r.storeCode && (() => {
+                        const canSwap = ['new', 'separating'].includes(r.status);
+                        const tooltip = canSwap
+                          ? `Escolher outra loja no lugar de ${r.storeCode}. Só funciona se a loja ainda não bipou.`
+                          : `Já passou de "separando" (status: ${r.status}). Não dá pra trocar sem perder trabalho da loja.`;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => swapStore(r.storeCode!, r.storeName)}
+                            disabled={sepLoading || !canSwap}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border transition ${
+                              canSwap
+                                ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100 disabled:opacity-60'
+                                : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                            }`}
+                            title={tooltip}
+                          >
+                            ↔ Trocar loja
+                          </button>
+                        );
+                      })()}
                     </div>
                     {r.status === 'shipped' && r.trackingCode && (
                       <div className="mt-1 pl-6 text-xs text-slate-700">
