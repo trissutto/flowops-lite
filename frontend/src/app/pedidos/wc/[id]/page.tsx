@@ -133,6 +133,38 @@ export default function PedidoDetailPage() {
   const [printState, setPrintState] = useState<Record<string, 'idle' | 'sending' | 'sent' | 'error'>>({});
   const [printError, setPrintError] = useState<Record<string, string>>({});
 
+  // Gate de quebra — pedido dividido em N lojas exige o operador marcar
+  // "ciente da divisão" antes do botão Confirmar habilitar. Zera sempre que
+  // gera/recalcula preview pra forçar nova revisão.
+  const [splitApproved, setSplitApproved] = useState(false);
+
+  // Modal de "Escolher loja manualmente" — retaguarda escolhe especificamente pra
+  // qual loja o pedido vai (bypassa a decisão automática do routing). Usado
+  // principalmente quando uma loja reportou problema e retaguarda quer forçar
+  // uma outra loja específica em vez de deixar o engine decidir.
+  const [pickStoreOpen, setPickStoreOpen] = useState(false);
+  const [pickStoreLoading, setPickStoreLoading] = useState(false);
+  const [pickStoreError, setPickStoreError] = useState<string | null>(null);
+  const [pickStoreApplying, setPickStoreApplying] = useState<string | null>(null);
+  const [pickStoreCandidates, setPickStoreCandidates] = useState<Array<{
+    id: string;
+    code: string;
+    name: string;
+    city: string | null;
+    state: string | null;
+    /** Cobertura: quantos SKUs a loja consegue cobrir entre os do pedido. */
+    skusCovered: number;
+    skusTotal: number;
+    /** Quantidade total que a loja tem somando todos os SKUs. */
+    totalQty: number;
+    /** Lista dos SKUs que faltam nessa loja. */
+    missingSkus: string[];
+    /** Já reportou problema nesse pedido? */
+    hasReportedIssue: boolean;
+    active: boolean;
+  }>>([]);
+  const [allStoreCodes, setAllStoreCodes] = useState<string[]>([]);
+
   // ── Status ao vivo dos pick-orders (matriz vê o que a filial está fazendo) ──
   // Carregado de /pick-orders/by-wc/:wcId + atualizado em tempo real pelo
   // evento socket 'pick-order:status' (emitido pela sala 'admin' quando
@@ -368,6 +400,7 @@ export default function PedidoDetailPage() {
       const res = await api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`);
       setSeparation(res);
       setOverrides({});
+      setSplitApproved(false); // reset gate a cada novo preview
     } catch (e: any) {
       setSepError(e.message);
     } finally {
@@ -438,6 +471,179 @@ export default function PedidoDetailPage() {
       setSepError(e.message);
     } finally {
       setSepLoading(false);
+    }
+  }
+
+  /**
+   * Abre o modal "Escolher loja manualmente" — retaguarda decide especificamente
+   * pra qual loja mandar o pedido (bypassa a ordenação automática do routing).
+   *
+   * Fluxo:
+   *  1. Puxa /stores pra ter a lista completa de lojas ativas
+   *  2. Puxa /orders/wc/:id/prepare-separation pra ter alternativesBySku
+   *     (qualquer estado do pedido — se tem issue, o recalculate com exclude
+   *      já é outro caminho; esse modal é pra forçar uma loja específica mesmo
+   *      com tudo rodando normal).
+   *  3. Constrói tabela de cobertura por loja e ordena por skusCovered DESC
+   *  4. Exibe lojas que reportaram problema com marcador vermelho (pra evitar
+   *     escolher de volta a mesma que falhou)
+   */
+  async function openPickStoreModal() {
+    setPickStoreOpen(true);
+    setPickStoreLoading(true);
+    setPickStoreError(null);
+    setPickStoreCandidates([]);
+    try {
+      const [stores, preview] = await Promise.all([
+        api<Array<{ id: string; code: string; name: string; city: string | null; state: string | null; active: boolean }>>('/stores'),
+        api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`),
+      ]);
+
+      const activeStores = stores.filter((s) => s.active);
+      setAllStoreCodes(activeStores.map((s) => s.code));
+
+      // Lojas que reportaram problema nesse pedido (pra marcar no modal)
+      const issueCodes = new Set(
+        liveStatus.filter((p) => p.issueReason && p.storeCode).map((p) => p.storeCode as string),
+      );
+
+      // Set de SKUs do pedido (inferido do groups + missing + alternativesBySku)
+      const allSkus = new Set<string>();
+      preview.groups.forEach((g) => g.items.forEach((it) => allSkus.add(it.sku)));
+      preview.missing.forEach((m) => allSkus.add(m.sku));
+      Object.keys(preview.alternativesBySku ?? {}).forEach((sku) => allSkus.add(sku));
+
+      // Quantidades pedidas (pra comparar com availableQty)
+      const qtyBySku = new Map<string, number>();
+      preview.groups.forEach((g) => g.items.forEach((it) => {
+        qtyBySku.set(it.sku, (qtyBySku.get(it.sku) ?? 0) + it.quantity);
+      }));
+      preview.missing.forEach((m) => {
+        qtyBySku.set(m.sku, (qtyBySku.get(m.sku) ?? 0) + m.quantity);
+      });
+
+      // Monta mapa storeCode → { skusCovered, totalQty, missingSkus }
+      const byStore = new Map<string, { skusCovered: number; totalQty: number; missing: string[] }>();
+      for (const code of activeStores.map((s) => s.code)) {
+        byStore.set(code, { skusCovered: 0, totalQty: 0, missing: [] });
+      }
+      // Também considera loja que está num group (tem tudo daquele grupo)
+      preview.groups.forEach((g) => {
+        const rec = byStore.get(g.storeCode);
+        if (!rec) return;
+        g.items.forEach((it) => {
+          rec.skusCovered += 1;
+          rec.totalQty += it.quantity;
+        });
+      });
+      // Adiciona o que aparece em alternativesBySku (qty disponível por loja/SKU)
+      Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
+        const need = qtyBySku.get(sku) ?? 1;
+        alts.forEach((alt) => {
+          const rec = byStore.get(alt.storeCode);
+          if (!rec) return;
+          if (alt.availableQty >= need) {
+            // Evita dupla contagem se a loja já está como group assignee
+            const alreadyInGroup = preview.groups.some(
+              (g) => g.storeCode === alt.storeCode && g.items.some((it) => it.sku === sku),
+            );
+            if (!alreadyInGroup) {
+              rec.skusCovered += 1;
+              rec.totalQty += alt.availableQty;
+            }
+          }
+        });
+      });
+
+      // Calcula missingSkus por loja
+      const skusArr = Array.from(allSkus);
+      for (const [code, rec] of byStore.entries()) {
+        const covered = new Set<string>();
+        preview.groups.filter((g) => g.storeCode === code).forEach((g) => g.items.forEach((it) => covered.add(it.sku)));
+        Object.entries(preview.alternativesBySku ?? {}).forEach(([sku, alts]) => {
+          const need = qtyBySku.get(sku) ?? 1;
+          const alt = alts.find((a) => a.storeCode === code);
+          if (alt && alt.availableQty >= need) covered.add(sku);
+        });
+        rec.missing = skusArr.filter((sku) => !covered.has(sku));
+      }
+
+      const candidates = activeStores
+        .map((s) => {
+          const rec = byStore.get(s.code) ?? { skusCovered: 0, totalQty: 0, missing: [] };
+          return {
+            id: s.id,
+            code: s.code,
+            name: s.name,
+            city: s.city,
+            state: s.state,
+            active: s.active,
+            skusCovered: rec.skusCovered,
+            skusTotal: allSkus.size,
+            totalQty: rec.totalQty,
+            missingSkus: rec.missing,
+            hasReportedIssue: issueCodes.has(s.code),
+          };
+        })
+        .sort((a, b) => {
+          if (b.skusCovered !== a.skusCovered) return b.skusCovered - a.skusCovered;
+          return b.totalQty - a.totalQty;
+        });
+
+      setPickStoreCandidates(candidates);
+    } catch (e: any) {
+      setPickStoreError(e?.message || 'Falha ao carregar lojas candidatas.');
+    } finally {
+      setPickStoreLoading(false);
+    }
+  }
+
+  /**
+   * Aplica a escolha manual: recalcula excluindo TODAS as outras lojas ativas
+   * exceto a escolhida. O routing engine é obrigado a rotear pra essa loja
+   * (se ela tiver estoque suficiente). Se não tiver, retorna sem-estoque-
+   * excluindo-loja e matriz decide.
+   */
+  async function applyPickStore(pickedCode: string, pickedName: string) {
+    if (!confirm(
+      `Forçar o pedido pra ${pickedName} (${pickedCode})?\n\n` +
+      `O sistema vai excluir TODAS as outras lojas do roteamento. Se ` +
+      `${pickedCode} não tiver estoque suficiente do que falta, o pedido ` +
+      `fica pending.`,
+    )) return;
+
+    setPickStoreApplying(pickedCode);
+    setPickStoreError(null);
+    try {
+      const excludeCodes = allStoreCodes.filter((c) => c !== pickedCode);
+      const res = await api<{
+        ok: boolean;
+        reason?: string;
+        message?: string;
+        pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
+      }>(`/orders/wc/${wcId}/recalculate-separation`, {
+        method: 'POST',
+        body: JSON.stringify({ excludeStoreCodes: excludeCodes }),
+      });
+
+      if (!res.ok) {
+        setPickStoreError(
+          res.message || `Não deu pra forçar ${pickedCode}. Provavelmente não tem estoque suficiente.`,
+        );
+        return;
+      }
+
+      setPickStoreOpen(false);
+      setFlash(`✓ Pedido reatribuído pra ${pickedName} (${pickedCode}).`);
+      setTimeout(() => setFlash(null), 5000);
+
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setPickStoreError(e?.message || 'Falha na chamada de recalcular.');
+    } finally {
+      setPickStoreApplying(null);
     }
   }
 
@@ -900,9 +1106,23 @@ export default function PedidoDetailPage() {
                       )}
                     </div>
                   ))}
-                <div className="mt-2 text-red-800 text-xs">
-                  Clique em <b>Recalcular separação</b> acima pra reatribuir pra outra loja
-                  (a loja que reportou será <b>excluída automaticamente</b>).
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={loadSeparation}
+                    disabled={sepLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-white border border-red-400 text-red-800 hover:bg-red-50 disabled:opacity-60"
+                    title="Deixa o sistema escolher automaticamente (exclui a loja que reportou)"
+                  >
+                    🔁 Recalcular automático
+                  </button>
+                  <button
+                    onClick={openPickStoreModal}
+                    disabled={sepLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60"
+                    title="Abre lista de lojas candidatas pra você escolher manualmente"
+                  >
+                    🎯 Escolher outra loja manualmente
+                  </button>
                 </div>
               </div>
             </div>
@@ -921,13 +1141,19 @@ export default function PedidoDetailPage() {
             {/* Dica: troca manual de loja (só faz sentido enquanto alguma ainda
                 está em new/separating — depois que bipou não dá mais) */}
             {liveStatus.some((p) => ['new', 'separating'].includes(p.status)) && (
-              <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5">
+              <div className="mb-2 text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded px-2 py-1.5 flex items-start gap-1.5 flex-wrap">
                 <span className="text-amber-700">💡</span>
-                <span>
-                  Quer trocar a loja que vai enviar/transferir? Clica em{' '}
-                  <b>↔ Trocar loja</b> no card da loja e o sistema escolhe outra com
-                  estoque automaticamente.
+                <span className="flex-1 min-w-[180px]">
+                  Quer trocar a loja que vai enviar/transferir? Use <b>↔ Trocar loja</b> no
+                  card (automático) ou <b>escolha manualmente</b> da lista de lojas.
                 </span>
+                <button
+                  onClick={openPickStoreModal}
+                  disabled={sepLoading}
+                  className="text-xs px-2 py-1 bg-white border border-amber-400 text-amber-900 rounded hover:bg-amber-100 font-semibold disabled:opacity-60"
+                >
+                  🎯 Escolher loja manualmente
+                </button>
               </div>
             )}
             <div className="space-y-2">
@@ -1123,29 +1349,79 @@ export default function PedidoDetailPage() {
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
 
-            {/* BOTÃO PRINCIPAL — Confirma e dispara socket pras lojas */}
-            {separation.success && (
-              <div className="bg-gradient-to-r from-brand to-brand-dark rounded-lg p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
-                <div className="text-white">
-                  <div className="font-bold text-base flex items-center gap-2">
-                    <Zap className="w-5 h-5" />
-                    Confirmar separação
-                  </div>
-                  <div className="text-xs opacity-90 mt-0.5">
-                    Cria a ordem no sistema e <b>dispara alerta no PC</b> da{separation.groups.length > 1 ? 's lojas' : ' loja'}{' '}
-                    {separation.groups.map((g) => g.storeName).join(', ')}.
+            {/* GATE DE QUEBRA — avisa retaguarda antes de emitir separação em N lojas.
+                 Multi-store = pedido dividido entre lojas diferentes (quebra). Quem
+                 opera precisa bater o olho nos grupos antes de disparar ordem pra
+                 cada uma porque qualquer ruptura depois vira retrabalho multi-loja. */}
+            {separation.success && separation.strategy === 'multi-store' && !splitApproved && (
+              <div className="bg-orange-50 border-2 border-orange-400 rounded-lg p-4 mb-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-6 h-6 text-orange-600 flex-shrink-0" />
+                  <div className="flex-1 text-sm">
+                    <div className="font-bold text-orange-900 text-base">
+                      ⚠ Atenção: pedido vai ser dividido em {separation.groups.length} lojas
+                    </div>
+                    <div className="text-orange-800 mt-1">
+                      Nenhuma loja sozinha tem todas as peças. O sistema sugere separar em:
+                      <ul className="mt-1 ml-5 list-disc">
+                        {separation.groups.map((g) => (
+                          <li key={g.storeCode}>
+                            <b>{g.storeName}</b> ({g.storeCode}): {g.items.reduce((s, it) => s + it.quantity, 0)} peça(s)
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="text-orange-700 text-xs mt-2">
+                      Antes de confirmar: <b>revise os grupos abaixo</b>, e use <b>↔ Trocar loja</b> ou
+                      <b> Escolher loja manualmente</b> se quiser consolidar numa única loja.
+                    </div>
+                    <label className="mt-3 flex items-center gap-2 cursor-pointer select-none text-sm font-semibold text-orange-900 bg-white border border-orange-300 rounded px-3 py-2 hover:bg-orange-50 transition w-fit">
+                      <input
+                        type="checkbox"
+                        checked={splitApproved}
+                        onChange={(e) => setSplitApproved(e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      Estou ciente da divisão — liberar confirmação
+                    </label>
                   </div>
                 </div>
-                <button
-                  onClick={confirmSeparation}
-                  disabled={confirmLoading || (confirmResult?.ok === true)}
-                  className="px-5 py-3 bg-white text-brand rounded font-semibold hover:bg-slate-100 disabled:opacity-60 flex items-center gap-2 shadow"
-                >
-                  {confirmLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  {confirmResult?.ok ? 'Já confirmado ✓' : confirmLoading ? 'Confirmando...' : 'Confirmar e enviar pras lojas'}
-                </button>
               </div>
             )}
+
+            {/* BOTÃO PRINCIPAL — Confirma e dispara socket pras lojas */}
+            {separation.success && (() => {
+              const isSplit = separation.strategy === 'multi-store';
+              const gatedBySplit = isSplit && !splitApproved;
+              return (
+                <div className="bg-gradient-to-r from-brand to-brand-dark rounded-lg p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
+                  <div className="text-white">
+                    <div className="font-bold text-base flex items-center gap-2">
+                      <Zap className="w-5 h-5" />
+                      Confirmar separação
+                    </div>
+                    <div className="text-xs opacity-90 mt-0.5">
+                      Cria a ordem no sistema e <b>dispara alerta no PC</b> da{separation.groups.length > 1 ? 's lojas' : ' loja'}{' '}
+                      {separation.groups.map((g) => g.storeName).join(', ')}.
+                    </div>
+                    {gatedBySplit && (
+                      <div className="text-xs mt-1 bg-orange-400/30 border border-orange-200 px-2 py-1 rounded inline-block">
+                        ⚠ Marque "ciente da divisão" acima pra liberar
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={confirmSeparation}
+                    disabled={confirmLoading || (confirmResult?.ok === true) || gatedBySplit}
+                    className="px-5 py-3 bg-white text-brand rounded font-semibold hover:bg-slate-100 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 shadow"
+                    title={gatedBySplit ? 'Marque "ciente da divisão" no aviso laranja acima' : undefined}
+                  >
+                    {confirmLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    {confirmResult?.ok ? 'Já confirmado ✓' : confirmLoading ? 'Confirmando...' : 'Confirmar e enviar pras lojas'}
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* Resultado da confirmação */}
             {confirmResult?.ok && confirmResult.pickOrders && (
@@ -1429,6 +1705,164 @@ export default function PedidoDetailPage() {
       <div className="text-xs text-slate-500 text-right">
         {order.attribution.origem} · {order.attribution.source}
       </div>
+
+      {/* MODAL — Escolher loja manualmente */}
+      {pickStoreOpen && (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">Escolher loja manualmente</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Força o pedido pra uma loja específica. Usado quando o routing automático
+                  não atende (ex: loja reportou problema, você quer concentrar numa loja só).
+                </p>
+              </div>
+              <button
+                onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+                className="text-slate-400 hover:text-slate-700 text-2xl leading-none p-1"
+                disabled={!!pickStoreApplying}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1">
+              {pickStoreLoading && (
+                <div className="flex items-center gap-2 text-slate-500 text-sm py-10 justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin" /> Carregando lojas candidatas...
+                </div>
+              )}
+
+              {pickStoreError && !pickStoreLoading && (
+                <div className="bg-red-50 text-red-700 p-3 rounded text-sm mb-3 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div>{pickStoreError}</div>
+                </div>
+              )}
+
+              {!pickStoreLoading && pickStoreCandidates.length === 0 && !pickStoreError && (
+                <div className="text-sm text-slate-500 text-center py-6">
+                  Nenhuma loja ativa encontrada.
+                </div>
+              )}
+
+              {!pickStoreLoading && pickStoreCandidates.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs text-slate-500 mb-2">
+                    Ordenado por <b>maior cobertura</b> (mais SKUs do pedido disponíveis).
+                    A loja <b>✓ verde</b> cobre o pedido todo. <b>⚠ amarelo</b> cobre parcialmente
+                    (vai faltar peça — ia precisar transferir ou quebrar de novo).
+                  </div>
+                  {pickStoreCandidates.map((c) => {
+                    const full = c.skusCovered >= c.skusTotal && c.skusTotal > 0;
+                    const partial = c.skusCovered > 0 && !full;
+                    const none = c.skusCovered === 0;
+                    const isCurrentAssigned = liveStatus.some((p) => p.storeCode === c.code && ['new', 'separating'].includes(p.status));
+                    return (
+                      <div
+                        key={c.code}
+                        className={`border rounded-lg p-3 flex items-center gap-3 ${
+                          c.hasReportedIssue
+                            ? 'bg-red-50 border-red-300'
+                            : full
+                            ? 'bg-emerald-50 border-emerald-300'
+                            : partial
+                            ? 'bg-amber-50 border-amber-300'
+                            : 'bg-slate-50 border-slate-200 opacity-70'
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-slate-800">{c.name}</span>
+                            <span className="text-xs font-mono text-slate-500">({c.code})</span>
+                            {isCurrentAssigned && (
+                              <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-medium">
+                                atual
+                              </span>
+                            )}
+                            {c.hasReportedIssue && (
+                              <span className="text-xs px-2 py-0.5 bg-red-200 text-red-900 rounded font-medium">
+                                ⚠ reportou problema
+                              </span>
+                            )}
+                            {full && !c.hasReportedIssue && (
+                              <span className="text-xs px-2 py-0.5 bg-emerald-600 text-white rounded font-bold">
+                                ✓ cobre tudo
+                              </span>
+                            )}
+                            {partial && (
+                              <span className="text-xs px-2 py-0.5 bg-amber-500 text-white rounded font-bold">
+                                ⚠ cobre {c.skusCovered}/{c.skusTotal}
+                              </span>
+                            )}
+                            {none && (
+                              <span className="text-xs px-2 py-0.5 bg-slate-400 text-white rounded font-medium">
+                                sem estoque
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {[c.city, c.state].filter(Boolean).join(' / ') || '—'}
+                            {c.totalQty > 0 && <> · {c.totalQty} un. disponíveis</>}
+                          </div>
+                          {c.missingSkus.length > 0 && c.missingSkus.length <= 5 && (
+                            <div className="text-xs text-slate-600 mt-1">
+                              <span className="opacity-70">Faltam:</span>{' '}
+                              <span className="font-mono">{c.missingSkus.join(', ')}</span>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => applyPickStore(c.code, c.name)}
+                          disabled={!!pickStoreApplying || none || isCurrentAssigned}
+                          className={`px-3 py-2 rounded text-xs font-semibold flex-shrink-0 flex items-center gap-1 ${
+                            none || isCurrentAssigned
+                              ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              : 'bg-brand text-white hover:bg-brand-dark disabled:opacity-60'
+                          }`}
+                          title={
+                            isCurrentAssigned
+                              ? 'Essa loja já é a responsável atual'
+                              : none
+                              ? 'Essa loja não tem estoque de nenhuma peça'
+                              : `Forçar pedido pra ${c.name}`
+                          }
+                        >
+                          {pickStoreApplying === c.code ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Aplicando...
+                            </>
+                          ) : (
+                            <>Escolher</>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 border-t bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
+              <span>Dica: se nenhuma loja cobre tudo, volte e use <b>Recalcular</b> pra dividir automático.</span>
+              <button
+                onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+                disabled={!!pickStoreApplying}
+                className="px-3 py-1.5 border rounded hover:bg-white text-slate-700 disabled:opacity-60"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -38,7 +38,7 @@ export interface SeparationPreviewLite {
 
 export type AutoSendOutcome =
   | { ok: true; groups: SeparationGroupLite[]; shippingMethod: string }
-  | { ok: false; reason: 'wa-disconnected' | 'no-stock' | 'no-whatsapp' | 'send-failed' | 'patch-failed' | 'prepare-failed' | 'unknown'; message: string; groups?: SeparationGroupLite[] };
+  | { ok: false; reason: 'wa-disconnected' | 'no-stock' | 'no-whatsapp' | 'send-failed' | 'patch-failed' | 'prepare-failed' | 'split-needs-approval' | 'unknown'; message: string; groups?: SeparationGroupLite[] };
 
 export interface AutoSendOptions {
   /** Se true, NÃO checa /whatsapp/status antes. Usado só em contextos onde já checou. */
@@ -91,6 +91,20 @@ export async function autoSendOrderToStore(
       ok: false,
       reason: 'no-stock',
       message: 'Pedido em ruptura — sem estoque em nenhuma loja. Revisão manual necessária.',
+      groups: preview.groups,
+    };
+  }
+
+  // GATE DE QUEBRA — se o routing devolveu multi-store (pedido dividido em N lojas),
+  // não auto-envia. Retaguarda precisa revisar e aprovar explicitamente na tela do
+  // pedido (checkbox "Ciente da divisão"). Piloto Automático ignora esses casos pra
+  // não disparar ordem sem supervisão quando tem risco de conflito de separação
+  // entre lojas (ex: chegar rupture em 1 loja obriga recalcular o outro grupo também).
+  if (preview.strategy === 'multi-store') {
+    return {
+      ok: false,
+      reason: 'split-needs-approval',
+      message: `Pedido foi quebrado em ${preview.groups.length} lojas. Requer aprovação manual — abra o pedido e confirme.`,
       groups: preview.groups,
     };
   }
