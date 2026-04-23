@@ -1069,8 +1069,10 @@ export default function SeparacaoPage() {
                         >
                           <StoreIcon className="w-3 h-3" />
                           {o.pickOrders.length === 1
-                            ? o.pickOrders[0].storeCode || o.pickOrders[0].storeName
-                            : `${o.pickOrders.length} lojas`}
+                            ? o.pickOrders[0].storeName || o.pickOrders[0].storeCode || '?'
+                            : o.pickOrders
+                                .map((p) => p.storeName || p.storeCode || '?')
+                                .join(' + ')}
                         </span>
                       )}
 
