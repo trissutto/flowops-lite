@@ -79,6 +79,8 @@ export class OrdersController {
             where: { wcOrderId: { in: wcIds } },
             select: {
               wcOrderId: true,
+              sellerId: true,
+              sellerName: true,
               pickOrders: {
                 select: {
                   status: true,
@@ -91,8 +93,13 @@ export class OrdersController {
           })
         : [];
     const picksByWcId = new Map<number, any[]>();
+    const sellerByWcId = new Map<number, { id: string | null; name: string | null }>();
     for (const ord of ordersWithPicks) {
       picksByWcId.set(ord.wcOrderId, ord.pickOrders || []);
+      sellerByWcId.set(ord.wcOrderId, {
+        id: ord.sellerId ?? null,
+        name: ord.sellerName ?? null,
+      });
     }
 
     const data = res.data.map((o: any) => {
@@ -125,6 +132,9 @@ export class OrdersController {
         shipped: allShipped,
         trackingCode: firstTracking?.trackingCode ?? null,
         trackingCarrier: firstTracking?.carrier ?? null,
+        // Vendedora atribuída (cache denormalizado no Order local)
+        sellerId: sellerByWcId.get(Number(o.id))?.id ?? null,
+        sellerName: sellerByWcId.get(Number(o.id))?.name ?? null,
         ...extractAttribution(o.meta_data ?? []),
       };
     });
@@ -164,6 +174,12 @@ export class OrdersController {
       select: { code: true, name: true, city: true },
     });
     const pickup = detectPickup(o, activeStores);
+
+    // Vendedora atribuída (cache denormalizado)
+    const localOrder = await this.prisma.order.findFirst({
+      where: { wcOrderId: Number(wcId) },
+      select: { sellerId: true, sellerName: true },
+    });
 
     return {
       id: o.id,
@@ -206,6 +222,8 @@ export class OrdersController {
         unresolvedCityName: pickup.unresolvedCityName ?? null,
       },
       attribution,
+      sellerId: localOrder?.sellerId ?? null,
+      sellerName: localOrder?.sellerName ?? null,
     };
   }
 

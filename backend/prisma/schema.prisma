@@ -79,15 +79,43 @@ model Order {
   pickupStoreCode String?  @map("pickup_store_code")                   // código da loja onde cliente vai retirar (LJ05 etc)
   shippingMethod  String?  @map("shipping_method")                      // título do método de envio do WC (pra UI)
   wcDateCreated   DateTime? @map("wc_date_created") // data que o cliente fez o pedido no site
+  // ── Atribuição de venda (atendente que iniciou o contato — cliente fecha no site) ──
+  // Marcação manual via UI (operadora matriz). Relatório mensal soma por vendedora.
+  sellerId        String?   @map("seller_id")
+  sellerName      String?   @map("seller_name") // cache denormalizado pra relatório não depender de JOIN
+  sellerAssignedAt DateTime? @map("seller_assigned_at")
+  sellerAssignedBy String?   @map("seller_assigned_by") // email do usuário matriz que atribuiu
   createdAt       DateTime @default(now()) @map("created_at") // data que chegou no FlowOps
   updatedAt       DateTime @updatedAt @map("updated_at")
 
   items      OrderItem[]
   pickOrders PickOrder[]
   history    OrderHistory[]
+  seller     Seller? @relation(fields: [sellerId], references: [id])
 
   @@index([status])
+  @@index([sellerId])
   @@map("orders")
+}
+
+/**
+ * Vendedoras — cadastro de atendentes que iniciam vendas online (exemplos: Karine, Manu).
+ * Cliente que tira dúvida com a vendedora via WhatsApp e depois fecha no site fica marcado
+ * com o sellerId — relatório mensal mostra performance de cada uma.
+ * Soft-delete via `active=false`. Nome é único case-insensitive (validação na service).
+ */
+model Seller {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  whatsapp  String?  // opcional — pra matriz saber contato da vendedora
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orders Order[]
+
+  @@index([active, name])
+  @@map("sellers")
 }
 
 model OrderItem {

@@ -25,6 +25,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { autoSendOrderToStore } from '@/lib/auto-send-order';
+import SellerTag from '@/components/SellerTag';
 import {
   RefreshCw,
   Send,
@@ -66,6 +67,9 @@ interface WcOrderListItem {
   shipped?: boolean;
   trackingCode?: string | null;
   trackingCarrier?: string | null;
+  // Vendedora atribuída (tag pra relatório de vendas online por atendente)
+  sellerId?: string | null;
+  sellerName?: string | null;
 }
 
 interface SeparationGroup {
@@ -1053,6 +1057,23 @@ export default function SeparacaoPage() {
                           )}
                         </span>
                       )}
+
+                      {/* Tag de vendedora atribuída (Karine, Manu, etc.) */}
+                      <span className="ml-2 align-middle inline-block">
+                        <SellerTag
+                          wcOrderId={o.id}
+                          currentSellerId={o.sellerId ?? null}
+                          currentSellerName={o.sellerName ?? null}
+                          compact
+                          onChange={(sellerId, sellerName) => {
+                            setOrders((prev) =>
+                              prev.map((x) =>
+                                x.id === o.id ? { ...x, sellerId, sellerName } : x,
+                              ),
+                            );
+                          }}
+                        />
+                      </span>
 
                       {/* Badge da(s) loja(s) responsável(is) pela separação */}
                       {o.pickOrders && o.pickOrders.length > 0 && (

@@ -6,6 +6,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import TrackingTimeline from '@/components/TrackingTimeline';
+import SellerTag from '@/components/SellerTag';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -95,6 +96,8 @@ interface WcOrderDetail {
     shippingMethodTitle: string | null;
     unresolvedCityName: string | null;
   };
+  sellerId?: string | null;
+  sellerName?: string | null;
 }
 
 export default function PedidoDetailPage() {
@@ -845,6 +848,15 @@ export default function PedidoDetailPage() {
                 </span>
               );
             })()}
+            {/* Tag de vendedora — atribuir Karine/Manu/etc pra relatório mensal */}
+            <SellerTag
+              wcOrderId={order.id}
+              currentSellerId={order.sellerId ?? null}
+              currentSellerName={order.sellerName ?? null}
+              onChange={(sellerId, sellerName) => {
+                setOrder((prev) => (prev ? { ...prev, sellerId, sellerName } : prev));
+              }}
+            />
           </div>
           <p className="text-sm text-slate-500 mt-1">
             Criado em {fmtDate(order.dateCreatedGmt)}

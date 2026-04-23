@@ -28,6 +28,7 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { PilotModule } from './pilot/pilot.module';
+import { SellersModule } from './sellers/sellers.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { PilotModule } from './pilot/pilot.module';
     IntegrationLogsModule,
     TrackingModule,
     PilotModule,
+    SellersModule,
   ],
 })
 export class AppModule {}

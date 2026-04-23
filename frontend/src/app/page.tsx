@@ -79,6 +79,7 @@ const RETAGUARDA_CARDS: ModuleCard[] = [
   { href: '/retaguarda/publicar-site',   label: 'Publicar no Site',  subtitle: 'Cadastros via IA',       icon: Globe },
   { href: '/retaguarda/whatsapp',        label: 'WhatsApp',          subtitle: 'Conexão + bulk',         icon: Smartphone },
   { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',   subtitle: 'Auditoria SKU',          icon: Database },
+  { href: '/retaguarda/vendedoras',      label: 'Vendedoras',        subtitle: 'Karine, Manu, …',        icon: Users },
 ];
 
 const GESTAO_CARDS: ModuleCard[] = [
@@ -86,6 +87,7 @@ const GESTAO_CARDS: ModuleCard[] = [
   { href: '/produtos',   label: 'Produtos',   subtitle: 'Sync + variações',         icon: ShoppingBag },
   { href: '/clientes',   label: 'Clientes',   subtitle: 'CRM + compras',            icon: Users },
   { href: '/marketing',  label: 'Marketing',  subtitle: 'Recuperação + campanhas',  icon: Megaphone },
+  { href: '/relatorios/vendedoras', label: 'Vendas por Vendedora', subtitle: 'Ranking mensal + CSV', icon: TrendingUp },
 ];
 
 const SISTEMA_CARDS: ModuleCard[] = [

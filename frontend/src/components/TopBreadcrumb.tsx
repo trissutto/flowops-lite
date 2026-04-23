@@ -42,6 +42,8 @@ const SEGMENT_LABELS: Record<string, string> = {
   'clientes':          'Clientes',
   'marketing':         'Marketing',
   'recuperacao':       'Recuperação de Carrinho',
+  'vendedoras':        'Vendedoras',
+  'relatorios':        'Relatórios',
   'configuracoes':     'Configurações',
   'auditoria-sku':     'Auditoria SKU',
   'carrinhos-abandonados': 'Carrinhos Abandonados',
