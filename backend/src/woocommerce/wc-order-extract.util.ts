@@ -154,3 +154,30 @@ export function detectPickup(wcOrder: any, stores: StoreLike[]): ExtractedPickup
     unresolvedCityName,
   };
 }
+
+/**
+ * Tenta extrair a variante (tamanho, cor) do meta_data do line_item do WC.
+ * Atributos de variação vêm com key tipo "pa_tamanho" / "pa_cor".
+ *
+ * Movido do orders.controller pra cá pra ser reutilizado pelo PilotService
+ * (evita duplicação + cyclic import).
+ */
+export function extractVariantFromLineItem(li: any): string | undefined {
+  const meta = li?.meta_data ?? [];
+  const parts: string[] = [];
+  for (const m of meta) {
+    const key = String(m?.key ?? '');
+    const display = String(m?.display_key ?? '');
+    const val = String(m?.display_value ?? m?.value ?? '').trim();
+    if (!val) continue;
+    // Ignora metas técnicas (chave começa com "_")
+    if (key.startsWith('_')) continue;
+    const label = display || key.replace(/^pa_/, '').replace(/_/g, ' ');
+    parts.push(`${capitalizeVariant(label)}: ${val}`);
+  }
+  return parts.length ? parts.join(' · ') : undefined;
+}
+
+function capitalizeVariant(s: string) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

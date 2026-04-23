@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
 import { ErpService } from '../erp/erp.service';
 import { extractAttribution } from '../woocommerce/attribution.util';
-import { extractCpf, detectPickup } from '../woocommerce/wc-order-extract.util';
+import { extractCpf, detectPickup, extractVariantFromLineItem } from '../woocommerce/wc-order-extract.util';
 
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
@@ -877,26 +877,5 @@ export class OrdersController {
   }
 }
 
-/**
- * Tenta extrair a variante (tamanho, cor) do meta_data do line_item do WC.
- * Atributos de variação vêm com key tipo "pa_tamanho" / "pa_cor".
- */
-function extractVariantFromLineItem(li: any): string | undefined {
-  const meta = li?.meta_data ?? [];
-  const parts: string[] = [];
-  for (const m of meta) {
-    const key = String(m?.key ?? '');
-    const display = String(m?.display_key ?? '');
-    const val = String(m?.display_value ?? m?.value ?? '').trim();
-    if (!val) continue;
-    // Ignora metas técnicas (chave começa com "_")
-    if (key.startsWith('_')) continue;
-    const label = display || key.replace(/^pa_/, '').replace(/_/g, ' ');
-    parts.push(`${capitalize(label)}: ${val}`);
-  }
-  return parts.length ? parts.join(' · ') : undefined;
-}
-
-function capitalize(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+// extractVariantFromLineItem foi movido pra ../woocommerce/wc-order-extract.util
+// pra ser reutilizado pelo PilotService.
