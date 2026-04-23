@@ -1,18 +1,10 @@
 /**
- * Layout específico da /vitrine — anula o padding-left da sidebar aplicado
- * no layout.tsx raiz.
+ * Layout da /vitrine — passthrough.
  *
- * O root layout injeta <div className="md:pl-60"> pra não sobrepor a sidebar
- * de matriz. Na vitrine (simula site público), a sidebar é escondida e o
- * conteúdo precisa ocupar 100% da largura.
- *
- * Solução: este layout aninhado aplica uma margem negativa equivalente no
- * desktop pra cancelar o padding do pai. Simples e reversível.
+ * No passado cancelava o `md:pl-60` do root layout (sidebar fixa). A sidebar
+ * foi removida, então esse layout ficou apenas como ponto de extensão futuro
+ * (metadata custom, tema, analytics) — hoje só repassa os children.
  */
 export default function VitrineLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="md:-ml-60 md:w-[calc(100%+15rem)]">
-      {children}
-    </div>
-  );
+  return <>{children}</>;
 }
