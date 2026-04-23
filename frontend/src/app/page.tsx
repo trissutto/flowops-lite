@@ -326,6 +326,8 @@ function JumboCard({
   kpiLabel?: string;
 }) {
   const Icon = item.icon;
+  // Card inteiro continua clicável (Link envolve tudo), mas agora existe um
+  // BOTÃO visível "ABRIR →" pra dar affordance clara de clique.
   return (
     <Link
       href={item.href}
@@ -344,7 +346,10 @@ function JumboCard({
             </div>
           )}
         </div>
-        <ArrowRight className="w-5 h-5 opacity-70 group-hover:translate-x-1 transition shrink-0" />
+        <div className="hidden sm:flex items-center gap-1.5 bg-white text-slate-900 font-bold text-sm px-4 py-2.5 rounded-xl shadow-md group-hover:shadow-lg group-hover:-translate-y-0.5 transition shrink-0">
+          ABRIR
+          <ArrowRight className="w-4 h-4" />
+        </div>
       </div>
     </Link>
   );
@@ -352,19 +357,25 @@ function JumboCard({
 
 function ModuleCardView({ item, gradient }: { item: ModuleCard; gradient: string }) {
   const Icon = item.icon;
+  // Card com botão "ABRIR" destacado no rodapé — mais affordance de clique do
+  // que só uma setinha solta. Link envolve o card todo, então clicar em qualquer
+  // área funciona, mas o botão é o foco visual.
   return (
     <Link
       href={item.href}
-      className={`group block rounded-xl bg-gradient-to-br ${gradient} text-white shadow-md hover:shadow-lg hover:scale-[1.02] transition p-4`}
+      className={`group flex flex-col rounded-xl bg-gradient-to-br ${gradient} text-white shadow-md hover:shadow-lg hover:-translate-y-0.5 transition p-4 min-h-[150px]`}
     >
-      <div className="flex items-start justify-between mb-2">
-        <div className="w-10 h-10 bg-white/15 rounded-lg flex items-center justify-center">
-          <Icon className="w-5 h-5" />
-        </div>
-        <ArrowRight className="w-4 h-4 opacity-60 group-hover:opacity-100 group-hover:translate-x-1 transition" />
+      <div className="w-10 h-10 bg-white/15 rounded-lg flex items-center justify-center mb-3">
+        <Icon className="w-5 h-5" />
       </div>
       <div className="font-semibold text-sm leading-tight">{item.label}</div>
       <div className="text-[11px] opacity-85 mt-0.5 line-clamp-1">{item.subtitle}</div>
+      <div className="mt-auto pt-3">
+        <div className="inline-flex items-center gap-1 bg-white/20 backdrop-blur text-white text-xs font-bold px-3 py-1.5 rounded-lg group-hover:bg-white group-hover:text-slate-900 transition">
+          ABRIR
+          <ArrowRight className="w-3.5 h-3.5" />
+        </div>
+      </div>
     </Link>
   );
 }
