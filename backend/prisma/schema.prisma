@@ -166,6 +166,18 @@ model IntegrationLog {
   @@map("integration_logs")
 }
 
+// Key-value simples pra flags globais do sistema (ligar/desligar Piloto
+// Automático, pausar crons, etc). Single source of truth — substitui
+// localStorage do client pra configs que devem valer pra TODOS os usuários
+// e pro worker server-side que roda sem aba aberta.
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
 // ==========================================================================
 // MARKETING — Recuperação de Carrinho via WhatsApp
 // ==========================================================================

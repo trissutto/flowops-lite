@@ -6,9 +6,16 @@ import { WcPollerService } from './wc-poller.service';
 import { OrdersModule } from '../orders/orders.module';
 import { QueueModule } from '../queue/queue.module';
 import { WebsocketModule } from '../websocket/websocket.module';
+import { PilotModule } from '../pilot/pilot.module';
 
 @Module({
-  imports: [HttpModule, forwardRef(() => OrdersModule), QueueModule, WebsocketModule],
+  imports: [
+    HttpModule,
+    forwardRef(() => OrdersModule),
+    QueueModule,
+    WebsocketModule,
+    forwardRef(() => PilotModule),
+  ],
   providers: [WooCommerceService, WcPollerService],
   controllers: [WooCommerceController],
   exports: [WooCommerceService],

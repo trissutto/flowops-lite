@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
-import { isPilotOn, setPilotOn } from '@/lib/auto-send-order';
+import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
 
 // ----------- Tipos dos fetches -----------
 interface CountsResp {
@@ -106,6 +106,8 @@ export default function DashboardHome() {
   const [enviadosHoje, setEnviadosHoje] = useState<number>(0);
   const [userName, setUserName] = useState<string>('');
   const [pilot, setPilot] = useState(false);
+  const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
+  const [pilotBusy, setPilotBusy] = useState(false);
 
   // Guard de sessão + role (mesma lógica da home antiga)
   useEffect(() => {
@@ -123,15 +125,31 @@ export default function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Piloto Automático
+  // Piloto Automático — flag agora é server-side. Sincroniza no mount e a cada 30s.
   useEffect(() => {
+    // Mostra imediatamente o último estado conhecido (cache) pra UI não piscar
     setPilot(isPilotOn());
+
+    let cancelled = false;
+    async function sync() {
+      const s = await fetchPilotStatus();
+      if (cancelled || !s) return;
+      setPilotStatus(s);
+      setPilot(!!s.on);
+    }
+    sync();
+    const t = setInterval(sync, 30_000);
+
     const onChange = (e: Event) => {
       const det = (e as CustomEvent).detail;
       setPilot(!!det?.on);
     };
     window.addEventListener('lurds:pilot-changed', onChange);
-    return () => window.removeEventListener('lurds:pilot-changed', onChange);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      window.removeEventListener('lurds:pilot-changed', onChange);
+    };
   }, []);
 
   // KPIs — contadores por status + enviados hoje (total). Atualiza a cada 30s.
@@ -177,10 +195,30 @@ export default function DashboardHome() {
     };
   }, []);
 
-  function togglePilot() {
+  async function togglePilot() {
+    if (pilotBusy) return;
     const next = !pilot;
-    setPilotOn(next);
+    setPilotBusy(true);
+    // Optimistic — UI responde já; se backend rejeitar, desfaz abaixo.
     setPilot(next);
+    try {
+      const s = await togglePilotServer(next);
+      if (s) {
+        setPilotStatus(s);
+        setPilot(!!s.on);
+        if (next && !s.whatsappConnected) {
+          alert('Piloto LIGADO, mas o WhatsApp não está conectado. Conecte em /retaguarda/whatsapp antes de receber pedidos.');
+        }
+      } else {
+        // Rollback se server retornou null (falha de rede)
+        setPilot(!next);
+        alert('Não foi possível mudar o estado do Piloto. Tenta de novo.');
+      }
+    } catch {
+      setPilot(!next);
+    } finally {
+      setPilotBusy(false);
+    }
   }
 
   const today = new Date().toLocaleDateString('pt-BR', {
@@ -202,19 +240,35 @@ export default function DashboardHome() {
             </div>
             <button
               onClick={togglePilot}
-              className={`relative rounded-xl px-4 py-2.5 text-sm font-bold flex items-center gap-2 transition shadow-lg ring-2 ${
+              disabled={pilotBusy || pilotStatus?.killSwitch === true}
+              className={`relative rounded-xl px-4 py-2.5 text-sm font-bold flex items-center gap-2 transition shadow-lg ring-2 disabled:opacity-50 disabled:cursor-not-allowed ${
                 pilot
                   ? 'bg-gradient-to-br from-fuchsia-500 to-purple-600 text-white ring-fuchsia-300/60 hover:from-fuchsia-600 hover:to-purple-700'
                   : 'bg-white/10 text-white ring-white/20 hover:bg-white/15'
               }`}
-              title={pilot ? 'Pedidos novos caem na loja sozinhos. Clique pra desligar.' : 'Envio manual. Clique pra ligar.'}
+              title={
+                pilotStatus?.killSwitch
+                  ? 'Bloqueado via env PILOT_DISABLED=1 — só desbloqueia no servidor.'
+                  : pilot
+                  ? `Server-side. Pedidos novos caem na loja sozinhos. WA: ${pilotStatus?.whatsappConnected ? 'conectado' : 'DESCONECTADO ⚠️'}. Clique pra desligar.`
+                  : 'Envio manual. Clique pra ligar (server-side).'
+              }
             >
               {pilot ? <Zap className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
               <span className="leading-tight text-left">
-                <span className="block text-[10px] uppercase opacity-80 tracking-wider">Piloto automático</span>
-                <span className="block text-sm">{pilot ? 'LIGADO' : 'DESLIGADO'}</span>
+                <span className="block text-[10px] uppercase opacity-80 tracking-wider">
+                  Piloto automático {pilotStatus?.killSwitch && '· BLOQUEADO'}
+                </span>
+                <span className="block text-sm">
+                  {pilotBusy ? '...' : pilot ? 'LIGADO' : 'DESLIGADO'}
+                </span>
               </span>
-              {pilot && <span className="ml-1 w-2 h-2 rounded-full bg-green-300 animate-pulse" />}
+              {pilot && pilotStatus?.whatsappConnected && (
+                <span className="ml-1 w-2 h-2 rounded-full bg-green-300 animate-pulse" title="WhatsApp conectado" />
+              )}
+              {pilot && pilotStatus && !pilotStatus.whatsappConnected && (
+                <span className="ml-1 w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="WhatsApp desconectado" />
+              )}
             </button>
           </div>
         </div>

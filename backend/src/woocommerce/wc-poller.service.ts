@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { OrdersService } from '../orders/orders.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { PilotService } from '../pilot/pilot.service';
 
 /**
  * Polling automático do WooCommerce.
@@ -25,6 +26,8 @@ export class WcPollerService {
     private readonly orders: OrdersService,
     private readonly queue: QueueService,
     private readonly gateway: RealtimeGateway,
+    @Inject(forwardRef(() => PilotService))
+    private readonly pilot: PilotService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -89,6 +92,14 @@ export class WcPollerService {
               this.logger.log(
                 `[WS] order:new emitido — #${full.wcOrderNumber} (${full.customerName}) status=${full.status} wasCreated=${saved.wasCreated}`,
               );
+
+              // PILOTO AUTOMÁTICO server-side (fire-and-forget).
+              // Não bloqueia o loop do poller — erros ficam no integration_logs.
+              const wcOrderId = Number(wc.id);
+              const orderCreatedAt = wc.date_created_gmt || wc.date_created || undefined;
+              this.pilot
+                .handleNewOrder(wcOrderId, orderCreatedAt)
+                .catch((err) => this.logger.error(`[Pilot] handleNewOrder #${wcOrderId} falhou: ${err?.message || err}`));
             }
           }
         } catch (e: any) {

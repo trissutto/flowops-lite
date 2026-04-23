@@ -171,11 +171,30 @@ export async function autoSendOrderToStore(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PILOTO AUTOMÁTICO — flag global (persistida em localStorage)
+// PILOTO AUTOMÁTICO — flag SERVER-SIDE (GET/PATCH /pilot).
+//
+// Antes a flag ficava em localStorage (client-side runner). Virou backend worker
+// (#165): agora `lurds_pilot_automatic_on` no localStorage é só CACHE pra UI
+// reagir rápido; a única fonte da verdade é o banco (SystemSetting).
+//
+// Fluxo:
+//   - Na montagem de tela: fetchPilotStatus() sincroniza cache + dispara event
+//   - Toggle do botão: togglePilotServer(on) PATCH /pilot/toggle, atualiza cache
+//   - isPilotOn() lê cache (síncrono, pra não travar UI)
+//   - O SERVIDOR escuta ordens novas e dispara sozinho — o browser não manda mais
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PILOT_KEY = 'lurds_pilot_automatic_on';
 
+export interface PilotStatus {
+  on: boolean;
+  killSwitch: boolean;
+  whatsappConnected: boolean;
+  whatsappNumber?: string | null;
+  rateLimit?: { perMinute: number; firedInLastMinute: number };
+}
+
+/** Leitura síncrona do cache local — use só pra UI. Fonte real = backend. */
 export function isPilotOn(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -185,11 +204,47 @@ export function isPilotOn(): boolean {
   }
 }
 
-export function setPilotOn(on: boolean) {
+/** Atualiza cache + dispara evento. NÃO fala com backend — quem faz é toggle. */
+function writeCache(on: boolean) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(PILOT_KEY, on ? '1' : '0');
-    // Dispatch storage-like event pra componentes reativos atualizarem
     window.dispatchEvent(new CustomEvent('lurds:pilot-changed', { detail: { on } }));
   } catch {}
+}
+
+/** GET /pilot/status — sincroniza cache com backend. Chame no mount. */
+export async function fetchPilotStatus(): Promise<PilotStatus | null> {
+  try {
+    const s = await api<PilotStatus>('/pilot/status');
+    writeCache(!!s.on);
+    return s;
+  } catch {
+    return null;
+  }
+}
+
+/** PATCH /pilot/toggle { on }. Se sucesso, atualiza cache. */
+export async function togglePilotServer(on: boolean): Promise<PilotStatus | null> {
+  try {
+    const s = await api<PilotStatus>('/pilot/toggle', {
+      method: 'PATCH',
+      body: JSON.stringify({ on }),
+    });
+    writeCache(!!s.on);
+    return s;
+  } catch (e: any) {
+    // Não muda cache se falhou — UI segue mostrando estado real
+    console.warn('[pilot] toggle falhou:', e?.message || e);
+    return null;
+  }
+}
+
+/**
+ * @deprecated Usa `togglePilotServer(on)` — só escrever em localStorage virou
+ * no-op pra UI quando o Runner client foi desativado. Mantido pra evitar
+ * quebra em callers antigos que ainda importem.
+ */
+export function setPilotOn(on: boolean) {
+  writeCache(on);
 }

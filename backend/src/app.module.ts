@@ -27,6 +27,7 @@ import { SitePublishModule } from './site-publish/site-publish.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { IntegrationLogsModule } from './integration-logs/integration-logs.module';
 import { TrackingModule } from './tracking/tracking.module';
+import { PilotModule } from './pilot/pilot.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { TrackingModule } from './tracking/tracking.module';
     WhatsappModule,
     IntegrationLogsModule,
     TrackingModule,
+    PilotModule,
   ],
 })
 export class AppModule {}
