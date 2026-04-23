@@ -247,6 +247,54 @@ export class ProductsService {
   }
 
   /**
+   * Resolve produto por slug (usado pela vitrine pública /vitrine/[slug]).
+   * O WC REST aceita `?slug=X` no GET /products — retorna [array] com 0 ou 1 item.
+   * Delegamos pro getById pra reusar a lógica de variações + ERP stock.
+   */
+  async getBySlug(slug: string) {
+    const res = await firstValueFrom(
+      this.http.get(`${this.baseUrl}/products`, {
+        auth: this.auth,
+        params: { slug, status: 'publish', per_page: 1 },
+      }),
+    );
+    const list: any[] = res.data ?? [];
+    if (list.length === 0) return null;
+    return this.getById(list[0].id);
+  }
+
+  /**
+   * Produtos relacionados — pega os N primeiros da mesma categoria (excluindo o próprio).
+   * Usado na página de detalhe pra "Você também vai amar".
+   */
+  async getRelated(productId: number, limit = 8) {
+    // 1) busca o produto pra pegar categoria
+    const res = await firstValueFrom(
+      this.http.get(`${this.baseUrl}/products/${productId}`, { auth: this.auth }),
+    );
+    const p = res.data;
+    const catIds = (p.categories ?? []).map((c: any) => c.id).filter(Boolean);
+    if (catIds.length === 0) return [];
+
+    // 2) lista produtos da mesma categoria (excluindo o próprio)
+    const listRes = await firstValueFrom(
+      this.http.get(`${this.baseUrl}/products`, {
+        auth: this.auth,
+        params: {
+          category: catIds[0],
+          exclude: [productId],
+          per_page: limit,
+          status: 'publish',
+          stock_status: 'instock',
+          orderby: 'popularity',
+        },
+      }),
+    );
+    const related: any[] = listRes.data ?? [];
+    return related.map((r) => this.flatten(r));
+  }
+
+  /**
    * Detalhe do produto + variações (se houver).
    */
   async getById(id: number) {

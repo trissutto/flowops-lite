@@ -153,7 +153,8 @@ function findActiveGroupKey(pathname: string): string {
 export default function SideNav() {
   const pathname = usePathname() || '/';
   const hide = pathname === '/login' || pathname.startsWith('/login') ||
-               pathname.startsWith('/minha-loja');
+               pathname.startsWith('/minha-loja') ||
+               pathname.startsWith('/vitrine'); // vitrine simula site público — sem menu interno
 
   // Grupos abertos — múltiplos podem estar abertos ao mesmo tempo (estilo
   // explorador de pastas). Persistido em localStorage pra não refechar ao navegar.

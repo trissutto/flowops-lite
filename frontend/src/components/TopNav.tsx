@@ -32,7 +32,8 @@ export default function TopNav() {
     () =>
       pathname === '/login' ||
       pathname.startsWith('/login') ||
-      pathname.startsWith('/minha-loja'),
+      pathname.startsWith('/minha-loja') ||
+      pathname.startsWith('/vitrine'), // vitrine simula site público — sem header interno
     [pathname],
   );
 
