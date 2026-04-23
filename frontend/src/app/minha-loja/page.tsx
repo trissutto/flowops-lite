@@ -26,6 +26,7 @@ import { getSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
 import Logo from '@/components/Logo';
+import TrackingTimeline from '@/components/TrackingTimeline';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
@@ -1028,20 +1029,32 @@ function PickOrderCard({
             {customerPhone && (
               <div className="mt-1">Tel: {formatPhone(customerPhone)}</div>
             )}
+            {customerEmail && (
+              <div className="mt-1 break-all">✉️ {customerEmail}</div>
+            )}
           </section>
         );
       })()}
 
-      {/* Rastreio (se já enviado) */}
+      {/* Rastreio (se já enviado) — mostra código + timeline ao vivo (LinkeTrack) */}
       {status === 'shipped' && row.trackingCode && (
-        <section className="mx-4 mb-3 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
-          <div className="text-[11px] uppercase tracking-wide font-bold text-emerald-800 flex items-center gap-1">
-            <Truck className="w-3 h-3" /> Rastreio
+        <section className="mx-4 mb-3 space-y-2">
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+            <div className="text-[11px] uppercase tracking-wide font-bold text-emerald-800 flex items-center gap-1">
+              <Truck className="w-3 h-3" /> Rastreio
+            </div>
+            <div className="font-mono text-lg font-bold text-emerald-900 mt-0.5">
+              {row.trackingCode}
+            </div>
+            <div className="text-xs text-emerald-700">{row.carrier}</div>
           </div>
-          <div className="font-mono text-lg font-bold text-emerald-900 mt-0.5">
-            {row.trackingCode}
-          </div>
-          <div className="text-xs text-emerald-700">{row.carrier}</div>
+          {/* Timeline ao vivo: só carrega quando expandir (compact) pra não estourar chamadas */}
+          <TrackingTimeline
+            code={row.trackingCode}
+            carrier={row.carrier}
+            autoFetch={false}
+            compact
+          />
         </section>
       )}
 

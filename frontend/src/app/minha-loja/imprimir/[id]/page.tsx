@@ -17,6 +17,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
+import { classifyShipping } from '@/lib/shipping-method';
 
 interface PickItem {
   id?: string;
@@ -31,6 +32,16 @@ interface PickDetail {
   trackingCode: string | null;
   carrier: string | null;
   createdAt: string;
+  isTransfer?: boolean;
+  transferToStoreCode?: string | null;
+  customerSnapshot?: {
+    name?: string | null;
+    cpf?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    shippingAddress?: string | null;
+    shippingCep?: string | null;
+  } | null;
   store: { id: string; code: string; name: string };
   order: {
     id: string;
@@ -38,8 +49,12 @@ interface PickDetail {
     wcOrderNumber: string | null;
     customerName: string | null;
     customerPhone: string | null;
+    customerCpf?: string | null;
+    customerEmail?: string | null;
     shippingCep: string | null;
     shippingAddress: string | null;
+    shippingMethod?: string | null;
+    isPickup?: boolean;
     totalAmount: number | null;
     wcDateCreated?: string | null;
     items: PickItem[];
@@ -124,12 +139,26 @@ function ImprimirCupomPageInner() {
     return <div style={{ padding: 16 }}>Carregando...</div>;
   }
 
-  const addr = parseShippingAddress(pick.order.shippingAddress);
+  // Em transferência, os dados reais do CLIENTE estão no snapshot do pick-order
+  // (a Order local tem a loja de retirada como "cliente" pra fins de emissão de NF).
+  // Fora de transferência, usa direto os campos do Order.
+  const snap = pick.customerSnapshot ?? null;
+  const isTransfer = pick.isTransfer === true;
+  const customerName  = isTransfer ? (snap?.name  ?? pick.order.customerName)  : pick.order.customerName;
+  const customerPhone = isTransfer ? (snap?.phone ?? pick.order.customerPhone) : pick.order.customerPhone;
+  const customerCpf   = isTransfer ? (snap?.cpf   ?? pick.order.customerCpf ?? null)   : (pick.order.customerCpf ?? null);
+  const customerEmail = isTransfer ? (snap?.email ?? pick.order.customerEmail ?? null) : (pick.order.customerEmail ?? null);
+  const shippingAddress = isTransfer ? (snap?.shippingAddress ?? pick.order.shippingAddress) : pick.order.shippingAddress;
+  const shippingCep = isTransfer ? (snap?.shippingCep ?? pick.order.shippingCep) : pick.order.shippingCep;
+
+  const addr = parseShippingAddress(shippingAddress);
   const orderNum = pick.order.wcOrderNumber ?? pick.order.wcOrderId ?? '—';
   const dataPedido = pick.order.wcDateCreated
     ? new Date(pick.order.wcDateCreated).toLocaleString('pt-BR')
     : new Date(pick.createdAt).toLocaleString('pt-BR');
   const dataImpressao = new Date().toLocaleString('pt-BR');
+
+  const shippingBadge = classifyShipping(pick.order.shippingMethod ?? '');
 
   return (
     <>
@@ -271,13 +300,43 @@ function ImprimirCupomPageInner() {
           Criado em {dataPedido}
         </div>
 
+        {/* FORMA DE ENVIO — destaque grande logo após o número do pedido, pra
+             conferente bater o olho antes de separar (SEDEX/PAC/RETIRADA). */}
+        {shippingBadge.kind !== 'other' && (
+          <>
+            <hr className="sep" />
+            <div className="center label">Forma de Envio</div>
+            <div className="center big">{shippingBadge.label}</div>
+            {pick.order.shippingMethod &&
+              pick.order.shippingMethod.toUpperCase() !== shippingBadge.label && (
+                <div className="center" style={{ fontSize: 9 }}>
+                  {pick.order.shippingMethod}
+                </div>
+              )}
+          </>
+        )}
+
+        {isTransfer && pick.transferToStoreCode && (
+          <>
+            <hr className="sep" />
+            <div className="center bold" style={{ fontSize: 12 }}>
+              🚚 TRANSFERIR PRA LOJA {pick.transferToStoreCode}
+            </div>
+            <div className="center" style={{ fontSize: 9 }}>
+              Cliente vai retirar lá. Não é venda direta.
+            </div>
+          </>
+        )}
+
         <hr className="sep" />
 
-        {/* Cliente */}
+        {/* Cliente — dados completos pra emissão de NF, follow-up ou conferência */}
         <div className="label">Cliente</div>
-        <div className="bold">{pick.order.customerName ?? '—'}</div>
-        {pick.order.customerPhone && (
-          <div>Tel: {formatPhone(pick.order.customerPhone)}</div>
+        <div className="bold">{customerName ?? '—'}</div>
+        {customerCpf && <div>CPF: {customerCpf}</div>}
+        {customerPhone && <div>Tel: {formatPhone(customerPhone)}</div>}
+        {customerEmail && (
+          <div style={{ wordBreak: 'break-all' }}>Email: {customerEmail}</div>
         )}
 
         <hr className="sep" />
@@ -289,8 +348,8 @@ function ImprimirCupomPageInner() {
         {addr?.complement && <div>Compl: {addr.complement}</div>}
         {addr?.neighborhood && <div>Bairro: {addr.neighborhood}</div>}
         {addr?.cityState && <div>{addr.cityState}</div>}
-        {(addr?.cep || pick.order.shippingCep) && (
-          <div className="bold">CEP: {addr?.cep ?? pick.order.shippingCep}</div>
+        {(addr?.cep || shippingCep) && (
+          <div className="bold">CEP: {addr?.cep ?? shippingCep}</div>
         )}
         {!addr?.streetLine && addr?.oneLiner && (
           <div style={{ wordBreak: 'break-word' }}>{addr.oneLiner}</div>

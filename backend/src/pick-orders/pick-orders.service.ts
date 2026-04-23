@@ -1025,6 +1025,9 @@ export class PickOrdersService {
 
   /**
    * Detalhe de 1 pick-order. Valida que pertence à loja do user.
+   * Retorna dados completos do cliente (CPF/email/telefone/endereço) +
+   * forma de envio pro cupom de impressão e tela da filial exibirem tudo
+   * que é útil pra despacho, follow-up ou emissão de NF.
    */
   async getOne(id: string, storeId: string) {
     const row = await this.prisma.pickOrder.findUnique({
@@ -1039,6 +1042,16 @@ export class PickOrdersService {
     const items = row.order.items.filter(
       (i) => !i.assignedStoreId || i.assignedStoreId === storeId,
     );
+    // Parse snapshot do cliente (só em transferência) pro frontend não precisar
+    // parsear JSON textual de novo.
+    let customerSnapshotObj: any = null;
+    if ((row as any).customerSnapshot) {
+      try {
+        customerSnapshotObj = JSON.parse((row as any).customerSnapshot);
+      } catch {
+        customerSnapshotObj = null;
+      }
+    }
     return {
       id: row.id,
       status: row.status,
@@ -1046,6 +1059,9 @@ export class PickOrdersService {
       carrier: row.carrier,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+      isTransfer: (row as any).isTransfer ?? false,
+      transferToStoreCode: (row as any).transferToStoreCode ?? null,
+      customerSnapshot: customerSnapshotObj,
       store: {
         id: row.store.id,
         code: row.store.code,
@@ -1057,8 +1073,13 @@ export class PickOrdersService {
         wcOrderNumber: row.order.wcOrderNumber,
         customerName: row.order.customerName,
         customerPhone: row.order.customerPhone,
+        customerCpf: row.order.customerCpf,
+        customerEmail: row.order.customerEmail,
         shippingCep: row.order.shippingCep,
         shippingAddress: row.order.shippingAddress,
+        shippingMethod: (row.order as any).shippingMethod ?? null,
+        isPickup: (row.order as any).isPickup ?? false,
+        pickupStoreCode: (row.order as any).pickupStoreCode ?? null,
         totalAmount: row.order.totalAmount,
         wcDateCreated: row.order.wcDateCreated,
         items,

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
+import TrackingTimeline from '@/components/TrackingTimeline';
 import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
@@ -1653,6 +1654,17 @@ export default function PedidoDetailPage() {
             <p className="text-xs text-slate-500 mt-2">
               Salvo como <code className="bg-slate-100 px-1 rounded">_tracking_number</code> / <code className="bg-slate-100 px-1 rounded">_tracking_carrier</code> nos meta_data do pedido (compatível com o plugin WooCommerce Shipment Tracking).
             </p>
+
+            {/* Timeline de rastreio — puxa status do Correios/LinkeTrack em tempo real */}
+            {order.tracking?.number && (
+              <div className="mt-4">
+                <TrackingTimeline
+                  code={order.tracking.number}
+                  carrier={order.tracking.carrier}
+                  autoFetch
+                />
+              </div>
+            )}
           </div>
 
           {/* Nota */}
