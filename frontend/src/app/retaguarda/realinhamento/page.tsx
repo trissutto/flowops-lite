@@ -3,23 +3,21 @@
 /**
  * /retaguarda/realinhamento — Rebalanceia estoque entre lojas.
  *
- * Fluxo (3 etapas):
- *   1) CONFIG: usuário cola REFERÊNCIAS (1 por linha, ex: VMS-223), marca lojas origem,
- *      lojas destino, define "alvo mínimo por destino" e "manter mínimo na origem".
- *      Backend consulta Giga e expande cada REF em todas as suas variações (cor × tamanho),
- *      então o algoritmo trabalha por SKU granular internamente (cada variação tem
- *      seu próprio déficit/excedente).
- *   2) PREVIEW: chama POST /realignment/preview → mostra plano completo em tabela
- *      com REF · COR · TAMANHO · antes/depois por loja. Usuário pode editar qtd ou
- *      remover linhas.
- *   3) CONFIRM: chama POST /realignment/confirm → cria TransferOrder tipo=REALINHAMENTO
- *      (refCode=REF, cor/tamanho preenchidos) e opcionalmente dispara WhatsApp
- *      consolidado por loja origem.
+ * Fluxo (4 etapas):
+ *   1) CONFIG: usuário cola REFERÊNCIAS (1 por linha, ex: VMS-223), marca lojas origem
+ *      (TODAS CEDEM) e destino (TODAS RECEBEM). Backend consulta Giga e expande cada REF
+ *      em todas as suas variações (cor × tamanho).
+ *   2) PREVIEW: POST /realignment/preview → plano completo em tabela com REF · COR · TAM
+ *      + antes/depois por loja. Usuário pode editar qty ou remover linhas.
+ *   3) PDF: "Gerar PDF para análise" abre uma tela imprimível (1 por loja ORIGEM) pra
+ *      revisar no papel/PDF antes de disparar WhatsApp.
+ *   4) CONFIRM: POST /realignment/confirm → TransferOrder tipo=REALINHAMENTO e WhatsApp
+ *      opcional.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2 } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, FileText, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -126,16 +124,14 @@ export default function RealinhamentoPage() {
     setter(next);
   }
 
-  function selectAll(scope: 'origin' | 'dest') {
-    const all = new Set(activeStores.map((s) => s.code));
-    if (scope === 'origin') setOriginCodes(all);
-    else setDestCodes(all);
+  function selectAllOrigins() {
+    setOriginCodes(new Set(activeStores.map((s) => s.code)));
   }
-
-  function clearAll(scope: 'origin' | 'dest') {
-    if (scope === 'origin') setOriginCodes(new Set());
-    else setDestCodes(new Set());
+  function selectAllDests() {
+    setDestCodes(new Set(activeStores.map((s) => s.code)));
   }
+  function clearOrigins() { setOriginCodes(new Set()); }
+  function clearDests() { setDestCodes(new Set()); }
 
   async function handlePreview() {
     setError(null);
@@ -240,6 +236,23 @@ export default function RealinhamentoPage() {
     }
   }
 
+  function handleOpenPdf() {
+    if (editedPlan.filter((l) => l.qty > 0).length === 0) {
+      setError('Plano vazio (todas as linhas com qty=0).');
+      return;
+    }
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      note: note.trim() || null,
+      lines: editedPlan.filter((l) => l.qty > 0),
+    };
+    try {
+      sessionStorage.setItem('realinhamento_print_payload', JSON.stringify(payload));
+    } catch {}
+    // Abre nova aba com print page (auto-aciona window.print)
+    window.open('/retaguarda/realinhamento/imprimir', '_blank', 'noopener');
+  }
+
   const editedTotals = useMemo(() => {
     const totalUnits = editedPlan.reduce((a, l) => a + l.qty, 0);
     const totalMoves = editedPlan.filter((l) => l.qty > 0).length;
@@ -329,81 +342,105 @@ export default function RealinhamentoPage() {
           </div>
         </div>
 
-        {/* Lojas */}
+        {/* Ações em massa */}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <button
+            onClick={selectAllOrigins}
+            className="group flex items-center justify-center gap-2 bg-indigo-50 hover:bg-indigo-600 hover:text-white border-2 border-indigo-200 hover:border-indigo-700 text-indigo-800 font-bold rounded-xl px-4 py-3 transition-all"
+          >
+            <ArrowUpFromLine className="w-5 h-5" />
+            TODAS CEDEM
+            <span className="ml-1 text-xs font-normal opacity-75">
+              (marca {activeStores.length} como origem)
+            </span>
+          </button>
+          <button
+            onClick={selectAllDests}
+            className="group flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-600 hover:text-white border-2 border-emerald-200 hover:border-emerald-700 text-emerald-800 font-bold rounded-xl px-4 py-3 transition-all"
+          >
+            <ArrowDownToLine className="w-5 h-5" />
+            TODAS RECEBEM
+            <span className="ml-1 text-xs font-normal opacity-75">
+              (marca {activeStores.length} como destino)
+            </span>
+          </button>
+        </div>
+
+        {/* Lojas — pills ON/OFF */}
         <div className="grid md:grid-cols-2 gap-5">
+          {/* ORIGEM */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-semibold text-slate-700">
-                Lojas ORIGEM <span className="text-slate-400 font-normal">({originCodes.size})</span>
+                Lojas ORIGEM <span className="text-slate-400 font-normal">({originCodes.size}/{activeStores.length})</span>
               </div>
-              <div className="flex gap-2 text-xs">
-                <button onClick={() => selectAll('origin')} className="text-indigo-600 hover:underline">
-                  Todas
-                </button>
-                <span className="text-slate-300">|</span>
-                <button onClick={() => clearAll('origin')} className="text-slate-600 hover:underline">
-                  Limpar
-                </button>
-              </div>
+              <button
+                onClick={clearOrigins}
+                className="text-xs text-slate-500 hover:text-slate-800 hover:underline"
+              >
+                Limpar
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-1 border border-slate-200 rounded-lg p-2 max-h-[260px] overflow-y-auto">
-              {activeStores.map((s) => (
-                <label
-                  key={'o' + s.code}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm transition ${
-                    originCodes.has(s.code)
-                      ? 'bg-indigo-50 border border-indigo-200'
-                      : 'hover:bg-slate-50 border border-transparent'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={originCodes.has(s.code)}
-                    onChange={() => toggle(originCodes, s.code, setOriginCodes)}
-                    className="accent-indigo-600"
-                  />
-                  <span className="font-mono text-xs text-slate-500 w-10">{s.code}</span>
-                  <span className="truncate">{s.name}</span>
-                </label>
-              ))}
+            <div className="grid grid-cols-2 sm:grid-cols-2 gap-1.5 border border-slate-200 rounded-lg p-2 max-h-[320px] overflow-y-auto bg-slate-50/40">
+              {activeStores.map((s) => {
+                const on = originCodes.has(s.code);
+                return (
+                  <button
+                    key={'o' + s.code}
+                    type="button"
+                    onClick={() => toggle(originCodes, s.code, setOriginCodes)}
+                    className={`relative flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-left font-medium border transition-all ${
+                      on
+                        ? 'bg-indigo-600 border-indigo-700 text-white shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:border-indigo-400 hover:bg-indigo-50'
+                    }`}
+                  >
+                    <span className={`font-mono text-xs w-7 shrink-0 ${on ? 'text-indigo-100' : 'text-slate-400'}`}>
+                      {s.code}
+                    </span>
+                    <span className="truncate">{s.name}</span>
+                    {on && <span className="ml-auto text-xs font-bold opacity-90">ON</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
+          {/* DESTINO */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-semibold text-slate-700">
-                Lojas DESTINO <span className="text-slate-400 font-normal">({destCodes.size})</span>
+                Lojas DESTINO <span className="text-slate-400 font-normal">({destCodes.size}/{activeStores.length})</span>
               </div>
-              <div className="flex gap-2 text-xs">
-                <button onClick={() => selectAll('dest')} className="text-indigo-600 hover:underline">
-                  Todas
-                </button>
-                <span className="text-slate-300">|</span>
-                <button onClick={() => clearAll('dest')} className="text-slate-600 hover:underline">
-                  Limpar
-                </button>
-              </div>
+              <button
+                onClick={clearDests}
+                className="text-xs text-slate-500 hover:text-slate-800 hover:underline"
+              >
+                Limpar
+              </button>
             </div>
-            <div className="grid grid-cols-2 gap-1 border border-slate-200 rounded-lg p-2 max-h-[260px] overflow-y-auto">
-              {activeStores.map((s) => (
-                <label
-                  key={'d' + s.code}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm transition ${
-                    destCodes.has(s.code)
-                      ? 'bg-emerald-50 border border-emerald-200'
-                      : 'hover:bg-slate-50 border border-transparent'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={destCodes.has(s.code)}
-                    onChange={() => toggle(destCodes, s.code, setDestCodes)}
-                    className="accent-emerald-600"
-                  />
-                  <span className="font-mono text-xs text-slate-500 w-10">{s.code}</span>
-                  <span className="truncate">{s.name}</span>
-                </label>
-              ))}
+            <div className="grid grid-cols-2 sm:grid-cols-2 gap-1.5 border border-slate-200 rounded-lg p-2 max-h-[320px] overflow-y-auto bg-slate-50/40">
+              {activeStores.map((s) => {
+                const on = destCodes.has(s.code);
+                return (
+                  <button
+                    key={'d' + s.code}
+                    type="button"
+                    onClick={() => toggle(destCodes, s.code, setDestCodes)}
+                    className={`relative flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-left font-medium border transition-all ${
+                      on
+                        ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
+                        : 'bg-white border-slate-200 text-slate-700 hover:border-emerald-400 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <span className={`font-mono text-xs w-7 shrink-0 ${on ? 'text-emerald-100' : 'text-slate-400'}`}>
+                      {s.code}
+                    </span>
+                    <span className="truncate">{s.name}</span>
+                    {on && <span className="ml-auto text-xs font-bold opacity-90">ON</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -597,10 +634,35 @@ export default function RealinhamentoPage() {
         </section>
       )}
 
-      {/* ETAPA 3 — Confirm */}
+      {/* ETAPA 3 — PDF pra análise (antes de confirmar) */}
+      {preview && editedPlan.length > 0 && (
+        <section className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl shadow-sm p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div className="flex-1">
+              <h2 className="text-lg font-bold text-amber-900">3. Gerar PDF para análise</h2>
+              <p className="text-sm text-amber-800 mt-0.5">
+                Abre uma página de impressão com <b>1 folha por loja ORIGEM</b>, mostrando exatamente
+                o que cada uma vai enviar e pra quem. Use pra conferir antes de disparar no WhatsApp.
+              </p>
+            </div>
+            <button
+              onClick={handleOpenPdf}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg px-5 py-2.5 flex items-center gap-2 transition shadow-sm shrink-0"
+            >
+              <FileText className="w-4 h-4" />
+              Gerar PDF
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* ETAPA 4 — Confirm */}
       {preview && editedPlan.length > 0 && (
         <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
-          <h2 className="text-lg font-bold text-slate-800">3. Confirmar e enviar</h2>
+          <h2 className="text-lg font-bold text-slate-800">4. Confirmar e enviar</h2>
 
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">

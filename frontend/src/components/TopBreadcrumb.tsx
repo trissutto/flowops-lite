@@ -71,12 +71,13 @@ export default function TopBreadcrumb() {
   const pathname = usePathname() || '/';
   const router = useRouter();
 
-  // Esconde em telas que não devem ter a topbar (auth, filial, vitrine, home)
+  // Esconde em telas que não devem ter a topbar (auth, filial, vitrine, home, impressão)
   const hide =
     pathname === '/' ||
     pathname === '/login' || pathname.startsWith('/login') ||
     pathname.startsWith('/minha-loja') ||
-    pathname.startsWith('/vitrine');
+    pathname.startsWith('/vitrine') ||
+    pathname.includes('/imprimir');
 
   // Monta o breadcrumb a partir do pathname — cada nível é clicável (exceto o último)
   const crumbs = useMemo(() => {
