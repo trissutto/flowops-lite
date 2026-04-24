@@ -496,18 +496,18 @@ function RealignGrid({
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-slate-100 border-b border-slate-200">
-              <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[100px]">
+              <th className="text-left px-2 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[80px]">
                 Cor
               </th>
               {g.tams.map((s) => (
                 <th
                   key={s}
-                  className="px-2 py-2 text-center font-bold text-slate-700 min-w-[56px]"
+                  className="px-1 py-2 text-center font-bold text-slate-700 min-w-[42px]"
                 >
                   {s}
                 </th>
               ))}
-              <th className="px-2 py-2 text-center font-bold text-slate-700 min-w-[56px] bg-slate-200">
+              <th className="px-1 py-2 text-center font-bold text-slate-700 min-w-[44px] bg-slate-200 sticky right-0 z-10">
                 Total
               </th>
             </tr>
@@ -520,15 +520,15 @@ function RealignGrid({
                   key={cor}
                   className="transition border-b border-slate-100 hover:bg-slate-50"
                 >
-                  <td className="px-3 py-2 font-semibold text-slate-800 sticky left-0 z-10 bg-white border-r border-slate-100">
-                    <div className="flex items-center gap-2">
+                  <td className="px-2 py-2 font-semibold text-slate-800 sticky left-0 z-10 bg-white border-r border-slate-100">
+                    <div className="flex items-center gap-1.5">
                       <span
-                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        className={`w-2 h-2 rounded-full shrink-0 ${
                           colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
                         }`}
                       />
                       <span
-                        className="truncate max-w-[110px] uppercase tracking-wide"
+                        className="truncate max-w-[90px] uppercase tracking-wide text-xs"
                         title={cor}
                       >
                         {cor}
@@ -548,7 +548,7 @@ function RealignGrid({
                     );
                   })}
                   <td
-                    className={`px-2 py-2 text-center font-bold ${
+                    className={`px-1 py-2 text-center font-bold sticky right-0 z-10 ${
                       colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'
                     } bg-slate-50`}
                   >
@@ -559,7 +559,7 @@ function RealignGrid({
             })}
             {/* Linha totais por tamanho */}
             <tr className="bg-slate-100 border-t-2 border-slate-300">
-              <td className="px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 border-r border-slate-200">
+              <td className="px-2 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 border-r border-slate-200">
                 Total
               </td>
               {g.tams.map((s) => {
@@ -567,7 +567,7 @@ function RealignGrid({
                 return (
                   <td
                     key={s}
-                    className={`px-2 py-2 text-center font-bold ${
+                    className={`px-1 py-2 text-center font-bold ${
                       t > 0 ? 'text-slate-800' : 'text-slate-400'
                     }`}
                   >
@@ -575,7 +575,7 @@ function RealignGrid({
                   </td>
                 );
               })}
-              <td className="px-2 py-2 text-center font-extrabold text-emerald-700 bg-slate-200">
+              <td className="px-1 py-2 text-center font-extrabold text-emerald-700 bg-slate-200 sticky right-0 z-10">
                 {g.totalQty}
               </td>
             </tr>
@@ -587,7 +587,7 @@ function RealignGrid({
       <div className="flex flex-wrap items-center gap-3 mt-2 px-1 text-[11px] text-slate-500">
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
-          a enviar · toque pra marcar
+          a enviar · toque pra marcar ENVIEI
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded bg-emerald-200 border border-emerald-400 inline-block" />
@@ -618,7 +618,7 @@ function RealignCell({
   onSend: (id: string) => void;
 }) {
   const base =
-    'mx-auto w-full h-12 rounded flex flex-col items-center justify-center font-extrabold relative transition select-none';
+    'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative transition select-none';
 
   if (!item) {
     return (
@@ -641,12 +641,10 @@ function RealignCell({
       type="button"
       onClick={() => onSend(item.id)}
       title={`Marcar como ENVIEI — ${item.qtyOrigem}un`}
-      className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 active:scale-95 cursor-pointer`}
+      className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 active:scale-95 cursor-pointer text-base`}
     >
-      <span className="text-lg leading-none tabular-nums">{item.qtyOrigem}</span>
-      <span className="text-[9px] font-black uppercase tracking-wider opacity-75 mt-0.5">
-        enviei
-      </span>
+      <span className="tabular-nums">{item.qtyOrigem}</span>
+      <CheckCircle2 className="w-3 h-3 absolute top-0.5 right-0.5 text-amber-700/70" />
     </button>
   );
 }
