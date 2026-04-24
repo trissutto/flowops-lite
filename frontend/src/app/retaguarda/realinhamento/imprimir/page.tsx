@@ -59,6 +59,36 @@ function sortSizes(sizes: string[]): string[] {
   });
 }
 
+// Escapa string pra uso em RegExp
+function escRe(s: string): string {
+  return s.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+/**
+ * Limpa a descrição removendo o REF, cores e tamanhos da string.
+ * Ex: "VESTIDO LONGO MANGA CURTA PLUS SIZE VLM-222 ESTAMPA PRETO 48 MARRIE"
+ *   + ref="VLM-222", cores=["ESTAMPA PRETO","PRETO"], tams=["46","48","50"]
+ *   = "VESTIDO LONGO MANGA CURTA PLUS SIZE MARRIE"
+ *
+ * Ordena cores por comprimento desc pra casar "ESTAMPA PRETO" antes de "PRETO".
+ */
+function cleanDesc(desc: string, ref: string, cores: string[], tams: string[]): string {
+  let out = desc || '';
+  if (!out) return '';
+  if (ref) {
+    out = out.replace(new RegExp(`\\b${escRe(ref)}\\b`, 'gi'), '');
+  }
+  const sortedCores = [...cores].filter((c) => c && c !== '—').sort((a, b) => b.length - a.length);
+  for (const c of sortedCores) {
+    out = out.replace(new RegExp(`\\b${escRe(c)}\\b`, 'gi'), '');
+  }
+  for (const t of tams) {
+    if (!t || t === '—') continue;
+    out = out.replace(new RegExp(`\\b${escRe(t)}\\b`, 'gi'), '');
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
 export default function ImprimirRealinhamentoPage() {
   const [payload, setPayload] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +155,7 @@ export default function ImprimirRealinhamentoPage() {
 
     type RefGrid = {
       ref: string;
-      desc: string;
+      desc: string; // descrição já limpa (sem REF/cor/tam)
       cores: string[];
       tamanhos: string[];
       // matrix[cor][tamanho] = qty
@@ -147,6 +177,27 @@ export default function ImprimirRealinhamentoPage() {
       total: number;
     };
 
+    // Pass 1: coleta TODAS as cores/tams que aparecem pra cada REF (global),
+    // pra limpar a desc uma vez só. Assim a mesma REF mostra a mesma desc em
+    // todos os destinos.
+    const refGlobalInfo = new Map<string, { cores: Set<string>; tams: Set<string>; firstDesc: string }>();
+    for (const line of payload.lines) {
+      const key = line.ref || line.sku;
+      if (!refGlobalInfo.has(key)) {
+        refGlobalInfo.set(key, { cores: new Set(), tams: new Set(), firstDesc: line.desc || '' });
+      }
+      const info = refGlobalInfo.get(key)!;
+      if (line.cor) info.cores.add(line.cor);
+      if (line.tamanho) info.tams.add(line.tamanho);
+      // Se o primeiro desc tava vazio, tenta pegar dum line seguinte
+      if (!info.firstDesc && line.desc) info.firstDesc = line.desc;
+    }
+    const refCleanDesc = new Map<string, string>();
+    for (const [key, info] of refGlobalInfo) {
+      refCleanDesc.set(key, cleanDesc(info.firstDesc, key, Array.from(info.cores), Array.from(info.tams)));
+    }
+
+    // Pass 2: monta hierarquia origem → destino → ref
     const originMap = new Map<string, OriginSheet>();
 
     for (const line of payload.lines) {
@@ -154,7 +205,6 @@ export default function ImprimirRealinhamentoPage() {
       const cor = line.cor || '—';
       const tam = line.tamanho || '—';
 
-      // garante estrutura até o ref
       if (!originMap.has(line.fromCode)) {
         originMap.set(line.fromCode, { code: line.fromCode, name: line.fromName, dests: [], total: 0 });
       }
@@ -170,7 +220,7 @@ export default function ImprimirRealinhamentoPage() {
       if (!refGrid) {
         refGrid = {
           ref: refKey,
-          desc: line.desc || '',
+          desc: refCleanDesc.get(refKey) || '',
           cores: [],
           tamanhos: [],
           matrix: {},
