@@ -45,23 +45,55 @@ export default function ImprimirRealinhamentoPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Estratégia tripla de recebimento:
+    //   1) Escuta postMessage da aba que abriu esta (mais confiável)
+    //   2) Lê localStorage (compartilhado entre abas)
+    //   3) Lê sessionStorage (fallback)
+    //
+    // A primeira que der match ganha. Se em 2s nenhuma trouxe dado, mostra erro.
+    let done = false;
+
+    const onMessage = (ev: MessageEvent) => {
+      if (done) return;
+      if (ev.origin !== window.location.origin) return;
+      const data = ev.data;
+      if (data && data.type === 'realinhamento_print_payload' && data.payload) {
+        done = true;
+        setPayload(data.payload as Payload);
+        // manda ack pra opener parar de reenviar
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage('realinhamento_print_ack', window.location.origin);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('message', onMessage);
+
+    // Tenta storage imediatamente
     try {
-      // Tenta localStorage primeiro (compartilhado entre abas), depois sessionStorage
-      // como fallback pra compatibilidade.
       const raw =
         localStorage.getItem('realinhamento_print_payload') ||
         sessionStorage.getItem('realinhamento_print_payload');
-      if (!raw) {
-        setError('Nenhum plano encontrado. Volte pra tela de realinhamento e clique em "Gerar PDF" novamente.');
-        return;
+      if (raw) {
+        done = true;
+        setPayload(JSON.parse(raw) as Payload);
       }
-      const data = JSON.parse(raw) as Payload;
-      setPayload(data);
-      // Não apago o storage aqui — assim o usuário pode dar F5 ou reimprimir
-      // sem precisar gerar de novo. Ele é sobrescrito na próxima geração.
-    } catch (e: any) {
-      setError(`Erro lendo plano: ${e?.message || e}`);
-    }
+    } catch {}
+
+    // Se em 2.5s nada chegou, mostra erro
+    const timeout = setTimeout(() => {
+      if (!done) {
+        setError(
+          'Nenhum plano encontrado. Volte pra tela de realinhamento, atualize a página com Ctrl+F5 e clique em "Gerar PDF" novamente.',
+        );
+      }
+    }, 2500);
+
+    return () => {
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timeout);
+    };
   }, []);
 
   useEffect(() => {

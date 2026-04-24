@@ -246,13 +246,44 @@ export default function RealinhamentoPage() {
       note: note.trim() || null,
       lines: editedPlan.filter((l) => l.qty > 0),
     };
-    try {
-      // localStorage é compartilhado entre abas — sessionStorage NÃO herda via window.open
-      localStorage.setItem('realinhamento_print_payload', JSON.stringify(payload));
-    } catch {}
-    // Abre nova aba com print page (auto-aciona window.print)
-    // Sem noopener pra garantir que a nova aba tenha acesso ao storage
-    window.open('/retaguarda/realinhamento/imprimir', '_blank');
+    const raw = JSON.stringify(payload);
+
+    // Tripla via de entrega pra ser à prova de cache/bugs de browser:
+    //   1) localStorage (compartilhado entre abas na mesma origin)
+    //   2) sessionStorage (fallback se algum browser só herdar 1 dos 2)
+    //   3) postMessage direto pra nova aba após load (mais confiável)
+    try { localStorage.setItem('realinhamento_print_payload', raw); } catch {}
+    try { sessionStorage.setItem('realinhamento_print_payload', raw); } catch {}
+
+    // Abre nova aba SEM noopener pra poder chamar postMessage
+    const win = window.open('/retaguarda/realinhamento/imprimir', '_blank');
+    if (win) {
+      // Re-envia payload via postMessage até a nova aba responder "ok" ou timeout.
+      // Essa aba escuta "message" no load — assim mesmo se localStorage falhar,
+      // o dado chega.
+      let acknowledged = false;
+      const ackListener = (ev: MessageEvent) => {
+        if (ev.data === 'realinhamento_print_ack') {
+          acknowledged = true;
+          window.removeEventListener('message', ackListener);
+        }
+      };
+      window.addEventListener('message', ackListener);
+      let attempts = 0;
+      const pusher = setInterval(() => {
+        if (acknowledged || attempts > 20 || !win || win.closed) {
+          clearInterval(pusher);
+          return;
+        }
+        try {
+          win.postMessage(
+            { type: 'realinhamento_print_payload', payload },
+            window.location.origin,
+          );
+        } catch {}
+        attempts++;
+      }, 250);
+    }
   }
 
   const editedTotals = useMemo(() => {
