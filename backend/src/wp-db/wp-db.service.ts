@@ -81,4 +81,90 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
     return rows as unknown as T[];
   }
+
+  /**
+   * Busca URL da imagem principal (thumbnail) de produtos pelos SKUs/REFs.
+   *
+   * Como o SKU no WC muitas vezes tem variantes (ex: VLM-222EM, VLM-222EP) mas
+   * a REF base (VLM-222) é o que temos, usamos LIKE 'REF%'. Se houver múltiplos
+   * matches, pega o primeiro produto PUBLICADO encontrado (qualquer tamanho/cor
+   * tem a mesma foto principal na maioria dos casos).
+   *
+   * Retorna map { REF → imageUrl } — REF não encontrada fica fora do map.
+   *
+   * Performance: 1 query SQL pra uma lista de REFs. Se a lista ultrapassar 50,
+   * fatia em lotes pra não estourar o tamanho do statement.
+   */
+  async getImagesByRefs(refs: string[]): Promise<Record<string, string>> {
+    if (!this.pool || !refs.length) return {};
+
+    const uniqRefs = Array.from(new Set(refs.map((r) => String(r || '').trim()).filter(Boolean)));
+    if (!uniqRefs.length) return {};
+
+    const result: Record<string, string> = {};
+    const BATCH = 50;
+
+    // Detecta o host do WP pra montar URLs absolutas. Fallback razoável.
+    const siteUrlRows = await this.query<{ option_value: string }>(
+      "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
+    );
+    const siteUrl = (siteUrlRows[0]?.option_value || '').replace(/\/+$/, '');
+
+    for (let i = 0; i < uniqRefs.length; i += BATCH) {
+      const slice = uniqRefs.slice(i, i + BATCH);
+
+      // Constrói LIKE OR pra cada REF — precisa no where MySQL
+      const likeClauses = slice.map(() => 'pm_sku.meta_value LIKE ?').join(' OR ');
+      const likeParams = slice.map((r) => `${r}%`);
+
+      // Query:
+      // 1. Pega posts do tipo product (publicado ou rascunho) com SKU que bata
+      // 2. Faz join com _thumbnail_id → pega ID do anexo de imagem
+      // 3. Join com _wp_attached_file → caminho relativo do upload
+      // 4. Prefixa com siteurl/wp-content/uploads/ pra URL absoluta
+      const sql = `
+        SELECT
+          pm_sku.meta_value AS sku,
+          pm_file.meta_value AS file_path
+        FROM wp_postmeta pm_sku
+        JOIN wp_posts p
+          ON p.ID = pm_sku.post_id
+          AND p.post_type IN ('product', 'product_variation')
+        LEFT JOIN wp_posts parent
+          ON parent.ID = p.post_parent
+        JOIN wp_postmeta pm_thumb
+          ON pm_thumb.post_id = (CASE WHEN p.post_type = 'product_variation' THEN p.post_parent ELSE p.ID END)
+          AND pm_thumb.meta_key = '_thumbnail_id'
+        JOIN wp_postmeta pm_file
+          ON pm_file.post_id = pm_thumb.meta_value
+          AND pm_file.meta_key = '_wp_attached_file'
+        WHERE pm_sku.meta_key = '_sku'
+          AND (${likeClauses})
+      `;
+
+      try {
+        const rows = await this.query<{ sku: string; file_path: string }>(sql, likeParams);
+        for (const row of rows) {
+          const sku = String(row.sku || '');
+          const file = String(row.file_path || '');
+          if (!file) continue;
+
+          // Match: procura qual REF da lista original esse SKU corresponde
+          const matched = slice.find((r) => sku.toUpperCase().startsWith(r.toUpperCase()));
+          if (!matched) continue;
+          if (result[matched]) continue; // já pegou — mantém o primeiro
+
+          const url = siteUrl
+            ? `${siteUrl}/wp-content/uploads/${file}`
+            : `/wp-content/uploads/${file}`;
+          result[matched] = url;
+        }
+      } catch (e: any) {
+        this.logger.warn(`getImagesByRefs falhou: ${e.message}`);
+        // Não quebra o caller — só devolve vazio pro lote que falhou
+      }
+    }
+
+    return result;
+  }
 }

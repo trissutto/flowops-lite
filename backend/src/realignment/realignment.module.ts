@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { WebsocketModule } from '../websocket/websocket.module';
+import { WpDbModule } from '../wp-db/wp-db.module';
 import { RealignmentController } from './realignment.controller';
 import { RealignmentService } from './realignment.service';
 
@@ -13,7 +14,7 @@ import { RealignmentService } from './realignment.service';
  * WebsocketModule pra emitir `realignment:new` e `realignment:sent`.
  */
 @Module({
-  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule],
+  imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule],
   controllers: [RealignmentController],
   providers: [RealignmentService],
   exports: [RealignmentService],

@@ -2,6 +2,7 @@ import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenEx
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { WpDbService } from '../wp-db/wp-db.service';
 
 /**
  * RealignmentService — Realinhamento de estoques entre lojas.
@@ -38,6 +39,7 @@ export class RealignmentService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly gateway: RealtimeGateway,
+    private readonly wpDb: WpDbService,
   ) {}
 
   /**
@@ -465,9 +467,21 @@ export class RealignmentService {
         createdAt: true,
       },
     });
+    // Busca miniaturas de imagens em batch (1 query SQL no WP DB) pra enriquecer
+    // cada ordem com a foto do produto. Se o WP DB não tiver configurado, o map
+    // volta vazio e os itens ficam sem imageUrl — UI cai no fallback do ícone.
+    const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
+    let imagesByRef: Record<string, string> = {};
+    try {
+      imagesByRef = await this.wpDb.getImagesByRefs(uniqueRefs);
+    } catch (e: any) {
+      this.logger.warn(`[realignment] falha buscando imagens: ${e.message}`);
+    }
+
     return orders.map((o) => ({
       ...o,
       createdAt: o.createdAt.toISOString(),
+      imageUrl: imagesByRef[o.refCode] ?? null,
     }));
   }
 

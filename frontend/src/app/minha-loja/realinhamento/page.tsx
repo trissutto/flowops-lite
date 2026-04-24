@@ -27,7 +27,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
-  AlertCircle, Send, Sparkles, Shirt, ChevronDown,
+  AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -42,6 +42,7 @@ interface RealignmentItem {
   solicitanteNome: string;
   mensagem: string;
   createdAt: string;
+  imageUrl?: string | null;
 }
 
 /** Title-case pra descrição — o Giga devolve tudo maiúsculo, fica elegante
@@ -101,9 +102,21 @@ export default function MinhaLojaRealinhamentoPage() {
   // Accordion: só 1 pilha aberta por vez. Começa TUDO fechado — vendedora
   // vê só os botões das lojas destino empilhados e abre o que for separar.
   const [expandedDest, setExpandedDest] = useState<string | null>(null);
+  // No modo impressão, força TODAS as pilhas abertas pra sair completo no papel.
+  // Toggle temporário (~500ms) só durante o window.print().
+  const [printMode, setPrintMode] = useState(false);
 
   const toggleDest = useCallback((code: string) => {
     setExpandedDest((curr) => (curr === code ? null : code));
+  }, []);
+
+  const handlePrint = useCallback(async () => {
+    setPrintMode(true);
+    // Espera React renderizar todas as pilhas antes de chamar print
+    await new Promise((r) => setTimeout(r, 150));
+    window.print();
+    // Restaura estado original depois que fechou o diálogo de impressão
+    setTimeout(() => setPrintMode(false), 500);
   }, []);
 
   const pushToast = useCallback((msg: string) => {
@@ -238,7 +251,9 @@ export default function MinhaLojaRealinhamentoPage() {
             // REF compartilham a descrição base do produto)
             const rawDesc = list.find((it) => it.descricao && it.descricao.trim())?.descricao || '';
             const descricao = rawDesc ? toTitleCase(rawDesc) : '';
-            return { ref, descricao, cores, tams, matrix, totalQty, items: list };
+            // Imagem: primeira URL válida (todas variações da mesma REF usam a mesma)
+            const imageUrl = list.find((it) => it.imageUrl && it.imageUrl.trim())?.imageUrl || null;
+            return { ref, descricao, imageUrl, cores, tams, matrix, totalQty, items: list };
           })
           .sort((a, b) => a.ref.localeCompare(b.ref));
 
@@ -262,8 +277,8 @@ export default function MinhaLojaRealinhamentoPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-fuchsia-50/30 pb-16 relative">
       {/* Decor blob sutil — visual moderno sem poluir. */}
-      <div className="fixed top-40 -left-32 w-96 h-96 rounded-full bg-gradient-to-br from-violet-300/30 to-fuchsia-300/20 blur-3xl pointer-events-none" />
-      <div className="fixed bottom-20 -right-32 w-[28rem] h-[28rem] rounded-full bg-gradient-to-tl from-indigo-300/20 to-pink-300/20 blur-3xl pointer-events-none" />
+      <div className="no-print fixed top-40 -left-32 w-96 h-96 rounded-full bg-gradient-to-br from-violet-300/30 to-fuchsia-300/20 blur-3xl pointer-events-none" />
+      <div className="no-print fixed bottom-20 -right-32 w-[28rem] h-[28rem] rounded-full bg-gradient-to-tl from-indigo-300/20 to-pink-300/20 blur-3xl pointer-events-none" />
 
       {/* Header — glass sutil com gradiente. Sticky pra manter contexto. */}
       <header className="bg-gradient-to-r from-indigo-700 via-violet-700 to-fuchsia-700 text-white sticky top-0 z-30 shadow-2xl relative overflow-hidden">
@@ -294,8 +309,16 @@ export default function MinhaLojaRealinhamentoPage() {
             </div>
           </div>
           <button
+            onClick={handlePrint}
+            className="no-print p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
+            title="Imprimir ordens de separação"
+            disabled={items.length === 0}
+          >
+            <Printer className="w-4 h-4" />
+          </button>
+          <button
             onClick={loadItems}
-            className="p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
+            className="no-print p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
             title="Atualizar"
           >
             <RefreshCw className="w-4 h-4" />
@@ -348,7 +371,7 @@ export default function MinhaLojaRealinhamentoPage() {
           </div>
         ) : (
           byDestination.map((d) => {
-            const isOpen = expandedDest === d.code;
+            const isOpen = printMode || expandedDest === d.code;
             return (
               <section
                 key={d.code}
@@ -389,7 +412,7 @@ export default function MinhaLojaRealinhamentoPage() {
                     </div>
                   </div>
                   <ChevronDown
-                    className={`w-6 h-6 shrink-0 relative transition-transform duration-300 ${
+                    className={`no-print w-6 h-6 shrink-0 relative transition-transform duration-300 ${
                       isOpen ? 'rotate-180' : ''
                     }`}
                   />
@@ -400,11 +423,30 @@ export default function MinhaLojaRealinhamentoPage() {
                   <div id={`pilha-${d.code}`} className="divide-y divide-slate-100">
                     {d.refGroups.map((g) => (
                       <div key={g.ref} className="p-4 sm:p-6 space-y-4">
-                        {/* Header do REF — card elegante com REF grande + descrição. */}
+                        {/* Header do REF — card elegante com miniatura (quando tem)
+                            ou ícone gradient fallback. Tamanho 16x20 mobile-first
+                            pra vendedora reconhecer visualmente a peça antes de
+                            ir na arara. */}
                         <div className="flex items-start gap-3 flex-wrap">
-                          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-lg shadow-fuchsia-500/20">
-                            <Shirt className="w-6 h-6 text-white" />
-                          </div>
+                          {g.imageUrl ? (
+                            <div className="w-16 h-20 sm:w-20 sm:h-24 rounded-xl overflow-hidden shrink-0 shadow-lg ring-1 ring-slate-200 bg-slate-100 relative">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={g.imageUrl}
+                                alt={g.ref}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                                onError={(e) => {
+                                  // Fallback silencioso: esconde img quebrada
+                                  (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-16 h-20 sm:w-20 sm:h-24 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-lg shadow-fuchsia-500/20">
+                              <Shirt className="w-8 h-8 text-white" />
+                            </div>
+                          )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <div className="font-mono font-black text-2xl sm:text-3xl text-slate-900 tracking-tight uppercase leading-none">
@@ -441,7 +483,7 @@ export default function MinhaLojaRealinhamentoPage() {
 
         {/* Info card — menor e muted, só referência. */}
         {byDestination.length > 0 && (
-          <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-4 flex items-start gap-3">
+          <div className="no-print bg-indigo-50/60 border border-indigo-200 rounded-xl p-4 flex items-start gap-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
               <Package className="w-4 h-4 text-indigo-700" />
             </div>
@@ -456,7 +498,7 @@ export default function MinhaLojaRealinhamentoPage() {
       </main>
 
       {/* Toasts */}
-      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 space-y-2 z-50 w-full max-w-md px-4">
+      <div className="no-print fixed bottom-4 left-1/2 -translate-x-1/2 space-y-2 z-50 w-full max-w-md px-4">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -466,6 +508,40 @@ export default function MinhaLojaRealinhamentoPage() {
           </div>
         ))}
       </div>
+
+      {/* Regras de impressão — esconde decorativos, achata gradientes pra
+          economizar tinta e força todas as pilhas abertas. Sem página separada
+          de preview: a própria tela vira o impresso quando clicam em Imprimir. */}
+      <style jsx global>{`
+        @media print {
+          @page {
+            size: A4 portrait;
+            margin: 10mm;
+          }
+          html, body {
+            background: white !important;
+            color: #000 !important;
+          }
+          .no-print { display: none !important; }
+          header.sticky { position: static !important; box-shadow: none !important; }
+          /* Gradientes e glass viram fundos sólidos limpos pra não gastar tinta */
+          header[class*="from-indigo"],
+          button[class*="from-emerald"] {
+            background: #fff !important;
+            color: #000 !important;
+            box-shadow: none !important;
+            border-bottom: 2px solid #000 !important;
+          }
+          /* Mantém legibilidade das grades */
+          table { page-break-inside: auto; }
+          tr { page-break-inside: avoid; page-break-after: auto; }
+          section { page-break-inside: avoid; break-inside: avoid; }
+          /* Borda clara em vez de shadow */
+          .shadow-xl, .shadow-2xl, .shadow-lg { box-shadow: none !important; }
+          /* Força ícones/spinners invisíveis no papel */
+          svg.animate-spin { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
