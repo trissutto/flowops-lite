@@ -28,11 +28,19 @@ const NEXT_ALLOWED: Record<PickStatus, PickStatus[]> = {
 /**
  * Mapeamento do status INTERNO do pick-order (loja) → status no WooCommerce.
  *   - separating/ready → 'separacao' (em separação no site)
- *   - shipped (quando TODOS os pick-orders siblings já foram enviados) → 'enviado'
- *     (se o WC não aceitar 'enviado', o retry no WooCommerceService cai pra 'completed')
+ *   - shipped (quando TODOS os pick-orders siblings já foram enviados) → 'completed'
+ *
+ * IMPORTANTE — por que 'completed' e não 'enviado':
+ * O status customizado 'enviado' (violeta) do WC NÃO dispara o hook nativo
+ * `woocommerce_order_status_completed` — e é nele que o plugin de WhatsApp
+ * fica pendurado pra mandar o rastreio pra cliente. Ao marcar 'completed',
+ * o WC dispara o hook, o plugin pega o meta `_tracking_number` que já está
+ * salvo no pedido e envia a mensagem automaticamente.
+ * O status "Enviado" da listagem nativa fica inutilizado, mas é aceitável —
+ * "Concluído" no WC corresponde ao "Enviado" no fluxo físico (saiu da loja).
  */
 const WC_STATUS_SEPARATING = 'separacao';
-const WC_STATUS_SHIPPED = 'enviado';
+const WC_STATUS_SHIPPED = 'completed';
 
 @Injectable()
 export class PickOrdersService {
