@@ -399,93 +399,14 @@ export default function MinhaLojaRealinhamentoPage() {
                       </div>
                     </div>
 
-                    {/* Grade Cor × Tamanho — células grandes, toque fácil. */}
-                    <div className="overflow-x-auto -mx-4 px-4 sm:-mx-5 sm:px-5">
-                      <table className="w-full text-sm border-separate border-spacing-0">
-                        <thead>
-                          <tr>
-                            <th className="text-left px-3 py-3 text-sm font-black uppercase tracking-wider text-slate-600 bg-slate-50 rounded-tl-lg min-w-[160px] sticky left-0 z-10">
-                              Cor
-                            </th>
-                            {g.tams.map((t, idx) => (
-                              <th
-                                key={t}
-                                className={`text-center px-2 py-3 text-2xl font-black text-slate-900 bg-slate-50 min-w-[110px] ${
-                                  idx === g.tams.length - 1 ? 'rounded-tr-lg' : ''
-                                }`}
-                              >
-                                {String(t).toUpperCase()}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {g.cores.map((c, rowIdx) => (
-                            <tr key={c}>
-                              <td
-                                className={`px-3 py-2 font-bold text-slate-800 bg-white sticky left-0 z-10 border-t ${
-                                  rowIdx === 0 ? 'border-transparent' : 'border-slate-100'
-                                }`}
-                              >
-                                <span className="inline-block bg-slate-100 text-slate-900 rounded-lg px-3 py-1.5 border-2 border-slate-300 uppercase text-base font-black tracking-wide">
-                                  {String(c).toUpperCase()}
-                                </span>
-                              </td>
-                              {g.tams.map((t) => {
-                                const it = g.matrix[c][t];
-                                if (!it) {
-                                  return (
-                                    <td
-                                      key={t}
-                                      className={`px-2 py-2 text-center text-slate-300 border-t ${
-                                        rowIdx === 0 ? 'border-transparent' : 'border-slate-100'
-                                      }`}
-                                    >
-                                      <span className="text-2xl">·</span>
-                                    </td>
-                                  );
-                                }
-                                const sending = sendingIds.has(it.id);
-                                return (
-                                  <td
-                                    key={t}
-                                    className={`px-1.5 py-1.5 align-middle border-t ${
-                                      rowIdx === 0 ? 'border-transparent' : 'border-slate-100'
-                                    }`}
-                                  >
-                                    <button
-                                      onClick={() => markSent(it.id)}
-                                      disabled={sending}
-                                      className="group relative w-full min-h-[84px] flex flex-col items-center justify-center gap-1.5 border-2 border-amber-400/80 bg-gradient-to-br from-amber-50 via-amber-100 to-yellow-100 hover:from-emerald-50 hover:via-emerald-100 hover:to-teal-100 hover:border-emerald-500 hover:shadow-xl hover:shadow-emerald-200/60 active:scale-95 disabled:opacity-60 disabled:cursor-wait rounded-2xl px-2 py-2 transition-all shadow-md shadow-amber-200/40 overflow-hidden"
-                                      title="Marcar como enviada"
-                                    >
-                                      {/* Shine sutil no hover */}
-                                      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition bg-gradient-to-tr from-transparent via-white/40 to-transparent" />
-                                      <span className="relative text-3xl font-black text-amber-900 group-hover:text-emerald-800 tabular-nums leading-none tracking-tight">
-                                        {it.qtyOrigem}
-                                      </span>
-                                      <span className="relative flex items-center gap-1 text-[10px] font-black text-amber-800 group-hover:text-emerald-800 uppercase tracking-[0.12em] leading-none">
-                                        {sending ? (
-                                          <>
-                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                            enviando
-                                          </>
-                                        ) : (
-                                          <>
-                                            <CheckCircle2 className="w-3.5 h-3.5" />
-                                            enviei
-                                          </>
-                                        )}
-                                      </span>
-                                    </button>
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    {/* Grade Cor × Tamanho — formato idêntico à tela /consultar.
+                        Header de tamanhos tipo tabela compacta + bolinha de cor +
+                        coluna/linha Total. Células clicáveis pra marcar ENVIEI. */}
+                    <RealignGrid
+                      g={g}
+                      sendingIds={sendingIds}
+                      onSend={markSent}
+                    />
                   </div>
                 ))}
               </div>
@@ -521,5 +442,211 @@ export default function MinhaLojaRealinhamentoPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * RealignGrid — grade Cor × Tamanho no MESMO formato da tela /consultar.
+ *
+ * Estrutura:
+ *   thead: Cor | [tamanhos] | Total
+ *   tbody: ● [COR]  | [células clicáveis amber] | [row total]
+ *   tfoot: Total    | [col totals]              | [grand total]
+ *
+ * Diferença do /consultar: as células aqui representam peças A ENVIAR.
+ * Clicar na célula = marcar "ENVIEI" (dispara onSend). Durante o envio,
+ * mostra spinner. Células sem peça (aquele cor/tam não veio no lote) ficam
+ * "—" em slate, não são clicáveis.
+ */
+function RealignGrid({
+  g,
+  sendingIds,
+  onSend,
+}: {
+  g: {
+    ref: string;
+    descricao: string;
+    cores: string[];
+    tams: string[];
+    matrix: Record<string, Record<string, RealignmentItem | null>>;
+    totalQty: number;
+    items: RealignmentItem[];
+  };
+  sendingIds: Set<string>;
+  onSend: (id: string) => void;
+}) {
+  // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.
+  const totalsByColor = new Map<string, number>();
+  const totalsBySize = new Map<string, number>();
+  for (const c of g.cores) {
+    let rowTotal = 0;
+    for (const t of g.tams) {
+      const it = g.matrix[c][t];
+      if (it) {
+        rowTotal += it.qtyOrigem;
+        totalsBySize.set(t, (totalsBySize.get(t) || 0) + it.qtyOrigem);
+      }
+    }
+    totalsByColor.set(c, rowTotal);
+  }
+
+  return (
+    <>
+      <div className="overflow-x-auto border border-slate-200 rounded-lg">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-200">
+              <th className="text-left px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[100px]">
+                Cor
+              </th>
+              {g.tams.map((s) => (
+                <th
+                  key={s}
+                  className="px-2 py-2 text-center font-bold text-slate-700 min-w-[56px]"
+                >
+                  {s}
+                </th>
+              ))}
+              <th className="px-2 py-2 text-center font-bold text-slate-700 min-w-[56px] bg-slate-200">
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {g.cores.map((cor) => {
+              const colorTotal = totalsByColor.get(cor) || 0;
+              return (
+                <tr
+                  key={cor}
+                  className="transition border-b border-slate-100 hover:bg-slate-50"
+                >
+                  <td className="px-3 py-2 font-semibold text-slate-800 sticky left-0 z-10 bg-white border-r border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                          colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'
+                        }`}
+                      />
+                      <span
+                        className="truncate max-w-[110px] uppercase tracking-wide"
+                        title={cor}
+                      >
+                        {cor}
+                      </span>
+                    </div>
+                  </td>
+                  {g.tams.map((s) => {
+                    const it = g.matrix[cor]?.[s] ?? null;
+                    return (
+                      <td key={s} className="p-0.5 text-center">
+                        <RealignCell
+                          item={it}
+                          sending={it ? sendingIds.has(it.id) : false}
+                          onSend={onSend}
+                        />
+                      </td>
+                    );
+                  })}
+                  <td
+                    className={`px-2 py-2 text-center font-bold ${
+                      colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'
+                    } bg-slate-50`}
+                  >
+                    {colorTotal}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* Linha totais por tamanho */}
+            <tr className="bg-slate-100 border-t-2 border-slate-300">
+              <td className="px-3 py-2 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 border-r border-slate-200">
+                Total
+              </td>
+              {g.tams.map((s) => {
+                const t = totalsBySize.get(s) || 0;
+                return (
+                  <td
+                    key={s}
+                    className={`px-2 py-2 text-center font-bold ${
+                      t > 0 ? 'text-slate-800' : 'text-slate-400'
+                    }`}
+                  >
+                    {t}
+                  </td>
+                );
+              })}
+              <td className="px-2 py-2 text-center font-extrabold text-emerald-700 bg-slate-200">
+                {g.totalQty}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legenda — mesmo estilo da /consultar, contexto adaptado. */}
+      <div className="flex flex-wrap items-center gap-3 mt-2 px-1 text-[11px] text-slate-500">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
+          a enviar · toque pra marcar
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded bg-emerald-200 border border-emerald-400 inline-block" />
+          enviando...
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
+          sem peça neste lote
+        </span>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Célula individual da grade de realinhamento.
+ *   - Com item:  amber, clicável (mostra qty grande + "ENVIEI" pequeno)
+ *   - Sem item:  "—" slate, não clicável
+ *   - Enviando:  emerald + spinner
+ */
+function RealignCell({
+  item,
+  sending,
+  onSend,
+}: {
+  item: RealignmentItem | null;
+  sending: boolean;
+  onSend: (id: string) => void;
+}) {
+  const base =
+    'mx-auto w-full h-12 rounded flex flex-col items-center justify-center font-extrabold relative transition select-none';
+
+  if (!item) {
+    return (
+      <div className={`${base} bg-slate-50 text-slate-300 text-base`}>
+        —
+      </div>
+    );
+  }
+
+  if (sending) {
+    return (
+      <div className={`${base} bg-emerald-200 text-emerald-900 border border-emerald-400`}>
+        <Loader2 className="w-4 h-4 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSend(item.id)}
+      title={`Marcar como ENVIEI — ${item.qtyOrigem}un`}
+      className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 active:scale-95 cursor-pointer`}
+    >
+      <span className="text-lg leading-none tabular-nums">{item.qtyOrigem}</span>
+      <span className="text-[9px] font-black uppercase tracking-wider opacity-75 mt-0.5">
+        enviei
+      </span>
+    </button>
   );
 }
