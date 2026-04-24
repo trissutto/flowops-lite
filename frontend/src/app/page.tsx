@@ -1,24 +1,17 @@
 'use client';
 
 /**
- * / — Home/Launchpad da matriz.
+ * / — Home/Launchpad da matriz (v3 — 4 botões MÃE).
  *
- * ANTES: a raiz renderizava direto a tela de Separação + faixa KPI sticky.
- * AGORA: é um DASHBOARD de entrada — cards grandes coloridos (estilo
- * /minha-loja) organizados por seção (Operação / Retaguarda / Gestão /
- * Sistema), com KPIs no topo e Piloto Automático em destaque.
+ * MUDANÇA: antes a home jogava 15+ cards em 4 seções (Operação / Retaguarda /
+ * Gestão / Sistema). Ficou visualmente pesado pra quem só quer chegar em um
+ * módulo. Agora a home mostra APENAS 4 botões MÃE gigantes (PEDIDOS,
+ * RETAGUARDA, GESTÃO, SISTEMA), cada um com uma forma geométrica diferente,
+ * e cada um leva pra uma tela hub com os sub-módulos.
  *
- * Estrutura:
- *   1. Header de boas-vindas
- *   2. Faixa de KPIs (Processando / Em separação / Pgto pendente / Aguardando /
- *      Enviados hoje) + Toggle Piloto Automático
- *   3. Grid OPERAÇÃO — card jumbo pra Pedidos & Separação (o módulo mais usado)
- *   4. Grid RETAGUARDA — 8 cards médios
- *   5. Grid GESTÃO — 4 cards
- *   6. Grid SISTEMA — 1 card
- *
- * Mobile: tudo vira grid 2 colunas. Desktop: 3-4 colunas por seção.
- * Pedidos & Separação propriamente dita virou rota dedicada /separacao.
+ * Mantém:
+ *   - Header de boas-vindas + Piloto Automático (é o switch mais crítico)
+ *   - KPIs (Processando / Em separação / Pgto pendente / Aguardando / Enviados)
  *
  * Redireciona:
  *   - sem token → /login
@@ -29,9 +22,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Truck, FileSearch, CheckCircle2, Package2, Boxes,
-  Globe, Smartphone, Database, DollarSign, ShoppingBag, Users,
-  Megaphone, Settings, Zap, Bot, ArrowRight, TrendingUp, Shuffle,
+  LayoutDashboard, Boxes, TrendingUp, Settings, Zap, Bot, ArrowRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -43,56 +34,59 @@ interface CountsResp {
   grand: number;
 }
 
-interface EnviadosHojeItem {
-  storeId?: string;
-  storeName?: string;
-  total?: number;
-}
-
-// ----------- Config dos cards -----------
-type ModuleCard = {
+// ----------- Botões MÃE -----------
+// Cada botão usa uma combinação diferente de border-radius pra criar a
+// sensação de "formas variadas" sem sair do Tailwind. Combinado com blobs
+// decorativos SVG internos o visual fica moderno e único por botão.
+type MotherButton = {
   href: string;
   label: string;
   subtitle: string;
   icon: typeof LayoutDashboard;
+  gradient: string;
+  shape: string;      // classes tailwind de border-radius assimétrico
+  blob: string;       // cor do blob decorativo interno
+  kpiKey?: string;    // opcional — pra mostrar contador no card
 };
 
-type Section = {
-  key: string;
-  label: string;
-  // Gradient color pair for section identity
-  bg: string;
-  accent: string;   // tailwind class pro rótulo da seção
-  items: ModuleCard[];
-};
-
-const OPERACAO_CARDS: ModuleCard[] = [
-  { href: '/separacao', label: 'Pedidos & Separação', subtitle: '1-clique envia pra loja', icon: LayoutDashboard },
-];
-
-const RETAGUARDA_CARDS: ModuleCard[] = [
-  { href: '/retaguarda/enviados-hoje',   label: 'Enviados por Loja', subtitle: 'Tracking do dia',         icon: Truck },
-  { href: '/retaguarda/baixas-log',      label: 'Log de Baixas',     subtitle: 'Auditoria ERP',          icon: FileSearch },
-  { href: '/retaguarda/venda-certa',     label: 'Venda Certa',       subtitle: 'Anti-malandragem',       icon: CheckCircle2 },
-  { href: '/retaguarda/materiais',       label: 'Materiais',         subtitle: 'Pedidos das filiais',    icon: Package2 },
-  { href: '/retaguarda/almoxarifado',    label: 'Almoxarifado',      subtitle: 'Estoque interno',        icon: Boxes },
-  { href: '/retaguarda/publicar-site',   label: 'Publicar no Site',  subtitle: 'Cadastros via IA',       icon: Globe },
-  { href: '/retaguarda/whatsapp',        label: 'WhatsApp',          subtitle: 'Conexão + bulk',         icon: Smartphone },
-  { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',   subtitle: 'Auditoria SKU',          icon: Database },
-  { href: '/retaguarda/vendedoras',      label: 'Vendedoras',        subtitle: 'Karine, Manu, …',        icon: Users },
-  { href: '/retaguarda/realinhamento',   label: 'Realinhamento',     subtitle: 'Rebalancear estoque entre lojas', icon: Shuffle },
-];
-
-const GESTAO_CARDS: ModuleCard[] = [
-  { href: '/financeiro', label: 'Financeiro', subtitle: 'Faturamento + recebíveis', icon: DollarSign },
-  { href: '/produtos',   label: 'Produtos',   subtitle: 'Sync + variações',         icon: ShoppingBag },
-  { href: '/clientes',   label: 'Clientes',   subtitle: 'CRM + compras',            icon: Users },
-  { href: '/marketing',  label: 'Marketing',  subtitle: 'Recuperação + campanhas',  icon: Megaphone },
-  { href: '/relatorios/vendedoras', label: 'Vendas por Vendedora', subtitle: 'Ranking mensal + CSV', icon: TrendingUp },
-];
-
-const SISTEMA_CARDS: ModuleCard[] = [
-  { href: '/configuracoes', label: 'Configurações', subtitle: 'Lojas, roles, prioridades', icon: Settings },
+const MOTHER_BUTTONS: MotherButton[] = [
+  {
+    href: '/separacao',
+    label: 'PEDIDOS',
+    subtitle: 'Separação · envio · impressão',
+    icon: LayoutDashboard,
+    gradient: 'from-sky-500 via-blue-600 to-indigo-700',
+    shape: 'rounded-tl-[5rem] rounded-br-[5rem] rounded-tr-3xl rounded-bl-3xl',
+    blob: 'bg-cyan-300/30',
+    kpiKey: 'processing',
+  },
+  {
+    href: '/retaguarda',
+    label: 'RETAGUARDA',
+    subtitle: 'Materiais · baixas · ERP · site',
+    icon: Boxes,
+    gradient: 'from-amber-500 via-orange-600 to-red-600',
+    shape: 'rounded-tr-[5rem] rounded-bl-[5rem] rounded-tl-3xl rounded-br-3xl',
+    blob: 'bg-yellow-300/30',
+  },
+  {
+    href: '/gestao',
+    label: 'GESTÃO',
+    subtitle: 'Financeiro · produtos · CRM · marketing',
+    icon: TrendingUp,
+    gradient: 'from-emerald-500 via-teal-600 to-cyan-700',
+    shape: 'rounded-bl-[5rem] rounded-tr-[5rem] rounded-br-3xl rounded-tl-3xl',
+    blob: 'bg-lime-300/30',
+  },
+  {
+    href: '/sistema',
+    label: 'SISTEMA',
+    subtitle: 'Configurações · lojas · usuários',
+    icon: Settings,
+    gradient: 'from-slate-700 via-slate-800 to-slate-950',
+    shape: 'rounded-br-[5rem] rounded-tl-[5rem] rounded-bl-3xl rounded-tr-3xl',
+    blob: 'bg-fuchsia-400/20',
+  },
 ];
 
 // KPI cards visíveis no topo
@@ -112,7 +106,7 @@ export default function DashboardHome() {
   const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
   const [pilotBusy, setPilotBusy] = useState(false);
 
-  // Guard de sessão + role (mesma lógica da home antiga)
+  // Guard de sessão + role
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
@@ -128,9 +122,8 @@ export default function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Piloto Automático — flag agora é server-side. Sincroniza no mount e a cada 30s.
+  // Piloto Automático — flag server-side. Sincroniza no mount e a cada 30s.
   useEffect(() => {
-    // Mostra imediatamente o último estado conhecido (cache) pra UI não piscar
     setPilot(isPilotOn());
 
     let cancelled = false;
@@ -165,8 +158,6 @@ export default function DashboardHome() {
         if (!cancelled) setCounts(cnt.byStatus);
       } catch {}
       try {
-        // Endpoint existente — retorna pedidos enviados hoje agrupados por loja.
-        // Uso o total agregado pra KPI.
         const env = await api<any>('/retaguarda/enviados-hoje');
         if (!cancelled) {
           if (Array.isArray(env)) {
@@ -202,7 +193,6 @@ export default function DashboardHome() {
     if (pilotBusy) return;
     const next = !pilot;
     setPilotBusy(true);
-    // Optimistic — UI responde já; se backend rejeitar, desfaz abaixo.
     setPilot(next);
     try {
       const s = await togglePilotServer(next);
@@ -213,7 +203,6 @@ export default function DashboardHome() {
           alert('Piloto LIGADO, mas o WhatsApp não está conectado. Conecte em /retaguarda/whatsapp antes de receber pedidos.');
         }
       } else {
-        // Rollback se server retornou null (falha de rede)
         setPilot(!next);
         alert('Não foi possível mudar o estado do Piloto. Tenta de novo.');
       }
@@ -229,10 +218,10 @@ export default function DashboardHome() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {/* Header de boas-vindas */}
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-50">
+      {/* Header */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 pb-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 pb-10">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
               <div className="text-xs uppercase tracking-widest text-slate-400 mb-1">Lurds Order One</div>
@@ -277,160 +266,82 @@ export default function DashboardHome() {
         </div>
       </div>
 
-      {/* KPIs — flutuam acima do fundo escuro, criando efeito de card */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 -mt-5 relative">
+      {/* KPIs flutuantes */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 -mt-6 relative">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3">
           {KPI_CARDS.map((c) => (
             <div
               key={c.slug}
-              className={`bg-white rounded-xl shadow-sm border-l-4 ${c.color} px-3 py-2.5`}
+              className={`bg-white rounded-xl shadow-md border-l-4 ${c.color} px-3 py-2.5`}
             >
               <div className="text-[11px] sm:text-xs text-slate-500 leading-none mb-1">{c.label}</div>
-              <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight">
+              <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight tabular-nums">
                 {(counts[c.slug]?.total ?? 0).toLocaleString('pt-BR')}
               </div>
             </div>
           ))}
-          <div className="bg-white rounded-xl shadow-sm border-l-4 border-pink-500 px-3 py-2.5">
+          <div className="bg-white rounded-xl shadow-md border-l-4 border-pink-500 px-3 py-2.5">
             <div className="text-[11px] sm:text-xs text-slate-500 leading-none mb-1 flex items-center gap-1">
               <TrendingUp className="w-3 h-3" /> Enviados hoje
             </div>
-            <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight">
+            <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight tabular-nums">
               {enviadosHoje.toLocaleString('pt-BR')}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Grid de módulos */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-        {/* OPERAÇÃO — card jumbo (mais usado) */}
-        <section>
-          <SectionLabel label="Operação" color="text-sky-700" />
-          <div className="grid grid-cols-1 gap-3">
-            {OPERACAO_CARDS.map((item) => (
-              <JumboCard
-                key={item.href}
-                item={item}
-                gradient="from-sky-500 via-blue-600 to-blue-700"
-                kpi={counts['processing']?.total}
-                kpiLabel="processando agora"
-              />
-            ))}
-          </div>
-        </section>
-
-        {/* RETAGUARDA */}
-        <section>
-          <SectionLabel label="Retaguarda" color="text-amber-700" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {RETAGUARDA_CARDS.map((item) => (
-              <ModuleCardView
-                key={item.href}
-                item={item}
-                gradient="from-amber-500 to-orange-600"
-              />
-            ))}
-          </div>
-        </section>
-
-        {/* GESTÃO */}
-        <section>
-          <SectionLabel label="Gestão" color="text-emerald-700" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {GESTAO_CARDS.map((item) => (
-              <ModuleCardView
-                key={item.href}
-                item={item}
-                gradient="from-emerald-500 to-teal-600"
-              />
-            ))}
-          </div>
-        </section>
-
-        {/* SISTEMA */}
-        <section>
-          <SectionLabel label="Sistema" color="text-slate-700" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {SISTEMA_CARDS.map((item) => (
-              <ModuleCardView
-                key={item.href}
-                item={item}
-                gradient="from-slate-600 to-slate-800"
-              />
-            ))}
-          </div>
-        </section>
+      {/* 4 BOTÕES MÃE — grid 2x2 gigante */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+          {MOTHER_BUTTONS.map((btn) => (
+            <MotherButtonCard
+              key={btn.href}
+              btn={btn}
+              kpi={btn.kpiKey ? counts[btn.kpiKey]?.total : undefined}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function SectionLabel({ label, color }: { label: string; color: string }) {
-  return (
-    <div className={`text-xs font-bold uppercase tracking-[0.2em] ${color} mb-3`}>
-      {label}
-    </div>
-  );
-}
-
-function JumboCard({
-  item, gradient, kpi, kpiLabel,
-}: {
-  item: ModuleCard;
-  gradient: string;
-  kpi?: number;
-  kpiLabel?: string;
-}) {
-  const Icon = item.icon;
-  // Card inteiro continua clicável (Link envolve tudo), mas agora existe um
-  // BOTÃO visível "ABRIR →" pra dar affordance clara de clique.
+function MotherButtonCard({ btn, kpi }: { btn: MotherButton; kpi?: number }) {
+  const Icon = btn.icon;
   return (
     <Link
-      href={item.href}
-      className={`group block rounded-2xl bg-gradient-to-br ${gradient} text-white shadow-lg hover:shadow-xl hover:scale-[1.01] transition p-5 sm:p-6`}
+      href={btn.href}
+      className={`group relative overflow-hidden bg-gradient-to-br ${btn.gradient} ${btn.shape} text-white shadow-2xl hover:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.45)] hover:scale-[1.02] transition-all duration-300 min-h-[220px] sm:min-h-[280px] flex flex-col justify-between p-7 sm:p-10`}
     >
-      <div className="flex items-center gap-4 sm:gap-5">
-        <div className="w-14 h-14 sm:w-16 sm:h-16 bg-white/15 backdrop-blur rounded-2xl flex items-center justify-center shrink-0">
-          <Icon className="w-7 h-7 sm:w-8 sm:h-8" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-lg sm:text-xl font-bold leading-tight">{item.label}</div>
-          <div className="text-xs sm:text-sm opacity-90 mt-0.5">{item.subtitle}</div>
-          {kpi != null && kpi > 0 && (
-            <div className="mt-2 inline-flex items-center gap-1.5 bg-white/20 backdrop-blur rounded-full px-2.5 py-0.5 text-xs font-semibold">
-              {kpi.toLocaleString('pt-BR')} {kpiLabel}
-            </div>
-          )}
-        </div>
-        <div className="hidden sm:flex items-center gap-1.5 bg-white text-slate-900 font-bold text-sm px-4 py-2.5 rounded-xl shadow-md group-hover:shadow-lg group-hover:-translate-y-0.5 transition shrink-0">
-          ABRIR
-          <ArrowRight className="w-4 h-4" />
-        </div>
-      </div>
-    </Link>
-  );
-}
+      {/* Blobs decorativos pra criar profundidade e diferenciar cada shape */}
+      <div className={`absolute -top-24 -right-24 w-72 h-72 rounded-full ${btn.blob} blur-3xl pointer-events-none`} />
+      <div className={`absolute -bottom-32 -left-20 w-80 h-80 rounded-full ${btn.blob} blur-3xl pointer-events-none opacity-60`} />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,white_0%,transparent_70%)] opacity-5 pointer-events-none" />
 
-function ModuleCardView({ item, gradient }: { item: ModuleCard; gradient: string }) {
-  const Icon = item.icon;
-  // Card com botão "ABRIR" destacado no rodapé — mais affordance de clique do
-  // que só uma setinha solta. Link envolve o card todo, então clicar em qualquer
-  // área funciona, mas o botão é o foco visual.
-  return (
-    <Link
-      href={item.href}
-      className={`group flex flex-col rounded-xl bg-gradient-to-br ${gradient} text-white shadow-md hover:shadow-lg hover:-translate-y-0.5 transition p-4 min-h-[150px]`}
-    >
-      <div className="w-10 h-10 bg-white/15 rounded-lg flex items-center justify-center mb-3">
-        <Icon className="w-5 h-5" />
+      {/* Top — ícone gigante */}
+      <div className="relative flex items-start justify-between">
+        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-white/15 backdrop-blur-md ring-1 ring-white/25 flex items-center justify-center shadow-xl group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300">
+          <Icon className="w-10 h-10 sm:w-12 sm:h-12 drop-shadow-lg" />
+        </div>
+        {kpi != null && kpi > 0 && (
+          <div className="bg-white/25 backdrop-blur-md ring-1 ring-white/30 rounded-full px-4 py-1.5 text-sm font-black tabular-nums shadow-lg">
+            {kpi.toLocaleString('pt-BR')} agora
+          </div>
+        )}
       </div>
-      <div className="font-semibold text-sm leading-tight">{item.label}</div>
-      <div className="text-[11px] opacity-85 mt-0.5 line-clamp-1">{item.subtitle}</div>
-      <div className="mt-auto pt-3">
-        <div className="inline-flex items-center gap-1 bg-white/20 backdrop-blur text-white text-xs font-bold px-3 py-1.5 rounded-lg group-hover:bg-white group-hover:text-slate-900 transition">
+
+      {/* Bottom — nome enorme + subtítulo + CTA */}
+      <div className="relative mt-6">
+        <div className="text-4xl sm:text-6xl font-black tracking-tight leading-none drop-shadow-md">
+          {btn.label}
+        </div>
+        <div className="text-sm sm:text-base opacity-90 mt-3 font-medium">
+          {btn.subtitle}
+        </div>
+        <div className="mt-5 inline-flex items-center gap-2 bg-white text-slate-900 font-black text-sm px-5 py-2.5 rounded-2xl shadow-xl group-hover:shadow-2xl group-hover:-translate-y-1 transition">
           ABRIR
-          <ArrowRight className="w-3.5 h-3.5" />
+          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition" />
         </div>
       </div>
     </Link>
