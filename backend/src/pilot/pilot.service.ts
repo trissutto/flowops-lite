@@ -23,12 +23,17 @@ import { extractVariantFromLineItem, detectPickup, extractCpf } from '../woocomm
  *   - Dedup por wcOrderId (flag em memória + verifica pick-order existente)
  *
  * Gates (não dispara mesmo ligado):
- *   - WhatsApp desconectado → aborta (não marca separação sem enviar)
  *   - Multi-store split → aborta (requer aprovação manual na retaguarda)
  *   - Ruptura total → aborta (sem estoque em nenhuma loja)
  *   - Pedido já tem pick-order ativo → aborta (operador manual já agiu)
  *   - Pedido mais velho que PILOT_MAX_AGE_MIN (default 30min) → aborta
  *     (evita disparar em pedidos antigos que vieram no poll por overlap)
+ *
+ * WhatsApp OPCIONAL:
+ *   - Se Baileys conectado → envia mensagem pra loja E cria pick-order
+ *   - Se Baileys OFFLINE → pula envio WA mas CONTINUA o fluxo:
+ *     cria pick-order + muda status WC → loja vê via socket/app (/minha-loja)
+ *     Mensagem de auditoria muda pra "notificação via app (WA off)".
  *
  * Rate limit: máximo N disparos/minuto (default 30) pra não banir Baileys.
  */
@@ -164,13 +169,10 @@ export class PilotService {
           }
         }
 
-        // Gate 4: WhatsApp conectado?
-        const waStatus = this.whatsapp.getStatus();
-        if (!waStatus.connected) {
-          this.logger.warn(`[pilot] #${wcOrderId} → WhatsApp desconectado, abortando`);
-          await this.audit('skip', { wcOrderId, reason: 'wa-disconnected' }, 503);
-          return;
-        }
+        // WhatsApp OPCIONAL — não é mais gate. Se tiver conectado, envia mensagem.
+        // Se não tiver, segue criando o pick-order + mudando status WC, a loja
+        // recebe via socket no app /minha-loja. Thiago (CEO) quer que o Piloto
+        // rode mesmo com WA off pra não bloquear operação.
 
         // Gate 5: já tem pick-order ativo? (outro caminho já agiu)
         const already = await this.prisma.order.findFirst({
@@ -227,26 +229,31 @@ export class PilotService {
       return;
     }
 
-    // 4) Verifica que tem pelo menos 1 grupo com WhatsApp
-    const groupsWithWa = preview.groups.filter((g: any) => g.whatsapp && g.whatsappMessage);
-    if (groupsWithWa.length === 0) {
-      this.logger.warn(`[pilot] #${wcOrderId} → nenhuma loja com WhatsApp`);
-      await this.audit('skip', { wcOrderId, reason: 'no-whatsapp' }, 400);
-      return;
-    }
-
-    // 5) Dispara WhatsApp — se qualquer um falhar, aborta antes do PATCH
+    // 4) WhatsApp é BEST-EFFORT (Thiago #181): se Baileys tiver conectado,
+    //    tenta enviar a(s) mensagem(ens); se não tiver, pula e segue o fluxo.
+    //    Notificação visual pras lojas acontece via socket quando o
+    //    `routing.confirmRoute` roda (passo 6).
+    const waStatus = this.whatsapp.getStatus();
+    const waSentOk: string[] = [];
     const sendFailures: Array<{ store: string; error: string }> = [];
-    for (const g of groupsWithWa) {
-      // filter acima já garantiu que whatsapp e whatsappMessage são strings.
-      const r = await this.whatsapp.sendText(g.whatsapp as string, g.whatsappMessage as string);
-      if (!r.ok) sendFailures.push({ store: g.storeCode, error: r.error || 'falha' });
-    }
+    let waAttempted = false;
 
-    if (sendFailures.length > 0) {
-      this.logger.warn(`[pilot] #${wcOrderId} → falha envio WA: ${JSON.stringify(sendFailures)}`);
-      await this.audit('send-failed', { wcOrderId, failures: sendFailures }, 502);
-      return;
+    if (waStatus.connected) {
+      const groupsWithWa = preview.groups.filter((g: any) => g.whatsapp && g.whatsappMessage);
+      if (groupsWithWa.length > 0) {
+        waAttempted = true;
+        for (const g of groupsWithWa) {
+          const r = await this.whatsapp.sendText(g.whatsapp as string, g.whatsappMessage as string);
+          if (r.ok) waSentOk.push(g.storeCode);
+          else sendFailures.push({ store: g.storeCode, error: r.error || 'falha' });
+        }
+        // Loga falhas parciais mas NÃO aborta — a loja vê o pedido pelo app
+        if (sendFailures.length > 0) {
+          this.logger.warn(`[pilot] #${wcOrderId} → WA enviou ${waSentOk.length}/${groupsWithWa.length} (falhas: ${JSON.stringify(sendFailures)}) — seguindo mesmo assim`);
+        }
+      }
+    } else {
+      this.logger.log(`[pilot] #${wcOrderId} → WhatsApp OFF, seguindo sem envio (notificação via app)`);
     }
 
     // 6) Persiste pick-orders (mesma lógica do controller ensurePickOrdersForWc)
@@ -267,21 +274,34 @@ export class PilotService {
 
     // 7) Atualiza WC: status → separacao + nota
     const storesLabel = preview.groups.map((g: any) => `${g.storeName} (${g.storeCode})`).join(', ');
+    const noteChannel = waAttempted && sendFailures.length === 0
+      ? 'via WhatsApp'
+      : waAttempted
+        ? `via WhatsApp (${waSentOk.length} ok, ${sendFailures.length} falhou) + app`
+        : 'via app (WhatsApp offline)';
+
     try {
       await this.wc.updateOrder(wcOrderId, { status: 'separacao' });
       await this.wc.addOrderNote(
         wcOrderId,
-        `Separação enviada via WhatsApp pra: ${storesLabel}. [Piloto Automático]`,
+        `Separação enviada ${noteChannel} pra: ${storesLabel}. [Piloto Automático]`,
         false,
       );
     } catch (e: any) {
-      this.logger.error(`[pilot] #${wcOrderId} → WhatsApp OK mas PATCH WC falhou: ${e?.message}`);
+      this.logger.error(`[pilot] #${wcOrderId} → pick-order OK mas PATCH WC falhou: ${e?.message}`);
       await this.audit('patch-wc-failed', { wcOrderId, error: e?.message }, 502);
       return;
     }
 
-    this.logger.log(`[pilot] ✅ #${wcOrderId} auto-enviado pra ${storesLabel}`);
-    await this.audit('sent', { wcOrderId, stores: preview.groups.map((g: any) => g.storeCode), shippingMethod: preview.shippingMethod }, 200);
+    this.logger.log(`[pilot] ✅ #${wcOrderId} auto-enviado pra ${storesLabel} (${noteChannel})`);
+    await this.audit('sent', {
+      wcOrderId,
+      stores: preview.groups.map((g: any) => g.storeCode),
+      shippingMethod: preview.shippingMethod,
+      waAttempted,
+      waSentOk,
+      waFailures: sendFailures,
+    }, 200);
   }
 
   // ───────────────────────────────────────────────────────────────────────
