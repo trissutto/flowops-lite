@@ -354,6 +354,7 @@ export class RealignmentService {
         data: {
           tipo: 'REALINHAMENTO',
           refCode: p.ref || p.sku,
+          descricao: (p.desc ?? '').trim() || null,
           cor: p.cor ?? null,
           tamanho: p.tamanho ?? null,
           qtyOrigem: p.qty,
@@ -453,6 +454,7 @@ export class RealignmentService {
       select: {
         id: true,
         refCode: true,
+        descricao: true,
         cor: true,
         tamanho: true,
         qtyOrigem: true,

@@ -349,6 +349,7 @@ model TransferOrder {
   id                String   @id @default(uuid())
   tipo              String   // REPOSICAO | VENDA_CERTA | REALINHAMENTO
   refCode           String   @map("ref_code")           // ex: VMS-223
+  descricao         String?                                // ex: "VESTIDO MIDI ESTAMPA PRETO" (descrição completa do Giga)
   cor               String?                                // ex: PRETO (null = cor não especificada no pedido)
   tamanho           String?                                // ex: 46    (null = tamanho não especificado)
   qtyOrigem         Int      @map("qty_origem")          // qtd na loja de origem no momento do pedido
