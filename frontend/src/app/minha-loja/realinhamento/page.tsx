@@ -27,7 +27,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
-  AlertCircle, Send, Sparkles, Shirt,
+  AlertCircle, Send, Sparkles, Shirt, ChevronDown,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -98,6 +98,13 @@ export default function MinhaLojaRealinhamentoPage() {
   const [error, setError] = useState<string | null>(null);
   const [sendingIds, setSendingIds] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
+  // Accordion: só 1 pilha aberta por vez. Começa TUDO fechado — vendedora
+  // vê só os botões das lojas destino empilhados e abre o que for separar.
+  const [expandedDest, setExpandedDest] = useState<string | null>(null);
+
+  const toggleDest = useCallback((code: string) => {
+    setExpandedDest((curr) => (curr === code ? null : code));
+  }, []);
 
   const pushToast = useCallback((msg: string) => {
     const id = String(Date.now() + Math.random());
@@ -340,78 +347,96 @@ export default function MinhaLojaRealinhamentoPage() {
             </div>
           </div>
         ) : (
-          byDestination.map((d) => (
-            <section
-              key={d.code}
-              className="bg-white/90 backdrop-blur rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden relative"
-            >
-              {/* Header destino — gradiente mais sofisticado + glass accents. */}
-              <div className="bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 text-white px-5 py-5 flex items-center gap-4 relative overflow-hidden">
-                <div className="absolute -top-8 -right-8 w-40 h-40 rounded-full bg-white/15 blur-2xl" />
-                <div className="absolute bottom-0 left-1/3 w-32 h-32 rounded-full bg-cyan-300/20 blur-3xl" />
-                <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 ring-1 ring-white/30 shadow-lg relative">
-                  <Send className="w-7 h-7" />
-                </div>
-                <div className="min-w-0 flex-1 relative">
-                  <div className="text-[11px] font-black uppercase tracking-[0.15em] opacity-80">
-                    Pilha pra
+          byDestination.map((d) => {
+            const isOpen = expandedDest === d.code;
+            return (
+              <section
+                key={d.code}
+                className="bg-white/90 backdrop-blur rounded-3xl border border-slate-200/80 shadow-xl overflow-hidden relative"
+              >
+                {/* Header destino = BOTÃO clicável. Toca abre/fecha a pilha.
+                    Só 1 aberta por vez (accordion) — foco total em separar
+                    uma loja antes de ir pra próxima. */}
+                <button
+                  type="button"
+                  onClick={() => toggleDest(d.code)}
+                  aria-expanded={isOpen}
+                  aria-controls={`pilha-${d.code}`}
+                  className="w-full bg-gradient-to-r from-emerald-500 via-teal-600 to-cyan-600 text-white px-5 py-5 flex items-center gap-4 relative overflow-hidden text-left active:scale-[0.995] hover:brightness-105 transition"
+                >
+                  <div className="absolute -top-8 -right-8 w-40 h-40 rounded-full bg-white/15 blur-2xl pointer-events-none" />
+                  <div className="absolute bottom-0 left-1/3 w-32 h-32 rounded-full bg-cyan-300/20 blur-3xl pointer-events-none" />
+                  <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 ring-1 ring-white/30 shadow-lg relative">
+                    <Send className="w-7 h-7" />
                   </div>
-                  <div className="font-black text-2xl sm:text-3xl leading-tight truncate tracking-tight mt-0.5">
-                    <span className="font-mono bg-white/25 backdrop-blur rounded-lg px-2.5 py-0.5 text-xl mr-2 ring-1 ring-white/30">
-                      {d.code}
-                    </span>
-                    {d.name}
-                  </div>
-                </div>
-                <div className="text-right shrink-0 relative">
-                  <div className="text-4xl font-black tabular-nums leading-none tracking-tight">
-                    {d.totalUnits}
-                  </div>
-                  <div className="text-[11px] font-black uppercase tracking-wider opacity-85 mt-1.5">
-                    unidades
-                  </div>
-                </div>
-              </div>
-
-              {/* Grupos por REF */}
-              <div className="divide-y divide-slate-100">
-                {d.refGroups.map((g) => (
-                  <div key={g.ref} className="p-4 sm:p-6 space-y-4">
-                    {/* Header do REF — card elegante com REF grande + descrição. */}
-                    <div className="flex items-start gap-3 flex-wrap">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-lg shadow-fuchsia-500/20">
-                        <Shirt className="w-6 h-6 text-white" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <div className="font-mono font-black text-2xl sm:text-3xl text-slate-900 tracking-tight uppercase leading-none">
-                            {g.ref.toUpperCase()}
-                          </div>
-                          <span className="text-xs bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-800 border border-indigo-200 rounded-full px-3 py-1 font-black uppercase tracking-wider shadow-sm">
-                            {g.items.length} × {g.totalQty}un
-                          </span>
-                        </div>
-                        {g.descricao && (
-                          <div className="text-sm text-slate-600 font-medium mt-1.5 leading-snug line-clamp-2">
-                            {g.descricao}
-                          </div>
-                        )}
-                      </div>
+                  <div className="min-w-0 flex-1 relative">
+                    <div className="text-[11px] font-black uppercase tracking-[0.15em] opacity-80">
+                      Pilha pra
                     </div>
-
-                    {/* Grade Cor × Tamanho — formato idêntico à tela /consultar.
-                        Header de tamanhos tipo tabela compacta + bolinha de cor +
-                        coluna/linha Total. Células clicáveis pra marcar ENVIEI. */}
-                    <RealignGrid
-                      g={g}
-                      sendingIds={sendingIds}
-                      onSend={markSent}
-                    />
+                    <div className="font-black text-2xl sm:text-3xl leading-tight truncate tracking-tight mt-0.5">
+                      <span className="font-mono bg-white/25 backdrop-blur rounded-lg px-2.5 py-0.5 text-xl mr-2 ring-1 ring-white/30">
+                        {d.code}
+                      </span>
+                      {d.name}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </section>
-          ))
+                  <div className="text-right shrink-0 relative">
+                    <div className="text-4xl font-black tabular-nums leading-none tracking-tight">
+                      {d.totalUnits}
+                    </div>
+                    <div className="text-[11px] font-black uppercase tracking-wider opacity-85 mt-1.5">
+                      unidades
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`w-6 h-6 shrink-0 relative transition-transform duration-300 ${
+                      isOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {/* Grupos por REF — só renderiza quando aberto */}
+                {isOpen && (
+                  <div id={`pilha-${d.code}`} className="divide-y divide-slate-100">
+                    {d.refGroups.map((g) => (
+                      <div key={g.ref} className="p-4 sm:p-6 space-y-4">
+                        {/* Header do REF — card elegante com REF grande + descrição. */}
+                        <div className="flex items-start gap-3 flex-wrap">
+                          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-lg shadow-fuchsia-500/20">
+                            <Shirt className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <div className="font-mono font-black text-2xl sm:text-3xl text-slate-900 tracking-tight uppercase leading-none">
+                                {g.ref.toUpperCase()}
+                              </div>
+                              <span className="text-xs bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-800 border border-indigo-200 rounded-full px-3 py-1 font-black uppercase tracking-wider shadow-sm">
+                                {g.items.length} × {g.totalQty}un
+                              </span>
+                            </div>
+                            {g.descricao && (
+                              <div className="text-sm text-slate-600 font-medium mt-1.5 leading-snug line-clamp-2">
+                                {g.descricao}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Grade Cor × Tamanho — formato idêntico à tela /consultar.
+                            Header de tamanhos tipo tabela compacta + bolinha de cor +
+                            coluna/linha Total. Células clicáveis pra marcar ENVIEI. */}
+                        <RealignGrid
+                          g={g}
+                          sendingIds={sendingIds}
+                          onSend={markSent}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })
         )}
 
         {/* Info card — menor e muted, só referência. */}
