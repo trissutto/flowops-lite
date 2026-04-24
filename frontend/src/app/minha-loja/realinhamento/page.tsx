@@ -336,13 +336,13 @@ export default function MinhaLojaRealinhamentoPage() {
               <div className="divide-y-2 divide-slate-100">
                 {d.refGroups.map((g) => (
                   <div key={g.ref} className="p-4 sm:p-5 space-y-3">
-                    {/* Header do REF — REF em destaque tipo tag grande. */}
+                    {/* Header do REF — REF em destaque tipo tag grande (uppercase). */}
                     <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2">
-                        <div className="font-mono font-black text-xl text-slate-900 bg-slate-100 rounded-lg px-3 py-1.5 border border-slate-200">
-                          {g.ref}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-mono font-black text-2xl sm:text-3xl text-slate-900 bg-slate-100 rounded-lg px-4 py-2 border-2 border-slate-300 uppercase tracking-wide">
+                          {g.ref.toUpperCase()}
                         </div>
-                        <span className="text-xs bg-indigo-50 text-indigo-800 border border-indigo-200 rounded-full px-2.5 py-1 font-bold">
+                        <span className="text-sm bg-indigo-50 text-indigo-800 border border-indigo-200 rounded-full px-3 py-1 font-bold">
                           {g.items.length} linha(s) · {g.totalQty}un
                         </span>
                       </div>
@@ -353,17 +353,17 @@ export default function MinhaLojaRealinhamentoPage() {
                       <table className="w-full text-sm border-separate border-spacing-0">
                         <thead>
                           <tr>
-                            <th className="text-left px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-500 bg-slate-50 rounded-tl-lg min-w-[120px] sticky left-0 z-10">
+                            <th className="text-left px-3 py-3 text-sm font-black uppercase tracking-wider text-slate-600 bg-slate-50 rounded-tl-lg min-w-[160px] sticky left-0 z-10">
                               Cor
                             </th>
                             {g.tams.map((t, idx) => (
                               <th
                                 key={t}
-                                className={`text-center px-2 py-2.5 text-base font-black text-slate-800 bg-slate-50 min-w-[96px] ${
+                                className={`text-center px-2 py-3 text-2xl font-black text-slate-900 bg-slate-50 min-w-[110px] ${
                                   idx === g.tams.length - 1 ? 'rounded-tr-lg' : ''
                                 }`}
                               >
-                                {t}
+                                {String(t).toUpperCase()}
                               </th>
                             ))}
                           </tr>
@@ -372,12 +372,12 @@ export default function MinhaLojaRealinhamentoPage() {
                           {g.cores.map((c, rowIdx) => (
                             <tr key={c}>
                               <td
-                                className={`px-3 py-2 font-bold text-slate-800 text-sm bg-white sticky left-0 z-10 border-t ${
+                                className={`px-3 py-2 font-bold text-slate-800 bg-white sticky left-0 z-10 border-t ${
                                   rowIdx === 0 ? 'border-transparent' : 'border-slate-100'
                                 }`}
                               >
-                                <span className="inline-block bg-slate-100 text-slate-800 rounded px-2 py-0.5 border border-slate-200 uppercase text-xs tracking-wide">
-                                  {c}
+                                <span className="inline-block bg-slate-100 text-slate-900 rounded-lg px-3 py-1.5 border-2 border-slate-300 uppercase text-base font-black tracking-wide">
+                                  {String(c).toUpperCase()}
                                 </span>
                               </td>
                               {g.tams.map((t) => {
