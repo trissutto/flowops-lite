@@ -859,6 +859,76 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * DIAGNÓSTICO: lista tabelas do Gigasistemas que batem com um LIKE.
+   * Uso: `listTablesLike('%credi%')` → retorna nomes de tabelas com "credi".
+   * Se a tabela existir, também devolve schema (colunas) e 3 linhas de amostra.
+   *
+   * Endpoint pensado pra eu (Claude) descobrir estrutura de tabelas sem precisar
+   * subir dump — útil pra investigar integrações (ex: crediarios do WinCred).
+   */
+  async listTablesLike(
+    pattern: string,
+  ): Promise<{
+    pattern: string;
+    tables: string[];
+    details: Array<{ table: string; columns: Array<{ field: string; type: string }>; sample: any[]; rowCount?: number }>;
+  }> {
+    if (!this.pool) return { pattern, tables: [], details: [] };
+
+    const p = String(pattern || '').trim() || '%';
+    const safe = p.includes('%') ? p : `%${p}%`;
+
+    try {
+      const [tRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SHOW TABLES LIKE ?`,
+        [safe],
+      );
+      // SHOW TABLES retorna colunas tipo "Tables_in_gigasistemas21"
+      const tables: string[] = (tRows as any[]).map((r) => {
+        const keys = Object.keys(r);
+        return String(r[keys[0]]);
+      });
+
+      const details: Array<{
+        table: string;
+        columns: Array<{ field: string; type: string }>;
+        sample: any[];
+        rowCount?: number;
+      }> = [];
+
+      for (const t of tables.slice(0, 10)) {
+        // Só inspeciona as 10 primeiras — evitar payload gigante
+        try {
+          const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
+            // Nome de tabela não pode ser parametrizado — usamos regex pra sanitizar
+            `SHOW COLUMNS FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\``,
+          );
+          const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT * FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\` LIMIT 3`,
+          );
+          const [countRows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT COUNT(*) AS c FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\``,
+          );
+          details.push({
+            table: t,
+            columns: (cols as any[]).map((c) => ({ field: c.Field, type: c.Type })),
+            sample: rows as any[],
+            rowCount: Number((countRows as any[])[0]?.c ?? 0),
+          });
+        } catch (e: any) {
+          details.push({ table: t, columns: [], sample: [], rowCount: undefined });
+          this.logger.warn(`listTablesLike(describe ${t}) falhou: ${e.message}`);
+        }
+      }
+
+      return { pattern: safe, tables, details };
+    } catch (e: any) {
+      this.logger.error(`listTablesLike falhou: ${e.message}`);
+      return { pattern: safe, tables: [], details: [] };
+    }
+  }
+
   /** Retorna metadados de um produto (nome, preço) direto da tabela produtos. */
   async getProduct(sku: string): Promise<{ name: string; price: number } | null> {
     if (!this.pool) return null;

@@ -100,4 +100,20 @@ export class StockController {
       ],
     };
   }
+
+  /**
+   * GET /stock/giga-tables?search=credi
+   *
+   * DIAGNÓSTICO de schema do Gigasistemas — lista tabelas que batem com o
+   * padrão (LIKE '%search%') e, para as 10 primeiras, devolve colunas +
+   * 3 linhas de amostra + contagem de registros.
+   *
+   * Usado pra descobrir estruturas de tabelas pouco conhecidas (ex: crediarios,
+   * vendedores, fidelidade) sem precisar dump do MySQL.
+   */
+  @Get('giga-tables')
+  async gigaTables(@Query('search') search: string) {
+    const pattern = (search || '').trim() || 'credi';
+    return this.erp.listTablesLike(pattern);
+  }
 }
