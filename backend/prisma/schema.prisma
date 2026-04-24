@@ -398,10 +398,21 @@ model TransferOrder {
   // Preenchido só quando entregaDireto=true. UI mostra todas as peças juntas.
   bundleId              String?   @map("bundle_id")
 
+  // ── Controle de REALINHAMENTO in-app (filial vê alerta) ──
+  // Quando tipo=REALINHAMENTO, a loja origem recebe alerta no /minha-loja e
+  // vai marcando como "enviado" uma a uma. status:
+  //   pending   → chegou na loja origem, operador ainda não separou
+  //   sent      → operador confirmou envio pra loja destino
+  //   cancelled → matriz cancelou antes de enviar (futuro)
+  realignmentStatus     String?   @map("realignment_status")
+  realignmentSentAt     DateTime? @map("realignment_sent_at")
+  realignmentSentByUserId String? @map("realignment_sent_by_user_id")
+
   @@index([lojaDestinoCode, createdAt(sort: Desc)])
   @@index([lojaOrigemCode, createdAt(sort: Desc)])
   @@index([refCode, createdAt(sort: Desc)])
   @@index([tipo, saleStatus, createdAt(sort: Desc)])
+  @@index([tipo, realignmentStatus, lojaOrigemCode])
   @@index([bundleId])
   @@map("transfer_orders")
 }

@@ -1,30 +1,14 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 
 /**
  * Rotas do realinhamento de estoques.
  *
- *   POST /realignment/preview   → calcula o plano (sem persistir)
- *   POST /realignment/confirm   → persiste o plano e opcionalmente dispara WhatsApp
- *
- * Exemplo preview:
- *   {
- *     "skus": ["VMS-223-PRETO-M", "VMS-223-PRETO-G"],
- *     "originStoreCodes": ["LJ01","LJ02","LJ05"],
- *     "destStoreCodes":   ["LJ03","LJ04"],
- *     "minPerDest": 2,
- *     "keepMinOrigin": 2
- *   }
- *
- * Exemplo confirm (reenvia o plan retornado do preview, pode editar qty):
- *   {
- *     "plan": [
- *       { "sku":"VMS-223-PRETO-M", "fromCode":"LJ05", "toCode":"LJ03", "qty":2, "stockFromBefore":7 }
- *     ],
- *     "sendWhatsapp": true,
- *     "note": "pro lançamento do sábado"
- *   }
+ *   POST  /realignment/preview     → calcula o plano (sem persistir) · retaguarda
+ *   POST  /realignment/confirm     → persiste plano + emite socket alerta · retaguarda
+ *   GET   /realignment/mine        → ordens pendentes pra separar (loja origem) · filial
+ *   PATCH /realignment/:id/sent    → loja marca ordem como enviada · filial
  */
 @UseGuards(JwtAuthGuard)
 @Controller('realignment')
@@ -61,7 +45,6 @@ export class RealignmentController {
         qty: number;
         stockFromBefore?: number;
       }>;
-      sendWhatsapp?: boolean;
       note?: string;
     },
     @Req() req: any,
@@ -73,6 +56,37 @@ export class RealignmentController {
       ...body,
       createdByUserId,
       createdByName,
+    });
+  }
+
+  /**
+   * Lista as ordens de realinhamento pendentes da loja do JWT.
+   * Retorna [] se o usuário não for role=store.
+   */
+  @Get('mine')
+  mine(@Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) return [];
+    return this.svc.listPendingForStore(storeId);
+  }
+
+  /**
+   * Loja marca 1 ordem como enviada.
+   * Valida role=store + matching storeCode no service.
+   */
+  @Patch(':id/sent')
+  async markSent(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.userId || req?.user?.sub || null;
+    if (role !== 'store' || !storeId) {
+      throw new ForbiddenException('Apenas loja pode marcar como enviado');
+    }
+    return this.svc.markAsSent({
+      transferId: id,
+      storeId,
+      userId,
     });
   }
 }

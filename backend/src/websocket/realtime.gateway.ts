@@ -163,6 +163,52 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   /**
+   * Realinhamento de estoques — matriz despachou ordens pra loja origem separar.
+   * Emite só pra sala da loja origem (store:{storeId}) + admin (pra /pedidos refletir).
+   * Payload é um agregado: array de itens pendentes que chegaram no mesmo confirm.
+   */
+  emitRealignmentNew(storeId: string, payload: {
+    storeId: string;
+    storeCode: string;
+    count: number;
+    totalUnits: number;
+    items: Array<{
+      id: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      qtyOrigem: number;
+      lojaDestinoCode: string;
+      lojaDestinoName: string;
+      mensagem: string;
+      createdAt: string;
+    }>;
+    note?: string | null;
+    solicitante: string;
+  }) {
+    this.server.to(`store:${storeId}`).emit('realignment:new', payload);
+    this.server.to('admin').emit('realignment:new', payload);
+  }
+
+  /**
+   * Loja confirmou que enviou o item de realinhamento.
+   * Admin vê em tempo real no /retaguarda/realinhamento/status (se existir).
+   */
+  emitRealignmentSent(storeId: string, payload: {
+    transferId: string;
+    storeId: string;
+    storeCode: string;
+    refCode: string;
+    cor: string | null;
+    tamanho: string | null;
+    lojaDestinoCode: string;
+    sentAt: string;
+  }) {
+    this.server.to(`store:${storeId}`).emit('realignment:sent', payload);
+    this.server.to('admin').emit('realignment:sent', payload);
+  }
+
+  /**
    * Dispara comando de impressão remota pro Electron da loja.
    * /minha-loja escuta esse evento e abre a tela imprimir/[id]?autoprint=1 que
    * chama window.electronAPI.silentPrintHTML e fecha sozinha.

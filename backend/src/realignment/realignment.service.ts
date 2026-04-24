@@ -1,7 +1,7 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
-import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { RealtimeGateway } from '../websocket/realtime.gateway';
 
 /**
  * RealignmentService — Realinhamento de estoques entre lojas.
@@ -11,16 +11,21 @@ import { WhatsappService } from '../whatsapp/whatsapp.service';
  * detectar essas distorções e gerar ordens de separação cruzadas (A → B)
  * sem precisar pedir de uma por uma no WhatsApp.
  *
- * Fluxo:
- *   1) preview(skus, origens, destinos, alvoMinimo) → lê estoque Giga, calcula
+ * Fluxo (pós-pivot #168..#172):
+ *   1) preview(refs, origens, destinos, alvoMinimo) → lê estoque Giga, calcula
  *      déficit em cada destino e excedente em cada origem, monta plano de
  *      movimentações sem persistir nada.
- *   2) confirm(plano, solicitante) → cria N TransferOrder (tipo=REALINHAMENTO)
- *      + opcionalmente dispara WhatsApp consolidado por loja origem.
+ *   2) confirm(plano, solicitante) → cria N TransferOrder (tipo=REALINHAMENTO,
+ *      realignmentStatus=pending) e EMITE socket `realignment:new` na sala da
+ *      loja ORIGEM. A própria filial (/minha-loja) recebe o alerta e abre a
+ *      tela de separação. Sem PDF, sem WhatsApp.
+ *   3) listPendingForStore(storeCode) → filial busca as suas ordens pendentes
+ *      (tipo=REALINHAMENTO, realignmentStatus=pending, lojaOrigemCode=storeCode).
+ *   4) markAsSent(id, storeCode, userId) → filial marca como enviado,
+ *      realignmentStatus=sent, emite `realignment:sent`.
  *
  * Regras (herdadas do routing do site):
  *   - Origem NUNCA fica abaixo de `keepMinOrigin` (default = alvoMinimo)
- *     → evita desabastecer quem mandou
  *   - Maior excedente → maior déficit (empate: loja com mais estoque absoluto)
  *   - Um SKU pode ter múltiplas origens pra cobrir múltiplos destinos
  *   - Respeita escopo: só transfere entre lojas marcadas como origem/destino
@@ -32,21 +37,15 @@ export class RealignmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
-    private readonly whatsapp: WhatsappService,
+    private readonly gateway: RealtimeGateway,
   ) {}
 
   /**
    * Monta o plano sem persistir.
-   *
-   * @param skus Lista de SKUs do Gigasistemas (ex: VMS-223-PRETO-M). 1 por linha.
-   * @param originStoreCodes Códigos das lojas que PODEM mandar. Vazio = nenhuma pode.
-   * @param destStoreCodes Códigos das lojas que RECEBEM. Vazio = nenhuma recebe.
-   * @param minPerDest Alvo mínimo que cada destino precisa ter de cada SKU.
-   * @param keepMinOrigin Mínimo que origem mantém (default = minPerDest).
    */
   async preview(input: {
-    refs?: string[];         // referências (ex: VMS-223) — sistema expande nas variações
-    skus?: string[];         // legado/power user: SKUs granulares direto (ex: VMS-223-PRETO-M)
+    refs?: string[];
+    skus?: string[];
     originStoreCodes: string[];
     destStoreCodes: string[];
     minPerDest: number;
@@ -60,8 +59,6 @@ export class RealignmentService {
       new Set((input.skus || []).map((s) => s.trim()).filter(Boolean)),
     );
 
-    // Mapa REF → lista de SKUs (CODIGO) + metadados pra exibição
-    // Ex: { 'VMS-223': [{sku:'VMS-223-PRETO-M', cor:'PRETO', tamanho:'M', desc:'...'}, ...] }
     const refMap: Record<string, Array<{ sku: string; cor: string | null; tamanho: string | null; desc: string }>> = {};
     const notFoundRefs: string[] = [];
 
@@ -97,11 +94,6 @@ export class RealignmentService {
     if (dests.length === 0)
       throw new BadRequestException('Selecione pelo menos uma loja de destino.');
 
-    // Loja nunca pode ser origem E destino ao mesmo tempo numa mesma movimentação
-    // — mas pode aparecer em ambas as listas. O algoritmo naturalmente não propõe
-    // mover X → X, porque sobra é calculada sobre o próprio estoque.
-
-    // Carrega nomes das lojas envolvidas
     const allCodes = Array.from(new Set([...origins, ...dests]));
     const stores = await this.prisma.store.findMany({
       where: { code: { in: allCodes } },
@@ -109,7 +101,6 @@ export class RealignmentService {
     });
     const storeByCode = new Map(stores.map((s) => [s.code, s]));
 
-    // Valida códigos
     const missing = allCodes.filter((c) => !storeByCode.has(c));
     if (missing.length > 0) {
       throw new BadRequestException(
@@ -117,10 +108,8 @@ export class RealignmentService {
       );
     }
 
-    // Carrega estoque detalhado do Giga pra todos os SKUs de uma vez
     const stockMap = await this.erp.getStockBySkusDetailed(skus);
 
-    // Índice reverso: SKU → metadados (ref/cor/tamanho/desc) pra enriquecer o plano
     const skuMeta: Record<string, { ref: string; cor: string | null; tamanho: string | null; desc: string }> = {};
     for (const [ref, variants] of Object.entries(refMap)) {
       for (const v of variants) {
@@ -130,7 +119,7 @@ export class RealignmentService {
 
     type PlanLine = {
       sku: string;
-      ref: string | null;     // enriquecido via Giga
+      ref: string | null;
       cor: string | null;
       tamanho: string | null;
       desc: string;
@@ -146,11 +135,10 @@ export class RealignmentService {
     };
 
     const plan: PlanLine[] = [];
-    // Relatório por SKU: quanto foi movido, quanto faltou, se nem começou
     const perSku: Array<{
       sku: string;
       totalMoved: number;
-      stillMissing: number; // déficit não atendido (falta estoque na origem)
+      stillMissing: number;
       note?: string;
     }> = [];
 
@@ -158,14 +146,12 @@ export class RealignmentService {
       const lines = stockMap[sku] || [];
       const stockByStore = new Map<string, number>();
       for (const l of lines) {
-        // Soma se por acaso houver duplicata
         stockByStore.set(
           l.storeCode,
           (stockByStore.get(l.storeCode) || 0) + (l.qty || 0),
         );
       }
 
-      // Déficit dos destinos
       const destDeficit = dests
         .map((code) => ({
           code,
@@ -173,10 +159,8 @@ export class RealignmentService {
           deficit: Math.max(0, minPerDest - (stockByStore.get(code) || 0)),
         }))
         .filter((d) => d.deficit > 0)
-        // Maior déficit primeiro; empate → loja com menor estoque atual (mais crítica)
         .sort((a, b) => b.deficit - a.deficit || a.current - b.current);
 
-      // Excedente das origens (respeitando keepMinOrigin)
       const originSurplus = origins
         .map((code) => ({
           code,
@@ -184,7 +168,6 @@ export class RealignmentService {
           surplus: Math.max(0, (stockByStore.get(code) || 0) - keepMinOrigin),
         }))
         .filter((o) => o.surplus > 0)
-        // Maior excedente primeiro (distribui de quem tem mais)
         .sort((a, b) => b.surplus - a.surplus || b.current - a.current);
 
       if (destDeficit.length === 0) {
@@ -202,10 +185,9 @@ export class RealignmentService {
         continue;
       }
 
-      // Estado mutável do algoritmo
       const remainingSurplus = new Map(originSurplus.map((o) => [o.code, o.surplus]));
       const remainingDeficit = new Map(destDeficit.map((d) => [d.code, d.deficit]));
-      const currentAfter = new Map(stockByStore); // vai sendo atualizado
+      const currentAfter = new Map(stockByStore);
 
       let totalMoved = 0;
 
@@ -256,13 +238,11 @@ export class RealignmentService {
       perSku.push({ sku, totalMoved, stillMissing });
     }
 
-    // Totais
     const totalMoves = plan.length;
     const totalUnits = plan.reduce((a, p) => a + p.qty, 0);
     const skusWithFullCoverage = perSku.filter((p) => p.stillMissing === 0 && p.totalMoved > 0).length;
     const skusUnchanged = perSku.filter((p) => p.totalMoved === 0).length;
 
-    // Resumo por REF (agrupa todas as variações movimentadas de cada referência)
     const perRef: Array<{ ref: string; desc: string; variants: number; totalMoved: number; stillMissing: number }> = [];
     for (const [ref, variants] of Object.entries(refMap)) {
       const skusOfRef = new Set(variants.map((v) => v.sku));
@@ -302,12 +282,12 @@ export class RealignmentService {
   }
 
   /**
-   * Persiste o plano: cria N TransferOrder (tipo=REALINHAMENTO) + opcionalmente
-   * dispara WhatsApp consolidado por loja origem.
+   * Persiste o plano: cria N TransferOrder (tipo=REALINHAMENTO,
+   * realignmentStatus=pending) e emite socket `realignment:new` agregando
+   * por loja origem. A filial (/minha-loja) recebe o alerta em tempo real.
    *
-   * ATENÇÃO: ao contrário do VENDA_CERTA/REPOSICAO do módulo filial, aqui
-   * `solicitanteNome` vem como "Realinhamento (retaguarda)" e `clienteNome`
-   * fica null. Esse tipo é detectável pelo `tipo=REALINHAMENTO` no relatório.
+   * Sem WhatsApp, sem PDF — a filial abre o app, vê o card de alerta e vai
+   * pra tela /minha-loja/realinhamento separar uma a uma.
    */
   async confirm(input: {
     plan: Array<{
@@ -323,24 +303,21 @@ export class RealignmentService {
     }>;
     createdByUserId?: string;
     createdByName?: string;
-    sendWhatsapp?: boolean;
-    note?: string; // texto livre opcional pra incluir na msg (ex: "pro lançamento do sábado")
+    note?: string;
   }) {
     const lines = (input.plan || []).filter((p) => p.qty > 0);
     if (lines.length === 0) throw new BadRequestException('Plano vazio.');
 
-    // Nomes das lojas envolvidas
+    // Nomes + IDs das lojas envolvidas (precisamos do storeId pra emitir socket room)
     const codes = Array.from(
       new Set(lines.flatMap((p) => [p.fromCode, p.toCode])),
     );
     const stores = await this.prisma.store.findMany({
       where: { code: { in: codes } },
-      select: { code: true, name: true, whatsapp: true },
+      select: { id: true, code: true, name: true },
     });
     const storeByCode = new Map(stores.map((s) => [s.code, s]));
 
-    // Label humanizado da peça pra WhatsApp e mensagem:
-    // Ex: "VMS-223 · PRETO · M (vestido midi plissado)"  — fallback pro SKU cru se faltar metadata
     const labelOf = (p: { sku: string; ref?: string | null; cor?: string | null; tamanho?: string | null }) => {
       const parts = [p.ref || p.sku];
       if (p.cor) parts.push(p.cor);
@@ -348,100 +325,212 @@ export class RealignmentService {
       return parts.join(' · ');
     };
 
-    // Mensagem base por origem (consolidada)
-    type Line = { label: string; sku: string; toCode: string; toName: string; qty: number };
-    const byOrigin = new Map<string, Line[]>();
-    for (const p of lines) {
-      if (!byOrigin.has(p.fromCode)) byOrigin.set(p.fromCode, []);
-      byOrigin.get(p.fromCode)!.push({
-        label: labelOf(p),
-        sku: p.sku,
-        toCode: p.toCode,
-        toName: storeByCode.get(p.toCode)?.name || p.toCode,
-        qty: p.qty,
-      });
-    }
-
     const solicitante = input.createdByName || 'Realinhamento (retaguarda)';
-    const createdTransfers: string[] = [];
-    const whatsappResults: Array<{ storeCode: string; ok: boolean; error?: string }> = [];
 
-    // Cria TransferOrder linha-a-linha (1 por movimentação)
-    // refCode = REF (ex: VMS-223), cor/tamanho preenchidos separados — bate com padrão de REPOSICAO/VENDA_CERTA.
+    // Cria TransferOrders linha-a-linha e agrupa pra emissão por loja origem
+    type CreatedItem = {
+      id: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      qtyOrigem: number;
+      lojaDestinoCode: string;
+      lojaDestinoName: string;
+      mensagem: string;
+      createdAt: string;
+    };
+    const createdByOrigin = new Map<string, CreatedItem[]>();
+
     for (const p of lines) {
       const label = labelOf(p);
+      const destStore = storeByCode.get(p.toCode);
+      const originStore = storeByCode.get(p.fromCode);
+      if (!originStore) continue;
+
       const msgLine =
-        `🔁 REALINHAMENTO — enviar pra ${storeByCode.get(p.toCode)?.name || p.toCode}: ${label} (${p.qty}un)` +
+        `🔁 REALINHAMENTO — enviar pra ${destStore?.name || p.toCode}: ${label} (${p.qty}un)` +
         (input.note ? ` · ${input.note}` : '');
       const t = await this.prisma.transferOrder.create({
         data: {
           tipo: 'REALINHAMENTO',
-          refCode: p.ref || p.sku,  // prioriza REF quando vier do fluxo Giga
+          refCode: p.ref || p.sku,
           cor: p.cor ?? null,
           tamanho: p.tamanho ?? null,
-          qtyOrigem: p.stockFromBefore ?? 0,
+          qtyOrigem: p.qty,
           lojaOrigemCode: p.fromCode,
-          lojaOrigemName: storeByCode.get(p.fromCode)?.name || p.fromCode,
+          lojaOrigemName: originStore.name,
           lojaDestinoCode: p.toCode,
-          lojaDestinoName: storeByCode.get(p.toCode)?.name || p.toCode,
+          lojaDestinoName: destStore?.name || p.toCode,
           solicitanteNome: solicitante,
           clienteNome: null,
           mensagem: msgLine,
           createdByUserId: input.createdByUserId ?? null,
+          realignmentStatus: 'pending',
         },
       });
-      createdTransfers.push(t.id);
+
+      const item: CreatedItem = {
+        id: t.id,
+        refCode: t.refCode,
+        cor: t.cor,
+        tamanho: t.tamanho,
+        qtyOrigem: t.qtyOrigem,
+        lojaDestinoCode: t.lojaDestinoCode,
+        lojaDestinoName: t.lojaDestinoName,
+        mensagem: t.mensagem,
+        createdAt: t.createdAt.toISOString(),
+      };
+      if (!createdByOrigin.has(p.fromCode)) createdByOrigin.set(p.fromCode, []);
+      createdByOrigin.get(p.fromCode)!.push(item);
     }
 
-    // Dispara WhatsApp consolidado por loja origem
-    if (input.sendWhatsapp) {
-      for (const [fromCode, items] of byOrigin.entries()) {
-        const origin = storeByCode.get(fromCode);
-        if (!origin?.whatsapp) {
-          whatsappResults.push({
-            storeCode: fromCode,
-            ok: false,
-            error: 'loja sem whatsapp cadastrado',
-          });
-          continue;
-        }
-        const header =
-          `🔁 *REALINHAMENTO DE ESTOQUE*\n\n` +
-          `Por favor separar e enviar as peças abaixo pras lojas indicadas:\n`;
-        const body = items
-          .map((it) => `• *${it.label}* → ${it.toCode} ${it.toName} · *${it.qty}un*`)
-          .join('\n');
-        const footer =
-          (input.note ? `\n\nObs: ${input.note}` : '') +
-          `\n\n_Enviado por: ${solicitante}_`;
-        const message = header + body + footer;
-        try {
-          await this.whatsapp.sendText(origin.whatsapp, message);
-          whatsappResults.push({ storeCode: fromCode, ok: true });
-        } catch (e: any) {
-          whatsappResults.push({
-            storeCode: fromCode,
-            ok: false,
-            error: e?.message || String(e),
-          });
-        }
+    // Emite socket agregado por loja origem (1 evento por loja = 1 alerta)
+    const emissions: Array<{ storeCode: string; count: number; ok: boolean; error?: string }> = [];
+    for (const [fromCode, items] of createdByOrigin.entries()) {
+      const origin = storeByCode.get(fromCode);
+      if (!origin) {
+        emissions.push({ storeCode: fromCode, count: items.length, ok: false, error: 'loja não encontrada' });
+        continue;
+      }
+      try {
+        const totalUnits = items.reduce((a, it) => a + it.qtyOrigem, 0);
+        this.gateway.emitRealignmentNew(origin.id, {
+          storeId: origin.id,
+          storeCode: origin.code,
+          count: items.length,
+          totalUnits,
+          items,
+          note: input.note || null,
+          solicitante,
+        });
+        emissions.push({ storeCode: fromCode, count: items.length, ok: true });
+      } catch (e: any) {
+        emissions.push({
+          storeCode: fromCode,
+          count: items.length,
+          ok: false,
+          error: e?.message || String(e),
+        });
       }
     }
 
+    const totalCreated = Array.from(createdByOrigin.values()).reduce((a, v) => a + v.length, 0);
     this.logger.log(
-      `[realignment] ${createdTransfers.length} transferências criadas por ${solicitante}` +
-        (input.sendWhatsapp ? ` (whatsapp: ${whatsappResults.filter((r) => r.ok).length}/${whatsappResults.length})` : ''),
+      `[realignment] ${totalCreated} ordens criadas por ${solicitante} · ` +
+      `alertas emitidos: ${emissions.filter((e) => e.ok).length}/${emissions.length}`,
     );
 
     return {
       ok: true,
-      createdCount: createdTransfers.length,
-      transferIds: createdTransfers,
-      whatsapp: {
-        attempted: input.sendWhatsapp ? whatsappResults.length : 0,
-        sent: whatsappResults.filter((r) => r.ok).length,
-        failures: whatsappResults.filter((r) => !r.ok),
+      createdCount: totalCreated,
+      alerts: {
+        emitted: emissions.filter((e) => e.ok).length,
+        total: emissions.length,
+        byStore: emissions,
       },
     };
+  }
+
+  /**
+   * Lista ordens pendentes de REALINHAMENTO pra LOJA ORIGEM dela.
+   * Recebe storeId do JWT → resolve storeCode via Store (JWT atual não carrega
+   * o code, só o id). Retorna [] se a loja não existir.
+   */
+  async listPendingForStore(storeId: string) {
+    if (!storeId) return [];
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!store?.code) return [];
+    const orders = await this.prisma.transferOrder.findMany({
+      where: {
+        tipo: 'REALINHAMENTO',
+        realignmentStatus: 'pending',
+        lojaOrigemCode: store.code,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        lojaDestinoCode: true,
+        lojaDestinoName: true,
+        solicitanteNome: true,
+        mensagem: true,
+        createdAt: true,
+      },
+    });
+    return orders.map((o) => ({
+      ...o,
+      createdAt: o.createdAt.toISOString(),
+    }));
+  }
+
+  /**
+   * Marca 1 ordem como enviada (filial clica "Enviei").
+   * Valida que a loja do JWT é a origem da ordem pra não deixar outra loja
+   * marcar ordem que não é dela.
+   */
+  async markAsSent(input: {
+    transferId: string;
+    storeId: string;
+    userId?: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true },
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferId },
+      select: {
+        id: true,
+        tipo: true,
+        lojaOrigemCode: true,
+        realignmentStatus: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        lojaDestinoCode: true,
+      },
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    if (order.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+    if (order.lojaOrigemCode !== store.code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (order.realignmentStatus === 'sent')
+      throw new BadRequestException('Ordem já marcada como enviada');
+
+    const now = new Date();
+    const updated = await this.prisma.transferOrder.update({
+      where: { id: order.id },
+      data: {
+        realignmentStatus: 'sent',
+        realignmentSentAt: now,
+        realignmentSentByUserId: input.userId ?? null,
+      },
+    });
+
+    try {
+      this.gateway.emitRealignmentSent(store.id, {
+        transferId: updated.id,
+        storeId: store.id,
+        storeCode: store.code,
+        refCode: updated.refCode,
+        cor: updated.cor,
+        tamanho: updated.tamanho,
+        lojaDestinoCode: updated.lojaDestinoCode,
+        sentAt: now.toISOString(),
+      });
+    } catch (e) {
+      this.logger.warn(`[realignment] falha ao emitir socket sent: ${(e as Error).message}`);
+    }
+
+    return { ok: true, id: updated.id, sentAt: now.toISOString() };
   }
 }

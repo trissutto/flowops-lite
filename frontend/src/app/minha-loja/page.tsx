@@ -31,7 +31,7 @@ import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
-  Package2, ClipboardList,
+  Package2, ClipboardList, Shuffle,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -123,6 +123,9 @@ export default function MinhaLojaPage() {
   const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
   const [showIssueModal, setShowIssueModal] = useState<PickOrderRow | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
+  // Badge de realinhamento: qtd de ordens pendentes (filial origem). Atualiza
+  // via load inicial + socket 'realignment:new' e 'realignment:sent'.
+  const [realignmentPending, setRealignmentPending] = useState(0);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -192,7 +195,7 @@ export default function MinhaLojaPage() {
         }
         // Carrega IDs já notificados hoje — protege contra reload do Electron
         if (profile.storeId) loadSeenFromStorage(profile.storeId);
-        await loadRows();
+        await Promise.all([loadRows(), loadRealignmentCount()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
         if (String(err?.message ?? '').startsWith('401')) {
@@ -237,6 +240,17 @@ export default function MinhaLojaPage() {
       setError(err?.message ?? 'Erro ao carregar pedidos');
     }
   }, [persistSeen]);
+
+  // Carrega count de realinhamento pendente (pra badge no card do launchpad).
+  // Silencioso: se falhar, mostra 0 e segue a vida — não bloqueia a tela.
+  const loadRealignmentCount = useCallback(async () => {
+    try {
+      const items = await api<Array<{ id: string }>>('/realignment/mine');
+      setRealignmentPending(Array.isArray(items) ? items.length : 0);
+    } catch {
+      setRealignmentPending(0);
+    }
+  }, []);
 
   // ---------- Socket ----------
   useEffect(() => {
@@ -358,12 +372,29 @@ export default function MinhaLojaPage() {
       pushToast(`🖨️ Imprimindo pedido #${payload.pickOrderId.slice(0, 6)}...`);
     };
 
+    // Realinhamento: matriz despachou ordens pra essa loja origem separar.
+    // Payload agregado: { items: [{id,refCode,cor,tamanho,qtyOrigem,...}] }
+    // Soma o count no badge + toast pro operador ver que chegou.
+    const onRealignmentNew = (payload: any) => {
+      const count = Number(payload?.count || payload?.items?.length || 0);
+      if (count > 0) {
+        setRealignmentPending((prev) => prev + count);
+        pushToast(`🔁 Realinhamento: ${count} peça(s) pra separar e enviar`);
+      }
+    };
+    // Quando a própria loja marca enviado em outra aba — sincroniza badge.
+    const onRealignmentSent = (_payload: any) => {
+      setRealignmentPending((prev) => Math.max(0, prev - 1));
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pick-order:new', onNew);
     socket.on('pick-order:status', onStatus);
     socket.on('pick-order:removed', onRemoved);
     socket.on('pick-order:print', onPrintRequest);
+    socket.on('realignment:new', onRealignmentNew);
+    socket.on('realignment:sent', onRealignmentSent);
     if (socket.connected) setConnected(true);
 
     return () => {
@@ -373,6 +404,8 @@ export default function MinhaLojaPage() {
       socket.off('pick-order:status', onStatus);
       socket.off('pick-order:removed', onRemoved);
       socket.off('pick-order:print', onPrintRequest);
+      socket.off('realignment:new', onRealignmentNew);
+      socket.off('realignment:sent', onRealignmentSent);
     };
   }, [me]);
 
@@ -598,7 +631,7 @@ export default function MinhaLojaPage() {
 
       {/* Quick-action grid — acesso rápido às funções da filial */}
       <div className="max-w-3xl mx-auto px-3 pt-3">
-        <QuickActionGrid />
+        <QuickActionGrid realignmentPending={realignmentPending} />
       </div>
 
       {/* Lista */}
@@ -706,8 +739,9 @@ function openPrintWindow(pickOrderId: string) {
 // ──────────────────────────────────────────────────────────────
 // Cada botão é um gradiente colorido com ícone e label. Pensado pra click
 // rápido no mobile (alvo grande) e pra destacar visualmente as funções
-// importantes da filial.
-function QuickActionGrid() {
+// importantes da filial. Quando há realinhamento pendente, destaca um
+// card cheia-largura com badge pra ficar impossível de ignorar.
+function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: number }) {
   const actions: Array<{
     href: string;
     icon: React.ReactNode;
@@ -746,28 +780,70 @@ function QuickActionGrid() {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2.5">
-      {actions.map((a) => (
+    <div className="space-y-2.5">
+      {/* Alerta de realinhamento: aparece como card FULL WIDTH destacado só
+          quando tem algo pra separar. Se não tem, esconde — a vendedora nunca
+          vê item vazio. Pulse contínuo pra captar atenção. */}
+      {realignmentPending > 0 && (
         <Link
-          key={a.href}
-          href={a.href}
-          className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${a.gradient} p-4 text-white shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all`}
+          href="/minha-loja/realinhamento"
+          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600 p-4 text-white shadow-lg hover:shadow-2xl hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center gap-3 animate-pulse-slow"
         >
-          <div className="flex items-start gap-3">
-            <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
-              {a.icon}
+          <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
+            <Shuffle className="w-6 h-6" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-black text-lg leading-tight flex items-center gap-2">
+              Realinhamento chegou!
+              <span className="bg-white text-rose-700 text-sm font-black rounded-full px-2 min-w-[28px] h-6 inline-flex items-center justify-center tabular-nums">
+                {realignmentPending}
+              </span>
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="font-bold text-base leading-tight">{a.label}</div>
-              <div className="text-[11px] opacity-90 leading-snug mt-0.5 line-clamp-2">
-                {a.subtitle}
-              </div>
+            <div className="text-xs opacity-95 leading-snug mt-0.5">
+              Peça(s) pra separar e enviar pras lojas irmãs · toque pra abrir
             </div>
           </div>
-          {/* Decorative glow */}
-          <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/10 blur-xl group-hover:bg-white/20 transition" />
+          <div className="text-white/80 shrink-0 font-bold text-xs uppercase tracking-wider">
+            Abrir →
+          </div>
+          <div className="absolute -bottom-8 -right-8 w-32 h-32 rounded-full bg-white/10 blur-2xl" />
         </Link>
-      ))}
+      )}
+
+      {/* Grid de 2 colunas — ações rápidas do dia a dia */}
+      <div className="grid grid-cols-2 gap-2.5">
+        {actions.map((a) => (
+          <Link
+            key={a.href}
+            href={a.href}
+            className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${a.gradient} p-4 text-white shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
+                {a.icon}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-base leading-tight">{a.label}</div>
+                <div className="text-[11px] opacity-90 leading-snug mt-0.5 line-clamp-2">
+                  {a.subtitle}
+                </div>
+              </div>
+            </div>
+            {/* Decorative glow */}
+            <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/10 blur-xl group-hover:bg-white/20 transition" />
+          </Link>
+        ))}
+      </div>
+
+      {/* Keyframe pro pulse lento do card de realinhamento. Global pq o
+          Tailwind default só tem animate-pulse (rápido demais pra esse uso). */}
+      <style jsx global>{`
+        @keyframes pulse-slow {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.82; }
+        }
+        .animate-pulse-slow { animation: pulse-slow 2.5s ease-in-out infinite; }
+      `}</style>
     </div>
   );
 }

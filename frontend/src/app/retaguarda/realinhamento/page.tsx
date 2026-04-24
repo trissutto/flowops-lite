@@ -3,21 +3,23 @@
 /**
  * /retaguarda/realinhamento — Rebalanceia estoque entre lojas.
  *
- * Fluxo (4 etapas):
+ * Fluxo (3 etapas · pós-pivot #168..#172):
  *   1) CONFIG: usuário cola REFERÊNCIAS (1 por linha, ex: VMS-223), marca lojas origem
  *      (TODAS CEDEM) e destino (TODAS RECEBEM). Backend consulta Giga e expande cada REF
  *      em todas as suas variações (cor × tamanho).
  *   2) PREVIEW: POST /realignment/preview → plano completo em tabela com REF · COR · TAM
  *      + antes/depois por loja. Usuário pode editar qty ou remover linhas.
- *   3) PDF: "Gerar PDF para análise" abre uma tela imprimível (1 por loja ORIGEM) pra
- *      revisar no papel/PDF antes de disparar WhatsApp.
- *   4) CONFIRM: POST /realignment/confirm → TransferOrder tipo=REALINHAMENTO e WhatsApp
- *      opcional.
+ *   3) CONFIRM: POST /realignment/confirm → cria N TransferOrder (tipo=REALINHAMENTO,
+ *      realignmentStatus=pending) e o backend emite socket 'realignment:new' pra cada
+ *      loja ORIGEM. O /minha-loja da filial mostra o card de alerta e a tela de
+ *      separação onde eles confirmam 1 a 1.
+ *
+ * PDF e WhatsApp foram removidos — o alerta chega direto no app da loja.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, FileText, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -93,13 +95,19 @@ export default function RealinhamentoPage() {
   const [minPerDest, setMinPerDest] = useState(2);
   const [keepMinOrigin, setKeepMinOrigin] = useState(2);
   const [note, setNote] = useState('');
-  const [sendWhatsapp, setSendWhatsapp] = useState(true);
 
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [editedPlan, setEditedPlan] = useState<PlanLine[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [confirmResult, setConfirmResult] = useState<{ createdCount: number; whatsapp: { sent: number; attempted: number; failures: Array<{ storeCode: string; error?: string }> } } | null>(null);
+  const [confirmResult, setConfirmResult] = useState<{
+    createdCount: number;
+    alerts: {
+      emitted: number;
+      total: number;
+      byStore: Array<{ storeCode: string; count: number; ok: boolean; error?: string }>;
+    };
+  } | null>(null);
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -205,7 +213,14 @@ export default function RealinhamentoPage() {
     }
     setConfirming(true);
     try {
-      const res = await api<{ createdCount: number; whatsapp: { sent: number; attempted: number; failures: Array<{ storeCode: string; error?: string }> } }>(
+      const res = await api<{
+        createdCount: number;
+        alerts: {
+          emitted: number;
+          total: number;
+          byStore: Array<{ storeCode: string; count: number; ok: boolean; error?: string }>;
+        };
+      }>(
         '/realignment/confirm',
         {
           method: 'POST',
@@ -221,7 +236,6 @@ export default function RealinhamentoPage() {
               qty: l.qty,
               stockFromBefore: l.stockFromBefore,
             })),
-            sendWhatsapp,
             note: note.trim() || undefined,
           }),
         },
@@ -233,56 +247,6 @@ export default function RealinhamentoPage() {
       setError(e?.message || String(e));
     } finally {
       setConfirming(false);
-    }
-  }
-
-  function handleOpenPdf() {
-    if (editedPlan.filter((l) => l.qty > 0).length === 0) {
-      setError('Plano vazio (todas as linhas com qty=0).');
-      return;
-    }
-    const payload = {
-      generatedAt: new Date().toISOString(),
-      note: note.trim() || null,
-      lines: editedPlan.filter((l) => l.qty > 0),
-    };
-    const raw = JSON.stringify(payload);
-
-    // Tripla via de entrega pra ser à prova de cache/bugs de browser:
-    //   1) localStorage (compartilhado entre abas na mesma origin)
-    //   2) sessionStorage (fallback se algum browser só herdar 1 dos 2)
-    //   3) postMessage direto pra nova aba após load (mais confiável)
-    try { localStorage.setItem('realinhamento_print_payload', raw); } catch {}
-    try { sessionStorage.setItem('realinhamento_print_payload', raw); } catch {}
-
-    // Abre nova aba SEM noopener pra poder chamar postMessage
-    const win = window.open('/retaguarda/realinhamento/imprimir', '_blank');
-    if (win) {
-      // Re-envia payload via postMessage até a nova aba responder "ok" ou timeout.
-      // Essa aba escuta "message" no load — assim mesmo se localStorage falhar,
-      // o dado chega.
-      let acknowledged = false;
-      const ackListener = (ev: MessageEvent) => {
-        if (ev.data === 'realinhamento_print_ack') {
-          acknowledged = true;
-          window.removeEventListener('message', ackListener);
-        }
-      };
-      window.addEventListener('message', ackListener);
-      let attempts = 0;
-      const pusher = setInterval(() => {
-        if (acknowledged || attempts > 20 || !win || win.closed) {
-          clearInterval(pusher);
-          return;
-        }
-        try {
-          win.postMessage(
-            { type: 'realinhamento_print_payload', payload },
-            window.location.origin,
-          );
-        } catch {}
-        attempts++;
-      }, 250);
     }
   }
 
@@ -330,21 +294,23 @@ export default function RealinhamentoPage() {
           <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
           <div className="text-sm">
             <div className="font-semibold">
-              {confirmResult.createdCount} transferências criadas com sucesso.
+              {confirmResult.createdCount} ordens criadas · alerta enviado pra{' '}
+              {confirmResult.alerts.emitted}/{confirmResult.alerts.total} loja(s) origem.
             </div>
-            {confirmResult.whatsapp.attempted > 0 && (
-              <div className="mt-1">
-                WhatsApp: {confirmResult.whatsapp.sent}/{confirmResult.whatsapp.attempted} disparados.
-                {confirmResult.whatsapp.failures.length > 0 && (
-                  <ul className="list-disc ml-5 mt-1 text-xs text-red-700">
-                    {confirmResult.whatsapp.failures.map((f, i) => (
-                      <li key={i}>
-                        {f.storeCode}: {f.error || 'erro'}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+            <div className="mt-0.5 text-xs text-emerald-800/80">
+              As lojas vão receber o alerta no app <b>/minha-loja</b> em tempo real.
+              Elas confirmam o envio uma a uma e você acompanha no histórico.
+            </div>
+            {confirmResult.alerts.byStore.some((s) => !s.ok) && (
+              <ul className="list-disc ml-5 mt-1 text-xs text-red-700">
+                {confirmResult.alerts.byStore
+                  .filter((s) => !s.ok)
+                  .map((f, i) => (
+                    <li key={i}>
+                      {f.storeCode}: {f.error || 'erro ao emitir alerta'}
+                    </li>
+                  ))}
+              </ul>
             )}
           </div>
         </div>
@@ -667,35 +633,21 @@ export default function RealinhamentoPage() {
         </section>
       )}
 
-      {/* ETAPA 3 — PDF pra análise (antes de confirmar) */}
-      {preview && editedPlan.length > 0 && (
-        <section className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 rounded-xl shadow-sm p-5 space-y-3">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0">
-              <FileText className="w-5 h-5" />
-            </div>
-            <div className="flex-1">
-              <h2 className="text-lg font-bold text-amber-900">3. Gerar PDF para análise</h2>
-              <p className="text-sm text-amber-800 mt-0.5">
-                Abre uma página de impressão com <b>1 folha por loja ORIGEM</b>, mostrando exatamente
-                o que cada uma vai enviar e pra quem. Use pra conferir antes de disparar no WhatsApp.
-              </p>
-            </div>
-            <button
-              onClick={handleOpenPdf}
-              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-lg px-5 py-2.5 flex items-center gap-2 transition shadow-sm shrink-0"
-            >
-              <FileText className="w-4 h-4" />
-              Gerar PDF
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* ETAPA 4 — Confirm */}
+      {/* ETAPA 3 — Confirm (direto, sem PDF/WhatsApp) */}
       {preview && editedPlan.length > 0 && (
         <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
-          <h2 className="text-lg font-bold text-slate-800">4. Confirmar e enviar</h2>
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-lg bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow">
+              <Send className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">3. Despachar pras lojas</h2>
+              <p className="text-sm text-slate-500">
+                Cada loja ORIGEM recebe um alerta em tempo real no app <b>/minha-loja</b>.
+                Ela abre a tela de separação e marca cada peça como enviada. Você acompanha no histórico.
+              </p>
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">
@@ -710,16 +662,6 @@ export default function RealinhamentoPage() {
             />
           </div>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={sendWhatsapp}
-              onChange={(e) => setSendWhatsapp(e.target.checked)}
-              className="accent-indigo-600"
-            />
-            Disparar WhatsApp consolidado pra cada loja origem
-          </label>
-
           <button
             onClick={handleConfirm}
             disabled={confirming || editedTotals.totalMoves === 0}
@@ -727,8 +669,8 @@ export default function RealinhamentoPage() {
           >
             {confirming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             {confirming
-              ? 'Criando ordens...'
-              : `Gerar ${editedTotals.totalMoves} transferência(s)`}
+              ? 'Enviando pras lojas...'
+              : `Enviar ${editedTotals.totalMoves} ordem(ns) pras lojas`}
           </button>
         </section>
       )}
