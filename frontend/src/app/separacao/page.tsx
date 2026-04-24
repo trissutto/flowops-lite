@@ -21,11 +21,13 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import { autoSendOrderToStore } from '@/lib/auto-send-order';
 import SellerTag from '@/components/SellerTag';
+import EnviadosByStore from '@/components/EnviadosByStore';
 import {
   RefreshCw,
   Send,
@@ -44,6 +46,7 @@ import {
   Printer,
   AlertCircle,
   Zap,
+  Truck,
 } from 'lucide-react';
 
 interface PickOrderLite {
@@ -124,6 +127,10 @@ const FILTROS = [
   { slug: 'pending',     label: 'Pagto pendente',      color: 'bg-amber-100 text-amber-800' },
   { slug: 'on-hold',     label: 'Aguardando',          color: 'bg-yellow-100 text-yellow-800' },
   { slug: 'separacao',   label: 'Em separação',        color: 'bg-blue-100 text-blue-800' },
+  // "Enviados por Loja" não é um status de pedido WC — é um painel diferente
+  // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
+  // precise ir pra /retaguarda/enviados-hoje só pra ver quem despachou.
+  { slug: 'enviados',    label: 'Enviados por Loja',   color: 'bg-emerald-100 text-emerald-800' },
 ];
 
 // Mapa de status destino permitidos pra mudança em bloco, com label.
@@ -136,9 +143,17 @@ const BULK_TARGETS: Array<{ slug: string; label: string; color: string }> = [
 ];
 
 export default function SeparacaoPage() {
+  const searchParams = useSearchParams();
+  const initialTab = (() => {
+    const t = searchParams?.get('tab');
+    // Só aceita slug válido. Se vier lixo, default pra 'processing'.
+    if (t && FILTROS.some((f) => f.slug === t)) return t;
+    return 'processing';
+  })();
+
   const [orders, setOrders] = useState<WcOrderListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState<string>('processing');
+  const [status, setStatus] = useState<string>(initialTab);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -643,6 +658,13 @@ export default function SeparacaoPage() {
   }
 
   async function load() {
+    // Aba "enviados" não usa a lista de pedidos WC — ela renderiza o componente
+    // EnviadosByStore que busca dados próprios. Pula fetch pra não poluir a rede.
+    if (status === 'enviados') {
+      setOrders([]);
+      setLoading(false);
+      return;
+    }
     try {
       const q = new URLSearchParams({ status, per_page: '50' });
       if (search) q.set('search', search);
@@ -824,17 +846,25 @@ export default function SeparacaoPage() {
           <button
             key={f.slug}
             onClick={() => setStatus(f.slug)}
-            className={`px-3 py-1.5 rounded text-sm border transition ${
+            className={`px-3 py-1.5 rounded text-sm border transition inline-flex items-center gap-1.5 ${
               status === f.slug
                 ? 'bg-brand text-white border-brand'
                 : 'bg-white hover:bg-slate-50'
             }`}
           >
+            {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
             {f.label}
           </button>
         ))}
       </div>
 
+      {/* Aba "Enviados por Loja" — mostra tracking do dia agrupado por filial,
+          em vez do fluxo normal de emissão de separações. Early-return aqui
+          mantém o header/filtros no topo mas pula toda a UI de pedidos. */}
+      {status === 'enviados' ? (
+        <EnviadosByStore />
+      ) : (
+      <>
       {/* Busca */}
       <form
         onSubmit={(e) => {
@@ -1453,6 +1483,8 @@ export default function SeparacaoPage() {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

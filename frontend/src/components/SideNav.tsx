@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
-  Smartphone, FileSearch, Truck,
+  Smartphone, FileSearch,
 } from 'lucide-react';
 
 type NavItem = {
@@ -56,7 +56,7 @@ const GROUPS: NavGroup[] = [
     label: 'Retaguarda',
     color: 'amber',
     items: [
-      { href: '/retaguarda/enviados-hoje',   label: 'Enviados por Loja', icon: Truck },
+      // "Enviados por Loja" virou aba dentro de /separacao — não aparece mais aqui.
       // "Baixa Estoque" foi REMOVIDA do menu — a baixa no Giga hoje acontece
       // automaticamente quando a loja bate 'shipped' + rastreio (autoDebitOnShipped).
       // Quando dá errado, a operadora cai direto em "Log de Baixas" (fallback).

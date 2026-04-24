@@ -16,7 +16,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Truck, FileSearch, CheckCircle2, Package2, Boxes, Globe, Smartphone,
+  FileSearch, CheckCircle2, Package2, Boxes, Globe, Smartphone,
   Database, Users, Shuffle, ArrowLeft, ArrowRight, Layers,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -25,11 +25,12 @@ type ModuleCard = {
   href: string;
   label: string;
   subtitle: string;
-  icon: typeof Truck;
+  icon: typeof FileSearch;
 };
 
 const RETAGUARDA_CARDS: ModuleCard[] = [
-  { href: '/retaguarda/enviados-hoje',   label: 'Enviados por Loja', subtitle: 'Tracking do dia',         icon: Truck },
+  // "Enviados por Loja" virou aba em /separacao (Emissão de Separações).
+  // Removido daqui pra não duplicar — acesso direto na tela de operação diária.
   { href: '/retaguarda/baixas-log',      label: 'Log de Baixas',     subtitle: 'Auditoria ERP',          icon: FileSearch },
   { href: '/retaguarda/venda-certa',     label: 'Venda Certa',       subtitle: 'Anti-malandragem',       icon: CheckCircle2 },
   { href: '/retaguarda/materiais',       label: 'Materiais',         subtitle: 'Pedidos das filiais',    icon: Package2 },
