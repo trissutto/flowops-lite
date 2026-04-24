@@ -19,7 +19,7 @@
  * Atualiza sozinho a cada 30s.
  */
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
@@ -142,7 +142,19 @@ const BULK_TARGETS: Array<{ slug: string; label: string; color: string }> = [
   { slug: 'completed',  label: 'Concluído',   color: 'bg-slate-600 hover:bg-slate-700' },
 ];
 
+/**
+ * Wrapper com Suspense — exigência do Next.js 14 App Router quando o componente
+ * usa `useSearchParams()`. Sem isso, o build estático explode (prerender-error).
+ */
 export default function SeparacaoPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-slate-400">Carregando…</div>}>
+      <SeparacaoPageInner />
+    </Suspense>
+  );
+}
+
+function SeparacaoPageInner() {
   const searchParams = useSearchParams();
   const initialTab = (() => {
     const t = searchParams?.get('tab');
