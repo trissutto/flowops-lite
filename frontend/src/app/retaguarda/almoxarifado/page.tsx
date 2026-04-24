@@ -33,12 +33,14 @@ type SupplyItem = {
 };
 
 /**
- * Badge visual pra origem do item — usado aqui na tabela e exportado pra
- * ficar consistente com outras telas (/retaguarda/materiais usa a mesma cor).
+ * Badge visual pra origem do item — usado aqui na tabela.
+ * Next App Router não deixa exportar componentes arbitrários de um page.tsx,
+ * então mantemos este local. A tela /retaguarda/materiais tem sua própria
+ * cópia idêntica (mesma aparência).
  * MATRIZ       → indigo (estoque interno, fluxo normal)
  * MERCADO_LIVRE → amber (compra sob demanda, lead time extra)
  */
-export function OriginBadge({ origin }: { origin: SupplyOrigin }) {
+function OriginBadge({ origin }: { origin: SupplyOrigin }) {
   if (origin === 'MERCADO_LIVRE') {
     return (
       <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded">
