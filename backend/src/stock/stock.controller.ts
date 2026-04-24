@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { StockService } from './stock.service';
 import { ErpService } from '../erp/erp.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WpDbService } from '../wp-db/wp-db.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 
 /**
@@ -15,7 +16,75 @@ export class StockController {
     private readonly stock: StockService,
     private readonly erp: ErpService,
     private readonly prisma: PrismaService,
+    private readonly wpDb: WpDbService,
   ) {}
+
+  /**
+   * GET /stock/wp-diagnose?ref=13015
+   *
+   * DIAGNÓSTICO do WP MySQL — usado pra investigar por que as miniaturas
+   * não aparecem no /minha-loja/realinhamento.
+   *
+   * Mostra:
+   *  1. Se o pool WP está ativo (env vars WP_DB_* configuradas + ping OK)
+   *  2. Raw SKUs cadastrados no WC que batem com a REF (LIKE 'REF%')
+   *  3. siteurl do WP
+   *  4. O que o getImagesByRefs retorna de fato pra essa REF
+   */
+  @Get('wp-diagnose')
+  async wpDiagnose(@Query('ref') ref: string) {
+    const pool = this.wpDb.getPool();
+    const poolAlive = !!pool;
+    const cleanRef = String(ref || '').trim();
+
+    if (!poolAlive) {
+      return {
+        poolAlive: false,
+        hint:
+          'Pool WP não inicializou. Verifique no Railway: WP_DB_HOST, WP_DB_PORT, WP_DB_USER, WP_DB_PASSWORD, WP_DB_DATABASE. Se host exigir IP whitelist, libere o IP outbound do Railway.',
+      };
+    }
+
+    if (!cleanRef) {
+      return {
+        poolAlive: true,
+        error: 'Query param ref é obrigatório (ex: ?ref=13015)',
+      };
+    }
+
+    // siteurl
+    const siteUrlRows = await this.wpDb.query<{ option_value: string }>(
+      "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
+    );
+    const siteUrl = siteUrlRows[0]?.option_value || null;
+
+    // SKUs brutos que batem com LIKE 'REF%'
+    const skuRows = await this.wpDb.query<{ sku: string; post_id: number; post_type: string; post_status: string }>(
+      `SELECT pm.meta_value AS sku, p.ID AS post_id, p.post_type, p.post_status
+         FROM wp_postmeta pm
+         JOIN wp_posts p ON p.ID = pm.post_id
+        WHERE pm.meta_key = '_sku'
+          AND pm.meta_value LIKE ?
+        LIMIT 20`,
+      [`${cleanRef}%`],
+    );
+
+    // Roda o método oficial pra ver o que a função devolveria em produção
+    const imagesByRef = await this.wpDb.getImagesByRefs([cleanRef]);
+
+    return {
+      poolAlive: true,
+      ref: cleanRef,
+      siteUrl,
+      matchingSkusInWc: skuRows,
+      imagesByRef,
+      hint: !skuRows.length
+        ? `Nenhum SKU no WC com LIKE '${cleanRef}%'. Confira se o SKU do produto no Woo começa com a REF.`
+        : !imagesByRef[cleanRef]
+        ? 'Achou SKU mas não achou imagem. Produto pode não ter _thumbnail_id definido (foto destacada) no WC.'
+        : 'OK — deveria estar aparecendo.',
+    };
+  }
 
   /**
    * GET /stock/diagnose?sku=11573739

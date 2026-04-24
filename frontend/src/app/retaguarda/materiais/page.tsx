@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Package2, ClipboardList, RefreshCw, Store, Truck, PackageCheck,
   Clock, CheckCircle2, XCircle, PlayCircle, ChevronRight, MessageSquare,
-  Filter, Search,
+  Filter, Search, Printer,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -237,6 +237,19 @@ function RequestCard({ request, onChanged }: { request: SupplyRequest; onChanged
             <span className="text-xs">{request.items.length} item{request.items.length === 1 ? '' : 'ns'}</span>
           </div>
         </div>
+        {/* Botão imprimir — não interfere com expand/collapse (stopPropagation) */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`/retaguarda/materiais/imprimir/${request.id}`, '_blank', 'noopener');
+          }}
+          title="Imprimir pedido"
+          className="flex items-center gap-1 text-slate-500 hover:text-white hover:bg-slate-700 border border-slate-300 hover:border-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors"
+        >
+          <Printer className="w-4 h-4" />
+          <span className="hidden sm:inline">Imprimir</span>
+        </button>
         <ChevronRight className={`w-5 h-5 text-slate-400 transition ${expanded ? 'rotate-90' : ''}`} />
       </header>
 
