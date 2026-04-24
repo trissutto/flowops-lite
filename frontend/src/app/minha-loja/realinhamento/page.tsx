@@ -221,13 +221,25 @@ export default function MinhaLojaRealinhamentoPage() {
       setItems((prev) => prev.filter((i) => i.id !== payload.transferId));
     };
 
+    // Sincronização de REVERSÃO entre abas/dispositivos. Se outra
+    // aba clicou "voltar pra pendentes", tiramos dos enviados e recarregamos
+    // os pendentes pra trazer o item de volta (com dados frescos).
+    const onUnsent = (payload: any) => {
+      if (!payload?.transferId) return;
+      setSentItems((prev) => prev.filter((i) => i.id !== payload.transferId));
+      // Recarrega pendentes — mais seguro que reconstruir do payload sem todos os campos
+      loadItems();
+    };
+
     socket.on('realignment:new', onNew);
     socket.on('realignment:sent', onSent);
+    socket.on('realignment:unsent', onUnsent);
     return () => {
       socket.off('realignment:new', onNew);
       socket.off('realignment:sent', onSent);
+      socket.off('realignment:unsent', onUnsent);
     };
-  }, [me, pushToast]);
+  }, [me, pushToast, loadItems]);
 
   /**
    * REVERTE um item já enviado (sent → pending). Caso de uso: vendedora
@@ -822,7 +834,9 @@ function RealignGrid({
                         <RealignCell
                           item={it}
                           sending={it ? sendingIds.has(it.id) : false}
+                          reverting={it ? revertingIds.has(it.id) : false}
                           onSend={onSend}
+                          onRevert={onRevert}
                           viewMode={viewMode}
                         />
                       </td>
@@ -888,6 +902,10 @@ function RealignGrid({
               enviada · mostra horário
             </span>
             <span className="inline-flex items-center gap-1">
+              <Undo2 className="w-3 h-3 text-rose-600" />
+              clicou errado? toque numa célula verde pra voltar pra pendentes
+            </span>
+            <span className="inline-flex items-center gap-1">
               <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
               sem peça neste lote
             </span>
@@ -903,16 +921,22 @@ function RealignGrid({
  *   - Com item:  amber, clicável (mostra qty grande + "ENVIEI" pequeno)
  *   - Sem item:  "—" slate, não clicável
  *   - Enviando:  emerald + spinner
+ *   - Enviada (modo sent): verde clicável → clica pra REVERTER pra pendente
+ *   - Revertendo: spinner em cima do verde
  */
 function RealignCell({
   item,
   sending,
+  reverting,
   onSend,
+  onRevert,
   viewMode,
 }: {
   item: RealignmentItem | null;
   sending: boolean;
+  reverting: boolean;
   onSend: (id: string) => void;
+  onRevert: (id: string) => void;
   viewMode: ViewMode;
 }) {
   const base =
@@ -926,19 +950,29 @@ function RealignCell({
     );
   }
 
-  // Modo CONFERÊNCIA — peça já foi enviada. Célula verde com quantidade +
-  // horário, não-clicável. Vendedora usa pra bater conferência de fim de dia.
+  // Modo CONFERÊNCIA — peça já foi enviada. Célula verde clicável pra permitir
+  // REVERTER caso a vendedora tenha clicado errado em "Enviei". Volta o item
+  // pra fila de pendentes. Título e ícone Undo2 deixam a affordance explícita.
   if (viewMode === 'sent') {
     const time = formatTime(item.sentAt);
+    if (reverting) {
+      return (
+        <div className={`${base} bg-emerald-200 text-emerald-900 border border-emerald-400`}>
+          <Loader2 className="w-4 h-4 animate-spin" />
+        </div>
+      );
+    }
     return (
-      <div
-        className={`${base} bg-emerald-100 text-emerald-900 border border-emerald-400 cursor-default`}
-        title={`Enviado às ${time || '—'} pra LJ${item.lojaDestinoCode}`}
+      <button
+        type="button"
+        onClick={() => onRevert(item.id)}
+        title={`Enviado às ${time || '—'} pra LJ${item.lojaDestinoCode} — toque pra REVERTER pra pendente`}
+        className={`${base} bg-emerald-100 text-emerald-900 border border-emerald-400 hover:bg-rose-100 hover:border-rose-400 hover:text-rose-900 active:scale-95 cursor-pointer`}
       >
         <span className="tabular-nums text-base leading-none">{item.qtyOrigem}</span>
         <span className="text-[9px] font-bold opacity-70 leading-none mt-0.5">{time}</span>
-        <CheckCircle2 className="w-3 h-3 absolute top-0.5 right-0.5 text-emerald-700" />
-      </div>
+        <Undo2 className="w-3 h-3 absolute top-0.5 right-0.5 text-emerald-700/80" />
+      </button>
     );
   }
 
