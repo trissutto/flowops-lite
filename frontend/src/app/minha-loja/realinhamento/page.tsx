@@ -27,7 +27,7 @@ import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
-  AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer,
+  AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer, Undo2,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -119,6 +119,8 @@ export default function MinhaLojaRealinhamentoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sendingIds, setSendingIds] = useState<Set<string>>(new Set());
+  // IDs em processo de REVERSÃO (sent → pending). UI mostra spinner na célula.
+  const [revertingIds, setRevertingIds] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   // Accordion: só 1 pilha aberta por vez. Começa TUDO fechado — vendedora
   // vê só os botões das lojas destino empilhados e abre o que for separar.
@@ -226,6 +228,47 @@ export default function MinhaLojaRealinhamentoPage() {
       socket.off('realignment:sent', onSent);
     };
   }, [me, pushToast]);
+
+  /**
+   * REVERTE um item já enviado (sent → pending). Caso de uso: vendedora
+   * clicou "Enviei" errado e precisa voltar pra fila de separação sem
+   * criar ordem nova. Move otimisticamente de sentItems → items.
+   */
+  async function markUnsent(itemId: string) {
+    const item = sentItems.find((i) => i.id === itemId);
+    if (!item) return;
+    // Confirmação simples pra evitar clique acidental
+    if (!confirm(`Voltar ${item.refCode} ${item.cor || ''} ${item.tamanho || ''} pra lista de pendentes?`)) {
+      return;
+    }
+    setRevertingIds((prev) => new Set(prev).add(itemId));
+    try {
+      await api(`/realignment/${itemId}/unsent`, { method: 'PATCH' });
+      // Move otimisticamente: tira dos enviados e devolve pra pendentes
+      let moved: RealignmentItem | null = null;
+      setSentItems((prev) => {
+        const found = prev.find((i) => i.id === itemId);
+        if (found) moved = found;
+        return prev.filter((i) => i.id !== itemId);
+      });
+      if (moved) {
+        const restored: RealignmentItem = {
+          ...(moved as RealignmentItem),
+          sentAt: null,
+        };
+        setItems((prev) => [restored, ...prev]);
+      }
+      pushToast('Voltou pra lista de pendentes ↺');
+    } catch (err: any) {
+      pushToast(`Erro: ${err?.message ?? 'falha ao reverter'}`);
+    } finally {
+      setRevertingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  }
 
   async function markSent(itemId: string) {
     setSendingIds((prev) => new Set(prev).add(itemId));
@@ -586,7 +629,9 @@ export default function MinhaLojaRealinhamentoPage() {
                         <RealignGrid
                           g={g}
                           sendingIds={sendingIds}
+                          revertingIds={revertingIds}
                           onSend={markSent}
+                          onRevert={markUnsent}
                           viewMode={view}
                         />
                       </div>
@@ -690,7 +735,9 @@ export default function MinhaLojaRealinhamentoPage() {
 function RealignGrid({
   g,
   sendingIds,
+  revertingIds,
   onSend,
+  onRevert,
   viewMode,
 }: {
   g: {
@@ -703,7 +750,9 @@ function RealignGrid({
     items: RealignmentItem[];
   };
   sendingIds: Set<string>;
+  revertingIds: Set<string>;
   onSend: (id: string) => void;
+  onRevert: (id: string) => void;
   viewMode: ViewMode;
 }) {
   // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.

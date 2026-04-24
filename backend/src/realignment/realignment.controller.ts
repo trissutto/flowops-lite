@@ -124,4 +124,21 @@ export class RealignmentController {
       userId,
     });
   }
+
+  /**
+   * Loja REVERTE uma ordem já marcada como enviada — volta pra fila de
+   * pendentes. Usada quando o operador clicou errado em "Enviei".
+   */
+  @Patch(':id/unsent')
+  async markUnsent(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) {
+      throw new ForbiddenException('Apenas loja pode reverter envio');
+    }
+    return this.svc.markAsUnsent({
+      transferId: id,
+      storeId,
+    });
+  }
 }

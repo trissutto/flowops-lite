@@ -209,6 +209,24 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   /**
+   * Loja REVERTEU um "enviei" (ordem volta de sent → pending).
+   * Usado quando o operador clica errado e precisa voltar pra fila.
+   * Admin e a própria loja (outros dispositivos) atualizam a UI.
+   */
+  emitRealignmentUnsent(storeId: string, payload: {
+    transferId: string;
+    storeId: string;
+    storeCode: string;
+    refCode: string;
+    cor: string | null;
+    tamanho: string | null;
+    lojaDestinoCode: string;
+  }) {
+    this.server.to(`store:${storeId}`).emit('realignment:unsent', payload);
+    this.server.to('admin').emit('realignment:unsent', payload);
+  }
+
+  /**
    * Dispara comando de impressão remota pro Electron da loja.
    * /minha-loja escuta esse evento e abre a tela imprimir/[id]?autoprint=1 que
    * chama window.electronAPI.silentPrintHTML e fecha sozinha.

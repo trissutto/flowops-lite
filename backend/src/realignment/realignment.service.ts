@@ -609,4 +609,83 @@ export class RealignmentService {
 
     return { ok: true, id: updated.id, sentAt: now.toISOString() };
   }
+
+  /**
+   * REVERTE uma ordem "sent" de volta pra "pending" (desfaz o clique "Enviei").
+   *
+   * Caso de uso: vendedora clicou em "Enviei" numa peça errada (ou a peça
+   * não foi encontrada depois de marcar) → precisa voltar pra fila de
+   * separação sem criar nova ordem.
+   *
+   * Regras:
+   *   - Só a própria loja origem pode reverter (mesmo check de markAsSent).
+   *   - Só reverte se estiver `sent` — se já foi `cancelled`/outros estados,
+   *     não faz nada.
+   *   - Limpa `realignmentSentAt` e `realignmentSentByUserId`.
+   *   - Emite socket `realignment:new` pra matriz atualizar o contador
+   *     (reaparece na fila).
+   */
+  async markAsUnsent(input: {
+    transferId: string;
+    storeId: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true, name: true },
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferId },
+      select: {
+        id: true,
+        tipo: true,
+        lojaOrigemCode: true,
+        realignmentStatus: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        lojaDestinoCode: true,
+        lojaDestinoName: true,
+        solicitanteNome: true,
+        mensagem: true,
+      },
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    if (order.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+    if (order.lojaOrigemCode !== store.code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (order.realignmentStatus !== 'sent')
+      throw new BadRequestException('Ordem não está marcada como enviada');
+
+    const updated = await this.prisma.transferOrder.update({
+      where: { id: order.id },
+      data: {
+        realignmentStatus: 'pending',
+        realignmentSentAt: null,
+        realignmentSentByUserId: null,
+      },
+    });
+
+    // Emite `realignment:unsent` pra retaguarda + outros dispositivos da loja
+    // atualizarem a UI (a ordem voltou pra fila). A UI local já atualizou
+    // otimisticamente — isso mantém sincronia com outros clientes logados.
+    try {
+      this.gateway.emitRealignmentUnsent(store.id, {
+        transferId: updated.id,
+        storeId: store.id,
+        storeCode: store.code,
+        refCode: updated.refCode,
+        cor: updated.cor,
+        tamanho: updated.tamanho,
+        lojaDestinoCode: updated.lojaDestinoCode,
+      });
+    } catch (e) {
+      this.logger.warn(`[realignment] falha ao emitir socket unsent: ${(e as Error).message}`);
+    }
+
+    return { ok: true, id: updated.id };
+  }
 }
