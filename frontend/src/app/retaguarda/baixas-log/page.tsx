@@ -230,13 +230,30 @@ export default function BaixasLogPage() {
 
   // IDs únicos de pick-orders nas rows visíveis que vieram de SHADOW
   // (candidatos a reabrir em lote). Ignora nulls e batch logs (bulk-approved).
+  //
+  // IMPORTANTE: `debit.real.failed` NÃO entra aqui. Reopen serve pra desfazer
+  // uma baixa APROVADA (debitApprovedAt != null). Baixa falhou = nunca foi aprovada,
+  // então reopen quebra com "ainda não foi aprovada". O caminho certo pra esses
+  // é RETRY (re-dispara autoDebit). Ver `retryCandidates` abaixo.
   const reopenCandidates = useMemo(() => {
     const ids = new Set<string>();
     for (const r of rows) {
       if (!r.pickOrderId) continue;
-      if (!r.event.includes('shadow') && r.event !== 'debit.real.failed') continue;
-      // pula batch logs (event bulk-approved.shadow) — não têm pickOrderId individual
+      if (!r.event.includes('shadow')) continue;
       if (r.event.startsWith('debit.bulk-approved')) continue;
+      ids.add(r.pickOrderId);
+    }
+    return Array.from(ids);
+  }, [rows]);
+
+  // IDs únicos de pick-orders LIVE FALHOU (candidatos a retry automático).
+  // Caminho diferente de reopen: chama retry-auto-debit que re-roda autoDebitOnShipped
+  // (pick-order segue shipped, debitApprovedAt=null, ainda não tocou o ERP de verdade).
+  const retryCandidates = useMemo(() => {
+    const ids = new Set<string>();
+    for (const r of rows) {
+      if (!r.pickOrderId) continue;
+      if (r.event !== 'debit.real.failed') continue;
       ids.add(r.pickOrderId);
     }
     return Array.from(ids);
@@ -263,6 +280,79 @@ export default function BaixasLogPage() {
     } finally {
       setReopening(false);
     }
+  };
+
+  // -----------------------------------------------------------------------
+  // RETRY de LIVE FALHOU — re-roda autoDebit (caminho diferente de reopen)
+  // -----------------------------------------------------------------------
+
+  const retryOne = async (pickOrderId: string) => {
+    if (!confirm(
+      'Tentar de novo essa baixa no Gigasistemas?\n\n' +
+      'O pedido segue como "shipped" e vamos re-executar o auto-debit. ' +
+      'Se o ERP responder dessa vez, o estoque é baixado e o log vira LIVE OK.',
+    )) return;
+    setReopening(true);
+    try {
+      const resp = await api<{
+        pickOrderId: string;
+        attempted: boolean;
+        applied: boolean;
+        skipped: boolean;
+        shadow: boolean;
+        reason: string | null;
+      }>(`/pick-orders/${pickOrderId}/retry-auto-debit`, {
+        method: 'POST',
+      });
+      if (resp.applied) {
+        alert('✅ Baixa aplicada com sucesso no Gigasistemas.');
+      } else if (resp.shadow) {
+        alert('⚠️ Sistema está em modo SHADOW (ERP_WRITE_ENABLED=false). Só gravou intenção — nada foi tocado no ERP.');
+      } else {
+        alert(`❌ Retry falhou de novo: ${resp.reason ?? 'erro desconhecido'}`);
+      }
+      setSelectedId(null);
+      load();
+      loadStats();
+    } catch (e: any) {
+      alert(`Erro ao tentar retry: ${String(e?.message ?? e)}`);
+    } finally {
+      setReopening(false);
+    }
+  };
+
+  const retryBulk = async () => {
+    if (retryCandidates.length === 0) {
+      alert('Nenhum LIVE FALHOU nesta página.');
+      return;
+    }
+    if (!confirm(
+      `Tentar de novo ${retryCandidates.length} baixa(s) que falharam?\n\n` +
+      `Vamos re-executar autoDebit uma por uma. Pode demorar ~${Math.ceil(retryCandidates.length * 2)}s.`,
+    )) return;
+    setReopening(true);
+    setBulkReopenResult(null);
+    let ok = 0;
+    let failed = 0;
+    let errors = 0;
+    for (const id of retryCandidates) {
+      try {
+        const resp = await api<{ applied: boolean; shadow: boolean; reason: string | null }>(
+          `/pick-orders/${id}/retry-auto-debit`,
+          { method: 'POST' },
+        );
+        if (resp.applied) ok += 1;
+        else failed += 1;
+      } catch {
+        errors += 1;
+      }
+    }
+    setBulkReopenResult(
+      `Retry: ✅ ${ok} aplicado(s) • ❌ ${failed} ainda falhou(aram) • ⚠️ ${errors} erro(s) de rede`,
+    );
+    setReopening(false);
+    load();
+    loadStats();
   };
 
   const reopenBulk = async () => {
@@ -320,15 +410,26 @@ export default function BaixasLogPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {retryCandidates.length > 0 && (
+            <button
+              onClick={retryBulk}
+              disabled={reopening}
+              className="px-3 py-2 text-sm font-bold rounded bg-red-600 text-white hover:bg-red-700 flex items-center gap-2 disabled:opacity-60"
+              title="Re-executa autoDebit nos pick-orders LIVE FALHOU desta página (re-bate no Giga agora)"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Retry {retryCandidates.length} falha(s) no ERP
+            </button>
+          )}
           {reopenCandidates.length > 0 && (
             <button
               onClick={reopenBulk}
               disabled={reopening}
               className="px-3 py-2 text-sm font-bold rounded bg-amber-600 text-white hover:bg-amber-700 flex items-center gap-2 disabled:opacity-60"
-              title="Devolve todos os pick-orders SHADOW/FALHOU desta página pra fila /baixa-estoque"
+              title="Devolve todos os pick-orders SHADOW desta página pra fila /baixa-estoque"
             >
               <RotateCcw className="w-4 h-4" />
-              Reabrir {reopenCandidates.length} shadow/falha
+              Reabrir {reopenCandidates.length} shadow
             </button>
           )}
           <button
@@ -602,6 +703,7 @@ export default function BaixasLogPage() {
           detail={detail}
           onClose={() => setSelectedId(null)}
           onReopen={reopenOne}
+          onRetry={retryOne}
           reopening={reopening}
         />
       )}
@@ -618,26 +720,35 @@ function DetailModal({
   detail,
   onClose,
   onReopen,
+  onRetry,
   reopening,
 }: {
   loading: boolean;
   detail: DetailResp | null;
   onClose: () => void;
   onReopen: (pickOrderId: string) => void;
+  onRetry: (pickOrderId: string) => void;
   reopening: boolean;
 }) {
   // Já foi resolvido? (shadow/falha mas existe debit.real.applied posterior)
   const alreadyResolved = !!detail?.resolvedByLog;
 
   // Exibe botão Reabrir somente se:
-  //  - é shadow OU failed (incluindo auto.shadow do auto-debit)
+  //  - é SHADOW (reopen quebra pra real.failed porque debitApprovedAt=null)
   //  - tem pickOrderId individual (não batch agregado)
   //  - NÃO foi resolvido posteriormente (anti-dupla-baixa)
   const canReopen =
     !!detail?.pickOrderId &&
     (detail.event === 'debit.approved.shadow' ||
-      detail.event === 'debit.auto.shadow' ||
-      detail.event === 'debit.real.failed') &&
+      detail.event === 'debit.auto.shadow') &&
+    !alreadyResolved;
+
+  // Exibe botão "Tentar de novo" (retry-auto-debit) somente pra LIVE FALHOU
+  // ainda não resolvido. Esses NÃO usam reopen porque o pick-order nunca teve
+  // debitApprovedAt marcado — o caminho certo é re-disparar autoDebitOnShipped.
+  const canRetry =
+    !!detail?.pickOrderId &&
+    detail.event === 'debit.real.failed' &&
     !alreadyResolved;
   const kind = detail ? eventKind(detail.event) : null;
   const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> =
@@ -845,15 +956,32 @@ function DetailModal({
           )}
         </div>
 
-        {/* Footer — ação de reabrir (só pra shadow/failed AINDA NÃO resolvidos) */}
+        {/* Footer — RETRY pra LIVE FALHOU (re-roda autoDebit agora) */}
+        {canRetry && detail?.pickOrderId && (
+          <div className="border-t bg-red-50 p-3 flex items-center justify-between gap-3">
+            <div className="text-xs text-red-900">
+              Baixa LIVE falhou no ERP (provavelmente ETIMEDOUT). O pedido segue como <b>shipped</b>{' '}
+              mas o estoque no Giga NÃO foi debitado. Clique pra tentar de novo agora — já com retry
+              automático no ERP (3 tentativas com backoff).
+            </div>
+            <button
+              onClick={() => onRetry(detail.pickOrderId!)}
+              disabled={reopening}
+              className="px-4 py-2 text-sm font-bold rounded bg-red-600 text-white hover:bg-red-700 flex items-center gap-2 disabled:opacity-60 whitespace-nowrap"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Tentar de novo no ERP
+            </button>
+          </div>
+        )}
+
+        {/* Footer — ação de reabrir (só pra shadow AINDA NÃO resolvidos) */}
         {canReopen && detail?.pickOrderId && (
           <div className="border-t bg-amber-50 p-3 flex items-center justify-between gap-3">
             <div className="text-xs text-amber-800">
               {detail.event === 'debit.approved.shadow'
                 ? 'Baixa feita em SHADOW — não tocou o ERP. Reabrir devolve o pick-order pra fila.'
-                : detail.event === 'debit.auto.shadow'
-                  ? 'Auto-baixa (shipped) foi em SHADOW — não tocou o ERP. Reabrir devolve pra fila.'
-                  : 'Baixa falhou no ERP. Reabrir devolve o pick-order pra fila pra tentar novamente.'}
+                : 'Auto-baixa (shipped) foi em SHADOW — não tocou o ERP. Reabrir devolve pra fila.'}
             </div>
             <button
               onClick={() => onReopen(detail.pickOrderId!)}

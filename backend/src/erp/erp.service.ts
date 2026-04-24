@@ -35,7 +35,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       waitForConnections: true,
       connectionLimit: 5,
       queueLimit: 0,
-      connectTimeout: 5000,
+      // 15s pra conectar — Giga roda atrás do NAT da loja, latência varia MUITO.
+      // 5s era curto e causava ETIMEDOUT em pico de uso / rede instável.
+      connectTimeout: 15000,
+      // Keep-alive evita que o NAT derrube conexão ociosa do pool.
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 30000,
     });
 
     // IMPORTANTE: ping em background. NÃO bloquear o boot do Nest.
@@ -98,6 +103,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
     error?: string;
+    attempts?: number;
   }> {
     if (!this.isWriteEnabled) {
       return { success: false, applied: [], error: 'ERP_WRITE_ENABLED não habilitado' };
@@ -109,6 +115,48 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return { success: true, applied: [] };
     }
 
+    // RETRY em erros transientes (timeout de rede/conexão). Até 3 tentativas
+    // com backoff 0 / 1s / 3s. Erros de regra de negócio (estoque insuficiente,
+    // SKU não encontrado, etc.) NÃO são retry — falha na hora.
+    const TRANSIENT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'PROTOCOL_CONNECTION_LOST', 'ER_LOCK_WAIT_TIMEOUT']);
+    const TRANSIENT_MSG_PATTERNS = [/read ETIMEDOUT/i, /connect ETIMEDOUT/i, /Connection lost/i, /closed state/i];
+    const isTransient = (err: any): boolean => {
+      const code = String(err?.code ?? '').toUpperCase();
+      if (TRANSIENT_CODES.has(code)) return true;
+      const msg = String(err?.message ?? err ?? '');
+      return TRANSIENT_MSG_PATTERNS.some((rx) => rx.test(msg));
+    };
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const BACKOFF_MS = [0, 1000, 3000];
+
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= BACKOFF_MS.length; attempt++) {
+      if (BACKOFF_MS[attempt - 1] > 0) await sleep(BACKOFF_MS[attempt - 1]);
+      const result = await this.decreaseStockOnce(items);
+      if (result.success) {
+        return { ...result, attempts: attempt };
+      }
+      lastError = result.error;
+      // Só faz retry se for transiente. Erro de regra de negócio → sai na hora.
+      if (!isTransient({ message: lastError })) {
+        return { ...result, attempts: attempt };
+      }
+      this.logger.warn(`ERP baixa tentativa ${attempt}/${BACKOFF_MS.length} falhou (transient): ${lastError}`);
+    }
+    return { success: false, applied: [], error: `${lastError} (${BACKOFF_MS.length} tentativas)`, attempts: BACKOFF_MS.length };
+  }
+
+  /**
+   * Execução ÚNICA da baixa (sem retry) — extraída pra poder ser chamada N vezes
+   * pelo wrapper de retry acima. Toda a lógica ACID fica aqui.
+   */
+  private async decreaseStockOnce(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+  }> {
     // Normaliza storeCode: "LJ01" ou "1" → "01"
     const normalizeStoreCode = (raw: string): string => {
       const s = String(raw || '').trim().toUpperCase().replace(/^LJ/i, '');

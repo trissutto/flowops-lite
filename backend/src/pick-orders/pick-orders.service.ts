@@ -970,6 +970,121 @@ export class PickOrdersService {
   }
 
   /**
+   * RETRY DA BAIXA AUTOMÁTICA que falhou (ETIMEDOUT, ECONNRESET, etc).
+   *
+   * Quando o pick-order foi marcado 'shipped' e o autoDebitOnShipped tentou
+   * bater no Giga mas falhou (ex: rede caiu), o pick-order fica em limbo:
+   *   - status = 'shipped' ✅ (pra loja, o pedido saiu)
+   *   - debitApprovedAt = null ❌ (matriz não debitou de verdade)
+   *   - tem log `debit.real.failed` ❌ (evidência de falha)
+   *
+   * Isso bagunça o estoque (venda enviada mas não baixada no ERP).
+   * `reopenDebit` não resolve porque ele exige `debitApprovedAt != null`
+   * (ele é pra desfazer uma baixa já aprovada — aqui é o OPOSTO).
+   *
+   * Esse método:
+   *   1. Valida que o pick-order está em estado LIVE FALHOU (shipped + sem aprovação + tem log falhou)
+   *   2. Valida anti-dupla (sem log debit.real.applied)
+   *   3. Re-executa autoDebitOnShipped (que agora tem retry automático no ERP)
+   *   4. Loga `debit.retry.attempted` com resultado pra auditoria
+   *   5. Retorna o resultado (aplicado / ainda falhou)
+   *
+   * Chamado por POST /pick-orders/:id/retry-auto-debit (botão "Retry" no log de baixas).
+   */
+  async retryAutoDebit(pickOrderId: string, operatorUserId: string) {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: {
+        id: true,
+        status: true,
+        storeId: true,
+        orderId: true,
+        debitApprovedAt: true,
+        store: { select: { code: true, name: true } },
+      } as any,
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+
+    // GUARD 1: já tem baixa aprovada → usar reopenDebit, não retry
+    if ((po as any).debitApprovedAt) {
+      throw new BadRequestException(
+        'Pick-order já tem baixa aprovada. Se quer refazer, use "Reabrir" na tela /baixa-estoque.',
+      );
+    }
+
+    // GUARD 2: precisa estar em estado pós-envio (shipped) pra fazer sentido retry
+    // Aceita variações caso futuramente o enum mude.
+    const st = String((po as any).status ?? '').toLowerCase();
+    if (st !== 'shipped') {
+      throw new BadRequestException(
+        `Pick-order está em status "${st}" — retry de baixa automática só faz sentido após 'shipped'.`,
+      );
+    }
+
+    // GUARD 3: anti-dupla — se já existe debit.real.applied, ERP já foi tocado
+    const priorApplied = await this.prisma.integrationLog.findFirst({
+      where: {
+        source: 'erp',
+        event: 'debit.real.applied',
+        payload: { contains: `"pickOrderId":"${pickOrderId}"` },
+      },
+      select: { id: true },
+    });
+    if (priorApplied) {
+      throw new BadRequestException(
+        `Já existe log debit.real.applied #${priorApplied.id} — ERP foi baixado. ` +
+        'Retry causaria baixa dupla. Veja o log ou corrija direto no Giga.',
+      );
+    }
+
+    // GUARD 4: precisa ter log de falha pra justificar o retry (evita disparo aleatório)
+    const priorFailed = await this.prisma.integrationLog.findFirst({
+      where: {
+        source: 'erp',
+        event: 'debit.real.failed',
+        payload: { contains: `"pickOrderId":"${pickOrderId}"` },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    });
+    if (!priorFailed) {
+      throw new BadRequestException(
+        'Nenhuma falha anterior registrada pra esse pick-order. Nada pra tentar de novo.',
+      );
+    }
+
+    // Auditoria — loga intenção ANTES de tentar
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'pick-order',
+        direction: 'internal',
+        event: 'debit.retry.attempted',
+        payload: JSON.stringify({
+          pickOrderId,
+          retryBy: operatorUserId,
+          storeCode: (po as any).store?.code ?? null,
+          storeName: (po as any).store?.name ?? null,
+          previousFailedLogId: priorFailed.id,
+        }),
+        status: 200,
+      },
+    });
+
+    // Re-executa a lógica de auto-baixa. autoDebitOnShipped já cuida de
+    // logar debit.real.failed/applied e atualizar debitApprovedAt em caso de sucesso.
+    const result = await this.autoDebitOnShipped(pickOrderId, operatorUserId);
+
+    return {
+      pickOrderId,
+      attempted: result.attempted,
+      applied: result.applied,
+      skipped: result.skipped,
+      shadow: result.shadow,
+      reason: result.reason,
+    };
+  }
+
+  /**
    * Lista TODOS os pick-orders de um pedido WC (matriz-only).
    * Usado pela tela /pedidos/wc/[id] pra mostrar status de cada loja ao vivo,
    * incluindo rastreio quando enviado. Join com store pra ter nome/code.

@@ -1,17 +1,19 @@
 'use client';
 
 /**
- * / — Home/Launchpad da matriz (v3 — 4 botões MÃE).
+ * / — Home/Launchpad da matriz (v4 — visual delicado).
  *
- * MUDANÇA: antes a home jogava 15+ cards em 4 seções (Operação / Retaguarda /
- * Gestão / Sistema). Ficou visualmente pesado pra quem só quer chegar em um
- * módulo. Agora a home mostra APENAS 4 botões MÃE gigantes (PEDIDOS,
- * RETAGUARDA, GESTÃO, SISTEMA), cada um com uma forma geométrica diferente,
- * e cada um leva pra uma tela hub com os sub-módulos.
+ * v3 era "shouty": gradientes saturados, shadows pesadas, shapes assimétricas,
+ * tipografia black. Nada disso some agora — só ficou mais refinado:
+ *   - Header claro (creme/off-white), tipografia serifada no saudar
+ *   - KPIs com borda fininha + número tabular discreto
+ *   - 4 cards MÃE em tom pastel (sky-50, amber-50, emerald-50, slate-100)
+ *     com ícone em círculo colorido e typography peso médio
+ *   - Piloto automático vira pill suave (em vez do botão berrante)
+ *   - Hover com lift de 2px + ring colorido fino (sem scale agressivo)
  *
- * Mantém:
- *   - Header de boas-vindas + Piloto Automático (é o switch mais crítico)
- *   - KPIs (Processando / Em separação / Pgto pendente / Aguardando / Enviados)
+ * Mantém toda a lógica: guard de sessão, KPIs via polling + socket,
+ * toggle do Piloto Automático server-side.
  *
  * Redireciona:
  *   - sem token → /login
@@ -34,67 +36,77 @@ interface CountsResp {
   grand: number;
 }
 
-// ----------- Botões MÃE -----------
-// Cada botão usa uma combinação diferente de border-radius pra criar a
-// sensação de "formas variadas" sem sair do Tailwind. Combinado com blobs
-// decorativos SVG internos o visual fica moderno e único por botão.
+// ----------- Botões MÃE (versão delicada) -----------
+// Cada card usa bg pastel + accent color pro ícone/CTA. Sem gradiente saturado,
+// sem shape assimétrico — só border-radius generoso (2xl) e ring suave no hover.
 type MotherButton = {
   href: string;
   label: string;
   subtitle: string;
   icon: typeof LayoutDashboard;
-  gradient: string;
-  shape: string;      // classes tailwind de border-radius assimétrico
-  blob: string;       // cor do blob decorativo interno
-  kpiKey?: string;    // opcional — pra mostrar contador no card
+  // Paleta: bg do card / cor do anel do ícone / cor do texto accent / ring hover
+  bg: string;
+  iconBg: string;
+  iconColor: string;
+  textAccent: string;
+  hoverRing: string;
+  kpiKey?: string;
 };
 
 const MOTHER_BUTTONS: MotherButton[] = [
   {
     href: '/separacao',
-    label: 'PEDIDOS',
-    subtitle: 'Separação · envio · impressão',
+    label: 'Pedidos',
+    subtitle: 'Separação, envio e impressão',
     icon: LayoutDashboard,
-    gradient: 'from-sky-500 via-blue-600 to-indigo-700',
-    shape: 'rounded-tl-[5rem] rounded-br-[5rem] rounded-tr-3xl rounded-bl-3xl',
-    blob: 'bg-cyan-300/30',
+    bg: 'bg-sky-50/70',
+    iconBg: 'bg-sky-100',
+    iconColor: 'text-sky-600',
+    textAccent: 'text-sky-900',
+    hoverRing: 'hover:ring-sky-200',
     kpiKey: 'processing',
   },
   {
     href: '/retaguarda',
-    label: 'RETAGUARDA',
-    subtitle: 'Materiais · baixas · ERP · site',
+    label: 'Retaguarda',
+    subtitle: 'Materiais, baixas, ERP e site',
     icon: Boxes,
-    gradient: 'from-amber-500 via-orange-600 to-red-600',
-    shape: 'rounded-tr-[5rem] rounded-bl-[5rem] rounded-tl-3xl rounded-br-3xl',
-    blob: 'bg-yellow-300/30',
+    bg: 'bg-amber-50/70',
+    iconBg: 'bg-amber-100',
+    iconColor: 'text-amber-700',
+    textAccent: 'text-amber-900',
+    hoverRing: 'hover:ring-amber-200',
   },
   {
     href: '/gestao',
-    label: 'GESTÃO',
-    subtitle: 'Financeiro · produtos · CRM · marketing',
+    label: 'Gestão',
+    subtitle: 'Financeiro, produtos, CRM e marketing',
     icon: TrendingUp,
-    gradient: 'from-emerald-500 via-teal-600 to-cyan-700',
-    shape: 'rounded-bl-[5rem] rounded-tr-[5rem] rounded-br-3xl rounded-tl-3xl',
-    blob: 'bg-lime-300/30',
+    bg: 'bg-emerald-50/70',
+    iconBg: 'bg-emerald-100',
+    iconColor: 'text-emerald-700',
+    textAccent: 'text-emerald-900',
+    hoverRing: 'hover:ring-emerald-200',
   },
   {
     href: '/sistema',
-    label: 'SISTEMA',
-    subtitle: 'Configurações · lojas · usuários',
+    label: 'Sistema',
+    subtitle: 'Configurações, lojas e usuários',
     icon: Settings,
-    gradient: 'from-slate-700 via-slate-800 to-slate-950',
-    shape: 'rounded-br-[5rem] rounded-tl-[5rem] rounded-bl-3xl rounded-tr-3xl',
-    blob: 'bg-fuchsia-400/20',
+    bg: 'bg-slate-100/70',
+    iconBg: 'bg-slate-200',
+    iconColor: 'text-slate-700',
+    textAccent: 'text-slate-900',
+    hoverRing: 'hover:ring-slate-300',
   },
 ];
 
-// KPI cards visíveis no topo
-const KPI_CARDS: Array<{ slug: string; label: string; color: string }> = [
-  { slug: 'processing', label: 'Processando',    color: 'border-emerald-500' },
-  { slug: 'separacao',  label: 'Em separação',   color: 'border-blue-500' },
-  { slug: 'pending',    label: 'Pgto pendente',  color: 'border-amber-500' },
-  { slug: 'on-hold',    label: 'Aguardando',     color: 'border-yellow-500' },
+// KPI cards — paleta pastel, accent só num traço fino na esquerda
+const KPI_CARDS: Array<{ slug: string; label: string; dot: string }> = [
+  { slug: 'processing', label: 'Processando',   dot: 'bg-emerald-400' },
+  { slug: 'separacao',  label: 'Em separação',  dot: 'bg-sky-400' },
+  { slug: 'pending',    label: 'Pgto pendente', dot: 'bg-amber-400' },
+  { slug: 'on-hold',    label: 'Aguardando',    dot: 'bg-yellow-400' },
 ];
 
 export default function DashboardHome() {
@@ -148,7 +160,7 @@ export default function DashboardHome() {
     };
   }, []);
 
-  // KPIs — contadores por status + enviados hoje (total). Atualiza a cada 30s.
+  // KPIs — contadores por status + enviados hoje. Atualiza a cada 30s.
   useEffect(() => {
     let cancelled = false;
 
@@ -218,25 +230,35 @@ export default function DashboardHome() {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-slate-50">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 pb-10">
-          <div className="flex items-center justify-between flex-wrap gap-4">
+    <div className="min-h-screen bg-[#faf9f7]">
+      {/* Header delicado — bg creme, sem gradiente escuro */}
+      <div className="border-b border-slate-200/70 bg-white/60 backdrop-blur-sm">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-10 pb-8">
+          <div className="flex items-start justify-between flex-wrap gap-6">
             <div>
-              <div className="text-xs uppercase tracking-widest text-slate-400 mb-1">Lurds Order One</div>
-              <h1 className="text-2xl sm:text-3xl font-bold">
-                {userName ? `Oi, ${userName.split(' ')[0]}` : 'Bem-vindo'} 👋
+              <div className="text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-2 font-medium">
+                Lurds Order One
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-light text-slate-800 tracking-tight">
+                {userName ? (
+                  <>
+                    Oi, <span className="font-medium text-slate-900">{userName.split(' ')[0]}</span>
+                  </>
+                ) : (
+                  <span className="font-medium text-slate-900">Bem-vindo</span>
+                )}
               </h1>
-              <div className="text-sm text-slate-300 mt-1 capitalize">{today}</div>
+              <div className="text-sm text-slate-500 mt-2 capitalize font-light">{today}</div>
             </div>
+
+            {/* Piloto automático — pill sutil em vez de botão berrante */}
             <button
               onClick={togglePilot}
               disabled={pilotBusy || pilotStatus?.killSwitch === true}
-              className={`relative rounded-xl px-4 py-2.5 text-sm font-bold flex items-center gap-2 transition shadow-lg ring-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`group relative rounded-full pl-3 pr-4 py-2 text-sm font-medium flex items-center gap-2.5 transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
                 pilot
-                  ? 'bg-gradient-to-br from-fuchsia-500 to-purple-600 text-white ring-fuchsia-300/60 hover:from-fuchsia-600 hover:to-purple-700'
-                  : 'bg-white/10 text-white ring-white/20 hover:bg-white/15'
+                  ? 'bg-white text-slate-800 border-slate-300 shadow-sm hover:shadow'
+                  : 'bg-transparent text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
               }`}
               title={
                 pilotStatus?.killSwitch
@@ -246,54 +268,64 @@ export default function DashboardHome() {
                   : 'Envio manual. Clique pra ligar (server-side).'
               }
             >
-              {pilot ? <Zap className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+              {/* Indicador de estado — bolinha com pulso sutil */}
+              <span className={`relative flex items-center justify-center w-6 h-6 rounded-full ${pilot ? 'bg-emerald-50' : 'bg-slate-100'}`}>
+                {pilot ? <Zap className="w-3.5 h-3.5 text-emerald-600" /> : <Bot className="w-3.5 h-3.5 text-slate-400" />}
+                {pilot && (
+                  <span className="absolute inset-0 rounded-full ring-2 ring-emerald-200 animate-ping opacity-40" />
+                )}
+              </span>
               <span className="leading-tight text-left">
-                <span className="block text-[10px] uppercase opacity-80 tracking-wider">
-                  Piloto automático {pilotStatus?.killSwitch && '· BLOQUEADO'}
+                <span className="block text-[9px] uppercase tracking-widest text-slate-400">
+                  Piloto {pilotStatus?.killSwitch && '· bloqueado'}
                 </span>
-                <span className="block text-sm">
-                  {pilotBusy ? '...' : pilot ? 'LIGADO' : 'DESLIGADO'}
+                <span className={`block text-xs font-semibold ${pilot ? 'text-emerald-700' : 'text-slate-500'}`}>
+                  {pilotBusy ? '…' : pilot ? 'Ligado' : 'Desligado'}
                 </span>
               </span>
-              {pilot && pilotStatus?.whatsappConnected && (
-                <span className="ml-1 w-2 h-2 rounded-full bg-green-300 animate-pulse" title="WhatsApp conectado" />
-              )}
               {pilot && pilotStatus && !pilotStatus.whatsappConnected && (
-                <span className="ml-1 w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="WhatsApp desconectado" />
+                <span
+                  className="w-1.5 h-1.5 rounded-full bg-amber-400"
+                  title="WhatsApp desconectado"
+                />
               )}
             </button>
           </div>
         </div>
       </div>
 
-      {/* KPIs flutuantes */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 -mt-6 relative">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3">
+      {/* KPIs — delicados, com bolinha de cor em vez de border-left grossa */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {KPI_CARDS.map((c) => (
             <div
               key={c.slug}
-              className={`bg-white rounded-xl shadow-md border-l-4 ${c.color} px-3 py-2.5`}
+              className="bg-white rounded-xl border border-slate-200/70 px-4 py-3 hover:border-slate-300 transition"
             >
-              <div className="text-[11px] sm:text-xs text-slate-500 leading-none mb-1">{c.label}</div>
-              <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight tabular-nums">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                <div className="text-[11px] text-slate-500 font-medium tracking-wide">{c.label}</div>
+              </div>
+              <div className="text-2xl font-light text-slate-900 tabular-nums leading-none">
                 {(counts[c.slug]?.total ?? 0).toLocaleString('pt-BR')}
               </div>
             </div>
           ))}
-          <div className="bg-white rounded-xl shadow-md border-l-4 border-pink-500 px-3 py-2.5">
-            <div className="text-[11px] sm:text-xs text-slate-500 leading-none mb-1 flex items-center gap-1">
-              <TrendingUp className="w-3 h-3" /> Enviados hoje
+          <div className="bg-white rounded-xl border border-slate-200/70 px-4 py-3 hover:border-slate-300 transition">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
+              <div className="text-[11px] text-slate-500 font-medium tracking-wide">Enviados hoje</div>
             </div>
-            <div className="text-xl sm:text-2xl font-bold text-slate-900 leading-tight tabular-nums">
+            <div className="text-2xl font-light text-slate-900 tabular-nums leading-none">
               {enviadosHoje.toLocaleString('pt-BR')}
             </div>
           </div>
         </div>
       </div>
 
-      {/* 4 BOTÕES MÃE — grid 2x2 gigante */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+      {/* 4 cards MÃE — grid 2x2 em tons pastel */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-10 sm:py-14">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
           {MOTHER_BUTTONS.map((btn) => (
             <MotherButtonCard
               key={btn.href}
@@ -312,36 +344,31 @@ function MotherButtonCard({ btn, kpi }: { btn: MotherButton; kpi?: number }) {
   return (
     <Link
       href={btn.href}
-      className={`group relative overflow-hidden bg-gradient-to-br ${btn.gradient} ${btn.shape} text-white shadow-2xl hover:shadow-[0_25px_60px_-15px_rgba(0,0,0,0.45)] hover:scale-[1.02] transition-all duration-300 min-h-[220px] sm:min-h-[280px] flex flex-col justify-between p-7 sm:p-10`}
+      className={`group relative overflow-hidden ${btn.bg} rounded-3xl border border-slate-200/70 ring-1 ring-transparent ${btn.hoverRing} hover:-translate-y-0.5 hover:shadow-md transition-all duration-300 min-h-[180px] sm:min-h-[210px] flex flex-col justify-between p-6 sm:p-8`}
     >
-      {/* Blobs decorativos pra criar profundidade e diferenciar cada shape */}
-      <div className={`absolute -top-24 -right-24 w-72 h-72 rounded-full ${btn.blob} blur-3xl pointer-events-none`} />
-      <div className={`absolute -bottom-32 -left-20 w-80 h-80 rounded-full ${btn.blob} blur-3xl pointer-events-none opacity-60`} />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,white_0%,transparent_70%)] opacity-5 pointer-events-none" />
-
-      {/* Top — ícone gigante */}
-      <div className="relative flex items-start justify-between">
-        <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-white/15 backdrop-blur-md ring-1 ring-white/25 flex items-center justify-center shadow-xl group-hover:scale-110 group-hover:rotate-3 transition-transform duration-300">
-          <Icon className="w-10 h-10 sm:w-12 sm:h-12 drop-shadow-lg" />
+      {/* Topo — ícone em círculo pastel + counter se houver */}
+      <div className="flex items-start justify-between">
+        <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl ${btn.iconBg} flex items-center justify-center transition-transform duration-300 group-hover:scale-105`}>
+          <Icon className={`w-7 h-7 sm:w-8 sm:h-8 ${btn.iconColor}`} strokeWidth={1.5} />
         </div>
         {kpi != null && kpi > 0 && (
-          <div className="bg-white/25 backdrop-blur-md ring-1 ring-white/30 rounded-full px-4 py-1.5 text-sm font-black tabular-nums shadow-lg">
+          <div className={`text-xs font-medium ${btn.textAccent} bg-white/70 rounded-full px-3 py-1 tabular-nums border border-white`}>
             {kpi.toLocaleString('pt-BR')} agora
           </div>
         )}
       </div>
 
-      {/* Bottom — nome enorme + subtítulo + CTA */}
-      <div className="relative mt-6">
-        <div className="text-4xl sm:text-6xl font-black tracking-tight leading-none drop-shadow-md">
+      {/* Base — nome + subtítulo + seta discreta */}
+      <div className="mt-5">
+        <div className={`text-2xl sm:text-3xl font-medium tracking-tight ${btn.textAccent}`}>
           {btn.label}
         </div>
-        <div className="text-sm sm:text-base opacity-90 mt-3 font-medium">
+        <div className="text-sm text-slate-600 mt-1.5 font-light">
           {btn.subtitle}
         </div>
-        <div className="mt-5 inline-flex items-center gap-2 bg-white text-slate-900 font-black text-sm px-5 py-2.5 rounded-2xl shadow-xl group-hover:shadow-2xl group-hover:-translate-y-1 transition">
-          ABRIR
-          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition" />
+        <div className={`mt-4 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider ${btn.textAccent} opacity-70 group-hover:opacity-100 transition`}>
+          Abrir
+          <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition" />
         </div>
       </div>
     </Link>

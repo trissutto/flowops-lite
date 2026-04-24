@@ -194,6 +194,21 @@ export class PickOrdersController {
     return this.svc.reopenDebit(id, user.userId, body?.reason);
   }
 
+  /**
+   * RETRY de baixa automática que falhou (LIVE FALHOU).
+   * Usado pelo botão "Retry" no log de baixas quando autoDebit caiu por
+   * ETIMEDOUT/ECONNRESET e o pick-order ficou shipped mas sem aprovação.
+   * Re-dispara autoDebitOnShipped (que agora tem retry no ERP service).
+   */
+  @Post(':id/retry-auto-debit')
+  retryAutoDebit(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz (admin/operator) pode reexecutar baixa automática');
+    }
+    return this.svc.retryAutoDebit(id, user.userId);
+  }
+
   @Get(':id')
   getOne(@Req() req: any, @Param('id') id: string) {
     const user = req.user as AuthUser;
