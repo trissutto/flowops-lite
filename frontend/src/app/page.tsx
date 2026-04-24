@@ -1,55 +1,42 @@
 'use client';
 
 /**
- * / — Home/Launchpad da matriz (v4 — visual delicado).
+ * / — Home/Launchpad da matriz (v5 — PREMIUM preto & dourado).
  *
- * v3 era "shouty": gradientes saturados, shadows pesadas, shapes assimétricas,
- * tipografia black. Nada disso some agora — só ficou mais refinado:
- *   - Header claro (creme/off-white), tipografia serifada no saudar
- *   - KPIs com borda fininha + número tabular discreto
- *   - 4 cards MÃE em tom pastel (sky-50, amber-50, emerald-50, slate-100)
- *     com ícone em círculo colorido e typography peso médio
- *   - Piloto automático vira pill suave (em vez do botão berrante)
- *   - Hover com lift de 2px + ring colorido fino (sem scale agressivo)
+ * Troca do visual pastel pra preto/dourado com tipografia serif (Playfair
+ * Display). Referência: boutique de luxo / hotel 5★. Ideia:
+ *   - Fundo preto carvão (#0b0b0d) com textura noise sutil
+ *   - Linhas douradas fininhas (rgba gold 0.35) delimitando seções
+ *   - Títulos em serif (Playfair) com pesos 400-500
+ *   - Números em Inter tabular-nums
+ *   - CTAs com gradiente dourado brilhante
+ *   - Cards MÃE em glass escuro com shine dourado diagonal no hover
  *
  * Mantém toda a lógica: guard de sessão, KPIs via polling + socket,
  * toggle do Piloto Automático server-side.
- *
- * Redireciona:
- *   - sem token → /login
- *   - role=store → /minha-loja (operador de filial tem UI dedicada)
  */
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Boxes, TrendingUp, Settings, Zap, Bot, ArrowRight,
+  LayoutDashboard, Boxes, TrendingUp, Settings, Zap, Bot, ArrowRight, Sparkles,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
 
-// ----------- Tipos dos fetches -----------
 interface CountsResp {
   byStatus: Record<string, { name: string; total: number }>;
   grand: number;
 }
 
-// ----------- Botões MÃE (versão delicada) -----------
-// Cada card usa bg pastel + accent color pro ícone/CTA. Sem gradiente saturado,
-// sem shape assimétrico — só border-radius generoso (2xl) e ring suave no hover.
+// ----------- Botões MÃE (versão premium) -----------
 type MotherButton = {
   href: string;
   label: string;
   subtitle: string;
   icon: typeof LayoutDashboard;
-  // Paleta: bg do card / cor do anel do ícone / cor do texto accent / ring hover
-  bg: string;
-  iconBg: string;
-  iconColor: string;
-  textAccent: string;
-  hoverRing: string;
   kpiKey?: string;
 };
 
@@ -57,51 +44,31 @@ const MOTHER_BUTTONS: MotherButton[] = [
   {
     href: '/separacao',
     label: 'Pedidos',
-    subtitle: 'Separação, envio e impressão',
+    subtitle: 'Separação · envio · impressão',
     icon: LayoutDashboard,
-    bg: 'bg-sky-50/70',
-    iconBg: 'bg-sky-100',
-    iconColor: 'text-sky-600',
-    textAccent: 'text-sky-900',
-    hoverRing: 'hover:ring-sky-200',
     kpiKey: 'processing',
   },
   {
     href: '/retaguarda',
     label: 'Retaguarda',
-    subtitle: 'Materiais, baixas, ERP e site',
+    subtitle: 'Materiais · baixas · ERP · site',
     icon: Boxes,
-    bg: 'bg-amber-50/70',
-    iconBg: 'bg-amber-100',
-    iconColor: 'text-amber-700',
-    textAccent: 'text-amber-900',
-    hoverRing: 'hover:ring-amber-200',
   },
   {
     href: '/gestao',
     label: 'Gestão',
-    subtitle: 'Financeiro, produtos, CRM e marketing',
+    subtitle: 'Financeiro · produtos · CRM · marketing',
     icon: TrendingUp,
-    bg: 'bg-emerald-50/70',
-    iconBg: 'bg-emerald-100',
-    iconColor: 'text-emerald-700',
-    textAccent: 'text-emerald-900',
-    hoverRing: 'hover:ring-emerald-200',
   },
   {
     href: '/sistema',
     label: 'Sistema',
-    subtitle: 'Configurações, lojas e usuários',
+    subtitle: 'Configurações · lojas · usuários',
     icon: Settings,
-    bg: 'bg-slate-100/70',
-    iconBg: 'bg-slate-200',
-    iconColor: 'text-slate-700',
-    textAccent: 'text-slate-900',
-    hoverRing: 'hover:ring-slate-300',
   },
 ];
 
-// KPI cards — paleta pastel, accent só num traço fino na esquerda
+// KPI cards — dourado sutil em cima da cor de tema
 const KPI_CARDS: Array<{ slug: string; label: string; dot: string }> = [
   { slug: 'processing', label: 'Processando',   dot: 'bg-emerald-400' },
   { slug: 'separacao',  label: 'Em separação',  dot: 'bg-sky-400' },
@@ -134,7 +101,7 @@ export default function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Piloto Automático — flag server-side. Sincroniza no mount e a cada 30s.
+  // Piloto Automático — flag server-side.
   useEffect(() => {
     setPilot(isPilotOn());
 
@@ -230,36 +197,77 @@ export default function DashboardHome() {
   });
 
   return (
-    <div className="min-h-screen bg-[#faf9f7]">
-      {/* Header delicado — bg creme, sem gradiente escuro */}
-      <div className="border-b border-slate-200/70 bg-white/60 backdrop-blur-sm">
-        <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-10 pb-8">
+    <div
+      className="min-h-screen text-slate-100"
+      style={{
+        background:
+          'radial-gradient(ellipse at top, #1c1c22 0%, #0b0b0d 55%, #000 100%)',
+      }}
+    >
+      {/* Ruído sutil (overlay SVG data-uri) + vinheta dourada no topo */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 opacity-[0.035]"
+        style={{
+          backgroundImage:
+            "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")",
+        }}
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 top-0 h-96"
+        style={{
+          background:
+            'radial-gradient(ellipse at center top, rgba(201,150,45,0.12), transparent 70%)',
+        }}
+      />
+
+      {/* Header — headline serif, pill dourada pra piloto */}
+      <div className="relative border-b border-gold-hairline">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-12 pb-10">
           <div className="flex items-start justify-between flex-wrap gap-6">
             <div>
-              <div className="text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-2 font-medium">
-                Lurds Order One
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-3.5 h-3.5 text-gold-400" style={{ color: '#d4a84a' }} />
+                <div className="text-[10px] uppercase tracking-[0.35em] text-gold-gradient font-medium">
+                  Lurds Order One
+                </div>
               </div>
-              <h1 className="text-3xl sm:text-4xl font-light text-slate-800 tracking-tight">
+              <h1 className="font-display text-5xl sm:text-6xl font-normal text-white tracking-tight leading-none">
                 {userName ? (
                   <>
-                    Oi, <span className="font-medium text-slate-900">{userName.split(' ')[0]}</span>
+                    Oi,{' '}
+                    <span className="italic text-gold-gradient">
+                      {userName.split(' ')[0]}
+                    </span>
                   </>
                 ) : (
-                  <span className="font-medium text-slate-900">Bem-vindo</span>
+                  <span className="italic text-gold-gradient">Bem-vindo</span>
                 )}
               </h1>
-              <div className="text-sm text-slate-500 mt-2 capitalize font-light">{today}</div>
+              <div className="text-sm text-slate-400 mt-4 capitalize font-light tracking-wide">
+                {today}
+              </div>
             </div>
 
-            {/* Piloto automático — pill sutil em vez de botão berrante */}
+            {/* Piloto automático — pill dourada premium */}
             <button
               onClick={togglePilot}
               disabled={pilotBusy || pilotStatus?.killSwitch === true}
-              className={`group relative rounded-full pl-3 pr-4 py-2 text-sm font-medium flex items-center gap-2.5 transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`group relative rounded-full pl-2.5 pr-5 py-2.5 text-sm flex items-center gap-3 transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
                 pilot
-                  ? 'bg-white text-slate-800 border-slate-300 shadow-sm hover:shadow'
-                  : 'bg-transparent text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-700'
+                  ? 'border-transparent shadow-[0_0_24px_rgba(201,150,45,0.25)]'
+                  : 'bg-black/30 text-slate-300 border-slate-700 hover:border-slate-500'
               }`}
+              style={
+                pilot
+                  ? {
+                      background:
+                        'linear-gradient(135deg, rgba(201,150,45,0.18) 0%, rgba(20,20,24,0.6) 100%)',
+                      borderColor: 'rgba(201,150,45,0.55)',
+                    }
+                  : undefined
+              }
               title={
                 pilotStatus?.killSwitch
                   ? 'Bloqueado via env PILOT_DISABLED=1 — só desbloqueia no servidor.'
@@ -268,18 +276,40 @@ export default function DashboardHome() {
                   : 'Envio manual. Clique pra ligar (server-side).'
               }
             >
-              {/* Indicador de estado — bolinha com pulso sutil */}
-              <span className={`relative flex items-center justify-center w-6 h-6 rounded-full ${pilot ? 'bg-emerald-50' : 'bg-slate-100'}`}>
-                {pilot ? <Zap className="w-3.5 h-3.5 text-emerald-600" /> : <Bot className="w-3.5 h-3.5 text-slate-400" />}
+              <span
+                className={`relative flex items-center justify-center w-8 h-8 rounded-full ${
+                  pilot ? '' : 'bg-slate-800'
+                }`}
+                style={
+                  pilot
+                    ? {
+                        background:
+                          'linear-gradient(135deg, #f3d989 0%, #c9962d 100%)',
+                      }
+                    : undefined
+                }
+              >
+                {pilot ? (
+                  <Zap className="w-4 h-4 text-slate-900" strokeWidth={2.5} />
+                ) : (
+                  <Bot className="w-4 h-4 text-slate-500" strokeWidth={1.8} />
+                )}
                 {pilot && (
-                  <span className="absolute inset-0 rounded-full ring-2 ring-emerald-200 animate-ping opacity-40" />
+                  <span
+                    className="absolute inset-0 rounded-full animate-ping opacity-30"
+                    style={{ boxShadow: '0 0 0 2px rgba(243,217,137,0.6)' }}
+                  />
                 )}
               </span>
               <span className="leading-tight text-left">
-                <span className="block text-[9px] uppercase tracking-widest text-slate-400">
+                <span className="block text-[9px] uppercase tracking-[0.2em] text-slate-400 font-medium">
                   Piloto {pilotStatus?.killSwitch && '· bloqueado'}
                 </span>
-                <span className={`block text-xs font-semibold ${pilot ? 'text-emerald-700' : 'text-slate-500'}`}>
+                <span
+                  className={`block text-xs font-semibold ${
+                    pilot ? 'text-gold-gradient' : 'text-slate-400'
+                  }`}
+                >
                   {pilotBusy ? '…' : pilot ? 'Ligado' : 'Desligado'}
                 </span>
               </span>
@@ -294,38 +324,54 @@ export default function DashboardHome() {
         </div>
       </div>
 
-      {/* KPIs — delicados, com bolinha de cor em vez de border-left grossa */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-8 pt-8">
+      {/* KPIs — cards glass escuro com borda dourada fininha */}
+      <div className="relative max-w-6xl mx-auto px-4 sm:px-8 pt-10">
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {KPI_CARDS.map((c) => (
             <div
               key={c.slug}
-              className="bg-white rounded-xl border border-slate-200/70 px-4 py-3 hover:border-slate-300 transition"
+              className="relative rounded-xl px-4 py-3.5 backdrop-blur-sm hover:border-gold-hairline transition-all"
+              style={{
+                background:
+                  'linear-gradient(180deg, rgba(28,28,34,0.7) 0%, rgba(11,11,13,0.7) 100%)',
+                border: '1px solid rgba(201,150,45,0.18)',
+              }}
             >
-              <div className="flex items-center gap-1.5 mb-1.5">
+              <div className="flex items-center gap-1.5 mb-2">
                 <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-                <div className="text-[11px] text-slate-500 font-medium tracking-wide">{c.label}</div>
+                <div className="text-[10px] text-slate-400 font-medium uppercase tracking-[0.12em]">
+                  {c.label}
+                </div>
               </div>
-              <div className="text-2xl font-light text-slate-900 tabular-nums leading-none">
+              <div className="font-display text-3xl font-normal text-white tabular-nums leading-none">
                 {(counts[c.slug]?.total ?? 0).toLocaleString('pt-BR')}
               </div>
             </div>
           ))}
-          <div className="bg-white rounded-xl border border-slate-200/70 px-4 py-3 hover:border-slate-300 transition">
-            <div className="flex items-center gap-1.5 mb-1.5">
+          <div
+            className="relative rounded-xl px-4 py-3.5 backdrop-blur-sm hover:border-gold-hairline transition-all"
+            style={{
+              background:
+                'linear-gradient(180deg, rgba(28,28,34,0.7) 0%, rgba(11,11,13,0.7) 100%)',
+              border: '1px solid rgba(201,150,45,0.18)',
+            }}
+          >
+            <div className="flex items-center gap-1.5 mb-2">
               <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
-              <div className="text-[11px] text-slate-500 font-medium tracking-wide">Enviados hoje</div>
+              <div className="text-[10px] text-slate-400 font-medium uppercase tracking-[0.12em]">
+                Enviados hoje
+              </div>
             </div>
-            <div className="text-2xl font-light text-slate-900 tabular-nums leading-none">
+            <div className="font-display text-3xl font-normal text-gold-gradient tabular-nums leading-none">
               {enviadosHoje.toLocaleString('pt-BR')}
             </div>
           </div>
         </div>
       </div>
 
-      {/* 4 cards MÃE — grid 2x2 em tons pastel */}
-      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-10 sm:py-14">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
+      {/* 4 cards MÃE — grid 2x2 premium */}
+      <div className="relative max-w-6xl mx-auto px-4 sm:px-8 py-12 sm:py-16">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
           {MOTHER_BUTTONS.map((btn) => (
             <MotherButtonCard
               key={btn.href}
@@ -333,6 +379,14 @@ export default function DashboardHome() {
               kpi={btn.kpiKey ? counts[btn.kpiKey]?.total : undefined}
             />
           ))}
+        </div>
+      </div>
+
+      {/* Footer sutil */}
+      <div className="relative border-t border-gold-hairline mt-8">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 py-5 flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-[0.3em]">
+          <span>Lurds · Plus Size</span>
+          <span className="text-gold-gradient">v1</span>
         </div>
       </div>
     </div>
@@ -344,29 +398,74 @@ function MotherButtonCard({ btn, kpi }: { btn: MotherButton; kpi?: number }) {
   return (
     <Link
       href={btn.href}
-      className={`group relative overflow-hidden ${btn.bg} rounded-3xl border border-slate-200/70 ring-1 ring-transparent ${btn.hoverRing} hover:-translate-y-0.5 hover:shadow-md transition-all duration-300 min-h-[180px] sm:min-h-[210px] flex flex-col justify-between p-6 sm:p-8`}
+      className="group relative overflow-hidden rounded-2xl p-7 sm:p-9 min-h-[220px] flex flex-col justify-between transition-all duration-500 hover:-translate-y-1 gold-shine"
+      style={{
+        background:
+          'linear-gradient(145deg, rgba(28,28,34,0.95) 0%, rgba(11,11,13,0.95) 100%)',
+        border: '1px solid rgba(201,150,45,0.25)',
+        boxShadow:
+          'inset 0 1px 0 0 rgba(243,217,137,0.08), 0 8px 40px rgba(0,0,0,0.45)',
+      }}
     >
-      {/* Topo — ícone em círculo pastel + counter se houver */}
-      <div className="flex items-start justify-between">
-        <div className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl ${btn.iconBg} flex items-center justify-center transition-transform duration-300 group-hover:scale-105`}>
-          <Icon className={`w-7 h-7 sm:w-8 sm:h-8 ${btn.iconColor}`} strokeWidth={1.5} />
+      {/* Glow dourado no canto superior direito, intensifica no hover */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-20 -right-20 w-60 h-60 rounded-full blur-3xl opacity-40 group-hover:opacity-70 transition-opacity duration-500"
+        style={{
+          background:
+            'radial-gradient(circle, rgba(201,150,45,0.35) 0%, transparent 70%)',
+        }}
+      />
+      {/* Linha dourada fina no topo do card */}
+      <div
+        aria-hidden
+        className="absolute inset-x-8 top-0 h-px"
+        style={{
+          background:
+            'linear-gradient(90deg, transparent, rgba(201,150,45,0.6), transparent)',
+        }}
+      />
+
+      {/* Topo — ícone em moldura dourada + counter */}
+      <div className="relative flex items-start justify-between">
+        <div
+          className="w-16 h-16 rounded-xl flex items-center justify-center transition-all duration-500 group-hover:scale-105"
+          style={{
+            background:
+              'linear-gradient(135deg, rgba(201,150,45,0.15) 0%, rgba(20,20,24,0.6) 100%)',
+            border: '1px solid rgba(201,150,45,0.35)',
+          }}
+        >
+          <Icon className="w-7 h-7" strokeWidth={1.5} style={{ color: '#d4a84a' }} />
         </div>
         {kpi != null && kpi > 0 && (
-          <div className={`text-xs font-medium ${btn.textAccent} bg-white/70 rounded-full px-3 py-1 tabular-nums border border-white`}>
+          <div
+            className="text-[11px] font-semibold tabular-nums rounded-full px-3 py-1.5 text-gold-gradient uppercase tracking-wider"
+            style={{
+              background: 'rgba(201,150,45,0.08)',
+              border: '1px solid rgba(201,150,45,0.35)',
+            }}
+          >
             {kpi.toLocaleString('pt-BR')} agora
           </div>
         )}
       </div>
 
-      {/* Base — nome + subtítulo + seta discreta */}
-      <div className="mt-5">
-        <div className={`text-2xl sm:text-3xl font-medium tracking-tight ${btn.textAccent}`}>
+      {/* Base — nome em serif + subtítulo + CTA dourada */}
+      <div className="relative mt-6">
+        <div className="font-display text-4xl sm:text-5xl font-normal tracking-tight text-white leading-none">
           {btn.label}
         </div>
-        <div className="text-sm text-slate-600 mt-1.5 font-light">
+        <div className="text-sm text-slate-400 mt-3 font-light tracking-wide">
           {btn.subtitle}
         </div>
-        <div className={`mt-4 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider ${btn.textAccent} opacity-70 group-hover:opacity-100 transition`}>
+
+        <div className="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-[0.2em] text-slate-900 shadow-lg transition-all group-hover:shadow-[0_8px_24px_rgba(201,150,45,0.35)] group-hover:-translate-y-0.5"
+          style={{
+            background:
+              'linear-gradient(135deg, #f3d989 0%, #d4a84a 50%, #a77a1c 100%)',
+          }}
+        >
           Abrir
           <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition" />
         </div>

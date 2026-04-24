@@ -3,7 +3,49 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Paleta preto & dourado — usada pela home premium.
+       Outras telas continuam claras (slate-50) via `body.light-bg` ou override
+       direto. Pra evitar regressão global, o body default fica claro e a home
+       seta o fundo escuro diretamente no container. */
+    --gold-50:  #fdf8e7;
+    --gold-200: #f0dc9a;
+    --gold-400: #d4a84a;
+    --gold-500: #c9962d;
+    --gold-600: #a77a1c;
+    --ink-900:  #0b0b0d;
+    --ink-800:  #141418;
+    --ink-700:  #1c1c22;
+  }
+
   body { @apply bg-slate-50 text-slate-900 antialiased; }
+
+  /* Mapeamento CSS-var → utilitária do Tailwind */
+  .font-display { font-family: var(--font-display), ui-serif, Georgia, serif; }
+  .font-sans    { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; }
+}
+
+@layer utilities {
+  /* Texto dourado com gradiente suave — pra números premium e CTAs */
+  .text-gold-gradient {
+    background: linear-gradient(135deg, #f3d989 0%, #c9962d 55%, #a77a1c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Borda dourada 1px em fundo escuro — pra cards premium */
+  .border-gold-hairline { border-color: rgba(201, 150, 45, 0.35); }
+  /* Shine diagonal — aparece no hover dos botões MÃE */
+  .gold-shine::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(120deg, transparent 30%, rgba(243, 217, 137, 0.10) 50%, transparent 70%);
+    transform: translateX(-100%);
+    transition: transform 0.9s ease;
+    pointer-events: none;
+  }
+  .group:hover .gold-shine::before { transform: translateX(100%); }
 }
 
 @media print {
