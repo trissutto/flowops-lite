@@ -15,9 +15,10 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { Printer, X } from 'lucide-react';
+import { Printer, X, Warehouse, ShoppingCart } from 'lucide-react';
 
 type Status = 'pending' | 'approved' | 'separating' | 'shipped' | 'delivered' | 'cancelled';
+type SupplyOrigin = 'MATRIZ' | 'MERCADO_LIVRE';
 
 type SupplyRequest = {
   id: string;
@@ -42,10 +43,33 @@ type SupplyRequest = {
       category: string | null;
       unit: string;
       description: string | null;
+      origin: SupplyOrigin;
     };
   }>;
   store: { id: string; code: string; name: string };
 };
+
+/**
+ * Badge ORIGEM pra folha impressa. Na tela mantém cor (indigo/amber) pra
+ * facilitar batida visual. No papel vira preto sobre branco via print:* pra
+ * ficar legível mesmo em impressora térmica ou laser monocromática.
+ */
+function OriginBadgePrint({ origin }: { origin: SupplyOrigin }) {
+  if (origin === 'MERCADO_LIVRE') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-500 px-1.5 py-0.5 rounded print:bg-white print:text-black print:border-black">
+        <ShoppingCart className="w-2.5 h-2.5 print:hidden" />
+        Mercado Livre
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-indigo-100 text-indigo-900 border border-indigo-500 px-1.5 py-0.5 rounded print:bg-white print:text-black print:border-black">
+      <Warehouse className="w-2.5 h-2.5 print:hidden" />
+      Matriz
+    </span>
+  );
+}
 
 const STATUS_LABEL: Record<Status, string> = {
   pending: 'Pendente',
@@ -237,7 +261,10 @@ export default function ImprimirMateriaisPage() {
                 <tr key={it.id} className="border-b border-slate-200">
                   <td className="px-3 py-2 text-slate-500 font-mono text-xs">{idx + 1}</td>
                   <td className="px-3 py-2">
-                    <div className="font-bold">{it.supply.name}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold">{it.supply.name}</span>
+                      <OriginBadgePrint origin={it.supply.origin} />
+                    </div>
                     {(it.supply.category || it.supply.description) && (
                       <div className="text-[11px] text-slate-500 mt-0.5">
                         {it.supply.category}

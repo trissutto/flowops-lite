@@ -14,7 +14,18 @@ export type SupplyItemInput = {
   imageUrl?: string | null;
   active?: boolean;
   minQty?: number | null;
+  // Onde a matriz vai buscar esse material: 'MATRIZ' (estoque próprio)
+  // ou 'MERCADO_LIVRE' (comprar online sob demanda). Default: MATRIZ.
+  origin?: 'MATRIZ' | 'MERCADO_LIVRE' | string;
 };
+
+// Normaliza e valida a origin vinda do body. Qualquer valor inesperado cai
+// em 'MATRIZ' pra não explodir telas antigas.
+function normalizeOrigin(v: unknown): 'MATRIZ' | 'MERCADO_LIVRE' {
+  const s = String(v || '').trim().toUpperCase();
+  if (s === 'MERCADO_LIVRE' || s === 'ML' || s === 'MERCADOLIVRE') return 'MERCADO_LIVRE';
+  return 'MATRIZ';
+}
 
 export type SupplyRequestStatus =
   | 'pending'
@@ -65,6 +76,7 @@ export class SuppliesService {
         imageUrl: body.imageUrl?.trim() || null,
         active: body.active !== false,
         minQty: typeof body.minQty === 'number' ? body.minQty : null,
+        origin: normalizeOrigin(body.origin),
       },
     });
   }
@@ -82,6 +94,7 @@ export class SuppliesService {
     if (body.imageUrl !== undefined) data.imageUrl = body.imageUrl?.trim() || null;
     if (body.active !== undefined) data.active = body.active;
     if (body.minQty !== undefined) data.minQty = typeof body.minQty === 'number' ? body.minQty : null;
+    if (body.origin !== undefined) data.origin = normalizeOrigin(body.origin);
 
     try {
       return await (this.prisma as any).supplyItem.update({ where: { id }, data });

@@ -10,8 +10,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Package2, Plus, Search, Edit3, Power, PowerOff, X, Save, RefreshCw,
+  Warehouse, ShoppingCart,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+
+// Origem de compra/separação do material.
+// MATRIZ         → sai do estoque interno da matriz (separação normal)
+// MERCADO_LIVRE  → matriz precisa comprar online sob demanda (lead time)
+type SupplyOrigin = 'MATRIZ' | 'MERCADO_LIVRE';
 
 type SupplyItem = {
   id: string;
@@ -23,7 +29,31 @@ type SupplyItem = {
   imageUrl: string | null;
   active: boolean;
   minQty: number | null;
+  origin: SupplyOrigin;
 };
+
+/**
+ * Badge visual pra origem do item — usado aqui na tabela e exportado pra
+ * ficar consistente com outras telas (/retaguarda/materiais usa a mesma cor).
+ * MATRIZ       → indigo (estoque interno, fluxo normal)
+ * MERCADO_LIVRE → amber (compra sob demanda, lead time extra)
+ */
+export function OriginBadge({ origin }: { origin: SupplyOrigin }) {
+  if (origin === 'MERCADO_LIVRE') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded">
+        <ShoppingCart className="w-3 h-3" />
+        Mercado Livre
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-indigo-100 text-indigo-900 border border-indigo-300 px-2 py-0.5 rounded">
+      <Warehouse className="w-3 h-3" />
+      Matriz
+    </span>
+  );
+}
 
 export default function AlmoxarifadoPage() {
   const [items, setItems] = useState<SupplyItem[]>([]);
@@ -174,6 +204,7 @@ export default function AlmoxarifadoPage() {
                     <th className="text-left px-4 py-2">Nome</th>
                     <th className="text-left px-4 py-2">SKU</th>
                     <th className="text-left px-4 py-2">Unid.</th>
+                    <th className="text-left px-4 py-2">Origem</th>
                     <th className="text-left px-4 py-2">Status</th>
                     <th className="text-right px-4 py-2">Ações</th>
                   </tr>
@@ -189,6 +220,9 @@ export default function AlmoxarifadoPage() {
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{it.sku || '—'}</td>
                       <td className="px-4 py-2.5 text-slate-700">{it.unit}</td>
+                      <td className="px-4 py-2.5">
+                        <OriginBadge origin={it.origin} />
+                      </td>
                       <td className="px-4 py-2.5">
                         {it.active ? (
                           <span className="inline-flex items-center gap-1 text-xs font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
@@ -247,6 +281,7 @@ function ItemFormModal({
   const [description, setDescription] = useState(item?.description || '');
   const [minQty, setMinQty] = useState<string>(item?.minQty?.toString() || '');
   const [active, setActive] = useState(item?.active !== false);
+  const [origin, setOrigin] = useState<SupplyOrigin>(item?.origin || 'MATRIZ');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -267,6 +302,7 @@ function ItemFormModal({
         description: description.trim() || null,
         active,
         minQty: minQty.trim() ? parseInt(minQty, 10) : null,
+        origin,
       };
       if (item) {
         await api(`/supplies/items/${item.id}`, {
@@ -396,6 +432,46 @@ function ItemFormModal({
             placeholder="Opcional. Ex: Para peças até tam 46"
             className="w-full p-2.5 border border-slate-300 rounded-lg text-sm focus:border-brand focus:outline-none resize-none"
           />
+        </div>
+
+        {/* Origem — onde a matriz busca esse material. MATRIZ = estoque próprio,
+            MERCADO_LIVRE = compra online sob demanda. Dois botões grandes pra
+            fica óbvio no cadastro. */}
+        <div>
+          <label className="text-xs font-bold uppercase tracking-wide text-slate-600 block mb-1">
+            Origem
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setOrigin('MATRIZ')}
+              className={`flex items-center justify-center gap-2 p-3 rounded-lg border-2 text-sm font-bold transition ${
+                origin === 'MATRIZ'
+                  ? 'border-indigo-600 bg-indigo-50 text-indigo-800'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              <Warehouse className="w-4 h-4" />
+              MATRIZ
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrigin('MERCADO_LIVRE')}
+              className={`flex items-center justify-center gap-2 p-3 rounded-lg border-2 text-sm font-bold transition ${
+                origin === 'MERCADO_LIVRE'
+                  ? 'border-amber-600 bg-amber-50 text-amber-800'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+              }`}
+            >
+              <ShoppingCart className="w-4 h-4" />
+              MERCADO LIVRE
+            </button>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-1">
+            {origin === 'MATRIZ'
+              ? 'Sai do estoque da matriz — separa na hora.'
+              : 'Matriz compra no ML sob demanda — tem lead time.'}
+          </div>
         </div>
 
         <label className="flex items-center gap-2 text-sm">

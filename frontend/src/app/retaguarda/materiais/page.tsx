@@ -20,14 +20,38 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Package2, ClipboardList, RefreshCw, Store, Truck, PackageCheck,
   Clock, CheckCircle2, XCircle, PlayCircle, ChevronRight, MessageSquare,
-  Filter, Search, Printer,
+  Filter, Search, Printer, Warehouse, ShoppingCart,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+
+// Origem do material no catálogo. MATRIZ = estoque próprio (separação direta);
+// MERCADO_LIVRE = matriz precisa comprar online (tem lead time extra). Marcado
+// no almoxarifado e reaparece em toda linha da tabela de itens dos pedidos.
+type SupplyOrigin = 'MATRIZ' | 'MERCADO_LIVRE';
 
 type SupplyItem = {
   id: string; sku: string | null; name: string; category: string | null;
   unit: string; description: string | null;
+  origin: SupplyOrigin;
 };
+
+/** Badge visual MATRIZ/ML. Mesmo visual do /retaguarda/almoxarifado. */
+function OriginBadge({ origin }: { origin: SupplyOrigin }) {
+  if (origin === 'MERCADO_LIVRE') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 border border-amber-300 px-1.5 py-0.5 rounded">
+        <ShoppingCart className="w-3 h-3" />
+        Mercado Livre
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wide bg-indigo-100 text-indigo-900 border border-indigo-300 px-1.5 py-0.5 rounded">
+      <Warehouse className="w-3 h-3" />
+      Matriz
+    </span>
+  );
+}
 
 type Status = 'pending' | 'approved' | 'separating' | 'shipped' | 'delivered' | 'cancelled';
 
@@ -360,7 +384,12 @@ function RequestBody({ request, onChanged }: { request: SupplyRequest; onChanged
               return (
                 <tr key={it.id}>
                   <td className="px-3 py-2">
-                    <div className="font-semibold text-slate-800">{it.supply.name}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-800">{it.supply.name}</span>
+                      {/* Badge ORIGEM ao lado do nome — matriz separa imediato,
+                          mercado livre dispara compra sob demanda. */}
+                      <OriginBadge origin={it.supply.origin} />
+                    </div>
                     <div className="text-[11px] text-slate-400">
                       {it.supply.category ? `${it.supply.category} · ` : ''}Unidade: {it.supply.unit}
                     </div>

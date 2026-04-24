@@ -296,6 +296,10 @@ model SupplyItem {
   imageUrl    String?  @map("image_url")
   active      Boolean  @default(true)
   minQty      Int?     @map("min_qty")        // estoque mínimo de referência (futuro)
+  // Onde a matriz compra/separa esse item. Usado pra matriz saber se tira
+  // do estoque interno (MATRIZ) ou se precisa comprar no Mercado Livre (ML).
+  // Valores: 'MATRIZ' (default, vem do almoxarifado da matriz) | 'MERCADO_LIVRE'
+  origin      String   @default("MATRIZ")     // MATRIZ | MERCADO_LIVRE
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
