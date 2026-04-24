@@ -92,8 +92,10 @@ export default function RealinhamentoPage() {
   const [refsText, setRefsText] = useState('');
   const [originCodes, setOriginCodes] = useState<Set<string>>(new Set());
   const [destCodes, setDestCodes] = useState<Set<string>>(new Set());
-  const [minPerDest, setMinPerDest] = useState(2);
-  const [keepMinOrigin, setKeepMinOrigin] = useState(2);
+  // Padrão 1/1 — config mais frouxa que maximiza oportunidades de
+  // realinhamento. Com 2/2 muita peça ficava parada por "já está no alvo".
+  const [minPerDest, setMinPerDest] = useState(1);
+  const [keepMinOrigin, setKeepMinOrigin] = useState(1);
   const [note, setNote] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -446,28 +448,28 @@ export default function RealinhamentoPage() {
 
         <div className="grid md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1">
-              Alvo mínimo por destino
+            <label className="block text-sm font-bold text-slate-800 mb-1 uppercase tracking-wide">
+              Quantas peças nas lojas destino
             </label>
             <input
               type="number"
               min={0}
               value={minPerDest}
               onChange={(e) => setMinPerDest(Math.max(0, Number(e.target.value) || 0))}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold tabular-nums"
             />
             <div className="text-xs text-slate-500 mt-1">Cada destino precisa ter ≥ este valor por variação.</div>
           </div>
           <div>
-            <label className="block text-sm font-semibold text-slate-700 mb-1">
-              Manter mínimo na origem
+            <label className="block text-sm font-bold text-slate-800 mb-1 uppercase tracking-wide">
+              Quantas peças nas lojas origem
             </label>
             <input
               type="number"
               min={0}
               value={keepMinOrigin}
               onChange={(e) => setKeepMinOrigin(Math.max(0, Number(e.target.value) || 0))}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold tabular-nums"
             />
             <div className="text-xs text-slate-500 mt-1">Origem nunca fica abaixo deste nº.</div>
           </div>
