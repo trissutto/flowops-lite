@@ -8,6 +8,7 @@ import { RealignmentService } from './realignment.service';
  *   POST  /realignment/preview     → calcula o plano (sem persistir) · retaguarda
  *   POST  /realignment/confirm     → persiste plano + emite socket alerta · retaguarda
  *   GET   /realignment/mine        → ordens pendentes pra separar (loja origem) · filial
+ *   GET   /realignment/mine-sent   → ordens já enviadas hoje (conferência) · filial
  *   PATCH /realignment/:id/sent    → loja marca ordem como enviada · filial
  */
 @UseGuards(JwtAuthGuard)
@@ -69,6 +70,18 @@ export class RealignmentController {
     const storeId = req?.user?.storeId;
     if (role !== 'store' || !storeId) return [];
     return this.svc.listPendingForStore(storeId);
+  }
+
+  /**
+   * Ordens de realinhamento JÁ ENVIADAS HOJE pela loja do JWT.
+   * Usada pela aba "Enviados hoje" — conferência pra vendedora.
+   */
+  @Get('mine-sent')
+  mineSent(@Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) return [];
+    return this.svc.listSentTodayForStore(storeId);
   }
 
   /**

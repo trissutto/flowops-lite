@@ -43,6 +43,22 @@ interface RealignmentItem {
   mensagem: string;
   createdAt: string;
   imageUrl?: string | null;
+  // Preenchido apenas na view "enviados hoje" — horário em que a vendedora
+  // marcou a peça como separada. Usado pra exibir na célula em verde.
+  sentAt?: string | null;
+}
+
+type ViewMode = 'pending' | 'sent';
+
+/** Formata ISO → HH:MM no fuso local. */
+function formatTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
 }
 
 /** Title-case pra descrição — o Giga devolve tudo maiúsculo, fica elegante
@@ -95,6 +111,11 @@ export default function MinhaLojaRealinhamentoPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeProfile | null>(null);
   const [items, setItems] = useState<RealignmentItem[]>([]);
+  // Ordens já enviadas HOJE — conferência pra vendedora ver o que já separou.
+  // Preenchido via GET /realignment/mine-sent.
+  const [sentItems, setSentItems] = useState<RealignmentItem[]>([]);
+  // Toggle entre "Pendentes" e "Enviados hoje". Default = pendentes (o trabalho).
+  const [view, setView] = useState<ViewMode>('pending');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sendingIds, setSendingIds] = useState<Set<string>>(new Set());
@@ -137,6 +158,18 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, []);
 
+  // Carrega o que já foi separado hoje pra vendedora conferir. Isolada em
+  // try/catch própria pra NÃO derrubar a tela se endpoint ainda não deployado.
+  const loadSentItems = useCallback(async () => {
+    try {
+      const data = await api<RealignmentItem[]>('/realignment/mine-sent');
+      setSentItems(Array.isArray(data) ? data : []);
+    } catch {
+      // silencioso — vendedora ainda tem a tela de pendentes funcionando
+      setSentItems([]);
+    }
+  }, []);
+
   // Auth + initial load
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -152,7 +185,8 @@ export default function MinhaLojaRealinhamentoPage() {
           return;
         }
         setMe(profile);
-        await loadItems();
+        // Carrega as 2 listas em paralelo — pendentes + enviados hoje.
+        await Promise.all([loadItems(), loadSentItems()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar');
         if (String(err?.message ?? '').startsWith('401')) router.push('/login');
@@ -160,7 +194,7 @@ export default function MinhaLojaRealinhamentoPage() {
         setLoading(false);
       }
     })();
-  }, [router, loadItems]);
+  }, [router, loadItems, loadSentItems]);
 
   // Socket
   useEffect(() => {
@@ -197,7 +231,21 @@ export default function MinhaLojaRealinhamentoPage() {
     setSendingIds((prev) => new Set(prev).add(itemId));
     try {
       await api(`/realignment/${itemId}/sent`, { method: 'PATCH' });
-      setItems((prev) => prev.filter((i) => i.id !== itemId));
+      // Move otimisticamente: tira dos pendentes e coloca no topo de "enviados
+      // hoje" com timestamp local, pra aparecer na aba de conferência na hora.
+      let moved: RealignmentItem | null = null;
+      setItems((prev) => {
+        const found = prev.find((i) => i.id === itemId);
+        if (found) moved = found;
+        return prev.filter((i) => i.id !== itemId);
+      });
+      if (moved) {
+        const stamped: RealignmentItem = {
+          ...(moved as RealignmentItem),
+          sentAt: new Date().toISOString(),
+        };
+        setSentItems((prev) => [stamped, ...prev]);
+      }
       pushToast('Marcado como enviado ✓');
     } catch (err: any) {
       pushToast(`Erro: ${err?.message ?? 'falha ao marcar'}`);
@@ -210,10 +258,15 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }
 
+  // Fonte da verdade p/ a grade: troca conforme a aba selecionada.
+  // Dessa forma o mesmo agrupamento e o mesmo componente de grid servem pros
+  // 2 modos (só muda a cor/label das células).
+  const currentItems = view === 'pending' ? items : sentItems;
+
   // Agrupa por destino → dentro dele, por REF, com grade Cor × Tamanho
   const byDestination = useMemo(() => {
     const dests = new Map<string, { code: string; name: string; items: RealignmentItem[] }>();
-    for (const it of items) {
+    for (const it of currentItems) {
       if (!dests.has(it.lojaDestinoCode)) {
         dests.set(it.lojaDestinoCode, {
           code: it.lojaDestinoCode,
@@ -261,10 +314,15 @@ export default function MinhaLojaRealinhamentoPage() {
         const totalUnits = d.items.reduce((a, it) => a + it.qtyOrigem, 0);
         return { code: d.code, name: d.name, refGroups, totalItems, totalUnits };
       });
-  }, [items]);
+  }, [currentItems]);
 
   const totalPending = items.length;
   const totalUnits = useMemo(() => items.reduce((a, it) => a + it.qtyOrigem, 0), [items]);
+  const totalSentToday = sentItems.length;
+  const totalSentUnitsToday = useMemo(
+    () => sentItems.reduce((a, it) => a + it.qtyOrigem, 0),
+    [sentItems],
+  );
 
   if (loading) {
     return (
@@ -317,7 +375,7 @@ export default function MinhaLojaRealinhamentoPage() {
             <Printer className="w-4 h-4" />
           </button>
           <button
-            onClick={loadItems}
+            onClick={() => { loadItems(); loadSentItems(); }}
             className="no-print p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
             title="Atualizar"
           >
@@ -325,26 +383,81 @@ export default function MinhaLojaRealinhamentoPage() {
           </button>
         </div>
 
-        {/* KPIs grandes — visibilidade imediata do volume, glass effect. */}
+        {/* Abas pendentes / enviados hoje — logo abaixo do título.
+            Pílulas grandes, mobile-friendly. Mostra contador em cada uma pra
+            vendedora ter noção do trabalho pendente vs. feito sem clicar. */}
+        <div className="max-w-6xl mx-auto px-4 pb-3 flex gap-2 relative no-print">
+          <button
+            type="button"
+            onClick={() => { setView('pending'); setExpandedDest(null); }}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-black uppercase tracking-wider transition ring-1 ${
+              view === 'pending'
+                ? 'bg-white text-indigo-800 ring-white shadow-lg'
+                : 'bg-white/10 text-white/90 ring-white/20 hover:bg-white/15'
+            }`}
+          >
+            Pendentes · {totalPending}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setView('sent'); setExpandedDest(null); }}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-black uppercase tracking-wider transition ring-1 ${
+              view === 'sent'
+                ? 'bg-white text-emerald-800 ring-white shadow-lg'
+                : 'bg-white/10 text-white/90 ring-white/20 hover:bg-white/15'
+            }`}
+          >
+            Enviados hoje · {totalSentToday}
+          </button>
+        </div>
+
+        {/* KPIs grandes — trocam conforme a aba:
+             - Pendentes: amarelo (peças a separar) + verde (unidades totais)
+             - Enviados hoje: verde (peças feitas) + azul (unidades enviadas) */}
         <div className="max-w-6xl mx-auto px-4 pb-5 grid grid-cols-2 gap-3 relative">
-          <div className="group bg-gradient-to-br from-amber-300 to-amber-400 text-amber-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
-            <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
-              <Package className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalPending}</div>
-              <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Peças pendentes</div>
-            </div>
-          </div>
-          <div className="group bg-gradient-to-br from-emerald-300 to-emerald-400 text-emerald-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
-            <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
-              <Send className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalUnits}</div>
-              <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Unidades no total</div>
-            </div>
-          </div>
+          {view === 'pending' ? (
+            <>
+              <div className="group bg-gradient-to-br from-amber-300 to-amber-400 text-amber-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
+                <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
+                  <Package className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalPending}</div>
+                  <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Peças pendentes</div>
+                </div>
+              </div>
+              <div className="group bg-gradient-to-br from-emerald-300 to-emerald-400 text-emerald-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
+                <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
+                  <Send className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalUnits}</div>
+                  <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Unidades no total</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="group bg-gradient-to-br from-emerald-300 to-emerald-400 text-emerald-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
+                <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalSentToday}</div>
+                  <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Peças enviadas hoje</div>
+                </div>
+              </div>
+              <div className="group bg-gradient-to-br from-sky-300 to-sky-400 text-sky-950 rounded-2xl px-5 py-4 shadow-xl flex items-center gap-4 ring-1 ring-white/40 hover:scale-[1.02] transition">
+                <div className="w-12 h-12 rounded-xl bg-white/40 backdrop-blur flex items-center justify-center shrink-0 shadow-inner">
+                  <Send className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="text-4xl font-black tabular-nums leading-none tracking-tight">{totalSentUnitsToday}</div>
+                  <div className="text-xs font-black opacity-80 mt-1.5 uppercase tracking-wider">Unidades enviadas</div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
@@ -362,11 +475,14 @@ export default function MinhaLojaRealinhamentoPage() {
               <CheckCircle2 className="w-12 h-12 text-emerald-500" />
             </div>
             <div className="text-xl font-black text-slate-800">
-              Nenhuma peça pendente
+              {view === 'pending'
+                ? 'Nenhuma peça pendente'
+                : 'Nenhuma peça enviada hoje ainda'}
             </div>
             <div className="text-sm text-slate-500 mt-2 max-w-md mx-auto">
-              Quando a matriz despachar um realinhamento, ele aparece aqui na
-              hora. Enquanto isso, fica tranquila.
+              {view === 'pending'
+                ? 'Quando a matriz despachar um realinhamento, ele aparece aqui na hora. Enquanto isso, fica tranquila.'
+                : 'Assim que você marcar uma peça como ENVIEI, ela aparece nesta aba com o horário — pra você conferir o que já separou.'}
             </div>
           </div>
         ) : (
@@ -471,6 +587,7 @@ export default function MinhaLojaRealinhamentoPage() {
                           g={g}
                           sendingIds={sendingIds}
                           onSend={markSent}
+                          viewMode={view}
                         />
                       </div>
                     ))}
@@ -488,10 +605,21 @@ export default function MinhaLojaRealinhamentoPage() {
               <Package className="w-4 h-4 text-indigo-700" />
             </div>
             <div className="text-xs text-indigo-900 leading-relaxed">
-              <b className="text-sm">Como operar:</b><br />
-              Pegue a peça na arara · toque na célula com a quantidade e{' '}
-              <b>&quot;ENVIEI&quot;</b> · ela some da grade e a matriz vê na
-              hora. Se não tiver a peça fisicamente, simplesmente não clica.
+              {view === 'pending' ? (
+                <>
+                  <b className="text-sm">Como operar:</b><br />
+                  Pegue a peça na arara · toque na célula com a quantidade e{' '}
+                  <b>&quot;ENVIEI&quot;</b> · ela some desta aba e aparece na
+                  aba <b>Enviados hoje</b> com o horário, pra conferência.
+                </>
+              ) : (
+                <>
+                  <b className="text-sm">Conferência do dia:</b><br />
+                  Essas são todas as peças que você marcou como ENVIEI hoje —
+                  com horário de cada uma. A lista zera automaticamente à
+                  meia-noite.
+                </>
+              )}
             </div>
           </div>
         )}
@@ -563,6 +691,7 @@ function RealignGrid({
   g,
   sendingIds,
   onSend,
+  viewMode,
 }: {
   g: {
     ref: string;
@@ -575,6 +704,7 @@ function RealignGrid({
   };
   sendingIds: Set<string>;
   onSend: (id: string) => void;
+  viewMode: ViewMode;
 }) {
   // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.
   const totalsByColor = new Map<string, number>();
@@ -644,6 +774,7 @@ function RealignGrid({
                           item={it}
                           sending={it ? sendingIds.has(it.id) : false}
                           onSend={onSend}
+                          viewMode={viewMode}
                         />
                       </td>
                     );
@@ -684,20 +815,35 @@ function RealignGrid({
         </table>
       </div>
 
-      {/* Legenda — mesmo estilo da /consultar, contexto adaptado. */}
+      {/* Legenda — contexto muda conforme modo (separando vs. conferindo). */}
       <div className="flex flex-wrap items-center gap-3 mt-2 px-1 text-[11px] text-slate-500">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
-          a enviar · toque pra marcar ENVIEI
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded bg-emerald-200 border border-emerald-400 inline-block" />
-          enviando...
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
-          sem peça neste lote
-        </span>
+        {viewMode === 'pending' ? (
+          <>
+            <span className="inline-flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
+              a enviar · toque pra marcar ENVIEI
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-emerald-200 border border-emerald-400 inline-block" />
+              enviando...
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
+              sem peça neste lote
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-emerald-100 border border-emerald-400 inline-block" />
+              enviada · mostra horário
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
+              sem peça neste lote
+            </span>
+          </>
+        )}
       </div>
     </>
   );
@@ -713,18 +859,36 @@ function RealignCell({
   item,
   sending,
   onSend,
+  viewMode,
 }: {
   item: RealignmentItem | null;
   sending: boolean;
   onSend: (id: string) => void;
+  viewMode: ViewMode;
 }) {
   const base =
-    'mx-auto w-full h-10 rounded flex items-center justify-center font-extrabold relative transition select-none';
+    'mx-auto w-full h-10 rounded flex flex-col items-center justify-center font-extrabold relative transition select-none';
 
   if (!item) {
     return (
       <div className={`${base} bg-slate-50 text-slate-300 text-base`}>
         —
+      </div>
+    );
+  }
+
+  // Modo CONFERÊNCIA — peça já foi enviada. Célula verde com quantidade +
+  // horário, não-clicável. Vendedora usa pra bater conferência de fim de dia.
+  if (viewMode === 'sent') {
+    const time = formatTime(item.sentAt);
+    return (
+      <div
+        className={`${base} bg-emerald-100 text-emerald-900 border border-emerald-400 cursor-default`}
+        title={`Enviado às ${time || '—'} pra LJ${item.lojaDestinoCode}`}
+      >
+        <span className="tabular-nums text-base leading-none">{item.qtyOrigem}</span>
+        <span className="text-[9px] font-bold opacity-70 leading-none mt-0.5">{time}</span>
+        <CheckCircle2 className="w-3 h-3 absolute top-0.5 right-0.5 text-emerald-700" />
       </div>
     );
   }

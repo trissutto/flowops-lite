@@ -486,6 +486,66 @@ export class RealignmentService {
   }
 
   /**
+   * Lista ordens de REALINHAMENTO JÁ ENVIADAS HOJE pela loja origem.
+   * Usado pra tela /minha-loja/realinhamento → aba "Enviados hoje" — permite
+   * a vendedora conferir o que já separou durante o expediente sem precisar
+   * recontar do zero (a peça some da fila de pendentes depois do clique).
+   *
+   * Janela: meia-noite local do servidor até agora. Se precisar de recorte
+   * diferente (ex: últimas 24h), dá pra parametrizar depois.
+   */
+  async listSentTodayForStore(storeId: string) {
+    if (!storeId) return [];
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!store?.code) return [];
+
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const orders = await this.prisma.transferOrder.findMany({
+      where: {
+        tipo: 'REALINHAMENTO',
+        realignmentStatus: 'sent',
+        lojaOrigemCode: store.code,
+        realignmentSentAt: { gte: startOfDay },
+      },
+      orderBy: { realignmentSentAt: 'desc' },
+      select: {
+        id: true,
+        refCode: true,
+        descricao: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        lojaDestinoCode: true,
+        lojaDestinoName: true,
+        solicitanteNome: true,
+        mensagem: true,
+        createdAt: true,
+        realignmentSentAt: true,
+      },
+    });
+
+    const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
+    let imagesByRef: Record<string, string> = {};
+    try {
+      imagesByRef = await this.wpDb.getImagesByRefs(uniqueRefs);
+    } catch (e: any) {
+      this.logger.warn(`[realignment] falha buscando imagens (sent): ${e.message}`);
+    }
+
+    return orders.map((o) => ({
+      ...o,
+      createdAt: o.createdAt.toISOString(),
+      sentAt: o.realignmentSentAt ? o.realignmentSentAt.toISOString() : null,
+      imageUrl: imagesByRef[o.refCode] ?? null,
+    }));
+  }
+
+  /**
    * Marca 1 ordem como enviada (filial clica "Enviei").
    * Valida que a loja do JWT é a origem da ordem pra não deixar outra loja
    * marcar ordem que não é dela.
