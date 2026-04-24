@@ -1,6 +1,7 @@
-import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * Rotas do realinhamento de estoques.
@@ -14,7 +15,28 @@ import { RealignmentService } from './realignment.service';
 @UseGuards(JwtAuthGuard)
 @Controller('realignment')
 export class RealignmentController {
-  constructor(private readonly svc: RealignmentService) {}
+  constructor(
+    private readonly svc: RealignmentService,
+    private readonly erp: ErpService,
+  ) {}
+
+  /**
+   * GET /realignment/search-refs?term=blusa preta
+   *
+   * Busca no Gigasistemas por REFs cuja DESCRICAOCOMPLETA contenha TODAS as
+   * palavras do termo (AND LIKE). Uso: a retaguarda precisa achar REFs por
+   * nome ("vestido boho", "blusa azul 48") porque a mesma REF pode se repetir
+   * pra produtos diferentes (ex: BL-5512 blusa + BL-5512 calça) — filtrar
+   * também pela descrição evita criar realinhamento do produto errado.
+   *
+   * Retorna Array<{REF, DESCRICAOCOMPLETA, VARIANT_COUNT}> limitado a 200.
+   */
+  @Get('search-refs')
+  searchRefs(@Query('term') term: string) {
+    const t = String(term || '').trim();
+    if (t.length < 2) return [];
+    return this.erp.searchByDescriptionGrouped(t);
+  }
 
   @Post('preview')
   preview(

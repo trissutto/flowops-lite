@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -102,6 +102,17 @@ export default function RealinhamentoPage() {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [editedPlan, setEditedPlan] = useState<PlanLine[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Busca por descrição (pra quando o usuário não sabe a REF exata ou a
+  // mesma REF existe em produtos diferentes — ex: BL-5512 blusa + BL-5512 calça)
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<
+    Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>
+  >([]);
+  const [searchSelected, setSearchSelected] = useState<Set<string>>(new Set());
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [confirmResult, setConfirmResult] = useState<{
     createdCount: number;
     alerts: {
@@ -142,6 +153,75 @@ export default function RealinhamentoPage() {
   }
   function clearOrigins() { setOriginCodes(new Set()); }
   function clearDests() { setDestCodes(new Set()); }
+
+  /**
+   * Busca REFs no Gigasistemas por termos da descrição.
+   * Backend faz AND LIKE em DESCRICAOCOMPLETA pra cada palavra, agrupa por REF.
+   */
+  async function handleSearchRefs() {
+    const term = searchTerm.trim();
+    if (term.length < 2) {
+      setSearchError('Digite pelo menos 2 caracteres');
+      return;
+    }
+    setSearchError(null);
+    setSearching(true);
+    setSearchSelected(new Set());
+    try {
+      const rows = await api<
+        Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>
+      >(`/realignment/search-refs?term=${encodeURIComponent(term)}`);
+      setSearchResults(rows || []);
+      setSearchOpen(true);
+      if (!rows?.length) setSearchError('Nada encontrado pra esse termo.');
+    } catch (e: any) {
+      setSearchError(`Erro: ${e?.message || e}`);
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function toggleSearchRef(ref: string) {
+    const next = new Set(searchSelected);
+    if (next.has(ref)) next.delete(ref);
+    else next.add(ref);
+    setSearchSelected(next);
+  }
+
+  function selectAllSearchResults() {
+    setSearchSelected(new Set(searchResults.map((r) => r.REF)));
+  }
+  function clearSearchSelection() {
+    setSearchSelected(new Set());
+  }
+
+  /** Adiciona REFs selecionadas no textarea principal (sem duplicar). */
+  function addSelectedRefsToInput() {
+    if (!searchSelected.size) return;
+    const existing = new Set(
+      refsText
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+    const toAdd = [...searchSelected].filter((r) => !existing.has(r));
+    if (!toAdd.length) {
+      setSearchError('Essas REFs já estavam na lista.');
+      return;
+    }
+    const next = [
+      ...existing,
+      ...toAdd,
+    ].join('\n');
+    setRefsText(next);
+    setSearchError(null);
+    // Limpa busca pra feedback visual
+    setSearchSelected(new Set());
+    setSearchOpen(false);
+    setSearchResults([]);
+    setSearchTerm('');
+  }
 
   async function handlePreview() {
     setError(null);
@@ -340,6 +420,127 @@ export default function RealinhamentoPage() {
           />
           <div className="text-xs text-slate-500 mt-1">
             {refsText.split('\n').filter((s) => s.trim()).length} referência(s). O sistema expande automaticamente em todas as cores e tamanhos.
+          </div>
+
+          {/* Busca por descrição — útil quando a mesma REF se repete em produtos diferentes */}
+          <div className="mt-3 border border-indigo-200 bg-indigo-50/60 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Search className="w-4 h-4 text-indigo-700" />
+              <div className="text-sm font-semibold text-indigo-900">
+                Não sabe a REF? Busque pela descrição
+              </div>
+            </div>
+            <div className="text-xs text-indigo-900/70 mb-2">
+              Digite palavras da descrição (ex: <i>blusa azul 48</i>, <i>vestido boho</i>) — o sistema lista as REFs correspondentes pra você marcar.
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                className="flex-1 border border-indigo-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+                placeholder="Ex: blusa manga longa preta"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSearchRefs(); } }}
+              />
+              <button
+                type="button"
+                onClick={handleSearchRefs}
+                disabled={searching || searchTerm.trim().length < 2}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-lg px-4 py-2 text-sm transition-all"
+              >
+                {searching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                Buscar
+              </button>
+            </div>
+            {searchError && (
+              <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                {searchError}
+              </div>
+            )}
+
+            {searchOpen && searchResults.length > 0 && (
+              <div className="mt-3 bg-white border border-indigo-200 rounded-lg">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50 rounded-t-lg">
+                  <div className="text-xs font-semibold text-slate-700">
+                    {searchResults.length} REF(s) encontrada(s) ·{' '}
+                    <span className="text-indigo-700">{searchSelected.size} selecionada(s)</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={selectAllSearchResults}
+                      className="text-xs text-indigo-700 hover:underline"
+                    >
+                      Marcar tudo
+                    </button>
+                    <span className="text-slate-300">·</span>
+                    <button
+                      type="button"
+                      onClick={clearSearchSelection}
+                      className="text-xs text-slate-500 hover:underline"
+                    >
+                      Limpar
+                    </button>
+                    <span className="text-slate-300">·</span>
+                    <button
+                      type="button"
+                      onClick={() => { setSearchOpen(false); setSearchResults([]); setSearchSelected(new Set()); }}
+                      className="text-slate-400 hover:text-slate-700"
+                      title="Fechar"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <div className="max-h-[340px] overflow-y-auto divide-y divide-slate-100">
+                  {searchResults.map((r) => {
+                    const checked = searchSelected.has(r.REF);
+                    return (
+                      <label
+                        key={r.REF}
+                        className={`flex items-start gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                          checked ? 'bg-indigo-50/70' : 'hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSearchRef(r.REF)}
+                          className="mt-0.5 w-4 h-4 accent-indigo-600"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-indigo-800 bg-indigo-100 rounded px-1.5 py-0.5">
+                              {r.REF}
+                            </span>
+                            <span className="text-xs text-slate-500">
+                              {r.VARIANT_COUNT} variação(ões)
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-700 truncate mt-0.5">
+                            {r.DESCRICAOCOMPLETA}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between px-3 py-2 border-t border-slate-200 bg-slate-50 rounded-b-lg">
+                  <div className="text-xs text-slate-500">
+                    Marque as REFs corretas (útil quando a mesma REF se repete em produtos diferentes).
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addSelectedRefsToInput}
+                    disabled={!searchSelected.size}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-lg px-3 py-2 text-xs transition-all"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Adicionar selecionadas
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
