@@ -23,6 +23,7 @@ import { useRouter } from 'next/navigation';
 import {
   CreditCard, AlertTriangle, Loader2, MessageSquare, Search,
   RefreshCw, ChevronDown, ChevronRight, Download, Copy, List, Users,
+  Send, Megaphone, FlaskConical, Phone, X, Check,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -78,6 +79,35 @@ interface DiagnoseResp {
   sample: any[];
   pagoCandidates: string[];
   detected: Record<string, string | null>;
+  clientesTable?: { table: string; codCliente: string; nome: string | null; telefone: string | null; telefone2: string | null } | null;
+}
+
+interface CampanhaItem {
+  codCliente: string;
+  nome: string;
+  telefoneOriginal: string | null;
+  telefone: string;
+  diasAtraso: number;
+  parcelasVencidas: number;
+  totalDevido: number;
+  mensagem: string;
+  templateIndex: number;
+}
+
+interface CampanhaPreviewResp {
+  queue: CampanhaItem[];
+  skipped: Array<{ codCliente: string; nome: string; motivo: string }>;
+  testMode: boolean;
+  testPhone: string | null;
+  summary: { totalClientes: number; totalMensagens: number; totalDevido: number };
+}
+
+interface CampanhaEnviarResp {
+  total: number;
+  sent: number;
+  failed: Array<{ codCliente: string; nome: string; telefone: string; error: string }>;
+  testMode: boolean;
+  durationMs: number;
 }
 
 type ViewMode = 'parcela' | 'cliente';
@@ -103,8 +133,10 @@ export default function CrediarioPage() {
 
   const [loja, setLoja] = useState('01');
   const [daysBack, setDaysBack] = useState(3650); // default: tudo que tá vencido (não filtra por idade)
+  const [dataInicio, setDataInicio] = useState<string>(''); // YYYY-MM-DD opcional
+  const [dataFim, setDataFim] = useState<string>('');       // YYYY-MM-DD opcional
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<ViewMode>('parcela');
+  const [view, setView] = useState<ViewMode>('cliente');
   const [flat, setFlat] = useState<FlatResp | null>(null);
   const [grouped, setGrouped] = useState<GroupResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -112,6 +144,15 @@ export default function CrediarioPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [diagnose, setDiagnose] = useState<DiagnoseResp | null>(null);
   const [showDiag, setShowDiag] = useState(false);
+
+  // Campanha WhatsApp
+  const [minDiasAtraso, setMinDiasAtraso] = useState(3);
+  const [delayMinutos, setDelayMinutos] = useState(2); // default 2min anti-ban
+  const [campanha, setCampanha] = useState<CampanhaPreviewResp | null>(null);
+  const [campanhaLoading, setCampanhaLoading] = useState(false);
+  const [showCampanha, setShowCampanha] = useState(false);
+  const [campanhaResult, setCampanhaResult] = useState<CampanhaEnviarResp | null>(null);
+  const [enviando, setEnviando] = useState(false);
 
   async function loadDiagnose() {
     try {
@@ -123,15 +164,22 @@ export default function CrediarioPage() {
     }
   }
 
+  function buildQs() {
+    const qs: string[] = [`loja=${loja}`, `daysBack=${daysBack}`];
+    if (dataInicio) qs.push(`dataInicio=${dataInicio}`);
+    if (dataFim) qs.push(`dataFim=${dataFim}`);
+    return qs.join('&');
+  }
+
   async function load() {
     setLoading(true);
     setError(null);
     try {
       if (view === 'parcela') {
-        const res = await api<FlatResp>(`/crediarios/vencidos?loja=${loja}&daysBack=${daysBack}&limit=20000`);
+        const res = await api<FlatResp>(`/crediarios/vencidos?${buildQs()}&limit=20000`);
         setFlat(res);
       } else {
-        const res = await api<GroupResp>(`/crediarios/vencidos-clientes?loja=${loja}&daysBack=${daysBack}`);
+        const res = await api<GroupResp>(`/crediarios/vencidos-clientes?${buildQs()}`);
         setGrouped(res);
       }
     } catch (e: any) {
@@ -141,7 +189,71 @@ export default function CrediarioPage() {
     }
   }
 
+  async function loadCampanha() {
+    setCampanhaLoading(true);
+    setCampanhaResult(null);
+    try {
+      const res = await api<CampanhaPreviewResp>('/crediarios/cobranca/preview', {
+        method: 'POST',
+        body: JSON.stringify({
+          loja,
+          daysBack,
+          dataInicio: dataInicio || undefined,
+          dataFim: dataFim || undefined,
+          minDiasAtraso,
+        }),
+      });
+      setCampanha(res);
+      setShowCampanha(true);
+    } catch (e: any) {
+      alert('Erro ao montar campanha: ' + (e.message || 'falha'));
+    } finally {
+      setCampanhaLoading(false);
+    }
+  }
+
+  async function dispararCampanha() {
+    if (!campanha) return;
+    const total = campanha.queue.length;
+    const minutos = Math.ceil((total * delayMinutos) / 1);
+    const msg = campanha.testMode
+      ? `MODO TESTE ativo: vai mandar ${total} mensagens TODAS pro número ${formatPhone(campanha.testPhone || '')}.\n\n` +
+        `Espaçamento: ${delayMinutos} min entre cada → tempo total ~${minutos} minutos.\n\nConfirma?`
+      : `⚠️ ATENÇÃO: vai disparar ${total} mensagens REAIS pros clientes.\n\n` +
+        `Espaçamento: ${delayMinutos} min entre cada → tempo total ~${minutos} minutos.\n\n` +
+        `WhatsApp precisa estar conectado. Confirma?`;
+    if (!confirm(msg)) return;
+    setEnviando(true);
+    setCampanhaResult(null);
+    try {
+      const res = await api<CampanhaEnviarResp>('/crediarios/cobranca/enviar', {
+        method: 'POST',
+        body: JSON.stringify({
+          loja,
+          daysBack,
+          dataInicio: dataInicio || undefined,
+          dataFim: dataFim || undefined,
+          minDiasAtraso,
+          delayMs: delayMinutos * 60_000,
+        }),
+      });
+      setCampanhaResult(res);
+    } catch (e: any) {
+      alert('Erro ao disparar: ' + (e.message || 'falha'));
+    } finally {
+      setEnviando(false);
+    }
+  }
+
   useEffect(() => { if (authed) load(); /* eslint-disable-next-line */ }, [authed, view]);
+
+  // Re-load quando filtros de data mudam (debounce simples 400ms)
+  useEffect(() => {
+    if (!authed) return;
+    const t = setTimeout(() => load(), 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line
+  }, [dataInicio, dataFim, daysBack, loja]);
 
   // ---- filtros locais ----
   const filteredParcelas = useMemo(() => {
@@ -300,11 +412,31 @@ export default function CrediarioPage() {
           />
         </div>
         <div>
+          <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Vencimento de</label>
+          <input
+            type="date"
+            value={dataInicio}
+            onChange={(e) => setDataInicio(e.target.value)}
+            className="px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white focus:outline-none focus:border-rose-400"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>até</label>
+          <input
+            type="date"
+            value={dataFim}
+            onChange={(e) => setDataFim(e.target.value)}
+            className="px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white focus:outline-none focus:border-rose-400"
+          />
+        </div>
+        <div>
           <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Janela</label>
           <select
             value={daysBack}
             onChange={(e) => setDaysBack(Number(e.target.value))}
-            className="px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white"
+            disabled={!!dataInicio}
+            className="px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white disabled:opacity-50"
+            title={dataInicio ? 'Janela ignorada quando "Vencimento de" está preenchido' : ''}
           >
             <option value={30}>30 dias</option>
             <option value={60}>60 dias</option>
@@ -315,6 +447,15 @@ export default function CrediarioPage() {
             <option value={3650}>10 anos (tudo)</option>
           </select>
         </div>
+        {(dataInicio || dataFim) && (
+          <button
+            onClick={() => { setDataInicio(''); setDataFim(''); }}
+            className="px-2 py-1.5 text-xs rounded-lg border border-rose-200 bg-white hover:bg-rose-50 text-rose-700 flex items-center gap-1"
+            title="Limpar datas"
+          >
+            <X className="w-3 h-3" /> Limpar datas
+          </button>
+        )}
         <div className="flex-1 min-w-[200px]">
           <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Buscar</label>
           <div className="relative">
@@ -358,6 +499,16 @@ export default function CrediarioPage() {
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           Atualizar
+        </button>
+        <button
+          onClick={loadCampanha}
+          disabled={campanhaLoading || (!flat && !grouped)}
+          className="px-3 py-1.5 text-sm rounded-lg text-white shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+          style={{ background: '#5d7048' }}
+          title="Preview de campanha de cobrança WhatsApp"
+        >
+          {campanhaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
+          Campanha WA
         </button>
         <button
           onClick={exportCsv}
@@ -620,6 +771,246 @@ export default function CrediarioPage() {
       {view === 'cliente' && grouped && filteredCustomers.length === 0 && !loading && (
         <div className="panel-pastel p-8 text-center text-slate-500 text-sm">
           Nenhum cliente em atraso encontrado{search ? ' pra esse filtro' : ''}.
+        </div>
+      )}
+
+      {/* Modal Campanha WhatsApp */}
+      {showCampanha && campanha && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !enviando && setShowCampanha(false)}>
+          <div
+            className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Megaphone className="w-5 h-5" style={{ color: '#5d7048' }} />
+                <h2 className="text-lg font-semibold" style={{ color: '#6e3a40' }}>Campanha de cobrança WhatsApp</h2>
+              </div>
+              <button
+                onClick={() => !enviando && setShowCampanha(false)}
+                disabled={enviando}
+                className="text-slate-500 hover:text-slate-800 text-2xl disabled:opacity-30"
+              >×</button>
+            </div>
+
+            {/* Banner modo TESTE */}
+            {campanha.testMode && (
+              <div className="mb-4 p-3 bg-amber-50 border-l-4 border-amber-500 rounded flex items-start gap-2">
+                <FlaskConical className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <div className="font-bold text-amber-900">MODO TESTE ATIVO</div>
+                  <div className="text-amber-800 text-xs mt-1">
+                    Todas as mensagens serão enviadas pro número de teste:&nbsp;
+                    <span className="font-mono font-bold">{formatPhone(campanha.testPhone || '')}</span>.
+                    <br />Pra desativar, remova a env var <code>COBRANCA_TEST_PHONE</code> no Railway.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Configs */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 p-3 bg-rose-50/50 rounded-lg border border-rose-100">
+              <div>
+                <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Atraso mínimo</label>
+                <select
+                  value={minDiasAtraso}
+                  onChange={(e) => setMinDiasAtraso(Number(e.target.value))}
+                  disabled={enviando}
+                  className="w-full px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white"
+                >
+                  <option value={0}>Qualquer atraso</option>
+                  <option value={1}>1 dia</option>
+                  <option value={3}>3 dias (recomendado)</option>
+                  <option value={5}>5 dias</option>
+                  <option value={7}>7 dias</option>
+                  <option value={15}>15 dias</option>
+                  <option value={30}>30 dias</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Espaçamento</label>
+                <select
+                  value={delayMinutos}
+                  onChange={(e) => setDelayMinutos(Number(e.target.value))}
+                  disabled={enviando}
+                  className="w-full px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white"
+                >
+                  <option value={1}>1 min (rápido — risco)</option>
+                  <option value={2}>2 min (recomendado)</option>
+                  <option value={3}>3 min</option>
+                  <option value={5}>5 min (seguro)</option>
+                  <option value={10}>10 min (ultra seguro)</option>
+                </select>
+              </div>
+              <div className="col-span-2 flex items-end">
+                <button
+                  onClick={loadCampanha}
+                  disabled={campanhaLoading || enviando}
+                  className="px-3 py-1.5 text-xs rounded-lg border border-rose-200 bg-white hover:bg-rose-50 flex items-center gap-1 disabled:opacity-50"
+                >
+                  {campanhaLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  Recalcular fila
+                </button>
+              </div>
+            </div>
+
+            {/* KPIs da campanha */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-emerald-800">Vão receber</div>
+                <div className="text-2xl font-semibold text-emerald-900 tabular-nums">{campanha.queue.length}</div>
+                <div className="text-[10px] text-emerald-700">clientes</div>
+              </div>
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-amber-800">Pulados</div>
+                <div className="text-2xl font-semibold text-amber-900 tabular-nums">{campanha.skipped.length}</div>
+                <div className="text-[10px] text-amber-700">sem telefone / atraso</div>
+              </div>
+              <div className="p-3 rounded-lg bg-rose-50 border border-rose-200">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-rose-800">Total a cobrar</div>
+                <div className="text-2xl font-semibold text-rose-900 tabular-nums">{brl(campanha.summary.totalDevido)}</div>
+                <div className="text-[10px] text-rose-700">~{Math.ceil((campanha.queue.length * delayMinutos))} min de envio</div>
+              </div>
+            </div>
+
+            {/* Resultado do disparo (depois) */}
+            {campanhaResult && (
+              <div className={`mb-4 p-3 rounded-lg border ${campanhaResult.failed.length > 0 ? 'bg-amber-50 border-amber-300' : 'bg-emerald-50 border-emerald-300'}`}>
+                <div className="font-bold text-sm mb-1 flex items-center gap-2">
+                  <Check className="w-4 h-4" />
+                  Disparo concluído em {(campanhaResult.durationMs / 60000).toFixed(1)} min
+                </div>
+                <div className="text-xs text-slate-700">
+                  {campanhaResult.sent} enviadas · {campanhaResult.failed.length} falhas
+                  {campanhaResult.testMode && <span className="ml-2 text-amber-700 font-bold">(MODO TESTE)</span>}
+                </div>
+                {campanhaResult.failed.length > 0 && (
+                  <details className="mt-2">
+                    <summary className="text-xs cursor-pointer text-amber-800">Ver falhas</summary>
+                    <div className="mt-2 max-h-40 overflow-y-auto text-[10px] font-mono space-y-1">
+                      {campanhaResult.failed.map((f, i) => (
+                        <div key={i} className="text-rose-700">• {f.nome} ({f.telefone}): {f.error}</div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+
+            {/* Lista da fila */}
+            {campanha.queue.length === 0 ? (
+              <div className="p-6 text-center text-sm text-slate-500 bg-slate-50 rounded">
+                Nenhum cliente elegível pra cobrança nesse filtro.
+                {campanha.skipped.length > 0 && <div className="mt-2 text-xs">{campanha.skipped.length} pulados — veja motivos abaixo.</div>}
+              </div>
+            ) : (
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold mb-2" style={{ color: '#6e3a40' }}>
+                  Fila de envio ({campanha.queue.length})
+                </h3>
+                <div className="max-h-[40vh] overflow-y-auto border border-rose-100 rounded-lg">
+                  <table className="text-xs w-full">
+                    <thead className="bg-rose-50 sticky top-0">
+                      <tr className="text-left">
+                        <th className="px-2 py-1.5 w-6">#</th>
+                        <th className="px-2 py-1.5">Cliente</th>
+                        <th className="px-2 py-1.5">Telefone</th>
+                        <th className="px-2 py-1.5 text-right">Atraso</th>
+                        <th className="px-2 py-1.5 text-right">Devido</th>
+                        <th className="px-2 py-1.5 text-center">Tpl</th>
+                        <th className="px-2 py-1.5">Mensagem</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {campanha.queue.map((q, i) => (
+                        <tr key={q.codCliente} className="border-t border-rose-50 hover:bg-rose-50/30 align-top">
+                          <td className="px-2 py-1.5 text-slate-500 tabular-nums">{i + 1}</td>
+                          <td className="px-2 py-1.5">
+                            <div className="font-semibold text-slate-800">{q.nome}</div>
+                            <div className="text-[10px] text-slate-500">cod {q.codCliente} · {q.parcelasVencidas} parc.</div>
+                          </td>
+                          <td className="px-2 py-1.5 font-mono">
+                            {campanha.testMode ? (
+                              <span className="text-amber-700 font-bold">{formatPhone(q.telefone)}</span>
+                            ) : (
+                              <span>{formatPhone(q.telefone)}</span>
+                            )}
+                            {campanha.testMode && q.telefoneOriginal && (
+                              <div className="text-[10px] text-slate-400">orig: {formatPhone(q.telefoneOriginal)}</div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums">
+                            <span className={`px-1 py-0.5 rounded text-[10px] font-semibold ${atrasoCor(q.diasAtraso)}`}>
+                              {q.diasAtraso}d
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold" style={{ color: '#8b4f55' }}>
+                            {brl(q.totalDevido)}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono">
+                              T{q.templateIndex + 1}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <details>
+                              <summary className="cursor-pointer text-[10px] text-rose-700 hover:underline">ver msg</summary>
+                              <pre className="mt-1 p-2 bg-slate-900 text-emerald-200 text-[10px] rounded whitespace-pre-wrap break-words max-w-md">{q.mensagem}</pre>
+                            </details>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Pulados */}
+            {campanha.skipped.length > 0 && (
+              <details className="mb-4">
+                <summary className="text-xs cursor-pointer text-amber-800 hover:underline">
+                  ⚠️ {campanha.skipped.length} clientes pulados
+                </summary>
+                <div className="mt-2 max-h-40 overflow-y-auto bg-amber-50/50 p-2 rounded text-[10px] font-mono space-y-1">
+                  {campanha.skipped.map((s, i) => (
+                    <div key={i} className="text-amber-900">• {s.nome} (cod {s.codCliente}) — {s.motivo}</div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            {/* Footer com ações */}
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-rose-100">
+              <div className="text-xs text-slate-500">
+                <Phone className="w-3 h-3 inline mr-1" />
+                {campanha.testMode
+                  ? <span className="text-amber-700 font-bold">Modo teste — número {formatPhone(campanha.testPhone || '')}</span>
+                  : <span>Disparo direto pros telefones reais</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => !enviando && setShowCampanha(false)}
+                  disabled={enviando}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Fechar
+                </button>
+                <button
+                  onClick={dispararCampanha}
+                  disabled={enviando || campanha.queue.length === 0}
+                  className="px-4 py-2 text-sm rounded-lg text-white shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                  style={{ background: campanha.testMode ? '#a07f30' : '#8b4f55' }}
+                >
+                  {enviando ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Enviando…</>
+                  ) : (
+                    <><Send className="w-4 h-4" /> Disparar {campanha.queue.length} mensagens</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
