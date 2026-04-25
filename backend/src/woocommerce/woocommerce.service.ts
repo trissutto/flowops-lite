@@ -264,6 +264,12 @@ export class WooCommerceService {
     page?: number;
     perPage?: number;
     search?: string;
+    /** ISO 8601 — pedidos com data DEPOIS desse timestamp (date_created por padrão no WC) */
+    after?: string;
+    /** ISO 8601 — pedidos com data ANTES desse timestamp */
+    before?: string;
+    /** Qual data filtrar — 'modified' (default WC) ou 'created'. Usado pra "concluidos hoje" via date_modified */
+    modifiedAfter?: string;
   }): Promise<{ data: any[]; total: number; totalPages: number }> {
     const qs: any = {
       per_page: params.perPage ?? 50,
@@ -273,6 +279,9 @@ export class WooCommerceService {
     };
     if (params.status && params.status !== 'any') qs.status = params.status;
     if (params.search) qs.search = params.search;
+    if (params.after) qs.after = params.after;
+    if (params.before) qs.before = params.before;
+    if (params.modifiedAfter) qs.modified_after = params.modifiedAfter;
 
     const res = await firstValueFrom(
       this.http.get(`${this.baseUrl}/orders`, { auth: this.auth, params: qs }),

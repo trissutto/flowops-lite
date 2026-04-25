@@ -155,6 +155,27 @@ export class OrdersController {
     return { byStatus, grand };
   }
 
+  /**
+   * Conta pedidos com status=completed que foram concluídos HOJE (modified_after).
+   * O WC marca como "completed" quando a baixa do pedido é confirmada — então
+   * filtramos por modified_after = hoje 00:00 (timezone do servidor).
+   *
+   * Estratégia: pedimos só 1 item (per_page=1) e lemos o header x-wp-total.
+   * Custo: 1 request HTTP, sem baixar dados.
+   */
+  @Get('wc/completed-today')
+  async wcCompletedToday() {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const res = await this.wc.listOrders({
+      status: 'completed',
+      perPage: 1,
+      page: 1,
+      modifiedAfter: start.toISOString(),
+    });
+    return { total: res.total, since: start.toISOString() };
+  }
+
   /** Detalhe de 1 pedido direto do WC. */
   @Get('wc/:wcId')
   async wcGetOne(@Param('wcId') wcId: string) {

@@ -75,7 +75,7 @@ const HUBS: Hub[] = [
 export default function DashboardHome() {
   const router = useRouter();
   const [counts, setCounts] = useState<Record<string, { name: string; total: number }>>({});
-  const [enviadosHoje, setEnviadosHoje] = useState<number>(0);
+  const [concluidosHoje, setConcluidosHoje] = useState<number>(0);
   const [userName, setUserName] = useState<string>('');
   const [pilot, setPilot] = useState(false);
   const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
@@ -126,19 +126,10 @@ export default function DashboardHome() {
         const cnt = await api<CountsResp>('/orders/wc/counts');
         if (!cancelled) setCounts(cnt.byStatus);
       } catch {}
+      // Concluídos hoje: pedidos do WC com status=completed e modified_after=hoje 00:00
       try {
-        const env = await api<any>('/retaguarda/enviados-hoje');
-        if (!cancelled) {
-          if (Array.isArray(env)) {
-            const total = env.reduce((a, x: any) => a + (x.total ?? x.count ?? 0), 0);
-            setEnviadosHoje(total);
-          } else if (env?.total != null) {
-            setEnviadosHoje(env.total);
-          } else if (env?.stores && Array.isArray(env.stores)) {
-            const total = env.stores.reduce((a: number, x: any) => a + (x.total ?? 0), 0);
-            setEnviadosHoje(total);
-          }
-        }
+        const done = await api<{ total: number; since: string }>('/orders/wc/completed-today');
+        if (!cancelled && done?.total != null) setConcluidosHoje(done.total);
       } catch {}
     }
     load();
@@ -227,7 +218,7 @@ export default function DashboardHome() {
           <MiniKpi label="Pendentes" value={totalPending} tone="rose" />
           <MiniKpi label="Processando" value={counts['processing']?.total ?? 0} tone="peach" />
           <MiniKpi label="Em separação" value={counts['separacao']?.total ?? 0} tone="lavender" />
-          <MiniKpi label="Enviados hoje" value={enviadosHoje} tone="mint" />
+          <MiniKpi label="Concluídos hoje" value={concluidosHoje} tone="mint" />
         </section>
 
         {/* 3 HUBS GIGANTES --------------------------------------------- */}
