@@ -4,48 +4,72 @@
 
 @layer base {
   :root {
-    /* Paleta preto & dourado — usada pela home premium.
-       Outras telas continuam claras (slate-50) via `body.light-bg` ou override
-       direto. Pra evitar regressão global, o body default fica claro e a home
-       seta o fundo escuro diretamente no container. */
-    --gold-50:  #fdf8e7;
-    --gold-200: #f0dc9a;
-    --gold-400: #d4a84a;
-    --gold-500: #c9962d;
-    --gold-600: #a77a1c;
-    --ink-900:  #0b0b0d;
-    --ink-800:  #141418;
-    --ink-700:  #1c1c22;
+    /* Paleta preto & dourado — boutique de luxo. Tons mais quentes e sóbrios. */
+    --gold-50:  #f5e9c7;
+    --gold-200: #e5cb88;
+    --gold-400: #c9a75a;
+    --gold-500: #b08d3f;
+    --gold-600: #8a6c28;
+    --ink-900:  #07070a;
+    --ink-800:  #0d0d11;
+    --ink-700:  #15151a;
   }
 
   body { @apply bg-slate-50 text-slate-900 antialiased; }
 
-  /* Mapeamento CSS-var → utilitária do Tailwind */
-  .font-display { font-family: var(--font-display), ui-serif, Georgia, serif; }
+  .font-display { font-family: var(--font-display), ui-serif, Georgia, serif; font-feature-settings: 'liga', 'dlig'; }
   .font-sans    { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; }
 }
 
 @layer utilities {
-  /* Texto dourado com gradiente suave — pra números premium e CTAs */
+  /* Texto dourado com gradiente — usado em números premium e acentos */
   .text-gold-gradient {
-    background: linear-gradient(135deg, #f3d989 0%, #c9962d 55%, #a77a1c 100%);
+    background: linear-gradient(135deg, #f5e9c7 0%, #c9a75a 50%, #8a6c28 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
   }
-  /* Borda dourada 1px em fundo escuro — pra cards premium */
-  .border-gold-hairline { border-color: rgba(201, 150, 45, 0.35); }
-  /* Shine diagonal — aparece no hover dos botões MÃE */
+
+  /* Separador dourado fininho */
+  .divider-gold {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(201,167,90,0.45), transparent);
+  }
+
+  /* Underline animado — cresce da esquerda pra direita no hover do link */
+  .underline-grow {
+    position: relative;
+  }
+  .underline-grow::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -4px;
+    height: 1px;
+    width: 0;
+    background: linear-gradient(90deg, #c9a75a, transparent);
+    transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .group:hover .underline-grow::after { width: 100%; }
+
+  /* Brilho que atravessa o card no hover (shine diagonal) */
   .gold-shine::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(120deg, transparent 30%, rgba(243, 217, 137, 0.10) 50%, transparent 70%);
-    transform: translateX(-100%);
-    transition: transform 0.9s ease;
+    background: linear-gradient(120deg, transparent 35%, rgba(245,233,199,0.08) 50%, transparent 65%);
+    transform: translateX(-110%);
+    transition: transform 1.1s cubic-bezier(0.2, 0.8, 0.2, 1);
     pointer-events: none;
   }
-  .group:hover .gold-shine::before { transform: translateX(100%); }
+  .group:hover .gold-shine::before { transform: translateX(110%); }
+
+  /* Animação sutil de fade-in-up pro primeiro render */
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .fade-up { animation: fade-up 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 }
 
 @media print {
