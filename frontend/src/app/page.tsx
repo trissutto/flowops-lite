@@ -1,82 +1,71 @@
 'use client';
 
 /**
- * / — Home/Launchpad LURDS (v7 — PASTEL TABLET).
+ * / — Home/Launchpad LURDS (v8 — HIERARQUIA + CORES VIBRANTES).
  *
- * Inspirado em ScapeBuilder/HS-Net: grade de botões circulares grandes,
- * cada módulo com sua cor pastel (rosa, pêssego, hortelã, lavanda, céu,
- * amarelo, coral, creme). Painel central como se fosse um tablet.
+ * Reorganizado em 3 blocos por importância:
  *
- * - Header: logo + nome + data
- * - Grid principal: 4×2 botões circulares (módulos mãe)
- * - Linha utilitária: 4 botões pequenos (Piloto, Site, ERP, Logs)
+ * 1. OPERAÇÃO (3 círculos GRANDES)        — fluxo crítico do dia: Pedidos,
+ *    Retaguarda, WhatsApp. São os botões maiores e em destaque.
+ *
+ * 2. CRESCIMENTO (4 círculos médios)      — Marketing, Crediário, Materiais,
+ *    Gestão. Importam mas não são da operação minuto-a-minuto.
+ *
+ * 3. SISTEMA (3 círculos pequenos)        — Sistema, Vendedoras, Vitrine.
+ *    Acessos eventuais.
+ *
+ * Cores: paleta pastel "vibrante" — anéis saturados, fundos claros.
  */
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ClipboardList, Boxes, TrendingUp, Settings,
-  Megaphone, Inbox, CreditCard, MessageCircle,
-  Zap, Bot, ShoppingBag, Database, FileText,
-  type LucideIcon,
+  ClipboardList, Boxes, MessageCircle,
+  Megaphone, CreditCard, Inbox, TrendingUp,
+  Settings, Users, ShoppingBag,
+  Zap, Bot, type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
+import { TONE_MAP, type PastelTone } from '@/components/PastelShell';
 
 interface CountsResp {
   byStatus: Record<string, { name: string; total: number }>;
   grand: number;
 }
 
-type PastelTone = 'rose' | 'peach' | 'mint' | 'sky' | 'lavender' | 'yellow' | 'coral' | 'cream';
-
-type ModuleButton = {
+type Module = {
   href: string;
   label: string;
   icon: LucideIcon;
   tone: PastelTone;
   kpiKey?: string;
-  badge?: 'count' | 'dot';
+  subtitle?: string;
 };
 
-// 8 módulos mãe — grade 4×2
-const MODULES: ModuleButton[] = [
-  { href: '/separacao',           label: 'Pedidos',     icon: ClipboardList,  tone: 'rose',     kpiKey: 'processing', badge: 'count' },
-  { href: '/retaguarda',          label: 'Retaguarda',  icon: Boxes,          tone: 'peach' },
-  { href: '/gestao',              label: 'Gestão',      icon: TrendingUp,     tone: 'mint' },
-  { href: '/sistema',             label: 'Sistema',     icon: Settings,       tone: 'lavender' },
-  { href: '/marketing/recuperacao', label: 'Marketing',  icon: Megaphone,      tone: 'sky' },
-  { href: '/retaguarda/materiais', label: 'Materiais',   icon: Inbox,          tone: 'yellow' },
-  { href: '/crediario',           label: 'Crediário',   icon: CreditCard,     tone: 'coral' },
-  { href: '/retaguarda/whatsapp', label: 'WhatsApp',    icon: MessageCircle,  tone: 'cream' },
+// BLOCO 1 — OPERAÇÃO: 3 botões GRANDES, fluxo crítico do dia
+const OPERATION: Module[] = [
+  { href: '/separacao',           label: 'Pedidos',     icon: ClipboardList, tone: 'rose',  kpiKey: 'processing', subtitle: 'Separação e envio' },
+  { href: '/retaguarda',          label: 'Retaguarda',  icon: Boxes,         tone: 'peach',                       subtitle: 'Baixas, ERP, materiais' },
+  { href: '/retaguarda/whatsapp', label: 'WhatsApp',    icon: MessageCircle, tone: 'mint',                        subtitle: 'Conexão + bulk' },
 ];
 
-// Linha utilitária — atalhos rápidos
-type UtilityButton = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  tone: PastelTone;
-};
-const UTILITIES: UtilityButton[] = [
-  { href: '/retaguarda/baixas-log', label: 'Baixas',  icon: FileText, tone: 'sky' },
-  { href: '/retaguarda',            label: 'ERP',     icon: Database, tone: 'mint' },
-  { href: '/separacao',             label: 'Site',    icon: ShoppingBag, tone: 'rose' },
+// BLOCO 2 — CRESCIMENTO: 4 botões médios, importam mas não são minuto-a-minuto
+const GROWTH: Module[] = [
+  { href: '/marketing',            label: 'Marketing',  icon: Megaphone,   tone: 'sky',      subtitle: 'CRM + recuperação' },
+  { href: '/crediario',            label: 'Crediário',  icon: CreditCard,  tone: 'coral',    subtitle: 'Cobrança + parcelas' },
+  { href: '/retaguarda/materiais', label: 'Materiais',  icon: Inbox,       tone: 'yellow',   subtitle: 'Pedidos das filiais' },
+  { href: '/gestao',               label: 'Gestão',     icon: TrendingUp,  tone: 'lavender', subtitle: 'Financeiro · CRM' },
 ];
 
-// Mapa de tons pastel → cores reais (hex e sombras)
-const TONE_MAP: Record<PastelTone, { ring: string; bg: string; icon: string; badge: string }> = {
-  rose:     { ring: '#f9a8d4', bg: '#fdf2f8', icon: '#db2777', badge: '#ec4899' },
-  peach:    { ring: '#fdba74', bg: '#fff7ed', icon: '#ea580c', badge: '#f97316' },
-  mint:     { ring: '#86efac', bg: '#f0fdf4', icon: '#16a34a', badge: '#22c55e' },
-  sky:      { ring: '#7dd3fc', bg: '#f0f9ff', icon: '#0284c7', badge: '#0ea5e9' },
-  lavender: { ring: '#c4b5fd', bg: '#f5f3ff', icon: '#7c3aed', badge: '#8b5cf6' },
-  yellow:   { ring: '#fde68a', bg: '#fefce8', icon: '#ca8a04', badge: '#eab308' },
-  coral:    { ring: '#fca5a5', bg: '#fef2f2', icon: '#dc2626', badge: '#ef4444' },
-  cream:    { ring: '#fcd6a5', bg: '#fffbeb', icon: '#a16207', badge: '#d97706' },
-};
+// BLOCO 3 — SISTEMA: 3 botões pequenos, acessos eventuais
+const SYSTEM: Module[] = [
+  { href: '/sistema',              label: 'Sistema',    icon: Settings,     tone: 'lavender' },
+  { href: '/retaguarda/vendedoras', label: 'Vendedoras', icon: Users,       tone: 'rose' },
+  { href: '/vitrine',              label: 'Vitrine',    icon: ShoppingBag, tone: 'cream' },
+];
 
 export default function DashboardHome() {
   const router = useRouter();
@@ -87,7 +76,6 @@ export default function DashboardHome() {
   const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
   const [pilotBusy, setPilotBusy] = useState(false);
 
-  // Guard de sessão + role
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
@@ -103,7 +91,6 @@ export default function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Piloto Automático
   useEffect(() => {
     setPilot(isPilotOn());
     let cancelled = false;
@@ -127,7 +114,6 @@ export default function DashboardHome() {
     };
   }, []);
 
-  // KPIs
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -203,19 +189,19 @@ export default function DashboardHome() {
       className="min-h-screen"
       style={{
         background:
-          'radial-gradient(1100px 600px at 50% -10%, #fce7f3 0%, transparent 60%), linear-gradient(180deg, #fef9f3 0%, #fdf2f8 100%)',
+          'radial-gradient(1100px 600px at 50% -10%, #fbcfe8 0%, transparent 60%), linear-gradient(180deg, #fff7ed 0%, #fce7f3 100%)',
       }}
     >
-      <div className="max-w-6xl mx-auto px-6 sm:px-10 py-10 sm:py-14">
+      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
 
         {/* Header ------------------------------------------------------- */}
         <header className="flex items-center justify-between flex-wrap gap-6 mb-8 fade-up">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.3em] text-pink-400 font-semibold mb-2">
+            <div className="text-[11px] uppercase tracking-[0.3em] text-pink-500 font-bold mb-2">
               Lurds Order One
             </div>
             <h1 className="font-display text-4xl sm:text-5xl text-slate-800 leading-tight">
-              {userName ? <>Oi, <span className="text-pink-500 italic">{userName.split(' ')[0]}</span> 🌸</> : 'Bem-vindo 🌸'}
+              {userName ? <>Oi, <span className="text-pink-500 italic">{userName.split(' ')[0]}</span> 🌸</> : 'Bem-vinda 🌸'}
             </h1>
             <div className="text-sm text-slate-500 mt-2 capitalize">{today}</div>
           </div>
@@ -228,41 +214,69 @@ export default function DashboardHome() {
           />
         </header>
 
-        {/* Faixa de KPI rápida ----------------------------------------- */}
-        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-8 fade-up" style={{ animationDelay: '0.05s' }}>
+        {/* KPIs vibrantes ------------------------------------------------ */}
+        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-10 fade-up" style={{ animationDelay: '0.05s' }}>
           <MiniKpi label="Pendentes" value={totalPending} tone="rose" />
           <MiniKpi label="Processando" value={counts['processing']?.total ?? 0} tone="peach" />
           <MiniKpi label="Em separação" value={counts['separacao']?.total ?? 0} tone="lavender" />
           <MiniKpi label="Enviados hoje" value={enviadosHoje} tone="mint" />
         </section>
 
-        {/* Painel principal — "tablet" pastel --------------------------- */}
+        {/* BLOCO 1: OPERAÇÃO — 3 grandes ------------------------------- */}
+        <SectionHeader
+          eyebrow="Operação do dia"
+          title="O que importa agora"
+          accent="#e11d48"
+        />
         <section
-          className="panel-pastel p-6 sm:p-10 fade-up"
+          className="panel-pastel p-6 sm:p-10 mb-6 fade-up"
           style={{ animationDelay: '0.1s' }}
         >
-          {/* Grade de 8 botões circulares — 4 col × 2 row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-8 gap-x-4 sm:gap-x-6 justify-items-center">
-            {MODULES.map((mod, idx) => {
+          <div className="grid grid-cols-3 gap-4 sm:gap-8 justify-items-center">
+            {OPERATION.map((mod, idx) => {
               const kpi = mod.kpiKey ? counts[mod.kpiKey]?.total : undefined;
               return (
-                <CircleButton
+                <BigCircle
                   key={mod.href}
                   module={mod}
-                  badgeValue={mod.badge === 'count' ? kpi : undefined}
+                  badge={kpi}
                   index={idx}
                 />
               );
             })}
           </div>
+        </section>
 
-          {/* Divisor pastel */}
-          <div className="my-8 h-px bg-gradient-to-r from-transparent via-pink-200 to-transparent" />
+        {/* BLOCO 2: CRESCIMENTO — 4 médios ------------------------------ */}
+        <SectionHeader
+          eyebrow="Crescimento"
+          title="Vendas, marketing e operação interna"
+          accent="#0ea5e9"
+        />
+        <section
+          className="panel-pastel p-5 sm:p-8 mb-6 fade-up"
+          style={{ animationDelay: '0.15s' }}
+        >
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-6 gap-x-4 justify-items-center">
+            {GROWTH.map((mod, idx) => (
+              <MidCircle key={mod.href} module={mod} index={idx} />
+            ))}
+          </div>
+        </section>
 
-          {/* Linha de utilitários — botões menores */}
-          <div className="flex items-center justify-center gap-6 sm:gap-10 flex-wrap">
-            {UTILITIES.map((u, idx) => (
-              <UtilityCircle key={u.href} util={u} index={idx} />
+        {/* BLOCO 3: SISTEMA — 3 pequenos -------------------------------- */}
+        <SectionHeader
+          eyebrow="Sistema"
+          title="Configurações e atalhos"
+          accent="#7c3aed"
+        />
+        <section
+          className="panel-pastel p-4 sm:p-6 mb-6 fade-up"
+          style={{ animationDelay: '0.2s' }}
+        >
+          <div className="grid grid-cols-3 gap-4 justify-items-center">
+            {SYSTEM.map((mod, idx) => (
+              <SmallCircle key={mod.href} module={mod} index={idx} />
             ))}
           </div>
         </section>
@@ -270,7 +284,7 @@ export default function DashboardHome() {
         {/* Footer */}
         <footer className="mt-8 flex items-center justify-between text-xs text-slate-400">
           <span>Lurds · Plus Size</span>
-          <span className="text-pink-400">Launchpad v7</span>
+          <span className="text-pink-500 font-semibold">Launchpad v8</span>
         </footer>
       </div>
     </div>
@@ -278,100 +292,161 @@ export default function DashboardHome() {
 }
 
 // ============================================================================
-// Botão circular grande — módulo mãe
+// Section Header — eyebrow + título + linha colorida
 // ============================================================================
-function CircleButton({
-  module: mod,
-  badgeValue,
-  index,
-}: {
-  module: ModuleButton;
-  badgeValue?: number;
-  index: number;
-}) {
+function SectionHeader({ eyebrow, title, accent }: { eyebrow: string; title: string; accent: string }) {
+  return (
+    <div className="flex items-center gap-3 mb-3 fade-up">
+      <div className="h-2 w-2 rounded-full" style={{ background: accent, boxShadow: `0 0 0 4px ${accent}22` }} />
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.3em] font-bold" style={{ color: accent }}>
+          {eyebrow}
+        </div>
+        <div className="font-display text-xl sm:text-2xl text-slate-700 leading-tight">{title}</div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// BigCircle — botão circular GRANDE (operação)
+// ============================================================================
+function BigCircle({ module: mod, badge, index }: { module: Module; badge?: number; index: number }) {
   const Icon = mod.icon;
-  const tone = TONE_MAP[mod.tone];
+  const t = TONE_MAP[mod.tone];
   return (
     <Link
       href={mod.href}
       className="group flex flex-col items-center gap-3 fade-up"
-      style={{ animationDelay: `${0.15 + index * 0.05}s` }}
+      style={{ animationDelay: `${0.15 + index * 0.06}s` }}
     >
       <div className="relative">
         <div
-          className="circle-ring flex items-center justify-center w-[88px] h-[88px] sm:w-[104px] sm:h-[104px]"
+          className="circle-ring flex items-center justify-center w-[120px] h-[120px] sm:w-[140px] sm:h-[140px]"
           style={{
-            border: `4px solid ${tone.ring}`,
-            background: tone.bg,
+            border: `5px solid ${t.ring}`,
+            background: t.bg,
+            boxShadow: `0 8px 30px ${t.ring}40, 0 1px 0 rgba(255,255,255,0.95) inset`,
           }}
         >
           <Icon
-            className="w-9 h-9 sm:w-11 sm:h-11 transition-transform duration-500 group-hover:scale-110"
-            style={{ color: tone.icon }}
+            className="w-12 h-12 sm:w-14 sm:h-14 transition-transform duration-500 group-hover:scale-110"
+            style={{ color: t.icon }}
             strokeWidth={1.6}
           />
         </div>
-        {badgeValue != null && badgeValue > 0 && (
+        {badge != null && badge > 0 && (
           <span
             className="circle-badge"
-            style={{ background: tone.badge }}
+            style={{
+              background: t.badge,
+              minWidth: 30,
+              height: 30,
+              fontSize: 13,
+              top: -6,
+              right: -6,
+            }}
           >
-            {badgeValue > 99 ? '99+' : badgeValue}
+            {badge > 99 ? '99+' : badge}
           </span>
         )}
       </div>
-      <div className="text-sm sm:text-base font-medium text-slate-700 group-hover:text-slate-900 transition-colors">
-        {mod.label}
+      <div className="text-center">
+        <div className="font-display text-lg sm:text-2xl font-medium text-slate-800 leading-tight">
+          {mod.label}
+        </div>
+        {mod.subtitle && (
+          <div className="text-[11px] sm:text-xs text-slate-500 mt-0.5">{mod.subtitle}</div>
+        )}
       </div>
     </Link>
   );
 }
 
 // ============================================================================
-// Botão circular pequeno — utilitário (linha de baixo)
+// MidCircle — botão circular médio (crescimento)
 // ============================================================================
-function UtilityCircle({ util, index }: { util: UtilityButton; index: number }) {
-  const Icon = util.icon;
-  const tone = TONE_MAP[util.tone];
+function MidCircle({ module: mod, index }: { module: Module; index: number }) {
+  const Icon = mod.icon;
+  const t = TONE_MAP[mod.tone];
   return (
     <Link
-      href={util.href}
+      href={mod.href}
       className="group flex flex-col items-center gap-2 fade-up"
-      style={{ animationDelay: `${0.5 + index * 0.05}s` }}
+      style={{ animationDelay: `${0.2 + index * 0.05}s` }}
     >
       <div
-        className="circle-ring flex items-center justify-center w-14 h-14"
+        className="circle-ring flex items-center justify-center w-[80px] h-[80px] sm:w-[92px] sm:h-[92px]"
         style={{
-          border: `2.5px solid ${tone.ring}`,
-          background: tone.bg,
+          border: `4px solid ${t.ring}`,
+          background: t.bg,
+          boxShadow: `0 6px 20px ${t.ring}30, 0 1px 0 rgba(255,255,255,0.95) inset`,
         }}
       >
-        <Icon className="w-5 h-5" style={{ color: tone.icon }} strokeWidth={1.7} />
+        <Icon
+          className="w-8 h-8 sm:w-10 sm:h-10 transition-transform duration-500 group-hover:scale-110"
+          style={{ color: t.icon }}
+          strokeWidth={1.6}
+        />
       </div>
-      <div className="text-[11px] font-medium text-slate-500 group-hover:text-slate-700 transition-colors">
-        {util.label}
+      <div className="text-center">
+        <div className="text-sm font-semibold text-slate-700 leading-tight">{mod.label}</div>
+        {mod.subtitle && (
+          <div className="text-[10px] text-slate-400 leading-tight">{mod.subtitle}</div>
+        )}
       </div>
     </Link>
   );
 }
 
 // ============================================================================
-// Mini KPI — pílula pastel pequena no topo
+// SmallCircle — botão circular pequeno (sistema)
+// ============================================================================
+function SmallCircle({ module: mod, index }: { module: Module; index: number }) {
+  const Icon = mod.icon;
+  const t = TONE_MAP[mod.tone];
+  return (
+    <Link
+      href={mod.href}
+      className="group flex flex-col items-center gap-1.5 fade-up"
+      style={{ animationDelay: `${0.25 + index * 0.04}s` }}
+    >
+      <div
+        className="circle-ring flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16"
+        style={{
+          border: `3px solid ${t.ring}`,
+          background: t.bg,
+        }}
+      >
+        <Icon
+          className="w-5 h-5 sm:w-6 sm:h-6 transition-transform duration-500 group-hover:scale-110"
+          style={{ color: t.icon }}
+          strokeWidth={1.7}
+        />
+      </div>
+      <div className="text-[11px] sm:text-xs font-medium text-slate-600 leading-tight">{mod.label}</div>
+    </Link>
+  );
+}
+
+// ============================================================================
+// MiniKpi — pílula pastel pequena no topo (cores vibrantes)
 // ============================================================================
 function MiniKpi({ label, value, tone }: { label: string; value: number; tone: PastelTone }) {
   const t = TONE_MAP[tone];
   return (
     <div
-      className="rounded-2xl px-4 py-3 flex items-center justify-between"
+      className="rounded-2xl px-4 py-3 flex items-center justify-between transition hover:scale-[1.02]"
       style={{
         background: t.bg,
-        border: `1px solid ${t.ring}`,
+        border: `2px solid ${t.ring}`,
+        boxShadow: `0 4px 12px ${t.ring}25`,
       }}
     >
-      <div className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: t.icon }}>
+      <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: t.text }}>
         {label}
       </div>
-      <div className="font-display text-2xl tabular-nums" style={{ color: t.icon }}>
+      <div className="font-display text-2xl tabular-nums font-semibold" style={{ color: t.icon }}>
         {value.toLocaleString('pt-BR')}
       </div>
     </div>
@@ -379,7 +454,7 @@ function MiniKpi({ label, value, tone }: { label: string; value: number; tone: P
 }
 
 // ============================================================================
-// Piloto Pill — toggle pastel
+// PilotPill — toggle pastel
 // ============================================================================
 function PilotPill({
   pilot,
@@ -397,10 +472,10 @@ function PilotPill({
     <button
       onClick={onToggle}
       disabled={disabled}
-      className="group flex items-center gap-3 px-5 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md"
+      className="group flex items-center gap-3 px-5 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
       style={{
-        background: pilot ? '#dcfce7' : 'white',
-        border: `2px solid ${pilot ? '#86efac' : '#e2e8f0'}`,
+        background: pilot ? '#d1fae5' : 'white',
+        border: `2.5px solid ${pilot ? '#34d399' : '#e2e8f0'}`,
       }}
       title={
         status?.killSwitch
@@ -412,7 +487,7 @@ function PilotPill({
     >
       <div
         className={`relative flex items-center justify-center w-9 h-9 rounded-full ${pilot ? 'pulse-soft' : ''}`}
-        style={{ background: pilot ? '#22c55e' : '#f1f5f9' }}
+        style={{ background: pilot ? '#10b981' : '#f1f5f9' }}
       >
         {pilot ? (
           <Zap className="w-4 h-4 text-white" strokeWidth={2.2} fill="white" />
@@ -421,10 +496,10 @@ function PilotPill({
         )}
       </div>
       <div className="text-left">
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
           Piloto {status?.killSwitch && '· bloqueado'}
         </div>
-        <div className={`text-sm font-semibold ${pilot ? 'text-green-700' : 'text-slate-600'}`}>
+        <div className={`text-sm font-bold ${pilot ? 'text-emerald-700' : 'text-slate-600'}`}>
           {busy ? '…' : pilot ? 'Ligado' : 'Desligado'}
         </div>
       </div>

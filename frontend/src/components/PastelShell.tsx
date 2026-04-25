@@ -19,14 +19,15 @@ import { ReactNode } from 'react';
 export type PastelTone = 'rose' | 'peach' | 'mint' | 'sky' | 'lavender' | 'yellow' | 'coral' | 'cream';
 
 export const TONE_MAP: Record<PastelTone, { ring: string; bg: string; icon: string; badge: string; text: string }> = {
-  rose:     { ring: '#f9a8d4', bg: '#fdf2f8', icon: '#db2777', badge: '#ec4899', text: '#be185d' },
-  peach:    { ring: '#fdba74', bg: '#fff7ed', icon: '#ea580c', badge: '#f97316', text: '#c2410c' },
-  mint:     { ring: '#86efac', bg: '#f0fdf4', icon: '#16a34a', badge: '#22c55e', text: '#15803d' },
-  sky:      { ring: '#7dd3fc', bg: '#f0f9ff', icon: '#0284c7', badge: '#0ea5e9', text: '#0369a1' },
-  lavender: { ring: '#c4b5fd', bg: '#f5f3ff', icon: '#7c3aed', badge: '#8b5cf6', text: '#6d28d9' },
-  yellow:   { ring: '#fde68a', bg: '#fefce8', icon: '#ca8a04', badge: '#eab308', text: '#a16207' },
-  coral:    { ring: '#fca5a5', bg: '#fef2f2', icon: '#dc2626', badge: '#ef4444', text: '#b91c1c' },
-  cream:    { ring: '#fcd6a5', bg: '#fffbeb', icon: '#a16207', badge: '#d97706', text: '#92400e' },
+  // Cores mais vibrantes — anéis saturados, mantendo fundo claro pra não cansar.
+  rose:     { ring: '#fb7185', bg: '#ffe4e6', icon: '#e11d48', badge: '#f43f5e', text: '#be123c' },
+  peach:    { ring: '#fb923c', bg: '#ffedd5', icon: '#ea580c', badge: '#f97316', text: '#9a3412' },
+  mint:     { ring: '#34d399', bg: '#d1fae5', icon: '#059669', badge: '#10b981', text: '#065f46' },
+  sky:      { ring: '#38bdf8', bg: '#e0f2fe', icon: '#0284c7', badge: '#0ea5e9', text: '#075985' },
+  lavender: { ring: '#a78bfa', bg: '#ede9fe', icon: '#7c3aed', badge: '#8b5cf6', text: '#5b21b6' },
+  yellow:   { ring: '#facc15', bg: '#fef9c3', icon: '#ca8a04', badge: '#eab308', text: '#854d0e' },
+  coral:    { ring: '#f87171', bg: '#fee2e2', icon: '#dc2626', badge: '#ef4444', text: '#991b1b' },
+  cream:    { ring: '#f59e0b', bg: '#fef3c7', icon: '#b45309', badge: '#d97706', text: '#78350f' },
 };
 
 interface PastelShellProps {
