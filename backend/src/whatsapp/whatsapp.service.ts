@@ -196,6 +196,73 @@ export class WhatsappService implements OnModuleInit {
     return `${n}@s.whatsapp.net`;
   }
 
+  /**
+   * Valida em batch se números têm WhatsApp ativo. Usa Baileys onWhatsApp.
+   *
+   * Retorna Map<numeroNormalizado, { exists, jid? }>.
+   * - exists=true: tem WhatsApp
+   * - exists=false: número não está no WhatsApp (cadastro errado, fixo, etc)
+   * - exists=null: erro de rede / não foi possível verificar
+   *
+   * Limita a 200 números por chamada (Baileys aceita batch mas com cautela).
+   */
+  async validateNumbers(rawNumbers: string[]): Promise<Map<string, { exists: boolean | null; jid?: string }>> {
+    const out = new Map<string, { exists: boolean | null; jid?: string }>();
+    if (!this.sock || !this.connectedAt) {
+      for (const n of rawNumbers) out.set(String(n).replace(/\D/g, ''), { exists: null });
+      return out;
+    }
+    // dedup + normaliza
+    const norm = new Map<string, string>(); // jidPlano → original
+    for (const raw of rawNumbers) {
+      const jid = this.toJid(raw);
+      if (!jid) {
+        out.set(String(raw).replace(/\D/g, ''), { exists: false });
+        continue;
+      }
+      // chave plana sem @s.whatsapp.net pra Baileys
+      const plain = jid.split('@')[0];
+      norm.set(plain, String(raw).replace(/\D/g, ''));
+    }
+    if (norm.size === 0) return out;
+    const unique = Array.from(norm.keys());
+    // Limita lote
+    const slice = unique.slice(0, 200);
+    try {
+      // onWhatsApp aceita array de números E2E. Retorna [{ jid, exists }]
+      const res = await this.sock.onWhatsApp(...slice);
+      const byPlain = new Map<string, any>();
+      if (Array.isArray(res)) {
+        for (const r of res) {
+          const plain = String(r?.jid || '').split('@')[0];
+          if (plain) byPlain.set(plain, r);
+        }
+      }
+      for (const plain of slice) {
+        const r = byPlain.get(plain);
+        const original = norm.get(plain) || plain;
+        if (r) {
+          out.set(original, { exists: !!r.exists, jid: r.jid });
+        } else {
+          // Baileys às vezes só retorna os que existem
+          out.set(original, { exists: false });
+        }
+      }
+      // marca os que não couberam no slice como erro
+      for (const plain of unique.slice(200)) {
+        const original = norm.get(plain) || plain;
+        out.set(original, { exists: null });
+      }
+    } catch (e: any) {
+      this.logger.warn(`validateNumbers falhou: ${e?.message}`);
+      for (const plain of slice) {
+        const original = norm.get(plain) || plain;
+        out.set(original, { exists: null });
+      }
+    }
+    return out;
+  }
+
   /** Dispara 1 mensagem. Retorna `{ ok, error? }`. */
   async sendText(rawNumber: string, text: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.sock || !this.connectedAt) {

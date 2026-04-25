@@ -1,9 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ErpService } from '../erp/erp.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   CobrancaContext, ParcelaCobranca, renderCobranca, TEMPLATES,
+  DEFAULT_TEMPLATE_STRINGS,
 } from './cobranca-templates';
+
+const TEMPLATES_KEY = 'cobranca_templates';
+const LOJA_NOME_KEY = 'cobranca_loja_nome';
 
 /**
  * CrediariosService — cobrança de parcelas vencidas direto da tabela
@@ -38,7 +43,80 @@ export class CrediariosService {
   constructor(
     private readonly erp: ErpService,
     private readonly wa: WhatsappService,
+    private readonly prisma: PrismaService,
   ) {}
+
+  // =========== TEMPLATES EDITÁVEIS ===========
+
+  /**
+   * Lê os 6 templates configuráveis. Se não tiver salvo, retorna os defaults.
+   * Cache em memória 30s pra evitar SELECT em cada disparo.
+   */
+  private templatesCache: { value: string[]; lojaNome: string; expiresAt: number } | null = null;
+
+  async getEditableTemplates(force = false): Promise<{ templates: string[]; lojaNome: string; isDefault: boolean }> {
+    if (!force && this.templatesCache && Date.now() < this.templatesCache.expiresAt) {
+      return {
+        templates: this.templatesCache.value,
+        lojaNome: this.templatesCache.lojaNome,
+        isDefault: false,
+      };
+    }
+    let templates = [...DEFAULT_TEMPLATE_STRINGS];
+    let lojaNome = `Lurd's Plus Size`;
+    let isDefault = true;
+    try {
+      const rec = await (this.prisma as any).systemSetting.findUnique({ where: { key: TEMPLATES_KEY } });
+      if (rec?.value) {
+        const parsed = JSON.parse(rec.value);
+        if (Array.isArray(parsed) && parsed.every((s) => typeof s === 'string')) {
+          templates = parsed.filter((s: string) => s && s.trim().length > 0);
+          isDefault = false;
+        }
+      }
+      const recLoja = await (this.prisma as any).systemSetting.findUnique({ where: { key: LOJA_NOME_KEY } });
+      if (recLoja?.value && typeof recLoja.value === 'string') {
+        lojaNome = recLoja.value;
+      }
+    } catch (e: any) {
+      this.logger.warn(`getEditableTemplates: usando defaults (${e?.message})`);
+    }
+    if (!templates.length) templates = [...DEFAULT_TEMPLATE_STRINGS];
+    this.templatesCache = { value: templates, lojaNome, expiresAt: Date.now() + 30_000 };
+    return { templates, lojaNome, isDefault };
+  }
+
+  async setEditableTemplates(templates: string[], lojaNome?: string): Promise<{ ok: boolean }> {
+    const clean = (templates || [])
+      .map((s) => String(s ?? '').trim())
+      .filter((s) => s.length > 0);
+    if (clean.length < 1) {
+      throw new Error('Pelo menos 1 template precisa ter conteúdo');
+    }
+    if (clean.length > 12) {
+      throw new Error('Máximo 12 templates');
+    }
+    await (this.prisma as any).systemSetting.upsert({
+      where: { key: TEMPLATES_KEY },
+      update: { value: JSON.stringify(clean) },
+      create: { key: TEMPLATES_KEY, value: JSON.stringify(clean) },
+    });
+    if (typeof lojaNome === 'string' && lojaNome.trim().length > 0) {
+      await (this.prisma as any).systemSetting.upsert({
+        where: { key: LOJA_NOME_KEY },
+        update: { value: lojaNome.trim() },
+        create: { key: LOJA_NOME_KEY, value: lojaNome.trim() },
+      });
+    }
+    this.templatesCache = null;
+    return { ok: true };
+  }
+
+  async resetEditableTemplates(): Promise<{ ok: boolean }> {
+    await (this.prisma as any).systemSetting.delete({ where: { key: TEMPLATES_KEY } }).catch(() => null);
+    this.templatesCache = null;
+    return { ok: true };
+  }
 
   /**
    * Lê SHOW COLUMNS FROM movimento e tenta mapear nomes da instalação local
@@ -412,6 +490,7 @@ export class CrediariosService {
     const minDiasAtraso = Math.max(0, Math.min(365, opts.minDiasAtraso ?? 3));
     const dayOffset = Math.max(0, Math.min(30, opts.dayOffset ?? 0));
     const data = await this.listOverdueByCustomer(opts);
+    const cfg = await this.getEditableTemplates();
 
     const testPhone = (process.env.COBRANCA_TEST_PHONE || '').replace(/\D/g, '') || null;
     const testMode = !!testPhone;
@@ -445,9 +524,9 @@ export class CrediariosService {
       const ctx: CobrancaContext = {
         nome: c.nome,
         parcelas,
-        lojaNome: `Lurd's Plus Size`,
+        lojaNome: cfg.lojaNome,
       };
-      const { text, templateIndex } = renderCobranca(ctx, seq, dayOffset);
+      const { text, templateIndex } = renderCobranca(ctx, seq, dayOffset, cfg.templates);
 
       queue.push({
         codCliente: c.codCliente,
@@ -598,17 +677,46 @@ export class CrediariosService {
     return { ok: r.ok, testMode: !!testPhone, usedNumber, error: r.error };
   }
 
+  /**
+   * Valida em lote se os números têm WhatsApp ativo. Retorna objeto serializável.
+   */
+  async validateNumbers(rawNumbers: string[]): Promise<{
+    results: Record<string, { exists: boolean | null; jid?: string }>;
+    summary: { total: number; ativos: number; inativos: number; erros: number };
+    connected: boolean;
+  }> {
+    const status = this.wa.getStatus();
+    const map = await this.wa.validateNumbers(rawNumbers || []);
+    const results: Record<string, { exists: boolean | null; jid?: string }> = {};
+    let ativos = 0, inativos = 0, erros = 0;
+    for (const [k, v] of map.entries()) {
+      results[k] = v;
+      if (v.exists === true) ativos++;
+      else if (v.exists === false) inativos++;
+      else erros++;
+    }
+    return {
+      results,
+      summary: { total: map.size, ativos, inativos, erros },
+      connected: status.connected,
+    };
+  }
+
   /** Lista os templates renderizados com dados-exemplo — pra preview no admin. */
-  previewTemplates(): Array<{ index: number; preview: string }> {
+  async previewTemplates(): Promise<Array<{ index: number; preview: string }>> {
+    const cfg = await this.getEditableTemplates();
     const ctx: CobrancaContext = {
       nome: 'Maria Silva',
-      lojaNome: `Lurd's Plus Size`,
+      lojaNome: cfg.lojaNome,
       parcelas: [
         { vencimento: '2026-04-10', valor: 89.90, parcela: 2, totalParcelas: 4 },
         { vencimento: '2026-04-25', valor: 89.90, parcela: 3, totalParcelas: 4 },
       ],
     };
-    return TEMPLATES.map((t, i) => ({ index: i, preview: t(ctx) }));
+    return cfg.templates.map((_, i) => {
+      const { text } = renderCobranca(ctx, i, 0, cfg.templates);
+      return { index: i, preview: text };
+    });
   }
 }
 

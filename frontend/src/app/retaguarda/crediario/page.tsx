@@ -23,7 +23,7 @@ import { useRouter } from 'next/navigation';
 import {
   CreditCard, AlertTriangle, Loader2, MessageSquare, Search,
   RefreshCw, ChevronDown, ChevronRight, Download, Copy, List, Users,
-  Send, Megaphone, FlaskConical, Phone, X, Check, Zap,
+  Send, Megaphone, FlaskConical, Phone, X, Check, Zap, Settings, ShieldCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
@@ -155,9 +155,18 @@ export default function CrediarioPage() {
   const [delayMinutos, setDelayMinutos] = useState(2); // default 2min anti-ban
   const [campanha, setCampanha] = useState<CampanhaPreviewResp | null>(null);
   const [campanhaLoading, setCampanhaLoading] = useState(false);
+  const [campanhaError, setCampanhaError] = useState<string | null>(null);
   const [showCampanha, setShowCampanha] = useState(false);
   const [campanhaResult, setCampanhaResult] = useState<CampanhaEnviarResp | null>(null);
   const [enviando, setEnviando] = useState(false);
+
+  // Validação WhatsApp
+  const [validating, setValidating] = useState(false);
+  const [waValidation, setWaValidation] = useState<{
+    results: Record<string, { exists: boolean | null; jid?: string }>;
+    summary: { total: number; ativos: number; inativos: number; erros: number };
+    connected: boolean;
+  } | null>(null);
 
   async function loadDiagnose() {
     try {
@@ -197,6 +206,9 @@ export default function CrediarioPage() {
   async function loadCampanha() {
     setCampanhaLoading(true);
     setCampanhaResult(null);
+    setCampanhaError(null);
+    setShowCampanha(true); // abre modal IMEDIATAMENTE com loader (evita "fica travado")
+    setWaValidation(null);
     try {
       const res = await api<CampanhaPreviewResp>('/crediarios/cobranca/preview', {
         method: 'POST',
@@ -209,11 +221,34 @@ export default function CrediarioPage() {
         }),
       });
       setCampanha(res);
-      setShowCampanha(true);
     } catch (e: any) {
-      alert('Erro ao montar campanha: ' + (e.message || 'falha'));
+      const msg = e.message || 'falha';
+      setCampanhaError(msg);
+      setCampanha(null);
     } finally {
       setCampanhaLoading(false);
+    }
+  }
+
+  async function validarWhatsapp() {
+    if (!campanha) return;
+    setValidating(true);
+    try {
+      // Pega telefones únicos da fila + dos pulados que tem telefone
+      const numbersSet = new Set<string>();
+      for (const q of campanha.queue) {
+        const t = String(q.telefoneOriginal || q.telefone || '').replace(/\D/g, '');
+        if (t) numbersSet.add(t);
+      }
+      const res = await api<typeof waValidation>('/crediarios/validar-whatsapp', {
+        method: 'POST',
+        body: JSON.stringify({ numbers: Array.from(numbersSet) }),
+      });
+      setWaValidation(res as any);
+    } catch (e: any) {
+      alert('Erro ao validar WhatsApp: ' + (e.message || 'falha'));
+    } finally {
+      setValidating(false);
     }
   }
 
@@ -590,6 +625,15 @@ export default function CrediarioPage() {
           <Zap className="w-4 h-4" />
           Automático
         </Link>
+        <Link
+          href="/retaguarda/crediario/mensagens"
+          className="px-3 py-1.5 text-sm rounded-lg shadow-sm flex items-center gap-1.5 border"
+          style={{ background: '#fff', borderColor: '#c08081', color: '#6e3a40' }}
+          title="Editar templates de cobrança"
+        >
+          <Settings className="w-4 h-4" />
+          Mensagens
+        </Link>
         <button
           onClick={exportCsv}
           disabled={!flat && !grouped}
@@ -863,8 +907,8 @@ export default function CrediarioPage() {
       )}
 
       {/* Modal Campanha WhatsApp */}
-      {showCampanha && campanha && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !enviando && setShowCampanha(false)}>
+      {showCampanha && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => !enviando && !campanhaLoading && setShowCampanha(false)}>
           <div
             className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto p-5"
             onClick={(e) => e.stopPropagation()}
@@ -875,11 +919,45 @@ export default function CrediarioPage() {
                 <h2 className="text-lg font-semibold" style={{ color: '#6e3a40' }}>Campanha de cobrança WhatsApp</h2>
               </div>
               <button
-                onClick={() => !enviando && setShowCampanha(false)}
-                disabled={enviando}
+                onClick={() => !enviando && !campanhaLoading && setShowCampanha(false)}
+                disabled={enviando || campanhaLoading}
                 className="text-slate-500 hover:text-slate-800 text-2xl disabled:opacity-30"
               >×</button>
             </div>
+
+            {/* Loading inicial */}
+            {campanhaLoading && !campanha && (
+              <div className="p-12 text-center text-slate-500">
+                <Loader2 className="w-8 h-8 animate-spin inline mb-3" style={{ color: '#5d7048' }} />
+                <div className="text-sm font-semibold" style={{ color: '#6e3a40' }}>Montando fila de cobrança…</div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Buscando clientes em atraso, telefones e renderizando templates.
+                  Pode demorar 30-60s pra lojas grandes.
+                </div>
+              </div>
+            )}
+
+            {/* Erro */}
+            {campanhaError && !campanha && !campanhaLoading && (
+              <div className="p-6 bg-rose-50 border-l-4 border-rose-500 rounded">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div className="font-bold text-rose-900">Erro ao montar campanha</div>
+                    <div className="text-sm text-rose-800 mt-1 font-mono break-words whitespace-pre-wrap">{campanhaError}</div>
+                    <button
+                      onClick={loadCampanha}
+                      className="mt-3 px-3 py-1.5 text-xs rounded-lg bg-rose-700 text-white hover:bg-rose-800 flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Tentar novamente
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {campanha && (<>
+              {/* CONTEÚDO ORIGINAL DO MODAL VEM A SEGUIR */}
 
             {/* Banner modo TESTE */}
             {campanha.testMode && (
@@ -1068,6 +1146,50 @@ export default function CrediarioPage() {
               </details>
             )}
 
+            {/* Validação WhatsApp */}
+            {waValidation && (
+              <div className="mb-3 p-3 rounded-lg bg-sky-50 border border-sky-200">
+                <div className="text-xs font-bold text-sky-900 flex items-center gap-1.5 mb-2">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  Validação WhatsApp ({waValidation.summary.total} números)
+                  {!waValidation.connected && <span className="ml-auto text-rose-700">⚠ desconectado</span>}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-emerald-100 rounded p-2 text-emerald-900">
+                    <div className="text-[10px] uppercase font-bold">Tem WhatsApp</div>
+                    <div className="text-xl font-semibold tabular-nums">{waValidation.summary.ativos}</div>
+                  </div>
+                  <div className="bg-rose-100 rounded p-2 text-rose-900">
+                    <div className="text-[10px] uppercase font-bold">Não tem</div>
+                    <div className="text-xl font-semibold tabular-nums">{waValidation.summary.inativos}</div>
+                  </div>
+                  <div className="bg-slate-100 rounded p-2 text-slate-700">
+                    <div className="text-[10px] uppercase font-bold">Erro/timeout</div>
+                    <div className="text-xl font-semibold tabular-nums">{waValidation.summary.erros}</div>
+                  </div>
+                </div>
+                {waValidation.summary.inativos > 0 && (
+                  <details className="mt-2">
+                    <summary className="text-[11px] cursor-pointer text-rose-700 hover:underline">
+                      Ver {waValidation.summary.inativos} números sem WhatsApp
+                    </summary>
+                    <div className="mt-1 max-h-32 overflow-y-auto text-[10px] font-mono space-y-0.5 bg-white p-2 rounded border border-rose-200">
+                      {campanha.queue
+                        .filter((q) => {
+                          const n = String(q.telefoneOriginal || q.telefone || '').replace(/\D/g, '');
+                          return waValidation.results[n]?.exists === false;
+                        })
+                        .map((q) => (
+                          <div key={q.codCliente} className="text-rose-800">
+                            • {q.nome} ({formatPhone(q.telefoneOriginal || q.telefone)}) — cod {q.codCliente}
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+
             {/* Footer com ações */}
             <div className="flex items-center justify-between gap-3 pt-3 border-t border-rose-100">
               <div className="text-xs text-slate-500">
@@ -1077,6 +1199,16 @@ export default function CrediarioPage() {
                   : <span>Disparo direto pros telefones reais</span>}
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={validarWhatsapp}
+                  disabled={validating || enviando || campanha.queue.length === 0}
+                  className="px-3 py-1.5 text-sm rounded-lg border-2 flex items-center gap-1.5 disabled:opacity-50"
+                  style={{ borderColor: '#0ea5e9', color: '#0369a1', background: '#f0f9ff' }}
+                  title="Verifica quais números têm WhatsApp ativo"
+                >
+                  {validating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                  Validar WA
+                </button>
                 <button
                   onClick={() => !enviando && setShowCampanha(false)}
                   disabled={enviando}
@@ -1098,6 +1230,7 @@ export default function CrediarioPage() {
                 </button>
               </div>
             </div>
+            </>)}
           </div>
         </div>
       )}
@@ -1121,12 +1254,24 @@ export default function CrediarioPage() {
 
       {view === 'cliente' && grouped && filteredCustomers.length > 0 && (
         <div className="panel-pastel p-0 overflow-hidden">
+          {/* Resumo de telefones */}
+          <div className="px-3 py-2 bg-rose-50/40 border-b border-rose-100 text-xs flex items-center gap-3 flex-wrap">
+            <span className="font-semibold" style={{ color: '#6e3a40' }}>
+              Telefones cadastrados: {filteredCustomers.filter((c) => c.telefone).length}/{filteredCustomers.length}
+            </span>
+            {filteredCustomers.filter((c) => !c.telefone).length > 0 && (
+              <span className="text-rose-600">
+                ⚠️ {filteredCustomers.filter((c) => !c.telefone).length} sem telefone — não recebem cobrança WA
+              </span>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="text-sm w-full">
               <thead>
                 <tr className="text-left bg-rose-50 text-rose-900 border-b border-rose-200">
                   <th className="px-3 py-2 w-8"></th>
                   <th className="px-3 py-2">Cliente</th>
+                  <th className="px-3 py-2">Telefone</th>
                   <th className="px-3 py-2 text-right">Parcelas</th>
                   <th className="px-3 py-2 text-right">Total devido</th>
                   <th className="px-3 py-2">Vencimento + antigo</th>
@@ -1180,7 +1325,16 @@ function FragmentRow({
         </td>
         <td className="px-3 py-2">
           <div className="font-semibold text-slate-800">{c.nome}</div>
-          <div className="text-xs text-slate-500">cod {c.codCliente}{c.telefone ? ` · ${formatPhone(c.telefone)}` : ''}</div>
+          <div className="text-xs text-slate-500">cod {c.codCliente}</div>
+        </td>
+        <td className="px-3 py-2">
+          {c.telefone ? (
+            <span className="text-xs font-mono text-slate-700">{formatPhone(c.telefone)}</span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-700">
+              sem cadastro
+            </span>
+          )}
         </td>
         <td className="px-3 py-2 text-right tabular-nums">{c.parcelasVencidas}</td>
         <td className="px-3 py-2 text-right tabular-nums font-semibold" style={{ color: '#8b4f55' }}>{brl(c.totalDevido)}</td>
@@ -1214,7 +1368,7 @@ function FragmentRow({
       </tr>
       {isOpen && (
         <tr className="bg-rose-50/30 border-b border-rose-100">
-          <td colSpan={7} className="px-3 py-3">
+          <td colSpan={8} className="px-3 py-3">
             <div className="overflow-x-auto">
               <table className="text-xs w-full">
                 <thead>

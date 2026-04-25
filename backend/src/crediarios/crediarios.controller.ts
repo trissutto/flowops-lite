@@ -97,7 +97,48 @@ export class CrediariosController {
   @Get('cobranca/templates')
   async templates(@Req() req: any) {
     this.ensureMatriz(req);
-    return { templates: this.svc.previewTemplates() };
+    return { templates: await this.svc.previewTemplates() };
+  }
+
+  // ============== TEMPLATES EDITÁVEIS ==============
+
+  @Get('templates-config')
+  async getTemplatesConfig(@Req() req: any) {
+    this.ensureMatriz(req);
+    const cfg = await this.svc.getEditableTemplates(true);
+    return cfg;
+  }
+
+  @Post('templates-config')
+  async saveTemplatesConfig(
+    @Req() req: any,
+    @Body() body: { templates: string[]; lojaNome?: string },
+  ) {
+    this.ensureMatriz(req);
+    if (!Array.isArray(body?.templates)) {
+      throw new BadRequestException('Campo "templates" precisa ser array de strings');
+    }
+    return this.svc.setEditableTemplates(body.templates, body.lojaNome);
+  }
+
+  @Post('templates-config/reset')
+  async resetTemplatesConfig(@Req() req: any) {
+    this.ensureMatriz(req);
+    return this.svc.resetEditableTemplates();
+  }
+
+  // ============== VALIDAÇÃO WhatsApp ==============
+
+  @Post('validar-whatsapp')
+  async validarWhatsapp(
+    @Req() req: any,
+    @Body() body: { numbers: string[] },
+  ) {
+    this.ensureMatriz(req);
+    if (!Array.isArray(body?.numbers)) {
+      throw new BadRequestException('Campo "numbers" precisa ser array');
+    }
+    return this.svc.validateNumbers(body.numbers);
   }
 
   @Post('cobranca/send-one')

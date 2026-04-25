@@ -154,6 +154,8 @@ export class CobrancaAutoService {
     const optOuts = await (this.prisma as any).waOptOut.findMany({ select: { phone: true } });
     const optOutSet = new Set<string>(optOuts.map((o: any) => String(o.phone).replace(/\D/g, '')));
 
+    const cfg = await this.svc.getEditableTemplates();
+
     let seq = 0;
     let sent = 0;
     let failed = 0;
@@ -191,9 +193,9 @@ export class CobrancaAutoService {
       const ctx: CobrancaContext = {
         nome: c.nome,
         parcelas,
-        lojaNome: `Lurd's Plus Size`,
+        lojaNome: cfg.lojaNome,
       };
-      const { text, templateIndex } = renderCobranca(ctx, seq, dayOffset);
+      const { text, templateIndex } = renderCobranca(ctx, seq, dayOffset, cfg.templates);
 
       const usedNumber = testMode ? testPhone! : tel;
 
