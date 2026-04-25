@@ -298,7 +298,7 @@ const EMPTY_MAP: ColumnMap = {
   registro: null, controle: null, numeroCompra: null, loja: null,
   codCliente: null, nome: null, dataCompra: null, valorCompra: null,
   parcela: null, totalParcelas: null, vencimento: null, valorParcela: null,
-  dataPagamento: null, valorPago: null, status: null, tipo: null, telefone: null,
+  dataPagamento: null, valorPago: null, pago: null, status: null, tipo: null, telefone: null,
 };
 
 function pickColumn(cols: string[], ...patterns: RegExp[]): string | null {
