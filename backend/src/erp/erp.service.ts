@@ -1518,12 +1518,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Lista TODAS as tabelas do banco com row_count aproximado (information_schema). */
+  /**
+   * Lista TODAS as tabelas do banco. Estratégia robusta:
+   *   1. Tenta information_schema.TABLES (com TABLE_SCHEMA = ?). Traz rows+size.
+   *   2. Se vier vazio, fallback pra SHOW TABLES (não tem metadados, mas
+   *      funciona em user MySQL com GRANT mínimo). Tenta enriquecer com
+   *      information_schema.STATISTICS.TABLE_ROWS por tabela.
+   *
+   * Por que dois caminhos? O Gigasistemas usa MySQL antigo onde nem todo user
+   * tem permissão pra ler information_schema completa. SHOW TABLES funciona
+   * com qualquer SELECT, mesmo restrito.
+   */
   async listAllTables(): Promise<Array<{ name: string; rows: number; sizeMb: number; engine: string | null }>> {
     if (!this.pool) return [];
+
+    const dbName = this.config.get<string>('ERP_DATABASE') ?? '';
+
+    // Tentativa 1: information_schema (com schema explícito + DATABASE() como fallback)
     try {
-      // information_schema.TABLES — TABLE_ROWS é aproximação (NDB/InnoDB),
-      // mas é instantâneo. COUNT(*) por tabela inviável em DB com 200+ tabelas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT
             TABLE_NAME    AS name,
@@ -1531,18 +1543,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS sizeMb,
             ENGINE        AS engine
            FROM information_schema.TABLES
-          WHERE TABLE_SCHEMA = DATABASE()
-            AND TABLE_TYPE = 'BASE TABLE'
+          WHERE TABLE_SCHEMA = COALESCE(?, DATABASE())
+            AND TABLE_TYPE IN ('BASE TABLE', 'VIEW')
           ORDER BY TABLE_NAME ASC`,
+        [dbName || null],
       );
-      return (rows as any[]).map((r) => ({
+      const arr = (rows as any[]).map((r) => ({
         name: String(r.name),
         rows: Number(r.rows ?? 0),
         sizeMb: Number(r.sizeMb ?? 0),
         engine: r.engine ? String(r.engine) : null,
       }));
+      if (arr.length > 0) return arr;
+      this.logger.warn('listAllTables: information_schema retornou 0 — caindo pro SHOW TABLES');
     } catch (e: any) {
-      this.logger.error(`listAllTables falhou: ${e.message}`);
+      this.logger.warn(`listAllTables information_schema falhou: ${e.message} — caindo pro SHOW TABLES`);
+    }
+
+    // Tentativa 2: SHOW TABLES (mais robusto, mas sem metadados de tamanho)
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW TABLES`);
+      // SHOW TABLES retorna 1 coluna chamada Tables_in_<dbname>
+      const arr = (rows as any[]).map((r) => {
+        const name = String(Object.values(r)[0] ?? '');
+        return { name, rows: 0, sizeMb: 0, engine: null as string | null };
+      }).filter((x) => x.name);
+      this.logger.log(`listAllTables: SHOW TABLES retornou ${arr.length} tabelas`);
+      return arr;
+    } catch (e: any) {
+      this.logger.error(`listAllTables SHOW TABLES também falhou: ${e.message}`);
       return [];
     }
   }
