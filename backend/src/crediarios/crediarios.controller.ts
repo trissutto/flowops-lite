@@ -37,6 +37,16 @@ export class CrediariosController {
     return { columnMap: map };
   }
 
+  /**
+   * Retorna TODAS as colunas brutas da `movimento` + 5 linhas de exemplo
+   * + candidatos a coluna PAGO (regex). Pra diagnóstico visual.
+   */
+  @Get('diagnose')
+  async diagnose(@Req() req: any) {
+    this.ensureMatriz(req);
+    return this.svc.diagnoseRawColumns();
+  }
+
   @Get('vencidos')
   async vencidos(
     @Req() req: any,

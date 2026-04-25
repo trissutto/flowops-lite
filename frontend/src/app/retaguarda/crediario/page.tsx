@@ -70,6 +70,14 @@ interface GroupResp {
   customers: CustomerOverdue[];
   summary: { totalClientes: number; totalParcelas: number; totalDevido: number };
   columnMap: Record<string, string | null>;
+  rawSql: string;
+}
+
+interface DiagnoseResp {
+  columns: { field: string; type: string; null: string; default: any }[];
+  sample: any[];
+  pagoCandidates: string[];
+  detected: Record<string, string | null>;
 }
 
 type ViewMode = 'parcela' | 'cliente';
@@ -102,6 +110,18 @@ export default function CrediarioPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [diagnose, setDiagnose] = useState<DiagnoseResp | null>(null);
+  const [showDiag, setShowDiag] = useState(false);
+
+  async function loadDiagnose() {
+    try {
+      const r = await api<DiagnoseResp>('/crediarios/diagnose');
+      setDiagnose(r);
+      setShowDiag(true);
+    } catch (e: any) {
+      alert('Erro: ' + (e.message || 'falha ao diagnosticar'));
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -376,13 +396,36 @@ export default function CrediarioPage() {
         </div>
       )}
 
-      {/* Mapeamento de colunas detectado (debug) */}
+      {/* Aviso quando filtro PAGO não foi detectado */}
+      {columnMap && !columnMap.pago && (
+        <div className="panel-pastel p-3 border-l-4 border-amber-400 mb-3">
+          <div className="flex items-start gap-2 text-sm">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="font-semibold text-amber-800">Coluna PAGO não foi detectada</div>
+              <div className="text-amber-700 text-xs mt-1">
+                Pode estar trazendo parcelas já pagas. Clique em <b>Diagnosticar</b> pra ver os nomes reais
+                das colunas da tabela <code>movimento</code> e me passar o resultado.
+              </div>
+              <button
+                onClick={loadDiagnose}
+                className="mt-2 px-3 py-1.5 text-xs rounded-lg bg-amber-600 text-white shadow-sm hover:bg-amber-700"
+              >
+                Diagnosticar colunas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mapeamento de colunas detectado (debug) + SQL gerado */}
       {columnMap && (
         <details className="panel-pastel p-2 mb-3">
           <summary className="text-xs text-slate-500 cursor-pointer">
             Mapeamento de colunas detectado (debug)
             {columnMap.pago && <span className="ml-2 text-emerald-700 text-[11px]">· filtro PAGO=N ativo</span>}
             {!columnMap.pago && columnMap.dataPagamento && <span className="ml-2 text-amber-700 text-[11px]">· fallback DATA_PAGAMENTO IS NULL</span>}
+            {!columnMap.pago && !columnMap.dataPagamento && <span className="ml-2 text-rose-700 text-[11px]">· SEM filtro de pago — vai trazer pagas</span>}
           </summary>
           <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-1 text-[11px] font-mono">
             {Object.entries(columnMap).map(([k, v]) => (
@@ -392,7 +435,84 @@ export default function CrediarioPage() {
               </div>
             ))}
           </div>
+          {/* SQL gerado */}
+          {(flat?.rawSql || grouped?.rawSql) && (
+            <div className="mt-3 pt-2 border-t border-rose-100">
+              <div className="text-[10px] uppercase tracking-widest font-semibold text-slate-500 mb-1">SQL gerado</div>
+              <pre className="bg-slate-900 text-emerald-200 text-[10px] p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
+{flat?.rawSql || grouped?.rawSql}
+              </pre>
+            </div>
+          )}
+          <button
+            onClick={loadDiagnose}
+            className="mt-2 px-2.5 py-1 text-[11px] rounded bg-slate-700 text-white hover:bg-slate-800"
+          >
+            Ver TODAS as colunas brutas + amostra
+          </button>
         </details>
+      )}
+
+      {/* Modal diagnóstico */}
+      {showDiag && diagnose && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowDiag(false)}>
+          <div
+            className="bg-white rounded-2xl max-w-5xl w-full max-h-[85vh] overflow-y-auto p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold" style={{ color: '#6e3a40' }}>Diagnóstico — tabela `movimento`</h2>
+              <button onClick={() => setShowDiag(false)} className="text-slate-500 hover:text-slate-800 text-2xl">×</button>
+            </div>
+
+            {diagnose.pagoCandidates.length > 0 && (
+              <div className="mb-3 p-3 bg-emerald-50 border-l-4 border-emerald-500 rounded">
+                <div className="text-xs font-bold text-emerald-800 uppercase mb-1">Candidatos a coluna "pago"</div>
+                <ul className="text-sm text-emerald-900">
+                  {diagnose.pagoCandidates.map((c) => <li key={c} className="font-mono">• {c}</li>)}
+                </ul>
+                <div className="text-[11px] text-emerald-700 mt-2">
+                  Se algum desses for o filtro de pago real, me passa o nome exato e eu adiciono no regex.
+                </div>
+              </div>
+            )}
+
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold mb-2" style={{ color: '#6e3a40' }}>Todas as colunas ({diagnose.columns.length})</h3>
+              <div className="overflow-x-auto">
+                <table className="text-xs w-full border border-slate-200">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Campo</th>
+                      <th className="px-2 py-1 text-left">Tipo</th>
+                      <th className="px-2 py-1 text-left">Null</th>
+                      <th className="px-2 py-1 text-left">Default</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diagnose.columns.map((c) => (
+                      <tr key={c.field} className="border-t border-slate-100 hover:bg-slate-50">
+                        <td className="px-2 py-1 font-mono font-semibold">{c.field}</td>
+                        <td className="px-2 py-1 text-slate-600">{c.type}</td>
+                        <td className="px-2 py-1">{c.null}</td>
+                        <td className="px-2 py-1 text-slate-500">{c.default ?? '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold mb-2" style={{ color: '#6e3a40' }}>Amostra (5 linhas)</h3>
+              <div className="overflow-x-auto">
+                <pre className="bg-slate-900 text-emerald-200 text-[10px] p-2 rounded whitespace-pre-wrap break-all">
+{JSON.stringify(diagnose.sample, null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Loading */}

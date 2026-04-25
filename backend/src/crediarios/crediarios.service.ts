@@ -58,7 +58,11 @@ export class CrediariosService {
       valorParcela:   pickColumn(cols, /^valor_?parcela$/i, /^valor_?parc$/i, /^vlrparc$/i, /^valor$/i),
       dataPagamento:  pickColumn(cols, /^data_?pagamento$/i, /^dt_?pagto$/i, /^data_?pagto$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i),
       valorPago:      pickColumn(cols, /^valor_?pago$/i, /^valorpago$/i, /^vlrpago$/i),
-      pago:           pickColumn(cols, /^pago$/i, /^pg$/i, /^baixado$/i, /^quitado$/i),
+      pago:           pickColumn(cols,
+        /^pago$/i, /^pg$/i, /^pago_?sn$/i, /^st_?pago$/i, /^stat_?pago$/i, /^status_?pago$/i,
+        /^flag_?pago$/i, /^baixado$/i, /^baixa$/i, /^bx$/i, /^quitado$/i, /^liquidado$/i,
+        /^pgto$/i, /^pgo$/i, /^paga$/i,
+      ),
       status:         pickColumn(cols, /^status$/i, /^situacao$/i),
       tipo:           pickColumn(cols, /^tipo$/i, /^tipo_?pagamento$/i, /^forma_?pagamento$/i),
       telefone:       pickColumn(cols, /^telefone$/i, /^fone$/i, /^celular$/i),
@@ -186,6 +190,7 @@ export class CrediariosService {
     }>;
     summary: { totalClientes: number; totalParcelas: number; totalDevido: number };
     columnMap: ColumnMap;
+    rawSql: string;
   }> {
     const overdue = await this.listOverdue({ ...opts, limit: 50000 });
     const grouped = new Map<string, any>();
@@ -232,7 +237,37 @@ export class CrediariosService {
         totalDevido: overdue.summary.totalDevido,
       },
       columnMap: overdue.columnMap,
+      rawSql: overdue.rawSql,
     };
+  }
+
+  /**
+   * Diagnóstico: retorna SCHEMA bruto + 2 linhas reais (mascarando nomes)
+   * pra Thiago identificar visualmente qual coluna é PAGO/baixa e me passar.
+   */
+  async diagnoseRawColumns(): Promise<{
+    columns: { field: string; type: string; null: string; default: any }[];
+    sample: any[];
+    pagoCandidates: string[];
+    detected: ColumnMap;
+  }> {
+    const schema = await this.erp.getTableSchema('movimento', 1);
+    if (!schema) throw new Error('Tabela `movimento` não encontrada');
+    const columns = schema.columns.map((c: any) => ({
+      field: c.field, type: c.type, null: c.null, default: c.default ?? null,
+    }));
+    // Pega 2 linhas com PAGO=N (ou pelo menos não-pagas) e 2 com qualquer valor
+    // pra você comparar os campos visualmente
+    const sampleSql = 'SELECT * FROM `movimento` LIMIT 5';
+    const sampleResult = await this.erp.runReadOnly(sampleSql, { maxRows: 5, timeoutMs: 10000 });
+
+    // Heurística: candidatos a "pago" — colunas char(1)/tinyint que têm cara de flag
+    const pagoCandidates = columns
+      .filter((c) => /pag|pg|baix|liq|quit|status|sit/i.test(c.field))
+      .map((c) => `${c.field} (${c.type})`);
+
+    const detected = await this.detectColumns(true);
+    return { columns, sample: sampleResult.rows, pagoCandidates, detected };
   }
 }
 
