@@ -40,6 +40,17 @@ export class ErpQueryController {
     }
   }
 
+  /**
+   * Diagnóstico do pool MySQL Giga — pra UI mostrar o motivo quando lista vem vazia.
+   * Retorna { ok, error?, host, port, database, hasUser, hasPassword, pingMs }.
+   * Não vaza senha — só sinaliza se a env tá setada.
+   */
+  @Get('health')
+  async health(@Req() req: any) {
+    this.ensureAdmin(req);
+    return this.erp.pingHealth();
+  }
+
   @Get('tables')
   async listTables(@Req() req: any) {
     this.ensureAdmin(req);

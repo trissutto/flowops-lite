@@ -39,6 +39,16 @@ interface QueryResult {
   appliedLimit: number;
 }
 interface SavedQuery { id: string; name: string; sql: string; createdAt: string }
+interface HealthInfo {
+  ok: boolean;
+  error?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  hasUser: boolean;
+  hasPassword: boolean;
+  pingMs?: number;
+}
 
 const SAVED_KEY = 'flowops_giga_saved_queries';
 const LAST_SQL_KEY = 'flowops_giga_last_sql';
@@ -70,14 +80,38 @@ export default function GigaExplorerPage() {
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [schema, setSchema] = useState<TableSchema | null>(null);
   const [loadingSchema, setLoadingSchema] = useState(false);
+  const [health, setHealth] = useState<HealthInfo | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+
+  async function loadHealth() {
+    setLoadingHealth(true);
+    try {
+      const h = await api<HealthInfo>('/erp-query/health');
+      setHealth(h);
+    } catch (e: any) {
+      // 404 = backend velho sem o endpoint
+      const m = String(e?.message || '');
+      setHealth({
+        ok: false,
+        error: m.startsWith('404') ? 'Backend não tem o endpoint /erp-query/health (deploy pendente?)' : m,
+        hasUser: false,
+        hasPassword: false,
+      });
+    } finally {
+      setLoadingHealth(false);
+    }
+  }
 
   async function loadTables() {
     setLoadingTables(true);
     try {
       const res = await api<{ count: number; tables: TableMeta[] }>('/erp-query/tables');
       setTables(res.tables);
+      // Se veio vazio, dispara health pra mostrar motivo
+      if (!res.tables.length) loadHealth();
     } catch (e: any) {
       alert('Erro ao carregar tabelas: ' + e.message);
+      loadHealth();
     } finally {
       setLoadingTables(false);
     }
@@ -285,6 +319,64 @@ export default function GigaExplorerPage() {
 
         {/* Main: editor + resultado */}
         <main className="col-span-12 lg:col-span-9 space-y-3">
+          {/* Banner de diagnóstico — aparece quando 0 tabelas */}
+          {!loadingTables && tables.length === 0 && (
+            <div className="panel-pastel p-4 border-l-4 border-amber-400">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="flex-1 text-sm">
+                  <div className="font-semibold text-amber-900 mb-1">Sem tabelas — diagnóstico de conexão</div>
+                  {loadingHealth ? (
+                    <div className="text-amber-800 text-xs"><Loader2 className="w-3 h-3 animate-spin inline mr-1" /> Testando conexão MySQL Giga…</div>
+                  ) : health ? (
+                    <div className="text-xs space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold w-24">Status:</span>
+                        {health.ok
+                          ? <span className="text-emerald-700">✓ Pool conectado ({health.pingMs}ms)</span>
+                          : <span className="text-rose-700 font-mono">✗ {health.error || 'falhou'}</span>}
+                      </div>
+                      <div><span className="font-semibold w-24 inline-block">Host:</span> <span className="font-mono text-slate-700">{health.host || '(vazio)'}</span> :{health.port}</div>
+                      <div><span className="font-semibold w-24 inline-block">Database:</span> <span className="font-mono text-slate-700">{health.database || '(vazio)'}</span></div>
+                      <div>
+                        <span className="font-semibold w-24 inline-block">Credenciais:</span>{' '}
+                        ERP_USER {health.hasUser ? '✓' : '✗'} · ERP_PASSWORD {health.hasPassword ? '✓' : '✗'}
+                      </div>
+                      {!health.ok && (
+                        <div className="mt-2 pt-2 border-t border-amber-200 text-amber-800">
+                          <div className="font-semibold mb-1">Causas mais comuns:</div>
+                          <ul className="list-disc list-inside space-y-0.5">
+                            {health.error?.includes('ETIMEDOUT') || health.error?.includes('ECONNREFUSED') ? (
+                              <li>O servidor MySQL Giga só aceita conexão da rede da matriz — Railway não consegue alcançar. Solução: túnel reverso (Cloudflared/Ngrok) ou liberar IP do Railway no firewall.</li>
+                            ) : null}
+                            {!health.hasUser || !health.hasPassword ? (
+                              <li>Variáveis ERP_USER/ERP_PASSWORD não setadas no Railway — vai em Settings → Variables e configura.</li>
+                            ) : null}
+                            {health.error?.includes('Access denied') ? (
+                              <li>Usuário/senha do MySQL Giga estão errados — confere no Railway.</li>
+                            ) : null}
+                            {health.error?.includes('404') ? (
+                              <li>Backend Railway ainda tá no build antigo. Precisa redeploy.</li>
+                            ) : null}
+                          </ul>
+                        </div>
+                      )}
+                      <div className="pt-2">
+                        <button onClick={loadHealth} className="text-xs underline text-amber-900 hover:text-amber-700">
+                          Re-testar conexão
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={loadHealth} className="text-xs underline text-amber-900">
+                      Testar conexão agora
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Schema preview do selecionado */}
           {selectedTable && (
             <div className="panel-pastel p-3 text-sm">

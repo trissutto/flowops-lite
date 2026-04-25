@@ -1474,6 +1474,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   //  5. Timeout de 30s na query
   // ═══════════════════════════════════════════════════════════════════════
 
+  /**
+   * Health check do pool MySQL — devolve diagnóstico em formato amigável.
+   *
+   * Não engole erro: retorna o `error.message` real pra UI mostrar o motivo
+   * (timeout, ECONNREFUSED, access denied, etc.). Também expõe se as envs
+   * obrigatórias estão setadas (sem vazar senha).
+   */
+  async pingHealth(): Promise<{
+    ok: boolean;
+    error?: string;
+    host?: string;
+    port?: number;
+    database?: string;
+    hasUser: boolean;
+    hasPassword: boolean;
+    pingMs?: number;
+  }> {
+    const host = this.config.get<string>('ERP_HOST');
+    const port = Number(this.config.get<string>('ERP_PORT') ?? 3306);
+    const database = this.config.get<string>('ERP_DATABASE');
+    const hasUser = !!this.config.get<string>('ERP_USER');
+    const hasPassword = !!this.config.get<string>('ERP_PASSWORD');
+
+    if (!this.pool) {
+      return { ok: false, error: 'Pool ERP não inicializado', host, port, database, hasUser, hasPassword };
+    }
+    const t0 = Date.now();
+    try {
+      const conn = await this.pool.getConnection();
+      try {
+        await conn.ping();
+      } finally {
+        conn.release();
+      }
+      return { ok: true, host, port, database, hasUser, hasPassword, pingMs: Date.now() - t0 };
+    } catch (e: any) {
+      return {
+        ok: false,
+        error: e?.message ?? 'ping falhou',
+        host, port, database, hasUser, hasPassword,
+      };
+    }
+  }
+
   /** Lista TODAS as tabelas do banco com row_count aproximado (information_schema). */
   async listAllTables(): Promise<Array<{ name: string; rows: number; sizeMb: number; engine: string | null }>> {
     if (!this.pool) return [];
