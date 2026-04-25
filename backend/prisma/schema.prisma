@@ -495,3 +495,89 @@ model SitePublishQueue {
   @@index([refCode])
   @@map("site_publish_queue")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COBRANÇA AUTOMÁTICA — campanhas recorrentes que rodam server-side
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Diferente do disparo manual (botão "Disparar X mensagens"), aqui a matriz
+// cadastra UMA campanha contínua e o cron worker cuida do resto:
+//
+//   - Roda a cada 5 minutos
+//   - Pra cada CobrancaCampanha ativa, valida:
+//       1. Janela de horário (horaInicio ≤ agora ≤ horaFim)
+//       2. Frequência (proximoEnvio já chegou?)
+//       3. Lista de elegíveis (mesma lógica do /preview, com minDiasAtraso)
+//       4. Pra cada cliente:
+//           - se já recebeu nas últimas N horas → skip
+//           - se parcela já foi paga (PAGO=S no movimento) → skip
+//           - se opt-out (WaOptOut) → skip
+//           - senão → envia + cria CobrancaTentativa
+//   - Atualiza ultimoEnvio + proximoEnvio (calcula próximo slot)
+//
+// Frequências suportadas (string):
+//   '1x_dia'      → 1 mensagem por cliente por dia
+//   '2x_dia'      → 2 mensagens por dia (manhã + tarde)
+//   'cada_2_dias' → 1 mensagem a cada 2 dias
+//   'cada_3_dias' → 1 mensagem a cada 3 dias
+//   'semanal'     → 1 mensagem por semana
+//
+// Estado de "cliente já recebeu" — consultado via CobrancaTentativa pelo
+// par (campanhaId, codCliente, status='ok', enviadaEm > limite).
+
+model CobrancaCampanha {
+  id            String   @id @default(uuid())
+  nome          String                              // ex: "Cobrança Loja 01 — vencidos 3+ dias"
+  lojaCode      String   @map("loja_code")          // "01", "02", etc
+  ativa         Boolean  @default(true)
+
+  // Janela de horário (HH:MM, 24h)
+  horaInicio    String   @map("hora_inicio")        // "09:00"
+  horaFim       String   @map("hora_fim")           // "18:00"
+
+  // Frequência: 1x_dia | 2x_dia | cada_2_dias | cada_3_dias | semanal
+  frequencia    String
+
+  // Filtros de elegibilidade
+  minDiasAtraso Int      @default(3) @map("min_dias_atraso")
+  maxDiasAtraso Int?     @map("max_dias_atraso")    // opcional — só cobra até N dias
+
+  // Espaçamento entre mensagens (ms) durante o disparo de uma rodada
+  delayMs       Int      @default(120000)            // 2min default
+
+  // Estado da campanha (atualizado pelo worker)
+  ultimoEnvio   DateTime? @map("ultimo_envio")       // último disparo de batch
+  proximoEnvio  DateTime? @map("proximo_envio")      // quando o worker DEVE rodar de novo
+  totalEnviadas Int      @default(0) @map("total_enviadas")
+
+  // Auditoria
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tentativas CobrancaTentativa[]
+
+  @@index([ativa, proximoEnvio])
+  @@index([lojaCode])
+  @@map("cobranca_campanhas")
+}
+
+model CobrancaTentativa {
+  id          String   @id @default(uuid())
+  campanhaId  String   @map("campanha_id")
+  codCliente  String   @map("cod_cliente")
+  nome        String
+  telefone    String                                  // número usado no envio (pode ser teste)
+  telefoneOriginal String? @map("telefone_original") // número real do cliente (modo teste)
+  templateIndex Int    @map("template_index")
+  mensagem    String                                  // texto enviado (pra auditoria)
+  status      String                                  // ok | falha | skipped
+  erro        String?
+  enviadaEm   DateTime @default(now()) @map("enviada_em")
+
+  campanha CobrancaCampanha @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+
+  @@index([campanhaId, codCliente, enviadaEm(sort: Desc)])
+  @@index([campanhaId, status, enviadaEm(sort: Desc)])
+  @@map("cobranca_tentativas")
+}

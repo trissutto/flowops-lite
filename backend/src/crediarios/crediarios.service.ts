@@ -574,6 +574,30 @@ export class CrediariosService {
     return { columns, sample: sampleResult.rows, pagoCandidates, detected, clientesTable };
   }
 
+  /**
+   * Envia 1 mensagem direto via Baileys (já conectado).
+   * Usado pelos botões individuais "WA" da tela — em vez de abrir aba do
+   * web.whatsapp.com (que exige login toda vez), reusa a sessão do backend.
+   *
+   * Aplica o testPhone se a env COBRANCA_TEST_PHONE estiver setada.
+   */
+  async sendOne(opts: {
+    rawNumber: string;
+    text: string;
+  }): Promise<{ ok: boolean; testMode: boolean; usedNumber: string; error?: string }> {
+    const status = this.wa.getStatus();
+    if (!status.connected) {
+      return { ok: false, testMode: false, usedNumber: '', error: 'WhatsApp desconectado. Conecte primeiro em /retaguarda/whatsapp.' };
+    }
+    const testPhone = (process.env.COBRANCA_TEST_PHONE || '').replace(/\D/g, '') || null;
+    const usedNumber = testPhone || String(opts.rawNumber || '').replace(/\D/g, '');
+    if (!usedNumber) {
+      return { ok: false, testMode: !!testPhone, usedNumber: '', error: 'Número inválido' };
+    }
+    const r = await this.wa.sendText(usedNumber, opts.text);
+    return { ok: r.ok, testMode: !!testPhone, usedNumber, error: r.error };
+  }
+
   /** Lista os templates renderizados com dados-exemplo — pra preview no admin. */
   previewTemplates(): Array<{ index: number; preview: string }> {
     const ctx: CobrancaContext = {

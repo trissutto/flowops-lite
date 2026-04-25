@@ -23,8 +23,9 @@ import { useRouter } from 'next/navigation';
 import {
   CreditCard, AlertTriangle, Loader2, MessageSquare, Search,
   RefreshCw, ChevronDown, ChevronRight, Download, Copy, List, Users,
-  Send, Megaphone, FlaskConical, Phone, X, Check,
+  Send, Megaphone, FlaskConical, Phone, X, Check, Zap,
 } from 'lucide-react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
 
@@ -111,6 +112,7 @@ interface CampanhaEnviarResp {
 }
 
 type ViewMode = 'parcela' | 'cliente';
+type SortMode = 'nome' | 'totalDevido' | 'atraso';
 
 export default function CrediarioPage() {
   const router = useRouter();
@@ -137,6 +139,9 @@ export default function CrediarioPage() {
   const [dataFim, setDataFim] = useState<string>('');       // YYYY-MM-DD opcional
   const [search, setSearch] = useState('');
   const [view, setView] = useState<ViewMode>('cliente');
+  const [sortMode, setSortMode] = useState<SortMode>('nome');
+  const [sendingOne, setSendingOne] = useState<string | null>(null); // codCliente sendo enviado
+  const [sendToast, setSendToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const [flat, setFlat] = useState<FlatResp | null>(null);
   const [grouped, setGrouped] = useState<GroupResp | null>(null);
   const [loading, setLoading] = useState(false);
@@ -258,23 +263,47 @@ export default function CrediarioPage() {
   // ---- filtros locais ----
   const filteredParcelas = useMemo(() => {
     if (!flat) return [];
-    if (!search.trim()) return flat.rows;
-    const q = search.toLowerCase();
-    return flat.rows.filter((p) =>
-      String(p.nome ?? '').toLowerCase().includes(q) ||
-      String(p.codCliente ?? '').includes(q) ||
-      String(p.numeroCompra ?? '').includes(q),
-    );
-  }, [flat, search]);
+    let list = flat.rows;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((p) =>
+        String(p.nome ?? '').toLowerCase().includes(q) ||
+        String(p.codCliente ?? '').includes(q) ||
+        String(p.numeroCompra ?? '').includes(q),
+      );
+    }
+    list = [...list];
+    if (sortMode === 'nome') {
+      list.sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }));
+    } else if (sortMode === 'totalDevido') {
+      list.sort((a, b) => Number(b.valorParcela ?? 0) - Number(a.valorParcela ?? 0));
+    } else if (sortMode === 'atraso') {
+      // mais atrasado primeiro = vencimento mais antigo
+      list.sort((a, b) => String(a.vencimento || '').localeCompare(String(b.vencimento || '')));
+    }
+    return list;
+  }, [flat, search, sortMode]);
 
   const filteredCustomers = useMemo(() => {
     if (!grouped) return [];
-    if (!search.trim()) return grouped.customers;
-    const q = search.toLowerCase();
-    return grouped.customers.filter((c) =>
-      c.nome.toLowerCase().includes(q) || c.codCliente.includes(q),
-    );
-  }, [grouped, search]);
+    let list = grouped.customers;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((c) =>
+        c.nome.toLowerCase().includes(q) || c.codCliente.includes(q),
+      );
+    }
+    // Ordenação
+    list = [...list];
+    if (sortMode === 'nome') {
+      list.sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR', { sensitivity: 'base' }));
+    } else if (sortMode === 'totalDevido') {
+      list.sort((a, b) => b.totalDevido - a.totalDevido);
+    } else if (sortMode === 'atraso') {
+      list.sort((a, b) => b.diasAtraso - a.diasAtraso);
+    }
+    return list;
+  }, [grouped, search, sortMode]);
 
   // KPI summary depende da view
   const kpiData = useMemo(() => {
@@ -306,34 +335,61 @@ export default function CrediarioPage() {
     });
   }
 
-  function whatsappLinkParcela(p: Parcela) {
-    const tel = String(p.telefone ?? '').replace(/\D/g, '');
+  /**
+   * Envia uma mensagem direto pelo backend (Baileys já conectado), sem abrir
+   * aba do web.whatsapp.com. Mostra toast com resultado.
+   */
+  async function sendDirect(key: string, number: string, text: string) {
+    setSendingOne(key);
+    setSendToast(null);
+    try {
+      const r = await api<{ ok: boolean; testMode: boolean; usedNumber: string; error?: string }>(
+        '/crediarios/cobranca/send-one',
+        {
+          method: 'POST',
+          body: JSON.stringify({ number, text }),
+        },
+      );
+      if (r.ok) {
+        setSendToast({
+          ok: true,
+          msg: r.testMode
+            ? `Enviada em modo TESTE pra ${formatPhone(r.usedNumber)}`
+            : `Enviada pra ${formatPhone(r.usedNumber)}`,
+        });
+      } else {
+        setSendToast({ ok: false, msg: r.error || 'Falha ao enviar' });
+      }
+    } catch (e: any) {
+      setSendToast({ ok: false, msg: e.message || 'Erro de rede' });
+    } finally {
+      setSendingOne(null);
+      setTimeout(() => setSendToast(null), 4000);
+    }
+  }
+
+  function buildMsgParcela(p: Parcela): string {
     const nome = String(p.nome ?? '').split(' ')[0] || 'cliente';
-    const msg = encodeURIComponent(
+    return (
       `Olá, ${nome}! Aqui é da Lurd's Plus Size.\n\n` +
       `Tenho aqui uma parcela em aberto:\n` +
       `• Compra ${p.numeroCompra ?? '-'} — Parcela ${p.parcela ?? '?'}/${p.totalParcelas ?? '?'}\n` +
       `• Vencimento: ${fmtDate(p.vencimento)}\n` +
       `• Valor: ${brl(p.valorParcela)}\n\n` +
-      `Pode regularizar pelo PIX, cartão ou direto na loja. Qualquer dúvida, é só chamar!`,
+      `Pode regularizar pelo PIX, cartão ou direto na loja. Qualquer dúvida, é só chamar!`
     );
-    if (tel) return `https://web.whatsapp.com/send?phone=55${tel}&text=${msg}`;
-    return `https://web.whatsapp.com/send?text=${msg}`;
   }
 
-  function whatsappLinkCliente(c: CustomerOverdue) {
-    const tel = (c.telefone || '').replace(/\D/g, '');
+  function buildMsgCliente(c: CustomerOverdue): string {
     const partes = c.parcelas
       .map((p) => `• Parcela ${p.parcela ?? '?'}/${p.totalParcelas ?? '?'} — venc. ${fmtDate(p.vencimento)} — ${brl(p.valorParcela)}`)
       .join('\n');
-    const msg = encodeURIComponent(
+    return (
       `Olá, ${c.nome.split(' ')[0]}! Aqui é da Lurd's Plus Size.\n\n` +
       `Identificamos parcelas em atraso:\n${partes}\n\n` +
       `Total em aberto: ${brl(c.totalDevido)} (${c.parcelasVencidas} parcelas — ${c.diasAtraso} dias atraso).\n\n` +
-      `Pode regularizar pelo PIX, cartão ou direto na loja. Qualquer dúvida, é só chamar!`,
+      `Pode regularizar pelo PIX, cartão ou direto na loja. Qualquer dúvida, é só chamar!`
     );
-    if (tel) return `https://web.whatsapp.com/send?phone=55${tel}&text=${msg}`;
-    return `https://web.whatsapp.com/send?text=${msg}`;
   }
 
   function exportCsv() {
@@ -491,6 +547,21 @@ export default function CrediarioPage() {
           </button>
         </div>
 
+        {/* Ordenação */}
+        <div>
+          <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Ordenar por</label>
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            className="px-2 py-1.5 text-sm rounded-lg border border-rose-200 bg-white focus:outline-none focus:border-rose-400"
+            title="Ordem da lista"
+          >
+            <option value="nome">Nome (A-Z)</option>
+            <option value="totalDevido">Total devido (maior)</option>
+            <option value="atraso">Mais atrasado</option>
+          </select>
+        </div>
+
         <button
           onClick={load}
           disabled={loading}
@@ -510,6 +581,15 @@ export default function CrediarioPage() {
           {campanhaLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Megaphone className="w-4 h-4" />}
           Campanha WA
         </button>
+        <Link
+          href="/retaguarda/crediario/automatico"
+          className="px-3 py-1.5 text-sm rounded-lg text-white shadow-sm flex items-center gap-1.5"
+          style={{ background: '#a07f30' }}
+          title="Disparador automático recorrente"
+        >
+          <Zap className="w-4 h-4" />
+          Automático
+        </Link>
         <button
           onClick={exportCsv}
           disabled={!flat && !grouped}
@@ -726,16 +806,24 @@ export default function CrediarioPage() {
                       </td>
                       <td className="px-3 py-2 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          <a
-                            href={whatsappLinkParcela(p)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2 py-1 text-xs rounded-lg text-white flex items-center gap-1 shadow-sm"
-                            style={{ background: '#5d7048' }}
-                            title="Cobrar essa parcela via WhatsApp"
-                          >
-                            <MessageSquare className="w-3 h-3" /> WA
-                          </a>
+                          {(() => {
+                            const key = `parc-${p.registro ?? p.controle ?? i}`;
+                            const sending = sendingOne === key;
+                            const tel = String(p.telefone ?? '').replace(/\D/g, '');
+                            const disabled = !tel || sending;
+                            return (
+                              <button
+                                onClick={() => sendDirect(key, tel, buildMsgParcela(p))}
+                                disabled={disabled}
+                                className="px-2 py-1 text-xs rounded-lg text-white flex items-center gap-1 shadow-sm disabled:opacity-40"
+                                style={{ background: '#5d7048' }}
+                                title={tel ? 'Mandar WA direto pelo backend' : 'Sem telefone'}
+                              >
+                                {sending ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
+                                WA
+                              </button>
+                            );
+                          })()}
                           <button
                             onClick={() => navigator.clipboard.writeText(
                               `${p.nome ?? ''} (${p.codCliente ?? ''}) — Compra ${p.numeroCompra ?? '-'} — Parcela ${p.parcela ?? '?'}/${p.totalParcelas ?? '?'} — venc ${fmtDate(p.vencimento)} — ${brl(p.valorParcela)}`,
@@ -1014,6 +1102,23 @@ export default function CrediarioPage() {
         </div>
       )}
 
+      {/* Toast de envio direto */}
+      {sendToast && (
+        <div
+          className={`fixed bottom-6 right-6 z-[60] px-4 py-3 rounded-xl shadow-lg border flex items-center gap-2 text-sm max-w-md ${
+            sendToast.ok
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+              : 'bg-rose-50 border-rose-300 text-rose-900'
+          }`}
+        >
+          {sendToast.ok ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+          <span className="flex-1">{sendToast.msg}</span>
+          <button onClick={() => setSendToast(null)} className="opacity-60 hover:opacity-100">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {view === 'cliente' && grouped && filteredCustomers.length > 0 && (
         <div className="panel-pastel p-0 overflow-hidden">
           <div className="overflow-x-auto">
@@ -1032,13 +1137,15 @@ export default function CrediarioPage() {
               <tbody>
                 {filteredCustomers.map((c) => {
                   const isOpen = expanded.has(c.codCliente);
+                  const sending = sendingOne === `cli-${c.codCliente}`;
                   return (
                     <FragmentRow
                       key={c.codCliente}
                       c={c}
                       isOpen={isOpen}
+                      sending={sending}
                       onToggle={() => toggleExpand(c.codCliente)}
-                      whatsappHref={whatsappLinkCliente(c)}
+                      onSend={() => sendDirect(`cli-${c.codCliente}`, String(c.telefone ?? '').replace(/\D/g, ''), buildMsgCliente(c))}
                     />
                   );
                 })}
@@ -1053,13 +1160,16 @@ export default function CrediarioPage() {
 
 // ---------- subcomponentes ----------
 function FragmentRow({
-  c, isOpen, onToggle, whatsappHref,
+  c, isOpen, sending, onToggle, onSend,
 }: {
   c: CustomerOverdue;
   isOpen: boolean;
+  sending: boolean;
   onToggle: () => void;
-  whatsappHref: string;
+  onSend: () => void;
 }) {
+  const tel = String(c.telefone ?? '').replace(/\D/g, '');
+  const disabled = !tel || sending;
   return (
     <>
       <tr className="border-b border-rose-100 hover:bg-rose-50/40 transition">
@@ -1082,16 +1192,16 @@ function FragmentRow({
         </td>
         <td className="px-3 py-2 text-center">
           <div className="flex items-center justify-center gap-1">
-            <a
-              href={whatsappHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-2 py-1 text-xs rounded-lg text-white flex items-center gap-1 shadow-sm"
+            <button
+              onClick={onSend}
+              disabled={disabled}
+              className="px-2 py-1 text-xs rounded-lg text-white flex items-center gap-1 shadow-sm disabled:opacity-40"
               style={{ background: '#5d7048' }}
-              title="Cobrar via WhatsApp"
+              title={tel ? 'Cobrar via WhatsApp (envio direto)' : 'Sem telefone'}
             >
-              <MessageSquare className="w-3 h-3" /> WA
-            </a>
+              {sending ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
+              WA
+            </button>
             <button
               onClick={() => navigator.clipboard.writeText(`${c.nome} (${c.codCliente}) — ${brl(c.totalDevido)}`)}
               className="p-1 hover:bg-rose-100 rounded"
