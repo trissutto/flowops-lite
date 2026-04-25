@@ -97,45 +97,48 @@ export default function TopBreadcrumb() {
   if (hide) return null;
 
   return (
-    <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+    <header className="bg-white/80 backdrop-blur border-b border-pink-100 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center gap-3">
-        {/* Logo — volta pra home */}
+        {/* Logo — volta pra home (círculo pastel rosa) */}
         <Link
           href="/"
           className="flex items-center gap-2 shrink-0 group"
           title="Voltar à home"
         >
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 text-white flex items-center justify-center text-xs font-black shadow-sm group-hover:shadow transition">
+          <div
+            className="circle-ring flex items-center justify-center w-9 h-9 text-xs font-bold transition"
+            style={{ border: '2.5px solid #f9a8d4', background: '#fdf2f8', color: '#db2777' }}
+          >
             L1
           </div>
-          <span className="hidden sm:inline font-bold text-slate-800 tracking-wide">
+          <span className="hidden sm:inline font-display text-base text-slate-800 tracking-wide">
             ORDER ONE
           </span>
         </Link>
 
-        {/* Separador vertical */}
-        <div className="h-5 w-px bg-slate-200 hidden sm:block" />
+        {/* Separador rosa fino */}
+        <div className="h-5 w-px bg-pink-100 hidden sm:block" />
 
         {/* Breadcrumb */}
-        <nav className="flex items-center gap-1 text-sm min-w-0 flex-1 overflow-x-auto scrollbar-none">
+        <nav className="flex items-center gap-1.5 text-sm min-w-0 flex-1 overflow-x-auto scrollbar-none">
           <Link
             href="/"
-            className="flex items-center gap-1 text-slate-500 hover:text-slate-800 transition shrink-0"
+            className="flex items-center gap-1 text-pink-400 hover:text-pink-600 transition shrink-0"
             title="Home"
           >
             <Home className="w-4 h-4" />
           </Link>
           {crumbs.map((c, i) => (
-            <div key={c.href + i} className="flex items-center gap-1 shrink-0">
-              <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+            <div key={c.href + i} className="flex items-center gap-1.5 shrink-0">
+              <ChevronRight className="w-3.5 h-3.5 text-pink-200" />
               {c.isLast ? (
-                <span className="font-semibold text-slate-800 truncate max-w-[220px] sm:max-w-[400px]">
+                <span className="font-semibold text-pink-700 truncate max-w-[220px] sm:max-w-[400px] bg-pink-50 px-2.5 py-0.5 rounded-full border border-pink-100">
                   {c.label}
                 </span>
               ) : (
                 <Link
                   href={c.href}
-                  className="text-slate-500 hover:text-slate-800 transition truncate max-w-[140px]"
+                  className="text-slate-500 hover:text-pink-600 transition truncate max-w-[140px]"
                 >
                   {c.label}
                 </Link>
@@ -144,10 +147,10 @@ export default function TopBreadcrumb() {
           ))}
         </nav>
 
-        {/* Ações à direita */}
+        {/* Sair — pílula pastel */}
         <button
           onClick={logout}
-          className="flex items-center gap-1.5 text-sm px-2.5 sm:px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg transition shrink-0"
+          className="flex items-center gap-1.5 text-sm px-3 py-1.5 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition shrink-0"
           title="Sair"
         >
           <LogOut className="w-4 h-4" />

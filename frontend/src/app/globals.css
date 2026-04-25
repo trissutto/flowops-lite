@@ -32,6 +32,13 @@
 }
 
 @layer utilities {
+  /* Página pastel — fundo padrão pra qualquer tela */
+  .pastel-page {
+    background:
+      radial-gradient(900px 500px at 50% -10%, #fce7f3 0%, transparent 60%),
+      linear-gradient(180deg, #fef9f3 0%, #fdf2f8 100%);
+  }
+
   /* Painel pastel — fundo do "tablet" */
   .panel-pastel {
     background: linear-gradient(180deg, #fef5fa 0%, #fdeaf3 100%);

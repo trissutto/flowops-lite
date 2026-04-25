@@ -60,7 +60,7 @@ type Tab = 'novo' | 'historico';
 // Envolve em Suspense porque usa useSearchParams (exigido pelo Next 14 no build estático)
 export default function MateriaisPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-slate-50 p-8 text-slate-400">Carregando…</div>}>
+    <Suspense fallback={<div className="min-h-screen pastel-page p-8 text-slate-400">Carregando…</div>}>
       <MateriaisPageInner />
     </Suspense>
   );
@@ -73,7 +73,7 @@ function MateriaisPageInner() {
   const [tab, setTab] = useState<Tab>(initialTab);
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen pastel-page">
       <header className="bg-brand text-white sticky top-0 z-20 shadow">
         <div className="px-4 py-3 flex items-center gap-3 max-w-4xl mx-auto">
           <Link href="/minha-loja" className="p-2 hover:bg-white/10 rounded" title="Voltar">

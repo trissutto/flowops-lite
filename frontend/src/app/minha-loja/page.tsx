@@ -586,46 +586,67 @@ export default function MinhaLojaPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      {/* Header fixo */}
-      <header className="bg-brand text-white sticky top-0 z-30 shadow">
+    <div
+      className="min-h-screen"
+      style={{
+        background:
+          'radial-gradient(900px 400px at 50% -10%, #fce7f3 0%, transparent 60%), linear-gradient(180deg, #fef9f3 0%, #fdf2f8 100%)',
+      }}
+    >
+      {/* Header pastel — fixo, suave */}
+      <header
+        className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-pink-100"
+      >
         <div className="px-4 py-3 flex items-center justify-between max-w-3xl mx-auto">
-          <div className="flex items-center gap-2">
-            <Logo height={32} className="brightness-0 invert" />
+          <div className="flex items-center gap-3">
+            <div
+              className="circle-ring flex items-center justify-center w-11 h-11"
+              style={{ border: '3px solid #f9a8d4', background: '#fdf2f8' }}
+            >
+              <Logo height={22} />
+            </div>
             <div>
-              <div className="font-bold leading-tight tracking-wide">ORDER ONE</div>
-              <div className="text-xs opacity-90">
+              <div className="text-[10px] uppercase tracking-[0.2em] font-semibold text-pink-500 leading-none">
+                Order One
+              </div>
+              <div className="font-display text-lg text-slate-800 leading-tight">
                 {me?.storeName ? me.storeName : 'Minha Loja'}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span
-              className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
-                connected ? 'bg-emerald-500/20' : 'bg-red-500/30'
+              className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full font-medium ${
+                connected
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-red-100 text-red-700'
               }`}
               title={connected ? 'Conectado em tempo real' : 'Desconectado — sem tempo real'}
             >
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               <span className="hidden sm:inline">{connected ? 'Online' : 'Offline'}</span>
             </span>
-            <button onClick={loadRows} className="p-2 hover:bg-white/10 rounded" title="Atualizar">
+            <button
+              onClick={loadRows}
+              className="p-2 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition"
+              title="Atualizar"
+            >
               <RefreshCw className="w-4 h-4" />
             </button>
-            <button onClick={logout} className="p-2 hover:bg-white/10 rounded" title="Sair">
+            <button
+              onClick={logout}
+              className="p-2 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition"
+              title="Sair"
+            >
               <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
-        {/* Contadores — 3 grandes, fácil bater o olho e ver o volume */}
+        {/* Contadores pastel — 3 mini-pílulas */}
         <div className="px-4 pb-3 max-w-3xl mx-auto grid grid-cols-3 gap-2">
-          <Counter label="Novos" count={countByStatus.new} color="bg-amber-400 text-amber-950" />
-          <Counter label="Separando" count={countByStatus.separating} color="bg-blue-400 text-blue-950" />
-          <Counter
-            label="Pronto p/ postar"
-            count={countByStatus.separated + countByStatus.ready}
-            color="bg-emerald-400 text-emerald-950"
-          />
+          <Counter label="Novos"            count={countByStatus.new}                                  tone="rose"  />
+          <Counter label="Separando"        count={countByStatus.separating}                           tone="sky"   />
+          <Counter label="Pronto p/ postar" count={countByStatus.separated + countByStatus.ready}      tone="mint"  />
         </div>
       </header>
 
@@ -742,101 +763,96 @@ function openPrintWindow(pickOrderId: string) {
 // importantes da filial. Quando há realinhamento pendente, destaca um
 // card cheia-largura com badge pra ficar impossível de ignorar.
 function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: number }) {
-  const actions: Array<{
+  const items: Array<{
     href: string;
-    icon: React.ReactNode;
+    icon: any;
     label: string;
     subtitle: string;
-    gradient: string;
+    tone: 'sky' | 'lavender' | 'peach' | 'mint' | 'rose';
   }> = [
-    {
-      href: '/minha-loja/consultar',
-      icon: <Search className="w-6 h-6" />,
-      label: 'Consultar',
-      subtitle: 'Buscar produto na rede',
-      gradient: 'from-sky-500 to-blue-600',
-    },
-    {
-      href: '/minha-loja/historico',
-      icon: <History className="w-6 h-6" />,
-      label: 'Transferências',
-      subtitle: 'Histórico de pedidos',
-      gradient: 'from-violet-500 to-purple-600',
-    },
-    {
-      href: '/minha-loja/materiais',
-      icon: <Package2 className="w-6 h-6" />,
-      label: 'Materiais',
-      subtitle: 'Pedir saquinho, bobina...',
-      gradient: 'from-amber-500 to-orange-600',
-    },
-    {
-      href: '/minha-loja/materiais?tab=historico',
-      icon: <ClipboardList className="w-6 h-6" />,
-      label: 'Meus pedidos',
-      subtitle: 'Status dos materiais',
-      gradient: 'from-emerald-500 to-teal-600',
-    },
+    { href: '/minha-loja/consultar',                  icon: Search,         label: 'Consultar',      subtitle: 'Buscar na rede',     tone: 'sky' },
+    { href: '/minha-loja/historico',                  icon: History,        label: 'Transferências', subtitle: 'Histórico',          tone: 'lavender' },
+    { href: '/minha-loja/materiais',                  icon: Package2,       label: 'Materiais',      subtitle: 'Pedir saquinho…',    tone: 'peach' },
+    { href: '/minha-loja/materiais?tab=historico',    icon: ClipboardList,  label: 'Meus pedidos',   subtitle: 'Status materiais',   tone: 'mint' },
   ];
 
+  const TONES: Record<string, { ring: string; bg: string; icon: string; text: string }> = {
+    rose:     { ring: '#f9a8d4', bg: '#fdf2f8', icon: '#db2777', text: '#be185d' },
+    sky:      { ring: '#7dd3fc', bg: '#f0f9ff', icon: '#0284c7', text: '#0369a1' },
+    mint:     { ring: '#86efac', bg: '#f0fdf4', icon: '#16a34a', text: '#15803d' },
+    peach:    { ring: '#fdba74', bg: '#fff7ed', icon: '#ea580c', text: '#c2410c' },
+    lavender: { ring: '#c4b5fd', bg: '#f5f3ff', icon: '#7c3aed', text: '#6d28d9' },
+  };
+
   return (
-    <div className="space-y-2.5">
-      {/* Alerta de realinhamento: aparece como card FULL WIDTH destacado só
-          quando tem algo pra separar. Se não tem, esconde — a vendedora nunca
-          vê item vazio. Pulse contínuo pra captar atenção. */}
+    <div className="space-y-3 panel-pastel p-4 fade-up">
+      {/* Alerta de realinhamento — pulso pastel rosa quando tem algo */}
       {realignmentPending > 0 && (
         <Link
           href="/minha-loja/realinhamento"
-          className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600 p-4 text-white shadow-lg hover:shadow-2xl hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center gap-3 animate-pulse-slow"
+          className="group relative overflow-hidden rounded-2xl p-4 flex items-center gap-3 animate-pulse-slow shadow-md hover:shadow-lg transition-all"
+          style={{
+            background: 'linear-gradient(135deg, #fdf2f8 0%, #fbcfe8 100%)',
+            border: '2px solid #f9a8d4',
+          }}
         >
-          <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
-            <Shuffle className="w-6 h-6" />
+          <div
+            className="circle-ring flex items-center justify-center w-12 h-12 shrink-0 pulse-soft"
+            style={{ border: '3px solid #f472b6', background: 'white' }}
+          >
+            <Shuffle className="w-5 h-5" style={{ color: '#db2777' }} strokeWidth={1.8} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="font-black text-lg leading-tight flex items-center gap-2">
+            <div className="font-display text-lg text-pink-700 leading-tight flex items-center gap-2">
               Realinhamento chegou!
-              <span className="bg-white text-rose-700 text-sm font-black rounded-full px-2 min-w-[28px] h-6 inline-flex items-center justify-center tabular-nums">
+              <span
+                className="text-sm font-bold rounded-full px-2 min-w-[26px] h-6 inline-flex items-center justify-center tabular-nums text-white"
+                style={{ background: '#ec4899' }}
+              >
                 {realignmentPending}
               </span>
             </div>
-            <div className="text-xs opacity-95 leading-snug mt-0.5">
+            <div className="text-xs text-pink-600/80 leading-snug mt-0.5">
               Peça(s) pra separar e enviar pras lojas irmãs · toque pra abrir
             </div>
           </div>
-          <div className="text-white/80 shrink-0 font-bold text-xs uppercase tracking-wider">
+          <div className="text-pink-500 shrink-0 font-bold text-xs uppercase tracking-wider">
             Abrir →
           </div>
-          <div className="absolute -bottom-8 -right-8 w-32 h-32 rounded-full bg-white/10 blur-2xl" />
         </Link>
       )}
 
-      {/* Grid de 2 colunas — ações rápidas do dia a dia */}
-      <div className="grid grid-cols-2 gap-2.5">
-        {actions.map((a) => (
-          <Link
-            key={a.href}
-            href={a.href}
-            className={`group relative overflow-hidden rounded-2xl bg-gradient-to-br ${a.gradient} p-4 text-white shadow-md hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all`}
-          >
-            <div className="flex items-start gap-3">
-              <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 group-hover:bg-white/30 transition">
-                {a.icon}
+      {/* Grid de 4 botões circulares — ações rápidas */}
+      <div className="grid grid-cols-4 gap-2 sm:gap-4 justify-items-center pt-2">
+        {items.map((a, idx) => {
+          const t = TONES[a.tone];
+          const Icon = a.icon;
+          return (
+            <Link
+              key={a.href}
+              href={a.href}
+              className="group flex flex-col items-center gap-1.5 fade-up"
+              style={{ animationDelay: `${0.1 + idx * 0.05}s` }}
+            >
+              <div
+                className="circle-ring flex items-center justify-center w-[68px] h-[68px] sm:w-20 sm:h-20"
+                style={{ border: `3px solid ${t.ring}`, background: t.bg }}
+              >
+                <Icon
+                  className="w-7 h-7 sm:w-8 sm:h-8 transition-transform duration-500 group-hover:scale-110"
+                  style={{ color: t.icon }}
+                  strokeWidth={1.6}
+                />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-base leading-tight">{a.label}</div>
-                <div className="text-[11px] opacity-90 leading-snug mt-0.5 line-clamp-2">
-                  {a.subtitle}
-                </div>
+              <div className="text-center">
+                <div className="text-xs sm:text-sm font-medium text-slate-700 leading-tight">{a.label}</div>
+                <div className="text-[10px] text-slate-400 leading-tight hidden sm:block">{a.subtitle}</div>
               </div>
-            </div>
-            {/* Decorative glow */}
-            <div className="absolute -bottom-6 -right-6 w-20 h-20 rounded-full bg-white/10 blur-xl group-hover:bg-white/20 transition" />
-          </Link>
-        ))}
+            </Link>
+          );
+        })}
       </div>
 
-      {/* Keyframe pro pulse lento do card de realinhamento. Global pq o
-          Tailwind default só tem animate-pulse (rápido demais pra esse uso). */}
       <style jsx global>{`
         @keyframes pulse-slow {
           0%, 100% { opacity: 1; }
@@ -848,16 +864,34 @@ function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: numb
   );
 }
 
-function Counter({ label, count, color }: { label: string; count: number; color: string }) {
+function Counter({
+  label,
+  count,
+  tone,
+}: {
+  label: string;
+  count: number;
+  tone: 'rose' | 'sky' | 'mint' | 'peach';
+}) {
+  const TONES: Record<string, { ring: string; bg: string; text: string }> = {
+    rose:  { ring: '#f9a8d4', bg: '#fdf2f8', text: '#be185d' },
+    sky:   { ring: '#7dd3fc', bg: '#f0f9ff', text: '#0369a1' },
+    mint:  { ring: '#86efac', bg: '#f0fdf4', text: '#15803d' },
+    peach: { ring: '#fdba74', bg: '#fff7ed', text: '#c2410c' },
+  };
+  const t = TONES[tone];
   const hasCount = count > 0;
   return (
     <div
-      className={`flex-1 rounded-lg px-3 py-2 font-medium transition-all ${color} ${
-        hasCount ? 'shadow-md ring-2 ring-white/30' : 'opacity-70'
-      }`}
+      className={`flex-1 rounded-2xl px-3 py-2 transition-all ${hasCount ? '' : 'opacity-60'}`}
+      style={{ background: t.bg, border: `1.5px solid ${t.ring}` }}
     >
-      <div className="text-2xl font-extrabold leading-none">{count}</div>
-      <div className="text-[11px] uppercase tracking-wide opacity-90 mt-0.5">{label}</div>
+      <div className="font-display text-2xl tabular-nums leading-none" style={{ color: t.text }}>
+        {count}
+      </div>
+      <div className="text-[10px] uppercase tracking-wider mt-1 font-semibold" style={{ color: t.text }}>
+        {label}
+      </div>
     </div>
   );
 }

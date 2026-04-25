@@ -53,10 +53,16 @@ function MarketingHubInner() {
   }
 
   return (
-    <div>
-      {/* Tabs sticky abaixo do TopNav */}
-      <div className="bg-white border-b shadow-sm sticky top-14 z-30">
-        <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto">
+    <div
+      className="min-h-screen"
+      style={{
+        background:
+          'radial-gradient(1100px 600px at 50% -10%, #fff7ed 0%, transparent 60%), linear-gradient(180deg, #fef9f3 0%, #fdf2f8 100%)',
+      }}
+    >
+      {/* Tabs sticky pastel — pílulas no topo */}
+      <div className="bg-white/70 backdrop-blur border-b border-pink-100 sticky top-14 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex gap-2 overflow-x-auto py-3">
           {TABS.map((t) => {
             const Icon = t.icon;
             const isActive = active === t.key;
@@ -64,10 +70,10 @@ function MarketingHubInner() {
               <button
                 key={t.key}
                 onClick={() => go(t.key)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm whitespace-nowrap border-b-2 transition ${
+                className={`flex items-center gap-2 px-4 py-2 text-sm whitespace-nowrap rounded-full transition font-medium ${
                   isActive
-                    ? 'border-brand text-brand font-bold'
-                    : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    ? 'bg-pink-100 text-pink-700 border-2 border-pink-300 shadow-sm'
+                    : 'text-slate-600 hover:bg-slate-50 border-2 border-transparent'
                 }`}
               >
                 <Icon className="w-4 h-4" />

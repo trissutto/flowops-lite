@@ -157,7 +157,7 @@ export default function RelatorioVendedorasPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen pastel-page">
       <header className="bg-brand text-white shadow">
         <div className="px-4 py-3 flex items-center gap-3 max-w-6xl mx-auto">
           <Link href="/" className="p-2 hover:bg-white/10 rounded" title="Voltar">
