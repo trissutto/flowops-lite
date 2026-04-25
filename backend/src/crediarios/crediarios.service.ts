@@ -58,7 +58,8 @@ export class CrediariosService {
       valorParcela:   pickColumn(cols, /^valor_?parcela$/i, /^valor_?parc$/i, /^vlrparc$/i, /^valor$/i),
       dataPagamento:  pickColumn(cols, /^data_?pagamento$/i, /^dt_?pagto$/i, /^data_?pagto$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i),
       valorPago:      pickColumn(cols, /^valor_?pago$/i, /^valorpago$/i, /^vlrpago$/i),
-      status:         pickColumn(cols, /^status$/i, /^situacao$/i, /^pago$/i, /^baixado$/i),
+      pago:           pickColumn(cols, /^pago$/i, /^pg$/i, /^baixado$/i, /^quitado$/i),
+      status:         pickColumn(cols, /^status$/i, /^situacao$/i),
       tipo:           pickColumn(cols, /^tipo$/i, /^tipo_?pagamento$/i, /^forma_?pagamento$/i),
       telefone:       pickColumn(cols, /^telefone$/i, /^fone$/i, /^celular$/i),
     };
@@ -69,16 +70,17 @@ export class CrediariosService {
 
   /**
    * Lista parcelas VENCIDAS e NÃO PAGAS de uma loja, ordenadas por
-   * cliente + vencimento. Cada linha = 1 parcela.
+   * VENCIMENTO ASC (mais antigo primeiro — fila de cobrança real).
    *
    * Vencida: VENCIMENTO < hoje
-   * Não paga: DATA_PAGAMENTO IS NULL OR DATA_PAGAMENTO = '0000-00-00'
-   *           (Giga frequentemente usa 0000-00-00 como "não pago")
+   * Não paga: PAGO = 'N' (preferencial — confirmado pelo Thiago)
+   *           Fallback: DATA_PAGAMENTO IS NULL OR = '0000-00-00'
    */
   async listOverdue(opts: {
     storeCode: string;
     daysBack?: number; // limite máximo no passado (default 365 — pra não pegar "lixo" de 2010)
     limit?: number;    // default 5000
+    orderBy?: 'vencimento' | 'cliente'; // default 'vencimento' (fila de cobrança)
   }): Promise<{
     columnMap: ColumnMap;
     rows: any[];
@@ -122,6 +124,7 @@ export class CrediariosService {
     addCol('valorParcela', 'valorParcela');
     addCol('dataPagamento', 'dataPagamento');
     addCol('valorPago', 'valorPago');
+    addCol('pago', 'pago');
     addCol('status', 'status');
 
     // WHERE
@@ -129,12 +132,18 @@ export class CrediariosService {
     where.push(`\`${map.loja}\` = '${safeStore}'`);
     where.push(`\`${map.vencimento}\` < CURDATE()`);
     where.push(`\`${map.vencimento}\` >= DATE_SUB(CURDATE(), INTERVAL ${daysBack} DAY)`);
-    if (map.dataPagamento) {
-      // não pago = NULL ou 0000-00-00 (Giga zero-date)
+    if (map.pago) {
+      // Filtro principal: PAGO = 'N' (confirmado pelo schema do Giga local)
+      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n' OR \`${map.pago}\` IS NULL)`);
+    } else if (map.dataPagamento) {
+      // Fallback: instalação sem coluna PAGO — usa zero-date
       where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00' OR \`${map.dataPagamento}\` = '0000-00-00 00:00:00')`);
     }
 
-    const orderBy = `\`${map.codCliente}\` ASC, \`${map.vencimento}\` ASC`;
+    // ORDER BY — default: vencimento ASC (mais atrasado primeiro)
+    const orderBy = opts.orderBy === 'cliente'
+      ? `\`${map.codCliente}\` ASC, \`${map.vencimento}\` ASC`
+      : `\`${map.vencimento}\` ASC, \`${map.codCliente}\` ASC`;
     const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY ${orderBy} LIMIT ${limit}`;
 
     const result = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 30000 });
@@ -244,6 +253,7 @@ export interface ColumnMap {
   valorParcela: string | null;
   dataPagamento: string | null;
   valorPago: string | null;
+  pago: string | null;
   status: string | null;
   tipo: string | null;
   telefone: string | null;
