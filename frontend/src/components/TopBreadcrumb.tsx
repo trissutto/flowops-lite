@@ -97,9 +97,12 @@ export default function TopBreadcrumb() {
   if (hide) return null;
 
   return (
-    <header className="bg-white/80 backdrop-blur border-b border-pink-100 sticky top-0 z-40">
+    <header
+      className="bg-white/85 backdrop-blur sticky top-0 z-40"
+      style={{ borderBottom: '1px solid #ead7d4' }}
+    >
       <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center gap-3">
-        {/* Logo — volta pra home (círculo pastel rosa) */}
+        {/* Logo — volta pra home (círculo boutique rosé fumê) */}
         <Link
           href="/"
           className="flex items-center gap-2 shrink-0 group"
@@ -107,38 +110,50 @@ export default function TopBreadcrumb() {
         >
           <div
             className="circle-ring flex items-center justify-center w-9 h-9 text-xs font-bold transition"
-            style={{ border: '2.5px solid #f9a8d4', background: '#fdf2f8', color: '#db2777' }}
+            style={{ border: '2.5px solid #c08081', background: '#f5e6e3', color: '#6e3a40' }}
           >
             L1
           </div>
-          <span className="hidden sm:inline font-display text-base text-slate-800 tracking-wide">
+          <span
+            className="hidden sm:inline font-display text-base tracking-wide"
+            style={{ color: '#3a2a2c' }}
+          >
             ORDER ONE
           </span>
         </Link>
 
-        {/* Separador rosa fino */}
-        <div className="h-5 w-px bg-pink-100 hidden sm:block" />
+        {/* Separador fumê fino */}
+        <div className="h-5 w-px hidden sm:block" style={{ background: '#ead7d4' }} />
 
         {/* Breadcrumb */}
         <nav className="flex items-center gap-1.5 text-sm min-w-0 flex-1 overflow-x-auto scrollbar-none">
           <Link
             href="/"
-            className="flex items-center gap-1 text-pink-400 hover:text-pink-600 transition shrink-0"
+            className="flex items-center gap-1 transition shrink-0"
+            style={{ color: '#a06469' }}
             title="Home"
           >
             <Home className="w-4 h-4" />
           </Link>
           {crumbs.map((c, i) => (
             <div key={c.href + i} className="flex items-center gap-1.5 shrink-0">
-              <ChevronRight className="w-3.5 h-3.5 text-pink-200" />
+              <ChevronRight className="w-3.5 h-3.5" style={{ color: '#d6b9b6' }} />
               {c.isLast ? (
-                <span className="font-semibold text-pink-700 truncate max-w-[220px] sm:max-w-[400px] bg-pink-50 px-2.5 py-0.5 rounded-full border border-pink-100">
+                <span
+                  className="font-semibold truncate max-w-[220px] sm:max-w-[400px] px-2.5 py-0.5 rounded-full"
+                  style={{
+                    color: '#6e3a40',
+                    background: '#f5e6e3',
+                    border: '1px solid #ead7d4',
+                  }}
+                >
                   {c.label}
                 </span>
               ) : (
                 <Link
                   href={c.href}
-                  className="text-slate-500 hover:text-pink-600 transition truncate max-w-[140px]"
+                  className="text-slate-500 transition truncate max-w-[140px] hover:opacity-80"
+                  style={{ ['--hover' as never]: '#8b4f55' }}
                 >
                   {c.label}
                 </Link>
@@ -147,10 +162,17 @@ export default function TopBreadcrumb() {
           ))}
         </nav>
 
-        {/* Sair — pílula pastel */}
+        {/* Sair — pílula boutique */}
         <button
           onClick={logout}
-          className="flex items-center gap-1.5 text-sm px-3 py-1.5 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition shrink-0"
+          className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-full transition shrink-0"
+          style={{ color: '#6e3a40' }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = '#f5e6e3';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+          }}
           title="Sair"
         >
           <LogOut className="w-4 h-4" />

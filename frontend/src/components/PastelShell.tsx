@@ -19,15 +19,18 @@ import { ReactNode } from 'react';
 export type PastelTone = 'rose' | 'peach' | 'mint' | 'sky' | 'lavender' | 'yellow' | 'coral' | 'cream';
 
 export const TONE_MAP: Record<PastelTone, { ring: string; bg: string; icon: string; badge: string; text: string }> = {
-  // Cores mais vibrantes — anéis saturados, mantendo fundo claro pra não cansar.
-  rose:     { ring: '#fb7185', bg: '#ffe4e6', icon: '#e11d48', badge: '#f43f5e', text: '#be123c' },
-  peach:    { ring: '#fb923c', bg: '#ffedd5', icon: '#ea580c', badge: '#f97316', text: '#9a3412' },
-  mint:     { ring: '#34d399', bg: '#d1fae5', icon: '#059669', badge: '#10b981', text: '#065f46' },
-  sky:      { ring: '#38bdf8', bg: '#e0f2fe', icon: '#0284c7', badge: '#0ea5e9', text: '#075985' },
-  lavender: { ring: '#a78bfa', bg: '#ede9fe', icon: '#7c3aed', badge: '#8b5cf6', text: '#5b21b6' },
-  yellow:   { ring: '#facc15', bg: '#fef9c3', icon: '#ca8a04', badge: '#eab308', text: '#854d0e' },
-  coral:    { ring: '#f87171', bg: '#fee2e2', icon: '#dc2626', badge: '#ef4444', text: '#991b1b' },
-  cream:    { ring: '#f59e0b', bg: '#fef3c7', icon: '#b45309', badge: '#d97706', text: '#78350f' },
+  // Paleta BOUTIQUE sofisticada — tons fumê/poeirento. Mantém os mesmos nomes
+  // de chave (rose, mint, sky…) pra não quebrar nada já existente, mas as
+  // cores agora são "muted" — rosé blush, sálvia, terracota, mauve, champagne,
+  // petrol, cobre, linen. Visual de loja boutique de luxo.
+  rose:     { ring: '#c08081', bg: '#f5e6e3', icon: '#8b4f55', badge: '#a06469', text: '#6e3a40' }, // rosé fumê / blush
+  peach:    { ring: '#c87f5e', bg: '#f3e2d6', icon: '#8b4d31', badge: '#a86747', text: '#6f3b25' }, // terracota
+  mint:     { ring: '#9caf88', bg: '#e3ebd9', icon: '#5d7048', badge: '#7a8e64', text: '#475636' }, // sálvia
+  sky:      { ring: '#6b8a92', bg: '#dde7ea', icon: '#3e5d6a', badge: '#557785', text: '#2e4750' }, // petrol/teal
+  lavender: { ring: '#a48ba1', bg: '#ebe2eb', icon: '#6b5870', badge: '#856e88', text: '#4f4054' }, // mauve fumê
+  yellow:   { ring: '#c9a96e', bg: '#f0e6cf', icon: '#8a7340', badge: '#a98e54', text: '#6a5830' }, // champagne / mostarda
+  coral:    { ring: '#b87355', bg: '#ecdac9', icon: '#7d4a30', badge: '#985d3f', text: '#5e3823' }, // cobre / canela
+  cream:    { ring: '#b89977', bg: '#efe5d4', icon: '#82664a', badge: '#9c7e5e', text: '#604a36' }, // nude / camelo
 };
 
 interface PastelShellProps {

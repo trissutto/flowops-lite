@@ -590,37 +590,45 @@ export default function MinhaLojaPage() {
       className="min-h-screen"
       style={{
         background:
-          'radial-gradient(900px 400px at 50% -10%, #fce7f3 0%, transparent 60%), linear-gradient(180deg, #fef9f3 0%, #fdf2f8 100%)',
+          'radial-gradient(900px 400px at 50% -10%, #f0e6cf 0%, transparent 55%), linear-gradient(180deg, #fdfaf3 0%, #f3e9d8 100%)',
       }}
     >
-      {/* Header pastel — fixo, suave */}
+      {/* Header boutique — fixo, suave */}
       <header
-        className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-pink-100"
+        className="sticky top-0 z-30 bg-white/85 backdrop-blur"
+        style={{ borderBottom: '1px solid #ead7d4' }}
       >
         <div className="px-4 py-3 flex items-center justify-between max-w-3xl mx-auto">
           <div className="flex items-center gap-3">
             <div
               className="circle-ring flex items-center justify-center w-11 h-11"
-              style={{ border: '3px solid #f9a8d4', background: '#fdf2f8' }}
+              style={{ border: '3px solid #c08081', background: '#f5e6e3' }}
             >
               <Logo height={22} />
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-[0.2em] font-semibold text-pink-500 leading-none">
+              <div
+                className="text-[10px] uppercase tracking-[0.2em] font-semibold leading-none"
+                style={{ color: '#8b4f55' }}
+              >
                 Order One
               </div>
-              <div className="font-display text-lg text-slate-800 leading-tight">
+              <div
+                className="font-display text-lg leading-tight"
+                style={{ color: '#3a2a2c' }}
+              >
                 {me?.storeName ? me.storeName : 'Minha Loja'}
               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <span
-              className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full font-medium ${
+              className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full font-medium"
+              style={
                 connected
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-red-100 text-red-700'
-              }`}
+                  ? { background: '#e3ebd9', color: '#475636' }
+                  : { background: '#f5e6e3', color: '#8b4f55' }
+              }
               title={connected ? 'Conectado em tempo real' : 'Desconectado — sem tempo real'}
             >
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
@@ -628,14 +636,28 @@ export default function MinhaLojaPage() {
             </span>
             <button
               onClick={loadRows}
-              className="p-2 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition"
+              className="p-2 rounded-full transition"
+              style={{ color: '#6e3a40' }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = '#f5e6e3';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+              }}
               title="Atualizar"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
             <button
               onClick={logout}
-              className="p-2 text-slate-500 hover:bg-pink-50 hover:text-pink-600 rounded-full transition"
+              className="p-2 rounded-full transition"
+              style={{ color: '#6e3a40' }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = '#f5e6e3';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+              }}
               title="Sair"
             >
               <LogOut className="w-4 h-4" />
@@ -776,47 +798,54 @@ function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: numb
     { href: '/minha-loja/materiais?tab=historico',    icon: ClipboardList,  label: 'Meus pedidos',   subtitle: 'Status materiais',   tone: 'mint' },
   ];
 
+  // Boutique sofisticado — em sintonia com o TONE_MAP do PastelShell
   const TONES: Record<string, { ring: string; bg: string; icon: string; text: string }> = {
-    rose:     { ring: '#f9a8d4', bg: '#fdf2f8', icon: '#db2777', text: '#be185d' },
-    sky:      { ring: '#7dd3fc', bg: '#f0f9ff', icon: '#0284c7', text: '#0369a1' },
-    mint:     { ring: '#86efac', bg: '#f0fdf4', icon: '#16a34a', text: '#15803d' },
-    peach:    { ring: '#fdba74', bg: '#fff7ed', icon: '#ea580c', text: '#c2410c' },
-    lavender: { ring: '#c4b5fd', bg: '#f5f3ff', icon: '#7c3aed', text: '#6d28d9' },
+    rose:     { ring: '#c08081', bg: '#f5e6e3', icon: '#8b4f55', text: '#6e3a40' },
+    sky:      { ring: '#6b8a92', bg: '#dde7ea', icon: '#3e5d6a', text: '#2e4750' },
+    mint:     { ring: '#9caf88', bg: '#e3ebd9', icon: '#5d7048', text: '#475636' },
+    peach:    { ring: '#c87f5e', bg: '#f3e2d6', icon: '#8b4d31', text: '#6f3b25' },
+    lavender: { ring: '#a48ba1', bg: '#ebe2eb', icon: '#6b5870', text: '#4f4054' },
   };
 
   return (
     <div className="space-y-3 panel-pastel p-4 fade-up">
-      {/* Alerta de realinhamento — pulso pastel rosa quando tem algo */}
+      {/* Alerta de realinhamento — pulso boutique cobre/terracota */}
       {realignmentPending > 0 && (
         <Link
           href="/minha-loja/realinhamento"
           className="group relative overflow-hidden rounded-2xl p-4 flex items-center gap-3 animate-pulse-slow shadow-md hover:shadow-lg transition-all"
           style={{
-            background: 'linear-gradient(135deg, #fdf2f8 0%, #fbcfe8 100%)',
-            border: '2px solid #f9a8d4',
+            background: 'linear-gradient(135deg, #f3e2d6 0%, #ecdac9 100%)',
+            border: '2px solid #b87355',
           }}
         >
           <div
             className="circle-ring flex items-center justify-center w-12 h-12 shrink-0 pulse-soft"
-            style={{ border: '3px solid #f472b6', background: 'white' }}
+            style={{ border: '3px solid #c87f5e', background: 'white' }}
           >
-            <Shuffle className="w-5 h-5" style={{ color: '#db2777' }} strokeWidth={1.8} />
+            <Shuffle className="w-5 h-5" style={{ color: '#7d4a30' }} strokeWidth={1.8} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="font-display text-lg text-pink-700 leading-tight flex items-center gap-2">
+            <div
+              className="font-display text-lg leading-tight flex items-center gap-2"
+              style={{ color: '#5e3823' }}
+            >
               Realinhamento chegou!
               <span
                 className="text-sm font-bold rounded-full px-2 min-w-[26px] h-6 inline-flex items-center justify-center tabular-nums text-white"
-                style={{ background: '#ec4899' }}
+                style={{ background: '#985d3f' }}
               >
                 {realignmentPending}
               </span>
             </div>
-            <div className="text-xs text-pink-600/80 leading-snug mt-0.5">
+            <div className="text-xs leading-snug mt-0.5" style={{ color: '#8b4d31' }}>
               Peça(s) pra separar e enviar pras lojas irmãs · toque pra abrir
             </div>
           </div>
-          <div className="text-pink-500 shrink-0 font-bold text-xs uppercase tracking-wider">
+          <div
+            className="shrink-0 font-bold text-xs uppercase tracking-wider"
+            style={{ color: '#7d4a30' }}
+          >
             Abrir →
           </div>
         </Link>
@@ -873,11 +902,12 @@ function Counter({
   count: number;
   tone: 'rose' | 'sky' | 'mint' | 'peach';
 }) {
+  // Boutique sofisticado — alinhado com TONE_MAP do PastelShell
   const TONES: Record<string, { ring: string; bg: string; text: string }> = {
-    rose:  { ring: '#f9a8d4', bg: '#fdf2f8', text: '#be185d' },
-    sky:   { ring: '#7dd3fc', bg: '#f0f9ff', text: '#0369a1' },
-    mint:  { ring: '#86efac', bg: '#f0fdf4', text: '#15803d' },
-    peach: { ring: '#fdba74', bg: '#fff7ed', text: '#c2410c' },
+    rose:  { ring: '#c08081', bg: '#f5e6e3', text: '#6e3a40' },
+    sky:   { ring: '#6b8a92', bg: '#dde7ea', text: '#2e4750' },
+    mint:  { ring: '#9caf88', bg: '#e3ebd9', text: '#475636' },
+    peach: { ring: '#c87f5e', bg: '#f3e2d6', text: '#6f3b25' },
   };
   const t = TONES[tone];
   const hasCount = count > 0;

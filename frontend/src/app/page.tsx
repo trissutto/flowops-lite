@@ -189,7 +189,7 @@ export default function DashboardHome() {
       className="min-h-screen"
       style={{
         background:
-          'radial-gradient(1100px 600px at 50% -10%, #fbcfe8 0%, transparent 60%), linear-gradient(180deg, #fff7ed 0%, #fce7f3 100%)',
+          'radial-gradient(1100px 600px at 50% -10%, #f0e6cf 0%, transparent 55%), linear-gradient(180deg, #fdfaf3 0%, #f3e9d8 100%)',
       }}
     >
       <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
@@ -197,11 +197,11 @@ export default function DashboardHome() {
         {/* Header ------------------------------------------------------- */}
         <header className="flex items-center justify-between flex-wrap gap-6 mb-8 fade-up">
           <div>
-            <div className="text-[11px] uppercase tracking-[0.3em] text-pink-500 font-bold mb-2">
+            <div className="text-[11px] uppercase tracking-[0.3em] font-bold mb-2" style={{ color: '#8b4f55' }}>
               Lurds Order One
             </div>
             <h1 className="font-display text-4xl sm:text-5xl text-slate-800 leading-tight">
-              {userName ? <>Oi, <span className="text-pink-500 italic">{userName.split(' ')[0]}</span> 🌸</> : 'Bem-vinda 🌸'}
+              {userName ? <>Olá, <span className="italic" style={{ color: '#8b4f55' }}>{userName.split(' ')[0]}</span></> : 'Bem-vinda'}
             </h1>
             <div className="text-sm text-slate-500 mt-2 capitalize">{today}</div>
           </div>
