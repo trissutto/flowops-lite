@@ -1457,4 +1457,217 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       tamanhos: corEntry.tamanhos,
     };
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // EXPLORER GENÉRICO DO ERP — list/schema/run read-only
+  //
+  // Usado pela tela /relatorios/giga (matriz). Permite ao admin executar
+  // queries SELECT arbitrárias contra o banco do Gigasistemas pra extrair
+  // dados em tempo real (relatórios ad-hoc, exports CSV/XLSX, dashboards).
+  //
+  // Segurança (defesa em camadas):
+  //  1. Controller exige role admin/operator
+  //  2. runReadOnly bloqueia comandos de escrita (regex blacklist)
+  //  3. runReadOnly força LIMIT global (default 1000, max 50000)
+  //  4. Pool dedicado de leitura — usa o mesmo pool, mas o user MySQL
+  //     do Gigasistemas idealmente só tem GRANT SELECT
+  //  5. Timeout de 30s na query
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** Lista TODAS as tabelas do banco com row_count aproximado (information_schema). */
+  async listAllTables(): Promise<Array<{ name: string; rows: number; sizeMb: number; engine: string | null }>> {
+    if (!this.pool) return [];
+    try {
+      // information_schema.TABLES — TABLE_ROWS é aproximação (NDB/InnoDB),
+      // mas é instantâneo. COUNT(*) por tabela inviável em DB com 200+ tabelas.
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT
+            TABLE_NAME    AS name,
+            TABLE_ROWS    AS rows,
+            ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 2) AS sizeMb,
+            ENGINE        AS engine
+           FROM information_schema.TABLES
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_TYPE = 'BASE TABLE'
+          ORDER BY TABLE_NAME ASC`,
+      );
+      return (rows as any[]).map((r) => ({
+        name: String(r.name),
+        rows: Number(r.rows ?? 0),
+        sizeMb: Number(r.sizeMb ?? 0),
+        engine: r.engine ? String(r.engine) : null,
+      }));
+    } catch (e: any) {
+      this.logger.error(`listAllTables falhou: ${e.message}`);
+      return [];
+    }
+  }
+
+  /** Retorna schema (colunas + tipos + key) e amostra de N rows pra uma tabela. */
+  async getTableSchema(
+    tableName: string,
+    sampleLimit = 5,
+  ): Promise<{
+    table: string;
+    columns: Array<{ field: string; type: string; null: string; key: string; default: string | null }>;
+    sample: any[];
+    rowCount: number;
+  } | null> {
+    if (!this.pool) return null;
+    // Sanitiza o nome da tabela: só alfanum/underscore (mysql identifier)
+    const safe = String(tableName || '').replace(/[^a-zA-Z0-9_]/g, '');
+    if (!safe) return null;
+    const lim = Math.max(1, Math.min(50, Number(sampleLimit) || 5));
+
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SHOW COLUMNS FROM \`${safe}\``,
+      );
+      const [sample] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT * FROM \`${safe}\` LIMIT ${lim}`,
+      );
+      const [cnt] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM \`${safe}\``,
+      );
+
+      return {
+        table: safe,
+        columns: (cols as any[]).map((c) => ({
+          field: String(c.Field),
+          type: String(c.Type),
+          null: String(c.Null),
+          key: String(c.Key ?? ''),
+          default: c.Default == null ? null : String(c.Default),
+        })),
+        sample: this.serializeRows(sample as any[]),
+        rowCount: Number((cnt as any[])[0]?.c ?? 0),
+      };
+    } catch (e: any) {
+      this.logger.warn(`getTableSchema(${safe}) falhou: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Executa uma query READ-ONLY (SELECT/SHOW/DESCRIBE/EXPLAIN/WITH).
+   * Bloqueia comandos de escrita por regex e força LIMIT.
+   *
+   * Retorna columns + rows + meta (executionMs, truncated).
+   */
+  async runReadOnly(
+    sqlRaw: string,
+    opts: { maxRows?: number; timeoutMs?: number } = {},
+  ): Promise<{
+    columns: string[];
+    rows: any[];
+    executionMs: number;
+    rowCount: number;
+    truncated: boolean;
+    appliedLimit: number;
+  }> {
+    if (!this.pool) {
+      throw new Error('Pool ERP não inicializado');
+    }
+    const sql = String(sqlRaw || '').trim();
+    if (!sql) throw new Error('SQL vazio');
+
+    // Tira comentários simples e ponto-e-vírgula final pra checar a 1ª palavra
+    const cleaned = sql
+      .replace(/^\s*--[^\n]*\n?/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .trim()
+      .replace(/;+\s*$/, '');
+
+    // 1. WHITELIST — só comandos read-only
+    const firstWord = cleaned.split(/\s+/)[0]?.toUpperCase() ?? '';
+    const allowedFirst = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'];
+    if (!allowedFirst.includes(firstWord)) {
+      throw new Error(`Apenas comandos de leitura: ${allowedFirst.join(', ')}. Recebido: ${firstWord || '(vazio)'}`);
+    }
+
+    // 2. BLACKLIST — não pode ter comandos de escrita em qualquer lugar
+    // (ex: SELECT 1; DELETE FROM produtos — rejeita pelo ;)
+    if (/;[\s\S]+\S/.test(cleaned)) {
+      throw new Error('Múltiplos statements separados por ";" não são permitidos');
+    }
+    const blacklist = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|RENAME|GRANT|REVOKE|REPLACE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE|HANDLER|LOCK\s+TABLES|UNLOCK|CALL|DO\s+SLEEP|BENCHMARK\s*\()\b/i;
+    const m = blacklist.exec(cleaned);
+    if (m) {
+      throw new Error(`Comando bloqueado: "${m[0].toUpperCase()}". Apenas leitura é permitida.`);
+    }
+
+    // 3. LIMIT automático (só pra SELECT/WITH; SHOW/DESCRIBE não precisa)
+    const maxRows = Math.max(1, Math.min(50000, opts.maxRows ?? 1000));
+    let finalSql = cleaned;
+    let appliedLimit = maxRows;
+    if (firstWord === 'SELECT' || firstWord === 'WITH') {
+      // Detecta LIMIT já existente (case-insensitive, no fim)
+      const limitMatch = cleaned.match(/\bLIMIT\s+(\d+)(\s*,\s*\d+)?\s*$/i);
+      if (limitMatch) {
+        const userLimit = Number(limitMatch[1]);
+        if (userLimit > maxRows) {
+          // Usuário pediu acima do teto — sobrescreve
+          finalSql = cleaned.replace(/\bLIMIT\s+\d+(\s*,\s*\d+)?\s*$/i, `LIMIT ${maxRows}`);
+        } else {
+          appliedLimit = userLimit;
+        }
+      } else {
+        finalSql = `${cleaned}\nLIMIT ${maxRows}`;
+      }
+    }
+
+    // 4. Timeout
+    const timeoutMs = Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 30_000));
+
+    const t0 = Date.now();
+    try {
+      const conn = await this.pool.getConnection();
+      try {
+        // SET SESSION pra timeout — precisa ser ms (mysql usa MAX_EXECUTION_TIME hint OU SESSION var)
+        // Forma compatível com MySQL 5.7+: hint /*+ MAX_EXECUTION_TIME(N) */
+        // Mas hint não funciona em SHOW/DESCRIBE — então usa SET SESSION quando dá.
+        try {
+          await conn.query(`SET SESSION MAX_EXECUTION_TIME=${timeoutMs}`);
+        } catch {
+          // MariaDB / versões antigas não suportam — segue sem timeout server-side
+        }
+        const [rows, fields] = await conn.query<mysql.RowDataPacket[]>(finalSql);
+        const ms = Date.now() - t0;
+        const arr = Array.isArray(rows) ? (rows as any[]) : [];
+        const cols = Array.isArray(fields)
+          ? (fields as any[]).map((f) => String(f.name))
+          : arr.length
+          ? Object.keys(arr[0])
+          : [];
+        return {
+          columns: cols,
+          rows: this.serializeRows(arr),
+          executionMs: ms,
+          rowCount: arr.length,
+          truncated: arr.length >= appliedLimit,
+          appliedLimit,
+        };
+      } finally {
+        conn.release();
+      }
+    } catch (e: any) {
+      throw new Error(`MySQL: ${e.message}`);
+    }
+  }
+
+  /** Serializa rows pra JSON: Buffer→string, Date→ISO, BigInt→number. */
+  private serializeRows(rows: any[]): any[] {
+    return rows.map((r) => {
+      const out: any = {};
+      for (const k of Object.keys(r)) {
+        const v = r[k];
+        if (v == null) out[k] = null;
+        else if (Buffer.isBuffer(v)) out[k] = v.toString('utf8');
+        else if (v instanceof Date) out[k] = v.toISOString();
+        else if (typeof v === 'bigint') out[k] = Number(v);
+        else out[k] = v;
+      }
+      return out;
+    });
+  }
 }

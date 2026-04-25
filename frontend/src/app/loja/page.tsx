@@ -10,7 +10,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store,
+  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store, FileSearch,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -23,6 +23,7 @@ const LOJA_ITEMS: CircleNavItem[] = [
   { href: '/retaguarda/almoxarifado',  label: 'Almoxarifado',   subtitle: 'Estoque interno',       icon: Boxes,        tone: 'lavender' },
   { href: '/retaguarda/venda-certa',   label: 'Venda Certa',    subtitle: 'Anti-malandragem',      icon: CheckCircle2, tone: 'mint'     },
   { href: '/retaguarda/materiais',     label: 'Materiais',      subtitle: 'Pedidos das filiais',   icon: Package2,     tone: 'peach'    },
+  { href: '/relatorios/giga',          label: 'Giga Explorer',  subtitle: 'SQL ERP em tempo real', icon: FileSearch,   tone: 'yellow'   },
 ];
 
 export default function LojaHub() {
