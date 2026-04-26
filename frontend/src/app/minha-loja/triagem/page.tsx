@@ -152,6 +152,34 @@ export default function TriagemPage() {
     }
   }, [setupOpen]);
 
+  // ── Listener global: qualquer tecla redireciona pro input se nada
+  // estiver focado. Garante que mesmo se a vendedora clicar fora ou
+  // perder o foco por qualquer motivo, a próxima bipada vai pro lugar certo.
+  useEffect(() => {
+    if (setupOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      // Se já está num input/textarea/botão, não interfere
+      if (
+        active &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.tagName === 'SELECT' ||
+          (active as HTMLElement).isContentEditable)
+      ) {
+        return;
+      }
+      // Ignora teclas de modificação/navegação puras
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Aceita alfanumérico, números do scanner, hífen e Enter
+      if (e.key.length === 1 || e.key === 'Enter' || e.key === 'Backspace') {
+        inputRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [setupOpen]);
+
   // ── Helpers setup ──
   const togglePreset = (preset: 'rede' | 'todas') => {
     if (preset === 'rede') {
@@ -229,6 +257,15 @@ export default function TriagemPage() {
       setErrorSku(sku);
     } finally {
       setScanLoading(false);
+      // Foco garantido: timeout pequeno pra deixar React aplicar o estado primeiro,
+      // depois força foco + seleciona qualquer conteúdo restante (se a próxima
+      // bipada vier antes do Enter, sobrescreve direto).
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
     }
   };
 
@@ -285,7 +322,12 @@ export default function TriagemPage() {
       setError(e?.message || 'Erro ao trocar destino');
     } finally {
       setScanLoading(false);
-      inputRef.current?.focus();
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
     }
   };
 
