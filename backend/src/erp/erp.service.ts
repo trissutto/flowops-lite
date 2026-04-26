@@ -2597,26 +2597,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const s = String(sku || '').trim();
     if (!s) return null;
 
-    // Helper: query produtos por CODIGO exato (com lista de candidatos)
+    // Helper: query produtos por CODIGO exato (com lista de candidatos).
+    // Usa só DESCRICAOCOMPLETA (DESCRICAO não existe no Giga).
+    // NÃO silencia erro de SQL — propaga pra cima pra debug.
     const tryCodigos = async (candidates: string[]): Promise<any | null> => {
       if (!candidates.length) return null;
-      try {
-        const [rows] = await this.pool!.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO AS codigo,
-                  REF AS ref,
-                  COR AS cor,
-                  TAMANHO AS tamanho,
-                  COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
-             FROM produtos
-            WHERE CODIGO IN (?)
-            LIMIT 1`,
-          [candidates],
-        );
-        return (rows as any[])[0] || null;
-      } catch (e) {
-        this.logger.warn(`resolveSkuInfo tryCodigos: ${(e as Error).message}`);
-        return null;
-      }
+      const [rows] = await this.pool!.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS codigo,
+                REF AS ref,
+                COR AS cor,
+                TAMANHO AS tamanho,
+                DESCRICAOCOMPLETA AS descricao
+           FROM produtos
+          WHERE CODIGO IN (?)
+          LIMIT 1`,
+        [candidates],
+      );
+      return (rows as any[])[0] || null;
     };
 
     // 1. Tenta exato + variantes com zero-padding comuns
@@ -2702,7 +2699,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const [r1] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+        `SELECT CODIGO, REF, DESCRICAOCOMPLETA AS descricao
            FROM produtos WHERE CODIGO LIKE ? LIMIT 10`,
         [`%${s}%`],
       );
@@ -2717,7 +2714,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const [r2] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+        `SELECT CODIGO, REF, DESCRICAOCOMPLETA AS descricao
            FROM produtos WHERE REF LIKE ? LIMIT 10`,
         [`%${s}%`],
       );
@@ -2735,7 +2732,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     for (const col of eanColumns) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+          `SELECT CODIGO, REF, DESCRICAOCOMPLETA AS descricao
              FROM produtos WHERE \`${col}\` IN (?) LIMIT 5`,
           [variantsTried],
         );
@@ -2756,7 +2753,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (s.length >= 3) {
       try {
         const [r4] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+          `SELECT CODIGO, REF, DESCRICAOCOMPLETA AS descricao
              FROM produtos WHERE COALESCE(DESCRICAOCOMPLETA, DESCRICAO) LIKE ? LIMIT 5`,
           [`%${s}%`],
         );
