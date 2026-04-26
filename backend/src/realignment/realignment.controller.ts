@@ -503,6 +503,46 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/triage/shipment/:id/items
+   * Lista os itens de uma remessa (pra modal de detalhe da caixa).
+   */
+  @Get('triage/shipment/:id/items')
+  triageShipmentItems(@Req() req: any, @Param('id') id: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    return this.triage.getShipmentItems(id);
+  }
+
+  /**
+   * DELETE /realignment/triage/item/:transferOrderId?fromStoreCode=02
+   * Remove UM item de uma caixa OPEN.
+   */
+  @Delete('triage/item/:transferOrderId')
+  triageRemoveItem(
+    @Req() req: any,
+    @Param('transferOrderId') transferOrderId: string,
+    @Query('fromStoreCode') fromStoreCode: string,
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    return this.triage.removeItemFromOpen({ transferOrderId, fromStoreCode });
+  }
+
+  /**
+   * POST /realignment/triage/wipe-open
+   * Body: { fromStoreCode }
+   * LIMPA TUDO — deleta todas as caixas OPEN da origem.
+   */
+  @Post('triage/wipe-open')
+  triageWipeOpen(@Req() req: any, @Body() body: { fromStoreCode: string }) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!body?.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    return this.triage.wipeOpenForOrigin({ fromStoreCode: body.fromStoreCode });
+  }
+
+  /**
    * POST /realignment/triage/finalize
    * Body: { fromStoreCode }
    * Fecha TODAS as remessas OPEN do par fromStoreCode em batch.

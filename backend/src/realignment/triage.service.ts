@@ -270,6 +270,113 @@ export class TriagemService {
   }
 
   /**
+   * Lista os itens de uma remessa OPEN (pra mostrar no modal de detalhe).
+   * Usado pelo click em "caixa em formação" — vendedora vê o que tá dentro.
+   */
+  async getShipmentItems(shipmentId: string) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+      select: {
+        id: true,
+        code: true,
+        fromStoreCode: true,
+        fromStoreName: true,
+        toStoreCode: true,
+        toStoreName: true,
+        status: true,
+      },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId } as any,
+      orderBy: { realignmentSentAt: 'desc' } as any,
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        descricao: true,
+        qtyOrigem: true,
+        realignmentSentAt: true,
+      } as any,
+    });
+    return { ...shipment, items };
+  }
+
+  /**
+   * Remove UM item de uma remessa OPEN (vendedora errou e quer tirar).
+   * Deleta o TransferOrder em vez de apenas desvincular — não polui a base
+   * com pedidos pending órfãos da triagem.
+   */
+  async removeItemFromOpen(input: {
+    transferOrderId: string;
+    fromStoreCode: string;
+  }) {
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferOrderId },
+      select: { id: true, lojaOrigemCode: true, shipmentId: true } as any,
+    });
+    if (!order) throw new NotFoundException('Item não encontrado');
+    const o = order as any;
+    if (o.lojaOrigemCode !== input.fromStoreCode) {
+      throw new BadRequestException('Item não pertence à origem informada');
+    }
+    if (!o.shipmentId) throw new BadRequestException('Item não está em remessa');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: o.shipmentId },
+      select: { id: true, status: true },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.status !== 'open') {
+      throw new BadRequestException('Remessa já foi fechada — não pode remover item');
+    }
+
+    // Deleta o item da triagem (vai sumir do TransferOrder)
+    await this.prisma.transferOrder.delete({ where: { id: o.id } });
+
+    // Se a remessa ficou vazia, deleta ela também
+    const remaining = await this.prisma.transferOrder.count({
+      where: { shipmentId: shipment.id } as any,
+    });
+    if (remaining === 0) {
+      await (this.prisma as any).realignmentShipment.delete({ where: { id: shipment.id } });
+      return { ok: true, shipmentDeleted: true };
+    }
+    return { ok: true, shipmentDeleted: false, remaining };
+  }
+
+  /**
+   * LIMPA TUDO — deleta todos os TransferOrders das remessas OPEN da origem
+   * e deleta as próprias remessas OPEN. Não toca em nada in_transit/received.
+   *
+   * Usado pelo botão "Limpar tudo" na tela de triagem.
+   */
+  async wipeOpenForOrigin(input: { fromStoreCode: string }) {
+    const opens = await (this.prisma as any).realignmentShipment.findMany({
+      where: { fromStoreCode: input.fromStoreCode, status: 'open' },
+      select: { id: true },
+    });
+    if (!opens.length) return { ok: true, deletedShipments: 0, deletedItems: 0 };
+    const shipmentIds = (opens as any[]).map((s) => s.id);
+
+    // Deleta os transferOrders
+    const itemsDel = await this.prisma.transferOrder.deleteMany({
+      where: { shipmentId: { in: shipmentIds } } as any,
+    });
+
+    // Deleta as remessas
+    const shipDel = await (this.prisma as any).realignmentShipment.deleteMany({
+      where: { id: { in: shipmentIds } },
+    });
+
+    this.logger.log(
+      `[triagem] WIPE: ${shipDel.count} remessas + ${itemsDel.count} itens deletados (origem ${input.fromStoreCode})`,
+    );
+    return { ok: true, deletedShipments: shipDel.count, deletedItems: itemsDel.count };
+  }
+
+  /**
    * Fecha TODAS as remessas OPEN do par fromStoreCode em batch.
    * Pra cada uma chama closeAndSend (decreaseStock + obrigações + emit socket).
    *

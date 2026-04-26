@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Loader2, Package, Box, CheckCircle2, X, Barcode, ArrowRight,
-  RefreshCw, Send, AlertCircle, Settings, Filter, Trash2,
+  RefreshCw, Send, AlertCircle, Settings, Filter, Trash2, Eraser,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -59,6 +59,7 @@ type OpenShipment = {
 };
 
 const SETUP_STORAGE_KEY = 'lurds_triagem_setup_v1';
+const HISTORY_STORAGE_KEY = 'lurds_triagem_history_v1';
 
 export default function TriagemPage() {
   // ── Setup ──
@@ -86,7 +87,14 @@ export default function TriagemPage() {
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeResult, setFinalizeResult] = useState<{ fechadas: number; falhas: number; results: any[] } | null>(null);
 
-  // ── Load lojas + setup salvo ──
+  // ── Modal detalhe da caixa ──
+  const [boxDetail, setBoxDetail] = useState<any | null>(null);
+  const [boxLoading, setBoxLoading] = useState(false);
+
+  // ── Wipe ──
+  const [wiping, setWiping] = useState(false);
+
+  // ── Load lojas + setup salvo + histórico ──
   useEffect(() => {
     api<Store[]>('/stores')
       .then((arr) => {
@@ -98,7 +106,6 @@ export default function TriagemPage() {
             const saved = JSON.parse(raw);
             if (saved?.fromStoreCode) setFromStoreCode(saved.fromStoreCode);
             if (Array.isArray(saved?.toStoreCodes)) setToStoreCodes(saved.toStoreCodes);
-            // Se tem setup salvo válido, fecha o painel
             if (saved?.fromStoreCode && saved?.toStoreCodes?.length > 0) {
               setSetupOpen(false);
             }
@@ -106,9 +113,29 @@ export default function TriagemPage() {
         } catch {
           /* noop */
         }
+        // Restaura histórico de bipagens
+        try {
+          const rawH = typeof window !== 'undefined' ? localStorage.getItem(HISTORY_STORAGE_KEY) : null;
+          if (rawH) {
+            const arr = JSON.parse(rawH);
+            if (Array.isArray(arr)) setConfirmed(arr.slice(0, 50));
+          }
+        } catch {
+          /* noop */
+        }
       })
       .catch(() => setError('Erro ao carregar lojas'));
   }, []);
+
+  // ── Salva histórico no localStorage ──
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(confirmed.slice(0, 50)));
+    } catch {
+      /* noop */
+    }
+  }, [confirmed]);
 
   // ── Salva setup ──
   useEffect(() => {
@@ -328,6 +355,77 @@ export default function TriagemPage() {
           inputRef.current.select();
         }
       }, 50);
+    }
+  };
+
+  // ── Abrir caixa pra ver/remover items ──
+  const openBox = async (shipmentId: string) => {
+    setBoxDetail(null);
+    setBoxLoading(true);
+    try {
+      const d = await api<any>(`/realignment/triage/shipment/${shipmentId}/items`);
+      setBoxDetail(d);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setBoxLoading(false);
+    }
+  };
+
+  const removeItem = async (transferOrderId: string) => {
+    if (!fromStoreCode) return;
+    if (!confirm('Remover esta peça da caixa? Vai voltar pro provador.')) return;
+    try {
+      const r = await api<{ ok: boolean; shipmentDeleted: boolean }>(
+        `/realignment/triage/item/${transferOrderId}?fromStoreCode=${fromStoreCode}`,
+        { method: 'DELETE' },
+      );
+      // Se a caixa esvaziou, fecha o modal
+      if (r.shipmentDeleted) {
+        setBoxDetail(null);
+      } else if (boxDetail) {
+        // Senão recarrega
+        openBox(boxDetail.id);
+      }
+      loadOpenShipments();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  // ── Limpar tudo ──
+  const wipeAll = async () => {
+    if (!fromStoreCode) return;
+    if (openShipments.length === 0) {
+      alert('Nenhuma caixa aberta pra limpar.');
+      return;
+    }
+    const totalQty = openShipments.reduce((s, sh) => s + sh.totalQty, 0);
+    if (
+      !confirm(
+        `LIMPAR TUDO?\n\nVai apagar ${openShipments.length} caixa(s) e ${totalQty} peça(s) bipada(s).\n\nAção destrutiva — sem rollback.`,
+      )
+    )
+      return;
+    if (!confirm('Confirma de verdade? Vai perder TODAS as bipagens da triagem.')) return;
+    setWiping(true);
+    try {
+      await api('/realignment/triage/wipe-open', {
+        method: 'POST',
+        body: JSON.stringify({ fromStoreCode }),
+      });
+      setConfirmed([]);
+      setLastSuggestion(null);
+      try {
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+      } catch {
+        /* noop */
+      }
+      loadOpenShipments();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setWiping(false);
     }
   };
 
@@ -651,9 +749,12 @@ export default function TriagemPage() {
                       .slice()
                       .sort((a, b) => b.totalQty - a.totalQty)
                       .map((sh) => (
-                        <div
+                        <button
                           key={sh.id}
-                          className="flex items-center justify-between p-2 rounded bg-violet-50 border border-violet-200"
+                          type="button"
+                          onClick={() => openBox(sh.id)}
+                          className="w-full flex items-center justify-between p-2 rounded bg-violet-50 border border-violet-200 hover:bg-violet-100 hover:border-violet-400 transition-colors text-left"
+                          title="Clique pra ver as peças"
                         >
                           <div className="min-w-0 flex-1">
                             <div className="font-semibold text-sm text-slate-800 truncate">
@@ -667,7 +768,7 @@ export default function TriagemPage() {
                             </div>
                             <div className="text-[10px] text-slate-500">peças</div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                   </div>
                   <div className="border-t pt-2 mt-2">
@@ -695,6 +796,16 @@ export default function TriagemPage() {
                     <p className="text-[10px] text-slate-400 mt-1.5 text-center">
                       Vai baixar estoque do Giga origem e gerar {openShipments.length} remessa(s) em trânsito.
                     </p>
+
+                    {/* Botão Limpar tudo (separado, vermelho discreto) */}
+                    <button
+                      onClick={wipeAll}
+                      disabled={wiping || openShipments.length === 0}
+                      className="w-full mt-2 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 rounded-md flex items-center justify-center gap-1.5 disabled:opacity-50 border border-rose-200"
+                    >
+                      {wiping ? <Loader2 className="w-3 h-3 animate-spin" /> : <Eraser className="w-3 h-3" />}
+                      Limpar tudo
+                    </button>
                   </div>
                 </>
               )}
@@ -723,6 +834,79 @@ export default function TriagemPage() {
           )}
         </aside>
       </main>
+
+      {/* Modal detalhe da caixa */}
+      {(boxLoading || boxDetail) && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={() => setBoxDetail(null)}
+        >
+          <div
+            className="bg-white rounded-lg max-w-2xl w-full my-8 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b flex items-center justify-between bg-violet-50 sticky top-0">
+              <div>
+                <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+                  <Box className="w-4 h-4 text-violet-600" />
+                  Caixa: {boxDetail?.toStoreName || '...'}
+                </h2>
+                {boxDetail && (
+                  <div className="text-xs text-slate-500 font-mono">
+                    {boxDetail.code} · {boxDetail.items?.length || 0} item(ns)
+                  </div>
+                )}
+              </div>
+              <button onClick={() => setBoxDetail(null)} className="p-1.5 hover:bg-slate-200 rounded">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 max-h-[70vh] overflow-y-auto">
+              {boxLoading ? (
+                <div className="text-center py-8 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin inline-block mb-2" />
+                  <div className="text-sm">Carregando peças...</div>
+                </div>
+              ) : boxDetail?.items?.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">Caixa vazia</div>
+              ) : (
+                <div className="space-y-1">
+                  {boxDetail?.items?.map((it: any) => (
+                    <div
+                      key={it.id}
+                      className="flex items-center gap-2 p-2 rounded border bg-slate-50 border-slate-200"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="font-mono text-sm font-semibold text-slate-700">
+                          {it.refCode}
+                          {it.cor && <span className="ml-2 text-slate-500">{it.cor}</span>}
+                          {it.tamanho && <span className="ml-1 text-slate-500">/{it.tamanho}</span>}
+                        </div>
+                        {it.descricao && (
+                          <div className="text-[10px] text-slate-500 truncate">{it.descricao}</div>
+                        )}
+                        {it.realignmentSentAt && (
+                          <div className="text-[10px] text-slate-400">
+                            Bipado às {new Date(it.realignmentSentAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeItem(it.id)}
+                        className="p-1.5 rounded hover:bg-rose-100 text-rose-600 shrink-0"
+                        title="Remover desta caixa"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal Setup */}
       {setupOpen && (
