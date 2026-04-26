@@ -247,6 +247,41 @@ export class RealignmentController {
   }
 
   // ════════════════════════════════════════════════════════════════════
+  // CONFIG: TAMANHOS PLUS SIZE
+  // Lista de tamanhos aceitos no realinhamento. Variações com tamanho fora
+  // dessa lista são IGNORADAS automaticamente (ex: REF 5187 jeans tem 40, 42,
+  // 44, 46, 48 → filtra só 46+). Default: 46-60 + combinações.
+  // Config vazia ('') desabilita o filtro (passa todos os tamanhos).
+  // ════════════════════════════════════════════════════════════════════
+
+  @Get('plus-size-sizes')
+  async getPlusSizeSizes(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const r = await (this.svc as any).prisma.systemSetting.findUnique({
+      where: { key: 'realignment_plus_size_sizes' },
+    });
+    const value = r?.value;
+    return {
+      sizes: value === undefined || value === null
+        ? '46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60'
+        : value,
+      isDefault: value === undefined || value === null,
+    };
+  }
+
+  @Post('plus-size-sizes')
+  async setPlusSizeSizes(@Req() req: any, @Body() body: { sizes: string }) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const value = String(body?.sizes ?? '').trim();
+    await (this.svc as any).prisma.systemSetting.upsert({
+      where: { key: 'realignment_plus_size_sizes' },
+      create: { key: 'realignment_plus_size_sizes', value },
+      update: { value },
+    });
+    return { ok: true, sizes: value };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
   // SHIPMENT (Remessa) — agrupamento físico de itens em trânsito
   // ════════════════════════════════════════════════════════════════════
 

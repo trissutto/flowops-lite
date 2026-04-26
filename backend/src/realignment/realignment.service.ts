@@ -45,6 +45,42 @@ export class RealignmentService {
   /**
    * Monta o plano sem persistir.
    */
+  /**
+   * Lista de tamanhos PLUS SIZE aceitos no realinhamento.
+   * Configurável via SystemSetting `realignment_plus_size_sizes` (lista
+   * separada por vírgula). Filtro é case/space insensitive.
+   *
+   * Default: 46-60 + combinações comuns (46/48, 50/52, etc).
+   *
+   * Se a config existir mas estiver vazia (string vazia), filtro é
+   * desabilitado e TODOS os tamanhos passam.
+   */
+  private async getPlusSizeFilterSet(): Promise<Set<string> | null> {
+    try {
+      const r = await (this.prisma as any).systemSetting.findUnique({
+        where: { key: 'realignment_plus_size_sizes' },
+      });
+      const raw = r?.value;
+      if (raw === undefined || raw === null) {
+        // Sem config — usa default
+        return new Set([
+          '46', '48', '50', '52', '54', '56', '58', '60',
+          '46/48', '48/50', '50/52', '52/54', '54/56', '56/58', '58/60',
+        ]);
+      }
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null; // Config vazia = sem filtro
+      return new Set(
+        trimmed
+          .split(',')
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean),
+      );
+    } catch {
+      return null; // Em caso de erro, não filtra (failsafe)
+    }
+  }
+
   async preview(input: {
     refs?: string[];
     skus?: string[];
@@ -61,6 +97,14 @@ export class RealignmentService {
       new Set((input.skus || []).map((s) => s.trim()).filter(Boolean)),
     );
 
+    // Carrega filtro de tamanhos plus size (config). Se null = sem filtro.
+    const plusFilter = await this.getPlusSizeFilterSet();
+    const isPlusSizeTamanho = (tam: string | null) => {
+      if (!plusFilter) return true;            // sem filtro
+      if (!tam) return false;                  // sem tamanho não passa filtro
+      return plusFilter.has(tam.trim().toUpperCase());
+    };
+
     const refMap: Record<string, Array<{ sku: string; cor: string | null; tamanho: string | null; desc: string }>> = {};
     const notFoundRefs: string[] = [];
 
@@ -70,12 +114,26 @@ export class RealignmentService {
         notFoundRefs.push(ref);
         continue;
       }
-      refMap[ref] = rows.map((r: any) => ({
-        sku: String(r.CODIGO || '').trim(),
-        cor: r.COR ? String(r.COR).trim() : null,
-        tamanho: r.TAMANHO ? String(r.TAMANHO).trim() : null,
-        desc: r.DESCRICAOCOMPLETA ? String(r.DESCRICAOCOMPLETA).trim() : '',
-      })).filter((x) => x.sku);
+      const variations = rows
+        .map((r: any) => ({
+          sku: String(r.CODIGO || '').trim(),
+          cor: r.COR ? String(r.COR).trim() : null,
+          tamanho: r.TAMANHO ? String(r.TAMANHO).trim() : null,
+          desc: r.DESCRICAOCOMPLETA ? String(r.DESCRICAOCOMPLETA).trim() : '',
+        }))
+        .filter((x) => x.sku)
+        .filter((x) => isPlusSizeTamanho(x.tamanho));
+
+      if (variations.length > 0) {
+        refMap[ref] = variations;
+      } else {
+        // REF tem variações no Giga mas NENHUMA passou no filtro plus size.
+        // Loga pra auditoria mas não joga em notFound (não é erro de cadastro,
+        // é a REF não ter peças plus size).
+        this.logger.log(
+          `[realignment] REF ${ref}: ${rows.length} variações no Giga, 0 plus size (filtradas)`,
+        );
+      }
     }
 
     const expandedSkus = Object.values(refMap).flat().map((x) => x.sku);

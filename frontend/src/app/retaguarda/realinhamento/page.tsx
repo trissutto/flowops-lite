@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles, Shirt } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -271,6 +271,38 @@ export default function RealinhamentoPage() {
     const atuais = new Set(refsText.split('\n').map((s) => s.trim()).filter(Boolean));
     novos.forEach((r) => atuais.add(r));
     setRefsText(Array.from(atuais).sort().join('\n'));
+  };
+
+  // ── CONFIG TAMANHOS PLUS SIZE ──
+  const [plusSizes, setPlusSizes] = useState('');
+  const [plusSizesIsDefault, setPlusSizesIsDefault] = useState(true);
+  const [plusSizesOpen, setPlusSizesOpen] = useState(false);
+  const [plusSizesSaving, setPlusSizesSaving] = useState(false);
+
+  useEffect(() => {
+    api<{ sizes: string; isDefault: boolean }>('/realignment/plus-size-sizes')
+      .then((r) => {
+        setPlusSizes(r.sizes);
+        setPlusSizesIsDefault(r.isDefault);
+      })
+      .catch(() => {});
+  }, []);
+
+  const savePlusSizes = async () => {
+    setPlusSizesSaving(true);
+    try {
+      const r = await api<{ sizes: string }>('/realignment/plus-size-sizes', {
+        method: 'POST',
+        body: JSON.stringify({ sizes: plusSizes }),
+      });
+      setPlusSizes(r.sizes);
+      setPlusSizesIsDefault(false);
+      alert('✅ Filtro de tamanhos atualizado');
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setPlusSizesSaving(false);
+    }
   };
 
   // ── WIPE ALL (admin) ─────────────────────────────────────────────
@@ -876,6 +908,63 @@ export default function RealinhamentoPage() {
             )}
           </div>
         )}
+
+        {/* ── FILTRO TAMANHOS PLUS SIZE (config global) ── */}
+        <div className="border border-rose-200 bg-rose-50/60 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Shirt className="w-4 h-4 text-rose-700" />
+            <div className="text-sm font-semibold text-rose-900 flex-1">
+              Filtro de tamanhos PLUS SIZE
+              {plusSizesIsDefault && <span className="ml-2 text-[10px] bg-rose-200 text-rose-900 px-2 py-0.5 rounded font-bold">DEFAULT</span>}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPlusSizesOpen(!plusSizesOpen)}
+              className="text-xs text-rose-700 hover:underline"
+            >
+              {plusSizesOpen ? 'Fechar' : 'Editar'}
+            </button>
+          </div>
+          <div className="text-xs text-rose-900/80 mb-2">
+            Variações com tamanho fora dessa lista são <b>ignoradas</b> automaticamente em todo realinhamento
+            (ex: REF de jeans com 40, 42, 44, 46, 48 → só 46+ entra). Vazio = sem filtro.
+          </div>
+          {plusSizesOpen ? (
+            <div className="space-y-2">
+              <textarea
+                value={plusSizes}
+                onChange={(e) => setPlusSizes(e.target.value)}
+                placeholder="46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60"
+                disabled={plusSizesSaving}
+                className="w-full border border-rose-300 rounded-lg px-3 py-2 text-sm font-mono bg-white min-h-[60px] focus:outline-none focus:ring-2 focus:ring-rose-400"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlusSizes('46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60');
+                  }}
+                  className="text-xs px-3 py-1.5 border border-slate-300 rounded hover:bg-slate-50"
+                >
+                  Restaurar default
+                </button>
+                <button
+                  type="button"
+                  onClick={savePlusSizes}
+                  disabled={plusSizesSaving}
+                  className="text-xs px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold rounded flex items-center gap-1"
+                >
+                  {plusSizesSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                  Salvar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs font-mono bg-white border border-rose-200 rounded px-2 py-1 text-slate-700 truncate">
+              {plusSizes || '(sem filtro — todos tamanhos)'}
+            </div>
+          )}
+        </div>
 
         {/* Refs */}
         <div>
