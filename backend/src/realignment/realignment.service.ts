@@ -547,19 +547,15 @@ export class RealignmentService {
 
   /**
    * Marca 1 ordem como enviada (filial clica "Enviei").
-   * Valida que a loja do JWT é a origem da ordem pra não deixar outra loja
-   * marcar ordem que não é dela.
    *
-   * EFEITOS COLATERAIS (importantes pro financeiro):
-   *   1. Atualiza status no TransferOrder.
-   *   2. Se a transferência for entre grupos diferentes (REDE↔FILIAL), CRIA
-   *      automaticamente uma obrigação financeira em InterStoreObligation,
-   *      capturando o snapshot do preço do Giga no momento.
-   *   3. Emite socket pra UI atualizar.
+   * NOVO MODELO (após Fase A-E de Shipment):
+   *   Esse método agora apenas ADICIONA o item à remessa aberta do par
+   *   origem→destino. Não baixa Giga ainda — só linka. A baixa Giga +
+   *   criação de obrigações acontece quando vendedora clica "Fechar e
+   *   enviar remessa" (closeAndSend no shipment service).
    *
-   * Falha na obrigação financeira NÃO bloqueia a marcação (loga warning) —
-   * a vendedora não pode ficar travada por causa de problema de Giga/cálculo.
-   * Admin vê o pendente na tela financeira e ajusta manualmente.
+   * Mantido por compat: tela `/minha-loja/realinhamento` antiga continua
+   * chamando esse endpoint sem precisar refator pesado.
    */
   async markAsSent(input: {
     transferId: string;
@@ -599,24 +595,51 @@ export class RealignmentService {
       throw new BadRequestException('Ordem já marcada como enviada');
 
     const now = new Date();
+    const o = order as any;
+
+    // Procura ou cria a remessa OPEN do par origem→destino
+    let shipment = await (this.prisma as any).realignmentShipment.findFirst({
+      where: {
+        fromStoreCode: o.lojaOrigemCode,
+        toStoreCode: o.lojaDestinoCode,
+        status: 'open',
+      },
+    });
+    if (!shipment) {
+      // Gera código sequencial REM-YYYY-NNNNNN
+      const year = now.getFullYear();
+      const prefix = `REM-${year}-`;
+      const count = await (this.prisma as any).realignmentShipment.count({
+        where: { code: { startsWith: prefix } },
+      });
+      const code = `${prefix}${String(count + 1).padStart(6, '0')}`;
+      shipment = await (this.prisma as any).realignmentShipment.create({
+        data: {
+          code,
+          fromStoreCode: o.lojaOrigemCode,
+          fromStoreName: o.lojaOrigemName,
+          toStoreCode: o.lojaDestinoCode,
+          toStoreName: o.lojaDestinoName,
+          status: 'open',
+          openedByUserId: input.userId ?? null,
+        },
+      });
+    }
+
     const updated = await this.prisma.transferOrder.update({
-      where: { id: (order as any).id },
+      where: { id: o.id },
       data: {
         realignmentStatus: 'sent',
         realignmentSentAt: now,
         realignmentSentByUserId: input.userId ?? null,
+        shipmentId: shipment.id,
       } as any,
     });
 
-    // ── FINANCEIRO: cria obrigação se for transferência entre grupos diferentes ──
-    try {
-      await this.maybeCreateInterStoreObligation(order as any, now, input.userId);
-    } catch (e) {
-      this.logger.warn(
-        `[realignment] falha criando obrigação financeira (não bloqueante): ${(e as Error).message}`,
-      );
-    }
-
+    // ── FINANCEIRO: a obrigação NÃO é mais criada aqui. Será criada em
+    //    closeAndSend() do shipment service quando a remessa for fechada e
+    //    enviada (porque esse é o momento que mercadoria efetivamente sai
+    //    do estoque Giga). Manteve apenas o status sent + socket abaixo.
     try {
       this.gateway.emitRealignmentSent(store.id, {
         transferId: (updated as any).id,

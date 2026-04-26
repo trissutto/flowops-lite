@@ -1,0 +1,757 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
+import { RealtimeGateway } from '../websocket/realtime.gateway';
+
+/**
+ * RealignmentShipmentService — gerencia o ciclo de REMESSA entre lojas.
+ *
+ * Diferente do markAsSent antigo (item-a-item), agora a vendedora MONTA uma
+ * remessa adicionando peças, e quando termina FECHA → vira código único e
+ * baixa estoque Giga em batch. Loja destino bipa cada peça e dá entrada.
+ *
+ * Convenção: TODOS endpoints só pra role=store (vendedora) ou admin.
+ * O role check fica no controller.
+ */
+@Injectable()
+export class RealignmentShipmentService {
+  private readonly logger = new Logger(RealignmentShipmentService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+    private readonly gateway: RealtimeGateway,
+  ) {}
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // GERAÇÃO DE CÓDIGO (REM-YYYY-NNNNNN sequencial global)
+  // ═══════════════════════════════════════════════════════════════════════
+  private async generateShipmentCode(): Promise<string> {
+    const year = new Date().getFullYear();
+    const prefix = `REM-${year}-`;
+    // Conta quantas remessas existem com esse prefixo no ano e soma 1
+    // (é race-condition tolerável — se 2 vendedoras criarem ao mesmo tempo,
+    // o índice unique no `code` vai rejeitar e tentamos de novo)
+    const count = await (this.prisma as any).realignmentShipment.count({
+      where: { code: { startsWith: prefix } },
+    });
+    return `${prefix}${String(count + 1).padStart(6, '0')}`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LOJA ORIGEM — montar e enviar remessa
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Lista as remessas ABERTAS da loja origem (ainda em montagem).
+   * Cada par origem→destino só pode ter 1 remessa aberta por vez —
+   * a vendedora vai acumulando peças nela até fechar e enviar.
+   */
+  async listOpenShipmentsForOrigin(storeId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true, name: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where: { fromStoreCode: (store as any).code, status: 'open' },
+      orderBy: { openedAt: 'asc' },
+    });
+
+    // Pra cada shipment, conta quantos itens já estão dentro
+    const result = await Promise.all(
+      shipments.map(async (s: any) => {
+        const items = await this.prisma.transferOrder.findMany({
+          where: { shipmentId: s.id } as any,
+          select: {
+            id: true,
+            refCode: true,
+            cor: true,
+            tamanho: true,
+            qtyOrigem: true,
+            descricao: true,
+          } as any,
+        });
+        return { ...s, items };
+      }),
+    );
+
+    return result;
+  }
+
+  /**
+   * Adiciona uma TransferOrder a uma remessa (criando ou reutilizando a
+   * remessa aberta do par origem→destino).
+   *
+   * Vendedora chama esse método uma vez por peça que está separando.
+   * Não baixa Giga ainda — só linka ao shipment.
+   */
+  async addItemToShipment(input: {
+    transferOrderId: string;
+    storeId: string;
+    userId?: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true, name: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferOrderId },
+      select: {
+        id: true,
+        tipo: true,
+        lojaOrigemCode: true,
+        lojaOrigemName: true,
+        lojaDestinoCode: true,
+        lojaDestinoName: true,
+        realignmentStatus: true,
+        shipmentId: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+      } as any,
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    const o = order as any;
+    if (o.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+    if (o.lojaOrigemCode !== (store as any).code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (o.realignmentStatus === 'sent')
+      throw new BadRequestException('Item já está em uma remessa');
+    if (o.realignmentStatus === 'received')
+      throw new BadRequestException('Item já foi recebido');
+
+    // Procura remessa OPEN do par origem→destino
+    let shipment = await (this.prisma as any).realignmentShipment.findFirst({
+      where: {
+        fromStoreCode: o.lojaOrigemCode,
+        toStoreCode: o.lojaDestinoCode,
+        status: 'open',
+      },
+    });
+
+    // Se não tem aberta, cria nova
+    if (!shipment) {
+      const code = await this.generateShipmentCode();
+      shipment = await (this.prisma as any).realignmentShipment.create({
+        data: {
+          code,
+          fromStoreCode: o.lojaOrigemCode,
+          fromStoreName: o.lojaOrigemName,
+          toStoreCode: o.lojaDestinoCode,
+          toStoreName: o.lojaDestinoName,
+          status: 'open',
+          openedByUserId: input.userId ?? null,
+        },
+      });
+      this.logger.log(`[shipment] Nova remessa ${code} aberta ${o.lojaOrigemCode}→${o.lojaDestinoCode}`);
+    }
+
+    // Marca item como sent + linka ao shipment
+    const updated = await this.prisma.transferOrder.update({
+      where: { id: o.id },
+      data: {
+        realignmentStatus: 'sent',
+        realignmentSentAt: new Date(),
+        realignmentSentByUserId: input.userId ?? null,
+        shipmentId: shipment.id,
+      } as any,
+    });
+
+    return { ok: true, shipmentId: shipment.id, shipmentCode: shipment.code, transferOrderId: (updated as any).id };
+  }
+
+  /**
+   * Remove um item de uma remessa OPEN (vendedora errou, quer tirar).
+   * Volta status pra pending.
+   */
+  async removeItemFromShipment(input: { transferOrderId: string; storeId: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferOrderId },
+      select: {
+        id: true,
+        lojaOrigemCode: true,
+        shipmentId: true,
+        realignmentStatus: true,
+      } as any,
+    });
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    const o = order as any;
+    if (o.lojaOrigemCode !== (store as any).code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (!o.shipmentId) throw new BadRequestException('Item não está em remessa');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: o.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.status !== 'open')
+      throw new BadRequestException('Remessa já foi fechada — não pode remover item');
+
+    await this.prisma.transferOrder.update({
+      where: { id: o.id },
+      data: {
+        realignmentStatus: 'pending',
+        realignmentSentAt: null,
+        realignmentSentByUserId: null,
+        shipmentId: null,
+      } as any,
+    });
+
+    return { ok: true };
+  }
+
+  /**
+   * FECHA a remessa: status → in_transit, baixa Giga origem em batch,
+   * emite socket pra loja destino mostrar alerta.
+   *
+   * NÃO permite fechar remessa vazia (precisa ter pelo menos 1 item).
+   */
+  async closeAndSend(input: { shipmentId: string; storeId: string; userId?: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.fromStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'open')
+      throw new BadRequestException(`Remessa não está aberta (status=${shipment.status})`);
+
+    // Itens da remessa
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+      } as any,
+    });
+    if (!items.length) throw new BadRequestException('Remessa vazia — adicione itens antes de fechar');
+
+    // Resolver SKU pra cada item (REF + cor + tamanho → SKU via Giga)
+    // Pra baixar estoque precisa de SKU. Se algum item não conseguir resolver,
+    // retorna erro com lista de problemas.
+    const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
+    const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+
+    for (const it of items as any[]) {
+      try {
+        const variations = await this.erp.searchByRef(it.refCode);
+        const match = variations.find(
+          (v: any) =>
+            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
+            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
+        );
+        const sku = match?.codigo || match?.sku;
+        if (!sku) {
+          unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+          continue;
+        }
+        stockItems.push({
+          sku,
+          qty: it.qtyOrigem || 1,
+          storeCode: shipment.fromStoreCode,
+          refCode: it.refCode,
+        });
+      } catch (e) {
+        unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+
+    if (unresolved.length) {
+      throw new BadRequestException(
+        `Não consegui resolver SKU pra ${unresolved.length} item(ns): ` +
+          unresolved.map((u) => `${u.refCode} ${u.cor || ''}/${u.tamanho || ''}`).join(', '),
+      );
+    }
+
+    // BAIXA estoque Giga origem em transação (todos ou nada)
+    const result = await this.erp.decreaseStock(
+      stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
+    );
+    if (!result.success) {
+      throw new BadRequestException(
+        `Falha ao baixar estoque Giga origem: ${result.error}. Remessa NÃO foi fechada.`,
+      );
+    }
+
+    // Atualiza shipment → in_transit
+    const now = new Date();
+    const totalQty = stockItems.reduce((s, x) => s + x.qty, 0);
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: {
+        status: 'in_transit',
+        sentAt: now,
+        sentByUserId: input.userId ?? null,
+        totalItems: items.length,
+        totalQty,
+      },
+    });
+
+    // ── FINANCEIRO: cria obrigações p/ itens entre grupos diferentes (REDE↔FILIAL)
+    // Captura preço Giga em batch (via SKU já resolvido acima) pra ser snapshot.
+    try {
+      await this.createObligationsForShipment(shipment, items, stockItems, now);
+    } catch (e) {
+      this.logger.warn(
+        `[shipment] falha criando obrigações financeiras (não bloqueante): ${(e as Error).message}`,
+      );
+    }
+
+    // Emite socket pra loja DESTINO
+    try {
+      const destStore = await this.prisma.store.findUnique({
+        where: { code: shipment.toStoreCode },
+        select: { id: true } as any,
+      });
+      if (destStore) {
+        this.gateway.emitToStore((destStore as any).id, 'shipment:incoming', {
+          shipmentId: shipment.id,
+          code: shipment.code,
+          fromStoreCode: shipment.fromStoreCode,
+          fromStoreName: shipment.fromStoreName,
+          totalItems: items.length,
+          totalQty,
+          sentAt: now.toISOString(),
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[shipment] falha emitindo socket: ${(e as Error).message}`);
+    }
+
+    this.logger.log(
+      `[shipment] ${shipment.code} fechada e enviada: ${items.length} itens, ${totalQty} peças, ` +
+        `Giga ${shipment.fromStoreCode} baixou ${result.applied.length} SKUs`,
+    );
+
+    return { ok: true, code: shipment.code, totalItems: items.length, totalQty };
+  }
+
+  /**
+   * Cria obrigações financeiras pra todos os itens do shipment quando
+   * as lojas envolvidas são de grupos diferentes (REDE↔FILIAL).
+   *
+   * Snapshot do preço Giga é capturado em batch. Mês de referência = mês
+   * da data de envio. Convenção: TO (destino) paga FROM (origem).
+   */
+  private async createObligationsForShipment(
+    shipment: any,
+    items: any[],
+    stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }>,
+    sentAt: Date,
+  ) {
+    // Carrega tipo das 2 lojas (snapshot — preserva histórico)
+    const [from, to] = await Promise.all([
+      this.prisma.store.findUnique({
+        where: { code: shipment.fromStoreCode },
+        select: { code: true, name: true, tipo: true } as any,
+      }),
+      this.prisma.store.findUnique({
+        where: { code: shipment.toStoreCode },
+        select: { code: true, name: true, tipo: true } as any,
+      }),
+    ]);
+    const fromTipo = (from as any)?.tipo || 'REDE';
+    const toTipo = (to as any)?.tipo || 'REDE';
+
+    // Mesmo grupo → sem cobrança
+    if (fromTipo === toTipo) return;
+
+    // Busca preços Giga em batch
+    const skus = stockItems.map((s) => s.sku);
+    const priceMap = await this.erp.getProductPricesBySkus(skus);
+
+    // Mapa REF→SKU pra encontrar item correto
+    const refToSku = new Map<string, string>();
+    for (const s of stockItems) refToSku.set(s.refCode, s.sku);
+
+    // Mês de referência
+    const mesReferencia = `${sentAt.getFullYear()}-${String(sentAt.getMonth() + 1).padStart(2, '0')}`;
+
+    for (const it of items as any[]) {
+      const sku = refToSku.get(it.refCode);
+      const preco = sku ? priceMap.get(sku) || 0 : 0;
+      const qty = it.qtyOrigem || 1;
+      const precoTotal = preco * qty;
+      const divisor = 2.5;
+      const valorObrigacao = precoTotal / divisor;
+
+      await (this.prisma as any).interStoreObligation.create({
+        data: {
+          transferOrderId: it.id,
+          fromStoreCode: shipment.fromStoreCode,
+          fromStoreName: shipment.fromStoreName,
+          fromStoreTipo: fromTipo,
+          toStoreCode: shipment.toStoreCode,
+          toStoreName: shipment.toStoreName,
+          toStoreTipo: toTipo,
+          refCode: it.refCode,
+          sku: sku || null,
+          cor: it.cor,
+          tamanho: it.tamanho,
+          descricao: it.descricao,
+          qty,
+          precoUnitario: preco,
+          precoTotal,
+          divisor,
+          valorObrigacao,
+          mesReferencia,
+          status: 'pending',
+        },
+      });
+    }
+
+    this.logger.log(
+      `[shipment] ${shipment.code}: ${items.length} obrigações financeiras criadas ` +
+        `(${fromTipo}→${toTipo}) mês=${mesReferencia}`,
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LOJA DESTINO — receber e dar entrada
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Lista remessas chegando na loja destino (status in_transit).
+   * Inclui contagem de itens já bipados pra UI mostrar progresso.
+   */
+  async listIncomingShipments(storeId: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where: { toStoreCode: (store as any).code, status: 'in_transit' },
+      orderBy: { sentAt: 'desc' },
+    });
+
+    return shipments;
+  }
+
+  /**
+   * Detalhe completo de uma remessa (todos os itens com status individual).
+   * Usado pela tela de recebimento — vendedora vê o que tem que conferir.
+   */
+  async getShipmentDetail(input: { shipmentId: string; storeId: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.toStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      orderBy: [{ refCode: 'asc' }],
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        descricao: true,
+        realignmentStatus: true,
+        realignmentReceivedAt: true,
+        realignmentMissingAt: true,
+        realignmentMissingNote: true,
+      } as any,
+    });
+
+    return { ...shipment, items };
+  }
+
+  /**
+   * Bipa um item da remessa pra marcar como conferido.
+   *
+   * A vendedora bipa o EAN/SKU. O sistema procura na lista de itens da
+   * remessa um que case por SKU (resolvido via Giga REF+cor+tamanho).
+   * Se achar, marca como `received`. Se não, retorna erro com sugestão.
+   *
+   * Itens já marcados como `received` ou `missing` não podem ser bipados de novo.
+   */
+  async scanItem(input: { shipmentId: string; sku: string; storeId: string; userId?: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.toStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'in_transit')
+      throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
+
+    const sku = String(input.sku || '').trim();
+    if (!sku) throw new BadRequestException('SKU vazio');
+
+    // Pega itens da remessa
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        realignmentStatus: true,
+      } as any,
+    });
+
+    // Resolve SKU → procura match nos itens
+    // Faz isso buscando todas as variações da REF e vendo se o SKU bipado bate
+    let matchedItemId: string | null = null;
+    let matchedRefCode: string | null = null;
+    for (const it of items as any[]) {
+      if (it.realignmentStatus === 'received' || it.realignmentStatus === 'missing') continue;
+      try {
+        const variations = await this.erp.searchByRef(it.refCode);
+        const variation = variations.find(
+          (v: any) =>
+            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
+            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
+        );
+        const itemSku = variation?.codigo || variation?.sku;
+        if (itemSku && String(itemSku).trim() === sku) {
+          matchedItemId = it.id;
+          matchedRefCode = it.refCode;
+          break;
+        }
+      } catch {
+        /* continua tentando próximos */
+      }
+    }
+
+    if (!matchedItemId) {
+      throw new BadRequestException(`SKU ${sku} não pertence a essa remessa (ou já foi bipado)`);
+    }
+
+    await this.prisma.transferOrder.update({
+      where: { id: matchedItemId },
+      data: {
+        realignmentStatus: 'received',
+        realignmentReceivedAt: new Date(),
+        realignmentReceivedByUserId: input.userId ?? null,
+      } as any,
+    });
+
+    return { ok: true, transferOrderId: matchedItemId, refCode: matchedRefCode };
+  }
+
+  /**
+   * Marca um item da remessa como FALTANTE (extraviada na remessa).
+   * Não dá entrada Giga e CANCELA a obrigação financeira correspondente.
+   */
+  async markItemMissing(input: {
+    shipmentId: string;
+    transferOrderId: string;
+    storeId: string;
+    note?: string;
+    userId?: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const order = await this.prisma.transferOrder.findUnique({
+      where: { id: input.transferOrderId },
+      select: { id: true, shipmentId: true, realignmentStatus: true } as any,
+    });
+    if (!order) throw new NotFoundException('Item não encontrado');
+    const o = order as any;
+    if (o.shipmentId !== input.shipmentId)
+      throw new BadRequestException('Item não pertence a essa remessa');
+    if (o.realignmentStatus === 'received')
+      throw new BadRequestException('Item já foi recebido — não pode marcar como faltante');
+
+    await this.prisma.transferOrder.update({
+      where: { id: o.id },
+      data: {
+        realignmentStatus: 'missing',
+        realignmentMissingAt: new Date(),
+        realignmentMissingNote: input.note?.trim() || null,
+        realignmentReceivedByUserId: input.userId ?? null,
+      } as any,
+    });
+
+    // Cancela obrigação financeira correspondente automaticamente
+    try {
+      await (this.prisma as any).interStoreObligation.updateMany({
+        where: { transferOrderId: o.id, status: { in: ['pending', 'closed'] } },
+        data: {
+          status: 'cancelled',
+          cancelledAt: new Date(),
+          cancelReason: 'Item faltante no recebimento da remessa',
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`[shipment] falha cancelando obrigação de item missing: ${(e as Error).message}`);
+    }
+
+    return { ok: true };
+  }
+
+  /**
+   * "Dar Entrada" — finaliza o recebimento da remessa.
+   *
+   * Pré-condição: TODOS itens da remessa devem ter status final
+   * (`received` ou `missing`). Itens ainda `sent` bloqueiam.
+   *
+   * Faz:
+   *   1. Resolve SKU dos itens `received`
+   *   2. Chama erp.increaseStock em batch (transação ACID)
+   *   3. Marca shipment.status = 'received'
+   *   4. Emite socket pra retaguarda
+   */
+  async confirmReceived(input: { shipmentId: string; storeId: string; userId?: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.toStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'in_transit')
+      throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
+
+    // Verifica que TODOS itens estão em status final
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        realignmentStatus: true,
+      } as any,
+    });
+
+    const pendingItems = (items as any[]).filter(
+      (i) => i.realignmentStatus !== 'received' && i.realignmentStatus !== 'missing',
+    );
+    if (pendingItems.length > 0) {
+      throw new BadRequestException(
+        `Ainda há ${pendingItems.length} item(ns) sem conferir. ` +
+          `Bipe todos ou marque como faltante antes de dar entrada.`,
+      );
+    }
+
+    const receivedItems = (items as any[]).filter((i) => i.realignmentStatus === 'received');
+    const missingItems = (items as any[]).filter((i) => i.realignmentStatus === 'missing');
+
+    // Resolve SKU pros itens received e dá entrada Giga
+    const stockItems: Array<{ sku: string; qty: number; storeCode: string }> = [];
+    for (const it of receivedItems as any[]) {
+      try {
+        const variations = await this.erp.searchByRef(it.refCode);
+        const match = variations.find(
+          (v: any) =>
+            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
+            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
+        );
+        const sku = match?.codigo || match?.sku;
+        if (sku) {
+          stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
+        }
+      } catch (e) {
+        this.logger.warn(`[shipment] não resolveu SKU pra ${it.refCode}: ${(e as Error).message}`);
+      }
+    }
+
+    let increaseResult: any = { success: true, applied: [] };
+    if (stockItems.length > 0) {
+      increaseResult = await this.erp.increaseStock(stockItems);
+      if (!increaseResult.success) {
+        throw new BadRequestException(
+          `Falha ao dar entrada Giga: ${increaseResult.error}. Remessa NÃO foi finalizada.`,
+        );
+      }
+    }
+
+    // Atualiza shipment
+    const now = new Date();
+    const receivedQty = receivedItems.reduce((s, i: any) => s + (i.qtyOrigem || 1), 0);
+    const missingQty = missingItems.reduce((s, i: any) => s + (i.qtyOrigem || 1), 0);
+
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: {
+        status: 'received',
+        receivedAt: now,
+        receivedByUserId: input.userId ?? null,
+        receivedQty,
+        missingQty,
+      },
+    });
+
+    this.logger.log(
+      `[shipment] ${shipment.code} recebida: ${receivedItems.length} itens entrada (Giga aplicou ${increaseResult.applied?.length || 0}), ` +
+        `${missingItems.length} faltantes`,
+    );
+
+    // Emite socket pra retaguarda atualizar dashboards
+    try {
+      this.gateway.emitToAdmins('shipment:received', {
+        shipmentId: shipment.id,
+        code: shipment.code,
+        toStoreCode: shipment.toStoreCode,
+        receivedItems: receivedItems.length,
+        missingItems: missingItems.length,
+      });
+    } catch (e) {
+      /* não bloqueia */
+    }
+
+    return {
+      ok: true,
+      code: shipment.code,
+      receivedItems: receivedItems.length,
+      missingItems: missingItems.length,
+      gigaApplied: increaseResult.applied?.length || 0,
+    };
+  }
+}

@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
+import { RealignmentShipmentService } from './shipment.service';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -17,6 +18,7 @@ import { ErpService } from '../erp/erp.service';
 export class RealignmentController {
   constructor(
     private readonly svc: RealignmentService,
+    private readonly shipment: RealignmentShipmentService,
     private readonly erp: ErpService,
   ) {}
 
@@ -141,6 +143,153 @@ export class RealignmentController {
       storeId,
     });
   }
+
+  // ════════════════════════════════════════════════════════════════════
+  // SHIPMENT (Remessa) — agrupamento físico de itens em trânsito
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * Lista as remessas ABERTAS da loja origem (vendedora ainda montando).
+   * GET /realignment/shipments/open · filial
+   */
+  @Get('shipments/open')
+  listOpenShipments(@Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) return [];
+    return this.shipment.listOpenShipmentsForOrigin(storeId);
+  }
+
+  /**
+   * Lista remessas chegando na loja destino (status=in_transit).
+   * GET /realignment/shipments/incoming · filial
+   */
+  @Get('shipments/incoming')
+  listIncomingShipments(@Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) return [];
+    return this.shipment.listIncomingShipments(storeId);
+  }
+
+  /**
+   * Detalhe de uma remessa (todos itens com status individual).
+   * GET /realignment/shipments/:id · filial
+   */
+  @Get('shipments/:id')
+  getShipmentDetail(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja');
+    return this.shipment.getShipmentDetail({ shipmentId: id, storeId });
+  }
+
+  /**
+   * Adiciona um item (TransferOrder pendente) à remessa aberta do par.
+   * POST /realignment/shipments/add-item { transferOrderId } · filial origem
+   */
+  @Post('shipments/add-item')
+  addItemToShipment(@Body() body: { transferOrderId: string }, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja origem');
+    return this.shipment.addItemToShipment({
+      transferOrderId: body?.transferOrderId,
+      storeId,
+      userId,
+    });
+  }
+
+  /**
+   * Remove um item de uma remessa aberta (vendedora errou, quer tirar).
+   * DELETE /realignment/shipments/items/:transferOrderId · filial origem
+   */
+  @Delete('shipments/items/:transferOrderId')
+  removeItemFromShipment(@Param('transferOrderId') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja origem');
+    return this.shipment.removeItemFromShipment({ transferOrderId: id, storeId });
+  }
+
+  /**
+   * Fecha a remessa, baixa estoque Giga origem em batch e envia.
+   * POST /realignment/shipments/:id/close-and-send · filial origem
+   */
+  @Post('shipments/:id/close-and-send')
+  closeAndSendShipment(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja origem');
+    return this.shipment.closeAndSend({ shipmentId: id, storeId, userId });
+  }
+
+  /**
+   * Bipa um SKU pra marcar item como conferido na remessa.
+   * POST /realignment/shipments/:id/scan { sku } · filial destino
+   */
+  @Post('shipments/:id/scan')
+  scanItem(@Param('id') id: string, @Body() body: { sku: string }, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja destino');
+    return this.shipment.scanItem({
+      shipmentId: id,
+      sku: body?.sku || '',
+      storeId,
+      userId,
+    });
+  }
+
+  /**
+   * Marca um item como FALTANTE (não chegou). Cancela obrigação financeira.
+   * POST /realignment/shipments/:id/missing { transferOrderId, note? } · filial destino
+   */
+  @Post('shipments/:id/missing')
+  markMissing(
+    @Param('id') id: string,
+    @Body() body: { transferOrderId: string; note?: string },
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja destino');
+    return this.shipment.markItemMissing({
+      shipmentId: id,
+      transferOrderId: body?.transferOrderId,
+      storeId,
+      note: body?.note,
+      userId,
+    });
+  }
+
+  /**
+   * "Dar Entrada" — finaliza recebimento, +1 estoque Giga destino.
+   * POST /realignment/shipments/:id/confirm-received · filial destino
+   */
+  @Post('shipments/:id/confirm-received')
+  confirmReceived(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja destino');
+    return this.shipment.confirmReceived({ shipmentId: id, storeId, userId });
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // WIPE / DESTRUTIVOS (admin)
+  // ════════════════════════════════════════════════════════════════════
 
   /**
    * GET /realignment/wipe-preview · admin

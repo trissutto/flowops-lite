@@ -6,6 +6,7 @@ import { WebsocketModule } from '../websocket/websocket.module';
 import { WpDbModule } from '../wp-db/wp-db.module';
 import { RealignmentController } from './realignment.controller';
 import { RealignmentService } from './realignment.service';
+import { RealignmentShipmentService } from './shipment.service';
 
 /**
  * Nota: dependia de WhatsappModule (disparo de WhatsApp consolidado) até o
@@ -16,7 +17,7 @@ import { RealignmentService } from './realignment.service';
 @Module({
   imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule],
   controllers: [RealignmentController],
-  providers: [RealignmentService],
-  exports: [RealignmentService],
+  providers: [RealignmentService, RealignmentShipmentService],
+  exports: [RealignmentService, RealignmentShipmentService],
 })
 export class RealignmentModule {}

@@ -130,6 +130,58 @@ model InterStoreObligation {
   @@map("inter_store_obligations")
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// REMESSA de realinhamento — agrupa N TransferOrders num "pacote físico"
+// pra dar rastreabilidade de trânsito entre lojas.
+//
+// Fluxo:
+//   1. Vendedora da loja A monta a remessa item a item (status = open)
+//      Cada item adicionado vira shipmentId no TransferOrder e seu
+//      realignmentStatus vira 'sent'.
+//   2. Quando termina, clica "Fechar e enviar" → status vira 'in_transit'
+//      Sistema baixa estoque Giga A em batch (todos os itens de uma vez)
+//      e emite socket pra loja B receber alerta.
+//   3. Loja B vê remessa chegando, bipa cada item à medida que chega.
+//      Itens não bipados podem ser marcados como 'missing'.
+//   4. "Dar Entrada" → status = 'received'. Sistema chama erp.increaseStock
+//      pros itens 'received' (não pros 'missing'). Itens missing têm
+//      a obrigação financeira cancelada automaticamente.
+//
+// Código (`code`): formato REM-YYYY-NNNNNN sequencial global.
+// ═══════════════════════════════════════════════════════════════════════════
+model RealignmentShipment {
+  id                String   @id @default(uuid())
+  // Código humano sequencial: REM-2026-000123
+  code              String   @unique
+  // Lojas envolvidas
+  fromStoreCode     String   @map("from_store_code")
+  fromStoreName     String   @map("from_store_name")
+  toStoreCode       String   @map("to_store_code")
+  toStoreName       String   @map("to_store_name")
+  // Status: open | in_transit | received | cancelled
+  status            String   @default("open")
+  // Timestamps por etapa
+  openedAt          DateTime @default(now()) @map("opened_at")
+  openedByUserId    String?  @map("opened_by_user_id")
+  sentAt            DateTime? @map("sent_at")
+  sentByUserId      String?  @map("sent_by_user_id")
+  receivedAt        DateTime? @map("received_at")
+  receivedByUserId  String?  @map("received_by_user_id")
+  // Quantidades (snapshots calculados no fechamento)
+  totalItems        Int      @default(0) @map("total_items")    // qtd de TransferOrders na remessa
+  totalQty          Int      @default(0) @map("total_qty")       // soma das quantidades
+  receivedQty       Int      @default(0) @map("received_qty")    // qty efetivamente recebida
+  missingQty        Int      @default(0) @map("missing_qty")     // qty marcada como faltante
+  notes             String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([fromStoreCode, status])
+  @@index([toStoreCode, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("realignment_shipments")
+}
+
 // Fechamento mensal — snapshot imutável de royalties + marketing + obrigações.
 // Criado quando admin aperta "Fechar mês X". Vira o demonstrativo oficial.
 model MonthlyClosure {
@@ -495,14 +547,25 @@ model TransferOrder {
   bundleId              String?   @map("bundle_id")
 
   // ── Controle de REALINHAMENTO in-app (filial vê alerta) ──
-  // Quando tipo=REALINHAMENTO, a loja origem recebe alerta no /minha-loja e
-  // vai marcando como "enviado" uma a uma. status:
+  // Status do ITEM individual no ciclo de remessa:
   //   pending   → chegou na loja origem, operador ainda não separou
-  //   sent      → operador confirmou envio pra loja destino
-  //   cancelled → matriz cancelou antes de enviar (futuro)
+  //   sent      → vendedora origem marcou como separado e adicionou à remessa
+  //                (vai junto quando shipment.status vira in_transit)
+  //   received  → loja destino bipou, conferiu e deu entrada (+ estoque Giga B)
+  //   missing   → veio na remessa mas NÃO chegou fisicamente (extraviada).
+  //                Não dá entrada Giga, e cancela a obrigação financeira.
+  //   cancelled → matriz cancelou antes de enviar
   realignmentStatus     String?   @map("realignment_status")
   realignmentSentAt     DateTime? @map("realignment_sent_at")
   realignmentSentByUserId String? @map("realignment_sent_by_user_id")
+  // Recebimento (loja destino dá entrada)
+  realignmentReceivedAt     DateTime? @map("realignment_received_at")
+  realignmentReceivedByUserId String? @map("realignment_received_by_user_id")
+  // Marcação como faltante (extraviada na remessa)
+  realignmentMissingAt      DateTime? @map("realignment_missing_at")
+  realignmentMissingNote    String?   @map("realignment_missing_note")
+  // FK pra remessa que agrupou esse item
+  shipmentId            String?   @map("shipment_id")
 
   @@index([lojaDestinoCode, createdAt(sort: Desc)])
   @@index([lojaOrigemCode, createdAt(sort: Desc)])

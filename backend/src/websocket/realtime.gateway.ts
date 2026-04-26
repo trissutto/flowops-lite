@@ -117,6 +117,21 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
   // ---------- API pra outros módulos chamarem ----------
 
   /**
+   * Emite um evento GENÉRICO pra sala de UMA loja específica.
+   * Use pra eventos novos sem precisar criar método dedicado.
+   */
+  emitToStore(storeId: string, event: string, payload: any) {
+    this.server.to(`store:${storeId}`).emit(event, payload);
+  }
+
+  /**
+   * Emite um evento GENÉRICO pra sala admin (todos admins logados).
+   */
+  emitToAdmins(event: string, payload: any) {
+    this.server.to('admin').emit(event, payload);
+  }
+
+  /**
    * Emite um evento pra SALA de UMA loja específica.
    * Usar quando admin confirma roteamento → loja recebe pick-order novo em tempo real.
    */

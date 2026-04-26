@@ -28,6 +28,7 @@ import { getSocket } from '@/lib/socket';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
   AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer, Undo2,
+  Truck, X,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -129,6 +130,13 @@ export default function MinhaLojaRealinhamentoPage() {
   // Toggle temporário (~500ms) só durante o window.print().
   const [printMode, setPrintMode] = useState(false);
 
+  // ── REMESSAS ABERTAS ──
+  // Cada vez que vendedora clica "Enviei" numa peça, ela vai pra remessa
+  // OPEN do par origem→destino. Aqui listamos essas remessas pra ela poder
+  // FECHAR e ENVIAR (baixa Giga em batch + manda alerta pra loja destino).
+  const [openShipments, setOpenShipments] = useState<any[]>([]);
+  const [closingShipmentId, setClosingShipmentId] = useState<string | null>(null);
+
   const toggleDest = useCallback((code: string) => {
     setExpandedDest((curr) => (curr === code ? null : code));
   }, []);
@@ -148,6 +156,16 @@ export default function MinhaLojaRealinhamentoPage() {
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
+  }, []);
+
+  const loadOpenShipments = useCallback(async () => {
+    try {
+      const data = await api<any[]>('/realignment/shipments/open');
+      setOpenShipments(Array.isArray(data) ? data : []);
+    } catch {
+      // silencioso — endpoint pode não existir ainda em deploys antigos
+      setOpenShipments([]);
+    }
   }, []);
 
   const loadItems = useCallback(async () => {
@@ -172,6 +190,23 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, []);
 
+  const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
+    if (!confirm(`Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças desta remessa. Não pode desfazer.`)) return;
+    setClosingShipmentId(shipmentId);
+    try {
+      const res = await api<{ ok: boolean; code: string; totalItems: number; totalQty: number }>(
+        `/realignment/shipments/${shipmentId}/close-and-send`,
+        { method: 'POST', body: '{}' },
+      );
+      pushToast(`✅ Remessa ${res.code} enviada (${res.totalQty} peças). Loja destino recebeu alerta.`);
+      await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
+    } catch (e: any) {
+      alert(`Erro ao fechar remessa: ${e?.message || e}`);
+    } finally {
+      setClosingShipmentId(null);
+    }
+  }, [pushToast, loadOpenShipments, loadItems, loadSentItems]);
+
   // Auth + initial load
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -187,8 +222,8 @@ export default function MinhaLojaRealinhamentoPage() {
           return;
         }
         setMe(profile);
-        // Carrega as 2 listas em paralelo — pendentes + enviados hoje.
-        await Promise.all([loadItems(), loadSentItems()]);
+        // Carrega as 3 listas em paralelo — pendentes + enviados hoje + remessas abertas.
+        await Promise.all([loadItems(), loadSentItems(), loadOpenShipments()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar');
         if (String(err?.message ?? '').startsWith('401')) router.push('/login');
@@ -430,7 +465,7 @@ export default function MinhaLojaRealinhamentoPage() {
             <Printer className="w-4 h-4" />
           </button>
           <button
-            onClick={() => { loadItems(); loadSentItems(); }}
+            onClick={() => { loadItems(); loadSentItems(); loadOpenShipments(); }}
             className="no-print p-2 hover:bg-white/15 rounded-lg transition backdrop-blur"
             title="Atualizar"
           >
@@ -521,6 +556,70 @@ export default function MinhaLojaRealinhamentoPage() {
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg px-4 py-3 flex items-start gap-2">
             <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
             <div className="text-sm">{error}</div>
+          </div>
+        )}
+
+        {/* ── REMESSAS ABERTAS ──
+            Cada remessa = 1 caixa física que vendedora está montando pra
+            mandar pra outra loja. Quando termina de empacotar, fecha aqui →
+            sistema baixa Giga + emite alerta pra loja destino receber. */}
+        {openShipments.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-amber-900">
+              <Truck className="w-4 h-4" />
+              Remessas em montagem
+            </div>
+            {openShipments.map((s) => {
+              const isClosing = closingShipmentId === s.id;
+              const totalQty = (s.items || []).reduce(
+                (sum: number, i: any) => sum + (i.qtyOrigem || 1), 0,
+              );
+              return (
+                <div
+                  key={s.id}
+                  className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 shadow-sm"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                      <Package className="w-6 h-6" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono font-black text-amber-900 text-base">
+                          {s.code}
+                        </span>
+                        <span className="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-bold uppercase">
+                          aberta
+                        </span>
+                      </div>
+                      <div className="text-sm text-amber-900/90 font-semibold mt-1">
+                        Pra <b>{s.toStoreName}</b> ({s.toStoreCode})
+                      </div>
+                      <div className="text-xs text-amber-800/80 mt-1">
+                        {(s.items || []).length} item(s) · {totalQty} peça(s) na caixa
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCloseShipment(s.id, s.code)}
+                      disabled={isClosing || (s.items || []).length === 0}
+                      className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {isClosing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                      Fechar e enviar
+                    </button>
+                  </div>
+                  <div className="mt-2 text-[11px] text-amber-900/70 leading-snug">
+                    ⚠️ Ao fechar, o estoque das peças sai do Giga desta loja e a remessa vai pra
+                    loja destino conferir. Não pode reverter depois.
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 

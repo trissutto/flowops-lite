@@ -234,6 +234,148 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * INCREASE estoque no Gigasistemas — usado pela loja DESTINO ao "Dar Entrada"
+   * em uma remessa de realinhamento recebida.
+   *
+   * Espelho exato de `decreaseStock`:
+   *  - Mesmo kill-switch ERP_WRITE_ENABLED
+   *  - Mesma transação ACID com rollback
+   *  - Mesmo retry/backoff em erro transiente
+   *  - SELECT FOR UPDATE → soma → UPDATE
+   *
+   * Diferenças do decrease:
+   *  - SOMA em vez de subtrair
+   *  - Não tem checagem de "estoque negativo" (sempre é seguro aumentar)
+   *  - Se SKU não existir na tabela `estoque` da loja destino, o registro é
+   *    INSERIDO (peça que nunca passou por essa loja antes — comum em
+   *    realinhamento. Só o INSERT, sem mexer em produtos.)
+   */
+  async increaseStock(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+    attempts?: number;
+  }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, applied: [], error: 'Pool ERP não inicializado' };
+    }
+    if (!items.length) {
+      return { success: true, applied: [] };
+    }
+
+    const TRANSIENT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'PROTOCOL_CONNECTION_LOST', 'ER_LOCK_WAIT_TIMEOUT']);
+    const TRANSIENT_MSG_PATTERNS = [/read ETIMEDOUT/i, /connect ETIMEDOUT/i, /Connection lost/i, /closed state/i];
+    const isTransient = (err: any): boolean => {
+      const code = String(err?.code ?? '').toUpperCase();
+      if (TRANSIENT_CODES.has(code)) return true;
+      const msg = String(err?.message ?? err ?? '');
+      return TRANSIENT_MSG_PATTERNS.some((rx) => rx.test(msg));
+    };
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const BACKOFF_MS = [0, 1000, 3000];
+
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= BACKOFF_MS.length; attempt++) {
+      if (BACKOFF_MS[attempt - 1] > 0) await sleep(BACKOFF_MS[attempt - 1]);
+      const result = await this.increaseStockOnce(items);
+      if (result.success) {
+        return { ...result, attempts: attempt };
+      }
+      lastError = result.error;
+      if (!isTransient({ message: lastError })) {
+        return { ...result, attempts: attempt };
+      }
+      this.logger.warn(`ERP entrada tentativa ${attempt}/${BACKOFF_MS.length} falhou (transient): ${lastError}`);
+    }
+    return { success: false, applied: [], error: `${lastError} (${BACKOFF_MS.length} tentativas)`, attempts: BACKOFF_MS.length };
+  }
+
+  /** Execução única do INCREASE — extraída pra retry. */
+  private async increaseStockOnce(
+    items: Array<{ sku: string; qty: number; storeCode: string }>,
+  ): Promise<{
+    success: boolean;
+    applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
+    error?: string;
+  }> {
+    const normalizeStoreCode = (raw: string): string => {
+      const s = String(raw || '').trim().toUpperCase().replace(/^LJ/i, '');
+      const n = parseInt(s, 10);
+      if (Number.isNaN(n) || n < 1 || n > 99) return s;
+      return String(n).padStart(2, '0');
+    };
+
+    const conn = await this.pool.getConnection();
+    const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
+
+    try {
+      await conn.beginTransaction();
+
+      for (const it of items) {
+        const sku = String(it.sku || '').trim();
+        const qty = Number(it.qty);
+        const storeCode = normalizeStoreCode(it.storeCode);
+
+        if (!sku || !storeCode || !qty || qty <= 0) {
+          throw new Error(`Item inválido: sku=${sku} loja=${storeCode} qty=${qty}`);
+        }
+
+        // SELECT FOR UPDATE — trava a linha
+        const [rows] = await conn.query<mysql.RowDataPacket[]>(
+          `SELECT ESTOQUE FROM estoque WHERE CODIGO = ? AND LOJA = ? LIMIT 1 FOR UPDATE`,
+          [sku, storeCode],
+        );
+
+        let previousStock = 0;
+        let newStock = qty;
+
+        if (!rows.length) {
+          // SKU não existe pra essa loja — INSERT novo
+          await conn.query(
+            `INSERT INTO estoque (CODIGO, LOJA, ESTOQUE) VALUES (?, ?, ?)`,
+            [sku, storeCode, qty],
+          );
+          previousStock = 0;
+          newStock = qty;
+        } else {
+          previousStock = Number(rows[0].ESTOQUE);
+          newStock = previousStock + qty;
+          const [result] = await conn.query<mysql.ResultSetHeader>(
+            `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
+            [newStock, sku, storeCode],
+          );
+          if (!result || result.affectedRows !== 1) {
+            throw new Error(
+              `UPDATE não afetou linha esperada: SKU=${sku} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
+            );
+          }
+        }
+
+        applied.push({ sku, storeCode, qty, previousStock, newStock });
+      }
+
+      await conn.commit();
+      this.logger.log(
+        `ERP entrada OK: ${applied.length} item(ns) entrada(s). ` +
+          applied.map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', '),
+      );
+      return { success: true, applied };
+    } catch (e: any) {
+      try { await conn.rollback(); } catch { /* ignore */ }
+      const msg = String(e?.message || e);
+      this.logger.error(`ERP entrada FALHOU (rollback): ${msg}`);
+      return { success: false, applied: [], error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
    * Retorna só registros com ESTOQUE > 0.
    */
