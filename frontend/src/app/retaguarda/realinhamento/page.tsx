@@ -123,6 +123,58 @@ export default function RealinhamentoPage() {
   } | null>(null);
   const [confirming, setConfirming] = useState(false);
 
+  // ── WIPE ALL (admin) ─────────────────────────────────────────────
+  // Botão pra zerar TODOS realinhamentos (após período de testes).
+  // Carrega preview ao abrir o modal pra usuário ver o impacto antes.
+  const [wipeOpen, setWipeOpen] = useState(false);
+  const [wipePreview, setWipePreview] = useState<{
+    total: number;
+    byStatus: Record<string, number>;
+    byStore: Array<{ code: string; name: string; count: number }>;
+  } | null>(null);
+  const [wipeLoading, setWipeLoading] = useState(false);
+  const [wipeExecuting, setWipeExecuting] = useState(false);
+  const [wipeDone, setWipeDone] = useState<{ deleted: number } | null>(null);
+  const [wipeConfirmText, setWipeConfirmText] = useState('');
+  const [wipeError, setWipeError] = useState<string | null>(null);
+
+  async function openWipeModal() {
+    setWipeOpen(true);
+    setWipeDone(null);
+    setWipeConfirmText('');
+    setWipeError(null);
+    setWipePreview(null);
+    setWipeLoading(true);
+    try {
+      const data = await api<typeof wipePreview>('/realignment/wipe-preview');
+      setWipePreview(data);
+    } catch (e: any) {
+      setWipeError(e?.message || 'Erro ao carregar preview');
+    } finally {
+      setWipeLoading(false);
+    }
+  }
+
+  async function executeWipe() {
+    if (wipeConfirmText !== 'ZERAR') {
+      setWipeError('Digite ZERAR (em maiúsculas) pra confirmar');
+      return;
+    }
+    setWipeExecuting(true);
+    setWipeError(null);
+    try {
+      const res = await api<{ ok: boolean; deleted: number }>(
+        '/realignment/wipe-all?confirm=YES',
+        { method: 'DELETE' },
+      );
+      setWipeDone({ deleted: res.deleted });
+    } catch (e: any) {
+      setWipeError(e?.message || 'Erro ao executar');
+    } finally {
+      setWipeExecuting(false);
+    }
+  }
+
   useEffect(() => {
     api<Store[]>('/stores')
       .then((arr) => {
@@ -356,12 +408,22 @@ export default function RealinhamentoPage() {
         <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white flex items-center justify-center shadow">
           <Shuffle className="w-5 h-5" />
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-slate-900">Realinhamento de Estoque</h1>
           <p className="text-sm text-slate-500">
             Informe as referências, o sistema busca todas as variações no Gigasistemas e gera as ordens de transferência.
           </p>
         </div>
+        {/* Admin: zerar realinhamentos de teste */}
+        <button
+          type="button"
+          onClick={openWipeModal}
+          className="hidden md:flex items-center gap-1.5 text-xs text-rose-700 hover:bg-rose-50 border border-rose-200 hover:border-rose-300 rounded-lg px-3 py-2 transition"
+          title="Zerar todos realinhamentos (admin)"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          Zerar realinhamentos
+        </button>
       </div>
 
       {error && (
@@ -876,6 +938,124 @@ export default function RealinhamentoPage() {
               : `Enviar ${editedTotals.totalMoves} ordem(ns) pras lojas`}
           </button>
         </section>
+      )}
+
+      {/* Modal: Zerar realinhamentos (admin) */}
+      {wipeOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-lg bg-rose-100 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4 text-rose-700" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">Zerar realinhamentos</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => !wipeExecuting && setWipeOpen(false)}
+                className="text-slate-400 hover:text-slate-600 disabled:opacity-30"
+                disabled={wipeExecuting}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {wipeDone ? (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg px-4 py-3 text-sm">
+                <div className="flex items-center gap-2 font-semibold mb-1">
+                  <CheckCircle2 className="w-4 h-4" />
+                  {wipeDone.deleted} ordens deletadas
+                </div>
+                <div className="text-xs text-emerald-800/80">
+                  Banco limpo. A partir de agora os realinhamentos criados serão os de uso real.
+                </div>
+              </div>
+            ) : wipeLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500 py-6 justify-center">
+                <Loader2 className="w-4 h-4 animate-spin" /> Carregando preview…
+              </div>
+            ) : wipePreview ? (
+              <>
+                <div className="text-sm text-slate-700">
+                  Vai deletar <b className="text-rose-700">{wipePreview.total}</b> ordem(ns) de realinhamento de <b>todas as lojas</b>.
+                  Pedidos de <b>reposição</b> e <b>venda certa</b> NÃO serão afetados.
+                </div>
+                {wipePreview.total > 0 && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1">
+                    <div className="font-semibold text-slate-700">Por status:</div>
+                    {Object.entries(wipePreview.byStatus)
+                      .filter(([, n]) => n > 0)
+                      .map(([k, n]) => (
+                        <div key={k} className="flex justify-between text-slate-600">
+                          <span>{k === 'null' ? 'sem status' : k}</span>
+                          <span className="font-mono">{n}</span>
+                        </div>
+                      ))}
+                    {wipePreview.byStore.length > 0 && (
+                      <>
+                        <div className="font-semibold text-slate-700 mt-2">Por loja origem:</div>
+                        {wipePreview.byStore.map((s) => (
+                          <div key={s.code} className="flex justify-between text-slate-600">
+                            <span>{s.code} — {s.name}</span>
+                            <span className="font-mono">{s.count}</span>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+                {wipePreview.total === 0 ? (
+                  <div className="text-sm text-slate-500">Nada pra deletar — banco já está vazio.</div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Pra confirmar, digite <span className="font-mono text-rose-700">ZERAR</span>:
+                      </label>
+                      <input
+                        type="text"
+                        value={wipeConfirmText}
+                        onChange={(e) => setWipeConfirmText(e.target.value)}
+                        placeholder="ZERAR"
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-rose-400"
+                        disabled={wipeExecuting}
+                      />
+                    </div>
+                  </>
+                )}
+                {wipeError && (
+                  <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded px-3 py-2">
+                    {wipeError}
+                  </div>
+                )}
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setWipeOpen(false)}
+                    disabled={wipeExecuting}
+                    className="px-4 py-2 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  {wipePreview.total > 0 && (
+                    <button
+                      type="button"
+                      onClick={executeWipe}
+                      disabled={wipeExecuting || wipeConfirmText !== 'ZERAR'}
+                      className="px-4 py-2 text-sm rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {wipeExecuting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      {wipeExecuting ? 'Deletando…' : `Deletar ${wipePreview.total}`}
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-rose-700">{wipeError || 'Erro ao carregar.'}</div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

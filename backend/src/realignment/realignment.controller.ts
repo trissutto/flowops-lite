@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 import { ErpService } from '../erp/erp.service';
@@ -140,5 +140,44 @@ export class RealignmentController {
       transferId: id,
       storeId,
     });
+  }
+
+  /**
+   * GET /realignment/wipe-preview · admin
+   *
+   * Conta quantos realinhamentos existem hoje (por status e por loja).
+   * NÃO deleta nada — usado pra UI mostrar preview antes do wipe.
+   */
+  @Get('wipe-preview')
+  wipePreview(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.svc.wipePreview();
+  }
+
+  /**
+   * DELETE /realignment/wipe-all?confirm=YES · admin
+   *
+   * ⚠️ DELETA TODOS os realinhamentos do banco (todas lojas, todos status).
+   * Preserva REPOSICAO e VENDA_CERTA (mesma tabela, tipos diferentes).
+   *
+   * Proteção dupla:
+   *   - role=admin no JWT
+   *   - query string ?confirm=YES (evita curl acidental)
+   */
+  @Delete('wipe-all')
+  async wipeAll(@Req() req: any, @Query('confirm') confirm?: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    if (confirm !== 'YES') {
+      throw new BadRequestException(
+        'Faltou confirm=YES na query. Ação destrutiva, sem rollback.',
+      );
+    }
+    return this.svc.wipeAll();
   }
 }

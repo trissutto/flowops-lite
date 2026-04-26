@@ -688,4 +688,53 @@ export class RealignmentService {
 
     return { ok: true, id: updated.id };
   }
+
+  /**
+   * Conta quantos realinhamentos existem (sem deletar).
+   * Usado pra mostrar preview antes de chamar wipeAll().
+   */
+  async wipePreview() {
+    const all = await this.prisma.transferOrder.findMany({
+      where: { tipo: 'REALINHAMENTO' },
+      select: { realignmentStatus: true, lojaOrigemCode: true, lojaOrigemName: true },
+    });
+    const byStatus: Record<string, number> = { pending: 0, sent: 0, cancelled: 0, null: 0 };
+    const byStore: Record<string, { code: string; name: string; count: number }> = {};
+    for (const r of all) {
+      const s = r.realignmentStatus || 'null';
+      byStatus[s] = (byStatus[s] || 0) + 1;
+      const key = r.lojaOrigemCode;
+      if (!byStore[key]) byStore[key] = { code: r.lojaOrigemCode, name: r.lojaOrigemName, count: 0 };
+      byStore[key].count++;
+    }
+    return {
+      total: all.length,
+      byStatus,
+      byStore: Object.values(byStore).sort((a, b) => b.count - a.count),
+    };
+  }
+
+  /**
+   * ⚠️ DESTRUTIVO ⚠️
+   * Deleta TODOS os TransferOrder onde tipo='REALINHAMENTO'.
+   * Preserva REPOSICAO e VENDA_CERTA (que usam a mesma tabela).
+   *
+   * Uso pretendido: limpar dados de teste antes de começar a usar
+   * realinhamento de verdade. Não tem rollback — se for chamado por
+   * engano, perde tudo.
+   *
+   * Proteção: o controller exige role=admin + query param confirm=YES.
+   */
+  async wipeAll() {
+    const before = await this.prisma.transferOrder.count({
+      where: { tipo: 'REALINHAMENTO' },
+    });
+    const result = await this.prisma.transferOrder.deleteMany({
+      where: { tipo: 'REALINHAMENTO' },
+    });
+    this.logger.warn(
+      `[realignment] WIPE ALL executado: ${result.count} ordens deletadas (count antes: ${before})`,
+    );
+    return { ok: true, deleted: result.count, countBefore: before };
+  }
 }
