@@ -11,6 +11,12 @@ export interface StoreInput {
   contactName?: string;
   active?: boolean;
   priorityScore?: number;
+  /**
+   * REDE   = loja própria (sem cobrança intercompany entre si)
+   * FILIAL = franquia (paga preço/2.5 + 8% royalties + 4% marketing)
+   * Default: REDE.
+   */
+  tipo?: 'REDE' | 'FILIAL';
 }
 
 @Injectable()
@@ -49,7 +55,8 @@ export class StoresService {
         contactName: data.contactName?.trim() || null,
         active: data.active ?? true,
         priorityScore: data.priorityScore ?? 50,
-      },
+        tipo: data.tipo === 'FILIAL' ? 'FILIAL' : 'REDE',
+      } as any,
     });
   }
 
@@ -75,7 +82,8 @@ export class StoresService {
         contactName: data.contactName !== undefined ? (data.contactName.trim() || null) : undefined,
         active: data.active ?? undefined,
         priorityScore: data.priorityScore ?? undefined,
-      },
+        tipo: data.tipo ? (data.tipo === 'FILIAL' ? 'FILIAL' : 'REDE') : undefined,
+      } as any,
     });
   }
 

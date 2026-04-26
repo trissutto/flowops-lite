@@ -51,12 +51,103 @@ model Store {
   priorityScore Int      @default(50) @map("priority_score")
   createdAt     DateTime @default(now()) @map("created_at")
 
+  // Categoria operacional/financeira:
+  //   REDE   = lojas próprias (sem cobrança intercompany entre si)
+  //   FILIAL = franquias (pagam preço/2.5 + 8% royalties + 4% marketing)
+  // Usado pra gerar obrigações financeiras automáticas em transferências mistas
+  // REDE↔FILIAL. Default REDE pra não quebrar lojas existentes.
+  tipo          String   @default("REDE")  // REDE | FILIAL
+
   users          User[]
   pickOrders     PickOrder[]
   orderItems     OrderItem[]
   supplyRequests SupplyRequest[]
 
   @@map("stores")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Obrigações financeiras geradas por transferências entre grupos REDE↔FILIAL.
+//
+// Regra do negócio:
+//   - Quando uma loja envia mercadoria pra OUTRO grupo (REDE → FILIAL ou
+//     FILIAL → REDE), gera uma obrigação financeira do RECEPTOR pro REMETENTE.
+//   - Valor da obrigação = preço_venda_giga × qty / 2.5
+//   - Snapshot do preço NO MOMENTO do envio (mudanças posteriores não afetam).
+//   - mesReferencia = mês do envio. Vence no dia 1 do mês seguinte.
+//
+// Status:
+//   pending   = obrigação criada, ainda não fechada nem paga
+//   closed    = mês fechado (admin apertou "fechar mês"), virou snapshot
+//   paid      = pagamento confirmado pelo admin
+//   cancelled = transferência revertida ou cancelada manualmente
+// ═══════════════════════════════════════════════════════════════════════════
+model InterStoreObligation {
+  id                String   @id @default(uuid())
+  // Vínculo com a transferência que gerou (auditoria)
+  transferOrderId   String   @map("transfer_order_id")
+  // Lojas envolvidas + categorias congeladas (preserva histórico mesmo se
+  // a loja mudar de tipo depois)
+  fromStoreCode     String   @map("from_store_code")
+  fromStoreName     String   @map("from_store_name")
+  fromStoreTipo     String   @map("from_store_tipo")     // REDE | FILIAL no momento
+  toStoreCode       String   @map("to_store_code")
+  toStoreName       String   @map("to_store_name")
+  toStoreTipo       String   @map("to_store_tipo")
+  // Item transferido
+  refCode           String   @map("ref_code")
+  sku               String?
+  cor               String?
+  tamanho           String?
+  descricao         String?
+  qty               Int
+  // Valores (snapshot)
+  precoUnitario     Float    @map("preco_unitario")     // preço cheio Giga no momento
+  precoTotal        Float    @map("preco_total")         // precoUnitario × qty
+  divisor           Float    @default(2.5)               // ÷ 2.5 padrão (futuro: configurável por filial)
+  valorObrigacao    Float    @map("valor_obrigacao")    // precoTotal / divisor
+  // Convenção: TO paga FROM (quem recebeu mercadoria paga quem mandou)
+  mesReferencia     String   @map("mes_referencia")     // "YYYY-MM"
+  status            String   @default("pending")        // pending | closed | paid | cancelled
+  // Pagamento
+  paidAt            DateTime? @map("paid_at")
+  paidByUserId      String?  @map("paid_by_user_id")
+  paidNote          String?  @map("paid_note")
+  // Fechamento
+  closedAt          DateTime? @map("closed_at")
+  closedByUserId    String?  @map("closed_by_user_id")
+  // Cancelamento
+  cancelledAt       DateTime? @map("cancelled_at")
+  cancelReason      String?  @map("cancel_reason")
+  // Timestamps
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([mesReferencia, status])
+  @@index([fromStoreCode, mesReferencia])
+  @@index([toStoreCode, mesReferencia])
+  @@index([transferOrderId])
+  @@map("inter_store_obligations")
+}
+
+// Fechamento mensal — snapshot imutável de royalties + marketing + obrigações.
+// Criado quando admin aperta "Fechar mês X". Vira o demonstrativo oficial.
+model MonthlyClosure {
+  id                String   @id @default(uuid())
+  mesReferencia     String   @unique @map("mes_referencia") // "2026-04"
+  closedAt          DateTime @default(now()) @map("closed_at")
+  closedByUserId    String?  @map("closed_by_user_id")
+  // Resumo geral
+  totalObrigacoes   Float    @default(0) @map("total_obrigacoes")
+  totalRoyalties    Float    @default(0) @map("total_royalties")
+  totalMarketing    Float    @default(0) @map("total_marketing")
+  // Detalhamento serializado em JSON (por filial)
+  // [{storeCode, storeName, vendaBruta, royaltiesValor, marketingValor,
+  //   obrigacoesAPagar, obrigacoesAReceber, saldoLiquido}]
+  detalhePorFilial  String   @map("detalhe_por_filial") // JSON
+  notes             String?
+
+  @@map("monthly_closures")
 }
 
 model Order {

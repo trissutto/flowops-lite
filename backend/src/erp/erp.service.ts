@@ -263,6 +263,65 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Busca preço cheio por SKU em batch na tabela `produtos` do Giga.
+   *
+   * Detecta automaticamente qual coluna tem o preço (VENDAUN, PRECO,
+   * PRECOVENDA, PRECO_VENDA — varia entre instalações Giga).
+   *
+   * Usado pelo realinhamento pra capturar o snapshot do preço no momento
+   * da transferência (mesma lógica do `seedAndApply` em #194).
+   *
+   * Retorna Map<sku, preco>. SKUs sem preço (ou sem coluna de preço
+   * detectada) NÃO aparecem no map → caller deve tratar como 0.
+   */
+  async getProductPricesBySkus(skus: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!skus.length || !this.pool) return out;
+
+    // Descobre qual coluna tem o preço (cache no método pickCol)
+    const precoCol = await this.pickCol([
+      'VENDAUN',
+      'PRECO',
+      'PRECOVENDA',
+      'PRECO_VENDA',
+      'VENDA',
+    ]);
+    if (!precoCol) {
+      this.logger.warn(
+        '[erp] getProductPricesBySkus: nenhuma coluna de preço detectada na tabela produtos',
+      );
+      return out;
+    }
+
+    // Dedup + limpa SKUs
+    const unique = Array.from(new Set(skus.map((s) => String(s).trim()).filter(Boolean)));
+    if (!unique.length) return out;
+
+    try {
+      // Backticks na coluna detectada (nome dinâmico) — protege contra reserved words
+      const sql = `
+        SELECT CODIGO AS sku, \`${precoCol}\` AS preco
+          FROM produtos
+         WHERE CODIGO IN (?)
+      `;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [unique]);
+      for (const r of rows) {
+        const sku = String(r.sku).trim();
+        const preco = Number(r.preco);
+        if (!Number.isNaN(preco) && preco > 0) {
+          out.set(sku, preco);
+        }
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(
+        `[erp] getProductPricesBySkus falhou: ${(e as Error).message}`,
+      );
+      return out;
+    }
+  }
+
+  /**
    * Estoque TOTAL consolidado por SKU (soma de todas as lojas).
    * Retorna um mapa { [sku]: totalQty }.
    * SKUs que não existem no ERP não aparecem no mapa (não ficam 0).
@@ -455,6 +514,48 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e) {
       this.logger.error(`describeSalesTable falhou: ${(e as Error).message}`);
       return { columns: [], sample: [] };
+    }
+  }
+
+  /**
+   * VENDA BRUTA por loja num intervalo de datas (em R$).
+   *
+   * Soma VALORTOTAL da tabela `caixa` entre [inicio, fim) — fim é EXCLUSIVO.
+   * Ignora linhas MARCADO='SIM' (estornadas/canceladas no PDV).
+   *
+   * Usado pra calcular royalties (8%) + marketing (4%) das filiais por mês.
+   *
+   * Retorna Map<storeCode, vendaBrutaR$>. Lojas sem venda no período NÃO
+   * aparecem no map (caller deve tratar como 0).
+   */
+  async getSalesGrossByStores(
+    storeCodes: string[],
+    inicio: Date,
+    fim: Date,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!this.pool || !storeCodes.length) return out;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT c.LOJA AS storeCode,
+                SUM(c.VALORTOTAL) AS bruto
+           FROM caixa c
+          WHERE c.LOJA IN (?)
+            AND c.DATA >= ?
+            AND c.DATA <  ?
+            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+          GROUP BY c.LOJA`,
+        [storeCodes, inicio, fim],
+      );
+      for (const r of rows as any[]) {
+        const code = String(r.storeCode).trim();
+        const bruto = Number(r.bruto) || 0;
+        if (bruto > 0) out.set(code, bruto);
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(`getSalesGrossByStores falhou: ${(e as Error).message}`);
+      return out;
     }
   }
 

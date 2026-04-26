@@ -549,6 +549,17 @@ export class RealignmentService {
    * Marca 1 ordem como enviada (filial clica "Enviei").
    * Valida que a loja do JWT é a origem da ordem pra não deixar outra loja
    * marcar ordem que não é dela.
+   *
+   * EFEITOS COLATERAIS (importantes pro financeiro):
+   *   1. Atualiza status no TransferOrder.
+   *   2. Se a transferência for entre grupos diferentes (REDE↔FILIAL), CRIA
+   *      automaticamente uma obrigação financeira em InterStoreObligation,
+   *      capturando o snapshot do preço do Giga no momento.
+   *   3. Emite socket pra UI atualizar.
+   *
+   * Falha na obrigação financeira NÃO bloqueia a marcação (loga warning) —
+   * a vendedora não pode ficar travada por causa de problema de Giga/cálculo.
+   * Admin vê o pendente na tela financeira e ajusta manualmente.
    */
   async markAsSent(input: {
     transferId: string;
@@ -563,51 +574,171 @@ export class RealignmentService {
 
     const order = await this.prisma.transferOrder.findUnique({
       where: { id: input.transferId },
+      // Pega TODOS campos relevantes pro snapshot financeiro (sku, qty, descrição, etc)
       select: {
         id: true,
         tipo: true,
         lojaOrigemCode: true,
+        lojaOrigemName: true,
+        lojaDestinoCode: true,
+        lojaDestinoName: true,
         realignmentStatus: true,
         refCode: true,
+        descricao: true,
         cor: true,
         tamanho: true,
-        lojaDestinoCode: true,
-      },
+        qtyOrigem: true,
+      } as any,
     });
     if (!order) throw new NotFoundException('Ordem não encontrada');
-    if (order.tipo !== 'REALINHAMENTO')
+    if ((order as any).tipo !== 'REALINHAMENTO')
       throw new BadRequestException('Ordem não é de realinhamento');
-    if (order.lojaOrigemCode !== store.code)
+    if ((order as any).lojaOrigemCode !== store.code)
       throw new ForbiddenException('Essa ordem não é da sua loja');
-    if (order.realignmentStatus === 'sent')
+    if ((order as any).realignmentStatus === 'sent')
       throw new BadRequestException('Ordem já marcada como enviada');
 
     const now = new Date();
     const updated = await this.prisma.transferOrder.update({
-      where: { id: order.id },
+      where: { id: (order as any).id },
       data: {
         realignmentStatus: 'sent',
         realignmentSentAt: now,
         realignmentSentByUserId: input.userId ?? null,
-      },
+      } as any,
     });
+
+    // ── FINANCEIRO: cria obrigação se for transferência entre grupos diferentes ──
+    try {
+      await this.maybeCreateInterStoreObligation(order as any, now, input.userId);
+    } catch (e) {
+      this.logger.warn(
+        `[realignment] falha criando obrigação financeira (não bloqueante): ${(e as Error).message}`,
+      );
+    }
 
     try {
       this.gateway.emitRealignmentSent(store.id, {
-        transferId: updated.id,
+        transferId: (updated as any).id,
         storeId: store.id,
         storeCode: store.code,
-        refCode: updated.refCode,
-        cor: updated.cor,
-        tamanho: updated.tamanho,
-        lojaDestinoCode: updated.lojaDestinoCode,
+        refCode: (updated as any).refCode,
+        cor: (updated as any).cor,
+        tamanho: (updated as any).tamanho,
+        lojaDestinoCode: (updated as any).lojaDestinoCode,
         sentAt: now.toISOString(),
       });
     } catch (e) {
       this.logger.warn(`[realignment] falha ao emitir socket sent: ${(e as Error).message}`);
     }
 
-    return { ok: true, id: updated.id, sentAt: now.toISOString() };
+    return { ok: true, id: (updated as any).id, sentAt: now.toISOString() };
+  }
+
+  /**
+   * Cria obrigação financeira automática se a transferência for entre grupos
+   * diferentes (REDE↔FILIAL). Caso contrário (REDE↔REDE ou FILIAL↔FILIAL do
+   * mesmo grupo), não faz nada.
+   *
+   * Lógica:
+   *   1. Lê o tipo (REDE|FILIAL) das duas lojas envolvidas.
+   *   2. Se mesmo grupo, sai (sem cobrança).
+   *   3. Se grupos diferentes, busca preço Giga via SKU (TransferOrder não
+   *      tem SKU direto — vou buscar via REF + cor + tamanho na próxima
+   *      iteração; por enquanto tenta achar pelo SKU se vier no campo).
+   *   4. Cria InterStoreObligation com snapshot.
+   *
+   * Convenção: TO (lojaDestino) paga FROM (lojaOrigem) — quem recebeu paga
+   * quem enviou.
+   */
+  private async maybeCreateInterStoreObligation(
+    order: any,
+    sentAt: Date,
+    userId?: string,
+  ) {
+    // Carrega tipo das 2 lojas
+    const [from, to] = await Promise.all([
+      this.prisma.store.findUnique({
+        where: { code: order.lojaOrigemCode },
+        select: { code: true, name: true, tipo: true } as any,
+      }),
+      this.prisma.store.findUnique({
+        where: { code: order.lojaDestinoCode },
+        select: { code: true, name: true, tipo: true } as any,
+      }),
+    ]);
+
+    const fromTipo = (from as any)?.tipo || 'REDE';
+    const toTipo = (to as any)?.tipo || 'REDE';
+
+    // Mesmo grupo → sem cobrança
+    if (fromTipo === toTipo) return;
+
+    // ── busca preço Giga ──
+    // TransferOrder não tem coluna SKU direto, mas o realinhamento foi criado
+    // a partir de SKU em confirm() (em mensagem). Pra MVP, busca preço pela
+    // primeira variação que casar com REF+cor+tamanho via Giga searchByRef.
+    let preco = 0;
+    let sku: string | null = null;
+    try {
+      const variations = await this.erp.searchByRef(order.refCode);
+      const match = variations.find(
+        (v: any) =>
+          (v.cor || '').toUpperCase() === (order.cor || '').toUpperCase() &&
+          (v.tamanho || '').toUpperCase() === (order.tamanho || '').toUpperCase(),
+      );
+      if (match) {
+        sku = match.codigo || match.sku || null;
+        if (sku) {
+          const priceMap = await this.erp.getProductPricesBySkus([sku]);
+          preco = priceMap.get(sku) || 0;
+        }
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[realignment] não conseguiu buscar preço pra ${order.refCode} ${order.cor}/${order.tamanho}: ${(e as Error).message}`,
+      );
+    }
+
+    // Mesmo se preço = 0, cria a obrigação (admin vê e ajusta manualmente)
+    const qty = order.qtyOrigem || 1;
+    const precoTotal = preco * qty;
+    const divisor = 2.5;
+    const valorObrigacao = precoTotal / divisor;
+
+    // Mês de referência = mês do envio (formato "YYYY-MM")
+    const mesReferencia = `${sentAt.getFullYear()}-${String(sentAt.getMonth() + 1).padStart(2, '0')}`;
+
+    await (this.prisma as any).interStoreObligation.create({
+      data: {
+        transferOrderId: order.id,
+        fromStoreCode: order.lojaOrigemCode,
+        fromStoreName: order.lojaOrigemName,
+        fromStoreTipo: fromTipo,
+        toStoreCode: order.lojaDestinoCode,
+        toStoreName: order.lojaDestinoName,
+        toStoreTipo: toTipo,
+        refCode: order.refCode,
+        sku: sku,
+        cor: order.cor,
+        tamanho: order.tamanho,
+        descricao: order.descricao,
+        qty,
+        precoUnitario: preco,
+        precoTotal,
+        divisor,
+        valorObrigacao,
+        mesReferencia,
+        status: 'pending',
+      },
+    });
+
+    this.logger.log(
+      `[financeiro] Obrigação criada: ${order.refCode} ${order.cor}/${order.tamanho} ` +
+        `${order.lojaOrigemCode}→${order.lojaDestinoCode} ` +
+        `qty=${qty} preco=R$${preco.toFixed(2)} ` +
+        `valor=R$${valorObrigacao.toFixed(2)} mês=${mesReferencia}`,
+    );
   }
 
   /**
