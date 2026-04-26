@@ -140,6 +140,9 @@ export default function RealinhamentoPage() {
     Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>
   >([]);
 
+  const [dateDebug, setDateDebug] = useState<any>(null);
+  const [dateDebugLoading, setDateDebugLoading] = useState(false);
+
   const handleSearchByDate = async () => {
     if (!dateFrom || !dateTo) {
       setDateError('Selecione as duas datas');
@@ -147,6 +150,7 @@ export default function RealinhamentoPage() {
     }
     setDateLoading(true);
     setDateError(null);
+    setDateDebug(null);
     try {
       const params = new URLSearchParams({
         from: dateFrom,
@@ -159,6 +163,24 @@ export default function RealinhamentoPage() {
       setDateError(e?.message || 'Erro buscando por data');
     } finally {
       setDateLoading(false);
+    }
+  };
+
+  const handleDateDebug = async () => {
+    if (!dateFrom || !dateTo) return;
+    setDateDebugLoading(true);
+    try {
+      const params = new URLSearchParams({
+        from: dateFrom,
+        to: dateTo,
+        ...(dateOnlyPlusSize ? { desc: 'PLUS SIZE' } : {}),
+      });
+      const data = await api<any>(`/realignment/search-refs-by-date-debug?${params}`);
+      setDateDebug(data);
+    } catch (e: any) {
+      alert(`Diagnóstico falhou: ${e?.message}`);
+    } finally {
+      setDateDebugLoading(false);
     }
   };
 
@@ -649,6 +671,73 @@ export default function RealinhamentoPage() {
           {dateError && (
             <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
               {dateError}
+            </div>
+          )}
+          {!dateLoading && !dateError && dateResults.length === 0 && (
+            <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+              <div className="text-xs text-amber-900 font-bold mb-1">⚠️ Nenhuma REF encontrada nesse período.</div>
+              <div className="text-xs text-amber-900/80 mb-2">
+                Possíveis causas: (1) coluna de data do Giga não foi detectada,
+                (2) descrição "PLUS SIZE" não bate exatamente com o cadastro,
+                (3) realmente não tem produtos cadastrados nesse período.
+              </div>
+              <button
+                type="button"
+                onClick={handleDateDebug}
+                disabled={dateDebugLoading}
+                className="text-xs bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold rounded px-3 py-1.5 flex items-center gap-1"
+              >
+                {dateDebugLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                Diagnosticar
+              </button>
+              {dateDebug && (
+                <div className="mt-3 bg-white border border-amber-200 rounded p-2 text-[11px] font-mono text-slate-700 max-h-96 overflow-auto">
+                  <div><b>Coluna de data detectada:</b> {dateDebug.colunaDataDetectada || '❌ NENHUMA'}</div>
+                  {dateDebug.colunasComDataNoNome && (
+                    <div><b>Colunas com "data" no nome:</b> {dateDebug.colunasComDataNoNome.join(', ') || '(nenhuma)'}</div>
+                  )}
+                  {dateDebug.colunaStats && (
+                    <>
+                      <div className="mt-1"><b>Range disponível na tabela:</b></div>
+                      <div className="ml-3">
+                        Mín: {dateDebug.colunaStats.minDate} · Máx: {dateDebug.colunaStats.maxDate} · Total c/ data: {dateDebug.colunaStats.totalComData}
+                      </div>
+                    </>
+                  )}
+                  {dateDebug.semFiltroDescricao && (
+                    <div className="mt-1">
+                      <b>No range {dateDebug.filtros.inicio}→{dateDebug.filtros.fim} (sem filtro descrição):</b>
+                      <div className="ml-3">{dateDebug.semFiltroDescricao.uniqueRefs} REFs únicas, {dateDebug.semFiltroDescricao.totalRows} linhas</div>
+                    </div>
+                  )}
+                  {dateDebug.comFiltroDescricao && (
+                    <div className="mt-1">
+                      <b>No range COM filtro "{dateDebug.filtros.descricao}":</b>
+                      <div className="ml-3">{dateDebug.comFiltroDescricao.uniqueRefs} REFs únicas, {dateDebug.comFiltroDescricao.totalRows} linhas</div>
+                    </div>
+                  )}
+                  {dateDebug.descricaoTotalNoBanco !== undefined && (
+                    <div className="mt-1">
+                      <b>Total com "{dateDebug.filtros.descricao}" no banco INTEIRO (sem filtro data):</b> {dateDebug.descricaoTotalNoBanco}
+                    </div>
+                  )}
+                  {dateDebug.sampleNoRange && dateDebug.sampleNoRange.length > 0 && (
+                    <div className="mt-1">
+                      <b>Sample de produtos no range:</b>
+                      <div className="ml-3 mt-1 space-y-0.5">
+                        {dateDebug.sampleNoRange.slice(0, 5).map((s: any, i: number) => (
+                          <div key={i} className="truncate">
+                            <span className="text-emerald-700">{s.ref}</span> · {s.descricao} · <span className="text-slate-400">{s.dataCadastro}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {dateDebug.problema && (
+                    <div className="mt-2 text-red-700 font-bold">⚠️ {dateDebug.problema}</div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {dateResults.length > 0 && (

@@ -104,16 +104,40 @@ export class RealignmentController {
     if (!from || !to) {
       throw new BadRequestException('Query params from e to são obrigatórios (YYYY-MM-DD)');
     }
-    const inicio = new Date(`${from}T00:00:00.000Z`);
-    // fim = dia seguinte ao "to" (intervalo half-open). Aceita "31/01" como fim.
-    const fimDate = new Date(`${to}T00:00:00.000Z`);
-    fimDate.setUTCDate(fimDate.getUTCDate() + 1);
-    if (isNaN(inicio.getTime()) || isNaN(fimDate.getTime())) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       throw new BadRequestException('Datas inválidas (use YYYY-MM-DD)');
     }
+    // fim = dia SEGUINTE ao "to" pra ser intervalo half-open (>=from, <fim)
+    // Assim "31/01" como "to" inclui o dia 31 inteiro.
+    const fimDate = new Date(`${to}T00:00:00.000Z`);
+    fimDate.setUTCDate(fimDate.getUTCDate() + 1);
+    const fimStr = fimDate.toISOString().slice(0, 10);
     return this.erp.searchRefsByDateRange({
-      inicio,
-      fim: fimDate,
+      inicio: from,
+      fim: fimStr,
+      descricaoContains: desc?.trim() || undefined,
+    });
+  }
+
+  /**
+   * GET /realignment/search-refs-by-date-debug — diagnóstico
+   * Mostra todas as colunas, qual data foi detectada, contagens, sample.
+   * Use quando search-refs-by-date retorna 0 pra entender por quê.
+   */
+  @Get('search-refs-by-date-debug')
+  async searchRefsByDateDebug(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('desc') desc?: string,
+    @Req() req?: any,
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    if (!from || !to) throw new BadRequestException('from e to obrigatórios (YYYY-MM-DD)');
+    const fimDate = new Date(`${to}T00:00:00.000Z`);
+    fimDate.setUTCDate(fimDate.getUTCDate() + 1);
+    return this.erp.diagnoseRefsByDate({
+      inicio: from,
+      fim: fimDate.toISOString().slice(0, 10),
       descricaoContains: desc?.trim() || undefined,
     });
   }

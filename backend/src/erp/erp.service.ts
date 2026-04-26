@@ -405,34 +405,40 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista REFs únicas cadastradas no intervalo de datas, filtrando opcionalmente
-   * por substring na descrição.
+   * Lista REFs únicas cadastradas no intervalo de datas (formato YYYY-MM-DD),
+   * filtrando opcionalmente por substring na descrição.
    *
-   * Uso principal: realinhamento por data — "puxa todas as REFs PLUS SIZE
-   * cadastradas em janeiro/2026" → vendedora insere essas REFs no buscador.
+   * Uso: "puxa REFs PLUS SIZE cadastradas em janeiro/2026" → vendedora insere
+   * no buscador de realinhamento.
    *
-   * Detecta automaticamente a coluna de data cadastro (DATACADASTRO,
-   * DT_CADASTRO, DATACRIACAO, etc). Se nenhuma coluna existir, retorna [].
+   * Detecta automaticamente a coluna de data cadastro. Se nenhuma existir,
+   * retorna [] e loga o problema.
    *
-   * Retorna até 500 REFs distintas, cada uma com descrição e contagem de
-   * variações (cores × tamanhos).
+   * Retorna até 500 REFs distintas com descrição + contagem de variações.
+   *
+   * NOTA: usa strings YYYY-MM-DD direto (não Date object) pra evitar
+   * confusão de timezone — driver mysql2 às vezes converte Date pra
+   * timestamp UTC e a coluna do Giga geralmente tá em horário local.
    */
   async searchRefsByDateRange(input: {
-    inicio: Date;
-    fim: Date;
+    inicio: string; // YYYY-MM-DD
+    fim: string;    // YYYY-MM-DD (exclusive — passe o dia SEGUINTE ao último dia desejado)
     descricaoContains?: string;
   }): Promise<Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>> {
     if (!this.pool) return [];
-    const dataCol = await this.pickCol([
-      'DATACADASTRO',
-      'DATA_CADASTRO',
-      'DT_CADASTRO',
-      'DATACRIACAO',
-      'DT_CRIACAO',
-      'CREATED_AT',
-    ]);
+
+    const candidatas = [
+      'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO',
+      'DATACRIACAO', 'DT_CRIACAO',
+      'DATA_INC', 'DATAINC', 'DT_INC', 'DATA_INCLUSAO', 'DATAINCLUSAO', 'DT_INCLUSAO',
+      'DATA_ENT', 'DATAENT', 'DT_ENT', 'DATA_ENTRADA', 'DATAENTRADA', 'DT_ENTRADA',
+      'CREATED_AT', 'CRIADO_EM', 'DATA',
+    ];
+    const dataCol = await this.pickCol(candidatas);
     if (!dataCol) {
-      this.logger.warn('[erp] searchRefsByDateRange: nenhuma coluna de data detectada');
+      this.logger.warn(
+        `[erp] searchRefsByDateRange: nenhuma coluna de data detectada. Tentei: ${candidatas.join(', ')}`,
+      );
       return [];
     }
 
@@ -461,16 +467,132 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
          ORDER BY MAX(\`${dataCol}\`) DESC
          LIMIT 500
       `;
+      this.logger.log(`[erp] searchRefsByDateRange col=${dataCol} from=${input.inicio} to=${input.fim} desc=${input.descricaoContains || '(none)'}`);
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
+      this.logger.log(`[erp] searchRefsByDateRange retornou ${rows.length} REF(s)`);
       return (rows as any[]).map((r) => ({
         ref: String(r.ref).trim(),
         descricao: String(r.descricao || '').trim(),
         variantCount: Number(r.variantCount) || 0,
-        dataCadastro: r.dataCadastro ? new Date(r.dataCadastro).toISOString() : null,
+        dataCadastro: r.dataCadastro ? String(r.dataCadastro) : null,
       }));
     } catch (e) {
       this.logger.error(`searchRefsByDateRange falhou: ${(e as Error).message}`);
       return [];
+    }
+  }
+
+  /**
+   * DIAGNÓSTICO de searchRefsByDateRange — usado pra debugar quando "0 resultados".
+   * Retorna:
+   *   - qual coluna de data foi detectada
+   *   - todas as colunas DATE/DATETIME existentes na tabela produtos
+   *   - contagens em diferentes cenários (com/sem filtro de data, com/sem PLUS SIZE)
+   *   - sample de DESCRICAOCOMPLETA pra ver o formato real
+   *   - min/max da coluna de data (pra ver se tem dado nesse range)
+   */
+  async diagnoseRefsByDate(input: {
+    inicio: string;
+    fim: string;
+    descricaoContains?: string;
+  }): Promise<any> {
+    if (!this.pool) return { error: 'pool não inicializado' };
+
+    const candidatas = [
+      'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO',
+      'DATACRIACAO', 'DT_CRIACAO',
+      'DATA_INC', 'DATAINC', 'DT_INC', 'DATA_INCLUSAO', 'DATAINCLUSAO', 'DT_INCLUSAO',
+      'DATA_ENT', 'DATAENT', 'DT_ENT', 'DATA_ENTRADA', 'DATAENTRADA', 'DT_ENTRADA',
+      'CREATED_AT', 'CRIADO_EM', 'DATA',
+    ];
+    const dataCol = await this.pickCol(candidatas);
+
+    // Lista TODAS as colunas da tabela produtos pra ele ver
+    const cols = await this.getProductsColumns();
+    const colsList = Array.from(cols).sort();
+    const dateCols = colsList.filter((c) => /DATA|DT|TIME|CREATED|UPDATED|INC/i.test(c));
+
+    const result: any = {
+      colunaDataDetectada: dataCol,
+      colunasComDataNoNome: dateCols,
+      todasAsColunasProdutos: colsList,
+      candidatasTentadas: candidatas,
+      filtros: {
+        inicio: input.inicio,
+        fim: input.fim,
+        descricao: input.descricaoContains,
+      },
+    };
+
+    if (!dataCol) {
+      result.problema = 'Nenhuma coluna de data foi detectada. Veja "colunasComDataNoNome" pra ver opções.';
+      return result;
+    }
+
+    try {
+      // Range total da coluna
+      const [minMaxRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT MIN(\`${dataCol}\`) AS minDate, MAX(\`${dataCol}\`) AS maxDate, COUNT(*) AS total FROM produtos WHERE \`${dataCol}\` IS NOT NULL`,
+      );
+      result.colunaStats = {
+        minDate: minMaxRows[0]?.minDate ? String(minMaxRows[0].minDate) : null,
+        maxDate: minMaxRows[0]?.maxDate ? String(minMaxRows[0].maxDate) : null,
+        totalComData: Number(minMaxRows[0]?.total) || 0,
+      };
+
+      // Total no range (sem filtro descrição)
+      const [rangeRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT COUNT(DISTINCT REF) AS uniqueRefs, COUNT(*) AS totalRows
+           FROM produtos
+          WHERE \`${dataCol}\` >= ? AND \`${dataCol}\` < ? AND REF IS NOT NULL AND REF <> ''`,
+        [input.inicio, input.fim],
+      );
+      result.semFiltroDescricao = {
+        uniqueRefs: Number(rangeRows[0]?.uniqueRefs) || 0,
+        totalRows: Number(rangeRows[0]?.totalRows) || 0,
+      };
+
+      // Total no range COM filtro descrição
+      if (input.descricaoContains?.trim()) {
+        const [filterRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT COUNT(DISTINCT REF) AS uniqueRefs, COUNT(*) AS totalRows
+             FROM produtos
+            WHERE \`${dataCol}\` >= ? AND \`${dataCol}\` < ?
+              AND REF IS NOT NULL AND REF <> ''
+              AND UPPER(DESCRICAOCOMPLETA) LIKE ?`,
+          [input.inicio, input.fim, `%${input.descricaoContains.trim().toUpperCase()}%`],
+        );
+        result.comFiltroDescricao = {
+          uniqueRefs: Number(filterRows[0]?.uniqueRefs) || 0,
+          totalRows: Number(filterRows[0]?.totalRows) || 0,
+        };
+
+        // Quantos produtos TEM essa descrição no banco inteiro (sem filtro de data)
+        const [descCountRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT COUNT(*) AS total FROM produtos WHERE UPPER(DESCRICAOCOMPLETA) LIKE ?`,
+          [`%${input.descricaoContains.trim().toUpperCase()}%`],
+        );
+        result.descricaoTotalNoBanco = Number(descCountRows[0]?.total) || 0;
+      }
+
+      // Sample de 5 produtos no range (descrições reais)
+      const [sampleRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT REF, DESCRICAOCOMPLETA, \`${dataCol}\` AS dataCadastro
+           FROM produtos
+          WHERE \`${dataCol}\` >= ? AND \`${dataCol}\` < ? AND REF IS NOT NULL
+          LIMIT 10`,
+        [input.inicio, input.fim],
+      );
+      result.sampleNoRange = (sampleRows as any[]).map((r) => ({
+        ref: r.REF,
+        descricao: r.DESCRICAOCOMPLETA,
+        dataCadastro: String(r.dataCadastro),
+      }));
+
+      return result;
+    } catch (e) {
+      result.error = (e as Error).message;
+      return result;
     }
   }
 
