@@ -131,7 +131,7 @@ export default function LojasPage() {
                         : 'bg-blue-100 text-blue-800'
                     }`}
                   >
-                    {tipo}
+                    {tipo === 'FILIAL' ? 'FRANQUIA' : 'REDE'}
                   </span>
                 </td>
                 <td className="p-3">{s.city || '—'} / {s.state || '—'}</td>
@@ -220,12 +220,12 @@ export default function LojasPage() {
                         : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
                     }`}
                   >
-                    FILIAL (franquia)
+                    FRANQUIA
                   </button>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  Transferências REDE↔FILIAL geram obrigação financeira automática (preço Giga ÷ 2,5).
-                  REDE↔REDE e FILIAL↔FILIAL não cobram.
+                  Transferências REDE↔FRANQUIA geram obrigação financeira automática (preço Giga ÷ 2,5).
+                  REDE↔REDE e FRANQUIA↔FRANQUIA não cobram.
                 </p>
               </div>
 

@@ -86,9 +86,9 @@ export default function LojasPage() {
           <Building2 className="w-5 h-5" />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-slate-900">Lojas (REDE / FILIAL)</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Lojas (REDE / FRANQUIA)</h1>
           <p className="text-sm text-slate-500">
-            Classifica cada loja. Transferências entre <b>REDE↔FILIAL</b> geram obrigação
+            Classifica cada loja. Transferências entre <b>REDE↔FRANQUIA</b> geram obrigação
             financeira automática (preço Giga ÷ 2,5). REDE↔REDE não cobra.
           </p>
         </div>
@@ -108,7 +108,7 @@ export default function LojasPage() {
         <KpiBox label="Total de lojas" value={items.length} color="slate" />
         <KpiBox label="Ativas" value={totalAtivas} color="emerald" />
         <KpiBox label="REDE" value={totalRede} color="blue" />
-        <KpiBox label="FILIAIS" value={totalFilial} color="amber" />
+        <KpiBox label="FRANQUIAS" value={totalFilial} color="amber" />
       </div>
 
       {error && (
@@ -181,7 +181,7 @@ export default function LojasPage() {
                           : 'text-slate-600 hover:bg-white'
                       } disabled:opacity-50`}
                     >
-                      FILIAL
+                      FRANQUIA
                     </button>
                   </div>
 
