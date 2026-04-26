@@ -2578,7 +2578,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Resolve um SKU (CODIGO Giga) pra dados completos do produto.
-   * Retorna null se SKU não existe ou tabela produtos não tem REF cadastrada.
+   *
+   * Tolerante a zeros à esquerda e EANs:
+   *   1. Tenta CODIGO exato
+   *   2. Se não achar, tenta variantes com padding zero (5, 6, 7, 8, 13, 14 dígitos)
+   *   3. Se não achar, delega pra findSkuByAnyEan (procura em EAN13, EAN, CODBARRAS, etc)
+   *
+   * Retorna null se nada bater.
    */
   async resolveSkuInfo(sku: string): Promise<{
     codigo: string;
@@ -2590,31 +2596,66 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return null;
     const s = String(sku || '').trim();
     if (!s) return null;
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO AS codigo,
-                REF AS ref,
-                COR AS cor,
-                TAMANHO AS tamanho,
-                COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
-           FROM produtos
-          WHERE CODIGO = ?
-          LIMIT 1`,
-        [s],
-      );
-      const r = (rows as any[])[0];
-      if (!r) return null;
-      return {
-        codigo: String(r.codigo).trim(),
-        ref: r.ref ? String(r.ref).trim() : null,
-        cor: r.cor ? String(r.cor).trim() : null,
-        tamanho: r.tamanho ? String(r.tamanho).trim() : null,
-        descricao: r.descricao ? String(r.descricao).trim() : null,
-      };
-    } catch (e) {
-      this.logger.error(`resolveSkuInfo falhou: ${(e as Error).message}`);
+
+    // Helper: query produtos por CODIGO exato (com lista de candidatos)
+    const tryCodigos = async (candidates: string[]): Promise<any | null> => {
+      if (!candidates.length) return null;
+      try {
+        const [rows] = await this.pool!.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO AS codigo,
+                  REF AS ref,
+                  COR AS cor,
+                  TAMANHO AS tamanho,
+                  COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+             FROM produtos
+            WHERE CODIGO IN (?)
+            LIMIT 1`,
+          [candidates],
+        );
+        return (rows as any[])[0] || null;
+      } catch (e) {
+        this.logger.warn(`resolveSkuInfo tryCodigos: ${(e as Error).message}`);
+        return null;
+      }
+    };
+
+    // 1. Tenta exato + variantes com zero-padding comuns
+    const variants = new Set<string>([s]);
+    const stripped = s.replace(/^0+/, '');
+    if (stripped) variants.add(stripped);
+    if (/^\d+$/.test(s)) {
+      // Padding em 5, 6, 7, 8, 13 e 14 dígitos cobre os formatos mais comuns
+      for (const len of [5, 6, 7, 8, 13, 14]) {
+        if (s.length < len) variants.add(s.padStart(len, '0'));
+      }
+    }
+    const list = Array.from(variants);
+
+    let row = await tryCodigos(list);
+
+    // 2. Fallback: tenta achar via colunas de EAN/barcode
+    if (!row) {
+      try {
+        const codigoEncontrado = await this.findSkuByAnyEan(s);
+        if (codigoEncontrado) {
+          row = await tryCodigos([codigoEncontrado]);
+        }
+      } catch (e) {
+        this.logger.warn(`resolveSkuInfo fallback EAN: ${(e as Error).message}`);
+      }
+    }
+
+    if (!row) {
+      this.logger.warn(`resolveSkuInfo: SKU "${s}" não bateu nem com variantes nem com EANs`);
       return null;
     }
+    return {
+      codigo: String(row.codigo).trim(),
+      ref: row.ref ? String(row.ref).trim() : null,
+      cor: row.cor ? String(row.cor).trim() : null,
+      tamanho: row.tamanho ? String(row.tamanho).trim() : null,
+      descricao: row.descricao ? String(row.descricao).trim() : null,
+    };
   }
 
   /**
