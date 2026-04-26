@@ -153,20 +153,22 @@ export class RealignmentAutoService {
       return { ok: true, enabled: false, refsFound: 0, dataAlvo: '' };
     }
 
-    // Calcula data alvo (N dias atrás, dia inteiro)
+    // Calcula data alvo (N dias atrás, dia inteiro) — strings YYYY-MM-DD
     const dataAlvo = new Date();
     dataAlvo.setUTCDate(dataAlvo.getUTCDate() - cfg.diasAtras);
     dataAlvo.setUTCHours(0, 0, 0, 0);
     const fim = new Date(dataAlvo);
     fim.setUTCDate(fim.getUTCDate() + 1);
 
+    const dataAlvoStr = dataAlvo.toISOString().slice(0, 10);
+    const fimStr = fim.toISOString().slice(0, 10);
+
     const refs = await this.erp.searchRefsByDateRange({
-      inicio: dataAlvo,
-      fim,
+      inicio: dataAlvoStr,
+      fim: fimStr,
       descricaoContains: cfg.descricaoFilter || undefined,
     });
 
-    const dataAlvoStr = dataAlvo.toISOString().slice(0, 10);
     this.logger.log(
       `[realignment-auto] ${refs.length} REF(s) encontradas pra data ${dataAlvoStr} (filtro="${cfg.descricaoFilter}")`,
     );
