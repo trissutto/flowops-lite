@@ -478,6 +478,19 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/triage/diagnose?sku=17
+   * Diagnóstico de SKU não encontrado: mostra variantes testadas + samples
+   * de produtos com CODIGO/REF/DESCRICAO/EAN contendo o termo.
+   */
+  @Get('triage/diagnose')
+  triageDiagnose(@Req() req: any, @Query('sku') sku: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!sku) throw new BadRequestException('sku obrigatório');
+    return this.erp.diagnoseSku(sku);
+  }
+
+  /**
    * GET /realignment/triage/open?fromStoreCode=
    * Lista remessas OPEN da loja origem (caixas em formação na triagem).
    */

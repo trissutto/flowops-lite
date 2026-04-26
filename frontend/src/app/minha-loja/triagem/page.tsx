@@ -73,6 +73,9 @@ export default function TriagemPage() {
   const [lastSuggestion, setLastSuggestion] = useState<Suggestion | null>(null);
   const [confirmed, setConfirmed] = useState<Array<{ ts: number; sku: string; toStoreCode: string; toStoreName: string }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const [errorSku, setErrorSku] = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagResult, setDiagResult] = useState<any | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ── Caixas em formação ──
@@ -185,6 +188,8 @@ export default function TriagemPage() {
     }
     setScanLoading(true);
     setError(null);
+    setErrorSku(null);
+    setDiagResult(null);
     setFinalizeResult(null);
     try {
       // 1. Pede sugestão
@@ -221,8 +226,23 @@ export default function TriagemPage() {
       inputRef.current?.focus();
     } catch (e: any) {
       setError(e?.message || 'Erro ao bipar peça');
+      setErrorSku(sku);
     } finally {
       setScanLoading(false);
+    }
+  };
+
+  // ── Diagnóstico ──
+  const runDiagnose = async () => {
+    if (!errorSku) return;
+    setDiagLoading(true);
+    try {
+      const r = await api<any>(`/realignment/triage/diagnose?sku=${encodeURIComponent(errorSku)}`);
+      setDiagResult(r);
+    } catch (e: any) {
+      alert(`Erro no diagnóstico: ${e?.message}`);
+    } finally {
+      setDiagLoading(false);
     }
   };
 
@@ -365,9 +385,97 @@ export default function TriagemPage() {
               </button>
             </div>
             {error && (
-              <div className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded p-2 flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{error}</span>
+              <div className="mt-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded p-2 space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span className="flex-1">{error}</span>
+                  {errorSku && !diagResult && (
+                    <button
+                      onClick={runDiagnose}
+                      disabled={diagLoading}
+                      className="text-xs px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white font-bold disabled:opacity-50"
+                    >
+                      {diagLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Diagnosticar'}
+                    </button>
+                  )}
+                </div>
+
+                {diagResult && (
+                  <div className="bg-white border border-amber-200 rounded p-2 text-[11px] font-mono text-slate-700 max-h-96 overflow-auto space-y-2">
+                    <div>
+                      <b>Variantes testadas:</b> {diagResult.variantsTried?.join(', ') || '—'}
+                    </div>
+
+                    {diagResult.matchesByCodigo?.length > 0 && (
+                      <div>
+                        <b className="text-emerald-700">Produtos com CODIGO contendo "{errorSku}":</b>
+                        <div className="ml-3 mt-1">
+                          {diagResult.matchesByCodigo.map((m: any, i: number) => (
+                            <div key={i} className="truncate">
+                              <span className="text-emerald-700">{m.codigo}</span>
+                              {m.ref && <span className="text-slate-500"> · REF {m.ref}</span>}
+                              {m.descricao && <span className="text-slate-400"> · {m.descricao}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {diagResult.matchesByEan?.length > 0 && (
+                      <div>
+                        <b className="text-violet-700">Encontrado em EAN/barcode:</b>
+                        <div className="ml-3 mt-1">
+                          {diagResult.matchesByEan.map((m: any, i: number) => (
+                            <div key={i} className="truncate">
+                              <span className="text-violet-700">[{m.matchedColumn}]</span>
+                              {' '}{m.codigo}
+                              {m.ref && <span className="text-slate-500"> · REF {m.ref}</span>}
+                              {m.descricao && <span className="text-slate-400"> · {m.descricao}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {diagResult.matchesByRef?.length > 0 && (
+                      <div>
+                        <b className="text-sky-700">Produtos com REF contendo "{errorSku}":</b>
+                        <div className="ml-3 mt-1">
+                          {diagResult.matchesByRef.map((m: any, i: number) => (
+                            <div key={i} className="truncate">
+                              <span className="text-emerald-700">{m.codigo}</span>
+                              {m.ref && <span className="text-sky-700"> · REF {m.ref}</span>}
+                              {m.descricao && <span className="text-slate-400"> · {m.descricao}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {diagResult.matchesByDescricao?.length > 0 && (
+                      <div>
+                        <b className="text-amber-700">Produtos com "{errorSku}" na descrição:</b>
+                        <div className="ml-3 mt-1">
+                          {diagResult.matchesByDescricao.map((m: any, i: number) => (
+                            <div key={i} className="truncate">
+                              <span className="text-emerald-700">{m.codigo}</span>
+                              {m.descricao && <span className="text-slate-400"> · {m.descricao}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!diagResult.matchesByCodigo?.length &&
+                      !diagResult.matchesByEan?.length &&
+                      !diagResult.matchesByRef?.length &&
+                      !diagResult.matchesByDescricao?.length && (
+                        <div className="text-rose-700 font-bold">
+                          Nada encontrado em nenhum lugar — esse SKU não existe no Giga.
+                        </div>
+                      )}
+                  </div>
+                )}
               </div>
             )}
             {!setupValid && (

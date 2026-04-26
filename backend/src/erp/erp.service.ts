@@ -2624,8 +2624,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const stripped = s.replace(/^0+/, '');
     if (stripped) variants.add(stripped);
     if (/^\d+$/.test(s)) {
-      // Padding em 5, 6, 7, 8, 13 e 14 dígitos cobre os formatos mais comuns
-      for (const len of [5, 6, 7, 8, 13, 14]) {
+      // Padding completo de 3 até 14 dígitos (cobre qualquer formato Giga)
+      for (let len = 3; len <= 14; len++) {
         if (s.length < len) variants.add(s.padStart(len, '0'));
       }
     }
@@ -2655,6 +2655,128 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       cor: row.cor ? String(row.cor).trim() : null,
       tamanho: row.tamanho ? String(row.tamanho).trim() : null,
       descricao: row.descricao ? String(row.descricao).trim() : null,
+    };
+  }
+
+  /**
+   * Diagnóstico de SKU bipado quando resolveSkuInfo retorna null.
+   * Retorna sample de produtos com CODIGO/REF/DESCRICAO contendo o termo,
+   * pra identificar como o "17" realmente aparece no Giga.
+   */
+  async diagnoseSku(sku: string): Promise<{
+    sku: string;
+    variantsTried: string[];
+    matchesByCodigo: Array<{ codigo: string; ref: string | null; descricao: string | null }>;
+    matchesByRef: Array<{ codigo: string; ref: string | null; descricao: string | null }>;
+    matchesByEan: Array<{ codigo: string; ref: string | null; descricao: string | null; matchedColumn?: string }>;
+    matchesByDescricao: Array<{ codigo: string; ref: string | null; descricao: string | null }>;
+  }> {
+    const empty = {
+      sku,
+      variantsTried: [],
+      matchesByCodigo: [],
+      matchesByRef: [],
+      matchesByEan: [],
+      matchesByDescricao: [],
+    };
+    if (!this.pool) return empty;
+    const s = String(sku || '').trim();
+    if (!s) return empty;
+
+    // Variantes que seriam testadas pelo resolveSkuInfo
+    const variants = new Set<string>([s]);
+    const stripped = s.replace(/^0+/, '');
+    if (stripped) variants.add(stripped);
+    if (/^\d+$/.test(s)) {
+      for (let len = 3; len <= 14; len++) {
+        if (s.length < len) variants.add(s.padStart(len, '0'));
+      }
+    }
+    const variantsTried = Array.from(variants);
+
+    // Busca LIKE %sku% em CODIGO
+    let matchesByCodigo: any[] = [];
+    let matchesByRef: any[] = [];
+    let matchesByDescricao: any[] = [];
+    let matchesByEan: any[] = [];
+
+    try {
+      const [r1] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+           FROM produtos WHERE CODIGO LIKE ? LIMIT 10`,
+        [`%${s}%`],
+      );
+      matchesByCodigo = (r1 as any[]).map((r) => ({
+        codigo: String(r.CODIGO).trim(),
+        ref: r.REF ? String(r.REF).trim() : null,
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+      }));
+    } catch (e) {
+      this.logger.warn(`diagnoseSku CODIGO LIKE: ${(e as Error).message}`);
+    }
+
+    try {
+      const [r2] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+           FROM produtos WHERE REF LIKE ? LIMIT 10`,
+        [`%${s}%`],
+      );
+      matchesByRef = (r2 as any[]).map((r) => ({
+        codigo: String(r.CODIGO).trim(),
+        ref: r.REF ? String(r.REF).trim() : null,
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+      }));
+    } catch (e) {
+      this.logger.warn(`diagnoseSku REF LIKE: ${(e as Error).message}`);
+    }
+
+    // Procura nas colunas de EAN (exato com variantes)
+    const eanColumns = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
+    for (const col of eanColumns) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+             FROM produtos WHERE \`${col}\` IN (?) LIMIT 5`,
+          [variantsTried],
+        );
+        for (const r of rows as any[]) {
+          matchesByEan.push({
+            codigo: String(r.CODIGO).trim(),
+            ref: r.REF ? String(r.REF).trim() : null,
+            descricao: r.descricao ? String(r.descricao).trim() : null,
+            matchedColumn: col,
+          });
+        }
+      } catch {
+        // coluna não existe — ignora
+      }
+    }
+
+    // Busca por descrição parcial (último recurso)
+    if (s.length >= 3) {
+      try {
+        const [r4] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, REF, COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+             FROM produtos WHERE COALESCE(DESCRICAOCOMPLETA, DESCRICAO) LIKE ? LIMIT 5`,
+          [`%${s}%`],
+        );
+        matchesByDescricao = (r4 as any[]).map((r) => ({
+          codigo: String(r.CODIGO).trim(),
+          ref: r.REF ? String(r.REF).trim() : null,
+          descricao: r.descricao ? String(r.descricao).trim() : null,
+        }));
+      } catch {
+        /* noop */
+      }
+    }
+
+    return {
+      sku: s,
+      variantsTried,
+      matchesByCodigo,
+      matchesByRef,
+      matchesByEan,
+      matchesByDescricao,
     };
   }
 
