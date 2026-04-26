@@ -138,6 +138,7 @@ export default function InteligenciaEstoquePage() {
   const [topValor, setTopValor] = useState<TopRef[]>([]);
   const [topMode, setTopMode] = useState<'pecas' | 'valor'>('pecas');
   const [topLoading, setTopLoading] = useState(false);
+  const [topError, setTopError] = useState<string | null>(null);
 
   // Drill-down modal
   const [detailCode, setDetailCode] = useState<string | null>(null);
@@ -172,6 +173,7 @@ export default function InteligenciaEstoquePage() {
 
   const loadTopSellers = async () => {
     setTopLoading(true);
+    setTopError(null);
     try {
       const [pecas, valor] = await Promise.all([
         api<TopRef[]>(`/intelligence/top-sellers?${queryString}&orderBy=pecas&limit=10`),
@@ -179,9 +181,10 @@ export default function InteligenciaEstoquePage() {
       ]);
       setTopPecas(pecas);
       setTopValor(valor);
-    } catch {
+    } catch (e: any) {
       setTopPecas([]);
       setTopValor([]);
+      setTopError(e?.message || 'Erro ao carregar top vendas');
     } finally {
       setTopLoading(false);
     }
@@ -525,6 +528,11 @@ export default function InteligenciaEstoquePage() {
                   {topLoading ? (
                     <div className="text-center py-6 text-slate-400">
                       <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                    </div>
+                  ) : topError ? (
+                    <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">
+                      <div className="font-bold">Erro ao consultar Giga:</div>
+                      <div className="font-mono mt-1">{topError}</div>
                     </div>
                   ) : (
                     <TopList items={topMode === 'pecas' ? topPecas : topValor} mode={topMode} />

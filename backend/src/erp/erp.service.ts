@@ -2285,36 +2285,46 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return [];
     const orderBy = input.orderBy === 'valor' ? 'valor' : 'pecas';
     const limit = Math.max(1, Math.min(100, input.limit || 10));
-    const conds: string[] = [
+
+    // Otimização: agrega `caixa` por CODIGO PRIMEIRO (subquery filtrada),
+    // depois faz JOIN com produtos. Reduz drasticamente o tamanho do JOIN.
+    const caixaConds: string[] = [
       'c.DATA >= ?',
       'c.DATA < ?',
       "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
-      'p.REF IS NOT NULL',
-      "p.REF <> ''",
     ];
-    const params: any[] = [input.inicio, input.fim];
+    const caixaParams: any[] = [input.inicio, input.fim];
     if (input.storeCode) {
-      conds.push('c.LOJA = ?');
-      params.push(input.storeCode);
+      caixaConds.push('c.LOJA = ?');
+      caixaParams.push(input.storeCode);
     }
+
+    const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      conds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
     }
+
     const sql = `
       SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
-             SUM(c.QUANTIDADE) AS pecas,
-             SUM(c.VALORTOTAL) AS valor
-        FROM caixa c
-        INNER JOIN produtos p ON p.CODIGO = c.CODIGO
-       WHERE ${conds.join(' AND ')}
+             SUM(agg.pecas) AS pecas,
+             SUM(agg.valor) AS valor
+        FROM (
+          SELECT c.CODIGO AS codigo,
+                 SUM(c.QUANTIDADE) AS pecas,
+                 SUM(c.VALORTOTAL) AS valor
+            FROM caixa c
+           WHERE ${caixaConds.join(' AND ')}
+           GROUP BY c.CODIGO
+        ) agg
+        INNER JOIN produtos p ON p.CODIGO = agg.codigo
+       WHERE ${prodConds.join(' AND ')}
        GROUP BY p.REF
        ORDER BY ${orderBy} DESC
-       LIMIT ?
+       LIMIT ${limit}
     `;
-    params.push(limit);
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, caixaParams);
       return (rows as any[]).map((r) => ({
         refCode: String(r.refCode).trim(),
         descricao: r.descricao ? String(r.descricao).trim() : null,
@@ -2323,7 +2333,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getTopRefsBySales falhou: ${(e as Error).message}`);
-      return [];
+      throw new Error(`getTopRefsBySales: ${(e as Error).message}`);
     }
   }
 
@@ -2346,22 +2356,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }): Promise<Array<{ refCode: string; descricao: string | null; pecasVendidas: number; estoqueAtual: number }>> {
     if (!this.pool) return [];
     const limit = Math.max(1, Math.min(100, input.limit || 10));
-    const conds: string[] = [
+    // Otimização igual getTopRefsBySales: agrega caixa por CODIGO antes do JOIN.
+    const caixaConds: string[] = [
       'c.DATA >= ?',
       'c.DATA < ?',
       "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
-      'p.REF IS NOT NULL',
-      "p.REF <> ''",
     ];
-    const params: any[] = [input.inicio, input.fim];
+    const caixaParams: any[] = [input.inicio, input.fim];
     if (input.storeCode) {
-      conds.push('c.LOJA = ?');
-      params.push(input.storeCode);
+      caixaConds.push('c.LOJA = ?');
+      caixaParams.push(input.storeCode);
     }
+    const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      conds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
     }
-    // Subquery de estoque atual por REF (filtrando loja se necessário)
+
+    // Subquery de estoque atual por REF
     const stockJoin = input.storeCode
       ? `LEFT JOIN (
             SELECT pr.REF AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
@@ -2381,19 +2392,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const sql = `
       SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
-             SUM(c.QUANTIDADE) AS pecasVendidas,
+             SUM(agg.pecas) AS pecasVendidas,
              COALESCE(MAX(est.qtd), 0) AS estoqueAtual
-        FROM caixa c
-        INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+        FROM (
+          SELECT c.CODIGO AS codigo, SUM(c.QUANTIDADE) AS pecas
+            FROM caixa c
+           WHERE ${caixaConds.join(' AND ')}
+           GROUP BY c.CODIGO
+        ) agg
+        INNER JOIN produtos p ON p.CODIGO = agg.codigo
         ${stockJoin}
-       WHERE ${conds.join(' AND ')}
+       WHERE ${prodConds.join(' AND ')}
        GROUP BY p.REF
       HAVING estoqueAtual = 0 AND pecasVendidas > 0
        ORDER BY pecasVendidas DESC
-       LIMIT ?
+       LIMIT ${limit}
     `;
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [...stockParams, ...params, limit]);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [...stockParams, ...caixaParams]);
       return (rows as any[]).map((r) => ({
         refCode: String(r.refCode).trim(),
         descricao: r.descricao ? String(r.descricao).trim() : null,
@@ -2402,7 +2418,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getRupturas falhou: ${(e as Error).message}`);
-      return [];
+      throw new Error(`getRupturas: ${(e as Error).message}`);
     }
   }
 
