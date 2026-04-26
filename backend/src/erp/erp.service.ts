@@ -405,6 +405,76 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Lista REFs únicas cadastradas no intervalo de datas, filtrando opcionalmente
+   * por substring na descrição.
+   *
+   * Uso principal: realinhamento por data — "puxa todas as REFs PLUS SIZE
+   * cadastradas em janeiro/2026" → vendedora insere essas REFs no buscador.
+   *
+   * Detecta automaticamente a coluna de data cadastro (DATACADASTRO,
+   * DT_CADASTRO, DATACRIACAO, etc). Se nenhuma coluna existir, retorna [].
+   *
+   * Retorna até 500 REFs distintas, cada uma com descrição e contagem de
+   * variações (cores × tamanhos).
+   */
+  async searchRefsByDateRange(input: {
+    inicio: Date;
+    fim: Date;
+    descricaoContains?: string;
+  }): Promise<Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>> {
+    if (!this.pool) return [];
+    const dataCol = await this.pickCol([
+      'DATACADASTRO',
+      'DATA_CADASTRO',
+      'DT_CADASTRO',
+      'DATACRIACAO',
+      'DT_CRIACAO',
+      'CREATED_AT',
+    ]);
+    if (!dataCol) {
+      this.logger.warn('[erp] searchRefsByDateRange: nenhuma coluna de data detectada');
+      return [];
+    }
+
+    const conds: string[] = [
+      `\`${dataCol}\` >= ?`,
+      `\`${dataCol}\` <  ?`,
+      `REF IS NOT NULL`,
+      `REF <> ''`,
+    ];
+    const vals: any[] = [input.inicio, input.fim];
+
+    if (input.descricaoContains?.trim()) {
+      conds.push('UPPER(DESCRICAOCOMPLETA) LIKE ?');
+      vals.push(`%${input.descricaoContains.trim().toUpperCase()}%`);
+    }
+
+    try {
+      const sql = `
+        SELECT REF                            AS ref,
+               MAX(DESCRICAOCOMPLETA)         AS descricao,
+               MAX(\`${dataCol}\`)            AS dataCadastro,
+               COUNT(*)                       AS variantCount
+          FROM produtos
+         WHERE ${conds.join(' AND ')}
+         GROUP BY REF
+         ORDER BY MAX(\`${dataCol}\`) DESC
+         LIMIT 500
+      `;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
+      return (rows as any[]).map((r) => ({
+        ref: String(r.ref).trim(),
+        descricao: String(r.descricao || '').trim(),
+        variantCount: Number(r.variantCount) || 0,
+        dataCadastro: r.dataCadastro ? new Date(r.dataCadastro).toISOString() : null,
+      }));
+    } catch (e) {
+      this.logger.error(`searchRefsByDateRange falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
    * Busca preço cheio por SKU em batch na tabela `produtos` do Giga.
    *
    * Detecta automaticamente qual coluna tem o preço (VENDAUN, PRECO,

@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get,
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
+import { RealignmentAutoService } from './realignment-auto.service';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -19,8 +20,53 @@ export class RealignmentController {
   constructor(
     private readonly svc: RealignmentService,
     private readonly shipment: RealignmentShipmentService,
+    private readonly auto: RealignmentAutoService,
     private readonly erp: ErpService,
   ) {}
+
+  // ════════════════════════════════════════════════════════════════════
+  // AUTO-REALINHAMENTO (cron diário com sugestões pendentes)
+  // ════════════════════════════════════════════════════════════════════
+
+  /** GET /realignment/auto/config — admin lê config atual */
+  @Get('auto/config')
+  autoGetConfig(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.auto.getConfig();
+  }
+
+  /** POST /realignment/auto/config — admin atualiza config */
+  @Post('auto/config')
+  async autoUpdateConfig(
+    @Req() req: any,
+    @Body() body: { enabled?: boolean; diasAtras?: number; descricaoFilter?: string },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    await this.auto.updateConfig(body || {});
+    return this.auto.getConfig();
+  }
+
+  /** GET /realignment/auto/pending — lista REFs sugeridas pendentes */
+  @Get('auto/pending')
+  autoGetPending(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.auto.getPending();
+  }
+
+  /** POST /realignment/auto/dismiss — descarta sugestões pendentes */
+  @Post('auto/dismiss')
+  async autoDismiss(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    await this.auto.dismissPending();
+    return { ok: true };
+  }
+
+  /** POST /realignment/auto/run-now — gatilho manual (testar config) */
+  @Post('auto/run-now')
+  autoRunNow(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.auto.runManual();
+  }
 
   /**
    * GET /realignment/search-refs?term=blusa preta
@@ -38,6 +84,38 @@ export class RealignmentController {
     const t = String(term || '').trim();
     if (t.length < 2) return [];
     return this.erp.searchByDescriptionGrouped(t);
+  }
+
+  /**
+   * GET /realignment/search-refs-by-date?from=2026-01-01&to=2026-01-31&desc=PLUS+SIZE
+   *
+   * Lista REFs cadastradas no Giga entre `from` e `to` (inclusive em from,
+   * exclusive em to+1). Filtra por substring na descrição se `desc` fornecido.
+   *
+   * Uso: vendedora quer realinhar todas peças plus size que chegaram em
+   * janeiro/2026 → busca aqui, copia REFs pro buscador.
+   */
+  @Get('search-refs-by-date')
+  async searchRefsByDate(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('desc') desc?: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('Query params from e to são obrigatórios (YYYY-MM-DD)');
+    }
+    const inicio = new Date(`${from}T00:00:00.000Z`);
+    // fim = dia seguinte ao "to" (intervalo half-open). Aceita "31/01" como fim.
+    const fimDate = new Date(`${to}T00:00:00.000Z`);
+    fimDate.setUTCDate(fimDate.getUTCDate() + 1);
+    if (isNaN(inicio.getTime()) || isNaN(fimDate.getTime())) {
+      throw new BadRequestException('Datas inválidas (use YYYY-MM-DD)');
+    }
+    return this.erp.searchRefsByDateRange({
+      inicio,
+      fim: fimDate,
+      descricaoContains: desc?.trim() || undefined,
+    });
   }
 
   @Post('preview')

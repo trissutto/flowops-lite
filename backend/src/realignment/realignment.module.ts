@@ -7,6 +7,7 @@ import { WpDbModule } from '../wp-db/wp-db.module';
 import { RealignmentController } from './realignment.controller';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
+import { RealignmentAutoService } from './realignment-auto.service';
 
 /**
  * Nota: dependia de WhatsappModule (disparo de WhatsApp consolidado) até o
@@ -17,7 +18,7 @@ import { RealignmentShipmentService } from './shipment.service';
 @Module({
   imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule],
   controllers: [RealignmentController],
-  providers: [RealignmentService, RealignmentShipmentService],
-  exports: [RealignmentService, RealignmentShipmentService],
+  providers: [RealignmentService, RealignmentShipmentService, RealignmentAutoService],
+  exports: [RealignmentService, RealignmentShipmentService, RealignmentAutoService],
 })
 export class RealignmentModule {}

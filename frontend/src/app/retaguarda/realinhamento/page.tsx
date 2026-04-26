@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -122,6 +122,134 @@ export default function RealinhamentoPage() {
     };
   } | null>(null);
   const [confirming, setConfirming] = useState(false);
+
+  // ── BUSCA POR DATA DE CADASTRO (pra REFs que chegaram no período) ──
+  // Ex: "PLUS SIZE cadastrados em janeiro/2026 → vou realinhar essas REFs"
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const monthAgoStr = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [dateFrom, setDateFrom] = useState(monthAgoStr);
+  const [dateTo, setDateTo] = useState(todayStr);
+  const [dateOnlyPlusSize, setDateOnlyPlusSize] = useState(true);
+  const [dateLoading, setDateLoading] = useState(false);
+  const [dateError, setDateError] = useState<string | null>(null);
+  const [dateResults, setDateResults] = useState<
+    Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>
+  >([]);
+
+  const handleSearchByDate = async () => {
+    if (!dateFrom || !dateTo) {
+      setDateError('Selecione as duas datas');
+      return;
+    }
+    setDateLoading(true);
+    setDateError(null);
+    try {
+      const params = new URLSearchParams({
+        from: dateFrom,
+        to: dateTo,
+        ...(dateOnlyPlusSize ? { desc: 'PLUS SIZE' } : {}),
+      });
+      const data = await api<typeof dateResults>(`/realignment/search-refs-by-date?${params}`);
+      setDateResults(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setDateError(e?.message || 'Erro buscando por data');
+    } finally {
+      setDateLoading(false);
+    }
+  };
+
+  const addAllDateRefs = () => {
+    if (!dateResults.length) return;
+    const novos = dateResults.map((r) => r.ref);
+    const atuais = new Set(refsText.split('\n').map((s) => s.trim()).filter(Boolean));
+    novos.forEach((r) => atuais.add(r));
+    setRefsText(Array.from(atuais).sort().join('\n'));
+  };
+
+  // ── AUTO-REALINHAMENTO (cron diário com sugestões) ──
+  type AutoConfig = { enabled: boolean; diasAtras: number; descricaoFilter: string };
+  type AutoPending = {
+    generatedAt: string | null;
+    diasAtras: number | null;
+    dataAlvo: string | null;
+    refs: Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>;
+  };
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [autoConfig, setAutoConfig] = useState<AutoConfig | null>(null);
+  const [autoPending, setAutoPending] = useState<AutoPending | null>(null);
+  const [autoSaving, setAutoSaving] = useState(false);
+  const [autoRunning, setAutoRunning] = useState(false);
+
+  const loadAuto = async () => {
+    try {
+      const [cfg, pend] = await Promise.all([
+        api<AutoConfig>('/realignment/auto/config'),
+        api<AutoPending>('/realignment/auto/pending'),
+      ]);
+      setAutoConfig(cfg);
+      setAutoPending(pend);
+    } catch (e: any) {
+      // silencioso — só admin tem acesso
+    }
+  };
+
+  useEffect(() => {
+    loadAuto();
+  }, []);
+
+  const saveAutoConfig = async (next: Partial<AutoConfig>) => {
+    setAutoSaving(true);
+    try {
+      const cfg = await api<AutoConfig>('/realignment/auto/config', {
+        method: 'POST',
+        body: JSON.stringify(next),
+      });
+      setAutoConfig(cfg);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setAutoSaving(false);
+    }
+  };
+
+  const runAutoNow = async () => {
+    if (!confirm('Rodar auto-realinhamento agora? (não dispara realinhamento, só gera sugestão)')) return;
+    setAutoRunning(true);
+    try {
+      const res = await api<{ refsFound: number; dataAlvo: string }>('/realignment/auto/run-now', {
+        method: 'POST',
+        body: '{}',
+      });
+      alert(`✅ ${res.refsFound} REF(s) encontradas pra data ${res.dataAlvo}`);
+      await loadAuto();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setAutoRunning(false);
+    }
+  };
+
+  const dismissAutoPending = async () => {
+    if (!confirm('Descartar essa sugestão?')) return;
+    try {
+      await api('/realignment/auto/dismiss', { method: 'POST', body: '{}' });
+      await loadAuto();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  const importAutoToBuscador = () => {
+    if (!autoPending?.refs?.length) return;
+    const novos = autoPending.refs.map((r) => r.ref);
+    const atuais = new Set(refsText.split('\n').map((s) => s.trim()).filter(Boolean));
+    novos.forEach((r) => atuais.add(r));
+    setRefsText(Array.from(atuais).sort().join('\n'));
+  };
 
   // ── WIPE ALL (admin) ─────────────────────────────────────────────
   // Botão pra zerar TODOS realinhamentos (após período de testes).
@@ -468,6 +596,197 @@ export default function RealinhamentoPage() {
             {stores.length} lojas cadastradas · {activeStores.length} ativas
           </div>
         </div>
+
+        {/* ── BUSCA POR DATA DE CADASTRO ── */}
+        <div className="border border-emerald-200 bg-emerald-50/60 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Search className="w-4 h-4 text-emerald-700" />
+            <div className="text-sm font-semibold text-emerald-900">
+              Buscar REFs por data de cadastro no Giga
+            </div>
+          </div>
+          <div className="text-xs text-emerald-900/80 mb-2">
+            Puxa todas as REFs cadastradas no período (ex: PLUS SIZE chegadas em janeiro/2026 →
+            realinhar todas pras filiais).
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-end">
+            <div>
+              <label className="block text-[11px] font-semibold text-emerald-900 mb-0.5">De</label>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="w-full border border-emerald-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-emerald-900 mb-0.5">Até</label>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="w-full border border-emerald-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-emerald-900 sm:pb-2">
+              <input
+                type="checkbox"
+                checked={dateOnlyPlusSize}
+                onChange={(e) => setDateOnlyPlusSize(e.target.checked)}
+              />
+              Só PLUS SIZE
+            </label>
+            <button
+              type="button"
+              onClick={handleSearchByDate}
+              disabled={dateLoading}
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold rounded-lg px-4 py-2 text-sm flex items-center justify-center gap-2"
+            >
+              {dateLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Buscar
+            </button>
+          </div>
+          {dateError && (
+            <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+              {dateError}
+            </div>
+          )}
+          {dateResults.length > 0 && (
+            <div className="mt-3 bg-white border border-emerald-200 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-emerald-100/50 border-b border-emerald-200">
+                <div className="text-xs font-bold text-emerald-900">
+                  {dateResults.length} REF(s) encontradas
+                </div>
+                <button
+                  type="button"
+                  onClick={addAllDateRefs}
+                  className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded px-3 py-1 flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  Adicionar todas ao buscador
+                </button>
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-emerald-100 text-xs">
+                {dateResults.slice(0, 100).map((r) => (
+                  <div key={r.ref} className="px-3 py-1.5 flex items-center gap-2">
+                    <span className="font-mono font-bold text-emerald-900">{r.ref}</span>
+                    <span className="text-slate-600 truncate flex-1">{r.descricao}</span>
+                    <span className="text-slate-400">{r.variantCount}var</span>
+                  </div>
+                ))}
+                {dateResults.length > 100 && (
+                  <div className="px-3 py-1.5 text-slate-500 italic">
+                    + {dateResults.length - 100} REFs adicionais (use "Adicionar todas")
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── AUTO-REALINHAMENTO ── */}
+        {autoConfig && (
+          <div className="border border-violet-200 bg-violet-50/60 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="w-4 h-4 text-violet-700" />
+              <div className="text-sm font-semibold text-violet-900 flex-1">
+                Auto-realinhamento (cron diário 06h)
+              </div>
+              <button
+                type="button"
+                onClick={() => setAutoOpen(!autoOpen)}
+                className="text-xs text-violet-700 hover:underline"
+              >
+                {autoOpen ? 'Fechar' : 'Configurar'}
+              </button>
+            </div>
+            {autoPending?.refs && autoPending.refs.length > 0 ? (
+              <div className="bg-white border-2 border-violet-300 rounded-lg p-3 mb-2">
+                <div className="text-xs text-violet-900 mb-1">
+                  🔔 <b>{autoPending.refs.length} REF(s) sugeridas</b> — geradas{' '}
+                  {autoPending.generatedAt ? new Date(autoPending.generatedAt).toLocaleString('pt-BR') : ''}{' '}
+                  (cadastradas em {autoPending.dataAlvo}, há {autoPending.diasAtras} dias)
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={importAutoToBuscador}
+                    className="text-xs bg-violet-600 hover:bg-violet-700 text-white font-bold rounded px-3 py-1.5 flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Importar p/ buscador
+                  </button>
+                  <button
+                    type="button"
+                    onClick={dismissAutoPending}
+                    className="text-xs border border-slate-300 hover:bg-slate-50 rounded px-3 py-1.5"
+                  >
+                    Descartar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-violet-900/70 mb-2">
+                {autoConfig.enabled
+                  ? `Ativo. Procura REFs cadastradas há ${autoConfig.diasAtras} dias com "${autoConfig.descricaoFilter}". Próxima execução: amanhã 06h.`
+                  : 'Desativado. Ative pra receber sugestões diárias automáticas.'}
+              </div>
+            )}
+            {autoOpen && (
+              <div className="bg-white border border-violet-200 rounded-lg p-3 space-y-2">
+                <label className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={autoConfig.enabled}
+                    disabled={autoSaving}
+                    onChange={(e) => saveAutoConfig({ enabled: e.target.checked })}
+                  />
+                  Ativar cron diário (06h)
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                      Dias atrás
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      value={autoConfig.diasAtras}
+                      disabled={autoSaving}
+                      onChange={(e) => setAutoConfig({ ...autoConfig, diasAtras: Number(e.target.value) })}
+                      onBlur={() => saveAutoConfig({ diasAtras: autoConfig.diasAtras })}
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                      Filtro descrição
+                    </label>
+                    <input
+                      type="text"
+                      value={autoConfig.descricaoFilter}
+                      disabled={autoSaving}
+                      onChange={(e) => setAutoConfig({ ...autoConfig, descricaoFilter: e.target.value })}
+                      onBlur={() => saveAutoConfig({ descricaoFilter: autoConfig.descricaoFilter })}
+                      placeholder="PLUS SIZE"
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={runAutoNow}
+                  disabled={autoRunning}
+                  className="text-xs bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-bold rounded px-3 py-1.5 flex items-center gap-1"
+                >
+                  {autoRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                  Rodar agora (testar)
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Refs */}
         <div>
