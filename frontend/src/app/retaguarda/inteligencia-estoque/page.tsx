@@ -133,12 +133,8 @@ export default function InteligenciaEstoquePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Top sellers (rede inteira)
-  const [topPecas, setTopPecas] = useState<TopRef[]>([]);
-  const [topValor, setTopValor] = useState<TopRef[]>([]);
-  const [topMode, setTopMode] = useState<'pecas' | 'valor'>('pecas');
-  const [topLoading, setTopLoading] = useState(false);
-  const [topError, setTopError] = useState<string | null>(null);
+  // (Top sellers da rede inteira foi removido — query pesada demais.
+  // O drill-down por loja continua mostrando top vendas da loja específica.)
 
   // Drill-down modal
   const [detailCode, setDetailCode] = useState<string | null>(null);
@@ -168,25 +164,6 @@ export default function InteligenciaEstoquePage() {
       setError(e?.message || 'Erro ao carregar overview');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadTopSellers = async () => {
-    setTopLoading(true);
-    setTopError(null);
-    try {
-      const [pecas, valor] = await Promise.all([
-        api<TopRef[]>(`/intelligence/top-sellers?${queryString}&orderBy=pecas&limit=10`),
-        api<TopRef[]>(`/intelligence/top-sellers?${queryString}&orderBy=valor&limit=10`),
-      ]);
-      setTopPecas(pecas);
-      setTopValor(valor);
-    } catch (e: any) {
-      setTopPecas([]);
-      setTopValor([]);
-      setTopError(e?.message || 'Erro ao carregar top vendas');
-    } finally {
-      setTopLoading(false);
     }
   };
 
@@ -224,7 +201,6 @@ export default function InteligenciaEstoquePage() {
   useEffect(() => {
     if (tab === 'overview') {
       loadOverview();
-      loadTopSellers();
     } else if (tab === 'heatmap') {
       loadHeatmap();
     }
@@ -297,7 +273,7 @@ export default function InteligenciaEstoquePage() {
             </p>
           </div>
           <button
-            onClick={() => (tab === 'overview' ? (loadOverview(), loadTopSellers()) : loadHeatmap())}
+            onClick={() => (tab === 'overview' ? loadOverview() : loadHeatmap())}
             disabled={loading || heatmapLoading}
             className="text-sm flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 disabled:opacity-50"
           >
@@ -425,9 +401,8 @@ export default function InteligenciaEstoquePage() {
               </div>
             )}
 
-            {/* Tabela + Top sellers */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="lg:col-span-2 bg-white rounded-lg border overflow-hidden">
+            {/* Tabela full-width */}
+            <div className="bg-white rounded-lg border overflow-hidden">
                 {loading ? (
                   <SkeletonTable />
                 ) : !overview || overview.rows.length === 0 ? (
@@ -502,43 +477,8 @@ export default function InteligenciaEstoquePage() {
                 )}
               </div>
 
-              {/* Top sellers card */}
-              <div className="bg-white rounded-lg border overflow-hidden">
-                <div className="px-3 py-2 border-b bg-slate-50 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
-                    <TrendingUp className="w-4 h-4 text-emerald-600" />
-                    Top 10 vendidas (rede)
-                  </div>
-                  <div className="flex bg-slate-100 rounded p-0.5">
-                    <button
-                      onClick={() => setTopMode('pecas')}
-                      className={`text-xs px-2 py-0.5 rounded ${topMode === 'pecas' ? 'bg-white shadow-sm font-bold' : 'text-slate-500'}`}
-                    >
-                      Peças
-                    </button>
-                    <button
-                      onClick={() => setTopMode('valor')}
-                      className={`text-xs px-2 py-0.5 rounded ${topMode === 'valor' ? 'bg-white shadow-sm font-bold' : 'text-slate-500'}`}
-                    >
-                      R$
-                    </button>
-                  </div>
-                </div>
-                <div className="p-2">
-                  {topLoading ? (
-                    <div className="text-center py-6 text-slate-400">
-                      <Loader2 className="w-5 h-5 animate-spin inline-block" />
-                    </div>
-                  ) : topError ? (
-                    <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded p-2">
-                      <div className="font-bold">Erro ao consultar Giga:</div>
-                      <div className="font-mono mt-1">{topError}</div>
-                    </div>
-                  ) : (
-                    <TopList items={topMode === 'pecas' ? topPecas : topValor} mode={topMode} />
-                  )}
-                </div>
-              </div>
+            <div className="text-xs text-slate-500 text-center">
+              Clique numa loja pra ver top vendas, rupturas e parados dela.
             </div>
           </>
         )}
