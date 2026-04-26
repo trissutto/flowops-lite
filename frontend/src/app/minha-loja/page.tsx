@@ -31,7 +31,7 @@ import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
-  Package2, ClipboardList, Shuffle, Inbox,
+  Package2, ClipboardList, Shuffle, Inbox, Package,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -807,6 +807,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
   }> = [
     { href: '/minha-loja/consultar',                  icon: Search,         label: 'Consultar',      subtitle: 'Buscar na rede',     tone: 'sky' },
     { href: '/minha-loja/historico',                  icon: History,        label: 'Transferências', subtitle: 'Histórico',          tone: 'lavender' },
+    { href: '/minha-loja/triagem',                    icon: Package,        label: 'Triagem',        subtitle: 'Bipar e distribuir', tone: 'rose' },
     { href: '/minha-loja/materiais',                  icon: Package2,       label: 'Materiais',      subtitle: 'Pedir saquinho…',    tone: 'peach' },
     { href: '/minha-loja/materiais?tab=historico',    icon: ClipboardList,  label: 'Meus pedidos',   subtitle: 'Status materiais',   tone: 'mint' },
   ];
@@ -906,8 +907,8 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
         </Link>
       )}
 
-      {/* Grid de 4 botões circulares — ações rápidas */}
-      <div className="grid grid-cols-4 gap-2 sm:gap-4 justify-items-center pt-2">
+      {/* Grid de 5 botões circulares — ações rápidas */}
+      <div className="grid grid-cols-5 gap-1.5 sm:gap-3 justify-items-center pt-2">
         {items.map((a, idx) => {
           const t = TONES[a.tone];
           const Icon = a.icon;

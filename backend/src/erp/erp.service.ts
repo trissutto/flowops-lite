@@ -2555,4 +2555,113 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return empty;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // TRIAGEM DO PROVADOR — auxiliares
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Resolve um SKU (CODIGO Giga) pra dados completos do produto.
+   * Retorna null se SKU não existe ou tabela produtos não tem REF cadastrada.
+   */
+  async resolveSkuInfo(sku: string): Promise<{
+    codigo: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricao: string | null;
+  } | null> {
+    if (!this.pool) return null;
+    const s = String(sku || '').trim();
+    if (!s) return null;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS codigo,
+                REF AS ref,
+                COR AS cor,
+                TAMANHO AS tamanho,
+                COALESCE(DESCRICAOCOMPLETA, DESCRICAO) AS descricao
+           FROM produtos
+          WHERE CODIGO = ?
+          LIMIT 1`,
+        [s],
+      );
+      const r = (rows as any[])[0];
+      if (!r) return null;
+      return {
+        codigo: String(r.codigo).trim(),
+        ref: r.ref ? String(r.ref).trim() : null,
+        cor: r.cor ? String(r.cor).trim() : null,
+        tamanho: r.tamanho ? String(r.tamanho).trim() : null,
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+      };
+    } catch (e) {
+      this.logger.error(`resolveSkuInfo falhou: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Estoque atual de UM SKU específico em N lojas. Retorna Map<storeCode, qty>.
+   * Lojas sem o SKU (ou com 0) NÃO aparecem no map.
+   */
+  async getStockBySkuAndStores(sku: string, storeCodes: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!this.pool || !sku || !storeCodes.length) return out;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT LOJA AS storeCode, ESTOQUE AS qty
+           FROM estoque
+          WHERE CODIGO = ?
+            AND LOJA IN (?)
+            AND ESTOQUE > 0`,
+        [sku, storeCodes],
+      );
+      for (const r of rows as any[]) {
+        const code = String(r.storeCode).trim();
+        const qty = Number(r.qty) || 0;
+        if (qty > 0) out.set(code, qty);
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(`getStockBySkuAndStores falhou: ${(e as Error).message}`);
+      return out;
+    }
+  }
+
+  /**
+   * Vendas de uma REF (qualquer cor/tamanho) por loja nos últimos N dias.
+   * Usado pra priorizar destino que mais vende essa REF.
+   */
+  async getRecentSalesByRefAndStores(
+    refCode: string,
+    storeCodes: string[],
+    days = 30,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!this.pool || !refCode || !storeCodes.length) return out;
+    const n = Math.max(1, Math.min(365, days || 30));
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT c.LOJA AS storeCode, SUM(c.QUANTIDADE) AS qty
+           FROM caixa c
+           INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+          WHERE p.REF = ?
+            AND c.LOJA IN (?)
+            AND c.DATA >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+          GROUP BY c.LOJA`,
+        [refCode, storeCodes, n],
+      );
+      for (const r of rows as any[]) {
+        const code = String(r.storeCode).trim();
+        const qty = Number(r.qty) || 0;
+        if (qty > 0) out.set(code, qty);
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(`getRecentSalesByRefAndStores falhou: ${(e as Error).message}`);
+      return out;
+    }
+  }
 }

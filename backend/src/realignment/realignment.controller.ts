@@ -3,6 +3,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
 import { RealignmentAutoService } from './realignment-auto.service';
+import { TriagemService } from './triage.service';
 import { ErpService } from '../erp/erp.service';
 
 /**
@@ -21,6 +22,7 @@ export class RealignmentController {
     private readonly svc: RealignmentService,
     private readonly shipment: RealignmentShipmentService,
     private readonly auto: RealignmentAutoService,
+    private readonly triage: TriagemService,
     private readonly erp: ErpService,
   ) {}
 
@@ -422,6 +424,83 @@ export class RealignmentController {
     if (role !== 'store' || !storeId)
       throw new ForbiddenException('Apenas loja destino');
     return this.shipment.confirmReceived({ shipmentId: id, storeId, userId });
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // TRIAGEM DO PROVADOR
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * POST /realignment/triage/suggest
+   * Body: { sku, fromStoreCode, candidateStoreCodes: string[] }
+   * Sugere o melhor destino pra um SKU bipado entre os candidatos.
+   * Não persiste nada.
+   */
+  @Post('triage/suggest')
+  triageSuggest(
+    @Req() req: any,
+    @Body() body: { sku: string; fromStoreCode: string; candidateStoreCodes: string[] },
+  ) {
+    if (req?.user?.role === 'store') {
+      // Vendedora pode usar (a triagem rola na loja física dela)
+    } else if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    return this.triage.suggest({
+      sku: body?.sku,
+      fromStoreCode: body?.fromStoreCode,
+      candidateStoreCodes: body?.candidateStoreCodes || [],
+    });
+  }
+
+  /**
+   * POST /realignment/triage/confirm
+   * Body: { sku, fromStoreCode, toStoreCode, qty? }
+   * Cria TransferOrder pending + linka em remessa OPEN do par.
+   */
+  @Post('triage/confirm')
+  triageConfirm(
+    @Req() req: any,
+    @Body() body: { sku: string; fromStoreCode: string; toStoreCode: string; qty?: number },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    const storeId = req?.user?.storeId || req?.user?.sub || '';
+    const userId = req?.user?.id || req?.user?.sub || undefined;
+    return this.triage.confirm({
+      sku: body?.sku,
+      fromStoreCode: body?.fromStoreCode,
+      toStoreCode: body?.toStoreCode,
+      qty: body?.qty,
+      storeId,
+      userId,
+    });
+  }
+
+  /**
+   * GET /realignment/triage/open?fromStoreCode=
+   * Lista remessas OPEN da loja origem (caixas em formação na triagem).
+   */
+  @Get('triage/open')
+  triageOpen(@Req() req: any, @Query('fromStoreCode') fromStoreCode: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    return this.triage.listOpenShipmentsForOrigin(fromStoreCode);
+  }
+
+  /**
+   * POST /realignment/triage/finalize
+   * Body: { fromStoreCode }
+   * Fecha TODAS as remessas OPEN do par fromStoreCode em batch.
+   */
+  @Post('triage/finalize')
+  triageFinalize(@Req() req: any, @Body() body: { fromStoreCode: string }) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!body?.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    const userId = req?.user?.id || req?.user?.sub || undefined;
+    return this.triage.finalizarTriagem({ fromStoreCode: body.fromStoreCode, userId });
   }
 
   // ════════════════════════════════════════════════════════════════════

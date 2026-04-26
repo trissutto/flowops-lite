@@ -1,0 +1,322 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
+import { RealignmentShipmentService } from './shipment.service';
+
+/**
+ * TriagemService — operação de "triagem do provador".
+ *
+ * Caso de uso real (Lurd's): vendedora tem N peças paradas no provador
+ * que vieram de outra loja sem registro de transferência. Precisa decidir
+ * pra onde mandar cada peça. Bipa o EAN/SKU, sistema sugere a loja onde
+ * mais falta, vendedora joga na caixa daquela cidade. No final fecha
+ * todas as remessas formadas.
+ *
+ * Decisão de destino (critério "B + empate proporcional"):
+ *   1. Filtra os destinos elegíveis com estoque ZERO desse SKU exato.
+ *      Entre eles, escolhe o que tem MAIS venda recente da REF (urgência).
+ *   2. Se ninguém com 0, escolhe o de MENOR estoque do SKU.
+ *   3. Empate (mesmo estoque + mesma venda): aleatório PROPORCIONAL ao
+ *      "déficit" (quanto menos tem, maior a chance de ser escolhido).
+ *
+ * Reusa o fluxo de RealignmentShipment já existente: cada confirmação
+ * cria um TransferOrder pending + linka ele numa remessa OPEN do par
+ * origem→destino. Quando vendedora finaliza, fecha todas as remessas
+ * (closeAndSend já faz decreaseStock origem + obrigações financeiras
+ * + emit socket pra loja destino).
+ */
+@Injectable()
+export class TriagemService {
+  private readonly logger = new Logger(TriagemService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+    private readonly shipment: RealignmentShipmentService,
+  ) {}
+
+  /**
+   * Sugere o melhor destino pra um SKU bipado entre os candidatos.
+   * Não persiste nada — só consulta.
+   */
+  async suggest(input: {
+    sku: string;
+    fromStoreCode: string;
+    candidateStoreCodes: string[];
+  }) {
+    const sku = String(input.sku || '').trim();
+    if (!sku) throw new BadRequestException('SKU vazio');
+    if (!input.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    if (!input.candidateStoreCodes?.length)
+      throw new BadRequestException('Pelo menos 1 destino candidato');
+
+    // Tira a loja origem da lista de candidatos (defensivo)
+    const candidates = input.candidateStoreCodes
+      .filter((c) => c && c !== input.fromStoreCode)
+      .map((c) => String(c).trim());
+    if (!candidates.length)
+      throw new BadRequestException('Nenhum candidato válido (origem foi excluída)');
+
+    // 1. Resolve dados do SKU
+    const info = await this.erp.resolveSkuInfo(sku);
+    if (!info) {
+      throw new NotFoundException(`SKU ${sku} não encontrado no Giga`);
+    }
+    if (!info.ref) {
+      throw new BadRequestException(`SKU ${sku} sem REF cadastrada`);
+    }
+
+    // 2. Busca em paralelo: estoque do SKU em cada candidato + venda da REF
+    const [stockMap, salesMap] = await Promise.all([
+      this.erp.getStockBySkuAndStores(sku, candidates),
+      this.erp.getRecentSalesByRefAndStores(info.ref, candidates, 30),
+    ]);
+
+    // 3. Monta comparativo (todos candidatos, mesmo os com estoque 0)
+    const comparativo = candidates.map((code) => ({
+      storeCode: code,
+      estoqueAtual: stockMap.get(code) || 0,
+      vendaRef30d: salesMap.get(code) || 0,
+    }));
+
+    // Carrega nomes de loja
+    const stores = await this.prisma.store.findMany({
+      where: { code: { in: candidates }, active: true },
+      select: { code: true, name: true } as any,
+    });
+    const nameByCode = new Map<string, string>();
+    for (const s of stores as any[]) nameByCode.set(s.code, s.name);
+
+    // 4. Aplica critério
+    const comZero = comparativo.filter((c) => c.estoqueAtual === 0);
+    let candidatosFinais: typeof comparativo;
+    let reason: string;
+
+    if (comZero.length > 0) {
+      // Critério A: filtra os com estoque 0
+      candidatosFinais = comZero;
+      // Entre eles, prioriza maior venda 30d
+      const maxVenda = Math.max(...comZero.map((c) => c.vendaRef30d));
+      candidatosFinais = comZero.filter((c) => c.vendaRef30d === maxVenda);
+      reason =
+        maxVenda > 0
+          ? `Estoque 0 e ${maxVenda} venda(s) da REF nos últimos 30d`
+          : 'Estoque 0 e sem venda recente';
+    } else {
+      // Critério B: ninguém com 0 — pega menor estoque
+      const minEstoque = Math.min(...comparativo.map((c) => c.estoqueAtual));
+      candidatosFinais = comparativo.filter((c) => c.estoqueAtual === minEstoque);
+      reason = `Menor estoque do SKU (${minEstoque} pç)`;
+    }
+
+    // 5. Empate: aleatório proporcional ao déficit
+    let escolhido: { storeCode: string; estoqueAtual: number; vendaRef30d: number };
+    if (candidatosFinais.length === 1) {
+      escolhido = candidatosFinais[0];
+    } else {
+      escolhido = this.weightedRandom(candidatosFinais);
+      reason += ` · ${candidatosFinais.length} candidatos empatados, escolhido por sorteio proporcional`;
+    }
+
+    return {
+      sku: info.codigo,
+      ref: info.ref,
+      cor: info.cor,
+      tamanho: info.tamanho,
+      descricao: info.descricao,
+      sugerido: {
+        storeCode: escolhido.storeCode,
+        storeName: nameByCode.get(escolhido.storeCode) || escolhido.storeCode,
+        reason,
+      },
+      comparativo: comparativo
+        .map((c) => ({
+          ...c,
+          storeName: nameByCode.get(c.storeCode) || c.storeCode,
+        }))
+        .sort((a, b) => a.estoqueAtual - b.estoqueAtual || b.vendaRef30d - a.vendaRef30d),
+    };
+  }
+
+  /**
+   * Sorteio aleatório proporcional ao "déficit":
+   * peso = vendaRef30d + 1 (evita peso 0 quando ninguém vendeu).
+   * Quem vendeu mais e tá com 0 estoque tem mais chance.
+   */
+  private weightedRandom<T extends { vendaRef30d: number; estoqueAtual: number }>(items: T[]): T {
+    // Peso: dá mais chance pra quem tem mais venda. Se ninguém vendeu,
+    // peso = 1 pra todos (uniforme).
+    const weights = items.map((i) => i.vendaRef30d + 1);
+    const total = weights.reduce((s, w) => s + w, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < items.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return items[i];
+    }
+    return items[items.length - 1];
+  }
+
+  /**
+   * Confirma um item da triagem: cria TransferOrder pending + linka em
+   * remessa OPEN do par origem→destino (criando a remessa se não existir).
+   *
+   * Reusa addItemToShipment do ShipmentService.
+   */
+  async confirm(input: {
+    sku: string;
+    fromStoreCode: string;
+    toStoreCode: string;
+    qty?: number;
+    storeId: string; // loja física que tá fazendo a triagem (operadora)
+    userId?: string;
+  }) {
+    const sku = String(input.sku || '').trim();
+    if (!sku) throw new BadRequestException('SKU vazio');
+    if (!input.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    if (!input.toStoreCode) throw new BadRequestException('toStoreCode obrigatório');
+    if (input.fromStoreCode === input.toStoreCode)
+      throw new BadRequestException('Origem e destino não podem ser iguais');
+
+    // Resolve SKU
+    const info = await this.erp.resolveSkuInfo(sku);
+    if (!info) throw new NotFoundException(`SKU ${sku} não encontrado`);
+
+    // Carrega dados das 2 lojas
+    const [from, to] = await Promise.all([
+      this.prisma.store.findUnique({
+        where: { code: input.fromStoreCode },
+        select: { id: true, code: true, name: true } as any,
+      }),
+      this.prisma.store.findUnique({
+        where: { code: input.toStoreCode },
+        select: { id: true, code: true, name: true } as any,
+      }),
+    ]);
+    if (!from) throw new BadRequestException(`Loja origem ${input.fromStoreCode} não cadastrada`);
+    if (!to) throw new BadRequestException(`Loja destino ${input.toStoreCode} não cadastrada`);
+
+    const qty = Math.max(1, Math.min(99, input.qty || 1));
+
+    // Cria TransferOrder pending
+    const order = await this.prisma.transferOrder.create({
+      data: {
+        tipo: 'REALINHAMENTO',
+        lojaOrigemCode: (from as any).code,
+        lojaOrigemName: (from as any).name,
+        lojaDestinoCode: (to as any).code,
+        lojaDestinoName: (to as any).name,
+        refCode: info.ref || sku,
+        cor: info.cor,
+        tamanho: info.tamanho,
+        descricao: info.descricao,
+        qtyOrigem: qty,
+        realignmentStatus: 'pending',
+        solicitanteNome: 'TRIAGEM',
+        mensagem: `Triagem provador (operada por ${input.storeId})`,
+      } as any,
+    });
+
+    // Linka em remessa OPEN do par
+    // OBS: addItemToShipment exige storeId == loja origem. Pra triagem operada
+    // de OUTRA loja física, usamos o ID da loja origem mesmo (a remessa
+    // pertence a SANTOS, mas vendedora de outra loja física tá montando ela).
+    await this.shipment.addItemToShipment({
+      transferOrderId: (order as any).id,
+      storeId: (from as any).id,
+      userId: input.userId,
+    });
+
+    return { ok: true, transferOrderId: (order as any).id };
+  }
+
+  /**
+   * Lista as remessas OPEN do par fromStoreCode→qualquer destino (todas
+   * as caixas em formação na triagem atual).
+   */
+  async listOpenShipmentsForOrigin(fromStoreCode: string) {
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where: { fromStoreCode, status: 'open' },
+      orderBy: { openedAt: 'asc' },
+    });
+    // Conta itens + qty por remessa
+    const result = await Promise.all(
+      (shipments as any[]).map(async (s) => {
+        const items = await this.prisma.transferOrder.findMany({
+          where: { shipmentId: s.id } as any,
+          select: { qtyOrigem: true } as any,
+        });
+        const totalQty = (items as any[]).reduce((sum, i) => sum + (i.qtyOrigem || 1), 0);
+        return {
+          id: s.id,
+          code: s.code,
+          fromStoreCode: s.fromStoreCode,
+          fromStoreName: s.fromStoreName,
+          toStoreCode: s.toStoreCode,
+          toStoreName: s.toStoreName,
+          status: s.status,
+          openedAt: s.openedAt,
+          totalItems: items.length,
+          totalQty,
+        };
+      }),
+    );
+    return result;
+  }
+
+  /**
+   * Fecha TODAS as remessas OPEN do par fromStoreCode em batch.
+   * Pra cada uma chama closeAndSend (decreaseStock + obrigações + emit socket).
+   *
+   * Retorna lista com ok/erro de cada remessa.
+   */
+  async finalizarTriagem(input: { fromStoreCode: string; userId?: string }) {
+    const from = await this.prisma.store.findUnique({
+      where: { code: input.fromStoreCode },
+      select: { id: true, code: true } as any,
+    });
+    if (!from) throw new NotFoundException(`Loja origem ${input.fromStoreCode} não encontrada`);
+
+    const opens = await (this.prisma as any).realignmentShipment.findMany({
+      where: { fromStoreCode: (from as any).code, status: 'open' },
+      select: { id: true, code: true, toStoreCode: true },
+    });
+
+    if (!opens.length) {
+      return { ok: true, fechadas: 0, results: [] };
+    }
+
+    const results: Array<{ shipmentId: string; code: string; toStoreCode: string; ok: boolean; error?: string }> =
+      [];
+    for (const s of opens as any[]) {
+      try {
+        await this.shipment.closeAndSend({
+          shipmentId: s.id,
+          storeId: (from as any).id,
+          userId: input.userId,
+        });
+        results.push({ shipmentId: s.id, code: s.code, toStoreCode: s.toStoreCode, ok: true });
+      } catch (e) {
+        results.push({
+          shipmentId: s.id,
+          code: s.code,
+          toStoreCode: s.toStoreCode,
+          ok: false,
+          error: (e as Error).message,
+        });
+      }
+    }
+
+    return {
+      ok: results.every((r) => r.ok),
+      fechadas: results.filter((r) => r.ok).length,
+      falhas: results.filter((r) => !r.ok).length,
+      results,
+    };
+  }
+}
