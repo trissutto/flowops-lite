@@ -428,6 +428,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return [];
 
     const candidatas = [
+      'DATAALT', 'DATA_ALT', 'DT_ALT', 'DATAALTERACAO', 'DATA_ALTERACAO',
       'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO',
       'DATACRIACAO', 'DT_CRIACAO',
       'DATA_INC', 'DATAINC', 'DT_INC', 'DATA_INCLUSAO', 'DATAINCLUSAO', 'DT_INCLUSAO',
@@ -499,6 +500,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return { error: 'pool não inicializado' };
 
     const candidatas = [
+      'DATAALT', 'DATA_ALT', 'DT_ALT', 'DATAALTERACAO', 'DATA_ALTERACAO',
       'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO',
       'DATACRIACAO', 'DT_CRIACAO',
       'DATA_INC', 'DATAINC', 'DT_INC', 'DATA_INCLUSAO', 'DATAINCLUSAO', 'DT_INCLUSAO',
@@ -1633,7 +1635,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const cfopCol = (await this.pickCol(['CFOP', 'CODCFOP'])) as string | null;
     const custoCol = (await this.pickCol(['CUSTOUN', 'CUSTO', 'CUSTO_UN', 'CUSTOMEDIO', 'CUSTO_MEDIO'])) as string | null;
     const precoCol = (await this.pickCol(['VENDAUN', 'PRECO', 'PRECOVENDA', 'PRECO_VENDA'])) as string | null;
-    const dataCol = (await this.pickCol(['DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO', 'DATACRIACAO', 'DT_CRIACAO', 'CREATED_AT'])) as string | null;
+    const dataCol = (await this.pickCol(['DATAALT', 'DATA_ALT', 'DT_ALT', 'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO', 'DATACRIACAO', 'DT_CRIACAO', 'CREATED_AT'])) as string | null;
     const eanCol = (await this.pickCol(['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'])) as string | null;
 
     // Monta SELECT dinâmico
