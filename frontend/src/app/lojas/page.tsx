@@ -16,11 +16,12 @@ interface Store {
   contactName?: string;
   active: boolean;
   priorityScore: number;
+  tipo?: 'REDE' | 'FILIAL' | string | null;
 }
 
 const EMPTY: Partial<Store> = {
   code: '', name: '', cep: '', city: '', state: '', whatsapp: '', contactName: '',
-  active: true, priorityScore: 50,
+  active: true, priorityScore: 50, tipo: 'REDE',
 };
 
 export default function LojasPage() {
@@ -54,6 +55,7 @@ export default function LojasPage() {
         contactName: editing!.contactName || undefined,
         active: editing!.active ?? true,
         priorityScore: Number(editing!.priorityScore ?? 50),
+        tipo: (editing!.tipo === 'FILIAL' ? 'FILIAL' : 'REDE'),
       };
       if ((editing as any).id) {
         await api(`/stores/${(editing as any).id}`, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -102,6 +104,7 @@ export default function LojasPage() {
             <tr>
               <th className="p-3 text-left">Código</th>
               <th className="p-3 text-left">Nome</th>
+              <th className="p-3 text-center">Tipo</th>
               <th className="p-3 text-left">Cidade/UF</th>
               <th className="p-3 text-left">CEP</th>
               <th className="p-3 text-left">WhatsApp</th>
@@ -112,12 +115,25 @@ export default function LojasPage() {
           </thead>
           <tbody>
             {stores.length === 0 && (
-              <tr><td colSpan={8} className="p-8 text-center text-slate-400">Nenhuma loja cadastrada.</td></tr>
+              <tr><td colSpan={9} className="p-8 text-center text-slate-400">Nenhuma loja cadastrada.</td></tr>
             )}
-            {stores.map((s) => (
+            {stores.map((s) => {
+              const tipo = (s.tipo || 'REDE') as 'REDE' | 'FILIAL';
+              return (
               <tr key={s.id} className={`border-t hover:bg-slate-50 ${!s.active ? 'opacity-40' : ''}`}>
                 <td className="p-3 font-mono">{s.code}</td>
                 <td className="p-3 font-medium">{s.name}</td>
+                <td className="p-3 text-center">
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      tipo === 'FILIAL'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-blue-100 text-blue-800'
+                    }`}
+                  >
+                    {tipo}
+                  </span>
+                </td>
                 <td className="p-3">{s.city || '—'} / {s.state || '—'}</td>
                 <td className="p-3">{s.cep || '—'}</td>
                 <td className="p-3 font-mono text-xs">{s.whatsapp || '—'}</td>
@@ -141,7 +157,8 @@ export default function LojasPage() {
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -177,6 +194,39 @@ export default function LojasPage() {
                     onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                   />
                 </div>
+              </div>
+
+              {/* Tipo REDE / FILIAL — define se transferência gera obrigação financeira */}
+              <div>
+                <label className="block font-medium mb-1">Tipo da loja *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ ...editing, tipo: 'REDE' })}
+                    className={`px-3 py-2 rounded border-2 text-sm font-bold transition-colors ${
+                      (editing.tipo || 'REDE') === 'REDE'
+                        ? 'border-blue-600 bg-blue-50 text-blue-800'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    REDE (própria)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ ...editing, tipo: 'FILIAL' })}
+                    className={`px-3 py-2 rounded border-2 text-sm font-bold transition-colors ${
+                      editing.tipo === 'FILIAL'
+                        ? 'border-amber-600 bg-amber-50 text-amber-800'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    FILIAL (franquia)
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Transferências REDE↔FILIAL geram obrigação financeira automática (preço Giga ÷ 2,5).
+                  REDE↔REDE e FILIAL↔FILIAL não cobram.
+                </p>
               </div>
 
               <div className="grid grid-cols-3 gap-3">
