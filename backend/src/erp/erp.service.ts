@@ -2271,7 +2271,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *   - Ordenadas por peças OU por valor
    *   - Filtro PLUS SIZE
    *
-   * Junta `caixa` com `produtos` pra resolver REFERENCIA (CODIGO no caixa = SKU).
+   * Junta `caixa` com `produtos` pra resolver REF (CODIGO no caixa = SKU).
    * Retorna até `limit` linhas.
    */
   async getTopRefsBySales(input: {
@@ -2289,8 +2289,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       'c.DATA >= ?',
       'c.DATA < ?',
       "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
-      'p.REFERENCIA IS NOT NULL',
-      "p.REFERENCIA <> ''",
+      'p.REF IS NOT NULL',
+      "p.REF <> ''",
     ];
     const params: any[] = [input.inicio, input.fim];
     if (input.storeCode) {
@@ -2301,14 +2301,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       conds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
     }
     const sql = `
-      SELECT p.REFERENCIA AS refCode,
+      SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
              SUM(c.QUANTIDADE) AS pecas,
              SUM(c.VALORTOTAL) AS valor
         FROM caixa c
         INNER JOIN produtos p ON p.CODIGO = c.CODIGO
        WHERE ${conds.join(' AND ')}
-       GROUP BY p.REFERENCIA
+       GROUP BY p.REF
        ORDER BY ${orderBy} DESC
        LIMIT ?
     `;
@@ -2350,8 +2350,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       'c.DATA >= ?',
       'c.DATA < ?',
       "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
-      'p.REFERENCIA IS NOT NULL',
-      "p.REFERENCIA <> ''",
+      'p.REF IS NOT NULL',
+      "p.REF <> ''",
     ];
     const params: any[] = [input.inicio, input.fim];
     if (input.storeCode) {
@@ -2364,22 +2364,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // Subquery de estoque atual por REF (filtrando loja se necessário)
     const stockJoin = input.storeCode
       ? `LEFT JOIN (
-            SELECT pr.REFERENCIA AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
+            SELECT pr.REF AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
               FROM estoque e
               INNER JOIN produtos pr ON pr.CODIGO = e.CODIGO
              WHERE e.LOJA = ?
-             GROUP BY pr.REFERENCIA
-          ) est ON est.ref = p.REFERENCIA`
+             GROUP BY pr.REF
+          ) est ON est.ref = p.REF`
       : `LEFT JOIN (
-            SELECT pr.REFERENCIA AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
+            SELECT pr.REF AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
               FROM estoque e
               INNER JOIN produtos pr ON pr.CODIGO = e.CODIGO
-             GROUP BY pr.REFERENCIA
-          ) est ON est.ref = p.REFERENCIA`;
+             GROUP BY pr.REF
+          ) est ON est.ref = p.REF`;
     const stockParams = input.storeCode ? [input.storeCode] : [];
 
     const sql = `
-      SELECT p.REFERENCIA AS refCode,
+      SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
              SUM(c.QUANTIDADE) AS pecasVendidas,
              COALESCE(MAX(est.qtd), 0) AS estoqueAtual
@@ -2387,7 +2387,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         INNER JOIN produtos p ON p.CODIGO = c.CODIGO
         ${stockJoin}
        WHERE ${conds.join(' AND ')}
-       GROUP BY p.REFERENCIA
+       GROUP BY p.REF
       HAVING estoqueAtual = 0 AND pecasVendidas > 0
        ORDER BY pecasVendidas DESC
        LIMIT ?
@@ -2439,19 +2439,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const salesParams = input.storeCode ? [input.storeCode] : [];
 
     const sql = `
-      SELECT p.REFERENCIA AS refCode,
+      SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
              SUM(e.ESTOQUE) AS estoqueAtual,
              (SELECT MAX(c2.DATA) FROM caixa c2
                 INNER JOIN produtos p2 ON p2.CODIGO = c2.CODIGO
-               WHERE p2.REFERENCIA = p.REFERENCIA
+               WHERE p2.REF = p.REF
                  AND (c2.MARCADO IS NULL OR c2.MARCADO <> 'SIM')
                  ${salesJoinFilter}
              ) AS ultimaVenda
         FROM estoque e
         INNER JOIN produtos p ON p.CODIGO = e.CODIGO
        WHERE ${stockConds.join(' AND ')}
-       GROUP BY p.REFERENCIA
+       GROUP BY p.REF
       HAVING estoqueAtual >= ?
          AND (ultimaVenda IS NULL OR ultimaVenda < DATE_SUB(CURDATE(), INTERVAL ? DAY))
        ORDER BY estoqueAtual DESC
@@ -2502,13 +2502,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       topConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
     }
     const topSql = `
-      SELECT p.REFERENCIA AS refCode,
+      SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
              SUM(e.ESTOQUE) AS totalRede
         FROM estoque e
         INNER JOIN produtos p ON p.CODIGO = e.CODIGO
        WHERE ${topConds.join(' AND ')}
-       GROUP BY p.REFERENCIA
+         AND p.REF IS NOT NULL AND p.REF <> ''
+       GROUP BY p.REF
        ORDER BY totalRede DESC
        LIMIT ?
     `;
@@ -2525,14 +2526,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
       // 2. Distribuição por loja dessas REFs
       const distSql = `
-        SELECT p.REFERENCIA AS refCode,
+        SELECT p.REF AS refCode,
                e.LOJA AS storeCode,
                SUM(e.ESTOQUE) AS qtd
           FROM estoque e
           INNER JOIN produtos p ON p.CODIGO = e.CODIGO
-         WHERE p.REFERENCIA IN (?)
+         WHERE p.REF IN (?)
            AND e.ESTOQUE > 0
-         GROUP BY p.REFERENCIA, e.LOJA
+         GROUP BY p.REF, e.LOJA
       `;
       const [distRows] = await this.pool.query<mysql.RowDataPacket[]>(distSql, [refCodes]);
 
