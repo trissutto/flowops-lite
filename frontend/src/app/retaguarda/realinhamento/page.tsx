@@ -143,6 +143,19 @@ export default function RealinhamentoPage() {
   const [dateDebug, setDateDebug] = useState<any>(null);
   const [dateDebugLoading, setDateDebugLoading] = useState(false);
 
+  // Filtro client-side ao vivo: digita "REGATA" → mostra só REFs com REGATA
+  // Aceita múltiplas palavras AND: "REGATA MANIFESTO" → tem AS DUAS
+  const [dateDescFilter, setDateDescFilter] = useState('');
+  const filteredDateResults = useMemo(() => {
+    const f = dateDescFilter.trim().toUpperCase();
+    if (!f) return dateResults;
+    const words = f.split(/\s+/).filter(Boolean);
+    return dateResults.filter((r) => {
+      const desc = (r.descricao || '').toUpperCase();
+      return words.every((w) => desc.includes(w));
+    });
+  }, [dateResults, dateDescFilter]);
+
   const handleSearchByDate = async () => {
     if (!dateFrom || !dateTo) {
       setDateError('Selecione as duas datas');
@@ -185,8 +198,10 @@ export default function RealinhamentoPage() {
   };
 
   const addAllDateRefs = () => {
-    if (!dateResults.length) return;
-    const novos = dateResults.map((r) => r.ref);
+    // Adiciona as REFs FILTRADAS ao buscador (não todas, respeita o filtro client-side)
+    const lista = filteredDateResults;
+    if (!lista.length) return;
+    const novos = lista.map((r) => r.ref);
     const atuais = new Set(refsText.split('\n').map((s) => s.trim()).filter(Boolean));
     novos.forEach((r) => atuais.add(r));
     setRefsText(Array.from(atuais).sort().join('\n'));
@@ -774,31 +789,59 @@ export default function RealinhamentoPage() {
           )}
           {dateResults.length > 0 && (
             <div className="mt-3 bg-white border border-emerald-200 rounded-lg overflow-hidden">
-              <div className="flex items-center justify-between px-3 py-2 bg-emerald-100/50 border-b border-emerald-200">
-                <div className="text-xs font-bold text-emerald-900">
-                  {dateResults.length} REF(s) encontradas
+              <div className="flex items-center gap-2 px-3 py-2 bg-emerald-100/50 border-b border-emerald-200">
+                <div className="text-xs font-bold text-emerald-900 shrink-0">
+                  {filteredDateResults.length === dateResults.length
+                    ? `${dateResults.length} REF(s)`
+                    : `${filteredDateResults.length} de ${dateResults.length}`}
                 </div>
+                <input
+                  type="text"
+                  value={dateDescFilter}
+                  onChange={(e) => setDateDescFilter(e.target.value)}
+                  placeholder="Filtrar (ex: REGATA, MANIFESTO, BLUSA MANGA…)"
+                  className="flex-1 border border-emerald-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-emerald-400 min-w-0"
+                />
+                {dateDescFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setDateDescFilter('')}
+                    className="text-xs px-2 py-1 text-slate-500 hover:bg-slate-100 rounded"
+                    title="Limpar filtro"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={addAllDateRefs}
-                  className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded px-3 py-1 flex items-center gap-1"
+                  disabled={filteredDateResults.length === 0}
+                  className="text-xs bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded px-3 py-1 flex items-center gap-1 shrink-0"
                 >
                   <Plus className="w-3 h-3" />
-                  Adicionar todas ao buscador
+                  Adicionar {filteredDateResults.length > 0 ? `(${filteredDateResults.length})` : ''}
                 </button>
               </div>
               <div className="max-h-48 overflow-y-auto divide-y divide-emerald-100 text-xs">
-                {dateResults.slice(0, 100).map((r) => (
-                  <div key={r.ref} className="px-3 py-1.5 flex items-center gap-2">
-                    <span className="font-mono font-bold text-emerald-900">{r.ref}</span>
-                    <span className="text-slate-600 truncate flex-1">{r.descricao}</span>
-                    <span className="text-slate-400">{r.variantCount}var</span>
+                {filteredDateResults.length === 0 ? (
+                  <div className="px-3 py-3 text-slate-500 italic text-center">
+                    Nada bate com "{dateDescFilter}"
                   </div>
-                ))}
-                {dateResults.length > 100 && (
-                  <div className="px-3 py-1.5 text-slate-500 italic">
-                    + {dateResults.length - 100} REFs adicionais (use "Adicionar todas")
-                  </div>
+                ) : (
+                  <>
+                    {filteredDateResults.slice(0, 100).map((r) => (
+                      <div key={r.ref} className="px-3 py-1.5 flex items-center gap-2">
+                        <span className="font-mono font-bold text-emerald-900">{r.ref}</span>
+                        <span className="text-slate-600 truncate flex-1">{r.descricao}</span>
+                        <span className="text-slate-400">{r.variantCount}var</span>
+                      </div>
+                    ))}
+                    {filteredDateResults.length > 100 && (
+                      <div className="px-3 py-1.5 text-slate-500 italic">
+                        + {filteredDateResults.length - 100} REFs adicionais (use "Adicionar")
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
