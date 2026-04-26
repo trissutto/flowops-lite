@@ -10,13 +10,14 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store, FileSearch, Truck,
+  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store, FileSearch, Truck, BarChart3,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
 import CircleNav, { type CircleNavItem } from '@/components/CircleNav';
 
 const LOJA_ITEMS: CircleNavItem[] = [
+  { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',   subtitle: 'Estoque + venda em real-time', icon: BarChart3,    tone: 'lavender' },
   { href: '/retaguarda/realinhamento', label: 'Realinhamento',  subtitle: 'Rebalancear estoque',   icon: Shuffle,      tone: 'coral'    },
   { href: '/retaguarda/remessas',      label: 'Remessas',       subtitle: 'Caixas em trânsito',    icon: Truck,        tone: 'sky'      },
   { href: '/auditoria-sku',            label: 'Produtos Loja',  subtitle: 'Gigasistemas (ERP)',    icon: Database,     tone: 'yellow'   },

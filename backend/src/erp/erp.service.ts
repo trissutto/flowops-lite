@@ -2180,4 +2180,378 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return out;
     });
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // INTELIGÊNCIA DE ESTOQUE — métodos pra dashboard /retaguarda/inteligencia-estoque
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Estoque atual em PEÇAS por loja (somatório de ESTOQUE > 0).
+   * Filtra opcionalmente só PLUS SIZE (descrição contém "PLUS SIZE").
+   *
+   * Retorna Map<storeCode, totalPecas>. Lojas sem estoque NÃO aparecem (caller trata como 0).
+   */
+  async getStockTotalByStores(plusSize = false): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (!this.pool) return out;
+    try {
+      const sql = plusSize
+        ? `SELECT e.LOJA AS storeCode, SUM(e.ESTOQUE) AS pecas
+             FROM estoque e
+             INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+            WHERE e.ESTOQUE > 0
+              AND UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'
+            GROUP BY e.LOJA`
+        : `SELECT LOJA AS storeCode, SUM(ESTOQUE) AS pecas
+             FROM estoque
+            WHERE ESTOQUE > 0
+            GROUP BY LOJA`;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+      for (const r of rows as any[]) {
+        const code = String(r.storeCode || '').trim();
+        const pecas = Number(r.pecas) || 0;
+        if (code && pecas > 0) out.set(code, pecas);
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(`getStockTotalByStores falhou: ${(e as Error).message}`);
+      return out;
+    }
+  }
+
+  /**
+   * Vendas por loja num período (data inicio/fim half-open: >= inicio, < fim).
+   * Retorna peças vendidas + valor bruto. Ignora MARCADO='SIM'.
+   * Filtro PLUS SIZE opcional (JOIN com produtos pra verificar descrição).
+   */
+  async getSalesByStoresInRange(
+    inicio: Date,
+    fim: Date,
+    plusSize = false,
+  ): Promise<Map<string, { pecas: number; valor: number }>> {
+    const out = new Map<string, { pecas: number; valor: number }>();
+    if (!this.pool) return out;
+    try {
+      const sql = plusSize
+        ? `SELECT c.LOJA AS storeCode,
+                  SUM(c.QUANTIDADE) AS pecas,
+                  SUM(c.VALORTOTAL) AS valor
+             FROM caixa c
+             INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+            WHERE c.DATA >= ? AND c.DATA < ?
+              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+              AND UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'
+            GROUP BY c.LOJA`
+        : `SELECT c.LOJA AS storeCode,
+                  SUM(c.QUANTIDADE) AS pecas,
+                  SUM(c.VALORTOTAL) AS valor
+             FROM caixa c
+            WHERE c.DATA >= ? AND c.DATA < ?
+              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+            GROUP BY c.LOJA`;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [inicio, fim]);
+      for (const r of rows as any[]) {
+        const code = String(r.storeCode || '').trim();
+        if (!code) continue;
+        out.set(code, {
+          pecas: Number(r.pecas) || 0,
+          valor: Number(r.valor) || 0,
+        });
+      }
+      return out;
+    } catch (e) {
+      this.logger.error(`getSalesByStoresInRange falhou: ${(e as Error).message}`);
+      return out;
+    }
+  }
+
+  /**
+   * TOP REFs vendidas no período. Pode ser:
+   *   - Toda a rede (storeCode null) ou loja específica
+   *   - Ordenadas por peças OU por valor
+   *   - Filtro PLUS SIZE
+   *
+   * Junta `caixa` com `produtos` pra resolver REFERENCIA (CODIGO no caixa = SKU).
+   * Retorna até `limit` linhas.
+   */
+  async getTopRefsBySales(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+    plusSize?: boolean;
+    orderBy?: 'pecas' | 'valor';
+    limit?: number;
+  }): Promise<Array<{ refCode: string; descricao: string | null; pecas: number; valor: number }>> {
+    if (!this.pool) return [];
+    const orderBy = input.orderBy === 'valor' ? 'valor' : 'pecas';
+    const limit = Math.max(1, Math.min(100, input.limit || 10));
+    const conds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      'p.REFERENCIA IS NOT NULL',
+      "p.REFERENCIA <> ''",
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    if (input.plusSize) {
+      conds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+    }
+    const sql = `
+      SELECT p.REFERENCIA AS refCode,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             SUM(c.QUANTIDADE) AS pecas,
+             SUM(c.VALORTOTAL) AS valor
+        FROM caixa c
+        INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+       WHERE ${conds.join(' AND ')}
+       GROUP BY p.REFERENCIA
+       ORDER BY ${orderBy} DESC
+       LIMIT ?
+    `;
+    params.push(limit);
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        refCode: String(r.refCode).trim(),
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+        pecas: Number(r.pecas) || 0,
+        valor: Number(r.valor) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getTopRefsBySales falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * RUPTURAS — REFs que VENDERAM no período mas estão com estoque ZERO HOJE.
+   * Sinaliza necessidade de reposição urgente.
+   *
+   * Pode ser global (storeCode null) ou por loja. Retorna até `limit`.
+   *
+   * Lógica: agrega vendas por REF no período, faz LEFT JOIN com estoque
+   * (somando todas as lojas se global, só a loja se específico) e filtra
+   * onde estoque atual = 0.
+   */
+  async getRupturas(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+    plusSize?: boolean;
+    limit?: number;
+  }): Promise<Array<{ refCode: string; descricao: string | null; pecasVendidas: number; estoqueAtual: number }>> {
+    if (!this.pool) return [];
+    const limit = Math.max(1, Math.min(100, input.limit || 10));
+    const conds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      'p.REFERENCIA IS NOT NULL',
+      "p.REFERENCIA <> ''",
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    if (input.plusSize) {
+      conds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+    }
+    // Subquery de estoque atual por REF (filtrando loja se necessário)
+    const stockJoin = input.storeCode
+      ? `LEFT JOIN (
+            SELECT pr.REFERENCIA AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
+              FROM estoque e
+              INNER JOIN produtos pr ON pr.CODIGO = e.CODIGO
+             WHERE e.LOJA = ?
+             GROUP BY pr.REFERENCIA
+          ) est ON est.ref = p.REFERENCIA`
+      : `LEFT JOIN (
+            SELECT pr.REFERENCIA AS ref, COALESCE(SUM(e.ESTOQUE), 0) AS qtd
+              FROM estoque e
+              INNER JOIN produtos pr ON pr.CODIGO = e.CODIGO
+             GROUP BY pr.REFERENCIA
+          ) est ON est.ref = p.REFERENCIA`;
+    const stockParams = input.storeCode ? [input.storeCode] : [];
+
+    const sql = `
+      SELECT p.REFERENCIA AS refCode,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             SUM(c.QUANTIDADE) AS pecasVendidas,
+             COALESCE(MAX(est.qtd), 0) AS estoqueAtual
+        FROM caixa c
+        INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+        ${stockJoin}
+       WHERE ${conds.join(' AND ')}
+       GROUP BY p.REFERENCIA
+      HAVING estoqueAtual = 0 AND pecasVendidas > 0
+       ORDER BY pecasVendidas DESC
+       LIMIT ?
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [...stockParams, ...params, limit]);
+      return (rows as any[]).map((r) => ({
+        refCode: String(r.refCode).trim(),
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+        pecasVendidas: Number(r.pecasVendidas) || 0,
+        estoqueAtual: Number(r.estoqueAtual) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getRupturas falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * PARADOS — REFs com estoque alto mas SEM venda há N dias (default 30).
+   * Candidatos a realinhamento (mandar pra loja que vende mais essa REF).
+   *
+   * Lógica:
+   *   1. Pega REFs com SUM(estoque) >= minStock (default 5)
+   *   2. Exclui as que tiveram venda nos últimos N dias
+   *   3. Ordena por estoque desc
+   */
+  async getParados(input: {
+    storeCode?: string | null;
+    daysSemVenda?: number;
+    minStock?: number;
+    plusSize?: boolean;
+    limit?: number;
+  }): Promise<Array<{ refCode: string; descricao: string | null; estoqueAtual: number; ultimaVenda: string | null }>> {
+    if (!this.pool) return [];
+    const days = Math.max(1, Math.min(365, input.daysSemVenda || 30));
+    const minStock = Math.max(1, input.minStock || 5);
+    const limit = Math.max(1, Math.min(100, input.limit || 10));
+    const stockConds: string[] = ['e.ESTOQUE > 0'];
+    const stockParams: any[] = [];
+    if (input.storeCode) {
+      stockConds.push('e.LOJA = ?');
+      stockParams.push(input.storeCode);
+    }
+    if (input.plusSize) {
+      stockConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+    }
+    const salesJoinFilter = input.storeCode ? 'AND c2.LOJA = ?' : '';
+    const salesParams = input.storeCode ? [input.storeCode] : [];
+
+    const sql = `
+      SELECT p.REFERENCIA AS refCode,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             SUM(e.ESTOQUE) AS estoqueAtual,
+             (SELECT MAX(c2.DATA) FROM caixa c2
+                INNER JOIN produtos p2 ON p2.CODIGO = c2.CODIGO
+               WHERE p2.REFERENCIA = p.REFERENCIA
+                 AND (c2.MARCADO IS NULL OR c2.MARCADO <> 'SIM')
+                 ${salesJoinFilter}
+             ) AS ultimaVenda
+        FROM estoque e
+        INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+       WHERE ${stockConds.join(' AND ')}
+       GROUP BY p.REFERENCIA
+      HAVING estoqueAtual >= ?
+         AND (ultimaVenda IS NULL OR ultimaVenda < DATE_SUB(CURDATE(), INTERVAL ? DAY))
+       ORDER BY estoqueAtual DESC
+       LIMIT ?
+    `;
+    try {
+      const params = [...stockParams, ...salesParams, minStock, days, limit];
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        refCode: String(r.refCode).trim(),
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+        estoqueAtual: Number(r.estoqueAtual) || 0,
+        ultimaVenda: r.ultimaVenda
+          ? r.ultimaVenda instanceof Date
+            ? r.ultimaVenda.toISOString().slice(0, 10)
+            : String(r.ultimaVenda).slice(0, 10)
+          : null,
+      }));
+    } catch (e) {
+      this.logger.error(`getParados falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * HEATMAP REF × LOJA — matriz de estoque pra visualização cruzada.
+   * Pega top N REFs com maior estoque total (rede) e mostra distribuição
+   * por loja. Útil pra decidir realinhamento manualmente.
+   *
+   * Retorna `{ refs: [{refCode, descricao, totalRede}], lojas: [storeCode],
+   *   matrix: { [refCode]: { [storeCode]: qtd } } }`
+   */
+  async getHeatmap(input: {
+    plusSize?: boolean;
+    limitRefs?: number;
+  }): Promise<{
+    refs: Array<{ refCode: string; descricao: string | null; totalRede: number }>;
+    lojas: string[];
+    matrix: Record<string, Record<string, number>>;
+  }> {
+    const empty = { refs: [], lojas: [], matrix: {} };
+    if (!this.pool) return empty;
+    const limit = Math.max(1, Math.min(50, input.limitRefs || 20));
+
+    // 1. Pega top REFs por estoque total
+    const topConds: string[] = ['e.ESTOQUE > 0'];
+    if (input.plusSize) {
+      topConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+    }
+    const topSql = `
+      SELECT p.REFERENCIA AS refCode,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             SUM(e.ESTOQUE) AS totalRede
+        FROM estoque e
+        INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+       WHERE ${topConds.join(' AND ')}
+       GROUP BY p.REFERENCIA
+       ORDER BY totalRede DESC
+       LIMIT ?
+    `;
+    try {
+      const [topRows] = await this.pool.query<mysql.RowDataPacket[]>(topSql, [limit]);
+      const refs = (topRows as any[]).map((r) => ({
+        refCode: String(r.refCode).trim(),
+        descricao: r.descricao ? String(r.descricao).trim() : null,
+        totalRede: Number(r.totalRede) || 0,
+      }));
+      if (!refs.length) return empty;
+
+      const refCodes = refs.map((r) => r.refCode);
+
+      // 2. Distribuição por loja dessas REFs
+      const distSql = `
+        SELECT p.REFERENCIA AS refCode,
+               e.LOJA AS storeCode,
+               SUM(e.ESTOQUE) AS qtd
+          FROM estoque e
+          INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+         WHERE p.REFERENCIA IN (?)
+           AND e.ESTOQUE > 0
+         GROUP BY p.REFERENCIA, e.LOJA
+      `;
+      const [distRows] = await this.pool.query<mysql.RowDataPacket[]>(distSql, [refCodes]);
+
+      const matrix: Record<string, Record<string, number>> = {};
+      const lojasSet = new Set<string>();
+      for (const ref of refs) matrix[ref.refCode] = {};
+      for (const r of distRows as any[]) {
+        const ref = String(r.refCode).trim();
+        const code = String(r.storeCode).trim();
+        const qtd = Number(r.qtd) || 0;
+        if (!matrix[ref]) matrix[ref] = {};
+        matrix[ref][code] = qtd;
+        lojasSet.add(code);
+      }
+      const lojas = Array.from(lojasSet).sort();
+      return { refs, lojas, matrix };
+    } catch (e) {
+      this.logger.error(`getHeatmap falhou: ${(e as Error).message}`);
+      return empty;
+    }
+  }
 }

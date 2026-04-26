@@ -109,7 +109,7 @@ export class FechamentoPdfService {
 
         // ── DADOS DA FILIAL ──────────────────────────────────────
         doc.fontSize(10).fillColor('#000').font('Helvetica');
-        doc.text(`Filial: `, { continued: true }).font('Helvetica-Bold').text(`${filial.storeCode} — ${filial.storeName}`);
+        doc.text(`Franquia: `, { continued: true }).font('Helvetica-Bold').text(`${filial.storeCode} — ${filial.storeName}`);
         doc.font('Helvetica').text(`Emitido em: `, { continued: true }).font('Helvetica-Bold').text(new Date().toLocaleString('pt-BR'));
         doc.font('Helvetica').text(`Fechado em: `, { continued: true }).font('Helvetica-Bold').text(new Date(closure.closedAt).toLocaleString('pt-BR'));
 
@@ -239,7 +239,7 @@ export class FechamentoPdfService {
 
           doc.y = rowY + 10;
         } else {
-          doc.fontSize(10).fillColor('#666').font('Helvetica-Oblique').text('Sem transferências REDE↔FILIAL nesse mês.');
+          doc.fontSize(10).fillColor('#666').font('Helvetica-Oblique').text('Sem transferências REDE↔FRANQUIA nesse mês.');
         }
 
         // ── FOOTER ────────────────────────────────────────────────

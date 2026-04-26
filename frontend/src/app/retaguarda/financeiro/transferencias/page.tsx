@@ -335,7 +335,7 @@ export default function FinanceiroTransferenciasPage() {
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-slate-900">Financeiro intercompany</h1>
           <p className="text-sm text-slate-500">
-            Obrigações REDE↔FILIAL + royalties (8%) + marketing (4%) + fechamento mensal.
+            Obrigações REDE↔FRANQUIA + royalties (8%) + marketing (4%) + fechamento mensal.
           </p>
         </div>
         {/* Mês selector */}
@@ -552,7 +552,7 @@ export default function FinanceiroTransferenciasPage() {
                     {royalties.porFilial.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
-                          Nenhuma filial cadastrada. Vá em <Link href="/retaguarda/lojas" className="text-blue-600 underline">Lojas</Link> e marque pelo menos uma como FILIAL.
+                          Nenhuma franquia cadastrada. Vá em <Link href="/retaguarda/lojas" className="text-blue-600 underline">Lojas</Link> e marque pelo menos uma como FRANQUIA.
                         </td>
                       </tr>
                     ) : (
@@ -638,7 +638,7 @@ export default function FinanceiroTransferenciasPage() {
                               if (filiais.length === 0) loadFiliais();
                             }}
                             className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200"
-                            title="Gerar PDF por filial"
+                            title="Gerar PDF por franquia"
                           >
                             <FileText className="w-3 h-3" />
                             PDFs
@@ -708,7 +708,7 @@ export default function FinanceiroTransferenciasPage() {
               </button>
             </div>
             <p className="text-xs text-slate-500">
-              Clique numa filial pra abrir o PDF do comprovante mensal. Cada PDF tem
+              Clique numa franquia pra abrir o PDF do comprovante mensal. Cada PDF tem
               venda bruta, royalties, marketing, obrigações e o detalhe das transferências.
             </p>
 
@@ -758,7 +758,7 @@ function Pill({ tipo }: { tipo: string }) {
         isFilial ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
       }`}
     >
-      {tipo}
+      {isFilial ? 'FRANQUIA' : 'REDE'}
     </span>
   );
 }
