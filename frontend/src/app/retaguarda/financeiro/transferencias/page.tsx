@@ -130,6 +130,55 @@ export default function FinanceiroTransferenciasPage() {
   const [closing, setClosing] = useState(false);
   const [closureModal, setClosureModal] = useState<{ mes: string; force: boolean } | null>(null);
 
+  // PDF modal state (lista filiais pra escolher e baixar)
+  const [pdfModal, setPdfModal] = useState<{ mes: string } | null>(null);
+  const [filiais, setFiliais] = useState<Array<{ code: string; name: string }>>([]);
+  const [filiaisLoading, setFiliaisLoading] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState<string | null>(null);
+
+  const loadFiliais = async () => {
+    setFiliaisLoading(true);
+    try {
+      const stores = await api<Array<{ code: string; name: string; tipo?: string }>>('/stores');
+      setFiliais(
+        stores
+          .filter((s) => (s.tipo || '').toUpperCase() === 'FILIAL')
+          .sort((a, b) => a.code.localeCompare(b.code))
+          .map((s) => ({ code: s.code, name: s.name })),
+      );
+    } catch {
+      setFiliais([]);
+    } finally {
+      setFiliaisLoading(false);
+    }
+  };
+
+  // Baixa PDF: abre em nova aba (PDF inline) com Authorization via blob URL
+  const downloadPdf = async (mes: string, filialCode: string) => {
+    setDownloadingPdf(filialCode);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      const apiBase = (process.env.NEXT_PUBLIC_API_URL as string) || `${window.location.protocol}//${window.location.hostname}:3001`;
+      const res = await fetch(
+        `${apiBase}/financeiro/closures/${mes}/pdf?filial=${encodeURIComponent(filialCode)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`PDF falhou (${res.status}): ${txt || res.statusText}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      // Libera URL após delay (pra dar tempo do navegador abrir)
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message || 'falha ao gerar PDF'}`);
+    } finally {
+      setDownloadingPdf(null);
+    }
+  };
+
   // ── Loaders ──
   const loadObligations = async () => {
     setObligationsLoading(true);
@@ -566,6 +615,7 @@ export default function FinanceiroTransferenciasPage() {
                       <th className="px-4 py-2 text-right">Royalties</th>
                       <th className="px-4 py-2 text-right">Marketing</th>
                       <th className="px-4 py-2 text-right">Total geral</th>
+                      <th className="px-4 py-2 text-center">Comprovantes</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -580,6 +630,19 @@ export default function FinanceiroTransferenciasPage() {
                         <td className="px-4 py-2.5 text-right tabular-nums text-blue-700">{brl(c.totalMarketing)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-bold text-emerald-700">
                           {brl(c.totalObrigacoes + c.totalRoyalties + c.totalMarketing)}
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          <button
+                            onClick={() => {
+                              setPdfModal({ mes: c.mesReferencia });
+                              if (filiais.length === 0) loadFiliais();
+                            }}
+                            className="text-xs inline-flex items-center gap-1 px-2 py-1 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200"
+                            title="Gerar PDF por filial"
+                          >
+                            <FileText className="w-3 h-3" />
+                            PDFs
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -621,6 +684,65 @@ export default function FinanceiroTransferenciasPage() {
                 Confirmar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal PDFs por filial */}
+      {pdfModal && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setPdfModal(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <FileText className="w-5 h-5 text-rose-600" />
+                Comprovantes — {pdfModal.mes}
+              </h3>
+              <button onClick={() => setPdfModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Clique numa filial pra abrir o PDF do comprovante mensal. Cada PDF tem
+              venda bruta, royalties, marketing, obrigações e o detalhe das transferências.
+            </p>
+
+            {filiaisLoading ? (
+              <div className="text-center py-6 text-slate-400">
+                <Loader2 className="w-5 h-5 animate-spin inline-block mb-1" />
+                <div className="text-xs">Carregando filiais...</div>
+              </div>
+            ) : filiais.length === 0 ? (
+              <div className="text-center py-6 text-slate-400 text-sm">
+                Nenhuma filial cadastrada. Vá em <Link href="/retaguarda/lojas" className="text-rose-600 underline">Lojas</Link> pra classificar.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {filiais.map((f) => (
+                  <button
+                    key={f.code}
+                    onClick={() => downloadPdf(pdfModal.mes, f.code)}
+                    disabled={downloadingPdf === f.code}
+                    className="w-full text-left flex items-center gap-3 p-2.5 rounded-lg border border-slate-200 hover:bg-rose-50 hover:border-rose-300 transition-colors disabled:opacity-50"
+                  >
+                    <div className="font-mono text-sm font-semibold text-slate-700 w-12 shrink-0">
+                      {f.code}
+                    </div>
+                    <div className="flex-1 text-sm text-slate-700 truncate">{f.name}</div>
+                    {downloadingPdf === f.code ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+                    ) : (
+                      <Download className="w-4 h-4 text-rose-600" />
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

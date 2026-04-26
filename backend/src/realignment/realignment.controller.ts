@@ -425,6 +425,54 @@ export class RealignmentController {
   }
 
   // ════════════════════════════════════════════════════════════════════
+  // ADMIN — Visão geral de remessas em trânsito
+  // ════════════════════════════════════════════════════════════════════
+
+  /**
+   * GET /realignment/shipments/admin/all · admin
+   * Lista todas as remessas (todas lojas) com filtros.
+   * Query params: status, fromStoreCode, toStoreCode, search, daysAgo
+   */
+  @Get('shipments/admin/all')
+  adminListShipments(
+    @Req() req: any,
+    @Query('status') status?: string,
+    @Query('fromStoreCode') fromStoreCode?: string,
+    @Query('toStoreCode') toStoreCode?: string,
+    @Query('search') search?: string,
+    @Query('daysAgo') daysAgo?: string,
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.listAllShipmentsAdmin({
+      status,
+      fromStoreCode,
+      toStoreCode,
+      search,
+      daysAgo: daysAgo ? Number(daysAgo) : undefined,
+    });
+  }
+
+  /**
+   * GET /realignment/shipments/admin/kpis · admin
+   * KPIs agregados (cards do topo da tela).
+   */
+  @Get('shipments/admin/kpis')
+  adminShipmentsKPIs(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.getShipmentsKPIs();
+  }
+
+  /**
+   * GET /realignment/shipments/admin/:id · admin
+   * Detalhe completo de uma remessa qualquer (sem filtro de loja).
+   */
+  @Get('shipments/admin/:id')
+  adminShipmentDetail(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.getShipmentDetailAdmin(id);
+  }
+
+  // ════════════════════════════════════════════════════════════════════
   // WIPE / DESTRUTIVOS (admin)
   // ════════════════════════════════════════════════════════════════════
 

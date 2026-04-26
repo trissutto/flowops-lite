@@ -829,13 +829,18 @@ export class RealignmentService {
    * não foi encontrada depois de marcar) → precisa voltar pra fila de
    * separação sem criar nova ordem.
    *
-   * Regras:
-   *   - Só a própria loja origem pode reverter (mesmo check de markAsSent).
-   *   - Só reverte se estiver `sent` — se já foi `cancelled`/outros estados,
-   *     não faz nada.
-   *   - Limpa `realignmentSentAt` e `realignmentSentByUserId`.
-   *   - Emite socket `realignment:new` pra matriz atualizar o contador
-   *     (reaparece na fila).
+   * Regras (atualizadas pra modelo de Shipment):
+   *   - Só a própria loja origem pode reverter.
+   *   - Só reverte se estiver `sent`.
+   *   - Se a ordem está vinculada a uma remessa, ela só pode voltar se a
+   *     remessa ainda está `open` (mercadoria ainda não saiu da loja).
+   *     Se a remessa já foi `closed`/`sent`/`received`, BLOQUEIA — caso
+   *     contrário ficaria estoque furado e obrigação financeira órfã.
+   *   - Cancela obrigações financeiras pendentes vinculadas a essa ordem
+   *     (caso edge: registros antigos do modelo anterior, ou se algum
+   *     fluxo paralelo criou obrigação).
+   *   - Limpa `realignmentSentAt`, `realignmentSentByUserId` e `shipmentId`.
+   *   - Emite socket pra retaguarda + outros dispositivos da loja.
    */
   async markAsUnsent(input: {
     transferId: string;
@@ -862,7 +867,8 @@ export class RealignmentService {
         lojaDestinoName: true,
         solicitanteNome: true,
         mensagem: true,
-      },
+        shipmentId: true,
+      } as any,
     });
     if (!order) throw new NotFoundException('Ordem não encontrada');
     if (order.tipo !== 'REALINHAMENTO')
@@ -872,13 +878,59 @@ export class RealignmentService {
     if (order.realignmentStatus !== 'sent')
       throw new BadRequestException('Ordem não está marcada como enviada');
 
+    // ── Guarda Shipment ──
+    // Se ordem está numa remessa, só permite reverter se a remessa ainda
+    // está OPEN. Se já fechou (mercadoria saiu), bloqueia — admin tem que
+    // resolver manualmente (devolução, cancelamento de obrigação, etc).
+    const shipmentId = (order as any).shipmentId as string | null;
+    if (shipmentId) {
+      const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+        where: { id: shipmentId },
+        select: { id: true, code: true, status: true },
+      });
+      if (shipment && shipment.status !== 'open') {
+        throw new BadRequestException(
+          `Remessa ${shipment.code} já foi fechada (status: ${shipment.status}). ` +
+            `Não dá pra reverter — mercadoria já saiu da loja. Fale com a matriz pra resolver.`,
+        );
+      }
+    }
+
+    // ── Cancela obrigações pendentes vinculadas (se existirem) ──
+    // No modelo novo, obrigações só são criadas em closeAndSend, então
+    // ordens em remessa OPEN não devem ter obrigação ainda. Mas se vier
+    // de registro antigo (modelo anterior), cancela.
+    try {
+      const cancelled = await (this.prisma as any).interStoreObligation.updateMany({
+        where: {
+          transferOrderId: order.id,
+          status: 'pending',
+        },
+        data: {
+          status: 'cancelled',
+          cancelledAt: new Date(),
+          cancelReason: 'Reverted by store (markAsUnsent)',
+        },
+      });
+      if (cancelled.count > 0) {
+        this.logger.log(
+          `[realignment] Cancelou ${cancelled.count} obrigação(ões) órfã(s) ao reverter ordem ${order.id}`,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[realignment] falha ao cancelar obrigações ao reverter ${order.id}: ${(e as Error).message}`,
+      );
+    }
+
     const updated = await this.prisma.transferOrder.update({
       where: { id: order.id },
       data: {
         realignmentStatus: 'pending',
         realignmentSentAt: null,
         realignmentSentByUserId: null,
-      },
+        shipmentId: null,
+      } as any,
     });
 
     // Emite `realignment:unsent` pra retaguarda + outros dispositivos da loja

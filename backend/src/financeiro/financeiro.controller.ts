@@ -9,10 +9,13 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FinanceiroService } from './financeiro.service';
+import { FechamentoPdfService } from './pdf.service';
 
 /**
  * /financeiro — gerencia obrigações intercompany REDE↔FILIAL.
@@ -23,7 +26,10 @@ import { FinanceiroService } from './financeiro.service';
 @UseGuards(JwtAuthGuard)
 @Controller('financeiro')
 export class FinanceiroController {
-  constructor(private readonly svc: FinanceiroService) {}
+  constructor(
+    private readonly svc: FinanceiroService,
+    private readonly pdf: FechamentoPdfService,
+  ) {}
 
   private requireAdmin(req: any) {
     if (req?.user?.role !== 'admin') {
@@ -108,5 +114,29 @@ export class FinanceiroController {
     this.requireAdmin(req);
     const userId = req?.user?.id || req?.user?.sub || null;
     return this.svc.closeMonth(mes, userId, !!body?.force);
+  }
+
+  /**
+   * GET /financeiro/closures/:mes/pdf?filial=LJ05
+   *
+   * Gera PDF do comprovante mensal de UMA filial específica.
+   * Stream direto pra response (não salva no disco).
+   */
+  @Get('closures/:mes/pdf')
+  async closurePdf(
+    @Req() req: any,
+    @Res() res: Response,
+    @Param('mes') mes: string,
+    @Query('filial') filial: string,
+  ) {
+    this.requireAdmin(req);
+    if (!filial) {
+      throw new BadRequestException('Query param filial obrigatório (ex: ?filial=LJ05)');
+    }
+    const { buffer, filename } = await this.pdf.generateForFilial(mes, filial);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.send(buffer);
   }
 }

@@ -629,6 +629,133 @@ export class RealignmentShipmentService {
     return { ok: true };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN — visão geral (matriz)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Lista TODAS as remessas com filtros opcionais (uso admin).
+   * Inclui contagem de itens (total, recebidos, faltantes) já calculada
+   * pra UI mostrar progresso sem precisar de N+1 queries no frontend.
+   *
+   * Filtros:
+   *   - status: open | in_transit | received (opcional)
+   *   - fromStoreCode (opcional)
+   *   - toStoreCode (opcional)
+   *   - search: substring no code da remessa (opcional)
+   *   - daysAgo: filtra remessas abertas/enviadas nos últimos N dias (default 30)
+   */
+  async listAllShipmentsAdmin(input: {
+    status?: string;
+    fromStoreCode?: string;
+    toStoreCode?: string;
+    search?: string;
+    daysAgo?: number;
+  }) {
+    const where: any = {};
+    if (input.status) where.status = input.status;
+    if (input.fromStoreCode) where.fromStoreCode = input.fromStoreCode;
+    if (input.toStoreCode) where.toStoreCode = input.toStoreCode;
+    if (input.search) where.code = { contains: input.search.trim(), mode: 'insensitive' };
+
+    const days = Number.isFinite(input.daysAgo) && (input.daysAgo as number) > 0 ? (input.daysAgo as number) : 30;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    where.openedAt = { gte: since };
+
+    const shipments = await (this.prisma as any).realignmentShipment.findMany({
+      where,
+      orderBy: [{ status: 'asc' }, { openedAt: 'desc' }],
+      take: 200,
+    });
+
+    // Conta itens por shipment via groupBy (1 query só)
+    const ids = shipments.map((s: any) => s.id);
+    if (ids.length === 0) return [];
+
+    const itemsRaw = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: { in: ids } } as any,
+      select: { shipmentId: true, realignmentStatus: true, qtyOrigem: true } as any,
+    });
+
+    const summary = new Map<string, { totalItems: number; totalQty: number; received: number; missing: number; sent: number }>();
+    for (const s of shipments) summary.set(s.id, { totalItems: 0, totalQty: 0, received: 0, missing: 0, sent: 0 });
+    for (const it of itemsRaw as any[]) {
+      const agg = summary.get(it.shipmentId);
+      if (!agg) continue;
+      agg.totalItems += 1;
+      agg.totalQty += it.qtyOrigem || 1;
+      if (it.realignmentStatus === 'received') agg.received += 1;
+      else if (it.realignmentStatus === 'missing') agg.missing += 1;
+      else if (it.realignmentStatus === 'sent') agg.sent += 1;
+    }
+
+    return shipments.map((s: any) => {
+      const agg = summary.get(s.id) || { totalItems: 0, totalQty: 0, received: 0, missing: 0, sent: 0 };
+      // Tempo em trânsito (em horas) pra alertar remessas paradas
+      let hoursInTransit: number | null = null;
+      if (s.status === 'in_transit' && s.sentAt) {
+        hoursInTransit = (Date.now() - new Date(s.sentAt).getTime()) / 1000 / 60 / 60;
+      }
+      return {
+        ...s,
+        totalItemsLive: agg.totalItems,
+        totalQtyLive: agg.totalQty,
+        receivedCount: agg.received,
+        missingCount: agg.missing,
+        pendingScanCount: agg.sent,
+        hoursInTransit,
+      };
+    });
+  }
+
+  /**
+   * Detalhe de uma remessa qualquer (uso admin — sem filtro de loja).
+   */
+  async getShipmentDetailAdmin(shipmentId: string) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId } as any,
+      orderBy: [{ refCode: 'asc' }],
+      select: {
+        id: true,
+        refCode: true,
+        cor: true,
+        tamanho: true,
+        qtyOrigem: true,
+        descricao: true,
+        realignmentStatus: true,
+        realignmentReceivedAt: true,
+        realignmentMissingAt: true,
+        realignmentMissingNote: true,
+      } as any,
+    });
+    return { ...shipment, items };
+  }
+
+  /**
+   * KPIs agregados (cards do topo da tela admin).
+   */
+  async getShipmentsKPIs() {
+    const all = await (this.prisma as any).realignmentShipment.findMany({
+      where: { openedAt: { gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000) } },
+      select: { id: true, status: true, sentAt: true, totalQty: true } as any,
+    });
+    const open = all.filter((s: any) => s.status === 'open').length;
+    const inTransit = all.filter((s: any) => s.status === 'in_transit').length;
+    const received = all.filter((s: any) => s.status === 'received').length;
+    // Remessas paradas (in_transit há mais de 48h)
+    const stuck = all.filter((s: any) => {
+      if (s.status !== 'in_transit' || !s.sentAt) return false;
+      const hours = (Date.now() - new Date(s.sentAt).getTime()) / 1000 / 60 / 60;
+      return hours > 48;
+    }).length;
+    return { open, inTransit, received, stuck, total90d: all.length };
+  }
+
   /**
    * "Dar Entrada" — finaliza o recebimento da remessa.
    *

@@ -31,7 +31,7 @@ import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
-  Package2, ClipboardList, Shuffle,
+  Package2, ClipboardList, Shuffle, Inbox,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -126,6 +126,8 @@ export default function MinhaLojaPage() {
   // Badge de realinhamento: qtd de ordens pendentes (filial origem). Atualiza
   // via load inicial + socket 'realignment:new' e 'realignment:sent'.
   const [realignmentPending, setRealignmentPending] = useState(0);
+  // Badge de remessas chegando (filial destino). Mostra no card "Receber".
+  const [shipmentsIncoming, setShipmentsIncoming] = useState(0);
   const autoMaximizeTimers = useRef<Map<string, number>>(new Map());
   const originalTitleRef = useRef<string>('LURDS ORDER ONE');
 
@@ -195,7 +197,7 @@ export default function MinhaLojaPage() {
         }
         // Carrega IDs já notificados hoje — protege contra reload do Electron
         if (profile.storeId) loadSeenFromStorage(profile.storeId);
-        await Promise.all([loadRows(), loadRealignmentCount()]);
+        await Promise.all([loadRows(), loadRealignmentCount(), loadShipmentsIncoming()]);
       } catch (err: any) {
         setError(err?.message ?? 'Erro ao carregar perfil');
         if (String(err?.message ?? '').startsWith('401')) {
@@ -249,6 +251,17 @@ export default function MinhaLojaPage() {
       setRealignmentPending(Array.isArray(items) ? items.length : 0);
     } catch {
       setRealignmentPending(0);
+    }
+  }, []);
+
+  // Carrega contagem de remessas chegando (filial destino) — alimenta badge
+  // no card "Receber". Silencioso em caso de erro.
+  const loadShipmentsIncoming = useCallback(async () => {
+    try {
+      const items = await api<Array<{ id: string }>>('/realignment/shipments/incoming');
+      setShipmentsIncoming(Array.isArray(items) ? items.length : 0);
+    } catch {
+      setShipmentsIncoming(0);
     }
   }, []);
 
@@ -674,7 +687,7 @@ export default function MinhaLojaPage() {
 
       {/* Quick-action grid — acesso rápido às funções da filial */}
       <div className="max-w-3xl mx-auto px-3 pt-3">
-        <QuickActionGrid realignmentPending={realignmentPending} />
+        <QuickActionGrid realignmentPending={realignmentPending} shipmentsIncoming={shipmentsIncoming} />
       </div>
 
       {/* Lista */}
@@ -784,7 +797,7 @@ function openPrintWindow(pickOrderId: string) {
 // rápido no mobile (alvo grande) e pra destacar visualmente as funções
 // importantes da filial. Quando há realinhamento pendente, destaca um
 // card cheia-largura com badge pra ficar impossível de ignorar.
-function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: number }) {
+function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { realignmentPending?: number; shipmentsIncoming?: number }) {
   const items: Array<{
     href: string;
     icon: any;
@@ -845,6 +858,48 @@ function QuickActionGrid({ realignmentPending = 0 }: { realignmentPending?: numb
           <div
             className="shrink-0 font-bold text-xs uppercase tracking-wider"
             style={{ color: '#7d4a30' }}
+          >
+            Abrir →
+          </div>
+        </Link>
+      )}
+
+      {/* Alerta de remessa chegando — mint boutique */}
+      {shipmentsIncoming > 0 && (
+        <Link
+          href="/minha-loja/recebimento"
+          className="group relative overflow-hidden rounded-2xl p-4 flex items-center gap-3 shadow-md hover:shadow-lg transition-all"
+          style={{
+            background: 'linear-gradient(135deg, #e3ebd9 0%, #d6e3c9 100%)',
+            border: '2px solid #7d9163',
+          }}
+        >
+          <div
+            className="circle-ring flex items-center justify-center w-12 h-12 shrink-0"
+            style={{ border: '3px solid #9caf88', background: 'white' }}
+          >
+            <Inbox className="w-5 h-5" style={{ color: '#5d7048' }} strokeWidth={1.8} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div
+              className="font-display text-lg leading-tight flex items-center gap-2"
+              style={{ color: '#3d4a2c' }}
+            >
+              Mercadoria a caminho
+              <span
+                className="text-sm font-bold rounded-full px-2 min-w-[26px] h-6 inline-flex items-center justify-center tabular-nums text-white"
+                style={{ background: '#5d7048' }}
+              >
+                {shipmentsIncoming}
+              </span>
+            </div>
+            <div className="text-xs leading-snug mt-0.5" style={{ color: '#5d7048' }}>
+              Remessa(s) em trânsito · toque pra dar entrada quando chegar
+            </div>
+          </div>
+          <div
+            className="shrink-0 font-bold text-xs uppercase tracking-wider"
+            style={{ color: '#475636' }}
           >
             Abrir →
           </div>
