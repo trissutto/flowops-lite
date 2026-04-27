@@ -13,17 +13,18 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Store, UserCog, Activity, Shield,
+  Settings, Store, UserCog, Activity, Shield, Receipt,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
 import CircleNav, { type CircleNavItem } from '@/components/CircleNav';
 
 const RETAGUARDA_ITEMS: CircleNavItem[] = [
-  { href: '/configuracoes', label: 'Configurações', subtitle: 'Prioridades, integrações', icon: Settings, tone: 'lavender' },
-  { href: '/lojas',         label: 'Lojas',         subtitle: 'Cadastro da rede',         icon: Store,    tone: 'rose'     },
-  { href: '/usuarios',      label: 'Usuários',      subtitle: 'Acesso e permissões',      icon: UserCog,  tone: 'sky'      },
-  { href: '/logs',          label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity, tone: 'mint'     },
+  { href: '/configuracoes',           label: 'Configurações', subtitle: 'Prioridades, integrações', icon: Settings, tone: 'lavender' },
+  { href: '/lojas',                   label: 'Lojas',         subtitle: 'Cadastro da rede',         icon: Store,    tone: 'rose'     },
+  { href: '/usuarios',                label: 'Usuários',      subtitle: 'Acesso e permissões',      icon: UserCog,  tone: 'sky'      },
+  { href: '/retaguarda/nfce-config',  label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,  tone: 'rose'     },
+  { href: '/logs',                    label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity, tone: 'mint'     },
 ];
 
 export default function RetaguardaHub() {
