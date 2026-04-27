@@ -512,8 +512,17 @@ export class RealignmentShipmentService {
     if (shipment.status !== 'in_transit')
       throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
 
-    const sku = String(input.sku || '').trim();
-    if (!sku) throw new BadRequestException('SKU vazio');
+    const skuBipado = String(input.sku || '').trim();
+    if (!skuBipado) throw new BadRequestException('SKU vazio');
+
+    // Normaliza o SKU bipado pelo Giga (resolve zeros à esquerda, EAN, etc).
+    // Se o usuário bipou "5358441" mas no Giga é "0005358441", aqui resolve.
+    const info = await this.erp.resolveSkuInfo(skuBipado);
+    const skuNormalizado = info?.codigo || skuBipado;
+
+    // Helper: compara 2 SKUs ignorando zeros à esquerda + trim
+    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
+    const skuBipadoStripped = stripZeros(skuNormalizado);
 
     // Pega itens da remessa
     const items = await this.prisma.transferOrder.findMany({
@@ -527,15 +536,16 @@ export class RealignmentShipmentService {
       } as any,
     });
 
-    // Resolve SKU → procura match nos itens da remessa.
-    // Usa findCodigoByRefCorTam (busca direta tolerante).
+    // Pra cada item da remessa, pega o SKU oficial via REF+cor+tam e compara.
+    // Comparação ignora zeros à esquerda em ambos os lados.
     let matchedItemId: string | null = null;
     let matchedRefCode: string | null = null;
     for (const it of items as any[]) {
       if (it.realignmentStatus === 'received' || it.realignmentStatus === 'missing') continue;
       try {
         const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
-        if (itemSku && String(itemSku).trim() === sku) {
+        if (!itemSku) continue;
+        if (stripZeros(itemSku) === skuBipadoStripped) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;
           break;
@@ -546,7 +556,10 @@ export class RealignmentShipmentService {
     }
 
     if (!matchedItemId) {
-      throw new BadRequestException(`SKU ${sku} não pertence a essa remessa (ou já foi bipado)`);
+      throw new BadRequestException(
+        `SKU ${skuBipado} não pertence a essa remessa (ou já foi bipado). ` +
+          (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : ''),
+      );
     }
 
     await this.prisma.transferOrder.update({
