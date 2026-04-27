@@ -50,6 +50,35 @@ export class TriagemService {
     fromStoreCode: string;
     candidateStoreCodes: string[];
   }) {
+    try {
+      return await this._suggestInner(input);
+    } catch (e: any) {
+      // Re-lança erros de regra (Bad/Not Found/Forbidden) — esses já têm mensagem certa.
+      if (
+        e?.status === 400 ||
+        e?.status === 403 ||
+        e?.status === 404 ||
+        e?.constructor?.name === 'BadRequestException' ||
+        e?.constructor?.name === 'NotFoundException' ||
+        e?.constructor?.name === 'ForbiddenException'
+      ) {
+        throw e;
+      }
+      // Erros transitórios de MySQL/Postgres viravam 500 cru.
+      // Converte em BadRequest com diagnóstico amigável.
+      const msg = String(e?.message || e || 'erro desconhecido');
+      this.logger.error(`[triage.suggest] erro inesperado pro SKU "${input.sku}": ${msg}`);
+      throw new BadRequestException(
+        `Não consegui processar a sugestão (${msg}). Tente novamente em 5s ou bipe outro SKU.`,
+      );
+    }
+  }
+
+  private async _suggestInner(input: {
+    sku: string;
+    fromStoreCode: string;
+    candidateStoreCodes: string[];
+  }) {
     const sku = String(input.sku || '').trim();
     if (!sku) throw new BadRequestException('SKU vazio');
     if (!input.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
@@ -63,21 +92,28 @@ export class TriagemService {
     if (!candidates.length)
       throw new BadRequestException('Nenhum candidato válido (origem foi excluída)');
 
-    // 1. Resolve dados do SKU
+    // 1. Resolve dados do SKU (aceita EAN13 também — resolveSkuInfo faz fallback
+    //    via colunas de barcode e devolve o CODIGO real do Giga).
     const info = await this.erp.resolveSkuInfo(sku);
     if (!info) {
-      throw new NotFoundException(`SKU ${sku} não encontrado no Giga`);
+      throw new NotFoundException(`SKU/EAN ${sku} não encontrado no Giga`);
     }
     if (!info.ref) {
       throw new BadRequestException(`SKU ${sku} sem REF cadastrada`);
     }
 
+    // CRÍTICO: a partir daqui SEMPRE usar info.codigo (CODIGO real do Giga),
+    // não o `sku` que veio do scanner — vendedora pode bipar o EAN13 que está
+    // diferente do CODIGO. Sem isso, o getStockBySkuAndStores não acha estoque
+    // e a sugestão fica errada (ou trava o fluxo).
+    const codigoGiga = info.codigo;
+
     // 2. Busca em paralelo:
-    //    - estoque do SKU exato em cada candidato (Giga)
+    //    - estoque do SKU exato em cada candidato (Giga) — usa CODIGO resolvido
     //    - venda da REF últimos 30d em cada candidato (Giga)
     //    - itens já bipados nas caixas OPEN do par origem→candidato (Postgres)
     const [stockMap, salesMap, openShipments] = await Promise.all([
-      this.erp.getStockBySkuAndStores(sku, candidates),
+      this.erp.getStockBySkuAndStores(codigoGiga, candidates),
       this.erp.getRecentSalesByRefAndStores(info.ref, candidates, 30),
       (this.prisma as any).realignmentShipment.findMany({
         where: {

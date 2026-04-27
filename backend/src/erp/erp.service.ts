@@ -2770,21 +2770,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     // Helper: query produtos por CODIGO exato (com lista de candidatos).
     // Usa só DESCRICAOCOMPLETA (DESCRICAO não existe no Giga).
-    // NÃO silencia erro de SQL — propaga pra cima pra debug.
+    // Captura erro pra não derrubar a chain inteira (erros transitórios de MySQL
+    // viravam 500 no /triage/suggest quando bipava EAN13).
     const tryCodigos = async (candidates: string[]): Promise<any | null> => {
       if (!candidates.length) return null;
-      const [rows] = await this.pool!.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO AS codigo,
-                REF AS ref,
-                COR AS cor,
-                TAMANHO AS tamanho,
-                DESCRICAOCOMPLETA AS descricao
-           FROM produtos
-          WHERE CODIGO IN (?)
-          LIMIT 1`,
-        [candidates],
-      );
-      return (rows as any[])[0] || null;
+      try {
+        const [rows] = await this.pool!.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO AS codigo,
+                  REF AS ref,
+                  COR AS cor,
+                  TAMANHO AS tamanho,
+                  DESCRICAOCOMPLETA AS descricao
+             FROM produtos
+            WHERE CODIGO IN (?)
+            LIMIT 1`,
+          [candidates],
+        );
+        return (rows as any[])[0] || null;
+      } catch (e: any) {
+        this.logger.warn(`resolveSkuInfo tryCodigos falhou: ${e?.message || e}`);
+        return null;
+      }
     };
 
     // 1. Tenta exato + variantes com zero-padding comuns
