@@ -15,6 +15,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
+import { PixService } from './pix.service';
 
 /**
  * /pdv — frente de caixa.
@@ -26,6 +27,7 @@ export class PdvController {
   constructor(
     private readonly svc: PdvService,
     private readonly erp: ErpService,
+    private readonly pix: PixService,
   ) {}
 
   private requireRole(req: any) {
@@ -194,6 +196,26 @@ export class PdvController {
       saleId: id,
       paymentMethod: body?.paymentMethod,
       paymentDetails: body?.paymentDetails,
+    });
+  }
+
+  /**
+   * POST /pdv/sales/:id/pix-charge
+   * Gera BR Code PIX (QR Code com valor cravado) pra pagamento.
+   * Não chama API de banco — gera localmente. Cai direto na conta da chave.
+   * Vendedora confirma manualmente após ver o pagamento no app do banco.
+   */
+  @Post('sales/:id/pix-charge')
+  async pixCharge(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    const sale = await this.svc.getSale(id);
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda já está ${sale.status}`);
+    if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
+    return this.pix.generatePixCharge({
+      valor: sale.total,
+      txid: `LURDS${id.slice(-8).toUpperCase()}`,
+      descricao: `Venda ${id.slice(-6).toUpperCase()}`,
     });
   }
 

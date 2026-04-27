@@ -779,6 +779,7 @@ export default function PdvPage() {
       {/* Modal Pagamento */}
       {showPayment && sale && (
         <PaymentModal
+          saleId={sale.id}
           total={sale.total}
           customerCpf={sale.customerCpf}
           finalizing={finalizing}
@@ -872,6 +873,7 @@ function CustomerModal({
 }
 
 function PaymentModal({
+  saleId,
   total,
   customerCpf,
   finalizing,
@@ -879,6 +881,7 @@ function PaymentModal({
   onConfirm,
   onLater,
 }: {
+  saleId: string;
   total: number;
   customerCpf: string | null;
   finalizing: boolean;
@@ -890,6 +893,39 @@ function PaymentModal({
   const [bandeira, setBandeira] = useState<string | null>(null);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
+  // PIX state
+  const [pixCharge, setPixCharge] = useState<{
+    txid: string;
+    chave: string;
+    payload: string;
+    qrCodeDataUrl: string;
+  } | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [copyMsg, setCopyMsg] = useState(false);
+
+  // Quando seleciona PIX, gera o QR direto
+  const generatePix = async () => {
+    setPixLoading(true);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
+      setPixCharge(r);
+    } catch (e: any) {
+      alert(`Erro ao gerar PIX: ${e?.message}`);
+    } finally {
+      setPixLoading(false);
+    }
+  };
+
+  const copyPix = async () => {
+    if (!pixCharge) return;
+    try {
+      await navigator.clipboard.writeText(pixCharge.payload);
+      setCopyMsg(true);
+      setTimeout(() => setCopyMsg(false), 2000);
+    } catch {
+      alert('Não consegui copiar — selecione e copie manualmente');
+    }
+  };
 
   const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
   const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
@@ -899,6 +935,10 @@ function PaymentModal({
     setSelected(id);
     setBandeira(null);
     setParcelas(1);
+    setPixCharge(null);
+    if (id === 'pix') {
+      generatePix();
+    }
   };
 
   const needsBandeira = selected === 'debito' || selected === 'credito';
@@ -930,6 +970,10 @@ function PaymentModal({
     if (selected === 'dinheiro') {
       details.recebido = recebidoNum;
       details.troco = troco;
+    }
+    if (selected === 'pix' && pixCharge) {
+      details.pixTxid = pixCharge.txid;
+      details.pixChave = pixCharge.chave;
     }
     if (needsBandeira) details.bandeira = bandeira;
     onConfirm(selected, details);
@@ -1092,13 +1136,72 @@ function PaymentModal({
           </div>
         )}
 
+        {/* Painel PIX — QR Code com valor */}
+        {selected === 'pix' && (
+          <div className="space-y-2 pt-2 border-t">
+            {pixLoading ? (
+              <div className="text-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin inline-block text-emerald-600 mb-2" />
+                <div className="text-sm text-slate-500">Gerando QR Code PIX...</div>
+              </div>
+            ) : pixCharge ? (
+              <>
+                <div className="flex flex-col items-center bg-emerald-50 rounded-lg p-3">
+                  <img
+                    src={pixCharge.qrCodeDataUrl}
+                    alt="QR Code PIX"
+                    className="w-48 h-48 sm:w-56 sm:h-56 bg-white rounded shadow"
+                  />
+                  <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                    Chave: {pixCharge.chave.replace(/\+55/, '')} (celular)
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={copyPix}
+                  className="w-full px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded font-mono text-xs flex items-center justify-center gap-2 transition-colors"
+                >
+                  {copyMsg ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700 font-bold">Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      📋 Copiar PIX Copia e Cola
+                    </>
+                  )}
+                </button>
+
+                <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900">
+                  <b>⚠ Confirmação manual:</b> aguarde o cliente pagar, confirme no app do banco
+                  e clique em <b>"Recebi"</b> abaixo pra finalizar.
+                </div>
+              </>
+            ) : null}
+          </div>
+        )}
+
         <button
           onClick={confirm}
-          disabled={!canConfirm || finalizing}
-          className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2"
+          disabled={
+            !canConfirm ||
+            finalizing ||
+            (selected === 'pix' && !pixCharge)
+          }
+          className={`w-full px-3 py-3 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 ${
+            selected === 'pix'
+              ? 'bg-emerald-600 hover:bg-emerald-700'
+              : 'bg-emerald-600 hover:bg-emerald-700'
+          }`}
         >
-          {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-          Confirmar pagamento
+          {finalizing ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Check className="w-4 h-4" />
+          )}
+          {selected === 'pix' ? 'Recebi o PIX — finalizar' : 'Confirmar pagamento'}
         </button>
 
         {/* Fechar depois — separa visualmente do botão principal */}
