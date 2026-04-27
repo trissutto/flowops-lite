@@ -18,7 +18,8 @@ import Link from 'next/link';
 import {
   ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
-  Send, Mail, MessageSquare, FileText, RotateCcw, History,
+  Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
+  Clock, ChevronRight, Pause,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -58,12 +59,15 @@ type Sale = {
 type Store = { id: string; code: string; name: string; active: boolean };
 
 const PAYMENT_METHODS = [
-  { id: 'dinheiro', label: 'Dinheiro', icon: Banknote, tone: 'emerald' },
-  { id: 'pix', label: 'PIX', icon: QrCode, tone: 'sky' },
-  { id: 'credito', label: 'Crédito', icon: CreditCard, tone: 'violet' },
-  { id: 'debito', label: 'Débito', icon: CreditCard, tone: 'blue' },
-  { id: 'crediario', label: 'Crediário', icon: User, tone: 'rose' },
+  { id: 'dinheiro', label: 'Dinheiro', icon: Banknote },
+  { id: 'pix', label: 'PIX', icon: QrCode },
+  { id: 'debito', label: 'Cartão Débito', icon: CreditCard },
+  { id: 'credito', label: 'Cartão Crédito', icon: CreditCard },
+  { id: 'crediario', label: 'Crediário', icon: User },
 ] as const;
+
+const BANDEIRAS_DEBITO = ['REDESHOP', 'VISA ELECTRON', 'ELO'] as const;
+const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'HIPERCARD', 'AMEX'] as const;
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -214,16 +218,79 @@ export default function PdvPage() {
     }
   };
 
-  // ── Quantidade ──
-  const updateQty = async (itemId: string, qty: number) => {
-    if (!sale || qty < 1) return;
+  // ── Atualizar qty/desconto do item ──
+  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number }) => {
+    if (!sale) return;
     try {
       await api(`/pdv/sales/${sale.id}/items/${itemId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ qty }),
+        body: JSON.stringify(patch),
       });
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  // ── Aplicar desconto na venda inteira ──
+  const setSaleDiscount = async (desconto: number) => {
+    if (!sale) return;
+    try {
+      await api(`/pdv/sales/${sale.id}/discount`, {
+        method: 'PATCH',
+        body: JSON.stringify({ desconto }),
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  // ── "Fechar depois" — deixa venda OPEN e abre nova ──
+  const fecharDepois = () => {
+    if (!sale || !sale.items?.length) return;
+    setShowPayment(false);
+    // Limpa referência da venda atual e cria nova (a anterior fica OPEN no DB)
+    localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
+    setSale(null);
+    createNewSale();
+    // Recarrega contagem de vendas em aberto
+    loadOpenCount();
+  };
+
+  // ── Vendas em aberto (badge) ──
+  const [openCount, setOpenCount] = useState(0);
+  const [showOpenList, setShowOpenList] = useState(false);
+  const loadOpenCount = async () => {
+    if (!storeCode) return;
+    try {
+      const list = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
+      // Não conta a venda ATUAL (que também é open)
+      const others = list.filter((s) => s.id !== sale?.id);
+      setOpenCount(others.length);
+    } catch {
+      setOpenCount(0);
+    }
+  };
+  useEffect(() => {
+    if (storeCode) loadOpenCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeCode, sale?.id]);
+
+  const retomarVenda = async (saleId: string) => {
+    try {
+      const s = await api<Sale>(`/pdv/sales/${saleId}`);
+      if (s.status !== 'open') {
+        alert('Essa venda não está mais aberta');
+        return;
+      }
+      setSale(s);
+      try {
+        localStorage.setItem(`lurds_pdv_sale_${storeCode}`, s.id);
+      } catch { /* noop */ }
+      setShowOpenList(false);
     } catch (e: any) {
       alert(`Erro: ${e?.message}`);
     }
@@ -355,6 +422,19 @@ export default function PdvPage() {
             <User className="w-3.5 h-3.5" />
             {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Cliente'}
           </button>
+
+          {/* Badge vendas em aberto */}
+          <button
+            onClick={() => setShowOpenList(true)}
+            disabled={openCount === 0}
+            className="text-xs px-2 py-1.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 flex items-center gap-1 disabled:opacity-30 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200"
+            title={openCount > 0 ? `${openCount} venda(s) em aberto` : 'Nenhuma venda em aberto'}
+          >
+            <Pause className="w-3.5 h-3.5" />
+            {openCount > 0 && (
+              <span className="font-bold tabular-nums">{openCount}</span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -412,7 +492,9 @@ export default function PdvPage() {
               Carrinho ({sale.items.length})
             </div>
             <div className="divide-y">
-              {sale.items.map((it) => (
+              {sale.items.map((it) => {
+                const bruto = it.precoUnit * it.qty;
+                return (
                 <div key={it.id} className="p-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="font-mono text-sm font-bold text-slate-800">
@@ -423,13 +505,16 @@ export default function PdvPage() {
                     {it.descricao && (
                       <div className="text-[11px] text-slate-500 truncate">{it.descricao}</div>
                     )}
-                    <div className="text-xs text-slate-600 mt-0.5">
-                      {brl(it.precoUnit)} cada
+                    <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-2">
+                      <span>{brl(it.precoUnit)} cada</span>
+                      {it.desconto > 0 && (
+                        <span className="text-rose-600 font-semibold">−{brl(it.desconto)} desc</span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
-                      onClick={() => updateQty(it.id, it.qty - 1)}
+                      onClick={() => updateItem(it.id, { qty: it.qty - 1 })}
                       disabled={it.qty <= 1 || sale.status !== 'open'}
                       className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center disabled:opacity-30"
                     >
@@ -437,26 +522,54 @@ export default function PdvPage() {
                     </button>
                     <span className="w-8 text-center font-bold tabular-nums">{it.qty}</span>
                     <button
-                      onClick={() => updateQty(it.id, it.qty + 1)}
+                      onClick={() => updateItem(it.id, { qty: it.qty + 1 })}
                       disabled={sale.status !== 'open'}
                       className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center disabled:opacity-30"
                     >
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="w-20 text-right shrink-0">
+                  <div className="w-24 text-right shrink-0">
                     <div className="font-bold text-emerald-700 tabular-nums">{brl(it.total)}</div>
+                    {it.desconto > 0 && (
+                      <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
+                    )}
                   </div>
                   {sale.status === 'open' && (
-                    <button
-                      onClick={() => removeItem(it.id)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        onClick={() => {
+                          const max = bruto.toFixed(2).replace('.', ',');
+                          const cur = (it.desconto || 0).toFixed(2).replace('.', ',');
+                          const v = window.prompt(
+                            `Desconto desse item em R$ (máx ${max}):\nValor atual: ${cur}`,
+                            cur,
+                          );
+                          if (v == null) return;
+                          const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
+                          if (isNaN(n) || n < 0) {
+                            alert('Valor inválido');
+                            return;
+                          }
+                          updateItem(it.id, { desconto: n });
+                        }}
+                        className="text-slate-400 hover:text-amber-600 p-1"
+                        title="Desconto neste item"
+                      >
+                        <Percent className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => removeItem(it.id)}
+                        className="text-slate-400 hover:text-rose-600 p-1"
+                        title="Remover"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : sale?.status === 'open' ? (
@@ -470,28 +583,63 @@ export default function PdvPage() {
       {/* Footer fixo: total + finalizar */}
       {sale?.status === 'open' && (
         <footer className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-10">
-          <div className="max-w-3xl mx-auto px-3 py-2 flex items-center gap-2">
-            <button
-              onClick={cancelSale}
-              className="text-xs text-rose-600 hover:bg-rose-50 px-2 py-2 rounded"
-              title="Cancelar"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="flex-1">
-              <div className="text-[10px] text-slate-500 uppercase">Total</div>
-              <div className="text-2xl font-bold text-emerald-700 tabular-nums leading-none">
-                {brl(sale.total)}
+          <div className="max-w-3xl mx-auto px-3 py-2">
+            {sale.desconto > 0 && (
+              <div className="flex items-center justify-between text-xs text-slate-500 mb-1 px-1">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{brl(sale.subtotal)}</span>
               </div>
+            )}
+            {sale.desconto > 0 && (
+              <div className="flex items-center justify-between text-xs text-rose-600 mb-1 px-1 font-semibold">
+                <span>Desconto total</span>
+                <span className="tabular-nums">−{brl(sale.desconto)}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={cancelSale}
+                className="text-xs text-rose-600 hover:bg-rose-50 px-2 py-2 rounded"
+                title="Cancelar venda"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  const subtotalLiquido = sale.items.reduce((s, i) => s + i.total, 0);
+                  const cur = (sale.desconto || 0).toFixed(2).replace('.', ',');
+                  const v = window.prompt(
+                    `Desconto na venda inteira em R$ (máx ${subtotalLiquido.toFixed(2).replace('.', ',')}):\nValor atual: ${cur}`,
+                    cur,
+                  );
+                  if (v == null) return;
+                  const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
+                  if (isNaN(n) || n < 0) {
+                    alert('Valor inválido');
+                    return;
+                  }
+                  setSaleDiscount(n);
+                }}
+                className="text-xs text-amber-700 hover:bg-amber-50 px-2 py-2 rounded flex items-center gap-1"
+                title="Desconto na venda"
+              >
+                <Percent className="w-4 h-4" />
+              </button>
+              <div className="flex-1">
+                <div className="text-[10px] text-slate-500 uppercase">Total</div>
+                <div className="text-2xl font-bold text-emerald-700 tabular-nums leading-none">
+                  {brl(sale.total)}
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPayment(true)}
+                disabled={!sale.items?.length || sale.total <= 0}
+                className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg flex items-center gap-2 disabled:opacity-40"
+              >
+                <Check className="w-5 h-5" />
+                Finalizar
+              </button>
             </div>
-            <button
-              onClick={() => setShowPayment(true)}
-              disabled={!sale.items?.length || sale.total <= 0}
-              className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg flex items-center gap-2 disabled:opacity-40"
-            >
-              <Check className="w-5 h-5" />
-              Finalizar
-            </button>
           </div>
         </footer>
       )}
@@ -518,6 +666,18 @@ export default function PdvPage() {
           finalizing={finalizing}
           onClose={() => setShowPayment(false)}
           onConfirm={finalizeSale}
+          onLater={fecharDepois}
+        />
+      )}
+
+      {/* Modal Vendas em Aberto (retomar) */}
+      {showOpenList && (
+        <OpenSalesModal
+          storeCode={storeCode}
+          currentSaleId={sale?.id}
+          onClose={() => setShowOpenList(false)}
+          onResume={retomarVenda}
+          onRefresh={loadOpenCount}
         />
       )}
 
@@ -599,26 +759,45 @@ function PaymentModal({
   finalizing,
   onClose,
   onConfirm,
+  onLater,
 }: {
   total: number;
   customerCpf: string | null;
   finalizing: boolean;
   onClose: () => void;
   onConfirm: (method: string, details?: any) => void;
+  onLater: () => void;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [bandeira, setBandeira] = useState<string | null>(null);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
 
-  const recebidoNum = Number((recebido || '0').replace(',', '.'));
+  const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
   const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
+
+  // Reset bandeira ao trocar de método
+  const selectMethod = (id: string) => {
+    setSelected(id);
+    setBandeira(null);
+    setParcelas(1);
+  };
+
+  const needsBandeira = selected === 'debito' || selected === 'credito';
+  const bandeiras =
+    selected === 'debito'
+      ? BANDEIRAS_DEBITO
+      : selected === 'credito'
+      ? BANDEIRAS_CREDITO
+      : [];
 
   const canConfirm = useMemo(() => {
     if (!selected) return false;
     if (selected === 'crediario' && !customerCpf) return false;
     if (selected === 'dinheiro' && recebidoNum < total) return false;
+    if (needsBandeira && !bandeira) return false;
     return true;
-  }, [selected, recebidoNum, total, customerCpf]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, total, customerCpf]);
 
   const confirm = () => {
     if (!selected) return;
@@ -628,6 +807,7 @@ function PaymentModal({
       details.recebido = recebidoNum;
       details.troco = troco;
     }
+    if (needsBandeira) details.bandeira = bandeira;
     onConfirm(selected, details);
   };
 
@@ -636,7 +816,7 @@ function PaymentModal({
       className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
       onClick={onClose}
     >
-      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3 max-h-[95vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-semibold flex items-center gap-2">
             <CreditCard className="w-4 h-4" /> Pagamento
@@ -658,7 +838,7 @@ function PaymentModal({
               <button
                 key={p.id}
                 type="button"
-                onClick={() => !disabled && setSelected(p.id)}
+                onClick={() => !disabled && selectMethod(p.id)}
                 disabled={disabled}
                 className={`p-3 rounded-lg border-2 text-sm font-bold transition-colors flex flex-col items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${
                   isSelected
@@ -674,10 +854,33 @@ function PaymentModal({
           })}
         </div>
 
-        {/* Detalhes por método */}
+        {/* Sub-bandeiras (débito/crédito) */}
+        {needsBandeira && (
+          <div className="space-y-2 pt-2 border-t">
+            <label className="text-xs text-slate-600 uppercase font-semibold">Bandeira</label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {bandeiras.map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  onClick={() => setBandeira(b)}
+                  className={`py-2 px-2 rounded border text-xs font-bold transition-colors ${
+                    bandeira === b
+                      ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Detalhes dinheiro */}
         {selected === 'dinheiro' && (
           <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600">Valor recebido</label>
+            <label className="text-xs text-slate-600 uppercase font-semibold">Valor recebido</label>
             <input
               type="text"
               inputMode="decimal"
@@ -696,9 +899,10 @@ function PaymentModal({
           </div>
         )}
 
+        {/* Parcelas (crédito ou crediário) */}
         {(selected === 'credito' || selected === 'crediario') && (
           <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600">Parcelas</label>
+            <label className="text-xs text-slate-600 uppercase font-semibold">Parcelas</label>
             <div className="grid grid-cols-6 gap-1">
               {[1, 2, 3, 4, 6, 10].map((p) => (
                 <button
@@ -727,6 +931,22 @@ function PaymentModal({
           {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
           Confirmar pagamento
         </button>
+
+        {/* Fechar depois — separa visualmente do botão principal */}
+        <div className="border-t pt-3">
+          <button
+            onClick={onLater}
+            disabled={finalizing}
+            className="w-full px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-semibold rounded text-sm flex items-center justify-center gap-2"
+            title="Pausar a venda — fica em aberto pra finalizar depois"
+          >
+            <Pause className="w-4 h-4" />
+            Fechar depois (pausar)
+          </button>
+          <p className="text-[10px] text-slate-500 text-center mt-1">
+            A venda fica em aberto. Você atende outra cliente e volta nessa pelo botão <Pause className="w-3 h-3 inline" /> do topo.
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -816,6 +1036,119 @@ function FinalizedModal({ sale, onNew }: { sale: Sale; onNew: () => void }) {
             <RotateCcw className="w-4 h-4" />
             Nova venda
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Modal Vendas em Aberto ────────────────────────────────────────────
+
+function OpenSalesModal({
+  storeCode,
+  currentSaleId,
+  onClose,
+  onResume,
+  onRefresh,
+}: {
+  storeCode: string;
+  currentSaleId?: string;
+  onClose: () => void;
+  onResume: (id: string) => void;
+  onRefresh: () => void;
+}) {
+  const [list, setList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const arr = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
+      setList(arr.filter((s) => s.id !== currentSaleId));
+    } catch {
+      setList([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const cancelOne = async (id: string) => {
+    if (!confirm('Cancelar essa venda em aberto?')) return;
+    try {
+      await api(`/pdv/sales/${id}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Cancelada do painel de vendas em aberto' }),
+      });
+      load();
+      onRefresh();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-lg w-full max-w-md my-8 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 bg-amber-50 border-b flex items-center justify-between">
+          <h2 className="font-semibold flex items-center gap-2">
+            <Pause className="w-4 h-4 text-amber-700" />
+            Vendas em aberto
+          </h2>
+          <button onClick={onClose}><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-3 space-y-2 max-h-[70vh] overflow-y-auto">
+          {loading ? (
+            <div className="text-center py-6 text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin inline-block" />
+            </div>
+          ) : list.length === 0 ? (
+            <div className="text-center py-6 text-slate-400 text-sm">
+              Nenhuma venda em aberto além da atual.
+            </div>
+          ) : (
+            list.map((s) => (
+              <div key={s.id} className="border rounded p-2 flex items-center gap-2 hover:bg-slate-50">
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-mono text-slate-500">
+                    {s.id.slice(-6).toUpperCase()} ·{' '}
+                    {new Date(s.createdAt).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </div>
+                  <div className="font-bold text-emerald-700 tabular-nums">{brl(s.total)}</div>
+                  {s.customerName && (
+                    <div className="text-xs text-slate-600 truncate">{s.customerName}</div>
+                  )}
+                </div>
+                <button
+                  onClick={() => onResume(s.id)}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded flex items-center gap-1"
+                >
+                  Retomar
+                  <ChevronRight className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => cancelOne(s.id)}
+                  className="p-1.5 text-rose-600 hover:bg-rose-50 rounded"
+                  title="Cancelar venda"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

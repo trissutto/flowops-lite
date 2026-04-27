@@ -2919,12 +2919,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return isNaN(n) ? 0 : n;
     };
 
+    // Colunas conhecidas que armazenam preço em CENTAVOS (precisa dividir por 100)
+    // No Giga (Lurd's), VENDAUN é centavos: 25990 = R$ 259,90
+    const isCentavos = (col: string): boolean => {
+      const u = col.toUpperCase();
+      return u === 'VENDAUN' || u === 'VENDA_UN' || u === 'VENDAUNIT';
+    };
+
     // Pega o primeiro preço > 0 entre os candidatos
     let preco = 0;
     let precoFonte: string | null = null;
     for (let i = 0; i < priceCols.length; i++) {
-      const v = parsePrice(extra[`preco_${i}`]);
+      let v = parsePrice(extra[`preco_${i}`]);
       if (v > 0) {
+        // Se a coluna armazena em centavos, divide por 100
+        if (isCentavos(priceCols[i])) v = v / 100;
         preco = v;
         precoFonte = priceCols[i];
         break;

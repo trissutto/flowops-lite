@@ -167,22 +167,61 @@ export class PdvService {
     return { ok: true, item };
   }
 
-  async updateItemQty(input: { saleId: string; itemId: string; qty: number }) {
-    if (input.qty < 1) throw new BadRequestException('qty deve ser >= 1');
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
     if (!item || item.saleId !== input.saleId)
       throw new NotFoundException('Item não encontrado nessa venda');
+
+    const newQty = input.qty != null ? Math.max(1, Math.min(99, input.qty)) : item.qty;
+    const newDesconto = input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
+    const bruto = item.precoUnit * newQty;
+    if (newDesconto > bruto) {
+      throw new BadRequestException(`Desconto (${newDesconto.toFixed(2)}) maior que o total do item (${bruto.toFixed(2)})`);
+    }
+
     const updated = await (this.prisma as any).pdvSaleItem.update({
       where: { id: item.id },
       data: {
-        qty: input.qty,
-        total: item.precoUnit * input.qty - (item.desconto || 0),
+        qty: newQty,
+        desconto: newDesconto,
+        total: bruto - newDesconto,
       },
     });
     await this.recalcTotals(input.saleId);
     return updated;
+  }
+
+  /**
+   * Aplica desconto na VENDA INTEIRA (additionalDiscount, somado por cima
+   * dos descontos individuais dos itens).
+   * Salva no campo `desconto` da venda, e o `total` é recalculado.
+   */
+  async setSaleDiscount(input: { saleId: string; desconto: number }) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      include: { items: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
+    const desconto = Math.max(0, input.desconto || 0);
+    // Soma dos itens (com seus descontos individuais já aplicados)
+    const subtotalItens = sale.items.reduce((s: number, i: any) => s + (i.total || 0), 0);
+    if (desconto > subtotalItens) {
+      throw new BadRequestException(
+        `Desconto total (R$${desconto.toFixed(2)}) maior que o subtotal dos itens (R$${subtotalItens.toFixed(2)})`,
+      );
+    }
+
+    return (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: {
+        desconto,
+        total: subtotalItens - desconto,
+      },
+    });
   }
 
   async removeItem(input: { saleId: string; itemId: string }) {
@@ -198,19 +237,37 @@ export class PdvService {
 
   /**
    * Recalcula totais da venda a partir dos itens.
-   * Chamado após qualquer mudança no carrinho.
+   * - subtotal = soma bruta dos itens (sem nenhum desconto)
+   * - desconto = soma dos descontos individuais dos itens + desconto da venda
+   * - total = subtotal - desconto
+   *
+   * Preserva o desconto manual aplicado na VENDA inteira (campo `desconto`
+   * tem dois usos: aqui guarda total geral; setSaleDiscount sobrescreve
+   * só com adicional do nível venda).
+   *
+   * Estratégia simples: total = soma de items.total - extraDescontoVenda
+   * (onde extraDescontoVenda é guardado em paymentDetails.saleDiscountExtra).
+   * Pra MVP: total = soma items.total. Desconto manual reaplica via setSaleDiscount.
    */
   private async recalcTotals(saleId: string) {
-    const items = await (this.prisma as any).pdvSaleItem.findMany({
-      where: { saleId },
-      select: { precoUnit: true, qty: true, desconto: true, total: true },
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { desconto: true, items: { select: { precoUnit: true, qty: true, desconto: true, total: true } } },
     });
+    if (!sale) return;
+    const items = sale.items;
     const subtotal = items.reduce((s: number, i: any) => s + (i.precoUnit * i.qty), 0);
-    const desconto = items.reduce((s: number, i: any) => s + (i.desconto || 0), 0);
-    const total = items.reduce((s: number, i: any) => s + (i.total || 0), 0);
+    const descontoItens = items.reduce((s: number, i: any) => s + (i.desconto || 0), 0);
+    const subtotalLiquido = items.reduce((s: number, i: any) => s + (i.total || 0), 0);
+    // Desconto adicional da venda inteira (aplicado por cima)
+    // sale.desconto pode incluir tanto soma de itens quanto extra. Pra simplificar:
+    // se desconto atual > descontoItens, considera o excedente como desconto da venda
+    const extraSaleDiscount = Math.max(0, (sale.desconto || 0) - descontoItens);
+    const totalDesconto = descontoItens + extraSaleDiscount;
+    const total = Math.max(0, subtotal - totalDesconto);
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { subtotal, desconto, total },
+      data: { subtotal, desconto: totalDesconto, total },
     });
   }
 

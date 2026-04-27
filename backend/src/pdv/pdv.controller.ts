@@ -106,21 +106,37 @@ export class PdvController {
   }
 
   /**
-   * PATCH /pdv/sales/:id/items/:itemId { qty }
+   * PATCH /pdv/sales/:id/items/:itemId { qty?, desconto? }
+   * Atualiza qty e/ou desconto do item.
    */
   @Patch('sales/:id/items/:itemId')
-  updateItemQty(
+  updateItem(
     @Req() req: any,
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: { qty: number },
+    @Body() body: { qty?: number; desconto?: number },
   ) {
     this.requireRole(req);
-    return this.svc.updateItemQty({
+    return this.svc.updateItem({
       saleId: id,
       itemId,
       qty: body?.qty,
+      desconto: body?.desconto,
     });
+  }
+
+  /**
+   * PATCH /pdv/sales/:id/discount { desconto }
+   * Aplica desconto na venda inteira (em R$, não percentual).
+   */
+  @Patch('sales/:id/discount')
+  setDiscount(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { desconto: number },
+  ) {
+    this.requireRole(req);
+    return this.svc.setSaleDiscount({ saleId: id, desconto: body?.desconto || 0 });
   }
 
   /**
