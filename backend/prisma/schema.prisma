@@ -735,3 +735,90 @@ model CobrancaTentativa {
   @@index([campanhaId, status, enviadaEm(sort: Desc)])
   @@map("cobranca_tentativas")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PDV — Frente de caixa (substituição gradual do Gigasistemas)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Modelo simples pra MVP:
+//   - PdvSale = cabeçalho (loja, vendedora, cliente opcional, total, pagamento)
+//   - PdvSaleItem = item do carrinho (snapshot de tudo: SKU, REF, descrição, NCM, preço)
+//
+// Snapshot é IMPORTANTE — o produto pode ter preço/descrição alterada depois,
+// mas a venda preserva o que foi vendido naquele momento.
+//
+// Status: open (montando) → finalized (paga) | cancelled
+//
+// NFC-e fica como string XML (pra debug/preview). Quando integrar com SEFAZ
+// real, vira o XML assinado. Por enquanto é "stub" pra mostrar o que sairia.
+//
+model PdvSale {
+  id              String   @id @default(uuid())
+  // Loja origem da venda
+  storeCode       String   @map("store_code")
+  storeName       String   @map("store_name")
+  // Vendedora (opcional — pode ser auto preenchido pelo JWT)
+  vendedorUserId  String?  @map("vendedor_user_id")
+  vendedorName    String?  @map("vendedor_name")
+  // Cliente (opcional — venda no balcão pode ser sem CPF)
+  customerCpf     String?  @map("customer_cpf")
+  customerName    String?  @map("customer_name")
+  customerEmail   String?  @map("customer_email")
+  customerPhone   String?  @map("customer_phone")
+  // Status + valores
+  status          String   @default("open")
+  subtotal        Float    @default(0)
+  desconto        Float    @default(0)
+  total           Float    @default(0)
+  // Pagamento
+  paymentMethod   String?  @map("payment_method")
+  paymentDetails  String?  @map("payment_details")
+  // Fiscal
+  nfceStatus      String?  @map("nfce_status")
+  nfceNumber      String?  @map("nfce_number")
+  nfceSerie       String?  @map("nfce_serie")
+  nfceChave       String?  @map("nfce_chave")
+  nfceXml         String?  @map("nfce_xml")
+  nfcePdfUrl      String?  @map("nfce_pdf_url")
+  // Envio
+  sentEmailAt     DateTime? @map("sent_email_at")
+  sentWhatsappAt  DateTime? @map("sent_whatsapp_at")
+  // Timestamps
+  createdAt       DateTime @default(now()) @map("created_at")
+  finalizedAt     DateTime? @map("finalized_at")
+  cancelledAt     DateTime? @map("cancelled_at")
+  cancelReason    String?  @map("cancel_reason")
+
+  items           PdvSaleItem[]
+
+  @@index([storeCode, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([customerCpf])
+  @@map("pdv_sales")
+}
+
+model PdvSaleItem {
+  id          String   @id @default(uuid())
+  saleId      String   @map("sale_id")
+  // Snapshot do produto Giga
+  sku         String
+  ean         String?
+  ref         String?
+  cor         String?
+  tamanho     String?
+  descricao   String
+  ncm         String?
+  cfop        String?
+  // Quantidades + valores
+  qty         Int      @default(1)
+  precoUnit   Float    @map("preco_unit")
+  desconto    Float    @default(0)
+  total       Float
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  sale        PdvSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([sku])
+  @@map("pdv_sale_items")
+}

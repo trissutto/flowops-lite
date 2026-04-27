@@ -31,7 +31,7 @@ import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
-  Package2, ClipboardList, Shuffle, Inbox, Package,
+  Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -805,11 +805,11 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     subtitle: string;
     tone: 'sky' | 'lavender' | 'peach' | 'mint' | 'rose';
   }> = [
+    { href: '/minha-loja/pdv',                        icon: ShoppingCart,   label: 'PDV',            subtitle: 'Frente de caixa',    tone: 'mint' },
     { href: '/minha-loja/consultar',                  icon: Search,         label: 'Consultar',      subtitle: 'Buscar na rede',     tone: 'sky' },
     { href: '/minha-loja/historico',                  icon: History,        label: 'Transferências', subtitle: 'Histórico',          tone: 'lavender' },
     { href: '/minha-loja/triagem',                    icon: Package,        label: 'Triagem',        subtitle: 'Bipar e distribuir', tone: 'rose' },
     { href: '/minha-loja/materiais',                  icon: Package2,       label: 'Materiais',      subtitle: 'Pedir saquinho…',    tone: 'peach' },
-    { href: '/minha-loja/materiais?tab=historico',    icon: ClipboardList,  label: 'Meus pedidos',   subtitle: 'Status materiais',   tone: 'mint' },
   ];
 
   // Boutique sofisticado — em sintonia com o TONE_MAP do PastelShell

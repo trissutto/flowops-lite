@@ -2806,6 +2806,102 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * PDV — busca info COMPLETA de produto pra venda (SKU/EAN bipado).
+   *
+   * Retorna tudo necessário pro carrinho + futuro NFC-e:
+   *   sku, ean, ref, cor, tamanho, descricao, preco, ncm, cfop, custo
+   *
+   * Usa as MESMAS variantes de zero-padding + fallback EAN do resolveSkuInfo.
+   * Detecta colunas dinamicamente (PRECO/PRECOVENDA/VALORVENDA, NCM, CFOP, etc).
+   */
+  async getPdvProductInfo(skuOrEan: string): Promise<{
+    sku: string;
+    ean: string | null;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricao: string;
+    preco: number;
+    ncm: string | null;
+    cfop: string | null;
+    custo: number | null;
+  } | null> {
+    if (!this.pool) return null;
+    const s = String(skuOrEan || '').trim();
+    if (!s) return null;
+
+    // 1. Resolve SKU (já trata zero-padding + EAN fallback)
+    const info = await this.resolveSkuInfo(s);
+    if (!info) return null;
+
+    // 2. Descobre colunas disponíveis na tabela produtos
+    let priceCol: string | null = null;
+    let costCol: string | null = null;
+    let ncmCol: string | null = null;
+    let cfopCol: string | null = null;
+    let eanCol: string | null = null;
+    try {
+      const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
+      const names = new Set((cols as any[]).map((c) => String(c.Field).toUpperCase()));
+      // Preço (vai do mais específico pro mais genérico)
+      for (const c of ['PRECOVENDA', 'VALORVENDA', 'VALORVAREJO', 'PRECO_VENDA', 'PRECO', 'VALOR']) {
+        if (names.has(c)) { priceCol = c; break; }
+      }
+      // Custo
+      for (const c of ['CUSTO', 'PRECOCUSTO', 'VALORCUSTO']) {
+        if (names.has(c)) { costCol = c; break; }
+      }
+      // NCM
+      for (const c of ['NCM', 'CODIGONCM', 'COD_NCM']) {
+        if (names.has(c)) { ncmCol = c; break; }
+      }
+      // CFOP
+      for (const c of ['CFOP', 'CODCFOP', 'CFOP_PADRAO']) {
+        if (names.has(c)) { cfopCol = c; break; }
+      }
+      // EAN
+      for (const c of ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS']) {
+        if (names.has(c)) { eanCol = c; break; }
+      }
+    } catch (e) {
+      this.logger.warn(`getPdvProductInfo SHOW COLUMNS: ${(e as Error).message}`);
+    }
+
+    // 3. Monta SELECT dinâmico
+    const selects = ['CODIGO AS codigo'];
+    if (priceCol) selects.push(`\`${priceCol}\` AS preco`);
+    if (costCol) selects.push(`\`${costCol}\` AS custo`);
+    if (ncmCol) selects.push(`\`${ncmCol}\` AS ncm`);
+    if (cfopCol) selects.push(`\`${cfopCol}\` AS cfop`);
+    if (eanCol) selects.push(`\`${eanCol}\` AS ean`);
+
+    let extra: any = {};
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT ${selects.join(', ')} FROM produtos WHERE CODIGO = ? LIMIT 1`,
+        [info.codigo],
+      );
+      const r = (rows as any[])[0];
+      if (r) extra = r;
+    } catch (e) {
+      this.logger.warn(`getPdvProductInfo extra: ${(e as Error).message}`);
+    }
+
+    return {
+      sku: info.codigo,
+      ean: extra.ean ? String(extra.ean).trim() : null,
+      ref: info.ref,
+      cor: info.cor,
+      tamanho: info.tamanho,
+      descricao: info.descricao || `${info.ref || info.codigo} ${info.cor || ''} ${info.tamanho || ''}`.trim(),
+      preco: Number(extra.preco) || 0,
+      ncm: extra.ncm ? String(extra.ncm).trim() : null,
+      cfop: extra.cfop ? String(extra.cfop).trim() : null,
+      custo: extra.custo != null ? Number(extra.custo) : null,
+    };
+  }
+
+  /**
    * Vendas de uma REF (qualquer cor/tamanho) por loja nos últimos N dias.
    * Usado pra priorizar destino que mais vende essa REF.
    */
