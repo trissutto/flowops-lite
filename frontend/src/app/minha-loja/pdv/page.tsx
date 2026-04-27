@@ -75,6 +75,27 @@ const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'HIPERCARD', 'AMEX'] as cons
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+/**
+ * Calcula parcelas com regra "centavos só na primeira":
+ *   total = R$ 153,10, n = 3 → primeira: R$ 51,10 · demais: R$ 51,00 (×2)
+ *
+ * Regra:
+ *   - Demais parcelas = floor(total / n) em REAIS (sem centavos)
+ *   - Primeira parcela = total − demais × (n−1)  (absorve o resto)
+ *
+ * Quando parcela = 1, primeira = total e demais = 0.
+ */
+function calcularParcelas(total: number, n: number): {
+  primeira: number;
+  demais: number;
+  qtdDemais: number;
+} {
+  if (n <= 1) return { primeira: total, demais: 0, qtdDemais: 0 };
+  const demais = Math.floor(total / n); // em reais inteiros
+  const primeira = Math.round((total - demais * (n - 1)) * 100) / 100;
+  return { primeira, demais, qtdDemais: n - 1 };
+}
+
 export default function PdvPage() {
   const [stores, setStores] = useState<Store[]>([]);
   const [storeCode, setStoreCode] = useState<string>('');
@@ -899,7 +920,13 @@ function PaymentModal({
   const confirm = () => {
     if (!selected) return;
     const details: any = {};
-    if (selected === 'credito' || selected === 'crediario') details.parcelas = parcelas;
+    if (selected === 'credito' || selected === 'crediario') {
+      details.parcelas = parcelas;
+      const calc = calcularParcelas(total, parcelas);
+      details.valorPrimeira = calc.primeira;
+      details.valorDemais = calc.demais;
+      details.qtdDemais = calc.qtdDemais;
+    }
     if (selected === 'dinheiro') {
       details.recebido = recebidoNum;
       details.troco = troco;
@@ -1016,11 +1043,52 @@ function PaymentModal({
                 </button>
               ))}
             </div>
-            <div className="text-center text-sm bg-emerald-50 rounded py-2">
-              <span className="text-slate-600">{parcelas}× de </span>
-              <span className="font-bold text-emerald-700 text-lg">{brl(total / parcelas)}</span>
-              <span className="text-slate-500 text-xs ml-1">sem juros</span>
-            </div>
+            {/* Simulador com regra "centavos só na primeira" */}
+            {(() => {
+              const calc = calcularParcelas(total, parcelas);
+              if (parcelas === 1) {
+                return (
+                  <div className="text-center bg-emerald-50 rounded py-2">
+                    <span className="text-slate-600 text-sm">À vista </span>
+                    <span className="font-bold text-emerald-700 text-lg">{brl(total)}</span>
+                  </div>
+                );
+              }
+              const parcelasIguais = calc.primeira === calc.demais;
+              return (
+                <div className="bg-emerald-50 rounded p-3 space-y-1.5">
+                  {parcelasIguais ? (
+                    <div className="text-center">
+                      <span className="text-slate-600 text-sm">{parcelas}× de </span>
+                      <span className="font-bold text-emerald-700 text-lg">{brl(calc.primeira)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-700">
+                          <b>1ª</b> parcela
+                          <span className="text-[10px] text-slate-500 ml-1">(com centavos)</span>
+                        </span>
+                        <span className="font-bold text-emerald-700 tabular-nums">
+                          {brl(calc.primeira)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm border-t pt-1.5 border-emerald-200">
+                        <span className="text-slate-700">
+                          <b>{calc.qtdDemais}×</b> demais parcelas
+                        </span>
+                        <span className="font-bold text-emerald-700 tabular-nums">
+                          {brl(calc.demais)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <div className="text-center text-[10px] text-slate-500 border-t pt-1 border-emerald-200">
+                    Total: {brl(total)} · sem juros
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
