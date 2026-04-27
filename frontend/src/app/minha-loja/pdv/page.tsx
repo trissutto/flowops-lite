@@ -19,7 +19,7 @@ import {
   ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
-  Clock, ChevronRight, Pause,
+  Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -493,6 +493,22 @@ export default function PdvPage() {
               <span className="font-bold tabular-nums">{openCount}</span>
             )}
           </button>
+
+          {/* Atalhos: Caixa + Devolução */}
+          <Link
+            href="/minha-loja/pdv/caixa"
+            className="text-xs px-2 py-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1"
+            title="Caixa do dia"
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+          </Link>
+          <Link
+            href="/minha-loja/pdv/devolucao"
+            className="text-xs px-2 py-1.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1"
+            title="Devolução / Troca"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+          </Link>
         </div>
       </header>
 

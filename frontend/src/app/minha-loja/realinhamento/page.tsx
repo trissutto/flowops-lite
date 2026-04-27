@@ -28,7 +28,7 @@ import { getSocket } from '@/lib/socket';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
   AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer, Undo2,
-  Truck, X,
+  Truck, X, FileText,
 } from 'lucide-react';
 
 interface RealignmentItem {
@@ -187,6 +187,42 @@ export default function MinhaLojaRealinhamentoPage() {
     } catch {
       // silencioso — vendedora ainda tem a tela de pendentes funcionando
       setSentItems([]);
+    }
+  }, []);
+
+  /**
+   * Baixa o PDF (romaneio) da remessa e abre numa nova aba.
+   * Usa fetch direto com bearer pra preservar autenticação da rota /pdf.
+   */
+  const handleDownloadPdf = useCallback(async (shipmentId: string, code: string) => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      if (!token) {
+        alert('Sessão expirada. Faça login novamente.');
+        return;
+      }
+      const { API_URL } = await import('@/lib/api');
+      const r = await fetch(`${API_URL}/realignment/shipments/${shipmentId}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error(txt || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.download = `remessa-${code}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Não revoga imediatamente pra deixar a aba abrir
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e: any) {
+      alert(`Erro ao gerar PDF: ${e?.message || e}`);
     }
   }, []);
 
@@ -599,23 +635,37 @@ export default function MinhaLojaRealinhamentoPage() {
                         {(s.items || []).length} item(s) · {totalQty} peça(s) na caixa
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleCloseShipment(s.id, s.code)}
-                      disabled={isClosing || (s.items || []).length === 0}
-                      className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
-                    >
-                      {isClosing ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Send className="w-4 h-4" />
-                      )}
-                      Fechar e enviar
-                    </button>
+                    <div className="flex flex-col gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadPdf(s.id, s.code)}
+                        disabled={(s.items || []).length === 0}
+                        className="bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-4 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                        title="Baixar romaneio em PDF"
+                      >
+                        <FileText className="w-4 h-4" />
+                        PDF
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCloseShipment(s.id, s.code)}
+                        disabled={isClosing || (s.items || []).length === 0}
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
+                      >
+                        {isClosing ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Send className="w-4 h-4" />
+                        )}
+                        Fechar e enviar
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-2 text-[11px] text-amber-900/70 leading-snug">
                     ⚠️ Ao fechar, o estoque das peças sai do Giga desta loja e a remessa vai pra
                     loja destino conferir. Não pode reverter depois.
+                    <br />
+                    💡 Dica: você pode <b>fechar uma loja por vez</b> — as outras remessas continuam abertas pra acumular peças.
                   </div>
                 </div>
               );

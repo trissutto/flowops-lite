@@ -757,9 +757,14 @@ model PdvSale {
   // Loja origem da venda
   storeCode       String   @map("store_code")
   storeName       String   @map("store_name")
+  // Caixa em que essa venda foi feita (FK lógica — sem cascade pra preservar histórico)
+  cashSessionId   String?  @map("cash_session_id")
   // Vendedora (opcional — pode ser auto preenchido pelo JWT)
   vendedorUserId  String?  @map("vendedor_user_id")
   vendedorName    String?  @map("vendedor_name")
+  // Vendedora atribuída pra comissão (FK Seller — separado do user que digitou)
+  sellerId        String?  @map("seller_id")
+  sellerName      String?  @map("seller_name")
   // Cliente (opcional — venda no balcão pode ser sem CPF)
   customerCpf     String?  @map("customer_cpf")
   customerName    String?  @map("customer_name")
@@ -798,7 +803,148 @@ model PdvSale {
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@index([customerCpf])
+  @@index([cashSessionId])
+  @@index([sellerId])
   @@map("pdv_sales")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CAIXA DIÁRIO — abertura/fechamento + sangria/suprimento
+// ═══════════════════════════════════════════════════════════════════════
+
+// Sessão de caixa = "dia da loja". Vendedora abre com fundo de troco,
+// faz vendas durante o dia, registra sangrias/suprimentos, e fecha com
+// conferência (físico vs sistema). Só pode haver UMA sessão `open` por loja
+// por vez (índice parcial não é suportado em todos os DBs, então a regra
+// é validada na app — buscar `where status=open AND storeCode=X`).
+model PdvCashSession {
+  id              String   @id @default(uuid())
+  storeCode       String   @map("store_code")
+  storeName       String   @map("store_name")
+  // Quem abriu (vendedora/operadora)
+  openedByUserId  String?  @map("opened_by_user_id")
+  openedByName    String?  @map("opened_by_name")
+  // Status: open | closed
+  status          String   @default("open")
+  // Valores de abertura
+  fundoTroco      Float    @default(0) @map("fundo_troco")     // dinheiro inicial pra troco
+  // Snapshot calculado no fechamento (pra histórico — não recalcular sempre)
+  totalVendas         Float?   @map("total_vendas")
+  totalDinheiro       Float?   @map("total_dinheiro")           // soma payments dinheiro
+  totalPix            Float?   @map("total_pix")
+  totalCartaoCredito  Float?   @map("total_cartao_credito")
+  totalCartaoDebito   Float?   @map("total_cartao_debito")
+  totalCrediario      Float?   @map("total_crediario")
+  totalSangrias       Float?   @map("total_sangrias")           // saídas
+  totalSuprimentos    Float?   @map("total_suprimentos")        // reforços
+  // Conferência física no fechamento
+  dinheiroEsperado    Float?   @map("dinheiro_esperado")        // fundo + dinheiro - sangrias + suprimentos
+  dinheiroFisico      Float?   @map("dinheiro_fisico")          // o que a vendedora contou
+  diferenca           Float?   // físico - esperado
+  observacao      String?  @db.Text
+  // Timestamps
+  openedAt        DateTime @default(now()) @map("opened_at")
+  closedAt        DateTime? @map("closed_at")
+  closedByName    String?  @map("closed_by_name")
+
+  movements       PdvCashMovement[]
+
+  @@index([storeCode, status])
+  @@index([storeCode, openedAt(sort: Desc)])
+  @@map("pdv_cash_sessions")
+}
+
+// Sangria (saída) ou Suprimento (entrada) DURANTE a sessão.
+// NÃO inclui pagamentos de venda — esses ficam em PdvSalePayment.
+model PdvCashMovement {
+  id            String   @id @default(uuid())
+  cashSessionId String   @map("cash_session_id")
+  // tipo: 'sangria' (saída) | 'suprimento' (entrada)
+  tipo          String
+  valor         Float
+  motivo        String   @db.Text
+  // Quem registrou
+  userId        String?  @map("user_id")
+  userName      String?  @map("user_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  session       PdvCashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+
+  @@index([cashSessionId])
+  @@index([tipo])
+  @@map("pdv_cash_movements")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DEVOLUÇÃO / TROCA
+// ═══════════════════════════════════════════════════════════════════════
+
+// Devolução de venda finalizada. 3 modos:
+//   - dinheiro: gera sangria automática + estorna estoque
+//   - troca:    gera vale-troca (PdvCashMovement crédito) e cliente usa em nova venda
+//   - credito:  vale-troca com prazo de validade
+//
+// Sempre estorna estoque no Giga (increaseStock) das peças retornadas.
+model PdvReturn {
+  id              String   @id @default(uuid())
+  // Venda original
+  originalSaleId  String   @map("original_sale_id")
+  originalSaleNumber String? @map("original_sale_number")
+  // Loja onde foi feita a devolução
+  storeCode       String   @map("store_code")
+  storeName       String   @map("store_name")
+  cashSessionId   String?  @map("cash_session_id")  // sessão de caixa atual
+  // Modo: 'dinheiro' | 'troca' | 'credito'
+  modo            String
+  valorTotal      Float    @map("valor_total")
+  // Status: 'pending' | 'completed' | 'used' (pra credito quando consumido)
+  status          String   @default("completed")
+  // Cliente
+  customerCpf     String?  @map("customer_cpf")
+  customerName    String?  @map("customer_name")
+  // Crédito gerado (se modo=credito ou troca)
+  creditoCode     String?  @unique @map("credito_code")  // código de barras do vale (ex: TROCA-XXXXX)
+  creditoValidade DateTime? @map("credito_validade")
+  creditoUsadoEm  String?  @map("credito_usado_em")      // saleId onde foi consumido
+  creditoUsadoAt  DateTime? @map("credito_usado_at")
+  // Quem fez
+  userId          String?  @map("user_id")
+  userName        String?  @map("user_name")
+  motivo          String?  @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  items           PdvReturnItem[]
+
+  @@index([originalSaleId])
+  @@index([storeCode, createdAt(sort: Desc)])
+  @@index([customerCpf])
+  @@index([status])
+  @@map("pdv_returns")
+}
+
+model PdvReturnItem {
+  id              String   @id @default(uuid())
+  returnId        String   @map("return_id")
+  // Snapshot da peça devolvida
+  originalItemId  String?  @map("original_item_id")
+  sku             String
+  ref             String?
+  cor             String?
+  tamanho         String?
+  descricao       String
+  qty             Int      @default(1)
+  precoUnit       Float    @map("preco_unit")
+  total           Float
+  // Estorno de estoque Giga
+  stockReturnedAt DateTime? @map("stock_returned_at")
+  stockError      String?  @map("stock_error")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  return          PdvReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+  @@index([sku])
+  @@map("pdv_return_items")
 }
 
 // Pagamentos individuais de uma venda (split payment).

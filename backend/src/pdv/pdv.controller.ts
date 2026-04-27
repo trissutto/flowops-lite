@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
 import { PixService } from './pix.service';
+import { NfceService } from './nfce.service';
 
 /**
  * /pdv — frente de caixa.
@@ -28,6 +29,7 @@ export class PdvController {
     private readonly svc: PdvService,
     private readonly erp: ErpService,
     private readonly pix: PixService,
+    private readonly nfce: NfceService,
   ) {}
 
   private requireRole(req: any) {
@@ -53,13 +55,57 @@ export class PdvController {
    * Abre nova venda OPEN.
    */
   @Post('sales')
-  createSale(@Req() req: any, @Body() body: { storeCode: string }) {
+  createSale(@Req() req: any, @Body() body: { storeCode: string; sellerId?: string; sellerName?: string }) {
     this.requireRole(req);
     return this.svc.createSale({
       storeCode: body?.storeCode,
       vendedorUserId: req?.user?.id || req?.user?.sub,
       vendedorName: req?.user?.name || null,
+      sellerId: body?.sellerId,
+      sellerName: body?.sellerName,
     });
+  }
+
+  /**
+   * PATCH /pdv/sales/:id/seller
+   * Body: { sellerId: string | null }
+   * Atribui ou remove a vendedora (Seller) responsável pela venda.
+   */
+  @Patch('sales/:id/seller')
+  setSeller(@Req() req: any, @Param('id') saleId: string, @Body() body: { sellerId: string | null }) {
+    this.requireRole(req);
+    return this.svc.setSeller({ saleId, sellerId: body?.sellerId ?? null });
+  }
+
+  /**
+   * POST /pdv/sales/:id/nfce — emite NFC-e da venda finalizada.
+   * Em modo stub (sem certificado A1) retorna XML preview + chave válida.
+   */
+  @Post('sales/:id/nfce')
+  emitNfce(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.nfce.emit(id);
+  }
+
+  /**
+   * GET /pdv/nfce/config — leitura da config NFC-e (sem revelar PFX).
+   */
+  @Get('nfce/config')
+  async getNfceConfig(@Req() req: any) {
+    this.requireRole(req);
+    return this.nfce.getConfig();
+  }
+
+  /**
+   * POST /pdv/nfce/config — salva config (admin only).
+   * Body: { ambiente, cnpj, ie, csc..., certPfxB64?, certPfxPass? }
+   */
+  @Post('nfce/config')
+  async setNfceConfig(@Req() req: any, @Body() body: any) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode editar config NFC-e');
+    }
+    return this.nfce.setConfig(body);
   }
 
   /**

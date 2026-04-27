@@ -1,10 +1,12 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
 import { RealignmentAutoService } from './realignment-auto.service';
 import { TriagemService } from './triage.service';
+import { ShipmentPdfService } from './shipment-pdf.service';
 import { ErpService } from '../erp/erp.service';
+import type { Response } from 'express';
 
 /**
  * Rotas do realinhamento de estoques.
@@ -23,6 +25,7 @@ export class RealignmentController {
     private readonly shipment: RealignmentShipmentService,
     private readonly auto: RealignmentAutoService,
     private readonly triage: TriagemService,
+    private readonly shipmentPdf: ShipmentPdfService,
     private readonly erp: ErpService,
   ) {}
 
@@ -367,6 +370,33 @@ export class RealignmentController {
     if (role !== 'store' || !storeId)
       throw new ForbiddenException('Apenas loja origem');
     return this.shipment.closeAndSend({ shipmentId: id, storeId, userId });
+  }
+
+  /**
+   * Gera PDF (romaneio) de uma remessa específica.
+   * GET /realignment/shipments/:id/pdf · loja origem, destino ou admin
+   *
+   * Pode ser baixado a qualquer momento (open / in_transit / received).
+   * Útil pra anexar fisicamente na caixa antes do envio.
+   */
+  @Get('shipments/:id/pdf')
+  async getShipmentPdf(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    // role=store: bloqueia se não for origem nem destino
+    const requireStoreCode = role === 'store' ? req?.user?.storeCode : undefined;
+
+    const { buffer, filename } = await this.shipmentPdf.generateForShipment(id, requireStoreCode);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Length', String(buffer.length));
+    res.end(buffer);
   }
 
   /**

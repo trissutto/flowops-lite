@@ -4,11 +4,16 @@ import { ErpModule } from '../erp/erp.module';
 import { PdvService } from './pdv.service';
 import { PdvController } from './pdv.controller';
 import { PixService } from './pix.service';
+import { CashService } from './cash.service';
+import { CashController } from './cash.controller';
+import { ReturnsService } from './returns.service';
+import { ReturnsController } from './returns.controller';
+import { NfceService } from './nfce.service';
 
 @Module({
   imports: [PrismaModule, ErpModule],
-  controllers: [PdvController],
-  providers: [PdvService, PixService],
-  exports: [PdvService, PixService],
+  controllers: [PdvController, CashController, ReturnsController],
+  providers: [PdvService, PixService, CashService, ReturnsService, NfceService],
+  exports: [PdvService, PixService, CashService, ReturnsService, NfceService],
 })
 export class PdvModule {}

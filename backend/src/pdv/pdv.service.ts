@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { CashService } from './cash.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -29,6 +30,7 @@ export class PdvService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly cash: CashService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -44,6 +46,8 @@ export class PdvService {
     storeId?: string;
     vendedorUserId?: string;
     vendedorName?: string;
+    sellerId?: string;
+    sellerName?: string;
   }) {
     if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
     const store = await this.prisma.store.findUnique({
@@ -52,16 +56,53 @@ export class PdvService {
     });
     if (!store) throw new BadRequestException(`Loja ${input.storeCode} não cadastrada`);
 
+    // Vincula a sessão de caixa atual (se houver). Ainda permite criar
+    // venda sem caixa aberto (rascunho), mas finalize() vai exigir.
+    const cashSession = await this.cash.getCurrentSession(store.code);
+
     const sale = await (this.prisma as any).pdvSale.create({
       data: {
         storeCode: store.code,
         storeName: store.name,
+        cashSessionId: cashSession?.id || null,
         vendedorUserId: input.vendedorUserId || null,
         vendedorName: input.vendedorName || null,
+        sellerId: input.sellerId || null,
+        sellerName: input.sellerName || null,
         status: 'open',
       },
     });
     return sale;
+  }
+
+  /**
+   * Atribui ou troca a vendedora (Seller) responsável pela venda.
+   * Pode ser feito a qualquer momento ANTES do finalize.
+   */
+  async setSeller(input: { saleId: string; sellerId: string | null }) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
+    if (!input.sellerId) {
+      return (this.prisma as any).pdvSale.update({
+        where: { id: input.saleId },
+        data: { sellerId: null, sellerName: null },
+      });
+    }
+    const seller = await (this.prisma as any).seller.findUnique({
+      where: { id: input.sellerId },
+      select: { id: true, name: true, active: true },
+    });
+    if (!seller) throw new BadRequestException('Vendedora não encontrada');
+    if (!seller.active) throw new BadRequestException('Vendedora inativa');
+    return (this.prisma as any).pdvSale.update({
+      where: { id: input.saleId },
+      data: { sellerId: seller.id, sellerName: seller.name },
+    });
   }
 
   /**
@@ -572,6 +613,23 @@ export class PdvService {
       throw new BadRequestException(`Venda já está ${sale.status}`);
     if (!sale.items?.length) throw new BadRequestException('Carrinho vazio');
     if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
+
+    // GATE: precisa de caixa aberto na loja pra finalizar.
+    // Se a venda foi criada antes do caixa abrir, vincula agora.
+    let cashSessionId = sale.cashSessionId;
+    if (!cashSessionId) {
+      const sess = await this.cash.getCurrentSession(sale.storeCode);
+      if (!sess) {
+        throw new BadRequestException(
+          'Não há caixa aberto nesta loja. Abra o caixa antes de finalizar a venda.',
+        );
+      }
+      cashSessionId = sess.id;
+      await (this.prisma as any).pdvSale.update({
+        where: { id: sale.id },
+        data: { cashSessionId },
+      });
+    }
 
     // MODO LEGADO: cria 1 pagamento único cobrindo o total
     if (input.paymentMethod) {
