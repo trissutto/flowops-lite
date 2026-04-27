@@ -793,11 +793,29 @@ model PdvSale {
   cancelReason    String?  @map("cancel_reason")
 
   items           PdvSaleItem[]
+  payments        PdvSalePayment[]
 
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@index([customerCpf])
   @@map("pdv_sales")
+}
+
+// Pagamentos individuais de uma venda (split payment).
+// Uma venda pode ter N pagamentos (ex: dinheiro + cartão + PIX).
+// Soma de payments.valor deve igualar PdvSale.total pra venda finalizar.
+model PdvSalePayment {
+  id        String   @id @default(uuid())
+  saleId    String   @map("sale_id")
+  method    String                                  // dinheiro | pix | credito | debito | crediario
+  valor     Float
+  details   String?  @db.Text                       // JSON: bandeira, parcelas, troco, txid, etc
+  createdAt DateTime @default(now()) @map("created_at")
+
+  sale      PdvSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@map("pdv_sale_payments")
 }
 
 model PdvSaleItem {

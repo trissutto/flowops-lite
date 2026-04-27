@@ -38,6 +38,13 @@ type Sale = {
   total: number;
   activePromotion: string | null;
   paymentMethod: string | null;
+  payments?: Array<{
+    id: string;
+    method: string;
+    valor: number;
+    details: string | null;
+    createdAt: string;
+  }>;
   nfceNumber: string | null;
   nfceChave: string | null;
   nfceXml: string | null;
@@ -379,16 +386,19 @@ export default function PdvPage() {
   };
 
   // ── Finalizar ──
+  // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
   const finalizeSale = async (paymentMethod: string, paymentDetails?: any) => {
     if (!sale) return;
     setFinalizing(true);
     try {
-      const result = await api<{ ok: boolean; sale: Sale }>(
+      const body: any = {};
+      if (paymentMethod) {
+        body.paymentMethod = paymentMethod;
+        body.paymentDetails = paymentDetails;
+      }
+      await api(
         `/pdv/sales/${sale.id}/finalize`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ paymentMethod, paymentDetails }),
-        },
+        { method: 'POST', body: JSON.stringify(body) },
       );
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
@@ -400,6 +410,15 @@ export default function PdvPage() {
     } finally {
       setFinalizing(false);
     }
+  };
+
+  // Recarrega a venda quando pagamentos parciais mudam (pra atualizar o footer da tela principal se quiser)
+  const onPaymentsChanged = async () => {
+    if (!sale) return;
+    try {
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+    } catch { /* noop */ }
   };
 
   const startNewSale = () => {
@@ -783,9 +802,11 @@ export default function PdvPage() {
           total={sale.total}
           customerCpf={sale.customerCpf}
           finalizing={finalizing}
+          initialPayments={sale.payments || []}
           onClose={() => setShowPayment(false)}
           onConfirm={finalizeSale}
           onLater={fecharDepois}
+          onPaymentsChange={onPaymentsChanged}
         />
       )}
 
@@ -877,22 +898,42 @@ function PaymentModal({
   total,
   customerCpf,
   finalizing,
+  initialPayments,
   onClose,
   onConfirm,
   onLater,
+  onPaymentsChange,
 }: {
   saleId: string;
   total: number;
   customerCpf: string | null;
   finalizing: boolean;
+  initialPayments?: Array<{ id: string; method: string; valor: number; details: string | null }>;
   onClose: () => void;
   onConfirm: (method: string, details?: any) => void;
   onLater: () => void;
+  onPaymentsChange?: () => void;
 }) {
+  // Lista de pagamentos parciais já adicionados
+  const [payments, setPayments] = useState(initialPayments || []);
+  const jaPago = payments.reduce((s, p) => s + p.valor, 0);
+  const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
+  const pago100 = restante < 0.01;
   const [selected, setSelected] = useState<string | null>(null);
   const [bandeira, setBandeira] = useState<string | null>(null);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
+  // Valor que vai cobrir essa forma de pagamento (default = restante)
+  const [valorParcial, setValorParcial] = useState('');
+  const [addingPayment, setAddingPayment] = useState(false);
+
+  // Quando muda o restante, sugere preencher o valor parcial
+  useEffect(() => {
+    if (restante > 0 && selected && !valorParcial) {
+      setValorParcial(restante.toFixed(2).replace('.', ','));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
   // PIX state
   const [pixCharge, setPixCharge] = useState<{
     txid: string;
@@ -903,7 +944,91 @@ function PaymentModal({
   const [pixLoading, setPixLoading] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
 
+  // ── Adicionar pagamento parcial ──
+  const adicionarPagamento = async () => {
+    if (!selected) return;
+    const valor = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.'));
+    if (isNaN(valor) || valor <= 0) {
+      alert('Valor inválido');
+      return;
+    }
+    if (valor > restante + 0.01) {
+      alert(`Valor maior que o restante (${brl(restante)})`);
+      return;
+    }
+    if (selected === 'crediario' && !customerCpf) {
+      alert('Crediário exige CPF do cliente');
+      return;
+    }
+    if (needsBandeira && !bandeira) {
+      alert('Escolha a bandeira');
+      return;
+    }
+    if (selected === 'pix' && !pixCharge) {
+      alert('Aguarde o QR PIX ser gerado');
+      return;
+    }
+    if (selected === 'dinheiro' && recebidoNum > 0 && recebidoNum < valor) {
+      alert(`Recebido (${brl(recebidoNum)}) menor que o valor parcial (${brl(valor)})`);
+      return;
+    }
+
+    const details: any = {};
+    if (selected === 'credito' || selected === 'crediario') {
+      details.parcelas = parcelas;
+      const calc = calcularParcelas(valor, parcelas);
+      details.valorPrimeira = calc.primeira;
+      details.valorDemais = calc.demais;
+      details.qtdDemais = calc.qtdDemais;
+    }
+    if (selected === 'dinheiro') {
+      const trocoP = recebidoNum > valor ? recebidoNum - valor : 0;
+      details.recebido = recebidoNum || valor;
+      details.troco = trocoP;
+    }
+    if (selected === 'pix' && pixCharge) {
+      details.pixTxid = pixCharge.txid;
+      details.pixChave = pixCharge.chave;
+    }
+    if (needsBandeira) details.bandeira = bandeira;
+
+    setAddingPayment(true);
+    try {
+      const newPayment = await api<any>(`/pdv/sales/${saleId}/payments`, {
+        method: 'POST',
+        body: JSON.stringify({ method: selected, valor, details }),
+      });
+      setPayments((prev) => [...prev, newPayment]);
+      // Reset form pra próximo pagamento
+      setSelected(null);
+      setBandeira(null);
+      setParcelas(1);
+      setRecebido('');
+      setValorParcial('');
+      setPixCharge(null);
+      onPaymentsChange?.();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setAddingPayment(false);
+    }
+  };
+
+  const removerPagamento = async (paymentId: string) => {
+    if (!window.confirm('Remover essa forma de pagamento?')) return;
+    try {
+      await api(`/pdv/sales/${saleId}/payments/${paymentId}`, { method: 'DELETE' });
+      setPayments((prev) => prev.filter((p) => p.id !== paymentId));
+      onPaymentsChange?.();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
   // Quando seleciona PIX, gera o QR direto
+  // Atenção: hoje o backend usa o total da venda. Pra PIX parcial,
+  // o cliente vê o valor parcial no app dele e paga só esse trecho.
+  // Vendedora confere e clica "Adicionar pagamento".
   const generatePix = async () => {
     setPixLoading(true);
     try {
@@ -992,35 +1117,135 @@ function PaymentModal({
           <button onClick={onClose}><X className="w-4 h-4" /></button>
         </div>
 
-        <div className="text-center py-2 bg-emerald-50 rounded">
-          <div className="text-xs text-slate-500 uppercase">Total a pagar</div>
-          <div className="text-3xl font-bold text-emerald-700 tabular-nums">{brl(total)}</div>
+        {/* Cabeçalho: total + pago + restante */}
+        <div className="bg-emerald-50 rounded p-2 space-y-1">
+          <div className="flex justify-between text-xs text-slate-600">
+            <span>Total da venda</span>
+            <span className="tabular-nums">{brl(total)}</span>
+          </div>
+          {payments.length > 0 && (
+            <div className="flex justify-between text-xs text-emerald-700">
+              <span>Já pago</span>
+              <span className="tabular-nums">−{brl(jaPago)}</span>
+            </div>
+          )}
+          <div className="border-t border-emerald-200 pt-1 flex justify-between items-baseline">
+            <span className="text-xs uppercase font-semibold text-slate-700">
+              {pago100 ? 'Pago 100%' : 'Restante'}
+            </span>
+            <span
+              className={`text-2xl font-bold tabular-nums ${
+                pago100 ? 'text-emerald-600' : 'text-rose-700'
+              }`}
+            >
+              {pago100 ? '✓' : brl(restante)}
+            </span>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          {PAYMENT_METHODS.map((p) => {
-            const Icon = p.icon;
-            const isSelected = selected === p.id;
-            const disabled = p.id === 'crediario' && !customerCpf;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => !disabled && selectMethod(p.id)}
-                disabled={disabled}
-                className={`p-3 rounded-lg border-2 text-sm font-bold transition-colors flex flex-col items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${
-                  isSelected
-                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
-                    : 'border-slate-200 hover:border-slate-300 text-slate-600'
-                }`}
-                title={disabled ? 'Crediário exige CPF do cliente' : ''}
-              >
-                <Icon className="w-5 h-5" />
-                {p.label}
-              </button>
-            );
-          })}
-        </div>
+        {/* Lista de pagamentos parciais já adicionados */}
+        {payments.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-[10px] uppercase font-semibold text-slate-500">
+              Pagamentos ({payments.length})
+            </div>
+            {payments.map((p) => {
+              const det = p.details ? JSON.parse(p.details) : {};
+              return (
+                <div
+                  key={p.id}
+                  className="flex items-center gap-2 bg-slate-50 border rounded px-2 py-1.5"
+                >
+                  <span className="text-xs font-bold uppercase text-slate-700">
+                    {p.method === 'MULTIPLO' ? 'Múltiplo' : p.method}
+                  </span>
+                  {det.bandeira && (
+                    <span className="text-[10px] text-slate-500">
+                      {det.bandeira}
+                    </span>
+                  )}
+                  {det.parcelas > 1 && (
+                    <span className="text-[10px] text-slate-500">
+                      {det.parcelas}×
+                    </span>
+                  )}
+                  <span className="ml-auto font-bold text-emerald-700 tabular-nums">
+                    {brl(p.valor)}
+                  </span>
+                  <button
+                    onClick={() => removerPagamento(p.id)}
+                    className="text-rose-500 hover:bg-rose-50 p-1 rounded"
+                    title="Remover"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Métodos só aparecem quando ainda há restante a pagar */}
+        {!pago100 && (
+          <>
+            <div className="text-[10px] uppercase font-semibold text-slate-500">
+              Adicionar forma de pagamento
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {PAYMENT_METHODS.map((p) => {
+                const Icon = p.icon;
+                const isSelected = selected === p.id;
+                const disabled = p.id === 'crediario' && !customerCpf;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => !disabled && selectMethod(p.id)}
+                    disabled={disabled}
+                    className={`p-3 rounded-lg border-2 text-sm font-bold transition-colors flex flex-col items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${
+                      isSelected
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                        : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                    }`}
+                    title={disabled ? 'Crediário exige CPF do cliente' : ''}
+                  >
+                    <Icon className="w-5 h-5" />
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Input de valor parcial — quanto vai cobrir nessa forma */}
+            {selected && (
+              <div className="space-y-1 pt-2">
+                <label className="text-xs text-slate-600 uppercase font-semibold">
+                  Valor pago nessa forma
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={valorParcial}
+                    onChange={(e) => setValorParcial(e.target.value)}
+                    placeholder={restante.toFixed(2).replace('.', ',')}
+                    className="flex-1 border rounded px-3 py-2 text-base font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setValorParcial(restante.toFixed(2).replace('.', ','))
+                    }
+                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
+                    title="Preencher com o restante"
+                  >
+                    = restante
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
 
         {/* Sub-bandeiras (débito/crédito) */}
         {needsBandeira && (
@@ -1183,26 +1408,39 @@ function PaymentModal({
           </div>
         )}
 
-        <button
-          onClick={confirm}
-          disabled={
-            !canConfirm ||
-            finalizing ||
-            (selected === 'pix' && !pixCharge)
-          }
-          className={`w-full px-3 py-3 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 ${
-            selected === 'pix'
-              ? 'bg-emerald-600 hover:bg-emerald-700'
-              : 'bg-emerald-600 hover:bg-emerald-700'
-          }`}
-        >
-          {finalizing ? (
-            <Loader2 className="w-4 h-4 animate-spin" />
-          ) : (
-            <Check className="w-4 h-4" />
-          )}
-          {selected === 'pix' ? 'Recebi o PIX — finalizar' : 'Confirmar pagamento'}
-        </button>
+        {/* Botão "Adicionar essa forma" — quando tem método selecionado E ainda falta pagar */}
+        {selected && !pago100 && (
+          <button
+            onClick={adicionarPagamento}
+            disabled={
+              addingPayment ||
+              !valorParcial ||
+              (needsBandeira && !bandeira) ||
+              (selected === 'pix' && !pixCharge) ||
+              (selected === 'crediario' && !customerCpf)
+            }
+            className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2"
+          >
+            {addingPayment ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Check className="w-4 h-4" />
+            )}
+            {selected === 'pix' ? 'Recebi o PIX — adicionar' : 'Adicionar essa forma'}
+          </button>
+        )}
+
+        {/* Botão "Finalizar venda" — quando pago = total */}
+        {pago100 && (
+          <button
+            onClick={() => onConfirm('', undefined)}
+            disabled={finalizing}
+            className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 animate-pulse"
+          >
+            {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-5 h-5" />}
+            Finalizar venda
+          </button>
+        )}
 
         {/* Fechar depois — separa visualmente do botão principal */}
         <div className="border-t pt-3">

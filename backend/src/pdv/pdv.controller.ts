@@ -200,6 +200,38 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/payments { method, valor, details? }
+   * Adiciona pagamento parcial à venda (split payment).
+   */
+  @Post('sales/:id/payments')
+  addPayment(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { method: string; valor: number; details?: any },
+  ) {
+    this.requireRole(req);
+    return this.svc.addPayment({
+      saleId: id,
+      method: body?.method,
+      valor: body?.valor,
+      details: body?.details,
+    });
+  }
+
+  /**
+   * DELETE /pdv/sales/:id/payments/:paymentId
+   */
+  @Delete('sales/:id/payments/:paymentId')
+  removePayment(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Param('paymentId') paymentId: string,
+  ) {
+    this.requireRole(req);
+    return this.svc.removePayment({ saleId: id, paymentId });
+  }
+
+  /**
    * POST /pdv/sales/:id/pix-charge
    * Gera BR Code PIX (QR Code com valor cravado) pra pagamento.
    * Não chama API de banco — gera localmente. Cai direto na conta da chave.

@@ -65,15 +65,97 @@ export class PdvService {
   }
 
   /**
-   * Lê venda + itens (com totais sempre atualizados).
+   * Lê venda + itens + pagamentos parciais (com totais sempre atualizados).
    */
   async getSale(id: string) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id },
-      include: { items: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        items: { orderBy: { createdAt: 'asc' } },
+        payments: { orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     return sale;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // SPLIT PAYMENT — múltiplas formas por venda
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Soma o valor já pago (todos os pagamentos parciais).
+   */
+  private async sumPaidValue(saleId: string): Promise<number> {
+    const payments = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId },
+      select: { valor: true },
+    });
+    return (payments as any[]).reduce((s, p) => s + (p.valor || 0), 0);
+  }
+
+  /**
+   * Adiciona um pagamento parcial à venda.
+   * Pode ser um único pagamento (R$ 153,10 dinheiro) ou parte de split
+   * (R$ 100 dinheiro + R$ 53,10 PIX em 2 chamadas).
+   */
+  async addPayment(input: {
+    saleId: string;
+    method: string;
+    valor: number;
+    details?: any;
+  }) {
+    if (!input.method) throw new BadRequestException('method obrigatório');
+    if (!input.valor || input.valor <= 0) throw new BadRequestException('valor deve ser > 0');
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { id: true, status: true, total: true, customerCpf: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
+    // Crediário precisa de cliente
+    if (input.method === 'crediario' && !sale.customerCpf) {
+      throw new BadRequestException('Crediário exige CPF do cliente');
+    }
+
+    // Não deixa pagar mais que o total
+    const jaPago = await this.sumPaidValue(input.saleId);
+    const restante = sale.total - jaPago;
+    const valor = Math.round(input.valor * 100) / 100;
+    if (valor > restante + 0.001) {
+      throw new BadRequestException(
+        `Valor R$${valor.toFixed(2)} maior que o restante R$${restante.toFixed(2)}`,
+      );
+    }
+
+    const payment = await (this.prisma as any).pdvSalePayment.create({
+      data: {
+        saleId: input.saleId,
+        method: input.method,
+        valor,
+        details: input.details ? JSON.stringify(input.details) : null,
+      },
+    });
+
+    return payment;
+  }
+
+  async removePayment(input: { saleId: string; paymentId: string }) {
+    const payment = await (this.prisma as any).pdvSalePayment.findUnique({
+      where: { id: input.paymentId },
+    });
+    if (!payment || payment.saleId !== input.saleId) {
+      throw new NotFoundException('Pagamento não encontrado nessa venda');
+    }
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { status: true },
+    });
+    if (sale?.status !== 'open') throw new BadRequestException('Venda já fechada');
+    await (this.prisma as any).pdvSalePayment.delete({ where: { id: input.paymentId } });
+    return { ok: true };
   }
 
   /**
@@ -470,40 +552,80 @@ export class PdvService {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
-   * Finaliza venda: registra pagamento + (futuro) emite NFC-e.
-   * Por enquanto gera STUB do XML pra preview, sem enviar SEFAZ.
+   * Finaliza venda. 2 modos:
+   *
+   * MODO LEGADO (1 forma só): { paymentMethod, paymentDetails }
+   *   → cria 1 pagamento parcial com valor total
+   *
+   * MODO SPLIT (várias formas): omitir paymentMethod
+   *   → usa os pagamentos já adicionados via addPayment()
+   *
+   * Em ambos, soma(payments) precisa = total da venda.
    */
   async finalize(input: {
     saleId: string;
-    paymentMethod: string;
+    paymentMethod?: string;
     paymentDetails?: any;
   }) {
     const sale = await this.getSale(input.saleId);
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda já está ${sale.status}`);
-    if (!sale.items?.length)
-      throw new BadRequestException('Carrinho vazio');
-    if (!input.paymentMethod)
-      throw new BadRequestException('Método de pagamento obrigatório');
-    if (sale.total <= 0)
-      throw new BadRequestException('Total da venda deve ser > 0');
+    if (!sale.items?.length) throw new BadRequestException('Carrinho vazio');
+    if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
 
-    // Crediário precisa de cliente identificado
-    if (input.paymentMethod === 'crediario' && !sale.customerCpf) {
-      throw new BadRequestException('Crediário exige CPF do cliente');
+    // MODO LEGADO: cria 1 pagamento único cobrindo o total
+    if (input.paymentMethod) {
+      // Limpa pagamentos anteriores (por segurança)
+      await (this.prisma as any).pdvSalePayment.deleteMany({
+        where: { saleId: sale.id },
+      });
+      await this.addPayment({
+        saleId: sale.id,
+        method: input.paymentMethod,
+        valor: sale.total,
+        details: input.paymentDetails,
+      });
     }
 
-    // Gera STUB do XML NFC-e (preview — não envia SEFAZ ainda)
-    const nfceStub = this.buildNfceStub(sale, input.paymentMethod);
+    // Verifica que pago = total
+    const jaPago = await this.sumPaidValue(sale.id);
+    if (Math.abs(jaPago - sale.total) > 0.01) {
+      throw new BadRequestException(
+        `Total pago R$${jaPago.toFixed(2)} ≠ total venda R$${sale.total.toFixed(2)}. ` +
+          `Faltam R$${(sale.total - jaPago).toFixed(2)}.`,
+      );
+    }
+
+    const payments = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId: sale.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    // 1 pagamento → método dele · N pagamentos → "MULTIPLO"
+    const finalMethod =
+      (payments as any[]).length === 1
+        ? (payments as any[])[0].method
+        : 'MULTIPLO';
+    const finalDetails =
+      (payments as any[]).length === 1
+        ? (payments as any[])[0].details
+        : JSON.stringify({
+            split: (payments as any[]).map((p) => ({
+              method: p.method,
+              valor: p.valor,
+              details: p.details ? JSON.parse(p.details) : null,
+            })),
+          });
+
+    // Gera STUB do XML NFC-e
+    const nfceStub = this.buildNfceStub(sale, finalMethod);
 
     const updated = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
       data: {
         status: 'finalized',
-        paymentMethod: input.paymentMethod,
-        paymentDetails: input.paymentDetails ? JSON.stringify(input.paymentDetails) : null,
+        paymentMethod: finalMethod,
+        paymentDetails: finalDetails,
         finalizedAt: new Date(),
-        // NFC-e stub
         nfceStatus: 'preview',
         nfceXml: nfceStub.xml,
         nfceNumber: nfceStub.numero,
@@ -513,7 +635,7 @@ export class PdvService {
     });
 
     this.logger.log(
-      `[pdv] Venda ${sale.id} finalizada: R$${sale.total.toFixed(2)} via ${input.paymentMethod}`,
+      `[pdv] Venda ${sale.id} finalizada: R$${sale.total.toFixed(2)} via ${finalMethod} (${(payments as any[]).length} pagamento(s))`,
     );
 
     return { ok: true, sale: updated, nfcePreview: nfceStub };
