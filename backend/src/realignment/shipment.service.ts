@@ -32,16 +32,70 @@ export class RealignmentShipmentService {
   // ═══════════════════════════════════════════════════════════════════════
   // GERAÇÃO DE CÓDIGO (REM-YYYY-NNNNNN sequencial global)
   // ═══════════════════════════════════════════════════════════════════════
-  private async generateShipmentCode(): Promise<string> {
+  /**
+   * Gera o próximo código de remessa baseado no MAIOR código existente do ano
+   * (não em `count()`). Razão: se uma remessa for deletada, count() retorna
+   * um número que JÁ EXISTE → UNIQUE constraint violation no INSERT.
+   *
+   * Estratégia: pega último código com MAX(numero) e soma 1.
+   * Se houver race com outra vendedora, o caller faz retry com nextSuffix.
+   */
+  private async generateShipmentCode(suffix = 0): Promise<string> {
     const year = new Date().getFullYear();
     const prefix = `REM-${year}-`;
-    // Conta quantas remessas existem com esse prefixo no ano e soma 1
-    // (é race-condition tolerável — se 2 vendedoras criarem ao mesmo tempo,
-    // o índice unique no `code` vai rejeitar e tentamos de novo)
-    const count = await (this.prisma as any).realignmentShipment.count({
+    // Pega o último código existente do ano (ordenando desc por code).
+    // Como o code tem padding de 6 zeros, ordenação alfabética = numérica.
+    const last = await (this.prisma as any).realignmentShipment.findFirst({
       where: { code: { startsWith: prefix } },
+      orderBy: { code: 'desc' },
+      select: { code: true },
     });
-    return `${prefix}${String(count + 1).padStart(6, '0')}`;
+    let lastNum = 0;
+    if (last?.code) {
+      const m = String(last.code).match(/-(\d+)$/);
+      if (m) lastNum = parseInt(m[1], 10) || 0;
+    }
+    const nextNum = lastNum + 1 + suffix;
+    return `${prefix}${String(nextNum).padStart(6, '0')}`;
+  }
+
+  /**
+   * Cria a remessa com retry — se 2 vendedoras criarem simultâneo, o INSERT
+   * pode falhar com UNIQUE constraint. Tenta até 5x com sufixo crescente.
+   */
+  private async createShipmentWithRetry(data: {
+    fromStoreCode: string;
+    fromStoreName: string;
+    toStoreCode: string;
+    toStoreName: string;
+    openedByUserId?: string | null;
+  }): Promise<any> {
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const code = await this.generateShipmentCode(attempt);
+      try {
+        return await (this.prisma as any).realignmentShipment.create({
+          data: {
+            code,
+            fromStoreCode: data.fromStoreCode,
+            fromStoreName: data.fromStoreName,
+            toStoreCode: data.toStoreCode,
+            toStoreName: data.toStoreName,
+            status: 'open',
+            openedByUserId: data.openedByUserId ?? null,
+          },
+        });
+      } catch (e: any) {
+        lastErr = e;
+        // P2002 = unique constraint violation no Prisma. Tenta próximo número.
+        const isUnique = e?.code === 'P2002' || /Unique constraint/i.test(e?.message || '');
+        if (!isUnique) throw e;
+        this.logger.warn(
+          `[shipment] code ${code} colidiu (tentativa ${attempt + 1}/5), tentando próximo`,
+        );
+      }
+    }
+    throw lastErr || new Error('Falha ao gerar código de remessa após 5 tentativas');
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -141,21 +195,16 @@ export class RealignmentShipmentService {
       },
     });
 
-    // Se não tem aberta, cria nova
+    // Se não tem aberta, cria nova (com retry em caso de colisão de code)
     if (!shipment) {
-      const code = await this.generateShipmentCode();
-      shipment = await (this.prisma as any).realignmentShipment.create({
-        data: {
-          code,
-          fromStoreCode: o.lojaOrigemCode,
-          fromStoreName: o.lojaOrigemName,
-          toStoreCode: o.lojaDestinoCode,
-          toStoreName: o.lojaDestinoName,
-          status: 'open',
-          openedByUserId: input.userId ?? null,
-        },
+      shipment = await this.createShipmentWithRetry({
+        fromStoreCode: o.lojaOrigemCode,
+        fromStoreName: o.lojaOrigemName,
+        toStoreCode: o.lojaDestinoCode,
+        toStoreName: o.lojaDestinoName,
+        openedByUserId: input.userId ?? null,
       });
-      this.logger.log(`[shipment] Nova remessa ${code} aberta ${o.lojaOrigemCode}→${o.lojaDestinoCode}`);
+      this.logger.log(`[shipment] Nova remessa ${shipment.code} aberta ${o.lojaOrigemCode}→${o.lojaDestinoCode}`);
     }
 
     // Marca item como sent + linka ao shipment
