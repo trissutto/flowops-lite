@@ -37,12 +37,20 @@ type Suggestion = {
   cor: string | null;
   tamanho: string | null;
   descricao: string | null;
-  sugerido: { storeCode: string; storeName: string; reason: string };
+  sugerido: {
+    storeCode: string;
+    storeName: string;
+    reason: string;
+    estrategia?: 'AGRUPAR_GRADE' | 'ESTOQUE_ZERO' | 'MENOR_ESTOQUE';
+  };
+  excluidos?: Array<{ storeCode: string; storeName: string; motivo: string }>;
   comparativo: Array<{
     storeCode: string;
     storeName: string;
     estoqueAtual: number;
     vendaRef30d: number;
+    qtdMesmaRefNaCaixa?: number;
+    temSkuExatoNaCaixa?: boolean;
   }>;
 };
 
@@ -647,38 +655,78 @@ export default function TriagemPage() {
                 <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
               </div>
 
-              {/* Sugestão grande */}
-              <div className="rounded-lg p-3 bg-emerald-50 border-2 border-emerald-300">
-                <div className="text-xs uppercase font-bold text-emerald-700">Joga na caixa de</div>
-                <div className="text-2xl font-bold text-emerald-900 mt-0.5">
-                  {lastSuggestion.sugerido.storeName}
+              {/* Sugestão grande — cor diferente conforme estratégia */}
+              {(() => {
+                const isGrade = lastSuggestion.sugerido.estrategia === 'AGRUPAR_GRADE';
+                const bg = isGrade ? 'bg-fuchsia-50' : 'bg-emerald-50';
+                const border = isGrade ? 'border-fuchsia-400' : 'border-emerald-300';
+                const titleColor = isGrade ? 'text-fuchsia-700' : 'text-emerald-700';
+                const nameColor = isGrade ? 'text-fuchsia-900' : 'text-emerald-900';
+                const subColor = isGrade ? 'text-fuchsia-700' : 'text-emerald-700';
+                const titulo = isGrade ? '🧩 Agrupa grade · Joga na caixa de' : 'Joga na caixa de';
+                return (
+                  <div className={`rounded-lg p-3 ${bg} border-2 ${border}`}>
+                    <div className={`text-xs uppercase font-bold ${titleColor}`}>{titulo}</div>
+                    <div className={`text-2xl font-bold mt-0.5 ${nameColor}`}>
+                      {lastSuggestion.sugerido.storeName}
+                    </div>
+                    <div className={`text-xs mt-0.5 ${subColor}`}>
+                      {lastSuggestion.sugerido.storeCode} · {lastSuggestion.sugerido.reason}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Lojas excluídas (já tem o SKU exato) */}
+              {lastSuggestion.excluidos && lastSuggestion.excluidos.length > 0 && (
+                <div className="bg-rose-50 border border-rose-200 rounded p-2 text-xs">
+                  <div className="font-bold text-rose-800 mb-1">
+                    🚫 Não pode jogar (SKU já está nessa caixa):
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {lastSuggestion.excluidos.map((e) => (
+                      <span key={e.storeCode} className="bg-white border border-rose-300 rounded px-1.5 py-0.5 text-rose-700">
+                        {e.storeName}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-                <div className="text-xs text-emerald-700 mt-0.5">
-                  {lastSuggestion.sugerido.storeCode} · {lastSuggestion.sugerido.reason}
-                </div>
-              </div>
+              )}
 
               {/* Comparativo */}
               <div>
                 <div className="text-xs uppercase font-semibold text-slate-500 mb-1.5">
-                  Estoque nos destinos elegíveis (clique pra trocar):
+                  Destinos elegíveis (clique pra trocar):
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                   {lastSuggestion.comparativo.map((c) => {
                     const isSugerido = c.storeCode === lastSuggestion.sugerido.storeCode;
+                    const isExcluido = c.temSkuExatoNaCaixa;
+                    const temGrade = !isExcluido && (c.qtdMesmaRefNaCaixa || 0) > 0;
                     return (
                       <button
                         key={c.storeCode}
                         type="button"
-                        onClick={() => !isSugerido && trocarDestino(c.storeCode)}
-                        disabled={isSugerido || scanLoading}
+                        onClick={() => !isSugerido && !isExcluido && trocarDestino(c.storeCode)}
+                        disabled={isSugerido || isExcluido || scanLoading}
                         className={`text-left p-2 rounded border text-xs transition-colors ${
-                          isSugerido
-                            ? 'bg-emerald-50 border-emerald-300 cursor-default'
+                          isExcluido
+                            ? 'bg-rose-50 border-rose-200 cursor-not-allowed opacity-60'
+                            : isSugerido
+                            ? temGrade
+                              ? 'bg-fuchsia-50 border-fuchsia-300 cursor-default'
+                              : 'bg-emerald-50 border-emerald-300 cursor-default'
+                            : temGrade
+                            ? 'bg-white border-fuchsia-300 hover:border-fuchsia-500 hover:bg-fuchsia-50 cursor-pointer'
                             : 'bg-white border-slate-200 hover:border-violet-400 hover:bg-violet-50 cursor-pointer'
                         }`}
+                        title={isExcluido ? 'SKU já está nessa caixa' : ''}
                       >
-                        <div className="font-semibold text-slate-700 truncate">{c.storeName}</div>
+                        <div className="font-semibold text-slate-700 truncate flex items-center gap-1">
+                          {temGrade && <span title="Já tem peças da REF">🧩</span>}
+                          {isExcluido && <span title="Já tem o SKU exato">🚫</span>}
+                          {c.storeName}
+                        </div>
                         <div className="text-[10px] font-mono text-slate-400">{c.storeCode}</div>
                         <div className="flex justify-between mt-1">
                           <span className={c.estoqueAtual === 0 ? 'text-rose-600 font-bold' : 'text-slate-600'}>
@@ -686,6 +734,11 @@ export default function TriagemPage() {
                           </span>
                           <span className="text-slate-500">V30d: {c.vendaRef30d}</span>
                         </div>
+                        {(c.qtdMesmaRefNaCaixa || 0) > 0 && (
+                          <div className="mt-1 text-[10px] text-fuchsia-700 font-semibold">
+                            Caixa: {c.qtdMesmaRefNaCaixa} pç da REF
+                          </div>
+                        )}
                       </button>
                     );
                   })}

@@ -72,18 +72,70 @@ export class TriagemService {
       throw new BadRequestException(`SKU ${sku} sem REF cadastrada`);
     }
 
-    // 2. Busca em paralelo: estoque do SKU em cada candidato + venda da REF
-    const [stockMap, salesMap] = await Promise.all([
+    // 2. Busca em paralelo:
+    //    - estoque do SKU exato em cada candidato (Giga)
+    //    - venda da REF últimos 30d em cada candidato (Giga)
+    //    - itens já bipados nas caixas OPEN do par origem→candidato (Postgres)
+    const [stockMap, salesMap, openShipments] = await Promise.all([
       this.erp.getStockBySkuAndStores(sku, candidates),
       this.erp.getRecentSalesByRefAndStores(info.ref, candidates, 30),
+      (this.prisma as any).realignmentShipment.findMany({
+        where: {
+          fromStoreCode: input.fromStoreCode,
+          toStoreCode: { in: candidates },
+          status: 'open',
+        },
+        select: {
+          id: true,
+          toStoreCode: true,
+          // Pega itens só com a mesma REF (pra agrupar grade)
+          // Filtra no JS pra evitar query complexa
+        },
+      }),
     ]);
 
-    // 3. Monta comparativo (todos candidatos, mesmo os com estoque 0)
-    const comparativo = candidates.map((code) => ({
-      storeCode: code,
-      estoqueAtual: stockMap.get(code) || 0,
-      vendaRef30d: salesMap.get(code) || 0,
-    }));
+    // Carrega itens das caixas open desses candidatos (filtrado por REF)
+    const openShipmentIds = (openShipments as any[]).map((s) => s.id);
+    const itensNasCaixas = openShipmentIds.length
+      ? await this.prisma.transferOrder.findMany({
+          where: {
+            shipmentId: { in: openShipmentIds },
+            refCode: info.ref,
+          } as any,
+          select: { shipmentId: true, refCode: true, cor: true, tamanho: true } as any,
+        })
+      : [];
+
+    // Mapa: storeCode → { qtdMesmaRef, temSkuExato }
+    const grade = new Map<string, { qtdMesmaRef: number; temSkuExato: boolean }>();
+    for (const code of candidates) grade.set(code, { qtdMesmaRef: 0, temSkuExato: false });
+    for (const s of openShipments as any[]) {
+      const itensDessaCaixa = (itensNasCaixas as any[]).filter((i) => i.shipmentId === s.id);
+      const cur = grade.get(s.toStoreCode) || { qtdMesmaRef: 0, temSkuExato: false };
+      cur.qtdMesmaRef += itensDessaCaixa.length;
+      // Verifica SKU exato (REF + cor + tamanho)
+      const corBip = (info.cor || '').toUpperCase();
+      const tamBip = (info.tamanho || '').toUpperCase();
+      const dup = itensDessaCaixa.find(
+        (i: any) =>
+          (i.cor || '').toUpperCase() === corBip &&
+          (i.tamanho || '').toUpperCase() === tamBip,
+      );
+      if (dup) cur.temSkuExato = true;
+      grade.set(s.toStoreCode, cur);
+    }
+
+    // 3. Monta comparativo enriquecido
+    const comparativo = candidates.map((code) => {
+      const g = grade.get(code) || { qtdMesmaRef: 0, temSkuExato: false };
+      return {
+        storeCode: code,
+        estoqueAtual: stockMap.get(code) || 0,
+        vendaRef30d: salesMap.get(code) || 0,
+        qtdMesmaRefNaCaixa: g.qtdMesmaRef,
+        temSkuExatoNaCaixa: g.temSkuExato,
+      };
+    });
 
     // Carrega nomes de loja
     const stores = await this.prisma.store.findMany({
@@ -93,35 +145,63 @@ export class TriagemService {
     const nameByCode = new Map<string, string>();
     for (const s of stores as any[]) nameByCode.set(s.code, s.name);
 
-    // 4. Aplica critério
-    const comZero = comparativo.filter((c) => c.estoqueAtual === 0);
-    let candidatosFinais: typeof comparativo;
-    let reason: string;
+    // 4. NOVA LÓGICA — particiona em 3 grupos:
+    //    A. EXCLUÍDOS — caixa já tem esse SKU exato (não duplica)
+    //    B. PREFERENCIAIS — caixa já tem outras peças da mesma REF (agrupa grade)
+    //    C. NORMAIS — sem caixa com essa REF, aplica critério de estoque
+    const excluidos = comparativo.filter((c) => c.temSkuExatoNaCaixa);
+    const preferenciais = comparativo.filter(
+      (c) => !c.temSkuExatoNaCaixa && c.qtdMesmaRefNaCaixa > 0,
+    );
+    const normais = comparativo.filter(
+      (c) => !c.temSkuExatoNaCaixa && c.qtdMesmaRefNaCaixa === 0,
+    );
 
-    if (comZero.length > 0) {
-      // Critério A: filtra os com estoque 0
-      candidatosFinais = comZero;
-      // Entre eles, prioriza maior venda 30d
-      const maxVenda = Math.max(...comZero.map((c) => c.vendaRef30d));
-      candidatosFinais = comZero.filter((c) => c.vendaRef30d === maxVenda);
-      reason =
-        maxVenda > 0
-          ? `Estoque 0 e ${maxVenda} venda(s) da REF nos últimos 30d`
-          : 'Estoque 0 e sem venda recente';
-    } else {
-      // Critério B: ninguém com 0 — pega menor estoque
-      const minEstoque = Math.min(...comparativo.map((c) => c.estoqueAtual));
-      candidatosFinais = comparativo.filter((c) => c.estoqueAtual === minEstoque);
-      reason = `Menor estoque do SKU (${minEstoque} pç)`;
+    // Se TUDO foi excluído, erro: SKU já está em todas as caixas elegíveis
+    if (preferenciais.length === 0 && normais.length === 0) {
+      throw new BadRequestException(
+        `Esta peça (${info.ref} ${info.cor || ''}/${info.tamanho || ''}) já está em todas as caixas elegíveis. ` +
+          `Não dá pra duplicar — confira se não foi bipada antes.`,
+      );
     }
 
-    // 5. Empate: aleatório proporcional ao déficit
-    let escolhido: { storeCode: string; estoqueAtual: number; vendaRef30d: number };
+    // 5. Decisão
+    let candidatosFinais: typeof comparativo;
+    let reason: string;
+    let estrategia: 'AGRUPAR_GRADE' | 'ESTOQUE_ZERO' | 'MENOR_ESTOQUE';
+
+    if (preferenciais.length > 0) {
+      // ESTRATÉGIA 1: agrupar grade — escolhe a caixa que JÁ TEM mais peças da REF
+      const maxQtd = Math.max(...preferenciais.map((c) => c.qtdMesmaRefNaCaixa));
+      candidatosFinais = preferenciais.filter((c) => c.qtdMesmaRefNaCaixa === maxQtd);
+      estrategia = 'AGRUPAR_GRADE';
+      reason = `Já tem ${maxQtd} peça(s) da REF ${info.ref} nessa caixa — agrupa grade`;
+    } else {
+      // ESTRATÉGIA 2/3: critério estoque (lógica antiga, só nas lojas NORMAIS)
+      const comZero = normais.filter((c) => c.estoqueAtual === 0);
+      if (comZero.length > 0) {
+        const maxVenda = Math.max(...comZero.map((c) => c.vendaRef30d));
+        candidatosFinais = comZero.filter((c) => c.vendaRef30d === maxVenda);
+        estrategia = 'ESTOQUE_ZERO';
+        reason =
+          maxVenda > 0
+            ? `Estoque 0 e ${maxVenda} venda(s) da REF nos últimos 30d`
+            : 'Estoque 0 e sem venda recente';
+      } else {
+        const minEstoque = Math.min(...normais.map((c) => c.estoqueAtual));
+        candidatosFinais = normais.filter((c) => c.estoqueAtual === minEstoque);
+        estrategia = 'MENOR_ESTOQUE';
+        reason = `Menor estoque do SKU (${minEstoque} pç)`;
+      }
+    }
+
+    // 6. Empate: aleatório proporcional ao déficit
+    let escolhido: typeof comparativo[0];
     if (candidatosFinais.length === 1) {
       escolhido = candidatosFinais[0];
     } else {
       escolhido = this.weightedRandom(candidatosFinais);
-      reason += ` · ${candidatosFinais.length} candidatos empatados, escolhido por sorteio proporcional`;
+      reason += ` · ${candidatosFinais.length} candidatos empatados, sorteio proporcional`;
     }
 
     return {
@@ -134,13 +214,25 @@ export class TriagemService {
         storeCode: escolhido.storeCode,
         storeName: nameByCode.get(escolhido.storeCode) || escolhido.storeCode,
         reason,
+        estrategia,
       },
+      excluidos: excluidos.map((c) => ({
+        storeCode: c.storeCode,
+        storeName: nameByCode.get(c.storeCode) || c.storeCode,
+        motivo: 'SKU já está nessa caixa',
+      })),
       comparativo: comparativo
         .map((c) => ({
           ...c,
           storeName: nameByCode.get(c.storeCode) || c.storeCode,
         }))
-        .sort((a, b) => a.estoqueAtual - b.estoqueAtual || b.vendaRef30d - a.vendaRef30d),
+        .sort((a, b) => {
+          // Ordem: preferenciais primeiro, depois normais, depois excluídos
+          const aRank = a.temSkuExatoNaCaixa ? 2 : a.qtdMesmaRefNaCaixa > 0 ? 0 : 1;
+          const bRank = b.temSkuExatoNaCaixa ? 2 : b.qtdMesmaRefNaCaixa > 0 ? 0 : 1;
+          if (aRank !== bRank) return aRank - bRank;
+          return a.estoqueAtual - b.estoqueAtual || b.vendaRef30d - a.vendaRef30d;
+        }),
     };
   }
 
@@ -200,6 +292,34 @@ export class TriagemService {
     ]);
     if (!from) throw new BadRequestException(`Loja origem ${input.fromStoreCode} não cadastrada`);
     if (!to) throw new BadRequestException(`Loja destino ${input.toStoreCode} não cadastrada`);
+
+    // Verifica se já tem o mesmo SKU exato na caixa OPEN do par
+    // (REF + cor + tamanho). Bloqueia duplicação na grade.
+    const existing = await (this.prisma as any).realignmentShipment.findFirst({
+      where: {
+        fromStoreCode: input.fromStoreCode,
+        toStoreCode: input.toStoreCode,
+        status: 'open',
+      },
+      select: { id: true },
+    });
+    if (existing && info.ref) {
+      const dup = await this.prisma.transferOrder.findFirst({
+        where: {
+          shipmentId: existing.id,
+          refCode: info.ref,
+          cor: info.cor || null,
+          tamanho: info.tamanho || null,
+        } as any,
+        select: { id: true },
+      });
+      if (dup) {
+        throw new BadRequestException(
+          `${info.ref} ${info.cor || ''}/${info.tamanho || ''} já está na caixa de ${(to as any).name}. ` +
+            `Não duplica — escolha outra loja.`,
+        );
+      }
+    }
 
     const qty = Math.max(1, Math.min(99, input.qty || 1));
 
