@@ -476,58 +476,108 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async getStock(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
     if (!skus.length || !storeCodes.length || !this.pool) return [];
 
-    // Helper: gera todas as variantes possíveis pra um SKU
-    const variantsOf = (s: string): string[] => {
-      const trimmed = String(s || '').trim();
-      if (!trimmed) return [];
-      const out = new Set<string>([trimmed]);
-      const stripped = trimmed.replace(/^0+/, '');
-      if (stripped) out.add(stripped);
-      if (/^\d+$/.test(trimmed)) {
-        for (let len = 3; len <= 14; len++) {
-          if (trimmed.length < len) out.add(trimmed.padStart(len, '0'));
+    // Normaliza SKUs originais (sem duplicatas, sem strings vazias)
+    const uniqueOriginals = Array.from(
+      new Set(skus.map((s) => String(s || '').trim()).filter(Boolean)),
+    );
+    if (!uniqueOriginals.length) return [];
+
+    // PASSO 1 — Resolve CODIGO REAL de cada SKU consultando o cadastro `produtos`.
+    //
+    // Por que NÃO basta expandir e buscar direto em `estoque`:
+    //   - SKU "5383498" pode existir no Giga como peça A (CODIGO="5383498")
+    //     E peça B totalmente diferente (CODIGO="0005383498").
+    //   - Se buscamos `WHERE CODIGO IN (variantes)` direto em estoque,
+    //     misturamos peças e o roteamento envia pedido pra loja que tem
+    //     o produto ERRADO. Bug observado em prod: pedido roteado pra Pira
+    //     porque "5383498" sem zeros existe lá como outra peça.
+    //
+    // Solução: descobrir, no cadastro, qual CODIGO específico é o "5383498"
+    // que o caller passou. Ele só pode ser UM (cadastro tem PK em CODIGO).
+    // Aí buscamos estoque SÓ desse CODIGO real.
+
+    const { allVariants, variantToOriginal } = this.expandSkus(uniqueOriginals);
+    if (!allVariants.length) return [];
+
+    // codigoGiga → sku original do caller
+    const codigoGigaToOriginal = new Map<string, string>();
+    try {
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO FROM produtos WHERE CODIGO IN (?)`,
+        [allVariants],
+      );
+      for (const r of prodRows as any[]) {
+        const codigoGiga = String(r.CODIGO).trim();
+        const originalSku = variantToOriginal.get(codigoGiga);
+        if (!originalSku) continue;
+        // Se 2+ variantes do mesmo SKU original existem como produtos diferentes
+        // (caso patológico), prioriza a versão MAIS LONGA (com mais zeros à
+        // esquerda), que é o padrão real do Giga (CODIGO sempre tem padding).
+        const existing = codigoGigaToOriginal.get(originalSku);
+        if (!existing) {
+          // Primeira ocorrência: mapeia 1:1 (sku original → codigoGiga)
+          codigoGigaToOriginal.set(codigoGiga, originalSku);
+        } else {
+          // Já tem um codigoGiga mapeado pra esse original.
+          // Decisão: se o NOVO codigoGiga é mais longo (mais padding),
+          // troca; senão mantém o anterior.
+          const previous = Array.from(codigoGigaToOriginal.entries()).find(
+            ([, orig]) => orig === originalSku,
+          )?.[0];
+          if (previous && codigoGiga.length > previous.length) {
+            codigoGigaToOriginal.delete(previous);
+            codigoGigaToOriginal.set(codigoGiga, originalSku);
+          }
         }
       }
-      return Array.from(out);
-    };
-
-    // Mapa: variante → SKU original (pra mapear retorno de volta)
-    const variantToOriginal = new Map<string, string>();
-    const allVariants = new Set<string>();
-    for (const original of skus) {
-      for (const v of variantsOf(original)) {
-        allVariants.add(v);
-        // Primeira ocorrência ganha (caso 2 SKUs originais gerem mesma variante,
-        // o que é improvável mas defensivo)
-        if (!variantToOriginal.has(v)) variantToOriginal.set(v, String(original).trim());
+    } catch (e) {
+      this.logger.warn(
+        `getStock: lookup em produtos falhou, caindo no modo legado (sujeito a colisão): ${(e as Error).message}`,
+      );
+      // Fallback degradado: usa todas variantes (comportamento antigo).
+      // Pelo menos a chamada não morre — operação continua, ainda que
+      // possa rotear errado em casos de colisão.
+      for (const v of allVariants) {
+        const original = variantToOriginal.get(v);
+        if (original) codigoGigaToOriginal.set(v, original);
       }
     }
-    if (!allVariants.size) return [];
 
-    const sql = `
-      SELECT CODIGO AS sku,
-             LOJA   AS storeCode,
-             ESTOQUE AS availableQty
-        FROM estoque
-       WHERE CODIGO IN (?)
-         AND LOJA IN (?)
-         AND ESTOQUE > 0
-    `;
+    if (!codigoGigaToOriginal.size) {
+      // Nenhum SKU foi achado no cadastro → não tem estoque pra rotear
+      return [];
+    }
+
+    // PASSO 2 — Estoque SÓ dos CODIGOs reais resolvidos
+    const codigosGiga = Array.from(codigoGigaToOriginal.keys());
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [
-        Array.from(allVariants),
-        storeCodes,
-      ]);
-      return rows.map((r) => {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS sku,
+                LOJA   AS storeCode,
+                ESTOQUE AS availableQty
+           FROM estoque
+          WHERE CODIGO IN (?)
+            AND LOJA IN (?)
+            AND ESTOQUE > 0`,
+        [codigosGiga, storeCodes],
+      );
+      // Agrega por (originalSku, storeCode) — embora não deva haver duplicação
+      // depois do passo 1 (1 codigoGiga por sku original), defensivo.
+      const agg = new Map<string, number>();
+      for (const r of rows as any[]) {
         const codigoGiga = String(r.sku).trim();
-        // Mapeia de volta pro SKU original que o caller passou
-        const originalSku = variantToOriginal.get(codigoGiga) || codigoGiga;
-        return {
-          storeCode: String(r.storeCode).trim(),
-          sku: originalSku,
-          availableQty: Number(r.availableQty),
-        };
-      });
+        const storeCode = String(r.storeCode).trim();
+        const originalSku = codigoGigaToOriginal.get(codigoGiga);
+        if (!originalSku) continue;
+        const key = `${storeCode}::${originalSku}`;
+        agg.set(key, (agg.get(key) || 0) + (Number(r.availableQty) || 0));
+      }
+      const out: StockEntry[] = [];
+      for (const [key, qty] of agg.entries()) {
+        const [storeCode, originalSku] = key.split('::');
+        out.push({ storeCode, sku: originalSku, availableQty: qty });
+      }
+      return out;
     } catch (e) {
       this.logger.error(`Falha ao consultar estoque ERP: ${(e as Error).message}`);
       return [];
