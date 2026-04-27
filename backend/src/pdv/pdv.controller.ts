@@ -140,6 +140,21 @@ export class PdvController {
   }
 
   /**
+   * PATCH /pdv/sales/:id/promotion { promotion }
+   * Define campanha promocional ATIVA (exclusiva).
+   * Valores: 'YEAR_BASED' | 'FOUR_FOR_THREE' | 'NONE' | null
+   */
+  @Patch('sales/:id/promotion')
+  setPromotion(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { promotion: string | null },
+  ) {
+    this.requireRole(req);
+    return this.svc.setPromotion({ saleId: id, promotion: body?.promotion ?? null });
+  }
+
+  /**
    * DELETE /pdv/sales/:id/items/:itemId
    */
   @Delete('sales/:id/items/:itemId')

@@ -770,6 +770,9 @@ model PdvSale {
   subtotal        Float    @default(0)
   desconto        Float    @default(0)
   total           Float    @default(0)
+  // Campanha promocional ATIVA (exclusiva — uma de cada vez)
+  // Valores: 'YEAR_BASED' | 'FOUR_FOR_THREE' | 'NONE' (default)
+  activePromotion String?  @map("active_promotion")
   // Pagamento
   paymentMethod   String?  @map("payment_method")
   paymentDetails  String?  @map("payment_details")

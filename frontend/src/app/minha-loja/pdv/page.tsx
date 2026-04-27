@@ -36,6 +36,7 @@ type Sale = {
   subtotal: number;
   desconto: number;
   total: number;
+  activePromotion: string | null;
   paymentMethod: string | null;
   nfceNumber: string | null;
   nfceChave: string | null;
@@ -227,6 +228,21 @@ export default function PdvPage() {
       await api(`/pdv/sales/${sale.id}/items/${itemId}`, {
         method: 'PATCH',
         body: JSON.stringify(patch),
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    }
+  };
+
+  // ── Trocar campanha promocional ATIVA ──
+  const setPromotion = async (promotion: string | null) => {
+    if (!sale) return;
+    try {
+      await api(`/pdv/sales/${sale.id}/promotion`, {
+        method: 'PATCH',
+        body: JSON.stringify({ promotion }),
       });
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
@@ -490,30 +506,73 @@ export default function PdvPage() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-lg border overflow-hidden">
-            {/* Banner promo "4 LEVA 3" se aplicável */}
-            {(() => {
-              const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
-              if (totalPecas >= 4) {
-                return (
-                  <div className="px-3 py-2 bg-gradient-to-r from-fuchsia-100 to-rose-100 border-b border-fuchsia-200 flex items-center gap-2">
-                    <span className="text-xl">🎁</span>
-                    <div className="flex-1 text-xs">
-                      <div className="font-bold text-fuchsia-800">PROMO 4 LEVA 3 ATIVA!</div>
-                      <div className="text-fuchsia-700">A peça de menor valor saiu de graça</div>
+            {/* Seletor de campanha */}
+            <div className="px-3 py-2 bg-gradient-to-r from-fuchsia-50 to-amber-50 border-b border-fuchsia-200">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <div className="text-xs uppercase font-bold text-fuchsia-700 flex items-center gap-1">
+                  <span>🎁</span> Campanha promocional ativa
+                </div>
+                {sale.activePromotion && (
+                  <button
+                    onClick={() => setPromotion('NONE')}
+                    className="text-[10px] text-rose-600 hover:underline"
+                  >
+                    Remover
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  onClick={() => setPromotion('NONE')}
+                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
+                    !sale.activePromotion
+                      ? 'bg-slate-700 text-white border-slate-700'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  Nenhuma
+                </button>
+                <button
+                  onClick={() => setPromotion('YEAR_BASED')}
+                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
+                    sale.activePromotion === 'YEAR_BASED'
+                      ? 'bg-amber-500 text-white border-amber-500'
+                      : 'bg-white text-amber-700 border-amber-200 hover:border-amber-400'
+                  }`}
+                >
+                  Por ano
+                  <div className="text-[9px] font-normal">2023:20% · 2022:30% · ≤21:50%</div>
+                </button>
+                <button
+                  onClick={() => setPromotion('FOUR_FOR_THREE')}
+                  className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
+                    sale.activePromotion === 'FOUR_FOR_THREE'
+                      ? 'bg-fuchsia-600 text-white border-fuchsia-600'
+                      : 'bg-white text-fuchsia-700 border-fuchsia-200 hover:border-fuchsia-400'
+                  }`}
+                >
+                  4 LEVA 3
+                  <div className="text-[9px] font-normal">menor sai grátis</div>
+                </button>
+              </div>
+              {/* Status da campanha */}
+              {sale.activePromotion === 'FOUR_FOR_THREE' && (() => {
+                const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
+                if (totalPecas >= 4) {
+                  return (
+                    <div className="mt-1.5 text-[11px] text-fuchsia-800 bg-fuchsia-100 rounded px-2 py-1 font-semibold">
+                      ✓ ATIVA — peça de menor valor saiu grátis
                     </div>
-                  </div>
-                );
-              }
-              const faltam = 4 - totalPecas;
-              if (totalPecas > 0 && faltam > 0 && faltam <= 3) {
+                  );
+                }
+                const faltam = 4 - totalPecas;
                 return (
-                  <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800">
-                    🎁 <b>Falta{faltam > 1 ? 'm' : ''} {faltam} peça{faltam > 1 ? 's' : ''}</b> pra ativar a promo <b>4 LEVA 3</b> (1 peça grátis)
+                  <div className="mt-1.5 text-[11px] text-amber-800 bg-amber-100 rounded px-2 py-1">
+                    Falta{faltam > 1 ? 'm' : ''} {faltam} peça{faltam > 1 ? 's' : ''} pra ativar
                   </div>
                 );
-              }
-              return null;
-            })()}
+              })()}
+            </div>
             <div className="px-3 py-2 bg-slate-50 border-b text-xs uppercase font-semibold text-slate-500">
               Carrinho ({sale.items.length})
             </div>

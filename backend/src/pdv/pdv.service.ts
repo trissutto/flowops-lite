@@ -244,104 +244,159 @@ export class PdvService {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
-   * Regras hardcoded pra MVP (depois pode virar config admin):
+   * Aplica APENAS a campanha promocional ATIVA da venda (exclusiva).
    *
-   *   1. Por ano de cadastro do produto (campo dataCadastro):
-   *      - 2023 → 20% off
-   *      - 2022 → 30% off
-   *      - 2021 ou anterior → 50% off
+   * Campanhas disponíveis (sale.activePromotion):
+   *   - 'YEAR_BASED'    → desconto por ano de cadastro do produto
+   *                       2023=20%, 2022=30%, ≤2021=50%
+   *   - 'FOUR_FOR_THREE' → carrinho com ≥4 peças, a menor sai de graça (1 un)
+   *   - null/'NONE'     → SEM promoção (zera todos os descontos auto)
    *
-   *   2. "4 LEVA 3":
-   *      - Se carrinho tem >= 4 peças (somando qty), a peça de menor preço
-   *        unitário (após desconto por ano) sai de graça (1 unidade)
-   *      - Aplicado como desconto extra no item da menor peça
+   * As campanhas NÃO são acumulativas — só uma roda por vez.
+   * Desconto manual (item ou venda) é separado e não é tocado por aqui.
    *
-   * O desconto fica salvo em item.desconto + item.promoTag (descritivo).
-   * Vendedora vê na tela qual promoção bateu.
+   * Defensivo: se a coluna `promoTag`/`active_promotion` não existir no DB
+   * (db push pendente), tenta sem ela e loga o erro pra debug.
    */
   private async applyAutoDiscounts(saleId: string) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { activePromotion: true },
+    });
+    const activePromotion = (sale as any)?.activePromotion || 'NONE';
+
     const items = await (this.prisma as any).pdvSaleItem.findMany({
       where: { saleId },
       orderBy: { createdAt: 'asc' },
     });
     if (!items.length) return;
 
-    // ── PROMO 1: por ano de cadastro ──
-    const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
-      if (!data) return null;
-      const year = parseInt(data.slice(0, 4), 10);
-      if (isNaN(year)) return null;
-      if (year <= 2021) return { pct: 0.50, tag: `PROMO 50% · ${year}` };
-      if (year === 2022) return { pct: 0.30, tag: 'PROMO 30% · 2022' };
-      if (year === 2023) return { pct: 0.20, tag: 'PROMO 20% · 2023' };
-      return null;
-    };
+    // Função pra zerar promo automática de todos itens (preserva desconto manual? não — autodesconto sobrescreve)
+    const updates: Array<{ id: string; desconto: number; total: number; tag: string | null }> = [];
 
-    // Calcula desconto base por item (da promo de ano)
-    type Calc = {
-      id: string;
-      qty: number;
-      precoUnit: number;
-      promoYearPct: number;
-      promoTag: string | null;
-      bruto: number;
-      descontoYear: number;
-      descontoFinal: number; // será modificado se "4 leva 3" bater
-      precoLiquidoUnit: number;
-    };
-    const calcs: Calc[] = (items as any[]).map((it) => {
-      const promo = promoByYear(it.dataCadastro || null);
-      const bruto = it.precoUnit * it.qty;
-      const descontoYear = promo ? bruto * promo.pct : 0;
-      const precoLiquidoUnit = it.precoUnit - it.precoUnit * (promo?.pct || 0);
-      return {
-        id: it.id,
-        qty: it.qty,
-        precoUnit: it.precoUnit,
-        promoYearPct: promo?.pct || 0,
-        promoTag: promo?.tag || null,
-        bruto,
-        descontoYear,
-        descontoFinal: descontoYear,
-        precoLiquidoUnit,
+    if (activePromotion === 'NONE' || !activePromotion) {
+      // Zera tudo (apenas resetando o que veio de promo automática)
+      for (const it of items as any[]) {
+        // Se o promoTag começa com "PROMO" ou "4 LEVA", é auto e zera
+        const wasAuto = !it.promoTag || /^(PROMO|4 LEVA)/.test(it.promoTag);
+        if (wasAuto) {
+          const bruto = it.precoUnit * it.qty;
+          updates.push({ id: it.id, desconto: 0, total: bruto, tag: null });
+        }
+      }
+    } else if (activePromotion === 'YEAR_BASED') {
+      const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
+        if (!data) return null;
+        const year = parseInt(data.slice(0, 4), 10);
+        if (isNaN(year)) return null;
+        if (year <= 2021) return { pct: 0.50, tag: `PROMO 50% · ${year}` };
+        if (year === 2022) return { pct: 0.30, tag: 'PROMO 30% · 2022' };
+        if (year === 2023) return { pct: 0.20, tag: 'PROMO 20% · 2023' };
+        return null;
       };
-    });
-
-    // ── PROMO 2: 4 LEVA 3 ──
-    // Conta total de PEÇAS (qty), não linhas. Se >= 4, "expande" virtualmente
-    // todas as peças individuais e dá grátis a de menor preço líquido unitário.
-    const totalPecas = calcs.reduce((s, c) => s + c.qty, 0);
-    let promo4leva3Aplicada = false;
-    if (totalPecas >= 4) {
-      // Acha a peça de MENOR preço líquido unitário
-      const menorPreco = Math.min(...calcs.map((c) => c.precoLiquidoUnit));
-      const menorIdx = calcs.findIndex((c) => c.precoLiquidoUnit === menorPreco);
-      if (menorIdx >= 0) {
-        // Adiciona desconto extra = preço líquido de 1 unidade dessa peça
-        calcs[menorIdx].descontoFinal += calcs[menorIdx].precoLiquidoUnit;
-        const tagAtual = calcs[menorIdx].promoTag;
-        calcs[menorIdx].promoTag = tagAtual
-          ? `${tagAtual} + 4 LEVA 3 (1 grátis)`
-          : '4 LEVA 3 · 1 peça grátis';
-        promo4leva3Aplicada = true;
+      for (const it of items as any[]) {
+        const bruto = it.precoUnit * it.qty;
+        const promo = promoByYear(it.dataCadastro || null);
+        if (promo) {
+          const desconto = Math.round(bruto * promo.pct * 100) / 100;
+          updates.push({
+            id: it.id,
+            desconto,
+            total: Math.round((bruto - desconto) * 100) / 100,
+            tag: promo.tag,
+          });
+        } else {
+          updates.push({
+            id: it.id,
+            desconto: 0,
+            total: bruto,
+            tag: it.dataCadastro ? `Sem promo · ${it.dataCadastro.slice(0, 4)}` : 'Sem data cad.',
+          });
+        }
+      }
+    } else if (activePromotion === 'FOUR_FOR_THREE') {
+      const totalPecas = (items as any[]).reduce((s, i) => s + i.qty, 0);
+      // Zera todos os descontos auto primeiro
+      for (const it of items as any[]) {
+        const bruto = it.precoUnit * it.qty;
+        updates.push({ id: it.id, desconto: 0, total: bruto, tag: null });
+      }
+      if (totalPecas >= 4) {
+        // Acha o item de MENOR preço unitário (não líquido — não tem outra promo aqui)
+        const menorPreco = Math.min(...(items as any[]).map((i) => i.precoUnit));
+        const menorIdx = (items as any[]).findIndex((i) => i.precoUnit === menorPreco);
+        if (menorIdx >= 0) {
+          const it = (items as any[])[menorIdx];
+          const bruto = it.precoUnit * it.qty;
+          // Desconta 1 unidade
+          const desconto = Math.round(it.precoUnit * 100) / 100;
+          updates[menorIdx] = {
+            id: it.id,
+            desconto,
+            total: Math.round((bruto - desconto) * 100) / 100,
+            tag: '4 LEVA 3 · 1 grátis',
+          };
+        }
       }
     }
 
-    // Persiste cada item com desconto + tag
-    for (const c of calcs) {
-      await (this.prisma as any).pdvSaleItem.update({
-        where: { id: c.id },
-        data: {
-          desconto: Math.round(c.descontoFinal * 100) / 100,
-          total: Math.round((c.bruto - c.descontoFinal) * 100) / 100,
-          promoTag: c.promoTag,
-        },
+    // Persiste — defensivo contra coluna inexistente
+    for (const u of updates) {
+      try {
+        await (this.prisma as any).pdvSaleItem.update({
+          where: { id: u.id },
+          data: { desconto: u.desconto, total: u.total, promoTag: u.tag },
+        });
+      } catch (e: any) {
+        // Se promoTag não existe no DB, tenta sem ele
+        if (/promoTag|promo_tag|Unknown/i.test(e?.message || '')) {
+          this.logger.warn(`[pdv] coluna promo_tag não existe — rodar prisma db push. Salvando sem tag.`);
+          try {
+            await (this.prisma as any).pdvSaleItem.update({
+              where: { id: u.id },
+              data: { desconto: u.desconto, total: u.total },
+            });
+          } catch (e2) {
+            this.logger.error(`[pdv] update item ${u.id} falhou: ${(e2 as Error).message}`);
+          }
+        } else {
+          this.logger.error(`[pdv] update item ${u.id} falhou: ${e?.message}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * Define a campanha promocional ATIVA da venda (exclusiva).
+   * Recalcula tudo automaticamente.
+   */
+  async setPromotion(input: { saleId: string; promotion: string | null }) {
+    const allowed = ['YEAR_BASED', 'FOUR_FOR_THREE', 'NONE'];
+    const promo = input.promotion && allowed.includes(input.promotion) ? input.promotion : 'NONE';
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
+    try {
+      await (this.prisma as any).pdvSale.update({
+        where: { id: input.saleId },
+        data: { activePromotion: promo === 'NONE' ? null : promo },
       });
+    } catch (e: any) {
+      // Se coluna não existe, avisa
+      if (/activePromotion|active_promotion|Unknown/i.test(e?.message || '')) {
+        throw new BadRequestException(
+          'Coluna active_promotion não existe no banco — rode `npx prisma db push` no Railway',
+        );
+      }
+      throw e;
     }
 
-    if (promo4leva3Aplicada) {
-      this.logger.log(`[pdv] Sale ${saleId}: 4 LEVA 3 aplicado (${totalPecas} peças)`);
-    }
+    await this.applyAutoDiscounts(input.saleId);
+    await this.recalcTotals(input.saleId);
+    return this.getSale(input.saleId);
   }
 
   /**
