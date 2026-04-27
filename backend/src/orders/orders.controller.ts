@@ -828,8 +828,18 @@ export class OrdersController {
   @Post('wc/:wcId/recalculate-separation')
   async recalculateSeparation(
     @Param('wcId') wcId: string,
-    @Body() body?: { excludeStoreCodes?: string[] },
+    @Body() body?: { excludeStoreCodes?: string[]; pickOrderId?: string },
   ) {
+    // SWAP CIRÚRGICO: se vier pickOrderId, troca SÓ aquele pick-order específico,
+    // sem mexer nos outros (caso onde uma loja já enviou e outra precisa ser trocada).
+    if (body?.pickOrderId) {
+      return this.routing.swapSinglePickOrder(body.pickOrderId, {
+        excludeStoreCodes: Array.isArray(body?.excludeStoreCodes)
+          ? body.excludeStoreCodes
+          : undefined,
+      });
+    }
+
     const wcOrderId = Number(wcId);
     const local = await this.prisma.order.findFirst({
       where: { wcOrderId },

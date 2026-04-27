@@ -425,21 +425,40 @@ export default function PedidoDetailPage() {
    */
   async function swapStore(storeCode: string, storeName: string | null) {
     const displayName = storeName || storeCode;
-    const hasAdvanced = liveStatus.some(
-      (p) => !['new', 'separating'].includes(p.status),
-    );
-    if (hasAdvanced) {
+
+    // Pega o pick-order ESPECÍFICO da loja sendo trocada
+    const targetPickOrder = liveStatus.find((p) => p.storeCode === storeCode);
+    if (!targetPickOrder) {
+      alert(`Não encontrei pick-order pra loja ${storeCode}.`);
+      return;
+    }
+
+    // Só bloqueia se a LOJA ALVO já avançou (bipou/enviou). Se outras lojas já
+    // enviaram, tudo bem — o swap cirúrgico no backend cuida disso e não toca
+    // nos pick-orders das outras lojas (mantém o que já foi feito).
+    const TARGET_SWAPPABLE = ['new', 'separating'];
+    if (!TARGET_SWAPPABLE.includes(targetPickOrder.status)) {
       alert(
-        'Não dá pra trocar loja: alguma já passou de "separando" (bipou/enviou). ' +
-        'Rejeite manualmente pela tela de baixa antes.',
+        `Não dá pra trocar a loja ${storeCode}: ela já passou de "separando" ` +
+        `(status atual: ${targetPickOrder.status}). ` +
+        `Rejeite manualmente pela tela de baixa antes.`,
       );
       return;
     }
+
+    // Avisa se outras lojas do mesmo pedido já enviaram (pra usuário ter contexto)
+    const outrasJaEnviaram = liveStatus.filter(
+      (p) => p.storeCode !== storeCode && !['new', 'separating'].includes(p.status),
+    );
+    const avisoOutras = outrasJaEnviaram.length
+      ? `\n⚠️ Outras lojas (${outrasJaEnviaram.map((p) => p.storeCode).join(', ')}) já avançaram — elas NÃO vão ser tocadas, só esta troca aqui.\n`
+      : '';
+
     if (!confirm(
-      `Trocar a loja ${displayName} (${storeCode}) por outra?\n\n` +
-      `O sistema vai rerodar o roteamento excluindo ${storeCode} e escolher outra loja ` +
-      `com estoque. O card atual vai sumir do /minha-loja da ${storeCode}.\n\n` +
-      `Se nenhuma outra loja tiver estoque suficiente, o pedido fica pending.`,
+      `Trocar SOMENTE a loja ${displayName} (${storeCode})?\n\n` +
+      avisoOutras +
+      `O sistema vai cancelar o pick-order desta loja e re-rotear OS ITEMS DELA pra outra loja com estoque.\n\n` +
+      `Se nenhuma outra loja tiver estoque, os items ficam órfãos (você decide manualmente).`,
     )) return;
 
     setSepLoading(true);
@@ -450,11 +469,16 @@ export default function PedidoDetailPage() {
         reason?: string;
         message?: string;
         cancelledCount?: number;
+        itemsReassigned?: number;
+        oldStoreCode?: string;
         excludedStoreCodes?: string[];
         pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
       }>(`/orders/wc/${wcId}/recalculate-separation`, {
         method: 'POST',
-        body: JSON.stringify({ excludeStoreCodes: [storeCode] }),
+        body: JSON.stringify({
+          excludeStoreCodes: [storeCode],
+          pickOrderId: targetPickOrder.id,  // ← swap cirúrgico
+        }),
       });
 
       if (!res.ok) {

@@ -396,6 +396,186 @@ export class RoutingService {
   }
 
   /**
+   * SWAP CIRÚRGICO de UM pick-order específico.
+   *
+   * Caso de uso: pedido tem split em N lojas, uma delas (ex: Sorocaba) já enviou,
+   * outra (ex: Vinhedo) reportou problema e precisa trocar. Um recalc total
+   * cancelaria tudo (incluindo Sorocaba que já está shipped). Esse método
+   * cancela APENAS o pick-order específico e re-roteia SOMENTE os items que
+   * estavam atribuídos pra ele.
+   *
+   * Pré-condições:
+   *  - O pick-order alvo está em new/separating (não pode trocar quem já bipou/enviou)
+   *  - Os outros pick-orders do mesmo Order ficam INTOCADOS
+   *
+   * Steps:
+   *  1. Carrega o pick-order alvo + valida status
+   *  2. Identifica items atribuídos pra essa loja
+   *  3. Cancela o pick-order alvo (delete) + desatribui items (assignedStoreId=null)
+   *  4. Roda routing SÓ pros items órfãos, excluindo loja alvo + lojas que reportaram problema
+   *  5. Cria novo(s) pick-order(s) pros items órfãos
+   *  6. Mantém os outros pick-orders intactos
+   *
+   * Retorna { ok, newPickOrders, oldStoreCode } ou { ok: false, reason }.
+   */
+  async swapSinglePickOrder(
+    pickOrderId: string,
+    opts?: { excludeStoreCodes?: string[] },
+  ) {
+    const pickOrder = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: { select: { id: true, code: true, name: true } },
+        order: { select: { id: true } },
+      },
+    });
+    if (!pickOrder) {
+      return {
+        ok: false as const,
+        reason: 'pick-order-not-found',
+        message: 'Pick-order não encontrado.',
+      };
+    }
+
+    // Só permite swap se o pick-order alvo está em status reversível
+    const SWAPPABLE_STATUS = ['new', 'separating'];
+    if (!SWAPPABLE_STATUS.includes(pickOrder.status)) {
+      return {
+        ok: false as const,
+        reason: 'target-advanced',
+        message:
+          `Esta loja já avançou (status: ${pickOrder.status}). Não dá pra trocar — ` +
+          `pra cancelar, use "Rejeitar baixa" pela tela de baixa-estoque antes.`,
+      };
+    }
+
+    const orderId = pickOrder.order.id;
+    const oldStoreCode = pickOrder.store.code;
+    const oldStoreId = pickOrder.store.id;
+
+    // Items atribuídos pra essa loja (pra re-rotear só eles)
+    const itemsAssigned = await this.prisma.orderItem.findMany({
+      where: { orderId, assignedStoreId: oldStoreId },
+      select: { id: true, sku: true, quantity: true },
+    });
+
+    if (itemsAssigned.length === 0) {
+      // Pick-order existe mas sem items vinculados — só apaga o pick-order
+      await this.prisma.pickOrder.delete({ where: { id: pickOrderId } });
+      try {
+        this.gateway.emitPickOrderRemoved?.(oldStoreId, { orderId });
+      } catch {}
+      return {
+        ok: false as const,
+        reason: 'no-items',
+        message: 'Esta loja não tinha items atribuídos. Pick-order removido sem realocação.',
+      };
+    }
+
+    // Lojas a excluir: alvo (sempre) + lojas que reportaram problema neste pedido
+    // + opcionais do admin
+    const otherPickOrdersOfOrder = await this.prisma.pickOrder.findMany({
+      where: { orderId, id: { not: pickOrderId } },
+      select: { storeId: true, status: true, issueReason: true } as any,
+    });
+    const issueReporterStoreIds = (otherPickOrdersOfOrder as any[])
+      .filter((p) => p.issueReason)
+      .map((p) => p.storeId);
+    // Também exclui lojas que JÁ ESTÃO atendendo o mesmo pedido (não duplica peça)
+    const otherActiveStoreIds = (otherPickOrdersOfOrder as any[])
+      .filter((p) => ['new', 'separating', 'separated', 'ready', 'shipped'].includes(p.status))
+      .map((p) => p.storeId);
+
+    const allExcludedStoreIds = Array.from(
+      new Set([oldStoreId, ...issueReporterStoreIds, ...otherActiveStoreIds]),
+    );
+    const excludedStores = await this.prisma.store.findMany({
+      where: { id: { in: allExcludedStoreIds } },
+      select: { id: true, code: true },
+    });
+    const excludeStoreCodes = Array.from(
+      new Set([
+        ...excludedStores.map((s) => s.code).filter(Boolean),
+        ...(opts?.excludeStoreCodes ?? []),
+      ]),
+    );
+
+    // 1) Cancela o pick-order alvo + desatribui SOMENTE os items dele
+    await this.prisma.$transaction(async (tx) => {
+      await tx.pickOrder.delete({ where: { id: pickOrderId } });
+      await tx.orderItem.updateMany({
+        where: { orderId, assignedStoreId: oldStoreId },
+        data: { assignedStoreId: null },
+      });
+      await tx.orderHistory.create({
+        data: {
+          orderId,
+          fromStatus: 'separating',
+          toStatus: 'separating',
+          note:
+            `Swap cirúrgico: pick-order da loja ${oldStoreCode} cancelado pra reatribuir ` +
+            `${itemsAssigned.length} item(ns). Outros pick-orders intactos.`,
+        },
+      });
+    });
+
+    // 2) Notifica loja antiga pra remover o card do app
+    try {
+      this.gateway.emitPickOrderRemoved?.(oldStoreId, { orderId });
+    } catch (err: any) {
+      this.logger.warn(`Falha ao emitir remoção de pick-order: ${err?.message ?? err}`);
+    }
+
+    // 3) Roda routing SOMENTE pros items órfãos (passando filtro de items)
+    // Como o previewRoute não suporta filtrar items, vamos rodar o routing
+    // sobre o pedido inteiro e considerar que outros items já têm assignedStoreId
+    // (não vão ser re-roteados — o engine só atribui items sem store).
+    // O routing engine atual atribui só items SEM assignedStoreId, então OK.
+    const preview = await this.previewRoute(orderId, { excludeStoreCodes });
+
+    if (!preview.success) {
+      return {
+        ok: false as const,
+        reason: 'sem-estoque-excluindo-loja',
+        message:
+          `Cancelei o pick-order da ${oldStoreCode} mas nenhuma OUTRA loja tem ` +
+          `estoque pra ${itemsAssigned.length} item(ns). Items ficaram sem loja — ` +
+          `verifique estoque ou divida manualmente.`,
+        missing: preview.missing,
+        oldStoreCode,
+        excludedStoreCodes: excludeStoreCodes,
+      };
+    }
+
+    // 4) Confirma criando APENAS pick-orders pra items que ainda não estão atribuídos
+    // (preserva os pick-orders das outras lojas que já estavam OK)
+    await this.confirmRoute(orderId, preview as any);
+
+    const newPickOrders = await this.prisma.pickOrder.findMany({
+      where: {
+        orderId,
+        storeId: { not: oldStoreId },
+        // Pega só os pick-orders criados agora (created após início do método)
+      },
+      include: { store: { select: { code: true, name: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      ok: true as const,
+      oldStoreCode,
+      excludedStoreCodes: excludeStoreCodes,
+      itemsReassigned: itemsAssigned.length,
+      pickOrders: newPickOrders.map((p) => ({
+        id: p.id,
+        status: p.status,
+        storeCode: p.store.code,
+        storeName: p.store.name,
+      })),
+    };
+  }
+
+  /**
    * ESTOQUE COMPROMETIDO em pick-orders ATIVOS (status new/separating/separated).
    *
    * Pra cada (storeCode, sku), retorna a soma de quantidades já alocadas em
