@@ -2825,6 +2825,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     ncm: string | null;
     cfop: string | null;
     custo: number | null;
+    dataCadastro: string | null;
   } | null> {
     if (!this.pool) return null;
     const s = String(skuOrEan || '').trim();
@@ -2840,6 +2841,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     let ncmCol: string | null = null;
     let cfopCol: string | null = null;
     let eanCol: string | null = null;
+    let dataCol: string | null = null;
     let allColumnNames: string[] = [];
     try {
       const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
@@ -2883,8 +2885,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       for (const c of ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS']) {
         if (names.has(c)) { eanCol = c; break; }
       }
+      // Data de cadastro (usado pra promoções por ano)
+      for (const c of ['DATAALT', 'DATACAD', 'DATA_CAD', 'DATACADASTRO', 'DATA_CADASTRO']) {
+        if (names.has(c)) { dataCol = c; break; }
+      }
       this.logger.log(
-        `[pdv] Cols detectadas: preco=[${priceCols.join('|')}] custo=${costCol} ncm=${ncmCol} cfop=${cfopCol} ean=${eanCol}`,
+        `[pdv] Cols detectadas: preco=[${priceCols.join('|')}] custo=${costCol} ncm=${ncmCol} cfop=${cfopCol} ean=${eanCol} data=${dataCol}`,
       );
     } catch (e) {
       this.logger.warn(`getPdvProductInfo SHOW COLUMNS: ${(e as Error).message}`);
@@ -2897,6 +2903,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (ncmCol) selects.push(`\`${ncmCol}\` AS ncm`);
     if (cfopCol) selects.push(`\`${cfopCol}\` AS cfop`);
     if (eanCol) selects.push(`\`${eanCol}\` AS ean`);
+    if (dataCol) selects.push(`\`${dataCol}\` AS dataCadastro`);
 
     let extra: any = {};
     try {
@@ -2970,6 +2977,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`[pdv] Preço de ${info.codigo}: R$${preco.toFixed(2)} (fonte: ${precoFonte})`);
     }
 
+    // Normaliza dataCadastro pra YYYY-MM-DD
+    let dataCadastro: string | null = null;
+    if (extra.dataCadastro) {
+      try {
+        const d = extra.dataCadastro instanceof Date
+          ? extra.dataCadastro
+          : new Date(String(extra.dataCadastro));
+        if (!isNaN(d.getTime())) {
+          dataCadastro = d.toISOString().slice(0, 10);
+        }
+      } catch { /* noop */ }
+    }
+
     return {
       sku: info.codigo,
       ean: extra.ean ? String(extra.ean).trim() : null,
@@ -2981,6 +3001,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       ncm: extra.ncm ? String(extra.ncm).trim() : null,
       cfop: extra.cfop ? String(extra.cfop).trim() : null,
       custo: extra.custo != null ? parsePrice(extra.custo) : null,
+      dataCadastro,
     };
   }
 

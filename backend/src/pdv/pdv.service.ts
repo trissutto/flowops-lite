@@ -155,6 +155,7 @@ export class PdvService {
           descricao: info.descricao,
           ncm: info.ncm,
           cfop: info.cfop,
+          dataCadastro: info.dataCadastro,
           qty,
           precoUnit: info.preco,
           desconto: 0,
@@ -163,6 +164,7 @@ export class PdvService {
       });
     }
 
+    await this.applyAutoDiscounts(sale.id);
     await this.recalcTotals(sale.id);
     return { ok: true, item };
   }
@@ -189,6 +191,7 @@ export class PdvService {
         total: bruto - newDesconto,
       },
     });
+    await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
     return updated;
   }
@@ -231,8 +234,114 @@ export class PdvService {
     if (!item || item.saleId !== input.saleId)
       throw new NotFoundException('Item não encontrado nessa venda');
     await (this.prisma as any).pdvSaleItem.delete({ where: { id: item.id } });
+    await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
     return { ok: true };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ENGINE DE PROMOÇÕES AUTOMÁTICAS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Regras hardcoded pra MVP (depois pode virar config admin):
+   *
+   *   1. Por ano de cadastro do produto (campo dataCadastro):
+   *      - 2023 → 20% off
+   *      - 2022 → 30% off
+   *      - 2021 ou anterior → 50% off
+   *
+   *   2. "4 LEVA 3":
+   *      - Se carrinho tem >= 4 peças (somando qty), a peça de menor preço
+   *        unitário (após desconto por ano) sai de graça (1 unidade)
+   *      - Aplicado como desconto extra no item da menor peça
+   *
+   * O desconto fica salvo em item.desconto + item.promoTag (descritivo).
+   * Vendedora vê na tela qual promoção bateu.
+   */
+  private async applyAutoDiscounts(saleId: string) {
+    const items = await (this.prisma as any).pdvSaleItem.findMany({
+      where: { saleId },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!items.length) return;
+
+    // ── PROMO 1: por ano de cadastro ──
+    const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
+      if (!data) return null;
+      const year = parseInt(data.slice(0, 4), 10);
+      if (isNaN(year)) return null;
+      if (year <= 2021) return { pct: 0.50, tag: `PROMO 50% · ${year}` };
+      if (year === 2022) return { pct: 0.30, tag: 'PROMO 30% · 2022' };
+      if (year === 2023) return { pct: 0.20, tag: 'PROMO 20% · 2023' };
+      return null;
+    };
+
+    // Calcula desconto base por item (da promo de ano)
+    type Calc = {
+      id: string;
+      qty: number;
+      precoUnit: number;
+      promoYearPct: number;
+      promoTag: string | null;
+      bruto: number;
+      descontoYear: number;
+      descontoFinal: number; // será modificado se "4 leva 3" bater
+      precoLiquidoUnit: number;
+    };
+    const calcs: Calc[] = (items as any[]).map((it) => {
+      const promo = promoByYear(it.dataCadastro || null);
+      const bruto = it.precoUnit * it.qty;
+      const descontoYear = promo ? bruto * promo.pct : 0;
+      const precoLiquidoUnit = it.precoUnit - it.precoUnit * (promo?.pct || 0);
+      return {
+        id: it.id,
+        qty: it.qty,
+        precoUnit: it.precoUnit,
+        promoYearPct: promo?.pct || 0,
+        promoTag: promo?.tag || null,
+        bruto,
+        descontoYear,
+        descontoFinal: descontoYear,
+        precoLiquidoUnit,
+      };
+    });
+
+    // ── PROMO 2: 4 LEVA 3 ──
+    // Conta total de PEÇAS (qty), não linhas. Se >= 4, "expande" virtualmente
+    // todas as peças individuais e dá grátis a de menor preço líquido unitário.
+    const totalPecas = calcs.reduce((s, c) => s + c.qty, 0);
+    let promo4leva3Aplicada = false;
+    if (totalPecas >= 4) {
+      // Acha a peça de MENOR preço líquido unitário
+      const menorPreco = Math.min(...calcs.map((c) => c.precoLiquidoUnit));
+      const menorIdx = calcs.findIndex((c) => c.precoLiquidoUnit === menorPreco);
+      if (menorIdx >= 0) {
+        // Adiciona desconto extra = preço líquido de 1 unidade dessa peça
+        calcs[menorIdx].descontoFinal += calcs[menorIdx].precoLiquidoUnit;
+        const tagAtual = calcs[menorIdx].promoTag;
+        calcs[menorIdx].promoTag = tagAtual
+          ? `${tagAtual} + 4 LEVA 3 (1 grátis)`
+          : '4 LEVA 3 · 1 peça grátis';
+        promo4leva3Aplicada = true;
+      }
+    }
+
+    // Persiste cada item com desconto + tag
+    for (const c of calcs) {
+      await (this.prisma as any).pdvSaleItem.update({
+        where: { id: c.id },
+        data: {
+          desconto: Math.round(c.descontoFinal * 100) / 100,
+          total: Math.round((c.bruto - c.descontoFinal) * 100) / 100,
+          promoTag: c.promoTag,
+        },
+      });
+    }
+
+    if (promo4leva3Aplicada) {
+      this.logger.log(`[pdv] Sale ${saleId}: 4 LEVA 3 aplicado (${totalPecas} peças)`);
+    }
   }
 
   /**

@@ -49,9 +49,11 @@ type Sale = {
     cor: string | null;
     tamanho: string | null;
     descricao: string;
+    dataCadastro: string | null;
     qty: number;
     precoUnit: number;
     desconto: number;
+    promoTag: string | null;
     total: number;
   }>;
 };
@@ -488,6 +490,30 @@ export default function PdvPage() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-lg border overflow-hidden">
+            {/* Banner promo "4 LEVA 3" se aplicável */}
+            {(() => {
+              const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
+              if (totalPecas >= 4) {
+                return (
+                  <div className="px-3 py-2 bg-gradient-to-r from-fuchsia-100 to-rose-100 border-b border-fuchsia-200 flex items-center gap-2">
+                    <span className="text-xl">🎁</span>
+                    <div className="flex-1 text-xs">
+                      <div className="font-bold text-fuchsia-800">PROMO 4 LEVA 3 ATIVA!</div>
+                      <div className="text-fuchsia-700">A peça de menor valor saiu de graça</div>
+                    </div>
+                  </div>
+                );
+              }
+              const faltam = 4 - totalPecas;
+              if (totalPecas > 0 && faltam > 0 && faltam <= 3) {
+                return (
+                  <div className="px-3 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800">
+                    🎁 <b>Falta{faltam > 1 ? 'm' : ''} {faltam} peça{faltam > 1 ? 's' : ''}</b> pra ativar a promo <b>4 LEVA 3</b> (1 peça grátis)
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <div className="px-3 py-2 bg-slate-50 border-b text-xs uppercase font-semibold text-slate-500">
               Carrinho ({sale.items.length})
             </div>
@@ -505,10 +531,22 @@ export default function PdvPage() {
                     {it.descricao && (
                       <div className="text-[11px] text-slate-500 truncate">{it.descricao}</div>
                     )}
-                    <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-2">
+                    <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-2 flex-wrap">
                       <span>{brl(it.precoUnit)} cada</span>
-                      {it.desconto > 0 && (
+                      {it.desconto > 0 && !it.promoTag && (
                         <span className="text-rose-600 font-semibold">−{brl(it.desconto)} desc</span>
+                      )}
+                      {it.promoTag && (
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            it.promoTag.includes('4 LEVA 3')
+                              ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
+                              : 'bg-amber-100 text-amber-800 border border-amber-300'
+                          }`}
+                          title={`Desconto: ${brl(it.desconto)}`}
+                        >
+                          🎁 {it.promoTag}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -591,8 +629,8 @@ export default function PdvPage() {
               </div>
             )}
             {sale.desconto > 0 && (
-              <div className="flex items-center justify-between text-xs text-rose-600 mb-1 px-1 font-semibold">
-                <span>Desconto total</span>
+              <div className="flex items-center justify-between text-xs text-emerald-700 mb-1 px-1 font-semibold">
+                <span>🎁 Você economizou</span>
                 <span className="tabular-nums">−{brl(sale.desconto)}</span>
               </div>
             )}

@@ -809,10 +809,12 @@ model PdvSaleItem {
   descricao   String
   ncm         String?
   cfop        String?
+  dataCadastro String? @map("data_cadastro")     // YYYY-MM-DD do cadastro Giga (pra promoções por ano)
   // Quantidades + valores
   qty         Int      @default(1)
   precoUnit   Float    @map("preco_unit")
   desconto    Float    @default(0)
+  promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
   total       Float
   createdAt   DateTime @default(now()) @map("created_at")
 
