@@ -253,21 +253,14 @@ export class RealignmentShipmentService {
     });
     if (!items.length) throw new BadRequestException('Remessa vazia — adicione itens antes de fechar');
 
-    // Resolver SKU pra cada item (REF + cor + tamanho → SKU via Giga)
-    // Pra baixar estoque precisa de SKU. Se algum item não conseguir resolver,
-    // retorna erro com lista de problemas.
+    // Resolve SKU de cada item (REF + cor + tamanho → CODIGO Giga).
+    // Usa findCodigoByRefCorTam (busca direta tolerante a variações de espaço/case).
     const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
     const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
 
     for (const it of items as any[]) {
       try {
-        const variations = await this.erp.searchByRef(it.refCode);
-        const match = variations.find(
-          (v: any) =>
-            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
-            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
-        );
-        const sku = match?.codigo || match?.sku;
+        const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
         if (!sku) {
           unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
           continue;
@@ -534,20 +527,14 @@ export class RealignmentShipmentService {
       } as any,
     });
 
-    // Resolve SKU → procura match nos itens
-    // Faz isso buscando todas as variações da REF e vendo se o SKU bipado bate
+    // Resolve SKU → procura match nos itens da remessa.
+    // Usa findCodigoByRefCorTam (busca direta tolerante).
     let matchedItemId: string | null = null;
     let matchedRefCode: string | null = null;
     for (const it of items as any[]) {
       if (it.realignmentStatus === 'received' || it.realignmentStatus === 'missing') continue;
       try {
-        const variations = await this.erp.searchByRef(it.refCode);
-        const variation = variations.find(
-          (v: any) =>
-            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
-            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
-        );
-        const itemSku = variation?.codigo || variation?.sku;
+        const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
         if (itemSku && String(itemSku).trim() === sku) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;

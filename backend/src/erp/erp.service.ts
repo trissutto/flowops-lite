@@ -2778,6 +2778,102 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Busca direta no Giga pelo CODIGO de uma combinação REF + cor + tamanho.
+   * Tolerante a TRIM, case e variações de espaço.
+   *
+   * Uso: na hora de fechar uma remessa de realinhamento, pegamos
+   * REF/COR/TAM do TransferOrder e precisamos do CODIGO pra dar baixa
+   * em estoque. Esse método resolve isso direto sem depender de searchByRef.
+   *
+   * Tenta em ordem:
+   *   1. Match exato (case-insensitive + trim)
+   *   2. Match com LIKE (cobre variações tipo "BEGE" vs "XADREZ BEGE")
+   *   3. Match só por REF + tamanho (ignora cor — fallback)
+   */
+  async findCodigoByRefCorTam(
+    refCode: string,
+    cor: string | null,
+    tamanho: string | null,
+  ): Promise<string | null> {
+    if (!this.pool || !refCode) return null;
+    const ref = String(refCode).trim();
+    const corClean = (cor || '').trim();
+    const tamClean = (tamanho || '').trim();
+
+    // 1. Match exato com TRIM e UPPER
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO FROM produtos
+          WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(COR, ''))) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+          LIMIT 1`,
+        [ref, corClean, tamClean],
+      );
+      if ((rows as any[]).length) {
+        return String((rows as any[])[0].CODIGO).trim();
+      }
+    } catch (e) {
+      this.logger.warn(`findCodigoByRefCorTam exato falhou: ${(e as Error).message}`);
+    }
+
+    // 2. Tenta com cor LIKE (pra casos "BEGE" vs "XADREZ BEGE")
+    if (corClean) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM produtos
+            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
+              AND UPPER(COR) LIKE UPPER(?)
+              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+            LIMIT 1`,
+          [ref, `%${corClean}%`, tamClean],
+        );
+        if ((rows as any[]).length) {
+          return String((rows as any[])[0].CODIGO).trim();
+        }
+        // Tenta o reverso (cor cadastrada está dentro da bipada)
+        const [rows2] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM produtos
+            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
+              AND ? LIKE CONCAT('%', UPPER(COR), '%')
+              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+            LIMIT 1`,
+          [ref, corClean.toUpperCase(), tamClean],
+        );
+        if ((rows2 as any[]).length) {
+          return String((rows2 as any[])[0].CODIGO).trim();
+        }
+      } catch (e) {
+        this.logger.warn(`findCodigoByRefCorTam LIKE falhou: ${(e as Error).message}`);
+      }
+    }
+
+    // 3. Último fallback: só REF + tamanho (ignora cor)
+    if (tamClean) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM produtos
+            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
+              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+            LIMIT 1`,
+          [ref, tamClean],
+        );
+        if ((rows as any[]).length) {
+          this.logger.warn(
+            `findCodigoByRefCorTam: usando fallback REF+TAM (cor "${corClean}" ignorada) pra ${ref}/${tamClean}`,
+          );
+          return String((rows as any[])[0].CODIGO).trim();
+        }
+      } catch (e) {
+        this.logger.warn(`findCodigoByRefCorTam fallback falhou: ${(e as Error).message}`);
+      }
+    }
+
+    this.logger.warn(`findCodigoByRefCorTam: NADA encontrado pra REF=${ref} COR=${corClean} TAM=${tamClean}`);
+    return null;
+  }
+
+  /**
    * Estoque atual de UM SKU específico em N lojas. Retorna Map<storeCode, qty>.
    * Lojas sem o SKU (ou com 0) NÃO aparecem no map.
    */
