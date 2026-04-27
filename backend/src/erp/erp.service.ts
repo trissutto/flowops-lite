@@ -2835,20 +2835,40 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!info) return null;
 
     // 2. Descobre colunas disponíveis na tabela produtos
-    let priceCol: string | null = null;
+    let priceCols: string[] = [];
     let costCol: string | null = null;
     let ncmCol: string | null = null;
     let cfopCol: string | null = null;
     let eanCol: string | null = null;
+    let allColumnNames: string[] = [];
     try {
       const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
-      const names = new Set((cols as any[]).map((c) => String(c.Field).toUpperCase()));
-      // Preço (vai do mais específico pro mais genérico)
-      for (const c of ['PRECOVENDA', 'VALORVENDA', 'VALORVAREJO', 'PRECO_VENDA', 'PRECO', 'VALOR']) {
-        if (names.has(c)) { priceCol = c; break; }
+      allColumnNames = (cols as any[]).map((c) => String(c.Field));
+      const names = new Set(allColumnNames.map((n) => n.toUpperCase()));
+
+      // PREÇO — lista ampla de candidatos comuns + fallback dinâmico.
+      // ORDEM IMPORTA: VENDAUN (Gigasistemas) é o oficial — fica primeiro.
+      const priceCandidates = [
+        'VENDAUN', 'VENDA_UN', 'VENDAUNIT',
+        'PRECOVAREJO', 'PRECO_VAREJO', 'VALORVAREJO', 'VALOR_VAREJO',
+        'PRECOVENDA', 'PRECO_VENDA', 'VALORVENDA', 'VALOR_VENDA',
+        'PRECO1', 'PVENDA', 'PRECO', 'VALOR', 'PRC_VENDA', 'PRECOUNIT',
+        'VALOR_UNITARIO', 'PRECOATUAL', 'PRECO_ATUAL',
+      ];
+      for (const c of priceCandidates) {
+        if (names.has(c)) priceCols.push(c);
+      }
+      // Fallback: qualquer coluna com PREC ou VALOR no nome (que ainda não tá na lista)
+      for (const n of allColumnNames) {
+        const upper = n.toUpperCase();
+        if (priceCols.includes(upper)) continue;
+        if (upper.startsWith('CUSTO') || upper.includes('CUSTO')) continue;
+        if (/^(PREC|PRC|VALOR|VL_|VLR_|VEN|VAR)/.test(upper)) {
+          priceCols.push(n);
+        }
       }
       // Custo
-      for (const c of ['CUSTO', 'PRECOCUSTO', 'VALORCUSTO']) {
+      for (const c of ['CUSTO', 'PRECOCUSTO', 'VALORCUSTO', 'CUSTO_MEDIO', 'CUSTOMEDIO']) {
         if (names.has(c)) { costCol = c; break; }
       }
       // NCM
@@ -2863,13 +2883,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       for (const c of ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS']) {
         if (names.has(c)) { eanCol = c; break; }
       }
+      this.logger.log(
+        `[pdv] Cols detectadas: preco=[${priceCols.join('|')}] custo=${costCol} ncm=${ncmCol} cfop=${cfopCol} ean=${eanCol}`,
+      );
     } catch (e) {
       this.logger.warn(`getPdvProductInfo SHOW COLUMNS: ${(e as Error).message}`);
     }
 
-    // 3. Monta SELECT dinâmico
+    // 3. Monta SELECT dinâmico — traz TODAS as colunas de preço candidatas
     const selects = ['CODIGO AS codigo'];
-    if (priceCol) selects.push(`\`${priceCol}\` AS preco`);
+    priceCols.forEach((c, i) => selects.push(`\`${c}\` AS preco_${i}`));
     if (costCol) selects.push(`\`${costCol}\` AS custo`);
     if (ncmCol) selects.push(`\`${ncmCol}\` AS ncm`);
     if (cfopCol) selects.push(`\`${cfopCol}\` AS cfop`);
@@ -2887,6 +2910,57 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`getPdvProductInfo extra: ${(e as Error).message}`);
     }
 
+    // Helper: parseia preço (string com vírgula vira número)
+    const parsePrice = (v: any): number => {
+      if (v == null) return 0;
+      if (typeof v === 'number') return v;
+      const s = String(v).trim().replace(/\./g, '').replace(',', '.');
+      const n = Number(s);
+      return isNaN(n) ? 0 : n;
+    };
+
+    // Pega o primeiro preço > 0 entre os candidatos
+    let preco = 0;
+    let precoFonte: string | null = null;
+    for (let i = 0; i < priceCols.length; i++) {
+      const v = parsePrice(extra[`preco_${i}`]);
+      if (v > 0) {
+        preco = v;
+        precoFonte = priceCols[i];
+        break;
+      }
+    }
+
+    // PLANO B: se não achou preço em produtos, busca último preço da tabela `caixa`
+    // (último valor unitário praticado pra esse SKU em qualquer loja)
+    if (preco <= 0) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT VALORTOTAL / NULLIF(QUANTIDADE, 0) AS unitario
+             FROM caixa
+            WHERE CODIGO = ?
+              AND VALORTOTAL > 0
+              AND QUANTIDADE > 0
+              AND (MARCADO IS NULL OR MARCADO <> 'SIM')
+            ORDER BY DATA DESC
+            LIMIT 1`,
+          [info.codigo],
+        );
+        const u = parsePrice((rows as any[])[0]?.unitario);
+        if (u > 0) {
+          preco = u;
+          precoFonte = 'caixa.último_unitário';
+          this.logger.log(`[pdv] Preço de ${info.codigo} via fallback caixa: R$${u.toFixed(2)}`);
+        }
+      } catch (e) {
+        this.logger.warn(`getPdvProductInfo fallback caixa: ${(e as Error).message}`);
+      }
+    }
+
+    if (preco > 0) {
+      this.logger.log(`[pdv] Preço de ${info.codigo}: R$${preco.toFixed(2)} (fonte: ${precoFonte})`);
+    }
+
     return {
       sku: info.codigo,
       ean: extra.ean ? String(extra.ean).trim() : null,
@@ -2894,10 +2968,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       cor: info.cor,
       tamanho: info.tamanho,
       descricao: info.descricao || `${info.ref || info.codigo} ${info.cor || ''} ${info.tamanho || ''}`.trim(),
-      preco: Number(extra.preco) || 0,
+      preco,
       ncm: extra.ncm ? String(extra.ncm).trim() : null,
       cfop: extra.cfop ? String(extra.cfop).trim() : null,
-      custo: extra.custo != null ? Number(extra.custo) : null,
+      custo: extra.custo != null ? parsePrice(extra.custo) : null,
     };
   }
 
