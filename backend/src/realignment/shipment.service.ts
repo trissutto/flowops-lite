@@ -810,23 +810,32 @@ export class RealignmentShipmentService {
     const receivedItems = (items as any[]).filter((i) => i.realignmentStatus === 'received');
     const missingItems = (items as any[]).filter((i) => i.realignmentStatus === 'missing');
 
-    // Resolve SKU pros itens received e dá entrada Giga
+    // Resolve SKU pros itens received e dá entrada Giga.
+    // Usa findCodigoByRefCorTam (busca direta tolerante — mesmo método do closeAndSend).
     const stockItems: Array<{ sku: string; qty: number; storeCode: string }> = [];
+    const naoResolvidos: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
     for (const it of receivedItems as any[]) {
       try {
-        const variations = await this.erp.searchByRef(it.refCode);
-        const match = variations.find(
-          (v: any) =>
-            (v.cor || '').toUpperCase() === (it.cor || '').toUpperCase() &&
-            (v.tamanho || '').toUpperCase() === (it.tamanho || '').toUpperCase(),
-        );
-        const sku = match?.codigo || match?.sku;
+        const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
         if (sku) {
           stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
+        } else {
+          naoResolvidos.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+          this.logger.warn(`[shipment] confirmReceived: não resolveu SKU pra ${it.refCode}/${it.cor}/${it.tamanho}`);
         }
       } catch (e) {
-        this.logger.warn(`[shipment] não resolveu SKU pra ${it.refCode}: ${(e as Error).message}`);
+        naoResolvidos.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        this.logger.warn(`[shipment] confirmReceived erro pra ${it.refCode}: ${(e as Error).message}`);
       }
+    }
+    // Se algum item não resolveu, NÃO finaliza — força admin a corrigir o cadastro
+    if (naoResolvidos.length > 0) {
+      throw new BadRequestException(
+        `Não consegui resolver SKU pra ${naoResolvidos.length} item(ns) (verifique cadastro Giga): ` +
+          naoResolvidos
+            .map((u) => `${u.refCode} ${u.cor || ''}/${u.tamanho || ''}`)
+            .join(', '),
+      );
     }
 
     let increaseResult: any = { success: true, applied: [] };

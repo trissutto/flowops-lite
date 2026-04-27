@@ -25,6 +25,54 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   constructor(private readonly config: ConfigService) {}
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // HELPERS DE NORMALIZAÇÃO DE SKU
+  //
+  // O Giga armazena CODIGO com zeros à esquerda (ex: "0005383498"). Outros
+  // sistemas (WC, scanner, frontend) enviam sem padding (ex: "5383498").
+  // Esses helpers expandem variantes pra que queries casem em qualquer formato.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Gera todas as variantes de um SKU (com padding zero de 3 a 14 dígitos
+   * + versão sem zeros à esquerda + original).
+   */
+  private skuVariants(sku: string): string[] {
+    const trimmed = String(sku || '').trim();
+    if (!trimmed) return [];
+    const out = new Set<string>([trimmed]);
+    const stripped = trimmed.replace(/^0+/, '');
+    if (stripped) out.add(stripped);
+    if (/^\d+$/.test(trimmed)) {
+      for (let len = 3; len <= 14; len++) {
+        if (trimmed.length < len) out.add(trimmed.padStart(len, '0'));
+      }
+    }
+    return Array.from(out);
+  }
+
+  /**
+   * Pra uma lista de SKUs, gera o set de variantes + um mapa
+   * variante→original (pra mapear retorno do Giga de volta pro
+   * formato que o caller passou).
+   */
+  private expandSkus(skus: string[]): {
+    allVariants: string[];
+    variantToOriginal: Map<string, string>;
+  } {
+    const variantToOriginal = new Map<string, string>();
+    const allVariants = new Set<string>();
+    for (const original of skus) {
+      const orig = String(original || '').trim();
+      if (!orig) continue;
+      for (const v of this.skuVariants(orig)) {
+        allVariants.add(v);
+        if (!variantToOriginal.has(v)) variantToOriginal.set(v, orig);
+      }
+    }
+    return { allVariants: Array.from(allVariants), variantToOriginal };
+  }
+
   async onModuleInit() {
     this.pool = mysql.createPool({
       host: this.config.get<string>('ERP_HOST'),
@@ -172,25 +220,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       await conn.beginTransaction();
 
       for (const it of items) {
-        const sku = String(it.sku || '').trim();
+        const skuOriginal = String(it.sku || '').trim();
         const storeCode = normalizeStoreCode(it.storeCode);
         const qty = Math.max(1, Number(it.qty) || 1);
 
-        if (!sku || !storeCode) {
-          throw new Error(`Item inválido: sku='${sku}' storeCode='${storeCode}'`);
+        if (!skuOriginal || !storeCode) {
+          throw new Error(`Item inválido: sku='${skuOriginal}' storeCode='${storeCode}'`);
         }
+
+        // Tolerância a zeros à esquerda: se o sistema pediu baixa de "5383498"
+        // mas no Giga está "0005383498", precisamos achar o CODIGO real antes
+        // de dar UPDATE — caso contrário a baixa some silenciosa.
+        const variants = this.skuVariants(skuOriginal);
 
         // SELECT FOR UPDATE — trava a linha durante a transação pra evitar
         // que outra conexão (ex: PDV do Giga) leia valor desatualizado.
+        // Tras o CODIGO real do Giga pra usar no UPDATE.
         const [beforeRows] = await conn.query<mysql.RowDataPacket[]>(
-          `SELECT ESTOQUE FROM estoque WHERE CODIGO = ? AND LOJA = ? LIMIT 1 FOR UPDATE`,
-          [sku, storeCode],
+          `SELECT CODIGO, ESTOQUE FROM estoque
+            WHERE CODIGO IN (?) AND LOJA = ?
+            ORDER BY ESTOQUE DESC
+            LIMIT 1 FOR UPDATE`,
+          [variants, storeCode],
         );
 
         if (!beforeRows.length) {
-          throw new Error(`Registro não encontrado em estoque: SKU=${sku} LOJA=${storeCode}`);
+          throw new Error(`Registro não encontrado em estoque: SKU=${skuOriginal} LOJA=${storeCode}`);
         }
 
+        const codigoGiga = String(beforeRows[0].CODIGO).trim();
         const previousStock = Number(beforeRows[0].ESTOQUE) || 0;
         const newStock = previousStock - qty;
 
@@ -199,22 +257,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         // divergência com o físico).
         if (newStock < 0) {
           throw new Error(
-            `Estoque insuficiente: SKU=${sku} LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
+            `Estoque insuficiente: SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
           );
         }
 
         const [result]: any = await conn.query(
           `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
-          [newStock, sku, storeCode],
+          [newStock, codigoGiga, storeCode],
         );
 
         if (!result || result.affectedRows !== 1) {
           throw new Error(
-            `UPDATE não afetou linha esperada: SKU=${sku} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
+            `UPDATE não afetou linha esperada: SKU=${codigoGiga} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
           );
         }
 
-        applied.push({ sku, storeCode, qty, previousStock, newStock });
+        // Mantém o sku ORIGINAL no log pra rastreabilidade (caller passou).
+        applied.push({ sku: skuOriginal, storeCode, qty, previousStock, newStock });
       }
 
       await conn.commit();
@@ -317,46 +376,70 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       await conn.beginTransaction();
 
       for (const it of items) {
-        const sku = String(it.sku || '').trim();
+        const skuOriginal = String(it.sku || '').trim();
         const qty = Number(it.qty);
         const storeCode = normalizeStoreCode(it.storeCode);
 
-        if (!sku || !storeCode || !qty || qty <= 0) {
-          throw new Error(`Item inválido: sku=${sku} loja=${storeCode} qty=${qty}`);
+        if (!skuOriginal || !storeCode || !qty || qty <= 0) {
+          throw new Error(`Item inválido: sku=${skuOriginal} loja=${storeCode} qty=${qty}`);
         }
 
-        // SELECT FOR UPDATE — trava a linha
+        // Tolerância a zeros à esquerda: tenta achar o CODIGO real do Giga
+        // (pode estar como "0005383498" mesmo recebendo "5383498").
+        const variants = this.skuVariants(skuOriginal);
+
+        // SELECT FOR UPDATE — trava a linha (se houver)
         const [rows] = await conn.query<mysql.RowDataPacket[]>(
-          `SELECT ESTOQUE FROM estoque WHERE CODIGO = ? AND LOJA = ? LIMIT 1 FOR UPDATE`,
-          [sku, storeCode],
+          `SELECT CODIGO, ESTOQUE FROM estoque
+            WHERE CODIGO IN (?) AND LOJA = ?
+            ORDER BY ESTOQUE DESC
+            LIMIT 1 FOR UPDATE`,
+          [variants, storeCode],
         );
 
         let previousStock = 0;
         let newStock = qty;
+        let codigoGiga = skuOriginal;
 
         if (!rows.length) {
-          // SKU não existe pra essa loja — INSERT novo
+          // Nenhuma variante existe pra essa loja — INSERT novo.
+          // Pra manter consistência com o cadastro, tenta usar o CODIGO
+          // do `produtos` (que pode ter padding diferente do que veio).
+          let codigoCadastro = skuOriginal;
+          try {
+            const [prodRows] = await conn.query<mysql.RowDataPacket[]>(
+              `SELECT CODIGO FROM produtos WHERE CODIGO IN (?) LIMIT 1`,
+              [variants],
+            );
+            if ((prodRows as any[]).length) {
+              codigoCadastro = String((prodRows as any[])[0].CODIGO).trim();
+            }
+          } catch { /* ignore — usa skuOriginal */ }
+
           await conn.query(
             `INSERT INTO estoque (CODIGO, LOJA, ESTOQUE) VALUES (?, ?, ?)`,
-            [sku, storeCode, qty],
+            [codigoCadastro, storeCode, qty],
           );
+          codigoGiga = codigoCadastro;
           previousStock = 0;
           newStock = qty;
         } else {
+          codigoGiga = String(rows[0].CODIGO).trim();
           previousStock = Number(rows[0].ESTOQUE);
           newStock = previousStock + qty;
           const [result] = await conn.query<mysql.ResultSetHeader>(
             `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
-            [newStock, sku, storeCode],
+            [newStock, codigoGiga, storeCode],
           );
           if (!result || result.affectedRows !== 1) {
             throw new Error(
-              `UPDATE não afetou linha esperada: SKU=${sku} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
+              `UPDATE não afetou linha esperada: SKU=${codigoGiga} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
             );
           }
         }
 
-        applied.push({ sku, storeCode, qty, previousStock, newStock });
+        // Mantém o sku ORIGINAL no log pra rastreabilidade (caller passou).
+        applied.push({ sku: skuOriginal, storeCode, qty, previousStock, newStock });
       }
 
       await conn.commit();
@@ -378,9 +461,48 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
    * Retorna só registros com ESTOQUE > 0.
+   *
+   * TOLERANTE A ZEROS À ESQUERDA: o WooCommerce pode enviar SKU "5383498"
+   * mas no Giga o CODIGO está cadastrado como "0005383498". Sem essa
+   * tolerância, o roteamento não acha estoque e divide pedidos errado.
+   *
+   * Estratégia:
+   *   1. Pra cada SKU recebido, gera variantes com padding 3-14 dígitos
+   *   2. Consulta no Giga com a união de todas as variantes
+   *   3. No retorno, mapeia o CODIGO do Giga DE VOLTA pro SKU original
+   *      do caller (pra que o resto do sistema continue trabalhando com
+   *      o formato que enviou)
    */
   async getStock(skus: string[], storeCodes: string[]): Promise<StockEntry[]> {
     if (!skus.length || !storeCodes.length || !this.pool) return [];
+
+    // Helper: gera todas as variantes possíveis pra um SKU
+    const variantsOf = (s: string): string[] => {
+      const trimmed = String(s || '').trim();
+      if (!trimmed) return [];
+      const out = new Set<string>([trimmed]);
+      const stripped = trimmed.replace(/^0+/, '');
+      if (stripped) out.add(stripped);
+      if (/^\d+$/.test(trimmed)) {
+        for (let len = 3; len <= 14; len++) {
+          if (trimmed.length < len) out.add(trimmed.padStart(len, '0'));
+        }
+      }
+      return Array.from(out);
+    };
+
+    // Mapa: variante → SKU original (pra mapear retorno de volta)
+    const variantToOriginal = new Map<string, string>();
+    const allVariants = new Set<string>();
+    for (const original of skus) {
+      for (const v of variantsOf(original)) {
+        allVariants.add(v);
+        // Primeira ocorrência ganha (caso 2 SKUs originais gerem mesma variante,
+        // o que é improvável mas defensivo)
+        if (!variantToOriginal.has(v)) variantToOriginal.set(v, String(original).trim());
+      }
+    }
+    if (!allVariants.size) return [];
 
     const sql = `
       SELECT CODIGO AS sku,
@@ -392,12 +514,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
          AND ESTOQUE > 0
     `;
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [skus, storeCodes]);
-      return rows.map((r) => ({
-        storeCode: String(r.storeCode).trim(),
-        sku: String(r.sku).trim(),
-        availableQty: Number(r.availableQty),
-      }));
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [
+        Array.from(allVariants),
+        storeCodes,
+      ]);
+      return rows.map((r) => {
+        const codigoGiga = String(r.sku).trim();
+        // Mapeia de volta pro SKU original que o caller passou
+        const originalSku = variantToOriginal.get(codigoGiga) || codigoGiga;
+        return {
+          storeCode: String(r.storeCode).trim(),
+          sku: originalSku,
+          availableQty: Number(r.availableQty),
+        };
+      });
     } catch (e) {
       this.logger.error(`Falha ao consultar estoque ERP: ${(e as Error).message}`);
       return [];
@@ -629,23 +759,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return out;
     }
 
-    // Dedup + limpa SKUs
+    // Dedup + limpa SKUs + EXPANDE variantes (zeros à esquerda)
     const unique = Array.from(new Set(skus.map((s) => String(s).trim()).filter(Boolean)));
     if (!unique.length) return out;
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return out;
 
     try {
-      // Backticks na coluna detectada (nome dinâmico) — protege contra reserved words
       const sql = `
         SELECT CODIGO AS sku, \`${precoCol}\` AS preco
           FROM produtos
          WHERE CODIGO IN (?)
       `;
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [unique]);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [allVariants]);
       for (const r of rows) {
-        const sku = String(r.sku).trim();
+        const codigoGiga = String(r.sku).trim();
+        // Mapeia de volta pro SKU original que o caller passou
+        const originalSku = variantToOriginal.get(codigoGiga) || codigoGiga;
         const preco = Number(r.preco);
         if (!Number.isNaN(preco) && preco > 0) {
-          out.set(sku, preco);
+          // VENDAUN é em centavos — divide por 100 (consistente com getPdvProductInfo)
+          const precoFinal = (precoCol || '').toUpperCase() === 'VENDAUN' ? preco / 100 : preco;
+          // Se já tem o SKU no map, mantém o maior preço (defensivo contra duplicatas)
+          const existing = out.get(originalSku);
+          if (!existing || precoFinal > existing) {
+            out.set(originalSku, precoFinal);
+          }
         }
       }
       return out;
@@ -671,7 +810,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
     if (!unique.length) return {};
 
-    // PASSO 1: verifica quais SKUs existem no CADASTRO (tabela `produtos`).
+    // Expande variantes de zero-padding (Giga grava "0005383498", outros sistemas
+    // podem mandar "5383498"). Mantém map variantToOriginal pra retornar
+    // o resultado agrupado pelo SKU original que o caller passou.
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+
+    // PASSO 1: verifica quais SKUs ORIGINAIS existem no CADASTRO (tabela `produtos`).
     // Produto pode existir em `produtos` mas NÃO em `estoque` se ele está zerado
     // em todas as lojas (gigasistemas só cria linha em `estoque` quando há movimento).
     // Se confundirmos "sem linha em estoque" com "não existe", as 698 variações
@@ -680,10 +825,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         'SELECT CODIGO FROM produtos WHERE CODIGO IN (?)',
-        [unique],
+        [allVariants],
       );
       for (const r of rows) {
-        existsInProducts.add(String(r.CODIGO).trim());
+        const codigoGiga = String(r.CODIGO).trim();
+        const original = variantToOriginal.get(codigoGiga) || codigoGiga;
+        existsInProducts.add(original);
       }
     } catch (e) {
       this.logger.error(`Falha ao verificar cadastro ERP: ${(e as Error).message}`);
@@ -691,6 +838,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     // PASSO 2: busca estoque consolidado dos que têm movimento em pelo menos uma loja.
+    // Soma todas as variantes de cada SKU original (caso o Giga tenha as duas formas).
     const stockMap: Record<string, number> = {};
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -698,10 +846,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
            FROM estoque
           WHERE CODIGO IN (?)
           GROUP BY CODIGO`,
-        [unique],
+        [allVariants],
       );
       for (const r of rows) {
-        stockMap[String(r.sku).trim()] = Number(r.totalQty) || 0;
+        const codigoGiga = String(r.sku).trim();
+        const original = variantToOriginal.get(codigoGiga) || codigoGiga;
+        const qty = Number(r.totalQty) || 0;
+        stockMap[original] = (stockMap[original] || 0) + qty;
       }
     } catch (e) {
       this.logger.error(`Falha ao consultar estoque total ERP: ${(e as Error).message}`);
@@ -729,22 +880,38 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
     if (!unique.length) return {};
 
+    // Tolerância a zeros à esquerda: expande cada SKU pra suas variantes 3-14 dígitos
+    // e mapeia o resultado de volta pro SKU original que o caller passou.
+    const { allVariants, variantToOriginal } = this.expandSkus(unique);
+    if (!allVariants.length) return {};
+
     const sql = `
       SELECT CODIGO AS sku,
              LOJA   AS storeCode,
-             ESTOQUE AS qty
+             SUM(ESTOQUE) AS qty
         FROM estoque
        WHERE CODIGO IN (?)
          AND ESTOQUE > 0
+       GROUP BY CODIGO, LOJA
        ORDER BY CODIGO, LOJA
     `;
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [unique]);
-      const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [allVariants]);
+      // Agrega por (sku original, storeCode) somando variantes que apareçam separadas.
+      const agg = new Map<string, Map<string, number>>();
       for (const r of rows) {
-        const sku = String(r.sku).trim();
-        if (!map[sku]) map[sku] = [];
-        map[sku].push({ storeCode: String(r.storeCode).trim(), qty: Number(r.qty) || 0 });
+        const codigoGiga = String(r.sku).trim();
+        const original = variantToOriginal.get(codigoGiga) || codigoGiga;
+        const storeCode = String(r.storeCode).trim();
+        const qty = Number(r.qty) || 0;
+        if (qty <= 0) continue;
+        if (!agg.has(original)) agg.set(original, new Map());
+        const lojaMap = agg.get(original)!;
+        lojaMap.set(storeCode, (lojaMap.get(storeCode) || 0) + qty);
+      }
+      const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+      for (const [sku, lojaMap] of agg.entries()) {
+        map[sku] = Array.from(lojaMap.entries()).map(([storeCode, qty]) => ({ storeCode, qty }));
       }
       return map;
     } catch (e) {
@@ -763,13 +930,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getStockRawBySku(sku: string): Promise<Array<{ sku: string; storeCode: string; qty: number }>> {
     if (!sku || !this.pool) return [];
+    const variants = this.skuVariants(sku);
+    if (!variants.length) return [];
     try {
+      // Diagnóstico: mostra TUDO (não filtra ESTOQUE>0 e mantém o CODIGO real
+      // do Giga pra ajudar a identificar problemas de zero-padding).
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
            FROM estoque
-          WHERE CODIGO = ?
-          ORDER BY LOJA`,
-        [sku.trim()],
+          WHERE CODIGO IN (?)
+          ORDER BY LOJA, CODIGO`,
+        [variants],
       );
       return (rows as any[]).map((r) => ({
         sku: String(r.sku).trim(),
@@ -2880,14 +3051,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async getStockBySkuAndStores(sku: string, storeCodes: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!this.pool || !sku || !storeCodes.length) return out;
+    const variants = this.skuVariants(sku);
+    if (!variants.length) return out;
     try {
+      // Soma tudo do SKU (todas as variantes de zero-padding) por loja.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT LOJA AS storeCode, ESTOQUE AS qty
+        `SELECT LOJA AS storeCode, SUM(ESTOQUE) AS qty
            FROM estoque
-          WHERE CODIGO = ?
+          WHERE CODIGO IN (?)
             AND LOJA IN (?)
-            AND ESTOQUE > 0`,
-        [sku, storeCodes],
+            AND ESTOQUE > 0
+          GROUP BY LOJA`,
+        [variants, storeCodes],
       );
       for (const r of rows as any[]) {
         const code = String(r.storeCode).trim();
