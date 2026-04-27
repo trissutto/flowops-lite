@@ -955,19 +955,19 @@ function PaymentModal({
         {needsBandeira && (
           <div className="space-y-2 pt-2 border-t">
             <label className="text-xs text-slate-600 uppercase font-semibold">Bandeira</label>
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className={`grid gap-1.5 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
               {bandeiras.map((b) => (
                 <button
                   key={b}
                   type="button"
                   onClick={() => setBandeira(b)}
-                  className={`py-2 px-2 rounded border text-xs font-bold transition-colors ${
+                  className={`py-3 px-2 rounded border-2 transition-all flex items-center justify-center min-h-[56px] ${
                     bandeira === b
-                      ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-600'
+                      ? 'border-emerald-600 bg-emerald-50 shadow-md scale-105'
+                      : 'border-slate-200 hover:border-slate-300 bg-white'
                   }`}
                 >
-                  {b}
+                  <BandeiraLogo brand={b} />
                 </button>
               ))}
             </div>
@@ -996,26 +996,30 @@ function PaymentModal({
           </div>
         )}
 
-        {/* Parcelas (crédito ou crediário) */}
+        {/* Parcelas (crédito ou crediário) — 1 a 12x sem juros */}
         {(selected === 'credito' || selected === 'crediario') && (
           <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600 uppercase font-semibold">Parcelas</label>
+            <label className="text-xs text-slate-600 uppercase font-semibold">
+              Parcelas (sem juros)
+            </label>
             <div className="grid grid-cols-6 gap-1">
-              {[1, 2, 3, 4, 6, 10].map((p) => (
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => (
                 <button
                   key={p}
                   type="button"
                   onClick={() => setParcelas(p)}
-                  className={`py-2 rounded text-sm font-bold ${
-                    parcelas === p ? 'bg-emerald-600 text-white' : 'bg-slate-100 hover:bg-slate-200'
+                  className={`py-2 rounded text-sm font-bold transition-colors ${
+                    parcelas === p ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 hover:bg-slate-200'
                   }`}
                 >
-                  {p}x
+                  {p}×
                 </button>
               ))}
             </div>
-            <div className="text-center text-xs text-slate-600">
-              {parcelas}× de <b>{brl(total / parcelas)}</b>
+            <div className="text-center text-sm bg-emerald-50 rounded py-2">
+              <span className="text-slate-600">{parcelas}× de </span>
+              <span className="font-bold text-emerald-700 text-lg">{brl(total / parcelas)}</span>
+              <span className="text-slate-500 text-xs ml-1">sem juros</span>
             </div>
           </div>
         )}
@@ -1250,4 +1254,116 @@ function OpenSalesModal({
       </div>
     </div>
   );
+}
+
+// ─── Logos das bandeiras (SVG inline) ──────────────────────────────────
+
+function BandeiraLogo({ brand }: { brand: string }) {
+  switch (brand) {
+    case 'MASTERCARD':
+      return (
+        <svg viewBox="0 0 60 36" className="h-7" aria-label="Mastercard">
+          <circle cx="22" cy="18" r="14" fill="#EB001B" />
+          <circle cx="38" cy="18" r="14" fill="#F79E1B" />
+          <path
+            d="M30 8a14 14 0 0 0 0 20 14 14 0 0 0 0-20z"
+            fill="#FF5F00"
+          />
+        </svg>
+      );
+
+    case 'VISANET':
+    case 'VISA ELECTRON':
+      return (
+        <div className="flex flex-col items-center">
+          <svg viewBox="0 0 80 26" className="h-6">
+            <text
+              x="40"
+              y="22"
+              textAnchor="middle"
+              fontFamily="Arial Black, sans-serif"
+              fontSize="22"
+              fontWeight="900"
+              fontStyle="italic"
+              fill="#1A1F71"
+            >
+              VISA
+            </text>
+          </svg>
+          {brand === 'VISA ELECTRON' && (
+            <span className="text-[8px] font-bold tracking-wider text-[#1A1F71]">
+              ELECTRON
+            </span>
+          )}
+        </div>
+      );
+
+    case 'HIPERCARD':
+      return (
+        <svg viewBox="0 0 110 24" className="h-6" aria-label="Hipercard">
+          <text
+            x="55"
+            y="20"
+            textAnchor="middle"
+            fontFamily="Arial Black, sans-serif"
+            fontSize="18"
+            fontWeight="900"
+            fontStyle="italic"
+            fill="#B3131B"
+          >
+            Hipercard
+          </text>
+        </svg>
+      );
+
+    case 'AMEX':
+      return (
+        <div className="bg-[#006FCF] rounded px-2 py-1 flex items-center justify-center min-w-[64px]">
+          <span className="text-white font-black text-sm tracking-wide italic">
+            AMEX
+          </span>
+        </div>
+      );
+
+    case 'ELO':
+      return (
+        <div className="flex items-center gap-0.5">
+          <span
+            className="inline-block w-3 h-3 rounded-full"
+            style={{ background: '#FFCB05' }}
+          />
+          <span
+            className="inline-block w-3 h-3 rounded-full -ml-1.5"
+            style={{ background: '#00A4E0' }}
+          />
+          <span
+            className="inline-block w-3 h-3 rounded-full -ml-1.5"
+            style={{ background: '#EE3124' }}
+          />
+          <span className="font-black text-sm text-slate-800 ml-1 italic">
+            elo
+          </span>
+        </div>
+      );
+
+    case 'REDESHOP':
+      return (
+        <svg viewBox="0 0 110 24" className="h-6" aria-label="Redeshop">
+          <text
+            x="55"
+            y="20"
+            textAnchor="middle"
+            fontFamily="Arial Black, sans-serif"
+            fontSize="16"
+            fontWeight="900"
+            fill="#CC092F"
+          >
+            REDESHOP
+          </text>
+        </svg>
+      );
+
+    default:
+      return <span className="text-xs font-bold text-slate-700">{brand}</span>;
+  }
 }
