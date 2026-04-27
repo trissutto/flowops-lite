@@ -2814,6 +2814,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     tamanho: string | null;
     descricao: string | null;
   } | null> {
+    // Wrapper bulletproof — NUNCA propaga erro pra cima.
+    // Qualquer erro de conexão / timeout / SQL → loga + retorna null.
+    // Caller (triage, etc) trata null como "produto não cadastrado" e mostra
+    // mensagem amigável em vez de 500.
+    try {
+      return await this._resolveSkuInfoInner(sku);
+    } catch (e: any) {
+      this.logger.error(`[resolveSkuInfo] erro fatal não tratado pra "${sku}": ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  private async _resolveSkuInfoInner(sku: string): Promise<{
+    codigo: string;
+    ref: string | null;
+    cor: string | null;
+    tamanho: string | null;
+    descricao: string | null;
+  } | null> {
     if (!this.pool) return null;
     const s = String(sku || '').trim();
     if (!s) return null;

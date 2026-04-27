@@ -54,22 +54,27 @@ export class TriagemService {
       return await this._suggestInner(input);
     } catch (e: any) {
       // Re-lança erros de regra (Bad/Not Found/Forbidden) — esses já têm mensagem certa.
+      // Identifica por status numérico OU por nome da classe (mais robusto entre versões do NestJS).
+      const status = e?.status || e?.response?.statusCode || 0;
+      const cls = e?.constructor?.name || '';
       if (
-        e?.status === 400 ||
-        e?.status === 403 ||
-        e?.status === 404 ||
-        e?.constructor?.name === 'BadRequestException' ||
-        e?.constructor?.name === 'NotFoundException' ||
-        e?.constructor?.name === 'ForbiddenException'
+        status === 400 || status === 403 || status === 404 ||
+        cls === 'BadRequestException' ||
+        cls === 'NotFoundException' ||
+        cls === 'ForbiddenException' ||
+        cls === 'HttpException'
       ) {
         throw e;
       }
       // Erros transitórios de MySQL/Postgres viravam 500 cru.
-      // Converte em BadRequest com diagnóstico amigável.
+      // Loga TUDO no console (Railway log) pra identificar a causa real.
       const msg = String(e?.message || e || 'erro desconhecido');
-      this.logger.error(`[triage.suggest] erro inesperado pro SKU "${input.sku}": ${msg}`);
+      const stack = e?.stack ? String(e.stack).split('\n').slice(0, 5).join(' | ') : '';
+      this.logger.error(
+        `[triage.suggest] erro inesperado pro SKU "${input.sku}" (origem=${input.fromStoreCode}): ${msg} | stack: ${stack}`,
+      );
       throw new BadRequestException(
-        `Não consegui processar a sugestão (${msg}). Tente novamente em 5s ou bipe outro SKU.`,
+        `Não consegui processar a sugestão. Detalhe técnico: ${msg.slice(0, 200)}. Tente novamente em 5s.`,
       );
     }
   }
