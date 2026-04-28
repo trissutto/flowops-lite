@@ -302,12 +302,44 @@ export class PagarmeService {
     const charge = (order.charges || [])[0];
     const lastTx = charge?.last_transaction || {};
 
-    const qrCodeText = lastTx.qr_code || '';
-    const qrCodeImageUrl = lastTx.qr_code_url || '';
+    // Pagar.me API v5 pode retornar QR em múltiplos caminhos dependendo da
+    // versão do endpoint. Tenta TODAS as posições conhecidas.
+    const qrCodeText: string =
+      lastTx.qr_code ||
+      lastTx.pix_qr_code ||
+      lastTx.qrcode ||
+      charge?.qr_code ||
+      charge?.pix?.qr_code ||
+      order?.checkouts?.[0]?.pix_qr_code ||
+      '';
+
+    const qrCodeImageUrl: string =
+      lastTx.qr_code_url ||
+      lastTx.pix_qr_code_url ||
+      lastTx.qrcode_url ||
+      charge?.qr_code_url ||
+      charge?.pix?.qr_code_url ||
+      order?.checkouts?.[0]?.pix_qr_code_url ||
+      '';
 
     if (!qrCodeText) {
-      this.logger.error(`[pagarme] order ${orderId} sem qr_code: ${JSON.stringify(order)}`);
-      throw new BadRequestException('Pagar.me não retornou QR Code');
+      // Loga estrutura completa pro Railway pra debug
+      this.logger.error(
+        `[pagarme] order ${orderId} sem qr_code. Response completo: ${JSON.stringify(order, null, 2).slice(0, 3000)}`,
+      );
+      // Retorna a estrutura pra cliente conseguir debugar visualmente
+      const debugStruct = {
+        orderStatus: order.status,
+        chargeStatus: charge?.status,
+        chargeId: charge?.id,
+        lastTxStatus: lastTx?.status,
+        lastTxKeys: Object.keys(lastTx || {}),
+        chargeKeys: Object.keys(charge || {}),
+        orderKeys: Object.keys(order || {}),
+      };
+      throw new BadRequestException(
+        `Pagar.me não retornou QR Code. Estrutura: ${JSON.stringify(debugStruct).slice(0, 250)}`,
+      );
     }
 
     await (this.prisma as any).pagarmePayment.create({
