@@ -922,6 +922,47 @@ model PdvReturn {
   @@map("pdv_returns")
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// NFC-e CONFIG POR LOJA
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Cada loja tem seu próprio CNPJ, IE, CSC e (geralmente) certificado A1.
+// O PDV emite a NFC-e usando a config da loja onde a venda foi feita.
+//
+// O certificado A1 (PFX) e a senha são guardados em base64 — em produção,
+// é fortemente recomendado usar criptografia at-rest no banco (Postgres
+// pgcrypto ou criptografia da app).
+model NfceConfig {
+  id              String   @id @default(uuid())
+  storeCode       String   @unique @map("store_code")
+  storeName       String?  @map("store_name")
+  // Ambiente: '1' produção · '2' homologação
+  ambiente        String   @default("2")
+  uf              String   @default("SP")
+  cnpj            String?
+  razaoSocial     String?  @map("razao_social")
+  fantasia        String?
+  ie              String?
+  // Regime: '1' Simples Nacional · '3' Regime Normal
+  regime          String   @default("1")
+  // Endereço (JSON: {logradouro,numero,bairro,municipio,cep,uf,codMunicipio})
+  endereco        String?  @db.Text
+  // CSC SEFAZ
+  cscId           String?  @map("csc_id")
+  cscToken        String?  @map("csc_token") @db.Text
+  // Numeração
+  serie           String   @default("1")
+  numeroAtual     Int      @default(0) @map("numero_atual")
+  // Certificado A1
+  certPfxB64      String?  @map("cert_pfx_b64") @db.Text
+  certPfxPass     String?  @map("cert_pfx_pass")
+  // Auditoria
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("nfce_configs")
+}
+
 model PdvReturnItem {
   id              String   @id @default(uuid())
   returnId        String   @map("return_id")

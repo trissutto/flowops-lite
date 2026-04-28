@@ -88,24 +88,35 @@ export class PdvController {
   }
 
   /**
-   * GET /pdv/nfce/config — leitura da config NFC-e (sem revelar PFX).
+   * GET /pdv/nfce/config?storeCode=01 — leitura da config NFC-e da loja.
    */
   @Get('nfce/config')
-  async getNfceConfig(@Req() req: any) {
+  async getNfceConfig(@Req() req: any, @Query('storeCode') storeCode: string) {
     this.requireRole(req);
-    return this.nfce.getConfig();
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.nfce.getConfig(storeCode);
+  }
+
+  /**
+   * GET /pdv/nfce/status — status NFC-e de TODAS as lojas (dashboard).
+   */
+  @Get('nfce/status')
+  async listNfceStatus(@Req() req: any) {
+    this.requireRole(req);
+    return this.nfce.listAllStatus();
   }
 
   /**
    * POST /pdv/nfce/config — salva config (admin only).
-   * Body: { ambiente, cnpj, ie, csc..., certPfxB64?, certPfxPass? }
+   * Body: { storeCode, ambiente, cnpj, ie, csc..., certPfxB64?, certPfxPass? }
    */
   @Post('nfce/config')
   async setNfceConfig(@Req() req: any, @Body() body: any) {
     if (req?.user?.role !== 'admin') {
       throw new ForbiddenException('Apenas admin pode editar config NFC-e');
     }
-    return this.nfce.setConfig(body);
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.nfce.setConfig(body.storeCode, body);
   }
 
   /**

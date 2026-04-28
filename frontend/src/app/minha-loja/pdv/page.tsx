@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import {
   ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
@@ -455,60 +456,95 @@ export default function PdvPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-20 bg-white border-b shadow-sm">
-        <div className="max-w-3xl mx-auto px-3 py-2 flex items-center gap-2">
-          <Link href="/minha-loja" className="text-slate-500 hover:text-slate-700" aria-label="Voltar">
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50 flex flex-col">
+      {/* ── HEADER novo: logo + brand + ações ───────────────────────── */}
+      <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-rose-100 shadow-sm">
+        <div className="max-w-3xl mx-auto px-3 py-2.5 flex items-center gap-3">
+          <Link
+            href="/minha-loja"
+            className="text-rose-700 hover:text-rose-900 transition shrink-0"
+            aria-label="Voltar"
+          >
             <ArrowLeft className="w-5 h-5" />
           </Link>
+
+          {/* Logo + brand */}
+          <Link href="/minha-loja" className="flex items-center gap-2 shrink-0">
+            <div className="relative w-10 h-10">
+              <Image
+                src="/lurds-logo.png"
+                alt="Lurd's Plus Size"
+                fill
+                sizes="40px"
+                className="object-contain"
+                priority
+              />
+            </div>
+          </Link>
+
+          {/* Título + venda */}
           <div className="flex-1 min-w-0">
-            <h1 className="text-base font-semibold text-slate-800 flex items-center gap-1.5">
-              <ShoppingCart className="w-4 h-4 text-emerald-600" />
-              PDV {sale?.storeCode}
+            <h1 className="text-sm font-bold bg-gradient-to-r from-rose-700 to-pink-600 bg-clip-text text-transparent leading-tight">
+              PDV · {sale?.storeCode || '...'}
             </h1>
-            <p className="text-[11px] text-slate-500 truncate">
-              {sale ? `Venda ${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} item(ns)` : 'Carregando...'}
+            <p className="text-[10px] text-rose-700/60 truncate font-medium">
+              {sale ? `#${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} item(ns)` : 'Carregando…'}
             </p>
           </div>
+
+          {/* Botão Cliente — destaque rosa */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className="text-xs px-2 py-1.5 rounded bg-slate-100 hover:bg-slate-200 flex items-center gap-1 disabled:opacity-50"
+            className={`text-xs px-2.5 py-2 rounded-lg flex items-center gap-1.5 font-bold transition shadow-sm disabled:opacity-50 ${
+              sale?.customerCpf
+                ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-rose-200'
+                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+            }`}
             title="Identificar cliente"
           >
             <User className="w-3.5 h-3.5" />
-            {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Cliente'}
+            <span className="hidden sm:inline truncate max-w-[80px]">
+              {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Cliente'}
+            </span>
           </button>
+        </div>
 
-          {/* Badge vendas em aberto */}
-          <button
-            onClick={() => setShowOpenList(true)}
-            disabled={openCount === 0}
-            className="text-xs px-2 py-1.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 flex items-center gap-1 disabled:opacity-30 disabled:bg-slate-100 disabled:text-slate-400 disabled:border-slate-200"
-            title={openCount > 0 ? `${openCount} venda(s) em aberto` : 'Nenhuma venda em aberto'}
-          >
-            <Pause className="w-3.5 h-3.5" />
-            {openCount > 0 && (
-              <span className="font-bold tabular-nums">{openCount}</span>
-            )}
-          </button>
-
-          {/* Atalhos: Caixa + Devolução */}
+        {/* ── Faixa de atalhos rápidos ──────────────────────────────── */}
+        <div className="max-w-3xl mx-auto px-3 pb-2.5 grid grid-cols-3 gap-2">
           <Link
             href="/minha-loja/pdv/caixa"
-            className="text-xs px-2 py-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center gap-1"
-            title="Caixa do dia"
+            className="bg-gradient-to-br from-emerald-50 to-green-100 hover:from-emerald-100 hover:to-green-200 border border-emerald-200 text-emerald-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow"
+            title="Caixa do dia (abrir, sangria, fechar)"
           >
-            <DollarSign className="w-3.5 h-3.5" />
+            <DollarSign className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wide">Caixa</span>
           </Link>
+
           <Link
             href="/minha-loja/pdv/devolucao"
-            className="text-xs px-2 py-1.5 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1"
+            className="bg-gradient-to-br from-amber-50 to-orange-100 hover:from-amber-100 hover:to-orange-200 border border-amber-200 text-amber-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow"
             title="Devolução / Troca"
           >
-            <ArrowRightLeft className="w-3.5 h-3.5" />
+            <ArrowRightLeft className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wide">Devolução</span>
           </Link>
+
+          <button
+            type="button"
+            onClick={() => setShowOpenList(true)}
+            disabled={openCount === 0}
+            className="bg-gradient-to-br from-violet-50 to-purple-100 hover:from-violet-100 hover:to-purple-200 border border-violet-200 text-violet-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed relative"
+            title={openCount > 0 ? `${openCount} venda(s) pausadas` : 'Nenhuma venda pausada'}
+          >
+            <Pause className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-wide">Pausadas</span>
+            {openCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow">
+                {openCount}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -520,13 +556,13 @@ export default function PdvPage() {
           </div>
         )}
 
-        {/* Input bipagem */}
+        {/* Input bipagem — destaque rosa */}
         {sale?.status === 'open' && (
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-lg border-2 border-emerald-300 p-3 shadow-sm"
+            className="bg-white rounded-2xl border-2 border-rose-300 p-3 shadow-md ring-4 ring-rose-100/50"
           >
-            <label className="text-xs uppercase font-semibold text-emerald-700 flex items-center gap-1 mb-1.5">
+            <label className="text-xs uppercase font-bold text-rose-700 flex items-center gap-1.5 mb-2 tracking-wide">
               <Barcode className="w-3.5 h-3.5" />
               Bipe o produto
             </label>
@@ -536,9 +572,9 @@ export default function PdvPage() {
                 type="text"
                 value={scanInput}
                 onChange={(e) => setScanInput(e.target.value)}
-                placeholder="SKU ou EAN"
+                placeholder="SKU ou EAN13"
                 disabled={scanLoading}
-                className="flex-1 px-4 py-3 text-lg font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-slate-50"
+                className="flex-1 px-4 py-3.5 text-xl font-mono font-bold border-2 border-rose-200 rounded-xl focus:outline-none focus:ring-4 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 placeholder:text-rose-200 placeholder:font-normal"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -547,7 +583,7 @@ export default function PdvPage() {
               <button
                 type="submit"
                 disabled={!scanInput || scanLoading}
-                className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-md flex items-center disabled:opacity-40"
+                className="px-5 py-3.5 bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-bold rounded-xl flex items-center disabled:opacity-40 shadow-md shadow-rose-200 transition"
               >
                 {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
               </button>

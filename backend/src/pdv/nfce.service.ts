@@ -1,33 +1,20 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
 
 /**
  * NFC-e (NFe modelo 65) — emissão fiscal de cupom no PDV.
  *
+ * Multi-loja: cada loja tem CNPJ/IE/CSC/A1 próprios, então a config é
+ * persistida por `storeCode` (model NfceConfig). O PDV usa a config da
+ * loja onde a venda foi feita (PdvSale.storeCode).
+ *
  * Estados deste service:
  *   1. STUB    → gera XML estruturado válido + chave de acesso REAL,
  *                marca status='preview'. NÃO transmite à SEFAZ.
  *   2. HOMOLOG → transmite ao ambiente de homologação SEFAZ-SP (testes)
  *                quando certificado A1 + CSC estão configurados.
- *   3. PROD    → transmite ao ambiente de produção quando NFCE_AMBIENTE=1
- *
- * Configuração via SystemSetting (key-value):
- *   nfce.ambiente       = '1' (prod) | '2' (homolog) — default '2'
- *   nfce.uf             = 'SP' (default)
- *   nfce.cnpj           = '00.000.000/0001-00' (sem máscara, 14 dígitos)
- *   nfce.razao_social   = 'LURDS PLUS SIZE LTDA'
- *   nfce.fantasia       = 'LURDS PLUS SIZE'
- *   nfce.ie             = inscrição estadual (sem máscara)
- *   nfce.regime         = '1' simples nacional (default) | '3' regime normal
- *   nfce.endereco       = JSON {logradouro,numero,bairro,municipio,cep,uf,codMunicipio}
- *   nfce.csc            = código do contribuinte (idCSC)
- *   nfce.csc_token      = token CSC
- *   nfce.csc_id         = id do CSC (1, 2, etc)
- *   nfce.serie          = '1' (default) — uma série por loja-PDV
- *   nfce.numero_atual   = contador (auto-incrementa)
- *   nfce.cert_pfx_b64   = certificado A1 em base64 (.pfx)
- *   nfce.cert_pfx_pass  = senha do A1
+ *   3. PROD    → transmite ao ambiente de produção quando ambiente='1'
  *
  * IMPORTANTE: A transmissão real exige biblioteca de assinatura digital XML
  * (xml-crypto + node-forge) e SOAP (axios + xml). Quando o certificado A1
@@ -39,98 +26,175 @@ export class NfceService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  // ── Config helpers ──────────────────────────────────────────────────
+  // ── Config CRUD por loja ────────────────────────────────────────────
 
-  private async readSettings(): Promise<Record<string, string>> {
-    const all = await (this.prisma as any).systemSetting.findMany({
-      where: { key: { startsWith: 'nfce.' } },
+  /**
+   * Lê config de UMA loja específica. Cria registro vazio se não existir
+   * (pra retornar status "não configurado" sem quebrar).
+   */
+  async getConfig(storeCode: string) {
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+
+    let cfg = await (this.prisma as any).nfceConfig.findUnique({
+      where: { storeCode },
     });
-    const out: Record<string, string> = {};
-    for (const s of all as any[]) {
-      out[s.key] = s.value;
-    }
-    return out;
-  }
 
-  async getConfig() {
-    const s = await this.readSettings();
+    if (!cfg) {
+      // Sem registro: retorna estrutura vazia (não persiste)
+      return {
+        storeCode,
+        storeName: null,
+        ambiente: '2',
+        uf: 'SP',
+        cnpj: null,
+        razaoSocial: null,
+        fantasia: null,
+        ie: null,
+        regime: '1',
+        endereco: null,
+        cscId: null,
+        cscToken: '',
+        serie: '1',
+        numeroAtual: 0,
+        certificadoCarregado: false,
+        ready: false,
+      };
+    }
+
     return {
-      ambiente: s['nfce.ambiente'] || '2',
-      uf: s['nfce.uf'] || 'SP',
-      cnpj: s['nfce.cnpj'] || null,
-      razaoSocial: s['nfce.razao_social'] || null,
-      fantasia: s['nfce.fantasia'] || null,
-      ie: s['nfce.ie'] || null,
-      regime: s['nfce.regime'] || '1',
-      endereco: s['nfce.endereco'] ? JSON.parse(s['nfce.endereco']) : null,
-      cscId: s['nfce.csc_id'] || null,
-      cscToken: s['nfce.csc_token'] || null,
-      serie: s['nfce.serie'] || '1',
-      numeroAtual: parseInt(s['nfce.numero_atual'] || '0', 10),
-      certificadoCarregado: !!s['nfce.cert_pfx_b64'],
+      storeCode: cfg.storeCode,
+      storeName: cfg.storeName,
+      ambiente: cfg.ambiente || '2',
+      uf: cfg.uf || 'SP',
+      cnpj: cfg.cnpj,
+      razaoSocial: cfg.razaoSocial,
+      fantasia: cfg.fantasia,
+      ie: cfg.ie,
+      regime: cfg.regime || '1',
+      endereco: cfg.endereco ? JSON.parse(cfg.endereco) : null,
+      cscId: cfg.cscId,
+      // NÃO retorna o token pra cliente — só status
+      cscToken: cfg.cscToken ? '••••••••' : '',
+      serie: cfg.serie || '1',
+      numeroAtual: cfg.numeroAtual || 0,
+      certificadoCarregado: !!cfg.certPfxB64,
       ready:
-        !!s['nfce.cnpj'] &&
-        !!s['nfce.ie'] &&
-        !!s['nfce.csc_token'] &&
-        !!s['nfce.cert_pfx_b64'],
+        !!cfg.cnpj && !!cfg.ie && !!cfg.cscToken && !!cfg.certPfxB64,
     };
   }
 
-  async setConfig(input: Partial<{
-    ambiente: '1' | '2';
-    uf: string;
-    cnpj: string;
-    razaoSocial: string;
-    fantasia: string;
-    ie: string;
-    regime: string;
-    endereco: any;
-    cscId: string;
-    cscToken: string;
-    serie: string;
-    numeroAtual: number;
-    certPfxB64: string;
-    certPfxPass: string;
-  }>) {
-    const map: Array<[string, any]> = [];
-    if (input.ambiente != null) map.push(['nfce.ambiente', input.ambiente]);
-    if (input.uf != null) map.push(['nfce.uf', input.uf]);
-    if (input.cnpj != null) map.push(['nfce.cnpj', input.cnpj.replace(/\D/g, '')]);
-    if (input.razaoSocial != null) map.push(['nfce.razao_social', input.razaoSocial]);
-    if (input.fantasia != null) map.push(['nfce.fantasia', input.fantasia]);
-    if (input.ie != null) map.push(['nfce.ie', input.ie.replace(/\D/g, '')]);
-    if (input.regime != null) map.push(['nfce.regime', input.regime]);
-    if (input.endereco != null) map.push(['nfce.endereco', JSON.stringify(input.endereco)]);
-    if (input.cscId != null) map.push(['nfce.csc_id', input.cscId]);
-    if (input.cscToken != null) map.push(['nfce.csc_token', input.cscToken]);
-    if (input.serie != null) map.push(['nfce.serie', input.serie]);
-    if (input.numeroAtual != null) map.push(['nfce.numero_atual', String(input.numeroAtual)]);
-    if (input.certPfxB64 != null) map.push(['nfce.cert_pfx_b64', input.certPfxB64]);
-    if (input.certPfxPass != null) map.push(['nfce.cert_pfx_pass', input.certPfxPass]);
+  /**
+   * Lista status de TODAS as lojas (pra dashboard / seletor).
+   */
+  async listAllStatus() {
+    const stores = await this.prisma.store.findMany({
+      where: { active: true } as any,
+      select: { code: true, name: true } as any,
+      orderBy: { code: 'asc' } as any,
+    });
+    const configs = await (this.prisma as any).nfceConfig.findMany();
+    const cfgByCode = new Map<string, any>();
+    for (const c of configs as any[]) cfgByCode.set(c.storeCode, c);
 
-    for (const [key, value] of map) {
-      await (this.prisma as any).systemSetting.upsert({
-        where: { key },
-        create: { key, value: String(value) },
-        update: { value: String(value) },
+    return (stores as any[]).map((s: any) => {
+      const c = cfgByCode.get(s.code);
+      const ready = !!(c?.cnpj && c?.ie && c?.cscToken && c?.certPfxB64);
+      return {
+        storeCode: s.code,
+        storeName: s.name,
+        configured: !!c,
+        ready,
+        ambiente: c?.ambiente || null,
+        cnpj: c?.cnpj || null,
+        certificadoCarregado: !!c?.certPfxB64,
+      };
+    });
+  }
+
+  /**
+   * Salva config de uma loja (upsert). Campos sensíveis (cscToken, certPfxB64,
+   * certPfxPass) só são alterados se vierem preenchidos no body.
+   */
+  async setConfig(
+    storeCode: string,
+    input: Partial<{
+      ambiente: '1' | '2';
+      uf: string;
+      cnpj: string;
+      razaoSocial: string;
+      fantasia: string;
+      ie: string;
+      regime: string;
+      endereco: any;
+      cscId: string;
+      cscToken: string;
+      serie: string;
+      numeroAtual: number;
+      certPfxB64: string;
+      certPfxPass: string;
+    }>,
+  ) {
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+
+    // Resolve nome da loja (snapshot)
+    const store = await this.prisma.store.findUnique({
+      where: { code: storeCode },
+      select: { code: true, name: true } as any,
+    });
+    if (!store) throw new BadRequestException(`Loja ${storeCode} não cadastrada`);
+
+    const existing = await (this.prisma as any).nfceConfig.findUnique({
+      where: { storeCode },
+    });
+
+    const data: any = {
+      storeName: (store as any).name,
+    };
+    if (input.ambiente != null) data.ambiente = input.ambiente;
+    if (input.uf != null) data.uf = input.uf;
+    if (input.cnpj != null) data.cnpj = input.cnpj.replace(/\D/g, '');
+    if (input.razaoSocial != null) data.razaoSocial = input.razaoSocial;
+    if (input.fantasia != null) data.fantasia = input.fantasia;
+    if (input.ie != null) data.ie = input.ie.replace(/\D/g, '');
+    if (input.regime != null) data.regime = input.regime;
+    if (input.endereco != null) data.endereco = JSON.stringify(input.endereco);
+    if (input.cscId != null) data.cscId = input.cscId;
+    if (input.serie != null) data.serie = input.serie;
+    if (input.numeroAtual != null && input.numeroAtual > 0) {
+      data.numeroAtual = input.numeroAtual;
+    }
+    // Sensíveis: só sobrescreve se vier valor novo
+    if (input.cscToken) data.cscToken = input.cscToken;
+    if (input.certPfxB64) data.certPfxB64 = input.certPfxB64;
+    if (input.certPfxPass) data.certPfxPass = input.certPfxPass;
+
+    if (existing) {
+      await (this.prisma as any).nfceConfig.update({
+        where: { storeCode },
+        data,
+      });
+    } else {
+      await (this.prisma as any).nfceConfig.create({
+        data: { storeCode, ...data },
       });
     }
-    return this.getConfig();
+
+    this.logger.log(`[nfce] config salva pra loja ${storeCode}`);
+    return this.getConfig(storeCode);
   }
 
   // ── Helpers de número e chave ───────────────────────────────────────
 
-  private async nextNumero(): Promise<number> {
-    // Lock pessimista usando SystemSetting (race-free pra Postgres)
-    const cur = await (this.prisma as any).systemSetting.findUnique({
-      where: { key: 'nfce.numero_atual' },
+  private async nextNumero(storeCode: string): Promise<number> {
+    const cur = await (this.prisma as any).nfceConfig.findUnique({
+      where: { storeCode },
+      select: { numeroAtual: true },
     });
-    const atual = cur ? parseInt(cur.value, 10) || 0 : 0;
+    const atual = cur?.numeroAtual || 0;
     const proximo = atual + 1;
-    await (this.prisma as any).systemSetting.upsert({
-      where: { key: 'nfce.numero_atual' },
-      create: { key: 'nfce.numero_atual', value: String(proximo) },
-      update: { value: String(proximo) },
+    await (this.prisma as any).nfceConfig.update({
+      where: { storeCode },
+      data: { numeroAtual: proximo },
     });
     return proximo;
   }
@@ -155,10 +219,10 @@ export class NfceService {
    *   cUF(2) + AAMM(4) + CNPJ(14) + mod(2)=65 + serie(3) + nNF(9) + tpEmis(1)=1 + cNF(8) + DV(1)
    */
   private buildChave(input: {
-    cUF: string;          // '35' SP
-    cnpj: string;         // 14 dígitos
-    serie: string;        // 1-999
-    numero: number;       // 1-999999999
+    cUF: string;
+    cnpj: string;
+    serie: string;
+    numero: number;
     dataEmissao: Date;
   }): string {
     const aamm =
@@ -168,7 +232,6 @@ export class NfceService {
     const serie = String(input.serie).padStart(3, '0');
     const nNF = String(input.numero).padStart(9, '0');
     const tpEmis = '1';
-    // cNF = código aleatório de 8 dígitos (não pode começar com nNF + dígito 0)
     const cNF = crypto.randomInt(10_000_000, 99_999_999).toString();
     const sem_dv =
       input.cUF.padStart(2, '0') +
@@ -184,17 +247,11 @@ export class NfceService {
 
   // ── Geração XML ─────────────────────────────────────────────────────
 
-  /**
-   * Gera o XML <NFe> da venda. Stub completo com todos os campos
-   * obrigatórios — só falta assinatura digital + transmissão SOAP pra
-   * virar emissão real.
-   */
   private async buildXml(sale: any, config: any, chave: string, numero: number): Promise<string> {
-    const ambiente = config.ambiente; // '1' prod | '2' homolog
+    const ambiente = config.ambiente;
     const dhEmi = new Date().toISOString().replace(/\.\d+/, '');
     const items = sale.items as any[];
 
-    // Em homologação a razão obrigatória da NFe é "NF-E EMITIDA EM AMBIENTE DE HOMOLOGAÇÃO - SEM VALOR FISCAL"
     const dest = sale.customerCpf
       ? `<dest><CPF>${sale.customerCpf.replace(/\D/g, '')}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`
       : '';
@@ -208,7 +265,7 @@ export class NfceService {
             ? 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
             : it.descricao || cProd;
         const ncm = it.ncm || '00000000';
-        const cfop = it.cfop || '5102'; // venda interna
+        const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         const vProd = (it.total || 0).toFixed(2);
         const vDesc = (it.desconto || 0).toFixed(2);
@@ -253,7 +310,7 @@ export class NfceService {
       .join('');
 
     const ender = config.endereco || {};
-    const cMun = ender.codMunicipio || '3550308'; // São Paulo default
+    const cMun = ender.codMunicipio || '3550308';
     const xMun = ender.municipio || 'SAO PAULO';
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -329,7 +386,6 @@ export class NfceService {
   }
 
   private mapPaymentToSefaz(method: string): string {
-    // Tabela tPag (NT 2020.001)
     const m = String(method || '').toLowerCase();
     if (m === 'dinheiro') return '01';
     if (m === 'cheque') return '02';
@@ -337,15 +393,13 @@ export class NfceService {
     if (m === 'debito' || m === 'cartao_debito') return '04';
     if (m === 'crediario' || m === 'credito_loja') return '05';
     if (m === 'pix') return '17';
-    return '99'; // outros
+    return '99';
   }
 
   // ── Emissão (público) ───────────────────────────────────────────────
 
   /**
-   * Emite a NFC-e da venda. Por padrão retorna apenas o XML (preview),
-   * marca a venda com chave + numero. Quando certificado A1 + CSC
-   * estiverem configurados, transmite à SEFAZ.
+   * Emite NFC-e da venda usando a config DA LOJA onde a venda foi feita.
    */
   async emit(saleId: string): Promise<{
     status: 'preview' | 'authorized' | 'rejected' | 'error';
@@ -365,7 +419,6 @@ export class NfceService {
       throw new BadRequestException('Venda precisa estar finalizada');
     }
     if (sale.nfceStatus === 'authorized') {
-      // Idempotência: já emitida
       return {
         status: 'authorized',
         chave: sale.nfceChave,
@@ -375,16 +428,36 @@ export class NfceService {
       };
     }
 
-    const config = await this.getConfig();
-    if (!config.cnpj) {
+    const cfgRaw = await (this.prisma as any).nfceConfig.findUnique({
+      where: { storeCode: sale.storeCode },
+    });
+    if (!cfgRaw) {
       throw new BadRequestException(
-        'NFC-e não configurada. Cadastre CNPJ/IE/CSC em Configurações → NFC-e.',
+        `NFC-e não configurada pra loja ${sale.storeCode}. Cadastre em Retaguarda → NFC-e.`,
+      );
+    }
+    if (!cfgRaw.cnpj) {
+      throw new BadRequestException(
+        `Loja ${sale.storeCode} sem CNPJ cadastrado pra NFC-e.`,
       );
     }
 
-    const numero = await this.nextNumero();
+    const config = {
+      ambiente: cfgRaw.ambiente || '2',
+      uf: cfgRaw.uf || 'SP',
+      cnpj: cfgRaw.cnpj,
+      razaoSocial: cfgRaw.razaoSocial || '',
+      fantasia: cfgRaw.fantasia || '',
+      ie: cfgRaw.ie || '',
+      regime: cfgRaw.regime || '1',
+      endereco: cfgRaw.endereco ? JSON.parse(cfgRaw.endereco) : {},
+      serie: cfgRaw.serie || '1',
+    };
+    const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
+
+    const numero = await this.nextNumero(sale.storeCode);
     const chave = this.buildChave({
-      cUF: '35', // SP
+      cUF: '35',
       cnpj: config.cnpj.replace(/\D/g, ''),
       serie: config.serie,
       numero,
@@ -393,8 +466,7 @@ export class NfceService {
 
     const xml = await this.buildXml(sale, config, chave, numero);
 
-    // Persiste mesmo em modo stub
-    const status: 'preview' | 'authorized' = config.ready ? 'preview' : 'preview';
+    const status: 'preview' | 'authorized' = 'preview';
     await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
       data: {
@@ -406,29 +478,21 @@ export class NfceService {
       },
     });
 
-    if (!config.ready) {
+    if (!ready) {
       this.logger.warn(
-        `[nfce] Venda ${sale.id.slice(0, 8)} sem certificado A1 — retornando XML preview (chave ${chave})`,
+        `[nfce] Venda ${sale.id.slice(0, 8)} loja=${sale.storeCode} sem certificado/CSC — XML preview (chave ${chave})`,
       );
       return { status: 'preview', chave, numero, serie: config.serie, xml };
     }
 
     // TODO: assinar XML com cert A1 + transmitir SEFAZ-SP
-    // Aqui entram: xml-crypto, node-forge pra extrair PFX, axios pro endpoint
-    // SEFAZ-SP NFCeAutorizacao4 (https://nfce.fazenda.sp.gov.br/ws/NFeAutorizacao4.asmx)
     this.logger.warn(
-      `[nfce] Certificado A1 carregado mas transmissão SEFAZ ainda não plugada. Stub mode.`,
+      `[nfce] Loja ${sale.storeCode}: certificado A1 carregado mas transmissão SEFAZ ainda não plugada. Stub mode.`,
     );
 
     return { status: 'preview', chave, numero, serie: config.serie, xml };
   }
 
-  // ── DANFE 80mm (cupom térmica) ──────────────────────────────────────
-
-  /**
-   * Gera texto formatado pro cupom térmico 80mm (40 colunas).
-   * Usado pela tela de impressão como fallback enquanto não tem PDF.
-   */
   buildCupomText(sale: any, chave: string): string {
     const lines: string[] = [];
     const w = 40;
@@ -455,7 +519,6 @@ export class NfceService {
     lines.push(split('TOTAL', `R$${(sale.total || 0).toFixed(2)}`));
     lines.push('');
     lines.push(`Chave de acesso:`);
-    // Quebra a chave em grupos de 4 (44 dígitos = 11 grupos)
     const chaveFmt = chave.replace(/(.{4})/g, '$1 ').trim();
     lines.push(chaveFmt);
     lines.push('');
