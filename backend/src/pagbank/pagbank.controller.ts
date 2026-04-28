@@ -38,6 +38,14 @@ export class PagbankController {
     return this.svc.testConnection();
   }
 
+  /** POST /pagbank/diagnose — testa o token em vários endpoints PagBank */
+  @UseGuards(JwtAuthGuard)
+  @Post('diagnose')
+  async diagnose(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.deepDiagnose();
+  }
+
   /** POST /pagbank/config — admin salva token + ambiente */
   @UseGuards(JwtAuthGuard)
   @Post('config')

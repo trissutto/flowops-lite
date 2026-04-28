@@ -48,6 +48,8 @@ export default function PagbankConfigPage() {
   // Testar conexão
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagnoseResult, setDiagnoseResult] = useState<any>(null);
 
   async function testConnection() {
     setTesting(true);
@@ -59,6 +61,19 @@ export default function PagbankConfigPage() {
       setTestResult({ ok: false, error: e?.message || String(e) });
     } finally {
       setTesting(false);
+    }
+  }
+
+  async function deepDiagnose() {
+    setDiagnosing(true);
+    setDiagnoseResult(null);
+    try {
+      const r = await api<any>('/pagbank/diagnose', { method: 'POST' });
+      setDiagnoseResult(r);
+    } catch (e: any) {
+      setDiagnoseResult({ error: e?.message || String(e) });
+    } finally {
+      setDiagnosing(false);
     }
   }
 
@@ -361,13 +376,69 @@ export default function PagbankConfigPage() {
 
           {/* TESTAR CONEXÃO */}
           <Card title="Testar conexão" subtitle="Faz uma chamada ao PagBank pra validar token + ambiente.">
-            <button
-              onClick={testConnection}
-              disabled={testing || !cfg.hasToken}
-              className="w-full p-3 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {testing ? 'Testando…' : 'Testar conexão agora'}
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={testConnection}
+                disabled={testing || !cfg.hasToken}
+                className="p-3 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {testing ? 'Testando…' : 'Teste rápido'}
+              </button>
+              <button
+                onClick={deepDiagnose}
+                disabled={diagnosing || !cfg.hasToken}
+                className="p-3 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {diagnosing ? 'Diagnosticando…' : 'Diagnóstico amplo'}
+              </button>
+            </div>
+
+            {diagnoseResult && (
+              <div className="mt-3 bg-slate-50 border border-slate-300 rounded-lg p-3 text-xs space-y-2">
+                {diagnoseResult.error ? (
+                  <div className="text-red-600">{diagnoseResult.error}</div>
+                ) : (
+                  <>
+                    <div>
+                      <b>Token:</b> {diagnoseResult.token?.format} ({diagnoseResult.token?.length} chars)
+                    </div>
+                    <div>
+                      <b>Ambiente:</b> {diagnoseResult.ambiente}
+                    </div>
+                    <div>
+                      <b>Email:</b> {diagnoseResult.email || '(não cadastrado)'}
+                    </div>
+                    <div className="border-t border-slate-300 pt-2">
+                      <b>Endpoints testados:</b>
+                    </div>
+                    {diagnoseResult.endpoints?.map((e: any, i: number) => (
+                      <div
+                        key={i}
+                        className={`p-2 rounded font-mono ${
+                          e.ok ? 'bg-emerald-100' : 'bg-red-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold">{e.name}</span>
+                          <span>
+                            {e.ok ? '✓' : '✗'} HTTP {e.status}
+                          </span>
+                        </div>
+                        <div className="opacity-70 break-all mt-0.5">
+                          {e.method} {e.url}
+                        </div>
+                        {e.response && (
+                          <div className="opacity-60 mt-1 break-all">{e.response}</div>
+                        )}
+                      </div>
+                    ))}
+                    <div className="bg-rose-100 border-2 border-rose-300 p-2 rounded text-rose-900 font-bold">
+                      💡 {diagnoseResult.recommendation}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {testResult && (
               <div

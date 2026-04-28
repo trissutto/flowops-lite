@@ -433,6 +433,131 @@ export class PagbankService {
   // ── Diagnóstico ─────────────────────────────────────────────────────
 
   /**
+   * DIAGNÓSTICO AMPLO: testa o token contra vários endpoints PagBank
+   * pra descobrir QUAL API ele atende. Útil quando token é UUID legacy
+   * mas as APIs novas (Orders/Charges) podem não aceitá-lo.
+   */
+  async deepDiagnose(): Promise<{
+    ambiente: string;
+    token: { length: number; format: string };
+    email: string | null;
+    endpoints: Array<{
+      name: string;
+      method: string;
+      url: string;
+      status: number | string;
+      ok: boolean;
+      response?: any;
+    }>;
+    recommendation: string;
+  }> {
+    const cfg = await (this.prisma as any).pagbankConfig.findUnique({
+      where: { id: 'singleton' },
+    });
+    if (!cfg?.bearerToken) throw new BadRequestException('Token não cadastrado');
+
+    const token = (cfg.bearerToken || '').trim();
+    const ambiente = cfg.ambiente || 'sandbox';
+    const baseModern = ambiente === 'production' ? 'https://api.pagseguro.com' : 'https://sandbox.api.pagseguro.com';
+    const baseClassic = ambiente === 'production' ? 'https://ws.pagseguro.uol.com.br' : 'https://ws.sandbox.pagseguro.uol.com.br';
+
+    // Detecta formato do token
+    const isUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i.test(token);
+    const isJwt = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(token);
+    const tokenFormat = isUuid ? 'UUID legacy (v2/v3)' : isJwt ? 'JWT (OAuth)' : `Outro (${token.length} chars)`;
+
+    const tests = [
+      // 1. API Moderna - Orders
+      { name: 'Orders API moderna', method: 'POST', url: `${baseModern}/orders`, body: {}, useBearer: true },
+      // 2. API Moderna - Charges
+      { name: 'Charges API moderna', method: 'POST', url: `${baseModern}/charges`, body: {}, useBearer: true },
+      // 3. API Moderna - PIX QR Codes diretos
+      { name: 'PIX QR-Codes', method: 'POST', url: `${baseModern}/pix/qr-codes`, body: {}, useBearer: true },
+      // 4. API Classic v2 — sessão (XML, com email+token query)
+      {
+        name: 'Classic v2 (sessions)',
+        method: 'POST',
+        url: `${baseClassic}/v2/sessions?email=${encodeURIComponent(cfg.email || '')}&token=${token}`,
+        body: '',
+        useBearer: false,
+      },
+      // 5. API Classic v3 — pre-approvals
+      {
+        name: 'Classic v3 (info)',
+        method: 'GET',
+        url: `${baseClassic}/v3/transactions?email=${encodeURIComponent(cfg.email || '')}&token=${token}&initialDate=2026-01-01T00:00&finalDate=2026-12-31T23:59`,
+        body: null,
+        useBearer: false,
+      },
+    ];
+
+    const results: any[] = [];
+    for (const t of tests) {
+      try {
+        const headers: any = {
+          Accept: 'application/json',
+        };
+        if (t.method === 'POST' && t.body !== '' && t.body !== null) {
+          headers['Content-Type'] = 'application/json';
+        } else if (t.body === '') {
+          headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
+        if (t.useBearer) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+
+        const resp = await firstValueFrom(
+          (t.method === 'GET'
+            ? this.http.get(t.url, { headers, timeout: 8000, validateStatus: () => true })
+            : this.http.post(t.url, t.body, {
+                headers,
+                timeout: 8000,
+                validateStatus: () => true,
+              })) as any,
+        );
+        const status = (resp as any).status;
+        // 2xx, 4xx (validation) = autenticou. 401/403 = NÃO autenticou.
+        const ok = status < 401 || (status >= 422 && status < 500);
+        const data = (resp as any).data;
+        results.push({
+          name: t.name,
+          method: t.method,
+          url: t.url.replace(token, 'TOKEN_REDACTED').slice(0, 100),
+          status,
+          ok,
+          response:
+            typeof data === 'string'
+              ? data.slice(0, 200)
+              : JSON.stringify(data || {}).slice(0, 200),
+        });
+      } catch (e: any) {
+        results.push({
+          name: t.name,
+          method: t.method,
+          url: t.url.replace(token, 'TOKEN_REDACTED').slice(0, 100),
+          status: 'ERRO',
+          ok: false,
+          response: e?.message || String(e),
+        });
+      }
+    }
+
+    // Determina recomendação baseada nos resultados
+    const okEndpoint = results.find((r) => r.ok);
+    const recommendation = okEndpoint
+      ? `Token aceito por: ${okEndpoint.name} (HTTP ${okEndpoint.status}). Vou plugar a integração nesse endpoint.`
+      : 'Nenhum endpoint aceitou o token. Pode ser problema de credencial OU a app PagBank não tem permissão pra essas APIs. Confira em portaldev.pagbank.com.br ou abre chamado no suporte PagBank.';
+
+    return {
+      ambiente,
+      token: { length: token.length, format: tokenFormat },
+      email: cfg.email || null,
+      endpoints: results,
+      recommendation,
+    };
+  }
+
+  /**
    * Testa conexão com o PagBank usando o token salvo.
    * Faz uma chamada barata (GET /public-keys) só pra validar autenticação.
    */
