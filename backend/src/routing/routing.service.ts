@@ -7,6 +7,7 @@ import { OrderStatus, PickStatus } from '../common/enums';
 import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
+import { ErpService } from '../erp/erp.service';
 
 @Injectable()
 export class RoutingService {
@@ -18,6 +19,7 @@ export class RoutingService {
     private readonly engine: RoutingEngine,
     private readonly gateway: RealtimeGateway,
     private readonly salesStats: SalesStatsService,
+    private readonly erp: ErpService,
   ) {}
 
   /**

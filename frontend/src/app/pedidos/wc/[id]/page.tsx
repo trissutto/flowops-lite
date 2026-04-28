@@ -23,6 +23,22 @@ const STATUS_OPTIONS: Array<{ slug: string; label: string }> = [
 ];
 
 // Transportadoras mais usadas no BR (livre pra digitar qualquer outra)
+/**
+ * Mapeia status do pick-order pra label e cores da pílula.
+ * Usado pra mostrar status visual ao lado de cada item do pedido.
+ */
+function pickStatusStyles(status: string): { label: string; bg: string; text: string } {
+  const s = (status || '').toLowerCase();
+  if (s === 'new') return { label: 'AGUARDANDO', bg: 'bg-slate-100', text: 'text-slate-700' };
+  if (s === 'separating') return { label: 'SEPARANDO', bg: 'bg-blue-100', text: 'text-blue-800' };
+  if (s === 'separated') return { label: 'SEPARADO', bg: 'bg-emerald-100', text: 'text-emerald-800' };
+  if (s === 'ready') return { label: 'PRONTO', bg: 'bg-cyan-100', text: 'text-cyan-800' };
+  if (s === 'shipped') return { label: 'ENVIADO', bg: 'bg-violet-100', text: 'text-violet-800' };
+  if (s === 'delivered') return { label: 'ENTREGUE', bg: 'bg-green-200', text: 'text-green-900' };
+  if (s === 'cancelled' || s === 'canceled') return { label: 'CANCELADO', bg: 'bg-red-100', text: 'text-red-800' };
+  return { label: status.toUpperCase(), bg: 'bg-gray-100', text: 'text-gray-700' };
+}
+
 const CARRIERS = [
   { value: 'Correios',         trackUrl: 'https://rastreamento.correios.com.br/app/index.php?objetos=' },
   { value: 'Jadlog',           trackUrl: 'https://www.jadlog.com.br/tracking?cte=' },
@@ -1606,17 +1622,39 @@ export default function PedidoDetailPage() {
                   </div>
 
                   <div className="p-4">
-                    <div className="text-xs text-slate-500 mb-2 font-medium">
-                      {g.items.length} item{g.items.length === 1 ? '' : 'ns'} pra essa loja
+                    <div className="text-xs text-slate-500 mb-2 font-medium flex items-center gap-2 flex-wrap">
+                      <span>{g.items.length} item{g.items.length === 1 ? '' : 'ns'} pra essa loja</span>
+                      {/* Status da loja inteira (do pick-order) */}
+                      {(() => {
+                        const live = liveStatus.find((p) => p.storeCode === g.storeCode);
+                        if (!live) return null;
+                        const s = live.status;
+                        const styles = pickStatusStyles(s);
+                        return (
+                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full ${styles.bg} ${styles.text}`}>
+                            {styles.label}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <ul className="text-sm space-y-1 mb-3">
-                      {g.items.map((it) => (
-                        <li key={it.sku}>
-                          <span className="font-medium">{it.quantity}×</span> {it.productName}
-                          <span className="text-xs text-slate-500 ml-2 font-mono">SKU {it.sku}</span>
-                          {it.variant && <span className="text-xs text-slate-500 ml-2">· {it.variant}</span>}
-                        </li>
-                      ))}
+                      {g.items.map((it) => {
+                        const live = liveStatus.find((p) => p.storeCode === g.storeCode);
+                        const styles = live ? pickStatusStyles(live.status) : null;
+                        return (
+                          <li key={it.sku} className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium">{it.quantity}×</span>
+                            <span>{it.productName}</span>
+                            <span className="text-xs text-slate-500 font-mono">SKU {it.sku}</span>
+                            {it.variant && <span className="text-xs text-slate-500">· {it.variant}</span>}
+                            {styles && (
+                              <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${styles.bg} ${styles.text} ml-auto`}>
+                                {styles.label}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                     <details className="text-xs text-slate-500">
                       <summary className="cursor-pointer hover:text-slate-700">Ver mensagem que vai pro WhatsApp</summary>
