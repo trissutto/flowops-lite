@@ -61,6 +61,7 @@ export class PagarmeController {
       customerName?: string;
       customerCpf?: string;
       customerEmail?: string;
+      customerPhone?: string;
       expiresInMinutes?: number;
     },
   ) {

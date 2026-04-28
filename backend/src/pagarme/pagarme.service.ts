@@ -209,6 +209,7 @@ export class PagarmeService {
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
+    customerPhone?: string;
     expiresInMinutes?: number;
   }): Promise<{
     pagarmeOrderId: string;
@@ -236,6 +237,25 @@ export class PagarmeService {
       // CPF fictício válido (algoritmo). Em test funciona, em live também aceita
       // mas é melhor identificar cliente sempre.
       customerDoc = '11144477735';
+    }
+
+    // Phone — Pagar.me EXIGE pelo menos 1 phone no customer pra charge PIX.
+    // Parseia o telefone do cliente; se não veio, usa fallback da loja (13 996218277).
+    const phoneRaw = (input.customerPhone || '').replace(/\D/g, '');
+    let phoneAreaCode = '13';
+    let phoneNumber = '996218277';
+    if (phoneRaw.length === 11) {
+      // 11 dígitos: DDD (2) + número (9) — celular
+      phoneAreaCode = phoneRaw.slice(0, 2);
+      phoneNumber = phoneRaw.slice(2);
+    } else if (phoneRaw.length === 10) {
+      // 10 dígitos: DDD (2) + número (8) — fixo
+      phoneAreaCode = phoneRaw.slice(0, 2);
+      phoneNumber = phoneRaw.slice(2);
+    } else if (phoneRaw.length === 13 && phoneRaw.startsWith('55')) {
+      // 13 dígitos com 55 prefixo: 55 + DDD + 9 dígitos
+      phoneAreaCode = phoneRaw.slice(2, 4);
+      phoneNumber = phoneRaw.slice(4);
     }
 
     // Split rule — obrigatório quando conta é PSP/marketplace.
@@ -284,6 +304,13 @@ export class PagarmeService {
         type: customerDoc.length === 14 ? 'company' : 'individual',
         document: customerDoc,
         document_type: customerDoc.length === 14 ? 'cnpj' : 'cpf',
+        phones: {
+          mobile_phone: {
+            country_code: '55',
+            area_code: phoneAreaCode,
+            number: phoneNumber,
+          },
+        },
       },
       payments: [pixPayment],
       metadata: {
