@@ -147,9 +147,24 @@ export class CrediarioBaixaService {
       throw new BadRequestException('Informe pelo menos 2 caracteres pra buscar');
     }
 
-    const map = await this.crediarios.detectColumns();
-    if (!map.vencimento || !map.valorParcela || !map.codCliente) {
-      throw new BadRequestException('Colunas essenciais não detectadas no Giga');
+    // Força refresh do cache pra garantir detecção atualizada
+    let map = await this.crediarios.detectColumns();
+    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      map = await this.crediarios.detectColumns(true);
+    }
+    if (!map.codCliente) {
+      throw new BadRequestException(
+        'Coluna codCliente não detectada no Giga. Detectadas: ' +
+          Object.entries(map).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', '),
+      );
+    }
+    if (!map.vencimento || !map.valorParcela) {
+      const faltam = [!map.vencimento && 'vencimento', !map.valorParcela && 'valorParcela']
+        .filter(Boolean).join(', ');
+      throw new BadRequestException(
+        `Colunas faltando: ${faltam}. Detectadas: ` +
+          Object.entries(map).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', '),
+      );
     }
 
     // Heurística: se busca é só números → tenta codCliente + telefone.
