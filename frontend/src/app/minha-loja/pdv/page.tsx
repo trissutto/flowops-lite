@@ -886,7 +886,10 @@ export default function PdvPage() {
         <PaymentModal
           saleId={sale.id}
           total={sale.total}
+          storeCode={sale.storeCode}
           customerCpf={sale.customerCpf}
+          customerName={sale.customerName}
+          customerEmail={sale.customerEmail}
           finalizing={finalizing}
           initialPayments={sale.payments || []}
           onClose={() => setShowPayment(false)}
@@ -982,7 +985,10 @@ function CustomerModal({
 function PaymentModal({
   saleId,
   total,
+  storeCode,
   customerCpf,
+  customerName,
+  customerEmail,
   finalizing,
   initialPayments,
   onClose,
@@ -992,7 +998,10 @@ function PaymentModal({
 }: {
   saleId: string;
   total: number;
+  storeCode?: string;
   customerCpf: string | null;
+  customerName?: string | null;
+  customerEmail?: string | null;
   finalizing: boolean;
   initialPayments?: Array<{ id: string; method: string; valor: number; details: string | null }>;
   onClose: () => void;
@@ -1020,14 +1029,18 @@ function PaymentModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
-  // PIX state
+  // PIX state — agora carrega flag indicando se foi via PagBank (auto-confirma via webhook)
   const [pixCharge, setPixCharge] = useState<{
     txid: string;
     chave: string;
     payload: string;
     qrCodeDataUrl: string;
+    provider?: 'pagbank' | 'local';  // pagbank = polling status; local = vendedora confirma manual
+    pagbankOrderId?: string;
+    expiresAt?: string;
   } | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
+  const [pixPaid, setPixPaid] = useState(false);  // setado quando PagBank webhook confirma
   const [copyMsg, setCopyMsg] = useState(false);
 
   // ── Adicionar pagamento parcial ──
@@ -1111,21 +1124,99 @@ function PaymentModal({
     }
   };
 
-  // Quando seleciona PIX, gera o QR direto
-  // Atenção: hoje o backend usa o total da venda. Pra PIX parcial,
-  // o cliente vê o valor parcial no app dele e paga só esse trecho.
-  // Vendedora confere e clica "Adicionar pagamento".
-  const generatePix = async () => {
+  // Quando seleciona PIX, tenta gerar via PagBank primeiro.
+  // Se PagBank desabilitado/quebrado, fallback no PIX local (chave pessoal celular).
+  // Em PagBank, o webhook confirma sozinho e a vendedora não precisa apertar nada —
+  // o polling abaixo detecta o status=paid e finaliza automático.
+  const generatePix = async (pixValor?: number) => {
     setPixLoading(true);
+    setPixPaid(false);
     try {
+      // 1) Tenta PagBank primeiro
+      try {
+        const valor = pixValor && pixValor > 0 ? pixValor : total;
+        const pb = await api<{
+          pagbankOrderId: string;
+          qrCodeText: string;
+          qrCodeImageB64: string;
+          expiresAt: string;
+          valor: number;
+        }>('/pagbank/pix/create', {
+          method: 'POST',
+          body: JSON.stringify({
+            saleId,
+            valor,
+            storeCode,
+            customerName: customerName || undefined,
+            customerCpf: customerCpf || undefined,
+            customerEmail: customerEmail || undefined,
+            expiresInMinutes: 15,
+          }),
+        });
+        setPixCharge({
+          txid: pb.pagbankOrderId,
+          chave: 'PagBank',
+          payload: pb.qrCodeText,
+          qrCodeDataUrl: pb.qrCodeImageB64
+            ? `data:image/png;base64,${pb.qrCodeImageB64}`
+            : '',
+          provider: 'pagbank',
+          pagbankOrderId: pb.pagbankOrderId,
+          expiresAt: pb.expiresAt,
+        });
+        return;
+      } catch (e: any) {
+        // 400 com "PagBank desabilitado" ou "não configurado" → fallback silencioso
+        const msg = String(e?.message || e);
+        const isDisabled =
+          /desabilitado/i.test(msg) || /não configurado/i.test(msg) || /Bearer Token/i.test(msg);
+        if (!isDisabled) {
+          // Erro real (token inválido, rede, etc) — loga mas tenta fallback
+          console.warn('[pdv] PagBank PIX falhou, caindo no PIX local:', msg);
+        }
+      }
+
+      // 2) Fallback: PIX local (chave celular)
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
-      setPixCharge(r);
+      setPixCharge({ ...r, provider: 'local' });
     } catch (e: any) {
       alert(`Erro ao gerar PIX: ${e?.message}`);
     } finally {
       setPixLoading(false);
     }
   };
+
+  // ── POLLING PagBank ──
+  // Quando PIX foi gerado via PagBank, faz polling a cada 3s no status.
+  // Quando webhook chegar e marcar paid → setPixPaid(true) → vendedora vê
+  // confirmação visual e o "Adicionar pagamento" auto-confirma.
+  useEffect(() => {
+    if (!pixCharge || pixCharge.provider !== 'pagbank' || pixPaid) return;
+    const orderId = pixCharge.pagbankOrderId;
+    if (!orderId) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await api<{ status: string; isPaid?: boolean }>(
+          `/pagbank/pix/status/${saleId}`,
+        );
+        if (cancelled) return;
+        if (r.status === 'paid') {
+          setPixPaid(true);
+        }
+      } catch {
+        // silencioso — tenta de novo no próximo tick
+      }
+    };
+    // Primeiro tick imediato + interval 3s
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [pixCharge, pixPaid, saleId]);
 
   const copyPix = async () => {
     if (!pixCharge) return;
@@ -1147,6 +1238,7 @@ function PaymentModal({
     setBandeira(null);
     setParcelas(1);
     setPixCharge(null);
+    setPixPaid(false);
     if (id === 'pix') {
       generatePix();
     }
@@ -1457,15 +1549,64 @@ function PaymentModal({
               </div>
             ) : pixCharge ? (
               <>
-                <div className="flex flex-col items-center bg-emerald-50 rounded-lg p-3">
-                  <img
-                    src={pixCharge.qrCodeDataUrl}
-                    alt="QR Code PIX"
-                    className="w-48 h-48 sm:w-56 sm:h-56 bg-white rounded shadow"
-                  />
-                  <div className="text-[10px] text-slate-500 mt-1 font-mono">
-                    Chave: {pixCharge.chave.replace(/\+55/, '')} (celular)
-                  </div>
+                {/* Badge identificando o provedor + status PagBank */}
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                      pixCharge.provider === 'pagbank'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    {pixCharge.provider === 'pagbank' ? '✓ PagBank' : 'PIX direto'}
+                  </span>
+                  {pixCharge.provider === 'pagbank' && (
+                    <span
+                      className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                        pixPaid
+                          ? 'bg-emerald-600 text-white animate-pulse'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {pixPaid ? (
+                        <>
+                          <Check className="w-3 h-3" /> PAGO
+                        </>
+                      ) : (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" /> AGUARDANDO
+                        </>
+                      )}
+                    </span>
+                  )}
+                </div>
+
+                <div
+                  className={`flex flex-col items-center rounded-lg p-3 transition ${
+                    pixPaid ? 'bg-emerald-100 ring-4 ring-emerald-400' : 'bg-emerald-50'
+                  }`}
+                >
+                  {pixCharge.qrCodeDataUrl && (
+                    <img
+                      src={pixCharge.qrCodeDataUrl}
+                      alt="QR Code PIX"
+                      className="w-48 h-48 sm:w-56 sm:h-56 bg-white rounded shadow"
+                    />
+                  )}
+                  {pixCharge.provider === 'local' && (
+                    <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                      Chave: {pixCharge.chave.replace(/\+55/, '')} (celular)
+                    </div>
+                  )}
+                  {pixCharge.provider === 'pagbank' && pixCharge.expiresAt && (
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      QR expira em{' '}
+                      {new Date(pixCharge.expiresAt).toLocaleTimeString('pt-BR', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 <button
@@ -1479,16 +1620,27 @@ function PaymentModal({
                       <span className="text-emerald-700 font-bold">Copiado!</span>
                     </>
                   ) : (
-                    <>
-                      📋 Copiar PIX Copia e Cola
-                    </>
+                    <>📋 Copiar PIX Copia e Cola</>
                   )}
                 </button>
 
-                <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900">
-                  <b>⚠ Confirmação manual:</b> aguarde o cliente pagar, confirme no app do banco
-                  e clique em <b>"Recebi"</b> abaixo pra finalizar.
-                </div>
+                {pixCharge.provider === 'pagbank' ? (
+                  pixPaid ? (
+                    <div className="bg-emerald-100 border-2 border-emerald-400 rounded-lg p-3 text-sm text-emerald-900 font-bold text-center">
+                      ✓ Pagamento confirmado pelo PagBank! Pode adicionar abaixo.
+                    </div>
+                  ) : (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-900">
+                      <b>✓ Confirmação automática:</b> assim que o cliente pagar, o PagBank avisa
+                      o sistema e a venda finaliza sozinha.
+                    </div>
+                  )
+                ) : (
+                  <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900">
+                    <b>⚠ Confirmação manual:</b> aguarde o cliente pagar, confirme no app do banco
+                    e clique em <b>"Recebi"</b> abaixo pra finalizar.
+                  </div>
+                )}
               </>
             ) : null}
           </div>
