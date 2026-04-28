@@ -128,6 +128,147 @@ export class CrediarioBaixaService {
     return { diasAtraso, juros };
   }
 
+  // ── Autocomplete: busca rápida de clientes ────────────────────────
+
+  /**
+   * Busca rápida na tabela `clientes` do Giga — só nomes/códigos.
+   * Usado pelo autocomplete do frontend. Não retorna parcelas.
+   *
+   * Filtra clientes-cartão (VISANET, MASTERCARD, etc) e cód <= 3.
+   */
+  async searchClientes(input: { q: string }): Promise<Array<{
+    codCliente: string;
+    nome: string;
+    telefone: string | null;
+  }>> {
+    const q = String(input.q || '').trim();
+    if (q.length < 2) return [];
+
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm || !cm.nome) {
+      throw new BadRequestException(
+        'Tabela de clientes do Giga não detectada — não dá pra buscar por nome.',
+      );
+    }
+
+    const safe = q.replace(/['"\\;]/g, '').slice(0, 100);
+    const onlyDigits = /^\d+$/.test(safe);
+
+    // Monta SELECT
+    const cols: string[] = [`\`${cm.codCliente}\` AS cod`];
+    if (cm.nome) cols.push(`\`${cm.nome}\` AS nome`);
+    if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
+    if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS tel2`);
+
+    let where: string;
+    if (onlyDigits) {
+      where = `\`${cm.codCliente}\` = '${safe}'`;
+    } else {
+      // Busca insensitive a case + acentos via UPPER + REPLACE básico
+      // (cobre caso comum de ÁÉÍÓÚÇ no nome cadastrado)
+      where = `UPPER(\`${cm.nome}\`) LIKE UPPER('%${safe}%')`;
+    }
+
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE ${where} ORDER BY \`${cm.nome}\` ASC LIMIT 30`;
+    const r = await this.erp.runReadOnly(sql, { maxRows: 30, timeoutMs: 8000 });
+
+    // Regex pra excluir clientes-cartão
+    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+
+    const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+    for (const row of r.rows as any[]) {
+      const cod = String(row.cod || '');
+      const n = parseInt(cod.replace(/\D/g, ''), 10);
+      if (isNaN(n) || n <= 3) continue;
+      const nome = String(row.nome || '').trim();
+      if (cardRegex.test(nome)) continue;
+      const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
+      out.push({ codCliente: cod, nome, telefone: tel });
+    }
+    return out;
+  }
+
+  /**
+   * Lista parcelas em aberto de UM codCliente específico (já resolvido pelo
+   * autocomplete). Mais rápido que listOpenInstallmentsByCustomer porque
+   * pula busca de cliente.
+   */
+  async listInstallmentsByCodCliente(input: {
+    codCliente: string;
+    storeCode?: string;
+  }): Promise<OpenInstallment[]> {
+    const cod = String(input.codCliente || '').trim();
+    if (!cod) throw new BadRequestException('codCliente obrigatório');
+
+    let map = await this.crediarios.detectColumns();
+    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      map = await this.crediarios.detectColumns(true);
+    }
+    if (!map.codCliente) throw new BadRequestException('Coluna codCliente não detectada');
+
+    const safeCod = cod.replace(/['"\\;]/g, '').slice(0, 50);
+    const safeStore = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    const select: string[] = [];
+    const addCol = (logical: keyof typeof map, alias: string) => {
+      const col = map[logical];
+      if (col) select.push(`\`${col}\` AS ${alias}`);
+    };
+    addCol('registro', 'registro');
+    addCol('controle', 'controle');
+    addCol('numeroCompra', 'numeroCompra');
+    addCol('loja', 'loja');
+    addCol('codCliente', 'codCliente');
+    addCol('nome', 'nome');
+    addCol('parcela', 'parcela');
+    addCol('totalParcelas', 'totalParcelas');
+    addCol('vencimento', 'vencimento');
+    addCol('valorParcela', 'valorParcela');
+
+    const where: string[] = [`\`${map.codCliente}\` = '${safeCod}'`];
+    if (map.pago) {
+      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+    } else if (map.dataPagamento) {
+      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
+    }
+    if (safeStore && map.loja) {
+      where.push(`\`${map.loja}\` = '${safeStore}'`);
+    }
+
+    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 500`;
+    const result = await this.erp.runReadOnly(sql, { maxRows: 500, timeoutMs: 30000 });
+
+    const phones = await this.crediarios.fetchPhonesByClienteIds([safeCod]);
+    const phoneInfo = phones.get(safeCod) || null;
+
+    const cfg = await this.getConfig();
+    const out: OpenInstallment[] = [];
+    for (const row of result.rows) {
+      const valor = Number(row.valorParcela || 0);
+      if (!row.vencimento || !valor) continue;
+      const venc = new Date(row.vencimento);
+      const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
+      out.push({
+        registro: String(row.registro),
+        controle: String(row.controle),
+        numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+        parcela: row.parcela != null ? Number(row.parcela) : null,
+        totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+        vencimento: venc.toISOString().slice(0, 10),
+        valorParcela: valor,
+        diasAtraso,
+        jurosCalculado: juros,
+        valorComJuros: Math.round((valor + juros) * 100) / 100,
+        codCliente: String(row.codCliente),
+        nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
+        telefone: phoneInfo?.telefone || null,
+      });
+    }
+    return out;
+  }
+
   // ── Busca parcelas em aberto de UM cliente ────────────────────────
 
   /**

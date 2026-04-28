@@ -92,6 +92,15 @@ export default function RecebimentosPage() {
   // Setado pelo `selectedCodCliente` (filtra installments por código).
   const [selectedCodCliente, setSelectedCodCliente] = useState<string | null>(null);
 
+  // Autocomplete: lista de clientes candidatos vinda do backend
+  const [autocompleteResults, setAutocompleteResults] = useState<Array<{
+    codCliente: string;
+    nome: string;
+    telefone: string | null;
+  }>>([]);
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [autocompleteLoading, setAutocompleteLoading] = useState(false);
+
   // Pagamento
   const [showPagamento, setShowPagamento] = useState(false);
   const [forma, setForma] = useState<'pix' | 'dinheiro' | null>(null);
@@ -139,6 +148,67 @@ export default function RecebimentosPage() {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Debounce 300ms: a cada letra, busca clientes no Giga.
+  // Só dispara se a busca tem 2+ chars E NÃO é só números (códigos vão direto pro buscar()).
+  useEffect(() => {
+    const q = busca.trim();
+    if (q.length < 2) {
+      setAutocompleteResults([]);
+      setAutocompleteOpen(false);
+      return;
+    }
+    if (/^\d+$/.test(q)) {
+      // Só código: pula autocomplete (vai direto pro buscar() ao apertar Enter)
+      setAutocompleteResults([]);
+      setAutocompleteOpen(false);
+      return;
+    }
+    setAutocompleteLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<typeof autocompleteResults>(
+          `/crediarios/baixa/clientes-autocomplete?q=${encodeURIComponent(q)}`,
+        );
+        setAutocompleteResults(r);
+        setAutocompleteOpen(true);
+      } catch {
+        setAutocompleteResults([]);
+        setAutocompleteOpen(false);
+      } finally {
+        setAutocompleteLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [busca]);
+
+  // Quando vendedora clica num cliente do autocomplete, busca SÓ as parcelas dele
+  async function selectClienteFromAutocomplete(c: { codCliente: string; nome: string; telefone: string | null }) {
+    setAutocompleteOpen(false);
+    setBusca(c.nome);
+    setLoading(true);
+    setError(null);
+    setSelected(new Set());
+    try {
+      const data = await api<Installment[]>(
+        `/crediarios/baixa/parcelas?codCliente=${encodeURIComponent(c.codCliente)}`,
+      );
+      // Garante que o nome/telefone do cliente apareça mesmo se a parcela não trouxer
+      const enriched = data.map((p) => ({
+        ...p,
+        nome: p.nome || c.nome,
+        telefone: p.telefone || c.telefone,
+      }));
+      setInstallments(enriched);
+      setSelectedCodCliente(c.codCliente);
+      if (!enriched.length) setError(`${c.nome} não tem parcelas em aberto nessa loja.`);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setInstallments([]);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function buscar() {
     if (busca.trim().length < 2) {
@@ -304,21 +374,39 @@ export default function RecebimentosPage() {
       </header>
 
       <main className="max-w-4xl mx-auto w-full p-4 md:p-6">
-        {/* Busca */}
-        <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+        {/* Busca com autocomplete */}
+        <div className="bg-white rounded-2xl shadow-sm p-4 mb-4 relative">
           <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">
             Buscar cliente (CPF, nome ou cód.)
           </label>
-          <div className="flex gap-2">
-            <input
-              ref={inputRef}
-              type="text"
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && buscar()}
-              placeholder="ex: 12345678901, MARIA SILVA, 7732"
-              className="flex-1 p-3 border-2 rounded-lg text-base font-mono"
-            />
+          <div className="flex gap-2 relative">
+            <div className="flex-1 relative">
+              <input
+                ref={inputRef}
+                type="text"
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (autocompleteResults.length === 1) {
+                      // Atalho: 1 só resultado → seleciona direto
+                      selectClienteFromAutocomplete(autocompleteResults[0]);
+                    } else {
+                      buscar();
+                    }
+                  } else if (e.key === 'Escape') {
+                    setAutocompleteOpen(false);
+                  }
+                }}
+                onFocus={() => autocompleteResults.length > 0 && setAutocompleteOpen(true)}
+                placeholder="Digite o nome (ELISA, MARIA), CPF ou código..."
+                className="w-full p-3 pr-10 border-2 rounded-lg text-base"
+                autoComplete="off"
+              />
+              {autocompleteLoading && (
+                <Loader2 className="w-5 h-5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400" />
+              )}
+            </div>
             <button
               onClick={buscar}
               disabled={loading || busca.trim().length < 2}
@@ -328,6 +416,41 @@ export default function RecebimentosPage() {
               Buscar
             </button>
           </div>
+
+          {/* DROPDOWN AUTOCOMPLETE */}
+          {autocompleteOpen && autocompleteResults.length > 0 && (
+            <div className="absolute left-4 right-4 top-full mt-1 bg-white rounded-xl shadow-2xl border border-gray-200 max-h-[60vh] overflow-y-auto z-30">
+              <div className="px-4 py-2 bg-rose-50 text-xs font-bold uppercase text-rose-900 border-b">
+                {autocompleteResults.length} cliente{autocompleteResults.length > 1 ? 's' : ''} encontrado{autocompleteResults.length > 1 ? 's' : ''}
+              </div>
+              <ul className="divide-y divide-gray-100">
+                {autocompleteResults.map((c) => (
+                  <li
+                    key={c.codCliente}
+                    onClick={() => selectClienteFromAutocomplete(c)}
+                    className="p-3 hover:bg-rose-50 cursor-pointer flex items-center gap-3"
+                  >
+                    <div className="w-8 h-8 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
+                      <User size={14} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-rose-900 truncate">{c.nome}</div>
+                      <div className="text-xs text-gray-600">
+                        Cód: <b>{c.codCliente}</b>
+                        {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {autocompleteOpen && !autocompleteLoading && autocompleteResults.length === 0 && busca.trim().length >= 2 && !/^\d+$/.test(busca.trim()) && (
+            <div className="absolute left-4 right-4 top-full mt-1 bg-white rounded-xl shadow-lg border border-amber-200 p-3 text-sm text-amber-900 z-30">
+              Nenhum cliente com esse nome no Giga. Tente parte do nome (ex: "ELI") ou pelo código.
+            </div>
+          )}
+
           {error && (
             <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-2 text-sm text-amber-900 flex items-start gap-2">
               <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />

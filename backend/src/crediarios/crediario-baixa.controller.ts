@@ -53,6 +53,33 @@ export class CrediarioBaixaController {
     return this.svc.setConfig(body);
   }
 
+  // ── Autocomplete cliente (rápido) ─────────────────────────────────
+
+  @Get('clientes-autocomplete')
+  async searchClientes(@Req() req: any, @Query('q') q: string) {
+    this.requireRole(req);
+    return this.svc.searchClientes({ q: q || '' });
+  }
+
+  // ── Lista parcelas de 1 cliente específico ────────────────────────
+
+  @Get('parcelas')
+  async listByCodCliente(
+    @Req() req: any,
+    @Query('codCliente') codCliente: string,
+    @Query('storeCode') storeCodeOverride?: string,
+    @Query('todasLojas') todasLojas?: string,
+  ) {
+    this.requireRole(req);
+    const role = req?.user?.role;
+    let storeCode: string | undefined;
+    if (todasLojas !== '1') {
+      if (role === 'admin') storeCode = storeCodeOverride || undefined;
+      else storeCode = req?.user?.storeCode;
+    }
+    return this.svc.listInstallmentsByCodCliente({ codCliente, storeCode });
+  }
+
   // ── Busca cliente + parcelas em aberto ────────────────────────────
 
   @Get('cliente')
