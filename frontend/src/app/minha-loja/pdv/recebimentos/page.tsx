@@ -88,6 +88,10 @@ export default function RecebimentosPage() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Quando múltiplos clientes batem na busca, primeiro escolhe o cliente.
+  // Setado pelo `selectedCodCliente` (filtra installments por código).
+  const [selectedCodCliente, setSelectedCodCliente] = useState<string | null>(null);
+
   // Pagamento
   const [showPagamento, setShowPagamento] = useState(false);
   const [forma, setForma] = useState<'pix' | 'dinheiro' | null>(null);
@@ -96,8 +100,41 @@ export default function RecebimentosPage() {
   const [pixPaid, setPixPaid] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
 
-  // Cliente atual (do primeiro item da lista — todos da mesma busca devem ser do mesmo cliente)
-  const cliente = installments[0] || null;
+  // Agrupa parcelas por cliente (quando busca por nome traz vários)
+  const clientesUnicos = useMemo(() => {
+    const map = new Map<string, {
+      codCliente: string;
+      nome: string | null;
+      telefone: string | null;
+      qtdParcelas: number;
+      total: number;
+    }>();
+    for (const p of installments) {
+      const ex = map.get(p.codCliente);
+      if (ex) {
+        ex.qtdParcelas += 1;
+        ex.total += p.valorComJuros;
+      } else {
+        map.set(p.codCliente, {
+          codCliente: p.codCliente,
+          nome: p.nome,
+          telefone: p.telefone,
+          qtdParcelas: 1,
+          total: p.valorComJuros,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+  }, [installments]);
+
+  // Parcelas filtradas pelo cliente selecionado
+  const parcelasDoCliente = useMemo(() => {
+    if (!selectedCodCliente) return [] as Installment[];
+    return installments.filter((p) => p.codCliente === selectedCodCliente);
+  }, [installments, selectedCodCliente]);
+
+  // Cliente atual (do primeiro item da lista filtrada)
+  const cliente = parcelasDoCliente[0] || null;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -111,12 +148,16 @@ export default function RecebimentosPage() {
     setLoading(true);
     setError(null);
     setSelected(new Set());
+    setSelectedCodCliente(null);
     try {
       const data = await api<Installment[]>(
         `/crediarios/baixa/cliente?busca=${encodeURIComponent(busca.trim())}`,
       );
       setInstallments(data);
       if (!data.length) setError('Nenhuma parcela em aberto pra esse cliente nessa loja');
+      // Se só 1 cliente bateu, seleciona automático
+      const unicos = Array.from(new Set(data.map((d) => d.codCliente)));
+      if (unicos.length === 1) setSelectedCodCliente(unicos[0]);
     } catch (e: any) {
       setError(e?.message || String(e));
       setInstallments([]);
@@ -134,16 +175,16 @@ export default function RecebimentosPage() {
     });
   }
   function selectAll() {
-    if (selected.size === installments.length) setSelected(new Set());
-    else setSelected(new Set(installments.map(keyOf)));
+    if (selected.size === parcelasDoCliente.length) setSelected(new Set());
+    else setSelected(new Set(parcelasDoCliente.map(keyOf)));
   }
   function keyOf(p: Installment) {
     return `${p.registro}/${p.controle}`;
   }
 
   const selecionadas = useMemo(
-    () => installments.filter((p) => selected.has(keyOf(p))),
-    [installments, selected],
+    () => parcelasDoCliente.filter((p) => selected.has(keyOf(p))),
+    [parcelasDoCliente, selected],
   );
   const totalPrincipal = useMemo(
     () => Math.round(selecionadas.reduce((s, p) => s + p.valorParcela, 0) * 100) / 100,
@@ -295,12 +336,53 @@ export default function RecebimentosPage() {
           )}
         </div>
 
+        {/* Múltiplos clientes — escolher antes */}
+        {installments.length > 0 && !selectedCodCliente && clientesUnicos.length > 1 && (
+          <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
+            <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900">
+              {clientesUnicos.length} clientes encontrados — escolha 1
+            </div>
+            <ul className="divide-y divide-gray-100">
+              {clientesUnicos.map((c) => (
+                <li
+                  key={c.codCliente}
+                  onClick={() => setSelectedCodCliente(c.codCliente)}
+                  className="p-4 cursor-pointer hover:bg-rose-50 transition flex items-center justify-between gap-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
+                      <User size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-rose-900 truncate">
+                        {c.nome || `Cód. ${c.codCliente}`}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        Cód: <b>{c.codCliente}</b>
+                        {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="font-bold text-emerald-700 tabular-nums">
+                      {brl(c.total)}
+                    </div>
+                    <div className="text-[10px] text-gray-500 uppercase font-bold">
+                      {c.qtdParcelas} parcela{c.qtdParcelas > 1 ? 's' : ''}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {/* Cliente + Parcelas */}
-        {installments.length > 0 && cliente && (
+        {parcelasDoCliente.length > 0 && cliente && (
           <>
             <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div>
+                <div className="flex-1 min-w-0">
                   <div className="text-xs uppercase text-gray-500 font-bold">Cliente</div>
                   <div className="text-lg font-bold text-rose-900 flex items-center gap-2">
                     <User size={18} />
@@ -311,22 +393,30 @@ export default function RecebimentosPage() {
                     {cliente.telefone && <> · Tel: <b>{cliente.telefone}</b></>}
                   </div>
                 </div>
+                {clientesUnicos.length > 1 && (
+                  <button
+                    onClick={() => { setSelectedCodCliente(null); setSelected(new Set()); }}
+                    className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded"
+                  >
+                    ← Trocar cliente
+                  </button>
+                )}
                 <button
                   onClick={selectAll}
                   className="text-sm px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 font-semibold rounded"
                 >
-                  {selected.size === installments.length ? 'Desmarcar todas' : 'Marcar todas'}
+                  {selected.size === parcelasDoCliente.length ? 'Desmarcar todas' : 'Marcar todas'}
                 </button>
               </div>
             </div>
 
             <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-32">
               <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
-                <span>{installments.length} parcelas em aberto</span>
+                <span>{parcelasDoCliente.length} parcelas em aberto</span>
                 <span>{selected.size} selecionadas</span>
               </div>
               <ul className="divide-y divide-gray-100">
-                {installments.map((p) => {
+                {parcelasDoCliente.map((p) => {
                   const k = keyOf(p);
                   const isSel = selected.has(k);
                   return (

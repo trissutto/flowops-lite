@@ -209,8 +209,20 @@ export class CrediarioBaixaService {
       }
     }
 
-    codClientes = Array.from(new Set(codClientes.filter((c) => c && c !== '0')));
-    if (codClientes.length === 0) return [];
+    // Filtra códigos "lixo" do Giga (cartões/avulsos: 0, 1, 2, 3 — CREDICARD, REDESHOP, etc).
+    // Cliente real começa em 4+ na maioria das instalações Lurd's.
+    codClientes = Array.from(new Set(
+      codClientes.filter((c) => {
+        if (!c) return false;
+        const n = parseInt(String(c).replace(/\D/g, ''), 10);
+        return !isNaN(n) && n > 3;
+      }),
+    ));
+    if (codClientes.length === 0) {
+      throw new BadRequestException(
+        'Nenhum cliente encontrado. Códigos 0-3 do Giga são cartões/avulsos (CREDICARD, REDESHOP, VISANET) — ignorados.',
+      );
+    }
 
     // Lista parcelas em aberto desses codClientes
     const select: string[] = [];
