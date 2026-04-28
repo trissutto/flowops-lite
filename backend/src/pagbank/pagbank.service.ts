@@ -151,21 +151,38 @@ export class PagbankService {
     const baseUrl = this.getBaseUrl(cfg.ambiente);
     const url = `${baseUrl}/orders`;
 
-    // Customer mínimo pro PIX. Se não tiver, manda fallback "Consumidor"
-    const customerName = (input.customerName || 'Consumidor').slice(0, 60);
+    // Customer COMPLETO — PagBank exige nome+email+tax_id+phones senão rejeita.
+    // Quando vendedora não identificou cliente, usamos defaults seguros.
+    const customerName = (input.customerName || 'Consumidor Final').slice(0, 60);
     const customerEmail = input.customerEmail || 'consumidor@lurds.com.br';
-    const customerCpf = (input.customerCpf || '').replace(/\D/g, '');
+    let customerCpf = (input.customerCpf || '').replace(/\D/g, '');
+    // Sandbox aceita CPF válido fictício; em produção, melhor não mandar tax_id
+    // se cliente não informou (pra evitar fraude com CPF errado).
+    // CPF default sandbox (válido pelos dígitos): 11144477735
+    if (!customerCpf || customerCpf.length !== 11) {
+      customerCpf = cfg.ambiente === 'sandbox' ? '11144477735' : '';
+    }
 
     const body: any = {
-      reference_id: `${input.saleId}:${input.storeCode}`,
+      reference_id: `${input.saleId}:${input.storeCode}`.slice(0, 64),
       customer: {
         name: customerName,
         email: customerEmail,
-        // tax_id é opcional, mas se vier formatado errado o PagBank rejeita
         ...(customerCpf && customerCpf.length === 11 ? { tax_id: customerCpf } : {}),
+        // PagBank exige phones em alguns casos. Manda default
+        // se não foi informado pra evitar rejection.
+        phones: [
+          {
+            country: '55',
+            area: '13',
+            number: '999999999',
+            type: 'MOBILE',
+          },
+        ],
       },
       items: [
         {
+          reference_id: input.saleId.slice(-12),
           name: `Venda PDV ${input.saleId.slice(-6).toUpperCase()}`,
           quantity: 1,
           unit_amount: valorCentavos,
@@ -174,15 +191,19 @@ export class PagbankService {
       qr_codes: [
         {
           amount: { value: valorCentavos },
-          expiration_date: expiresAt.toISOString(),
+          // ISO sem milissegundos, com offset BR (-03:00) — formato que
+          // PagBank parece aceitar melhor
+          expiration_date: this.formatPagbankDate(expiresAt),
         },
       ],
-      // notification_urls é onde PagBank manda webhook quando o status mudar.
-      // Configurado via env BACKEND_PUBLIC_URL.
-      notification_urls: this.getWebhookUrl()
-        ? [this.getWebhookUrl()]
-        : undefined,
     };
+
+    // notification_urls é onde PagBank manda webhook quando o status mudar.
+    // Só anexa se temos URL pública configurada (em dev pode não ter).
+    const webhook = this.getWebhookUrl();
+    if (webhook) {
+      body.notification_urls = [webhook];
+    }
 
     let resp: any;
     try {
@@ -202,15 +223,16 @@ export class PagbankService {
       const status = e?.response?.status;
       const data = e?.response?.data;
       this.logger.error(
-        `[pagbank] createPixCharge HTTP ${status} pra sale=${input.saleId}: ${JSON.stringify(data || e?.message)}`,
+        `[pagbank] createPixCharge HTTP ${status} pra sale=${input.saleId}: ${JSON.stringify(data || e?.message)}\nBODY ENVIADO: ${JSON.stringify(body)}`,
       );
+      // Concatena TODOS os erros do PagBank, não só o primeiro
+      const errMsgs = Array.isArray(data?.error_messages)
+        ? data.error_messages
+            .map((em: any) => `${em.parameter_name || em.code}: ${em.description}`)
+            .join(' | ')
+        : null;
       throw new BadRequestException(
-        `PagBank rejeitou a cobrança: ${
-          data?.error_messages?.[0]?.description ||
-          data?.error_messages?.[0]?.code ||
-          e?.message ||
-          'erro desconhecido'
-        }`,
+        `PagBank rejeitou: ${errMsgs || data?.message || e?.message || 'erro desconhecido'}`,
       );
     }
 
@@ -677,6 +699,19 @@ export class PagbankService {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Formata data ISO 8601 com offset BR (-03:00) sem milissegundos.
+   * Formato exigido pelo PagBank em campos como expiration_date.
+   */
+  private formatPagbankDate(d: Date): string {
+    // Cria string ISO sem ms e adiciona offset BR fixo -03:00
+    // (sandbox/prod do PagBank esperam timezone BR explícito)
+    const offsetMin = -180; // -3h em minutos
+    const local = new Date(d.getTime() + offsetMin * 60 * 1000);
+    const iso = local.toISOString().replace(/\.\d+Z$/, '');
+    return `${iso}-03:00`;
+  }
 
   private getBaseUrl(ambiente: string): string {
     return ambiente === 'production'
