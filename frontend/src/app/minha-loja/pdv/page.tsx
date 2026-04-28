@@ -150,6 +150,11 @@ export default function PdvPage() {
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
 
+  // Quando true, o filho (PaymentModal) confirmou PIX automaticamente via webhook/polling.
+  // Após finalizeSale, em vez de mostrar a tela "Venda finalizada", o PDV
+  // imprime + abre nova venda direto (fluxo full-auto pra caixa não travar).
+  const autoFlowRef = useRef(false);
+
   // ── Load lojas + restaura store + abre/retoma venda ──
   useEffect(() => {
     api<Store[]>('/stores')
@@ -434,8 +439,15 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowPayment(false);
-      setShowFinalized(true);
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
+
+      // Em fluxo AUTO (PIX confirmado pelo Pagar.me), pula a tela de finalizada
+      // — só imprime e abre próxima venda. Em fluxo MANUAL, mostra a tela.
+      const wasAutoFlow = autoFlowRef.current;
+      autoFlowRef.current = false;
+      if (!wasAutoFlow) {
+        setShowFinalized(true);
+      }
 
       // ── Imprime cupom NÃO FISCAL SILENCIOSAMENTE ──
       // Estratégia:
@@ -460,6 +472,15 @@ export default function PdvPage() {
         }
       } catch (printErr) {
         console.error('Falha ao imprimir recibo:', printErr);
+      }
+
+      // Em fluxo AUTO: depois de imprimir, abre próxima venda em ~1.5s
+      // (tempo suficiente pro recibo carregar e disparar print() no iframe).
+      if (wasAutoFlow) {
+        setTimeout(() => {
+          setSale(null);
+          createNewSale();
+        }, 1500);
       }
     } catch (e: any) {
       alert(`Erro: ${e?.message}`);
@@ -951,6 +972,7 @@ export default function PdvPage() {
           onConfirm={finalizeSale}
           onLater={fecharDepois}
           onPaymentsChange={onPaymentsChanged}
+          onAutoFlowTriggered={() => { autoFlowRef.current = true; }}
         />
       )}
 
@@ -1050,6 +1072,7 @@ function PaymentModal({
   onConfirm,
   onLater,
   onPaymentsChange,
+  onAutoFlowTriggered,
 }: {
   saleId: string;
   total: number;
@@ -1063,6 +1086,8 @@ function PaymentModal({
   onConfirm: (method: string, details?: any) => void;
   onLater: () => void;
   onPaymentsChange?: () => void;
+  /** Sinaliza pro parent que entrou em fluxo automático (PIX confirmado) */
+  onAutoFlowTriggered?: () => void;
 }) {
   // Lista de pagamentos parciais já adicionados
   const [payments, setPayments] = useState(initialPayments || []);
@@ -1329,20 +1354,31 @@ function PaymentModal({
     }
   };
 
-  // ── AUTO-ADICIONA PIX quando webhook/polling confirmar pagamento ──
-  // Quando pixPaid vira true E o método ativo é PIX E ainda tem valor a pagar,
-  // dispara adicionarPagamento sozinho — vendedora não precisa clicar nada.
-  // Após adicionar, o pago100 fica true e o botão "Finalizar venda" aparece.
+  // ── AUTO-FLUXO PIX: webhook/polling confirma → adiciona pagamento → finaliza venda ──
+  //
+  // 3 useEffects encadeados:
+  //   1) pixPaid=true        → marca autoAdd e chama adicionarPagamento + sinaliza parent
+  //   2) autoAdd + pago100   → chama onConfirm('') (finaliza)
+  //   3) reset quando pix cancelado/método trocado
+  //
+  // Resultado: vendedora não clica em NADA depois que cliente paga.
+  // Cupom imprime + PDV abre próxima venda automaticamente.
   const autoAddRef = useRef(false);
+  const autoFinalizeRef = useRef(false);
+
   useEffect(() => {
     if (!pixPaid) {
       autoAddRef.current = false;
+      autoFinalizeRef.current = false;
       return;
     }
     if (autoAddRef.current) return;
     if (selected !== 'pix' || !pixCharge) return;
     if (addingPayment) return;
     autoAddRef.current = true;
+    // Sinaliza o parent que entramos em fluxo full-auto (parent vai pular tela
+    // de "Venda finalizada" e abrir nova venda direto).
+    onAutoFlowTriggered?.();
     // Pequeno delay pro toast "✓ Pagamento confirmado" aparecer antes do add
     const t = setTimeout(() => {
       adicionarPagamento();
@@ -1350,6 +1386,20 @@ function PaymentModal({
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pixPaid, selected, pixCharge]);
+
+  // Auto-finaliza quando o auto-add do PIX zerou o restante.
+  useEffect(() => {
+    if (!autoAddRef.current) return;
+    if (autoFinalizeRef.current) return;
+    if (!pago100) return;
+    if (finalizing || addingPayment) return;
+    autoFinalizeRef.current = true;
+    const t = setTimeout(() => {
+      onConfirm('', undefined);
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pago100, finalizing, addingPayment]);
 
   const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
   const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
