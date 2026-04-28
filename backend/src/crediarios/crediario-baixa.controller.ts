@@ -53,6 +53,24 @@ export class CrediarioBaixaController {
     return this.svc.setConfig(body);
   }
 
+  // ── Lista TUDO (todos clientes com parcelas em aberto) ──────────
+  // Frontend filtra local em JS depois — busca instantânea sem ir no servidor.
+  @Get('todas')
+  async listAll(
+    @Req() req: any,
+    @Query('storeCode') storeCodeOverride?: string,
+    @Query('todasLojas') todasLojas?: string,
+  ) {
+    this.requireRole(req);
+    let storeCode: string | undefined;
+    if (todasLojas !== '1') {
+      const role = req?.user?.role;
+      if (role === 'admin') storeCode = storeCodeOverride || undefined;
+      else storeCode = req?.user?.storeCode;
+    }
+    return this.svc.listAllOpenInstallments({ storeCode });
+  }
+
   // ── Autocomplete cliente (rápido) ─────────────────────────────────
 
   @Get('clientes-autocomplete')

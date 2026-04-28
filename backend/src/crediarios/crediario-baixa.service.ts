@@ -128,6 +128,155 @@ export class CrediarioBaixaService {
     return { diasAtraso, juros };
   }
 
+  // ── LISTA TUDO (todos clientes com parcelas em aberto) ───────────
+  //
+  // Usado pelo PDV de RECEBIMENTOS — carrega tudo 1x, frontend filtra local.
+  // Inclui parcelas vencidas E a vencer (diferente de listOverdue que só lista
+  // vencidas). Filtro por loja é OPCIONAL — cliente pode pagar em qualquer filial.
+
+  async listAllOpenInstallments(input: { storeCode?: string }): Promise<{
+    parcelas: OpenInstallment[];
+    clientes: Array<{
+      codCliente: string;
+      nome: string;
+      telefone: string | null;
+      qtdParcelas: number;
+      total: number;
+    }>;
+  }> {
+    let map = await this.crediarios.detectColumns();
+    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      map = await this.crediarios.detectColumns(true);
+    }
+    if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      throw new BadRequestException(
+        'Colunas essenciais não detectadas no Giga (codCliente, vencimento, valorParcela)',
+      );
+    }
+
+    const safeStore = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    const select: string[] = [];
+    const addCol = (logical: keyof typeof map, alias: string) => {
+      const col = map[logical];
+      if (col) select.push(`\`${col}\` AS ${alias}`);
+    };
+    addCol('registro', 'registro');
+    addCol('controle', 'controle');
+    addCol('numeroCompra', 'numeroCompra');
+    addCol('loja', 'loja');
+    addCol('codCliente', 'codCliente');
+    addCol('nome', 'nome');
+    addCol('parcela', 'parcela');
+    addCol('totalParcelas', 'totalParcelas');
+    addCol('vencimento', 'vencimento');
+    addCol('valorParcela', 'valorParcela');
+
+    const where: string[] = [];
+    // PAGO='N' (vencidas E a vencer)
+    if (map.pago) {
+      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+    } else if (map.dataPagamento) {
+      where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
+    }
+    // Filtro por loja (opcional)
+    if (safeStore && map.loja) {
+      where.push(`\`${map.loja}\` = '${safeStore}'`);
+    }
+    // Exclui codCliente 0-3 e null/vazio
+    where.push(`\`${map.codCliente}\` IS NOT NULL`);
+    where.push(`\`${map.codCliente}\` <> ''`);
+    where.push(`CAST(\`${map.codCliente}\` AS UNSIGNED) > 3`);
+
+    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 50000`;
+    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 60000 });
+
+    // Enriquece com telefone + filtra clientes-cartão
+    const codClientes = Array.from(new Set(result.rows.map((r: any) => String(r.codCliente))));
+    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes);
+
+    // Filtra cartões pelo nome
+    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+    const cardCodes = new Set<string>();
+    const cm = await this.crediarios.detectClientesTable();
+    if (cm && cm.nome && codClientes.length > 0) {
+      const inList = codClientes.map((c) => `'${c.replace(/'/g, '')}'`).join(',');
+      const sqlCli = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${codClientes.length + 100}`;
+      try {
+        const r = await this.erp.runReadOnly(sqlCli, {
+          maxRows: codClientes.length + 100,
+          timeoutMs: 30000,
+        });
+        for (const row of r.rows as any[]) {
+          if (cardRegex.test(String(row.nome || '').trim())) {
+            cardCodes.add(String(row.cod));
+          }
+        }
+      } catch (e: any) {
+        this.logger.warn(`Filtro cartões: ${e?.message}`);
+      }
+    }
+
+    const cfg = await this.getConfig();
+    const out: OpenInstallment[] = [];
+    for (const row of result.rows) {
+      const codCli = String(row.codCliente);
+      if (cardCodes.has(codCli)) continue;
+      const valor = Number(row.valorParcela || 0);
+      if (!row.vencimento || !valor) continue;
+      const venc = new Date(row.vencimento);
+      const { diasAtraso, juros } = this.calcJuros(venc, valor, cfg);
+      const phoneInfo = phones.get(codCli) || null;
+      out.push({
+        registro: String(row.registro),
+        controle: String(row.controle),
+        numeroCompra: row.numeroCompra ? String(row.numeroCompra) : null,
+        parcela: row.parcela != null ? Number(row.parcela) : null,
+        totalParcelas: row.totalParcelas != null ? Number(row.totalParcelas) : null,
+        vencimento: venc.toISOString().slice(0, 10),
+        valorParcela: valor,
+        diasAtraso,
+        jurosCalculado: juros,
+        valorComJuros: Math.round((valor + juros) * 100) / 100,
+        codCliente: codCli,
+        nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
+        telefone: phoneInfo?.telefone || null,
+      });
+    }
+
+    // Resumo agrupado por cliente
+    const byCliente = new Map<string, {
+      codCliente: string;
+      nome: string;
+      telefone: string | null;
+      qtdParcelas: number;
+      total: number;
+    }>();
+    for (const p of out) {
+      const ex = byCliente.get(p.codCliente);
+      if (ex) {
+        ex.qtdParcelas += 1;
+        ex.total += p.valorComJuros;
+      } else {
+        byCliente.set(p.codCliente, {
+          codCliente: p.codCliente,
+          nome: p.nome || `Cód. ${p.codCliente}`,
+          telefone: p.telefone,
+          qtdParcelas: 1,
+          total: p.valorComJuros,
+        });
+      }
+    }
+
+    return {
+      parcelas: out,
+      clientes: Array.from(byCliente.values())
+        .sort((a, b) => a.nome.localeCompare(b.nome)),
+    };
+  }
+
   // ── Autocomplete: busca rápida de clientes ────────────────────────
 
   /**

@@ -3,20 +3,25 @@
 /**
  * /minha-loja/pdv/recebimentos — RECEBIMENTOS de crediário no PDV.
  *
+ * Estratégia: carrega TODAS as parcelas em aberto da rede (de qualquer loja)
+ * em uma chamada única ao montar a tela. Vendedora filtra LOCAL em JS por
+ * nome/código — busca instantânea, sem latência.
+ *
+ * Cliente pode pagar promissória em qualquer filial — por isso `todasLojas=1`.
+ *
  * Fluxo:
- *  1. Vendedora busca cliente (CPF, nome ou codCliente)
- *  2. Lista parcelas em aberto da loja, com juros calculados
- *  3. Vendedora seleciona N parcelas → total acumulado
- *  4. Escolhe forma: PIX (gera QR Pagar.me) ou DINHEIRO (registra direto)
- *  5. Após confirmação → UPDATE no Giga + abre recibo silencioso
- *  6. Recibo imprime na térmica e PDV volta pra busca
+ *  1. Mount → GET /crediarios/baixa/todas?todasLojas=1
+ *  2. Vendedora digita → filtra local
+ *  3. Clica no cliente → mostra parcelas dele
+ *  4. Marca parcelas → escolhe PIX ou dinheiro
+ *  5. Confirma → backend faz UPDATE no Giga + cupom imprime auto
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, CheckCircle2, AlertCircle, Banknote, QrCode, Copy, Check, X,
-  Calendar, User, FileText,
+  User, RefreshCw,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -34,6 +39,19 @@ type Installment = {
   codCliente: string;
   nome: string | null;
   telefone: string | null;
+};
+
+type ClienteResumo = {
+  codCliente: string;
+  nome: string;
+  telefone: string | null;
+  qtdParcelas: number;
+  total: number;
+};
+
+type ListResponse = {
+  parcelas: Installment[];
+  clientes: ClienteResumo[];
 };
 
 type PixCharge = {
@@ -55,15 +73,22 @@ const formatDate = (iso: string) => {
   }
 };
 
+// Normaliza string pra busca (lowercase + remove acentos)
+const normalize = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 function printReceipt(baixaId: string) {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
   const electron = (window as any).electronAPI;
   if (electron?.silentPrintUrl) {
     const absoluteUrl = window.location.origin + url;
-    electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
-      console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
-      hiddenIframe(url);
-    });
+    electron.silentPrintUrl(absoluteUrl).catch(() => hiddenIframe(url));
   } else {
     hiddenIframe(url);
   }
@@ -75,31 +100,27 @@ function hiddenIframe(url: string) {
     iframe.src = url;
     document.body.appendChild(iframe);
     setTimeout(() => { try { iframe.remove(); } catch {} }, 30000);
-  } catch (e) {
+  } catch {
     window.open(url, 'lurds_recibo', 'width=320,height=520,resizable=yes');
   }
 }
 
 export default function RecebimentosPage() {
+  // Carrega tudo no mount
+  const [allParcelas, setAllParcelas] = useState<Installment[]>([]);
+  const [allClientes, setAllClientes] = useState<ClienteResumo[]>([]);
+  const [loadingInicial, setLoadingInicial] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Busca local
   const [busca, setBusca] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [installments, setInstallments] = useState<Installment[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Quando múltiplos clientes batem na busca, primeiro escolhe o cliente.
-  // Setado pelo `selectedCodCliente` (filtra installments por código).
+  // Cliente selecionado (mostra suas parcelas)
   const [selectedCodCliente, setSelectedCodCliente] = useState<string | null>(null);
 
-  // Autocomplete: lista de clientes candidatos vinda do backend
-  const [autocompleteResults, setAutocompleteResults] = useState<Array<{
-    codCliente: string;
-    nome: string;
-    telefone: string | null;
-  }>>([]);
-  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
-  const [autocompleteLoading, setAutocompleteLoading] = useState(false);
+  // Seleção de parcelas
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   // Pagamento
   const [showPagamento, setShowPagamento] = useState(false);
@@ -109,132 +130,66 @@ export default function RecebimentosPage() {
   const [pixPaid, setPixPaid] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
 
-  // Agrupa parcelas por cliente (quando busca por nome traz vários)
-  const clientesUnicos = useMemo(() => {
-    const map = new Map<string, {
-      codCliente: string;
-      nome: string | null;
-      telefone: string | null;
-      qtdParcelas: number;
-      total: number;
-    }>();
-    for (const p of installments) {
-      const ex = map.get(p.codCliente);
-      if (ex) {
-        ex.qtdParcelas += 1;
-        ex.total += p.valorComJuros;
-      } else {
-        map.set(p.codCliente, {
-          codCliente: p.codCliente,
-          nome: p.nome,
-          telefone: p.telefone,
-          qtdParcelas: 1,
-          total: p.valorComJuros,
-        });
-      }
+  // ── Load inicial ─────────────────────────────────────────────
+
+  async function loadAll() {
+    setLoadingInicial(true);
+    setLoadError(null);
+    try {
+      // todasLojas=1 → cliente pode pagar promissória em qualquer filial
+      const data = await api<ListResponse>('/crediarios/baixa/todas?todasLojas=1');
+      setAllParcelas(data.parcelas);
+      setAllClientes(data.clientes);
+    } catch (e: any) {
+      setLoadError(e?.message || String(e));
+    } finally {
+      setLoadingInicial(false);
     }
-    return Array.from(map.values()).sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
-  }, [installments]);
+  }
+
+  useEffect(() => {
+    loadAll();
+    inputRef.current?.focus();
+  }, []);
+
+  // ── Filtro local ─────────────────────────────────────────────
+
+  const clientesFiltrados = useMemo(() => {
+    const q = normalize(busca);
+    if (q.length === 0) return allClientes.slice(0, 100); // Top 100 pra não pesar render inicial
+    return allClientes.filter((c) => {
+      const nome = normalize(c.nome);
+      const cod = normalize(c.codCliente);
+      const tel = c.telefone ? normalize(c.telefone) : '';
+      // Busca por palavras-chave: divide busca por espaços, todas precisam bater
+      const tokens = q.split(' ').filter(Boolean);
+      return tokens.every(
+        (t) => nome.includes(t) || cod.includes(t) || tel.includes(t),
+      );
+    });
+  }, [busca, allClientes]);
 
   // Parcelas filtradas pelo cliente selecionado
   const parcelasDoCliente = useMemo(() => {
     if (!selectedCodCliente) return [] as Installment[];
-    return installments.filter((p) => p.codCliente === selectedCodCliente);
-  }, [installments, selectedCodCliente]);
+    return allParcelas.filter((p) => p.codCliente === selectedCodCliente);
+  }, [allParcelas, selectedCodCliente]);
 
-  // Cliente atual (do primeiro item da lista filtrada)
-  const cliente = parcelasDoCliente[0] || null;
+  const cliente = parcelasDoCliente[0] ||
+    allClientes.find((c) => c.codCliente === selectedCodCliente) || null;
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  // Debounce 300ms: a cada letra, busca clientes no Giga.
-  // Só dispara se a busca tem 2+ chars E NÃO é só números (códigos vão direto pro buscar()).
-  useEffect(() => {
-    const q = busca.trim();
-    if (q.length < 2) {
-      setAutocompleteResults([]);
-      setAutocompleteOpen(false);
-      return;
-    }
-    if (/^\d+$/.test(q)) {
-      // Só código: pula autocomplete (vai direto pro buscar() ao apertar Enter)
-      setAutocompleteResults([]);
-      setAutocompleteOpen(false);
-      return;
-    }
-    setAutocompleteLoading(true);
-    const t = setTimeout(async () => {
-      try {
-        const r = await api<typeof autocompleteResults>(
-          `/crediarios/baixa/clientes-autocomplete?q=${encodeURIComponent(q)}`,
-        );
-        setAutocompleteResults(r);
-        setAutocompleteOpen(true);
-      } catch {
-        setAutocompleteResults([]);
-        setAutocompleteOpen(false);
-      } finally {
-        setAutocompleteLoading(false);
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [busca]);
-
-  // Quando vendedora clica num cliente do autocomplete, busca SÓ as parcelas dele
-  async function selectClienteFromAutocomplete(c: { codCliente: string; nome: string; telefone: string | null }) {
-    setAutocompleteOpen(false);
-    setBusca(c.nome);
-    setLoading(true);
-    setError(null);
+  function selectCliente(codCliente: string) {
+    setSelectedCodCliente(codCliente);
     setSelected(new Set());
-    try {
-      const data = await api<Installment[]>(
-        `/crediarios/baixa/parcelas?codCliente=${encodeURIComponent(c.codCliente)}`,
-      );
-      // Garante que o nome/telefone do cliente apareça mesmo se a parcela não trouxer
-      const enriched = data.map((p) => ({
-        ...p,
-        nome: p.nome || c.nome,
-        telefone: p.telefone || c.telefone,
-      }));
-      setInstallments(enriched);
-      setSelectedCodCliente(c.codCliente);
-      if (!enriched.length) setError(`${c.nome} não tem parcelas em aberto nessa loja.`);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setInstallments([]);
-    } finally {
-      setLoading(false);
-    }
   }
 
-  async function buscar() {
-    if (busca.trim().length < 2) {
-      setError('Digite pelo menos 2 caracteres');
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setSelected(new Set());
+  function backToList() {
     setSelectedCodCliente(null);
-    try {
-      const data = await api<Installment[]>(
-        `/crediarios/baixa/cliente?busca=${encodeURIComponent(busca.trim())}`,
-      );
-      setInstallments(data);
-      if (!data.length) setError('Nenhuma parcela em aberto pra esse cliente nessa loja');
-      // Se só 1 cliente bateu, seleciona automático
-      const unicos = Array.from(new Set(data.map((d) => d.codCliente)));
-      if (unicos.length === 1) setSelectedCodCliente(unicos[0]);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setInstallments([]);
-    } finally {
-      setLoading(false);
-    }
+    setSelected(new Set());
+    setTimeout(() => inputRef.current?.focus(), 100);
   }
+
+  // ── Seleção de parcelas ─────────────────────────────────────
 
   function toggleSelect(key: string) {
     setSelected((prev) => {
@@ -266,7 +221,7 @@ export default function RecebimentosPage() {
   );
   const totalPago = Math.round((totalPrincipal + totalJuros) * 100) / 100;
 
-  // ── Aplicação ───────────────────────────────────────────────
+  // ── Pagamento ───────────────────────────────────────────────
 
   function abrirPagamento() {
     if (selecionadas.length === 0) return;
@@ -285,7 +240,6 @@ export default function RecebimentosPage() {
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
         }),
       });
-      // Imprime + reseta
       printReceipt(r.baixaId);
       finalizarTudo();
     } catch (e: any) {
@@ -324,7 +278,6 @@ export default function RecebimentosPage() {
         if (cancelled) return;
         if (r.isPaid) {
           setPixPaid(true);
-          // Imprime + finaliza
           printReceipt(pixCharge.baixaId);
           setTimeout(() => finalizarTudo(), 1500);
         }
@@ -338,11 +291,13 @@ export default function RecebimentosPage() {
   function finalizarTudo() {
     setShowPagamento(false);
     setSelected(new Set());
-    setInstallments([]);
+    setSelectedCodCliente(null);
     setBusca('');
     setForma(null);
     setPixCharge(null);
     setPixPaid(false);
+    // Recarrega a lista (parcelas pagas saem)
+    loadAll();
     setTimeout(() => inputRef.current?.focus(), 200);
   }
 
@@ -369,139 +324,44 @@ export default function RecebimentosPage() {
             <ArrowLeft size={20} />
           </Link>
           <h1 className="text-xl md:text-2xl font-bold text-rose-900">RECEBIMENTOS</h1>
-          <span className="text-xs text-gray-500 hidden md:inline">crediário · baixa de parcelas</span>
+          <span className="text-xs text-gray-500 hidden md:inline flex-1">
+            crediário · baixa de parcelas
+          </span>
+          <button
+            onClick={loadAll}
+            disabled={loadingInicial}
+            className="p-2 rounded-lg hover:bg-rose-100 text-rose-700 disabled:opacity-50"
+            title="Recarregar"
+          >
+            <RefreshCw size={18} className={loadingInicial ? 'animate-spin' : ''} />
+          </button>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto w-full p-4 md:p-6">
-        {/* Busca com autocomplete */}
-        <div className="bg-white rounded-2xl shadow-sm p-4 mb-4 relative">
-          <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">
-            Buscar cliente (CPF, nome ou cód.)
-          </label>
-          <div className="flex gap-2 relative">
-            <div className="flex-1 relative">
-              <input
-                ref={inputRef}
-                type="text"
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    if (autocompleteResults.length === 1) {
-                      // Atalho: 1 só resultado → seleciona direto
-                      selectClienteFromAutocomplete(autocompleteResults[0]);
-                    } else {
-                      buscar();
-                    }
-                  } else if (e.key === 'Escape') {
-                    setAutocompleteOpen(false);
-                  }
-                }}
-                onFocus={() => autocompleteResults.length > 0 && setAutocompleteOpen(true)}
-                placeholder="Digite o nome (ELISA, MARIA), CPF ou código..."
-                className="w-full p-3 pr-10 border-2 rounded-lg text-base"
-                autoComplete="off"
-              />
-              {autocompleteLoading && (
-                <Loader2 className="w-5 h-5 absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-gray-400" />
-              )}
+        {/* Estado de carga inicial */}
+        {loadingInicial && allClientes.length === 0 && (
+          <div className="bg-white rounded-2xl shadow-sm p-12 text-center">
+            <Loader2 className="w-10 h-10 animate-spin mx-auto text-rose-600" />
+            <div className="mt-3 text-gray-700 font-bold">Carregando clientes…</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Carrega tudo 1 vez. Próximas buscas são instantâneas.
             </div>
-            <button
-              onClick={buscar}
-              disabled={loading || busca.trim().length < 2}
-              className="px-5 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold rounded-lg flex items-center gap-2"
-            >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search size={18} />}
-              Buscar
-            </button>
-          </div>
-
-          {/* DROPDOWN AUTOCOMPLETE */}
-          {autocompleteOpen && autocompleteResults.length > 0 && (
-            <div className="absolute left-4 right-4 top-full mt-1 bg-white rounded-xl shadow-2xl border border-gray-200 max-h-[60vh] overflow-y-auto z-30">
-              <div className="px-4 py-2 bg-rose-50 text-xs font-bold uppercase text-rose-900 border-b">
-                {autocompleteResults.length} cliente{autocompleteResults.length > 1 ? 's' : ''} encontrado{autocompleteResults.length > 1 ? 's' : ''}
-              </div>
-              <ul className="divide-y divide-gray-100">
-                {autocompleteResults.map((c) => (
-                  <li
-                    key={c.codCliente}
-                    onClick={() => selectClienteFromAutocomplete(c)}
-                    className="p-3 hover:bg-rose-50 cursor-pointer flex items-center gap-3"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
-                      <User size={14} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-rose-900 truncate">{c.nome}</div>
-                      <div className="text-xs text-gray-600">
-                        Cód: <b>{c.codCliente}</b>
-                        {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {autocompleteOpen && !autocompleteLoading && autocompleteResults.length === 0 && busca.trim().length >= 2 && !/^\d+$/.test(busca.trim()) && (
-            <div className="absolute left-4 right-4 top-full mt-1 bg-white rounded-xl shadow-lg border border-amber-200 p-3 text-sm text-amber-900 z-30">
-              Nenhum cliente com esse nome no Giga. Tente parte do nome (ex: "ELI") ou pelo código.
-            </div>
-          )}
-
-          {error && (
-            <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-2 text-sm text-amber-900 flex items-start gap-2">
-              <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Múltiplos clientes — escolher antes */}
-        {installments.length > 0 && !selectedCodCliente && clientesUnicos.length > 1 && (
-          <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
-            <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900">
-              {clientesUnicos.length} clientes encontrados — escolha 1
-            </div>
-            <ul className="divide-y divide-gray-100">
-              {clientesUnicos.map((c) => (
-                <li
-                  key={c.codCliente}
-                  onClick={() => setSelectedCodCliente(c.codCliente)}
-                  className="p-4 cursor-pointer hover:bg-rose-50 transition flex items-center justify-between gap-3"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
-                      <User size={18} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-bold text-rose-900 truncate">
-                        {c.nome || `Cód. ${c.codCliente}`}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        Cód: <b>{c.codCliente}</b>
-                        {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className="font-bold text-emerald-700 tabular-nums">
-                      {brl(c.total)}
-                    </div>
-                    <div className="text-[10px] text-gray-500 uppercase font-bold">
-                      {c.qtdParcelas} parcela{c.qtdParcelas > 1 ? 's' : ''}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
           </div>
         )}
 
-        {/* Cliente + Parcelas */}
-        {parcelasDoCliente.length > 0 && cliente && (
+        {loadError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-900 mb-4 flex items-start gap-2">
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+            <div>
+              <b>Erro ao carregar:</b> {loadError}
+              <button onClick={loadAll} className="ml-2 underline">tentar de novo</button>
+            </div>
+          </div>
+        )}
+
+        {/* Quando JÁ tem cliente selecionado → mostra parcelas dele */}
+        {selectedCodCliente && cliente ? (
           <>
             <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -509,21 +369,19 @@ export default function RecebimentosPage() {
                   <div className="text-xs uppercase text-gray-500 font-bold">Cliente</div>
                   <div className="text-lg font-bold text-rose-900 flex items-center gap-2">
                     <User size={18} />
-                    {cliente.nome || `Cód. ${cliente.codCliente}`}
+                    {('nome' in cliente ? cliente.nome : null) || `Cód. ${cliente.codCliente}`}
                   </div>
                   <div className="text-xs text-gray-600 mt-0.5">
                     Cód: <b>{cliente.codCliente}</b>
                     {cliente.telefone && <> · Tel: <b>{cliente.telefone}</b></>}
                   </div>
                 </div>
-                {clientesUnicos.length > 1 && (
-                  <button
-                    onClick={() => { setSelectedCodCliente(null); setSelected(new Set()); }}
-                    className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded"
-                  >
-                    ← Trocar cliente
-                  </button>
-                )}
+                <button
+                  onClick={backToList}
+                  className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded"
+                >
+                  ← Trocar cliente
+                </button>
                 <button
                   onClick={selectAll}
                   className="text-sm px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 font-semibold rounded"
@@ -533,68 +391,148 @@ export default function RecebimentosPage() {
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-32">
-              <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
-                <span>{parcelasDoCliente.length} parcelas em aberto</span>
-                <span>{selected.size} selecionadas</span>
+            {parcelasDoCliente.length === 0 ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-900 text-sm">
+                Esse cliente não tem parcelas em aberto.
               </div>
-              <ul className="divide-y divide-gray-100">
-                {parcelasDoCliente.map((p) => {
-                  const k = keyOf(p);
-                  const isSel = selected.has(k);
-                  return (
-                    <li
-                      key={k}
-                      onClick={() => toggleSelect(k)}
-                      className={`p-4 cursor-pointer transition flex items-start gap-3 ${
-                        isSel ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-rose-50'
-                      }`}
-                    >
-                      <div className={`w-5 h-5 rounded border-2 flex-shrink-0 mt-1 flex items-center justify-center ${
-                        isSel ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'
-                      }`}>
-                        {isSel && <Check size={14} className="text-white" />}
-                      </div>
-                      <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                        <div>
-                          <div className="text-[10px] uppercase text-gray-500 font-bold">Promissória</div>
-                          <div className="font-mono font-bold">
-                            {p.numeroCompra || '—'}/{p.parcela}
-                          </div>
-                          {p.totalParcelas && (
-                            <div className="text-[10px] text-gray-500">de {p.totalParcelas}</div>
-                          )}
+            ) : (
+              <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-32">
+                <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
+                  <span>{parcelasDoCliente.length} parcelas em aberto</span>
+                  <span>{selected.size} selecionadas</span>
+                </div>
+                <ul className="divide-y divide-gray-100">
+                  {parcelasDoCliente.map((p) => {
+                    const k = keyOf(p);
+                    const isSel = selected.has(k);
+                    const isVencida = p.diasAtraso > 0;
+                    return (
+                      <li
+                        key={k}
+                        onClick={() => toggleSelect(k)}
+                        className={`p-4 cursor-pointer transition flex items-start gap-3 ${
+                          isSel ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-rose-50'
+                        }`}
+                      >
+                        <div className={`w-5 h-5 rounded border-2 flex-shrink-0 mt-1 flex items-center justify-center ${
+                          isSel ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'
+                        }`}>
+                          {isSel && <Check size={14} className="text-white" />}
                         </div>
-                        <div>
-                          <div className="text-[10px] uppercase text-gray-500 font-bold">Vencimento</div>
-                          <div className="font-mono">{formatDate(p.vencimento)}</div>
-                          {p.diasAtraso > 0 && (
-                            <div className="text-[10px] text-rose-700 font-bold">
-                              {p.diasAtraso} dia{p.diasAtraso > 1 ? 's' : ''} atraso
+                        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                          <div>
+                            <div className="text-[10px] uppercase text-gray-500 font-bold">Promissória</div>
+                            <div className="font-mono font-bold">
+                              {p.numeroCompra || '—'}/{p.parcela}
                             </div>
-                          )}
-                        </div>
-                        <div className="text-right md:text-left">
-                          <div className="text-[10px] uppercase text-gray-500 font-bold">Valor</div>
-                          <div className="font-mono">{brl(p.valorParcela)}</div>
-                          {p.jurosCalculado > 0 && (
-                            <div className="text-[10px] text-rose-700 font-bold">
-                              + juros {brl(p.jurosCalculado)}
+                            {p.totalParcelas && (
+                              <div className="text-[10px] text-gray-500">de {p.totalParcelas}</div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-[10px] uppercase text-gray-500 font-bold">Vencimento</div>
+                            <div className={`font-mono ${isVencida ? 'text-rose-700 font-bold' : ''}`}>
+                              {formatDate(p.vencimento)}
                             </div>
-                          )}
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[10px] uppercase text-gray-500 font-bold">Total</div>
-                          <div className="font-bold text-emerald-700 tabular-nums">
-                            {brl(p.valorComJuros)}
+                            {isVencida && (
+                              <div className="text-[10px] text-rose-700 font-bold">
+                                {p.diasAtraso} dia{p.diasAtraso > 1 ? 's' : ''} atraso
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right md:text-left">
+                            <div className="text-[10px] uppercase text-gray-500 font-bold">Valor</div>
+                            <div className="font-mono">{brl(p.valorParcela)}</div>
+                            {p.jurosCalculado > 0 && (
+                              <div className="text-[10px] text-rose-700 font-bold">
+                                + juros {brl(p.jurosCalculado)}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] uppercase text-gray-500 font-bold">Total</div>
+                            <div className="font-bold text-emerald-700 tabular-nums">
+                              {brl(p.valorComJuros)}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </>
+        ) : (
+          /* Sem cliente selecionado → busca + lista de clientes */
+          <>
+            <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+              <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">
+                Buscar cliente {!loadingInicial && allClientes.length > 0 && (
+                  <span className="text-gray-500 normal-case">({allClientes.length} cadastrados com parcelas em aberto)</span>
+                )}
+              </label>
+              <div className="relative">
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  placeholder="Digita o nome (ELISA, MARIA SILVA), CPF ou código..."
+                  className="w-full p-3 pl-10 border-2 rounded-lg text-base"
+                  autoComplete="off"
+                  disabled={loadingInicial && allClientes.length === 0}
+                />
+              </div>
             </div>
+
+            {!loadingInicial && allClientes.length > 0 && (
+              <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
+                <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
+                  <span>
+                    {busca.trim() ? `${clientesFiltrados.length} resultado${clientesFiltrados.length !== 1 ? 's' : ''}` : `${allClientes.length} clientes`}
+                  </span>
+                  {!busca.trim() && allClientes.length > 100 && (
+                    <span className="text-gray-500 normal-case">mostrando 100 — digite pra filtrar</span>
+                  )}
+                </div>
+                {clientesFiltrados.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500 text-sm">
+                    Nenhum cliente encontrado. Tente parte do nome ou número.
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-gray-100 max-h-[60vh] overflow-y-auto">
+                    {clientesFiltrados.map((c) => (
+                      <li
+                        key={c.codCliente}
+                        onClick={() => selectCliente(c.codCliente)}
+                        className="p-3 cursor-pointer hover:bg-rose-50 transition flex items-center gap-3"
+                      >
+                        <div className="w-9 h-9 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
+                          <User size={16} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-rose-900 truncate">{c.nome}</div>
+                          <div className="text-xs text-gray-600">
+                            Cód: <b>{c.codCliente}</b>
+                            {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="font-bold text-emerald-700 tabular-nums text-sm">
+                            {brl(c.total)}
+                          </div>
+                          <div className="text-[10px] text-gray-500 uppercase font-bold">
+                            {c.qtdParcelas} parc.
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </>
         )}
 
@@ -604,7 +542,7 @@ export default function RecebimentosPage() {
             <div className="max-w-4xl mx-auto flex items-center gap-4 flex-wrap">
               <div className="flex-1 min-w-[200px]">
                 <div className="text-xs uppercase text-gray-500 font-bold">
-                  {selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''} selecionada{selecionadas.length > 1 ? 's' : ''}
+                  {selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''}
                 </div>
                 <div className="text-2xl md:text-3xl font-black text-emerald-700 tabular-nums">
                   {brl(totalPago)}
@@ -642,7 +580,6 @@ export default function RecebimentosPage() {
               </button>
             </div>
             <div className="p-4 space-y-4">
-              {/* Resumo */}
               <div className="bg-emerald-50 rounded-lg p-3 text-sm">
                 <div className="flex justify-between">
                   <span>{selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''}</span>
@@ -681,7 +618,6 @@ export default function RecebimentosPage() {
                 </div>
               )}
 
-              {/* PIX QR */}
               {forma === 'pix' && (
                 <div className="space-y-3">
                   {aplicando && !pixCharge && (
@@ -700,6 +636,7 @@ export default function RecebimentosPage() {
                       ) : (
                         <>
                           <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-3 flex justify-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={pixCharge.qrCodeImageUrl}
                               alt="QR PIX"
