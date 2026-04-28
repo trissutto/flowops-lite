@@ -1146,6 +1146,9 @@ function PaymentModal({
         expiresInMinutes: 15,
       };
 
+      // Coleta motivos de falha de cada provider pra debug se cair no local
+      const failures: string[] = [];
+
       // 1) Tenta Pagar.me primeiro (provider preferido)
       try {
         const pm = await api<{
@@ -1162,7 +1165,6 @@ function PaymentModal({
           txid: pm.pagarmeOrderId,
           chave: 'Pagar.me',
           payload: pm.qrCodeText,
-          // Pagar.me retorna URL da imagem, não base64
           qrCodeDataUrl: pm.qrCodeImageUrl || '',
           provider: 'pagarme',
           pagarmeOrderId: pm.pagarmeOrderId,
@@ -1172,9 +1174,14 @@ function PaymentModal({
       } catch (e: any) {
         const msg = String(e?.message || e);
         const status = e?.status || e?.response?.status;
-        if (!/desabilitado|não configurado|API Key/i.test(msg)) {
-          console.warn('[pdv] Pagar.me PIX falhou:', msg);
-        }
+        let reason = '';
+        if (status === 404 || /Cannot (POST|GET).*pagarme/i.test(msg))
+          reason = 'backend antigo (deploy pendente)';
+        else if (/desabilitado/i.test(msg)) reason = 'desligado';
+        else if (/não configurado|API Key/i.test(msg)) reason = 'sem key';
+        else reason = msg.slice(0, 80);
+        failures.push(`Pagar.me: ${reason}`);
+        console.warn('[pdv] Pagar.me PIX falhou:', msg);
       }
 
       // 2) Tenta PagBank (segundo provider)
@@ -1204,13 +1211,15 @@ function PaymentModal({
       } catch (e: any) {
         const msg = String(e?.message || e);
         let reason = '';
-        if (/desabilitado/i.test(msg)) reason = 'Pagar.me e PagBank desligados';
-        else if (/não configurado|Token|API Key/i.test(msg))
-          reason = 'Sem provider configurado';
-        else reason = `Provider falhou: ${msg.slice(0, 60)}`;
-        setPixFallbackReason(reason);
-        console.warn('[pdv] PagBank PIX falhou, caindo no PIX local:', msg);
+        if (/desabilitado/i.test(msg)) reason = 'desligado';
+        else if (/não configurado|Token/i.test(msg)) reason = 'sem token';
+        else reason = msg.slice(0, 80);
+        failures.push(`PagBank: ${reason}`);
+        console.warn('[pdv] PagBank PIX falhou:', msg);
       }
+
+      // Se chegou aqui, ambos providers falharam
+      setPixFallbackReason(failures.join(' · '));
 
       // 3) Fallback final: PIX local (chave celular)
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
