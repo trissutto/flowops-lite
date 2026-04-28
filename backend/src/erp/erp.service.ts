@@ -459,6 +459,92 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * BAIXA PARCELA DE CREDIÁRIO — UPDATE direto na tabela `movimento` do Giga.
+   *
+   * Marca a parcela como paga (PAGO='S' + DATA_PAGAMENTO=hoje + VALOR_PAGO=valorRecebido).
+   * Os nomes reais das colunas variam por instalação — recebemos via parâmetro
+   * (CrediariosService já detectou via `detectColumns`).
+   *
+   * Identificação da parcela: chave composta (REGISTRO + CONTROLE).
+   *
+   * Retorna { success, error? } — sem retry, sem transação multi-row,
+   * pra simplicidade. A baixa local (Postgres) é a fonte da verdade pro
+   * recibo; este UPDATE é "espelho" pro Giga.
+   */
+  async markCrediarioParcelaPaid(input: {
+    registro: string | number;
+    controle: string | number;
+    valorPago: number;
+    dataPagamento?: Date;
+    columns: {
+      registro: string | null;
+      controle: string | null;
+      pago: string | null;
+      dataPagamento: string | null;
+      valorPago: string | null;
+    };
+  }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, error: 'Pool ERP não inicializado' };
+    }
+    const { columns } = input;
+    if (!columns.registro || !columns.controle) {
+      return { success: false, error: 'Colunas REGISTRO/CONTROLE não detectadas' };
+    }
+
+    // Monta SET dinamicamente — só inclui colunas que existem no Giga local.
+    const sets: string[] = [];
+    const params: any[] = [];
+
+    if (columns.pago) {
+      sets.push(`\`${columns.pago}\` = ?`);
+      params.push('S');
+    }
+    if (columns.dataPagamento) {
+      sets.push(`\`${columns.dataPagamento}\` = ?`);
+      params.push(input.dataPagamento || new Date());
+    }
+    if (columns.valorPago) {
+      sets.push(`\`${columns.valorPago}\` = ?`);
+      params.push(input.valorPago);
+    }
+
+    if (sets.length === 0) {
+      return { success: false, error: 'Nenhuma coluna pra atualizar (PAGO/DATA_PAGAMENTO/VALOR_PAGO ausentes)' };
+    }
+
+    // WHERE chave composta
+    const sql = `UPDATE \`movimento\` SET ${sets.join(', ')} WHERE \`${columns.registro}\` = ? AND \`${columns.controle}\` = ? LIMIT 1`;
+    params.push(input.registro, input.controle);
+
+    const conn = await this.pool.getConnection();
+    try {
+      const [result]: any = await conn.execute(sql, params);
+      const affected = result?.affectedRows ?? 0;
+      if (affected === 0) {
+        return {
+          success: false,
+          error: `UPDATE não afetou linha (REGISTRO=${input.registro} CONTROLE=${input.controle}). Já paga ou inexistente.`,
+          affectedRows: 0,
+        };
+      }
+      this.logger.log(
+        `[crediario] baixa Giga OK: REGISTRO=${input.registro} CONTROLE=${input.controle} valor=R$${input.valorPago.toFixed(2)}`,
+      );
+      return { success: true, affectedRows: affected };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[crediario] UPDATE movimento FALHOU: ${msg}`);
+      return { success: false, error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
    * Retorna só registros com ESTOQUE > 0.
    *

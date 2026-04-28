@@ -21,6 +21,7 @@ import {
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
+  Receipt,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -630,8 +631,8 @@ export default function PdvPage() {
           </button>
         </div>
 
-        {/* Linha 2 — Atalhos rápidos (4 pílulas modernas) */}
-        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-4 gap-2">
+        {/* Linha 2 — Atalhos rápidos (5 pílulas modernas) */}
+        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-3 md:grid-cols-5 gap-2">
           <ShortcutPill
             href="/minha-loja/consultar"
             icon={<Search className="w-5 h-5" />}
@@ -651,6 +652,16 @@ export default function PdvPage() {
             border="border-emerald-300"
             text="text-emerald-800"
             iconBg="bg-emerald-500"
+          />
+          <ShortcutPill
+            href="/minha-loja/pdv/recebimentos"
+            icon={<Receipt className="w-5 h-5" />}
+            label="Receber"
+            sub="Crediário"
+            gradient="from-rose-100 to-pink-200"
+            border="border-rose-300"
+            text="text-rose-900"
+            iconBg="bg-rose-500"
           />
           <ShortcutPill
             href="/minha-loja/pdv/devolucao"

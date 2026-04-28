@@ -737,6 +737,99 @@ model CobrancaTentativa {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CREDIÁRIO — Baixa de parcelas direto na loja (cliente vem pagar promissória)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Fluxo:
+//   1. Cliente vai até a loja e quer pagar parcelas em aberto
+//   2. Vendedora bate no PDV → botão RECEBIMENTOS → busca cliente (CPF/nome)
+//   3. Sistema lista parcelas em aberto do Gigasistemas (movimento PAGO='N')
+//      com juros calculados conforme CrediarioConfig (carência + taxa mensal/30)
+//   4. Vendedora seleciona parcelas → escolhe forma pagamento (PIX/dinheiro)
+//   5. Confirma → backend faz UPDATE no movimento (PAGO='S' + DATA_PAGAMENTO)
+//      e cria registro em CrediarioBaixa+CrediarioBaixaItem (audit local)
+//   6. Imprime recibo 80mm não fiscal pra cliente assinar e ir pro caixa físico
+
+model CrediarioConfig {
+  id                 String   @id @default("singleton")
+  // Após quantos dias do vencimento começa a correr juros (carência).
+  // Default 0 = juros desde o 1º dia de atraso.
+  diasCarencia       Int      @default(0) @map("dias_carencia")
+  // Taxa mensal em porcentagem (ex: 8.0 = 8% ao mês).
+  // Calculada DIA-A-DIA: (taxaMensal / 30) por dia em atraso.
+  taxaMensalPercent  Float    @default(0) @map("taxa_mensal_percent")
+  // Habilitar cobrança de juros? Se false, sempre retorna juros = 0.
+  enabled            Boolean  @default(false)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("crediario_config")
+}
+
+// Header de uma baixa multi-parcelas
+model CrediarioBaixa {
+  id                String   @id @default(uuid())
+  // Cliente do Giga
+  codCliente        String?  @map("cod_cliente")
+  customerCpf       String?  @map("customer_cpf")
+  customerName      String?  @map("customer_name")
+  customerPhone     String?  @map("customer_phone")
+  // Loja onde a baixa foi feita (PDV da filial)
+  lojaCode          String   @map("loja_code")
+  lojaName          String?  @map("loja_name")
+  // Vendedora que operou
+  userId            String?  @map("user_id")
+  userName          String?  @map("user_name")
+  // Totais calculados na hora da baixa
+  totalParcelas     Int      @default(0) @map("total_parcelas")
+  totalPrincipal    Float    @default(0) @map("total_principal")
+  totalJuros        Float    @default(0) @map("total_juros")
+  totalPago         Float    @default(0) @map("total_pago")
+  // Forma de pagamento usada
+  formaPagamento    String                              // pix | dinheiro
+  // Quando PIX, vincula com a order Pagar.me
+  pagarmeOrderId    String?  @unique @map("pagarme_order_id")
+  // Status: pending (PIX não pago ainda) | paid (confirmado) | canceled
+  status            String   @default("paid")
+  paidAt            DateTime? @map("paid_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  items             CrediarioBaixaItem[]
+
+  @@index([lojaCode, createdAt(sort: Desc)])
+  @@index([codCliente, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("crediario_baixas")
+}
+
+// Item de baixa: uma parcela do movimento Giga
+model CrediarioBaixaItem {
+  id              String   @id @default(uuid())
+  baixaId         String   @map("baixa_id")
+  // Identificação da parcela no Giga (REGISTRO + CONTROLE = chave composta)
+  registro        String                                // movimento.REGISTRO
+  controle        String                                // movimento.CONTROLE
+  numeroPromis    String?  @map("numero_promis")        // exibição (NUMERO_COMPRA + parcela)
+  parcelaNum      Int?     @map("parcela_num")
+  totalParcelas   Int?     @map("total_parcelas")
+  vencimento      DateTime
+  valorParcela    Float    @map("valor_parcela")
+  jurosCalculado  Float    @default(0) @map("juros_calculado")
+  diasAtraso      Int      @default(0) @map("dias_atraso")
+  valorPago       Float    @map("valor_pago")           // valorParcela + jurosCalculado
+  // Resultado do UPDATE no Giga (audit)
+  gigaUpdateOk    Boolean  @default(false) @map("giga_update_ok")
+  gigaError       String?  @map("giga_error") @db.Text
+
+  baixa           CrediarioBaixa @relation(fields: [baixaId], references: [id], onDelete: Cascade)
+
+  @@index([baixaId])
+  @@index([registro, controle])
+  @@map("crediario_baixa_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PDV — Frente de caixa (substituição gradual do Gigasistemas)
 // ═══════════════════════════════════════════════════════════════════════════
 //

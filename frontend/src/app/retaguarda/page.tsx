@@ -13,7 +13,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode, CreditCard,
+  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode, CreditCard, Percent,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -27,6 +27,7 @@ const RETAGUARDA_ITEMS: CircleNavItem[] = [
   { href: '/retaguarda/nfce-config',    label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
   { href: '/retaguarda/pagarme-config',  label: 'Pagar.me',      subtitle: 'PIX no PDV (recomendado)', icon: CreditCard,     tone: 'mint'     },
   { href: '/retaguarda/pagbank-config',  label: 'PagBank',       subtitle: 'PIX (requer homologação)', icon: QrCode,         tone: 'sky'      },
+  { href: '/retaguarda/crediario-juros', label: 'Juros Crediário', subtitle: 'Carência + taxa mensal', icon: Percent,       tone: 'rose'     },
   { href: '/logs',                      label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity,       tone: 'mint'     },
 ];
 

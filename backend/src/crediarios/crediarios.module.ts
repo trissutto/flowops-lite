@@ -2,14 +2,17 @@ import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ErpModule } from '../erp/erp.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CrediariosService } from './crediarios.service';
 import { CrediariosController } from './crediarios.controller';
 import { CobrancaAutoService } from './cobranca-auto.service';
+import { CrediarioBaixaService } from './crediario-baixa.service';
+import { CrediarioBaixaController } from './crediario-baixa.controller';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), ErpModule, WhatsappModule],
-  controllers: [CrediariosController],
-  providers: [CrediariosService, CobrancaAutoService],
-  exports: [CrediariosService, CobrancaAutoService],
+  imports: [ScheduleModule.forRoot(), ErpModule, WhatsappModule, PagarmeModule],
+  controllers: [CrediariosController, CrediarioBaixaController],
+  providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
+  exports: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
 })
 export class CrediariosModule {}
