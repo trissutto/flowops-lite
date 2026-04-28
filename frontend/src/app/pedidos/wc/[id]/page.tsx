@@ -433,20 +433,7 @@ export default function PedidoDetailPage() {
       return;
     }
 
-    // Só bloqueia se a LOJA ALVO já avançou (bipou/enviou). Se outras lojas já
-    // enviaram, tudo bem — o swap cirúrgico no backend cuida disso e não toca
-    // nos pick-orders das outras lojas (mantém o que já foi feito).
-    const TARGET_SWAPPABLE = ['new', 'separating'];
-    if (!TARGET_SWAPPABLE.includes(targetPickOrder.status)) {
-      alert(
-        `Não dá pra trocar a loja ${storeCode}: ela já passou de "separando" ` +
-        `(status atual: ${targetPickOrder.status}). ` +
-        `Rejeite manualmente pela tela de baixa antes.`,
-      );
-      return;
-    }
-
-    // Avisa se outras lojas do mesmo pedido já enviaram (pra usuário ter contexto)
+    // Avisa se outras lojas do mesmo pedido já enviaram (pra contexto)
     const outrasJaEnviaram = liveStatus.filter(
       (p) => p.storeCode !== storeCode && !['new', 'separating'].includes(p.status),
     );
@@ -454,12 +441,38 @@ export default function PedidoDetailPage() {
       ? `\n⚠️ Outras lojas (${outrasJaEnviaram.map((p) => p.storeCode).join(', ')}) já avançaram — elas NÃO vão ser tocadas, só esta troca aqui.\n`
       : '';
 
-    if (!confirm(
-      `Trocar SOMENTE a loja ${displayName} (${storeCode})?\n\n` +
-      avisoOutras +
-      `O sistema vai cancelar o pick-order desta loja e re-rotear OS ITEMS DELA pra outra loja com estoque.\n\n` +
-      `Se nenhuma outra loja tiver estoque, os items ficam órfãos (você decide manualmente).`,
-    )) return;
+    // Aviso reforçado quando a LOJA ALVO já avançou (separado/enviado)
+    const ADVANCED_REVERSIBLE = ['shipped', 'delivered'];
+    const REQUIRES_REVERSE = ADVANCED_REVERSIBLE.includes(targetPickOrder.status);
+    const ADVANCED_PAST_NEW = !['new', 'separating'].includes(targetPickOrder.status);
+
+    let confirmMsg = '';
+    if (REQUIRES_REVERSE) {
+      confirmMsg =
+        `🚨 ATENÇÃO: a loja ${displayName} (${storeCode}) JÁ ESTÁ COMO "${targetPickOrder.status}".\n\n` +
+        `Se trocar, o sistema vai:\n` +
+        `1. ESTORNAR o estoque Giga da ${storeCode} (devolver as peças pro estoque dela)\n` +
+        `2. Cancelar o pick-order atual\n` +
+        `3. Roteamento pra outra loja\n` +
+        `4. ⚠️ Tracking/etiqueta correios já gerada NÃO é cancelada automaticamente — cancele manualmente nos Correios se necessário\n\n` +
+        avisoOutras +
+        `Confirma a troca?`;
+    } else if (ADVANCED_PAST_NEW) {
+      confirmMsg =
+        `⚠️ A loja ${displayName} (${storeCode}) já está em "${targetPickOrder.status}" (separada mas não enviada).\n\n` +
+        `Trocar vai cancelar o pick-order desta loja e re-rotear pra outra. ` +
+        `O estoque Giga ainda NÃO foi baixado, então sem efeito ERP.\n` +
+        avisoOutras +
+        `Confirma?`;
+    } else {
+      confirmMsg =
+        `Trocar SOMENTE a loja ${displayName} (${storeCode})?\n\n` +
+        avisoOutras +
+        `O sistema vai cancelar o pick-order desta loja e re-rotear OS ITEMS DELA pra outra loja com estoque.\n\n` +
+        `Se nenhuma outra loja tiver estoque, os items ficam órfãos (você decide manualmente).`;
+    }
+
+    if (!confirm(confirmMsg)) return;
 
     setSepLoading(true);
     setSepError(null);

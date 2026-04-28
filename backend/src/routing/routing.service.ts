@@ -420,7 +420,7 @@ export class RoutingService {
    */
   async swapSinglePickOrder(
     pickOrderId: string,
-    opts?: { excludeStoreCodes?: string[] },
+    opts?: { excludeStoreCodes?: string[]; forceAdvanced?: boolean },
   ) {
     const pickOrder = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
@@ -437,17 +437,18 @@ export class RoutingService {
       };
     }
 
-    // Só permite swap se o pick-order alvo está em status reversível
-    const SWAPPABLE_STATUS = ['new', 'separating'];
-    if (!SWAPPABLE_STATUS.includes(pickOrder.status)) {
-      return {
-        ok: false as const,
-        reason: 'target-advanced',
-        message:
-          `Esta loja já avançou (status: ${pickOrder.status}). Não dá pra trocar — ` +
-          `pra cancelar, use "Rejeitar baixa" pela tela de baixa-estoque antes.`,
-      };
-    }
+    // Status que requerem ação ESPECIAL antes de trocar:
+    //   - separated  → loja bipou mas não enviou. Sem efeito no Giga (baixa
+    //                  só rola no shipped). Só apaga pick-order.
+    //   - ready      → idem
+    //   - shipped    → loja já postou e Giga JÁ FOI BAIXADO. Precisa estornar
+    //                  Giga (increaseStock) antes de trocar pra outra loja
+    //                  fazer a baixa lá.
+    //
+    // Permite trocar a qualquer momento — o caller (frontend) já avisou o
+    // operador das consequências antes de chamar.
+    const ADVANCED_NEEDING_REVERSE = ['shipped', 'delivered'];
+    const needsErpReverse = ADVANCED_NEEDING_REVERSE.includes(pickOrder.status);
 
     const orderId = pickOrder.order.id;
     const oldStoreCode = pickOrder.store.code;
@@ -500,6 +501,33 @@ export class RoutingService {
       ]),
     );
 
+    // 1.0) Se loja JÁ ENVIOU (shipped/delivered) → estorna Giga primeiro.
+    // Senão a peça fica fantasma em duas lojas (a antiga continua sem ela
+    // fisicamente mas Giga acha que foi vendida; a nova vai dar baixa de
+    // novo no shipped).
+    let erpReverseResult: any = null;
+    if (needsErpReverse) {
+      try {
+        const stockItems = itemsAssigned.map((it: any) => ({
+          sku: it.sku,
+          qty: it.quantity || 1,
+          storeCode: oldStoreCode,
+        }));
+        erpReverseResult = await this.erp.increaseStock(stockItems);
+        if (erpReverseResult.success) {
+          this.logger.log(
+            `[swap] estorno Giga OK pra loja ${oldStoreCode}: ${itemsAssigned.length} item(ns) voltaram pro estoque`,
+          );
+        } else {
+          this.logger.warn(
+            `[swap] estorno Giga FALHOU pra loja ${oldStoreCode}: ${erpReverseResult.error}. Continuando swap mesmo assim — operador deve corrigir manualmente.`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.error(`[swap] estorno Giga exception: ${e?.message || e}`);
+      }
+    }
+
     // 1) Cancela o pick-order alvo + desatribui SOMENTE os items dele
     await this.prisma.$transaction(async (tx) => {
       await tx.pickOrder.delete({ where: { id: pickOrderId } });
@@ -510,11 +538,15 @@ export class RoutingService {
       await tx.orderHistory.create({
         data: {
           orderId,
-          fromStatus: 'separating',
+          fromStatus: pickOrder.status,
           toStatus: 'separating',
           note:
-            `Swap cirúrgico: pick-order da loja ${oldStoreCode} cancelado pra reatribuir ` +
-            `${itemsAssigned.length} item(ns). Outros pick-orders intactos.`,
+            `Swap cirúrgico: pick-order da loja ${oldStoreCode} cancelado (status era "${pickOrder.status}") pra reatribuir ` +
+            `${itemsAssigned.length} item(ns). ` +
+            (needsErpReverse
+              ? `Estorno Giga: ${erpReverseResult?.success ? 'OK' : 'FALHOU (' + (erpReverseResult?.error || 'erro') + ')'}. `
+              : '') +
+            `Outros pick-orders intactos.`,
         },
       });
     });
