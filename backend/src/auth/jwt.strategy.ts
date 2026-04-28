@@ -12,6 +12,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
   async validate(payload: any) {
-    return { userId: payload.sub, email: payload.email, role: payload.role, storeId: payload.storeId };
+    return {
+      // Mantém ambos pra compatibilidade com controllers que usam req.user.sub
+      // (PDV, cash, devolução) e os que usam req.user.userId (rotas mais antigas).
+      sub: payload.sub,
+      userId: payload.sub,
+      id: payload.sub,
+      email: payload.email,
+      name: payload.name,
+      role: payload.role,
+      storeId: payload.storeId,
+      storeCode: payload.storeCode,
+      storeName: payload.storeName,
+    };
   }
 }
