@@ -30,6 +30,14 @@ export class PagbankController {
     return this.svc.getConfig();
   }
 
+  /** POST /pagbank/test — testa conexão com o token salvo */
+  @UseGuards(JwtAuthGuard)
+  @Post('test')
+  async testConnection(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.testConnection();
+  }
+
   /** POST /pagbank/config — admin salva token + ambiente */
   @UseGuards(JwtAuthGuard)
   @Post('config')

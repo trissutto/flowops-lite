@@ -422,6 +422,103 @@ export class PagbankService {
     });
   }
 
+  // ── Diagnóstico ─────────────────────────────────────────────────────
+
+  /**
+   * Testa conexão com o PagBank usando o token salvo.
+   * Faz uma chamada barata (GET /public-keys) só pra validar autenticação.
+   */
+  async testConnection(): Promise<{
+    ok: boolean;
+    ambiente: string;
+    enabled: boolean;
+    hasToken: boolean;
+    httpStatus?: number;
+    error?: string;
+    hint?: string;
+  }> {
+    const cfg = await (this.prisma as any).pagbankConfig.findUnique({
+      where: { id: 'singleton' },
+    });
+    if (!cfg) {
+      return {
+        ok: false,
+        ambiente: 'sandbox',
+        enabled: false,
+        hasToken: false,
+        error: 'Config não criada — abra a tela e salve uma vez',
+      };
+    }
+    if (!cfg.bearerToken) {
+      return {
+        ok: false,
+        ambiente: cfg.ambiente,
+        enabled: !!cfg.enabled,
+        hasToken: false,
+        error: 'Bearer Token não cadastrado',
+        hint: 'Cole o Bearer Token na tela e salve',
+      };
+    }
+
+    const baseUrl = this.getBaseUrl(cfg.ambiente);
+    const url = `${baseUrl}/public-keys`;
+    try {
+      const resp = await firstValueFrom(
+        this.http.get(url, {
+          headers: {
+            Authorization: `Bearer ${cfg.bearerToken}`,
+            Accept: 'application/json',
+          },
+          timeout: 10000,
+          // Aceita 404 também (endpoint pode mudar, mas se autenticou
+          // significa que o token tá OK)
+          validateStatus: (s) => s < 500,
+        }),
+      );
+      const httpStatus = resp.status;
+      if (httpStatus === 401 || httpStatus === 403) {
+        return {
+          ok: false,
+          ambiente: cfg.ambiente,
+          enabled: !!cfg.enabled,
+          hasToken: true,
+          httpStatus,
+          error: 'Token rejeitado (401/403)',
+          hint:
+            cfg.ambiente === 'sandbox'
+              ? 'Confira se o token é REALMENTE de sandbox (gerado em portaldev.pagbank.com.br)'
+              : 'Confira se o token é de produção',
+        };
+      }
+      return {
+        ok: true,
+        ambiente: cfg.ambiente,
+        enabled: !!cfg.enabled,
+        hasToken: true,
+        httpStatus,
+      };
+    } catch (e: any) {
+      const httpStatus = e?.response?.status;
+      const data = e?.response?.data;
+      this.logger.error(`[pagbank] testConnection falhou: ${JSON.stringify(data || e?.message)}`);
+      return {
+        ok: false,
+        ambiente: cfg.ambiente,
+        enabled: !!cfg.enabled,
+        hasToken: true,
+        httpStatus,
+        error:
+          data?.error_messages?.[0]?.description ||
+          data?.error_messages?.[0]?.code ||
+          e?.message ||
+          'Erro desconhecido',
+        hint: httpStatus === 401 || httpStatus === 403
+          ? 'Token inválido ou expirado — gera novo no Portal Dev PagBank'
+          : 'Verifica se o backend tem internet pra api.pagseguro.com',
+      };
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────
 
   private getBaseUrl(ambiente: string): string {

@@ -43,6 +43,23 @@ export default function PagbankConfigPage() {
   const [showToken, setShowToken] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
 
+  // Testar conexão
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await api<any>('/pagbank/test', { method: 'POST' });
+      setTestResult(r);
+    } catch (e: any) {
+      setTestResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -323,6 +340,52 @@ export default function PagbankConfigPage() {
                 />
               </div>
             </button>
+          </Card>
+
+          {/* TESTAR CONEXÃO */}
+          <Card title="Testar conexão" subtitle="Faz uma chamada ao PagBank pra validar token + ambiente.">
+            <button
+              onClick={testConnection}
+              disabled={testing || !cfg.hasToken}
+              className="w-full p-3 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {testing ? 'Testando…' : 'Testar conexão agora'}
+            </button>
+
+            {testResult && (
+              <div
+                className={`mt-3 rounded-lg p-3 text-sm ${
+                  testResult.ok
+                    ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+                    : 'bg-red-50 border border-red-300 text-red-900'
+                }`}
+              >
+                <div className="font-bold mb-1">
+                  {testResult.ok ? '✓ Conexão OK' : '✗ Falhou'}
+                </div>
+                {testResult.ambiente && (
+                  <div className="text-xs">
+                    Ambiente: <b className="uppercase">{testResult.ambiente}</b>
+                  </div>
+                )}
+                {testResult.httpStatus && (
+                  <div className="text-xs">HTTP {testResult.httpStatus}</div>
+                )}
+                {testResult.error && (
+                  <div className="text-xs mt-1">
+                    <b>Erro:</b> {testResult.error}
+                  </div>
+                )}
+                {testResult.hint && (
+                  <div className="text-xs mt-1 italic">💡 {testResult.hint}</div>
+                )}
+                {testResult.ok && (
+                  <div className="text-xs mt-1">
+                    Token autenticado. Pode usar PIX no PDV.
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
 
           {/* SAVE */}
