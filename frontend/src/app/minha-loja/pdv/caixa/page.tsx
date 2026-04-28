@@ -12,8 +12,10 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, DollarSign, TrendingDown, TrendingUp, FileText, X, Lock, Clock } from 'lucide-react';
+import { ArrowLeft, DollarSign, TrendingDown, TrendingUp, FileText, X, Lock, Clock, Store as StoreIcon } from 'lucide-react';
 import { api } from '@/lib/api';
+
+type StoreOpt = { code: string; name: string; active?: boolean };
 
 type Movement = {
   id: string;
@@ -58,25 +60,74 @@ export default function CaixaPage() {
   const [totals, setTotals] = useState<Totals | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
 
+  // Loja contexto — admin pode trocar; vendedora vem travada do JWT
+  const [stores, setStores] = useState<StoreOpt[]>([]);
+  const [storeCode, setStoreCode] = useState<string>('');
+  const [isAdmin, setIsAdmin] = useState(false);
+
   // Modais
   const [showAbrir, setShowAbrir] = useState(false);
   const [showSangria, setShowSangria] = useState(false);
   const [showSuprimento, setShowSuprimento] = useState(false);
   const [showFechar, setShowFechar] = useState(false);
 
+  /**
+   * Bootstrap: descobre se é admin (precisa escolher loja) ou vendedora
+   * (já tem storeCode no JWT). Reaproveita 'lurds_pdv_store' do PDV pra
+   * lembrar última loja escolhida quando admin.
+   */
+  useEffect(() => {
+    (async () => {
+      try {
+        const me = await api<{ role: string; storeCode?: string }>('/auth/me');
+        if (me.role === 'admin') {
+          setIsAdmin(true);
+          const all = await api<StoreOpt[]>('/stores');
+          const ativas = all.filter((s) => s.active !== false);
+          setStores(ativas);
+          const saved = typeof window !== 'undefined' ? localStorage.getItem('lurds_pdv_store') : null;
+          if (saved && ativas.some((s) => s.code === saved)) {
+            setStoreCode(saved);
+          } else if (ativas[0]) {
+            setStoreCode(ativas[0].code);
+          }
+        } else {
+          // Vendedora: storeCode vem do JWT, backend resolve automático
+          setStoreCode(me.storeCode || '');
+        }
+      } catch (e) {
+        console.error('auth/me falhou', e);
+      }
+    })();
+  }, []);
+
+  // Salva escolha do admin
+  useEffect(() => {
+    if (isAdmin && storeCode && typeof window !== 'undefined') {
+      localStorage.setItem('lurds_pdv_store', storeCode);
+    }
+  }, [isAdmin, storeCode]);
+
+  // Adiciona ?storeCode=XX nas chamadas quando admin (vendedora não precisa)
+  const qs = isAdmin && storeCode ? `?storeCode=${encodeURIComponent(storeCode)}` : '';
+
   const reload = useCallback(async () => {
+    if (isAdmin && !storeCode) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const data = await api<{
         open: boolean;
         session: Session | null;
         totals?: Totals;
-      }>('/pdv/caixa/atual');
+      }>(`/pdv/caixa/atual${qs}`);
       setOpen(data.open);
       setSession(data.session);
       setTotals(data.totals || null);
       if (data.open) {
-        const movs = await api<Movement[]>('/pdv/caixa/movimentos');
+        const movs = await api<Movement[]>(`/pdv/caixa/movimentos${qs}`);
         setMovements(movs);
       } else {
         setMovements([]);
@@ -86,7 +137,7 @@ export default function CaixaPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [qs, isAdmin, storeCode]);
 
   useEffect(() => {
     reload();
@@ -110,12 +161,39 @@ export default function CaixaPage() {
           <ArrowLeft size={18} /> Voltar pro PDV
         </Link>
 
-        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-6">
+        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-3">
           Caixa do dia
         </h1>
 
-        {!open ? (
-          <NoCashOpenCard onOpen={() => setShowAbrir(true)} />
+        {/* SELETOR DE LOJA — só pra admin */}
+        {isAdmin && stores.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm p-4 mb-4 flex items-center gap-3">
+            <StoreIcon className="w-5 h-5 text-rose-600 shrink-0" />
+            <div className="flex-1">
+              <label className="block text-[11px] font-bold text-rose-700 uppercase tracking-wide mb-1">
+                Operando como (admin)
+              </label>
+              <select
+                value={storeCode}
+                onChange={(e) => setStoreCode(e.target.value)}
+                className="w-full p-2 border-2 border-rose-200 rounded-lg font-semibold text-rose-900 focus:border-rose-400 focus:outline-none"
+              >
+                {stores.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.code} — {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {!storeCode ? (
+          <div className="bg-white rounded-2xl shadow-sm p-12 text-center">
+            <p className="text-rose-700">Selecione uma loja acima.</p>
+          </div>
+        ) : !open ? (
+          <NoCashOpenCard onOpen={() => setShowAbrir(true)} storeName={isAdmin ? stores.find((s) => s.code === storeCode)?.name || storeCode : undefined} />
         ) : (
           <OpenCashPanel
             session={session!}
@@ -130,6 +208,7 @@ export default function CaixaPage() {
 
       {showAbrir && (
         <AbrirModal
+          storeCode={isAdmin ? storeCode : undefined}
           onClose={() => setShowAbrir(false)}
           onSuccess={() => {
             setShowAbrir(false);
@@ -140,6 +219,7 @@ export default function CaixaPage() {
       {showSangria && (
         <MovModal
           tipo="sangria"
+          storeCode={isAdmin ? storeCode : undefined}
           onClose={() => setShowSangria(false)}
           onSuccess={() => {
             setShowSangria(false);
@@ -150,6 +230,7 @@ export default function CaixaPage() {
       {showSuprimento && (
         <MovModal
           tipo="suprimento"
+          storeCode={isAdmin ? storeCode : undefined}
           onClose={() => setShowSuprimento(false)}
           onSuccess={() => {
             setShowSuprimento(false);
@@ -161,6 +242,7 @@ export default function CaixaPage() {
         <FecharModal
           totals={totals}
           fundoTroco={session!.fundoTroco}
+          storeCode={isAdmin ? storeCode : undefined}
           onClose={() => setShowFechar(false)}
           onSuccess={() => {
             setShowFechar(false);
@@ -172,14 +254,14 @@ export default function CaixaPage() {
   );
 }
 
-function NoCashOpenCard({ onOpen }: { onOpen: () => void }) {
+function NoCashOpenCard({ onOpen, storeName }: { onOpen: () => void; storeName?: string }) {
   return (
     <div className="bg-white rounded-2xl shadow-md p-8 text-center">
       <div className="w-20 h-20 mx-auto bg-rose-100 rounded-full flex items-center justify-center mb-4">
         <Lock size={36} className="text-rose-600" />
       </div>
       <h2 className="text-xl font-bold text-rose-900 mb-2">
-        Caixa fechado
+        Caixa fechado{storeName ? ` — ${storeName}` : ''}
       </h2>
       <p className="text-gray-600 mb-6">
         Abra o caixa antes de começar a vender.
@@ -395,7 +477,7 @@ function ModalShell({
   );
 }
 
-function AbrirModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; onSuccess: () => void; storeCode?: string }) {
   const [fundo, setFundo] = useState('');
   const [obs, setObs] = useState('');
   const [busy, setBusy] = useState(false);
@@ -410,9 +492,11 @@ function AbrirModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: ()
     }
     setBusy(true);
     try {
+      const body: any = { fundoTroco: v, observacao: obs || undefined };
+      if (storeCode) body.storeCode = storeCode;
       await api('/pdv/caixa/abrir', {
         method: 'POST',
-        body: JSON.stringify({ fundoTroco: v, observacao: obs || undefined }),
+        body: JSON.stringify(body),
       });
       onSuccess();
     } catch (e: any) {
@@ -469,10 +553,12 @@ function MovModal({
   tipo,
   onClose,
   onSuccess,
+  storeCode,
 }: {
   tipo: 'sangria' | 'suprimento';
   onClose: () => void;
   onSuccess: () => void;
+  storeCode?: string;
 }) {
   const [valor, setValor] = useState('');
   const [motivo, setMotivo] = useState('');
@@ -492,9 +578,11 @@ function MovModal({
     }
     setBusy(true);
     try {
+      const body: any = { valor: v, motivo: motivo.trim() };
+      if (storeCode) body.storeCode = storeCode;
       await api(`/pdv/caixa/${tipo}`, {
         method: 'POST',
-        body: JSON.stringify({ valor: v, motivo: motivo.trim() }),
+        body: JSON.stringify(body),
       });
       onSuccess();
     } catch (e: any) {
@@ -556,11 +644,13 @@ function FecharModal({
   fundoTroco,
   onClose,
   onSuccess,
+  storeCode,
 }: {
   totals: Totals;
   fundoTroco: number;
   onClose: () => void;
   onSuccess: () => void;
+  storeCode?: string;
 }) {
   const [fisico, setFisico] = useState('');
   const [obs, setObs] = useState('');
@@ -579,9 +669,11 @@ function FecharModal({
     }
     setBusy(true);
     try {
+      const body: any = { dinheiroFisico: fisicoNum, observacao: obs || undefined };
+      if (storeCode) body.storeCode = storeCode;
       await api('/pdv/caixa/fechar', {
         method: 'POST',
-        body: JSON.stringify({ dinheiroFisico: fisicoNum, observacao: obs || undefined }),
+        body: JSON.stringify(body),
       });
       onSuccess();
     } catch (e: any) {
