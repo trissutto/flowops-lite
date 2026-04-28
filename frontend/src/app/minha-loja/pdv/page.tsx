@@ -20,7 +20,7 @@ import {
   ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
-  Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft,
+  Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -456,27 +456,35 @@ export default function PdvPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50 flex flex-col">
-      {/* ── HEADER novo: logo + brand + ações ───────────────────────── */}
-      <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-rose-100 shadow-sm">
-        <div className="max-w-3xl mx-auto px-3 py-2.5 flex items-center gap-3">
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-fuchsia-50 flex flex-col">
+      {/* ╔══════════════════════════════════════════════════════════════╗
+          ║  HEADER MODERNO — hero card com logo grande + ações         ║
+          ╚══════════════════════════════════════════════════════════════╝ */}
+      <header className="sticky top-0 z-20 bg-white/70 backdrop-blur-xl border-b border-rose-100/60 shadow-[0_2px_24px_-8px_rgba(244,63,94,0.15)]">
+        {/* Linha 1 — logo grande + título + status */}
+        <div className="max-w-3xl mx-auto px-4 pt-3 pb-2 flex items-center gap-3">
           <Link
             href="/minha-loja"
-            className="text-rose-700 hover:text-rose-900 transition shrink-0"
+            className="text-rose-700 hover:text-rose-900 transition shrink-0 -ml-1"
             aria-label="Voltar"
           >
             <ArrowLeft className="w-5 h-5" />
           </Link>
 
-          {/* Logo + brand */}
-          <Link href="/minha-loja" className="flex items-center gap-2 shrink-0">
-            <div className="relative w-10 h-10">
+          {/* LOGO GRANDE — destaque visual */}
+          <Link
+            href="/minha-loja"
+            className="flex items-center gap-3 shrink-0 group"
+            title="Início"
+          >
+            <div className="relative w-16 h-16 transition-transform group-hover:scale-105">
+              <div className="absolute inset-0 rounded-full bg-gradient-to-br from-rose-200/50 to-pink-300/50 blur-md" />
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
                 fill
-                sizes="40px"
-                className="object-contain"
+                sizes="64px"
+                className="object-contain relative drop-shadow-md"
                 priority
               />
             </div>
@@ -484,63 +492,89 @@ export default function PdvPage() {
 
           {/* Título + venda */}
           <div className="flex-1 min-w-0">
-            <h1 className="text-sm font-bold bg-gradient-to-r from-rose-700 to-pink-600 bg-clip-text text-transparent leading-tight">
-              PDV · {sale?.storeCode || '...'}
-            </h1>
-            <p className="text-[10px] text-rose-700/60 truncate font-medium">
-              {sale ? `#${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} item(ns)` : 'Carregando…'}
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-black bg-gradient-to-r from-rose-700 via-pink-600 to-fuchsia-600 bg-clip-text text-transparent leading-tight tracking-tight">
+                PDV
+              </h1>
+              {sale?.storeCode && (
+                <span className="text-xs font-mono font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                  {sale.storeCode}
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-rose-700/70 truncate font-semibold mt-0.5">
+              {sale
+                ? `Venda #${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} item(ns) no carrinho`
+                : 'Carregando…'}
             </p>
           </div>
 
-          {/* Botão Cliente — destaque rosa */}
+          {/* Botão Cliente — pill compacta */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-2.5 py-2 rounded-lg flex items-center gap-1.5 font-bold transition shadow-sm disabled:opacity-50 ${
+            className={`text-xs px-3 py-2.5 rounded-full flex items-center gap-1.5 font-bold transition shadow-md disabled:opacity-50 ${
               sale?.customerCpf
-                ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-rose-200'
-                : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
+                ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-rose-300/60'
+                : 'bg-white hover:bg-rose-50 text-rose-700 border-2 border-rose-200 shadow-rose-100'
             }`}
             title="Identificar cliente"
           >
-            <User className="w-3.5 h-3.5" />
+            <User className="w-4 h-4" />
             <span className="hidden sm:inline truncate max-w-[80px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Cliente'}
             </span>
           </button>
         </div>
 
-        {/* ── Faixa de atalhos rápidos ──────────────────────────────── */}
-        <div className="max-w-3xl mx-auto px-3 pb-2.5 grid grid-cols-3 gap-2">
-          <Link
+        {/* Linha 2 — Atalhos rápidos (4 pílulas modernas) */}
+        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-4 gap-2">
+          <ShortcutPill
+            href="/minha-loja/consultar"
+            icon={<Search className="w-5 h-5" />}
+            label="Consultar"
+            sub="Estoque"
+            gradient="from-sky-100 to-blue-200"
+            border="border-sky-300"
+            text="text-sky-800"
+            iconBg="bg-sky-500"
+          />
+          <ShortcutPill
             href="/minha-loja/pdv/caixa"
-            className="bg-gradient-to-br from-emerald-50 to-green-100 hover:from-emerald-100 hover:to-green-200 border border-emerald-200 text-emerald-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow"
-            title="Caixa do dia (abrir, sangria, fechar)"
-          >
-            <DollarSign className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-wide">Caixa</span>
-          </Link>
-
-          <Link
+            icon={<DollarSign className="w-5 h-5" />}
+            label="Caixa"
+            sub="Sangria · Z"
+            gradient="from-emerald-100 to-green-200"
+            border="border-emerald-300"
+            text="text-emerald-800"
+            iconBg="bg-emerald-500"
+          />
+          <ShortcutPill
             href="/minha-loja/pdv/devolucao"
-            className="bg-gradient-to-br from-amber-50 to-orange-100 hover:from-amber-100 hover:to-orange-200 border border-amber-200 text-amber-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow"
-            title="Devolução / Troca"
-          >
-            <ArrowRightLeft className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-wide">Devolução</span>
-          </Link>
-
+            icon={<ArrowRightLeft className="w-5 h-5" />}
+            label="Trocar"
+            sub="Devolução"
+            gradient="from-amber-100 to-orange-200"
+            border="border-amber-300"
+            text="text-amber-900"
+            iconBg="bg-amber-500"
+          />
           <button
             type="button"
             onClick={() => setShowOpenList(true)}
             disabled={openCount === 0}
-            className="bg-gradient-to-br from-violet-50 to-purple-100 hover:from-violet-100 hover:to-purple-200 border border-violet-200 text-violet-800 rounded-xl p-2 flex flex-col items-center gap-0.5 transition shadow-sm hover:shadow disabled:opacity-40 disabled:cursor-not-allowed relative"
+            className="relative bg-gradient-to-br from-violet-100 to-purple-200 hover:from-violet-200 hover:to-purple-300 border border-violet-300 text-violet-900 rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed group"
             title={openCount > 0 ? `${openCount} venda(s) pausadas` : 'Nenhuma venda pausada'}
           >
-            <Pause className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-wide">Pausadas</span>
+            <div className="w-9 h-9 rounded-full bg-violet-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+              <Pause className="w-5 h-5" />
+            </div>
+            <div className="text-center leading-tight">
+              <div className="text-[11px] font-black uppercase tracking-wide">Pausadas</div>
+              <div className="text-[9px] opacity-70 font-semibold">Retomar</div>
+            </div>
             {openCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow">
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white animate-pulse">
                 {openCount}
               </span>
             )}
@@ -1827,4 +1861,41 @@ function BandeiraLogo({ brand }: { brand: string }) {
     default:
       return <span className="text-xs font-bold text-slate-700">{brand}</span>;
   }
+}
+
+
+// ── SHORTCUT PILL: atalho colorido grande do header do PDV ───────────
+function ShortcutPill({
+  href,
+  icon,
+  label,
+  sub,
+  gradient,
+  border,
+  text,
+  iconBg,
+}: {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  sub: string;
+  gradient: string;
+  border: string;
+  text: string;
+  iconBg: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`bg-gradient-to-br ${gradient} hover:brightness-105 border ${border} ${text} rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group`}
+    >
+      <div className={`w-9 h-9 rounded-full ${iconBg} text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform`}>
+        {icon}
+      </div>
+      <div className="text-center leading-tight">
+        <div className="text-[11px] font-black uppercase tracking-wide">{label}</div>
+        <div className="text-[9px] opacity-70 font-semibold">{sub}</div>
+      </div>
+    </Link>
+  );
 }
