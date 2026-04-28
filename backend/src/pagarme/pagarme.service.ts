@@ -297,57 +297,96 @@ export class PagarmeService {
       );
     }
 
-    const order = resp.data;
+    let order = resp.data;
     const orderId = order.id;
-    const charge = (order.charges || [])[0];
-    const lastTx = charge?.last_transaction || {};
 
-    // Pagar.me API v5 pode retornar QR em múltiplos caminhos dependendo da
-    // versão do endpoint. Tenta TODAS as posições conhecidas.
-    const qrCodeText: string =
-      lastTx.qr_code ||
-      lastTx.pix_qr_code ||
-      lastTx.qrcode ||
-      charge?.qr_code ||
-      charge?.pix?.qr_code ||
-      order?.checkouts?.[0]?.pix_qr_code ||
-      '';
+    // Helper: extrai QR de TODAS as posições conhecidas (API v5 varia)
+    const extractQr = (o: any): { qrText: string; qrUrl: string } => {
+      const charge = (o?.charges || [])[0];
+      const lastTx = charge?.last_transaction || {};
+      return {
+        qrText:
+          lastTx.qr_code ||
+          lastTx.pix_qr_code ||
+          lastTx.qrcode ||
+          charge?.qr_code ||
+          charge?.pix?.qr_code ||
+          o?.checkouts?.[0]?.pix_qr_code ||
+          '',
+        qrUrl:
+          lastTx.qr_code_url ||
+          lastTx.pix_qr_code_url ||
+          lastTx.qrcode_url ||
+          charge?.qr_code_url ||
+          charge?.pix?.qr_code_url ||
+          o?.checkouts?.[0]?.pix_qr_code_url ||
+          '',
+      };
+    };
 
-    const qrCodeImageUrl: string =
-      lastTx.qr_code_url ||
-      lastTx.pix_qr_code_url ||
-      lastTx.qrcode_url ||
-      charge?.qr_code_url ||
-      charge?.pix?.qr_code_url ||
-      order?.checkouts?.[0]?.pix_qr_code_url ||
-      '';
+    let { qrText: qrCodeText, qrUrl: qrCodeImageUrl } = extractQr(order);
+
+    // Se o response sync não trouxe qr_code, faz polling curto.
+    // Pagar.me gera o charge async — em ~1-3s o GET /orders/:id traz tudo.
+    if (!qrCodeText) {
+      const maxRetries = 6;        // 6 tentativas
+      const delayMs = 700;         // 700ms entre cada → até ~4.2s total
+      for (let i = 0; i < maxRetries; i++) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        try {
+          const refresh = await firstValueFrom(
+            this.http.get(`${this.BASE_URL}/orders/${orderId}`, {
+              headers: {
+                Authorization: this.authHeader(cfg.apiKey),
+                Accept: 'application/json',
+              },
+              timeout: 5000,
+            }),
+          );
+          order = refresh.data;
+          const e = extractQr(order);
+          if (e.qrText) {
+            qrCodeText = e.qrText;
+            qrCodeImageUrl = e.qrUrl;
+            this.logger.log(
+              `[pagarme] qr_code disponível após ${(i + 1) * delayMs}ms (tentativa ${i + 1})`,
+            );
+            break;
+          }
+        } catch (e: any) {
+          this.logger.warn(
+            `[pagarme] retry ${i + 1} GET /orders/${orderId} falhou: ${e?.message || e}`,
+          );
+        }
+      }
+    }
 
     if (!qrCodeText) {
-      // Loga estrutura completa pro Railway pra debug
+      // Mesmo após retries, sem qr_code. Loga estrutura completa pro Railway.
+      const charge = (order?.charges || [])[0];
+      const lastTx = charge?.last_transaction || {};
       this.logger.error(
-        `[pagarme] order ${orderId} sem qr_code. Response completo: ${JSON.stringify(order, null, 2).slice(0, 3000)}`,
+        `[pagarme] order ${orderId} SEM qr_code após retries. Response: ${JSON.stringify(order, null, 2).slice(0, 3000)}`,
       );
-      // Retorna a estrutura pra cliente conseguir debugar visualmente
       const debugStruct = {
-        orderStatus: order.status,
+        orderStatus: order?.status,
         chargeStatus: charge?.status,
-        chargeId: charge?.id,
         lastTxStatus: lastTx?.status,
         lastTxKeys: Object.keys(lastTx || {}),
         chargeKeys: Object.keys(charge || {}),
-        orderKeys: Object.keys(order || {}),
       };
       throw new BadRequestException(
-        `Pagar.me não retornou QR Code. Estrutura: ${JSON.stringify(debugStruct).slice(0, 250)}`,
+        `Pagar.me não retornou QR Code mesmo após retry. Status: ${order?.status} / charge: ${charge?.status}. Estrutura: ${JSON.stringify(debugStruct).slice(0, 200)}`,
       );
     }
 
+    const finalCharge = (order?.charges || [])[0];
     await (this.prisma as any).pagarmePayment.create({
       data: {
         saleId: input.saleId,
         storeCode: input.storeCode,
         pagarmeOrderId: orderId,
-        pagarmeChargeId: charge?.id || null,
+        pagarmeChargeId: finalCharge?.id || null,
         method: 'pix',
         valor: input.valor,
         status: 'pending',
