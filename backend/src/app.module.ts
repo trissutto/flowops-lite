@@ -35,6 +35,7 @@ import { FinanceiroModule } from './financeiro/financeiro.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { PdvModule } from './pdv/pdv.module';
 import { WcReturnsModule } from './wc-returns/wc-returns.module';
+import { PagbankModule } from './pagbank/pagbank.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { WcReturnsModule } from './wc-returns/wc-returns.module';
     IntelligenceModule,
     PdvModule,
     WcReturnsModule,
+    PagbankModule,
   ],
 })
 export class AppModule {}

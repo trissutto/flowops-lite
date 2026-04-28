@@ -923,6 +923,63 @@ model PdvReturn {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// PAGBANK — config global + rastreio de pagamentos PIX/cartão
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Como a Lurd's tem CONTA ÚNICA PagBank (CNPJ matriz), config é global
+// (não por loja). Todo dinheiro cai na mesma conta — depois conciliamos
+// por loja via reference_id da Order (que carrega storeCode da venda).
+model PagbankConfig {
+  id              String   @id @default("singleton")
+  // Ambiente: 'sandbox' | 'production'
+  ambiente        String   @default("sandbox")
+  // Bearer Token (sandbox ou prod) — guardado as-is (não exibido no GET)
+  bearerToken     String?  @map("bearer_token") @db.Text
+  // Webhook secret pra validar assinatura HMAC dos POST recebidos
+  webhookSecret   String?  @map("webhook_secret")
+  // Habilitado? Se false, PDV cai no fallback PIX local
+  enabled         Boolean  @default(false)
+  // Auditoria
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("pagbank_config")
+}
+
+// Cada cobrança PIX gerada vira um registro aqui pra rastrear status.
+// Vinculada à PdvSalePayment (split payment) — quando webhook chega
+// confirmando, o payment é marcado como pago e a venda finaliza.
+model PagbankPayment {
+  id              String   @id @default(uuid())
+  // Vínculo com a venda PDV
+  saleId          String   @map("sale_id")
+  pdvPaymentId    String?  @map("pdv_payment_id")  // FK pra PdvSalePayment
+  storeCode       String   @map("store_code")
+  // Order PagBank
+  pagbankOrderId  String   @unique @map("pagbank_order_id")
+  pagbankChargeId String?  @map("pagbank_charge_id")
+  // Tipo: 'pix' | 'credit_card' | 'boleto'
+  method          String
+  valor           Float
+  // Status: pending | paid | expired | cancelled | failed
+  status          String   @default("pending")
+  // PIX
+  qrCodeText      String?  @map("qr_code_text") @db.Text   // copia-e-cola
+  qrCodeImageB64  String?  @map("qr_code_image_b64") @db.Text  // PNG base64
+  expiresAt       DateTime? @map("expires_at")
+  // Auditoria
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  paidAt          DateTime? @map("paid_at")
+  rawWebhook      String?  @map("raw_webhook") @db.Text
+
+  @@index([saleId])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([pagbankOrderId])
+  @@map("pagbank_payments")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // TROCA DE PEDIDO DO SITE (WC) — peça volta pro estoque da loja receptora
 // ═══════════════════════════════════════════════════════════════════════
 //

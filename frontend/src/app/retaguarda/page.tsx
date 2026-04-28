@@ -13,7 +13,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft,
+  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -24,8 +24,9 @@ const RETAGUARDA_ITEMS: CircleNavItem[] = [
   { href: '/lojas',                    label: 'Lojas',         subtitle: 'Cadastro da rede',         icon: Store,          tone: 'rose'     },
   { href: '/usuarios',                 label: 'Usuários',      subtitle: 'Acesso e permissões',      icon: UserCog,        tone: 'sky'      },
   { href: '/retaguarda/trocas-site',   label: 'Trocas Site',   subtitle: 'Devolução pedidos WC',     icon: ArrowRightLeft, tone: 'mint'     },
-  { href: '/retaguarda/nfce-config',   label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
-  { href: '/logs',                     label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity,       tone: 'mint'     },
+  { href: '/retaguarda/nfce-config',    label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
+  { href: '/retaguarda/pagbank-config', label: 'PagBank',       subtitle: 'PIX automático no PDV',    icon: QrCode,         tone: 'sky'      },
+  { href: '/logs',                      label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity,       tone: 'mint'     },
 ];
 
 export default function RetaguardaHub() {
