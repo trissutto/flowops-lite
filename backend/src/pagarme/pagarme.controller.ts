@@ -83,11 +83,27 @@ export class PagarmeController {
       throw new ForbiddenException('Apenas admin ou loja');
     const p = await this.svc.getPaymentBySale(saleId);
     if (!p) return { found: false, status: 'none' };
+
+    // Se ainda pendente, consulta a Pagar.me AO VIVO (não depende do webhook).
+    // Assim o polling do frontend (3s) já força sync direto com a Pagar.me.
+    let currentStatus = p.status;
+    let paidAt = p.paidAt;
+    if (p.status === 'pending') {
+      try {
+        const live = await this.svc.checkOrderStatus(p.pagarmeOrderId);
+        currentStatus = live.status;
+        if (live.isPaid) paidAt = new Date();
+      } catch {
+        // Falha de rede com Pagar.me — mantém status local
+      }
+    }
+
     return {
       found: true,
-      status: p.status,
+      status: currentStatus,
+      isPaid: currentStatus === 'paid',
       pagarmeOrderId: p.pagarmeOrderId,
-      paidAt: p.paidAt,
+      paidAt,
       expiresAt: p.expiresAt,
       valor: p.valor,
     };

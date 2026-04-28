@@ -84,6 +84,36 @@ const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /**
+ * Imprime um cupom via iframe oculto — usado em browser puro (sem Electron).
+ *
+ * O iframe carrega a página de recibo, que tem um useEffect chamando
+ * window.print() automaticamente. O browser exibe o diálogo de impressão
+ * mas a janela em si fica invisível (0×0 px no canto inferior direito).
+ *
+ * Removido do DOM após ~30s pra liberar memória.
+ */
+function printViaHiddenIframe(url: string) {
+  try {
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText =
+      'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    iframe.src = url;
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+    // Cleanup tardio
+    setTimeout(() => {
+      try {
+        iframe.remove();
+      } catch {
+        /* noop */
+      }
+    }, 30000);
+  } catch (e) {
+    console.warn('printViaHiddenIframe falhou:', e);
+  }
+}
+
+/**
  * Calcula parcelas com regra "centavos só na primeira":
  *   total = R$ 153,10, n = 3 → primeira: R$ 51,10 · demais: R$ 51,00 (×2)
  *
@@ -406,6 +436,31 @@ export default function PdvPage() {
       setShowPayment(false);
       setShowFinalized(true);
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
+
+      // ── Imprime cupom NÃO FISCAL SILENCIOSAMENTE ──
+      // Estratégia:
+      //   - Electron (loja com instalador): usa electronAPI.silentPrintUrl()
+      //     → abre hidden window invisível no main process e imprime direto
+      //       na térmica padrão. Vendedora não vê nada.
+      //   - Browser puro: cria <iframe> oculto carregando o recibo. A tela
+      //     do recibo dispara window.print() sozinha no useEffect → o browser
+      //     imprime só o conteúdo do iframe. Mostra diálogo do SO mas não
+      //     abre janela visível.
+      try {
+        const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
+        const electron = (window as any).electronAPI;
+        if (electron?.silentPrintUrl) {
+          const absoluteUrl = window.location.origin + reciboPath;
+          electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
+            console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
+            printViaHiddenIframe(reciboPath);
+          });
+        } else {
+          printViaHiddenIframe(reciboPath);
+        }
+      } catch (printErr) {
+        console.error('Falha ao imprimir recibo:', printErr);
+      }
     } catch (e: any) {
       alert(`Erro: ${e?.message}`);
     } finally {
