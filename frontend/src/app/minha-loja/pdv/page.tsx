@@ -84,32 +84,59 @@ const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 /**
- * Imprime um cupom via iframe oculto — usado em browser puro (sem Electron).
+ * Imprime um cupom em browser puro (sem Electron).
  *
- * O iframe carrega a página de recibo, que tem um useEffect chamando
- * window.print() automaticamente. O browser exibe o diálogo de impressão
- * mas a janela em si fica invisível (0×0 px no canto inferior direito).
+ * Estratégia em 2 camadas:
+ *   1) Cria iframe FORA DA TELA (left:-9999px) com tamanho real (300×600).
+ *      Iframes 0×0 não renderizam, e o window.print() interno não dispara.
+ *      Com tamanho real renderizado fora da viewport, o print funciona.
+ *   2) Se o iframe falhar (popup blocker, navegação cross-origin), faz
+ *      fallback pra window.open() popup pequeno e visível que se auto-fecha.
  *
- * Removido do DOM após ~30s pra liberar memória.
+ * A página do recibo já dispara window.print() sozinha no useEffect
+ * e remove a janela com afterprint.
  */
 function printViaHiddenIframe(url: string) {
   try {
+    // Tentativa 1: iframe fora da tela (não bloqueia popup, não aparece visível)
     const iframe = document.createElement('iframe');
     iframe.style.cssText =
-      'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+      'position:fixed;left:-9999px;top:0;width:300px;height:600px;border:0;';
     iframe.src = url;
     iframe.setAttribute('aria-hidden', 'true');
+
+    // Detecta se o iframe carregou — se não, cai pro fallback popup
+    let loaded = false;
+    iframe.onload = () => {
+      loaded = true;
+    };
+
     document.body.appendChild(iframe);
-    // Cleanup tardio
+
+    // Fallback: se em 4s o iframe não carregou, abre popup visível pequeno
+    setTimeout(() => {
+      if (!loaded) {
+        try {
+          iframe.remove();
+        } catch {}
+        const w = window.open(url, 'lurds_recibo', 'width=320,height=520,resizable=yes');
+        if (!w) {
+          alert('Popup bloqueado — habilite pop-ups nessa página pra imprimir cupom automático.');
+        }
+      }
+    }, 4000);
+
+    // Cleanup do iframe após 30s
     setTimeout(() => {
       try {
         iframe.remove();
-      } catch {
-        /* noop */
-      }
+      } catch {}
     }, 30000);
   } catch (e) {
-    console.warn('printViaHiddenIframe falhou:', e);
+    console.warn('printViaHiddenIframe falhou, tentando popup direto:', e);
+    try {
+      window.open(url, 'lurds_recibo', 'width=320,height=520,resizable=yes');
+    } catch {}
   }
 }
 
