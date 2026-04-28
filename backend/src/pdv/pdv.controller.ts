@@ -253,6 +253,9 @@ export class PdvController {
       saleId: id,
       paymentMethod: body?.paymentMethod,
       paymentDetails: body?.paymentDetails,
+      // Passa storeCode do JWT pra reconciliação automática quando a
+      // venda foi criada com loja diferente do caixa atual.
+      userStoreCode: req?.user?.storeCode,
     });
   }
 

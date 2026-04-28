@@ -607,6 +607,9 @@ export class PdvService {
     saleId: string;
     paymentMethod?: string;
     paymentDetails?: any;
+    /** Loja do usuário logado (vem do JWT) — usada como fallback se o
+     *  storeCode da venda divergir do caixa aberto. */
+    userStoreCode?: string;
   }) {
     const sale = await this.getSale(input.saleId);
     if (sale.status !== 'open')
@@ -618,10 +621,43 @@ export class PdvService {
     // Se a venda foi criada antes do caixa abrir, vincula agora.
     let cashSessionId = sale.cashSessionId;
     if (!cashSessionId) {
-      const sess = await this.cash.getCurrentSession(sale.storeCode);
+      // Tenta primeiro pelo storeCode da venda
+      let sess = await this.cash.getCurrentSession(sale.storeCode);
+
+      // Fallback: se não tem caixa pra storeCode da venda mas o usuário
+      // tem caixa aberto em OUTRA loja (sua loja vinculada), reconcilia:
+      // atualiza o storeCode da venda pra refletir onde a vendedora está
+      // operando agora. Isso resolve o caso "venda criada antes do
+      // caixa abrir, com storeCode divergente do caixa atual".
+      if (!sess && input.userStoreCode && input.userStoreCode !== sale.storeCode) {
+        const userSess = await this.cash.getCurrentSession(input.userStoreCode);
+        if (userSess) {
+          this.logger.warn(
+            `[pdv] reconciliando venda ${sale.id}: storeCode ${sale.storeCode} → ${input.userStoreCode} (caixa aberto na loja do usuário)`,
+          );
+          // Busca a Store pra atualizar storeCode + storeName juntos
+          const newStore = await this.prisma.store.findUnique({
+            where: { code: input.userStoreCode },
+            select: { code: true, name: true },
+          });
+          await (this.prisma as any).pdvSale.update({
+            where: { id: sale.id },
+            data: {
+              storeCode: input.userStoreCode,
+              storeName: newStore?.name || sale.storeName,
+            },
+          });
+          sale.storeCode = input.userStoreCode;
+          if (newStore?.name) sale.storeName = newStore.name;
+          sess = userSess;
+        }
+      }
+
       if (!sess) {
+        // Mensagem de erro com diagnóstico — mostra qual storeCode foi consultado
         throw new BadRequestException(
-          'Não há caixa aberto nesta loja. Abra o caixa antes de finalizar a venda.',
+          `Não há caixa aberto na loja ${sale.storeCode}. ` +
+            `Abra o caixa antes de finalizar a venda.`,
         );
       }
       cashSessionId = sess.id;
