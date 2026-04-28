@@ -391,18 +391,51 @@ export class PagarmeService {
       // Mesmo após retries, sem qr_code. Loga estrutura completa pro Railway.
       const charge = (order?.charges || [])[0];
       const lastTx = charge?.last_transaction || {};
+
+      // Tenta buscar detalhe full do charge específico — traz acquirer_message,
+      // gateway_response_code que NÃO vêm no GET /orders.
+      let chargeDetail: any = null;
+      if (charge?.id) {
+        try {
+          const cd = await firstValueFrom(
+            this.http.get(`${this.BASE_URL}/charges/${charge.id}`, {
+              headers: {
+                Authorization: this.authHeader(cfg.apiKey),
+                Accept: 'application/json',
+              },
+              timeout: 5000,
+            }),
+          );
+          chargeDetail = cd.data;
+        } catch (e: any) {
+          this.logger.warn(`[pagarme] GET /charges/${charge.id} falhou: ${e?.message || e}`);
+        }
+      }
+
+      const detailLastTx = chargeDetail?.last_transaction || lastTx;
+      const detailGatewayResp = detailLastTx?.gateway_response || {};
+
       this.logger.error(
-        `[pagarme] order ${orderId} SEM qr_code após retries. Response: ${JSON.stringify(order, null, 2).slice(0, 3000)}`,
+        `[pagarme] order ${orderId} FALHOU. Order=${JSON.stringify(order).slice(0, 1500)} | Charge=${JSON.stringify(chargeDetail || charge).slice(0, 1500)}`,
       );
-      const debugStruct = {
-        orderStatus: order?.status,
-        chargeStatus: charge?.status,
-        lastTxStatus: lastTx?.status,
-        lastTxKeys: Object.keys(lastTx || {}),
-        chargeKeys: Object.keys(charge || {}),
-      };
+
+      // Monta motivo legível pro front
+      const reasons: string[] = [];
+      if (detailGatewayResp?.code) reasons.push(`código: ${detailGatewayResp.code}`);
+      if (detailGatewayResp?.errors && Array.isArray(detailGatewayResp.errors)) {
+        for (const err of detailGatewayResp.errors) {
+          if (err?.message) reasons.push(err.message);
+        }
+      }
+      if (detailLastTx?.acquirer_message) reasons.push(`acquirer: ${detailLastTx.acquirer_message}`);
+      if (detailLastTx?.acquirer_return_code) reasons.push(`acq_code: ${detailLastTx.acquirer_return_code}`);
+      if (detailLastTx?.status_reason) reasons.push(`reason: ${detailLastTx.status_reason}`);
+      if (chargeDetail?.status_reason) reasons.push(`charge_reason: ${chargeDetail.status_reason}`);
+
+      const reasonStr = reasons.length > 0 ? reasons.join(' · ') : 'Sem detalhes — confira logs Railway';
+
       throw new BadRequestException(
-        `Pagar.me não retornou QR Code mesmo após retry. Status: ${order?.status} / charge: ${charge?.status}. Estrutura: ${JSON.stringify(debugStruct).slice(0, 200)}`,
+        `Pagar.me retornou status=${order?.status} (charge=${charge?.status}). Motivo: ${reasonStr}`,
       );
     }
 
