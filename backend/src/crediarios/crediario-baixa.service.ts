@@ -194,23 +194,26 @@ export class CrediarioBaixaService {
         }
       } catch {/* ignora — usa só o codCliente direto */}
     } else {
-      // Busca por nome
+      // Busca por nome NA TABELA DE CLIENTES (nunca em movimento.NOME pra
+      // evitar pegar registros onde o nome é o cliente real mas o CODCLIENTE
+      // é cartão/avulso — ex: cliente "ELISA" pagou com VISA, fica como
+      // CODCLIENTE=26 VISANET, NOME=ELISA. Não queremos VISANET aqui.)
       const cm = await this.crediarios.detectClientesTable();
       if (cm && cm.nome) {
         const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE '%${safeBusca}%' LIMIT 50`;
         const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 });
         codClientes = r.rows.map((row) => String(row.cod));
-      }
-      // Fallback: nome desnormalizado em movimento.NOME
-      if (codClientes.length === 0 && map.nome && map.codCliente) {
-        const sql = `SELECT DISTINCT \`${map.codCliente}\` AS cod FROM \`movimento\` WHERE \`${map.nome}\` LIKE '%${safeBusca}%' LIMIT 50`;
-        const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 });
-        codClientes = r.rows.map((row) => String(row.cod));
+      } else {
+        throw new BadRequestException(
+          'Tabela de clientes do Giga não detectada. Use código do cliente em vez de nome.',
+        );
       }
     }
 
-    // Filtra códigos "lixo" do Giga (cartões/avulsos: 0, 1, 2, 3 — CREDICARD, REDESHOP, etc).
-    // Cliente real começa em 4+ na maioria das instalações Lurd's.
+    // Filtra códigos "lixo" — duas camadas:
+    //   1. Códigos 0-3: cartões clássicos (CREDICARD, REDESHOP, AMEX...).
+    //   2. Nomes que parecem cartão (VISANET, MASTERCARD, ELO, HIPER...) — esses
+    //      podem ter cód > 3 (ex: VISANET=26). Verifica na tabela clientes.
     codClientes = Array.from(new Set(
       codClientes.filter((c) => {
         if (!c) return false;
@@ -218,9 +221,32 @@ export class CrediarioBaixaService {
         return !isNaN(n) && n > 3;
       }),
     ));
+
+    // Filtra clientes-cartão pelo nome (VISANET, MASTERCARD, etc.)
+    if (codClientes.length > 0) {
+      const cm = await this.crediarios.detectClientesTable();
+      if (cm && cm.nome) {
+        const inList = codClientes.map((c) => `'${c}'`).join(',');
+        const sql = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${codClientes.length + 100}`;
+        try {
+          const r = await this.erp.runReadOnly(sql, { maxRows: codClientes.length + 100, timeoutMs: 10000 });
+          const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+          const cardCodes = new Set(
+            r.rows.filter((row: any) => cardRegex.test(String(row.nome || '').trim())).map((row: any) => String(row.cod)),
+          );
+          if (cardCodes.size > 0) {
+            this.logger.log(`[crediario-baixa] excluindo ${cardCodes.size} clientes-cartão: ${Array.from(cardCodes).join(',')}`);
+            codClientes = codClientes.filter((c) => !cardCodes.has(c));
+          }
+        } catch (e: any) {
+          this.logger.warn(`Filtro cartões falhou: ${e?.message}`);
+        }
+      }
+    }
+
     if (codClientes.length === 0) {
       throw new BadRequestException(
-        'Nenhum cliente encontrado. Códigos 0-3 do Giga são cartões/avulsos (CREDICARD, REDESHOP, VISANET) — ignorados.',
+        'Nenhum cliente real encontrado pra essa busca. Códigos 0-3 e nomes de cartões (VISANET, MASTERCARD, etc.) são ignorados.',
       );
     }
 
