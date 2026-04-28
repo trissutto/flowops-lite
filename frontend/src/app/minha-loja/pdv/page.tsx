@@ -1287,8 +1287,10 @@ function PaymentModal({
   };
 
   // ── POLLING (Pagar.me ou PagBank) ──
-  // Quando PIX foi gerado via provider externo, faz polling a cada 3s.
-  // Webhook → marca paid no banco → polling pega → setPixPaid(true).
+  // Quando PIX foi gerado via provider externo, faz polling a cada 1s
+  // (era 3s — reduzido pra UX no caixa: confirmação <1.5s após pagamento).
+  // Webhook → marca paid no banco + backend Pagar.me consulta ao vivo
+  // como fallback → polling pega → setPixPaid(true).
   useEffect(() => {
     if (!pixCharge || pixPaid) return;
     if (pixCharge.provider !== 'pagarme' && pixCharge.provider !== 'pagbank') return;
@@ -1309,7 +1311,7 @@ function PaymentModal({
       }
     };
     tick();
-    const id = setInterval(tick, 3000);
+    const id = setInterval(tick, 1000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1326,6 +1328,28 @@ function PaymentModal({
       alert('Não consegui copiar — selecione e copie manualmente');
     }
   };
+
+  // ── AUTO-ADICIONA PIX quando webhook/polling confirmar pagamento ──
+  // Quando pixPaid vira true E o método ativo é PIX E ainda tem valor a pagar,
+  // dispara adicionarPagamento sozinho — vendedora não precisa clicar nada.
+  // Após adicionar, o pago100 fica true e o botão "Finalizar venda" aparece.
+  const autoAddRef = useRef(false);
+  useEffect(() => {
+    if (!pixPaid) {
+      autoAddRef.current = false;
+      return;
+    }
+    if (autoAddRef.current) return;
+    if (selected !== 'pix' || !pixCharge) return;
+    if (addingPayment) return;
+    autoAddRef.current = true;
+    // Pequeno delay pro toast "✓ Pagamento confirmado" aparecer antes do add
+    const t = setTimeout(() => {
+      adicionarPagamento();
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pixPaid, selected, pixCharge]);
 
   const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
   const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
