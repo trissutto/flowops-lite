@@ -34,6 +34,7 @@ export class PagarmeController {
       ambiente?: 'test' | 'live';
       apiKey?: string;
       webhookSecret?: string;
+      recipientId?: string;
       enabled?: boolean;
     },
   ) {

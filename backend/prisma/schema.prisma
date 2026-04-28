@@ -939,6 +939,9 @@ model PagarmeConfig {
   apiKey          String?  @map("api_key") @db.Text
   // Webhook secret pra validar HMAC dos eventos
   webhookSecret   String?  @map("webhook_secret")
+  // Recipient ID (formato: rp_xxx ou ba_xxx) — obrigatório quando conta é PSP/marketplace.
+  // Quando preenchido, o service injeta split rule de 100% pra esse recebedor em todo charge.
+  recipientId     String?  @map("recipient_id")
   // Habilitado? Se false, PDV cai no fallback PIX local
   enabled         Boolean  @default(false)
   createdAt       DateTime @default(now()) @map("created_at")

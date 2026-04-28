@@ -52,6 +52,7 @@ export class PagarmeService {
       enabled: cfg.enabled,
       hasApiKey: !!cfg.apiKey,
       hasWebhookSecret: !!cfg.webhookSecret,
+      recipientId: cfg.recipientId || null,
       // Detecta ambiente automaticamente pela key
       detectedFromKey: cfg.apiKey
         ? cfg.apiKey.startsWith('sk_test_')
@@ -65,6 +66,7 @@ export class PagarmeService {
     ambiente?: 'test' | 'live';
     apiKey?: string;
     webhookSecret?: string;
+    recipientId?: string;
     enabled?: boolean;
   }) {
     const data: any = {};
@@ -80,6 +82,11 @@ export class PagarmeService {
     }
     if (input.webhookSecret && input.webhookSecret.trim()) {
       data.webhookSecret = input.webhookSecret.trim();
+    }
+    // recipientId — formato rp_xxx ou ba_xxx (Pagar.me)
+    if (input.recipientId !== undefined) {
+      const v = (input.recipientId || '').trim();
+      data.recipientId = v || null;
     }
 
     await (this.prisma as any).pagarmeConfig.upsert({
@@ -231,6 +238,36 @@ export class PagarmeService {
       customerDoc = '11144477735';
     }
 
+    // Split rule — obrigatório quando conta é PSP/marketplace.
+    // 100% do valor vai pro recipient cadastrado, com a própria conta absorvendo
+    // as taxas (liable=true, charge_processing_fee=true).
+    const splitRules = cfg.recipientId
+      ? [
+          {
+            recipient_id: cfg.recipientId,
+            amount: valorCentavos,
+            type: 'flat',
+            options: {
+              charge_processing_fee: true,
+              charge_remainder_fee: true,
+              liable: true,
+            },
+          },
+        ]
+      : undefined;
+
+    const pixPayment: any = {
+      payment_method: 'pix',
+      pix: {
+        expires_in: expiresInSec,
+        additional_information: [
+          { name: 'Loja', value: input.storeCode },
+          { name: 'Pedido', value: input.saleId.slice(-8).toUpperCase() },
+        ],
+      },
+    };
+    if (splitRules) pixPayment.split = splitRules;
+
     const body: any = {
       code: `LURDS-${input.saleId.slice(-8).toUpperCase()}`,
       items: [
@@ -248,18 +285,7 @@ export class PagarmeService {
         document: customerDoc,
         document_type: customerDoc.length === 14 ? 'cnpj' : 'cpf',
       },
-      payments: [
-        {
-          payment_method: 'pix',
-          pix: {
-            expires_in: expiresInSec,
-            additional_information: [
-              { name: 'Loja', value: input.storeCode },
-              { name: 'Pedido', value: input.saleId.slice(-8).toUpperCase() },
-            ],
-          },
-        },
-      ],
+      payments: [pixPayment],
       metadata: {
         saleId: input.saleId,
         storeCode: input.storeCode,

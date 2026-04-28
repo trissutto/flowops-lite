@@ -20,6 +20,7 @@ type ConfigState = {
   enabled: boolean;
   hasApiKey: boolean;
   hasWebhookSecret: boolean;
+  recipientId: string | null;
   detectedFromKey: 'test' | 'live' | null;
 };
 
@@ -32,11 +33,13 @@ export default function PagarmeConfigPage() {
     enabled: false,
     hasApiKey: false,
     hasWebhookSecret: false,
+    recipientId: null,
     detectedFromKey: null,
   });
 
   const [apiKey, setApiKey] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
+  const [recipientId, setRecipientId] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
 
@@ -66,6 +69,8 @@ export default function PagarmeConfigPage() {
       };
       if (apiKey.trim()) body.apiKey = apiKey.trim();
       if (webhookSecret.trim()) body.webhookSecret = webhookSecret.trim();
+      // recipientId — sempre envia (mesmo vazio) pra permitir limpar
+      body.recipientId = recipientId.trim();
 
       const updated = await api<ConfigState>('/pagarme/config', {
         method: 'POST',
@@ -74,6 +79,7 @@ export default function PagarmeConfigPage() {
       setCfg(updated);
       setApiKey('');
       setWebhookSecret('');
+      setRecipientId('');
       setMsg({ kind: 'ok', text: 'Configuração salva ✓' });
     } catch (e: any) {
       setMsg({ kind: 'err', text: 'Erro ao salvar: ' + (e?.message || e) });
@@ -241,6 +247,46 @@ export default function PagarmeConfigPage() {
                 {showSecret ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+          </Card>
+
+          {/* RECIPIENT ID — obrigatório pra contas PSP/marketplace */}
+          <Card
+            title="Recipient ID (split rule)"
+            subtitle="OBRIGATÓRIO se sua conta Pagar.me é PSP/marketplace. Dashboard → Recebedores → copia o ID (rp_xxx ou ba_xxx). Sem isso a Pagar.me retorna 'failed' em todo charge."
+          >
+            <div className="mb-3">
+              <div
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                  cfg.recipientId
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                {cfg.recipientId ? (
+                  <>
+                    <CheckCircle2 size={14} /> Recipient cadastrado:{' '}
+                    <code className="font-mono text-xs">{cfg.recipientId}</code>
+                  </>
+                ) : (
+                  <>
+                    <FileWarning size={14} /> Sem recipient (pode falhar se conta for PSP)
+                  </>
+                )}
+              </div>
+            </div>
+            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
+              {cfg.recipientId ? 'Trocar Recipient ID' : 'Recipient ID'}
+            </label>
+            <input
+              type="text"
+              value={recipientId}
+              onChange={(e) => setRecipientId(e.target.value)}
+              placeholder={cfg.recipientId ? '(deixe vazio pra manter)' : 'rp_xxx ou ba_xxx'}
+              className="w-full p-2.5 border rounded-lg font-mono text-sm"
+            />
+            <p className="text-xs text-gray-500 mt-2">
+              💡 Pra limpar, digita um espaço e salva.
+            </p>
           </Card>
 
           {/* WEBHOOK URL */}
