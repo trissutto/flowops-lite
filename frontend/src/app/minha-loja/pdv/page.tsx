@@ -1041,6 +1041,7 @@ function PaymentModal({
   } | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
   const [pixPaid, setPixPaid] = useState(false);  // setado quando PagBank webhook confirma
+  const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
   const [copyMsg, setCopyMsg] = useState(false);
 
   // ── Adicionar pagamento parcial ──
@@ -1131,6 +1132,7 @@ function PaymentModal({
   const generatePix = async (pixValor?: number) => {
     setPixLoading(true);
     setPixPaid(false);
+    setPixFallbackReason(null);
     try {
       // 1) Tenta PagBank primeiro
       try {
@@ -1166,14 +1168,19 @@ function PaymentModal({
         });
         return;
       } catch (e: any) {
-        // 400 com "PagBank desabilitado" ou "não configurado" → fallback silencioso
         const msg = String(e?.message || e);
-        const isDisabled =
-          /desabilitado/i.test(msg) || /não configurado/i.test(msg) || /Bearer Token/i.test(msg);
-        if (!isDisabled) {
-          // Erro real (token inválido, rede, etc) — loga mas tenta fallback
-          console.warn('[pdv] PagBank PIX falhou, caindo no PIX local:', msg);
-        }
+        const status = e?.status || e?.response?.status;
+        // Categoriza motivo do fallback pra mostrar pra retaguarda
+        let reason = '';
+        if (/desabilitado/i.test(msg)) reason = 'PagBank desligado';
+        else if (/não configurado/i.test(msg) || /Bearer Token/i.test(msg))
+          reason = 'PagBank sem token';
+        else if (status === 404 || /404|Not Found/i.test(msg))
+          reason = 'Backend antigo (deploy pendente)';
+        else if (status === 500) reason = `Erro servidor: ${msg.slice(0, 80)}`;
+        else reason = `Falhou: ${msg.slice(0, 80)}`;
+        setPixFallbackReason(reason);
+        console.warn('[pdv] PagBank PIX falhou, caindo no PIX local:', msg);
       }
 
       // 2) Fallback: PIX local (chave celular)
@@ -1550,7 +1557,7 @@ function PaymentModal({
             ) : pixCharge ? (
               <>
                 {/* Badge identificando o provedor + status PagBank */}
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span
                     className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
                       pixCharge.provider === 'pagbank'
@@ -1560,6 +1567,11 @@ function PaymentModal({
                   >
                     {pixCharge.provider === 'pagbank' ? '✓ PagBank' : 'PIX direto'}
                   </span>
+                  {pixCharge.provider === 'local' && pixFallbackReason && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-900">
+                      ⚠ {pixFallbackReason}
+                    </span>
+                  )}
                   {pixCharge.provider === 'pagbank' && (
                     <span
                       className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex items-center gap-1 ${
