@@ -1029,14 +1029,15 @@ function PaymentModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
-  // PIX state — agora carrega flag indicando se foi via PagBank (auto-confirma via webhook)
+  // PIX state — providers possíveis: pagarme (preferido), pagbank, local
   const [pixCharge, setPixCharge] = useState<{
     txid: string;
     chave: string;
     payload: string;
     qrCodeDataUrl: string;
-    provider?: 'pagbank' | 'local';  // pagbank = polling status; local = vendedora confirma manual
+    provider?: 'pagarme' | 'pagbank' | 'local';
     pagbankOrderId?: string;
+    pagarmeOrderId?: string;
     expiresAt?: string;
   } | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
@@ -1134,9 +1135,50 @@ function PaymentModal({
     setPixPaid(false);
     setPixFallbackReason(null);
     try {
-      // 1) Tenta PagBank primeiro
+      const valor = pixValor && pixValor > 0 ? pixValor : total;
+      const customerPayload = {
+        saleId,
+        valor,
+        storeCode,
+        customerName: customerName || undefined,
+        customerCpf: customerCpf || undefined,
+        customerEmail: customerEmail || undefined,
+        expiresInMinutes: 15,
+      };
+
+      // 1) Tenta Pagar.me primeiro (provider preferido)
       try {
-        const valor = pixValor && pixValor > 0 ? pixValor : total;
+        const pm = await api<{
+          pagarmeOrderId: string;
+          qrCodeText: string;
+          qrCodeImageUrl: string;
+          expiresAt: string;
+          valor: number;
+        }>('/pagarme/pix/create', {
+          method: 'POST',
+          body: JSON.stringify(customerPayload),
+        });
+        setPixCharge({
+          txid: pm.pagarmeOrderId,
+          chave: 'Pagar.me',
+          payload: pm.qrCodeText,
+          // Pagar.me retorna URL da imagem, não base64
+          qrCodeDataUrl: pm.qrCodeImageUrl || '',
+          provider: 'pagarme',
+          pagarmeOrderId: pm.pagarmeOrderId,
+          expiresAt: pm.expiresAt,
+        });
+        return;
+      } catch (e: any) {
+        const msg = String(e?.message || e);
+        const status = e?.status || e?.response?.status;
+        if (!/desabilitado|não configurado|API Key/i.test(msg)) {
+          console.warn('[pdv] Pagar.me PIX falhou:', msg);
+        }
+      }
+
+      // 2) Tenta PagBank (segundo provider)
+      try {
         const pb = await api<{
           pagbankOrderId: string;
           qrCodeText: string;
@@ -1145,15 +1187,7 @@ function PaymentModal({
           valor: number;
         }>('/pagbank/pix/create', {
           method: 'POST',
-          body: JSON.stringify({
-            saleId,
-            valor,
-            storeCode,
-            customerName: customerName || undefined,
-            customerCpf: customerCpf || undefined,
-            customerEmail: customerEmail || undefined,
-            expiresInMinutes: 15,
-          }),
+          body: JSON.stringify(customerPayload),
         });
         setPixCharge({
           txid: pb.pagbankOrderId,
@@ -1169,21 +1203,16 @@ function PaymentModal({
         return;
       } catch (e: any) {
         const msg = String(e?.message || e);
-        const status = e?.status || e?.response?.status;
-        // Categoriza motivo do fallback pra mostrar pra retaguarda
         let reason = '';
-        if (/desabilitado/i.test(msg)) reason = 'PagBank desligado';
-        else if (/não configurado/i.test(msg) || /Bearer Token/i.test(msg))
-          reason = 'PagBank sem token';
-        else if (status === 404 || /404|Not Found/i.test(msg))
-          reason = 'Backend antigo (deploy pendente)';
-        else if (status === 500) reason = `Erro servidor: ${msg.slice(0, 80)}`;
-        else reason = `Falhou: ${msg.slice(0, 80)}`;
+        if (/desabilitado/i.test(msg)) reason = 'Pagar.me e PagBank desligados';
+        else if (/não configurado|Token|API Key/i.test(msg))
+          reason = 'Sem provider configurado';
+        else reason = `Provider falhou: ${msg.slice(0, 60)}`;
         setPixFallbackReason(reason);
         console.warn('[pdv] PagBank PIX falhou, caindo no PIX local:', msg);
       }
 
-      // 2) Fallback: PIX local (chave celular)
+      // 3) Fallback final: PIX local (chave celular)
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
       setPixCharge({ ...r, provider: 'local' });
     } catch (e: any) {
@@ -1193,30 +1222,28 @@ function PaymentModal({
     }
   };
 
-  // ── POLLING PagBank ──
-  // Quando PIX foi gerado via PagBank, faz polling a cada 3s no status.
-  // Quando webhook chegar e marcar paid → setPixPaid(true) → vendedora vê
-  // confirmação visual e o "Adicionar pagamento" auto-confirma.
+  // ── POLLING (Pagar.me ou PagBank) ──
+  // Quando PIX foi gerado via provider externo, faz polling a cada 3s.
+  // Webhook → marca paid no banco → polling pega → setPixPaid(true).
   useEffect(() => {
-    if (!pixCharge || pixCharge.provider !== 'pagbank' || pixPaid) return;
-    const orderId = pixCharge.pagbankOrderId;
-    if (!orderId) return;
+    if (!pixCharge || pixPaid) return;
+    if (pixCharge.provider !== 'pagarme' && pixCharge.provider !== 'pagbank') return;
+
+    const endpoint =
+      pixCharge.provider === 'pagarme'
+        ? `/pagarme/pix/status/${saleId}`
+        : `/pagbank/pix/status/${saleId}`;
 
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await api<{ status: string; isPaid?: boolean }>(
-          `/pagbank/pix/status/${saleId}`,
-        );
+        const r = await api<{ status: string; isPaid?: boolean }>(endpoint);
         if (cancelled) return;
-        if (r.status === 'paid') {
-          setPixPaid(true);
-        }
+        if (r.status === 'paid') setPixPaid(true);
       } catch {
-        // silencioso — tenta de novo no próximo tick
+        // silencioso
       }
     };
-    // Primeiro tick imediato + interval 3s
     tick();
     const id = setInterval(tick, 3000);
     return () => {
@@ -1560,19 +1587,25 @@ function PaymentModal({
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span
                     className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                      pixCharge.provider === 'pagbank'
+                      pixCharge.provider === 'pagarme'
                         ? 'bg-emerald-100 text-emerald-800'
+                        : pixCharge.provider === 'pagbank'
+                        ? 'bg-sky-100 text-sky-800'
                         : 'bg-slate-200 text-slate-700'
                     }`}
                   >
-                    {pixCharge.provider === 'pagbank' ? '✓ PagBank' : 'PIX direto'}
+                    {pixCharge.provider === 'pagarme'
+                      ? '✓ Pagar.me'
+                      : pixCharge.provider === 'pagbank'
+                      ? '✓ PagBank'
+                      : 'PIX direto'}
                   </span>
                   {pixCharge.provider === 'local' && pixFallbackReason && (
                     <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-900">
                       ⚠ {pixFallbackReason}
                     </span>
                   )}
-                  {pixCharge.provider === 'pagbank' && (
+                  {(pixCharge.provider === 'pagarme' || pixCharge.provider === 'pagbank') && (
                     <span
                       className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex items-center gap-1 ${
                         pixPaid
@@ -1636,14 +1669,14 @@ function PaymentModal({
                   )}
                 </button>
 
-                {pixCharge.provider === 'pagbank' ? (
+                {pixCharge.provider === 'pagarme' || pixCharge.provider === 'pagbank' ? (
                   pixPaid ? (
                     <div className="bg-emerald-100 border-2 border-emerald-400 rounded-lg p-3 text-sm text-emerald-900 font-bold text-center">
-                      ✓ Pagamento confirmado pelo PagBank! Pode adicionar abaixo.
+                      ✓ Pagamento confirmado pelo {pixCharge.provider === 'pagarme' ? 'Pagar.me' : 'PagBank'}! Pode adicionar abaixo.
                     </div>
                   ) : (
                     <div className="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-900">
-                      <b>✓ Confirmação automática:</b> assim que o cliente pagar, o PagBank avisa
+                      <b>✓ Confirmação automática:</b> assim que o cliente pagar, o {pixCharge.provider === 'pagarme' ? 'Pagar.me' : 'PagBank'} avisa
                       o sistema e a venda finaliza sozinha.
                     </div>
                   )

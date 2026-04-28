@@ -923,6 +923,55 @@ model PdvReturn {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// PAGAR.ME — config global + rastreio de pagamentos PIX
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Pagar.me API v5 (https://api.pagar.me/core/v5).
+// Auth: Basic com API Key + senha vazia → header `Authorization: Basic <b64>`.
+// PIX dinâmico funciona em produção SEM homologação prévia (vantagem
+// principal sobre PagBank). Cada Order tem `payments[].pix.qr_code` +
+// `qr_code_url` (texto copia-e-cola + URL da imagem).
+model PagarmeConfig {
+  id              String   @id @default("singleton")
+  // Ambiente: 'test' (sandbox) | 'live' (produção)
+  ambiente        String   @default("test")
+  // API Key Pagar.me (formato: sk_xxxxx pra produção, sk_test_xxxxx pra sandbox)
+  apiKey          String?  @map("api_key") @db.Text
+  // Webhook secret pra validar HMAC dos eventos
+  webhookSecret   String?  @map("webhook_secret")
+  // Habilitado? Se false, PDV cai no fallback PIX local
+  enabled         Boolean  @default(false)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("pagarme_config")
+}
+
+// Cada cobrança PIX vira um registro aqui.
+model PagarmePayment {
+  id              String   @id @default(uuid())
+  saleId          String   @map("sale_id")
+  storeCode       String   @map("store_code")
+  // Order Pagar.me
+  pagarmeOrderId  String   @unique @map("pagarme_order_id")
+  pagarmeChargeId String?  @map("pagarme_charge_id")
+  method          String   @default("pix")
+  valor           Float
+  status          String   @default("pending")  // pending | paid | failed | canceled
+  qrCodeText      String?  @map("qr_code_text") @db.Text
+  qrCodeImageUrl  String?  @map("qr_code_image_url") @db.Text
+  expiresAt       DateTime? @map("expires_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  paidAt          DateTime? @map("paid_at")
+  rawWebhook      String?  @map("raw_webhook") @db.Text
+
+  @@index([saleId])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("pagarme_payments")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // PAGBANK — config global + rastreio de pagamentos PIX/cartão
 // ═══════════════════════════════════════════════════════════════════════
 //
