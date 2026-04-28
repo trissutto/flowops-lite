@@ -923,6 +923,77 @@ model PdvReturn {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// TROCA DE PEDIDO DO SITE (WC) — peça volta pro estoque da loja receptora
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Cliente do site recebe peça → arrepende, defeito, tamanho errado → manda
+// de volta → loja física recebe → registra essa troca no sistema → estoque
+// volta pro Giga (loja que recebeu fisicamente a peça).
+//
+// Diferente de PdvReturn (devolução de venda balcão), aqui a venda original
+// foi pelo site e o estoque já saiu lá atrás (loja que separou). Pode voltar
+// pra UMA loja diferente (a mais perto do cliente, etc).
+model WcReturnRequest {
+  id                String   @id @default(uuid())
+  // Pedido WC original
+  wcOrderId         Int      @map("wc_order_id")
+  wcOrderNumber     String?  @map("wc_order_number")
+  // Cliente snapshot
+  customerName      String?  @map("customer_name")
+  customerCpf       String?  @map("customer_cpf")
+  customerEmail     String?  @map("customer_email")
+  // Loja que está recebendo a peça FÍSICA (pra estornar pro Giga dela)
+  receivingStoreCode String  @map("receiving_store_code")
+  receivingStoreName String  @map("receiving_store_name")
+  // Modo: 'devolucao' (estorna $) | 'troca' (gera vale) | 'credito' (vale com prazo)
+  modo              String
+  valorTotal        Float    @map("valor_total")
+  status            String   @default("completed")  // pending | completed | cancelled
+  // Snapshot info do prazo no momento do registro
+  diasDesdeEnvio    Int?     @map("dias_desde_envio")
+  dentroDoPrazo     Boolean? @map("dentro_do_prazo")
+  // Vale (se modo = troca/credito)
+  creditoCode       String?  @unique @map("credito_code")
+  creditoValidade   DateTime? @map("credito_validade")
+  creditoUsadoEm    String?  @map("credito_usado_em")
+  creditoUsadoAt    DateTime? @map("credito_usado_at")
+  // Operadora
+  userId            String?  @map("user_id")
+  userName          String?  @map("user_name")
+  motivo            String?  @db.Text
+  obs               String?  @db.Text
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  items             WcReturnRequestItem[]
+
+  @@index([wcOrderId])
+  @@index([receivingStoreCode, createdAt(sort: Desc)])
+  @@index([customerCpf])
+  @@index([status])
+  @@map("wc_return_requests")
+}
+
+model WcReturnRequestItem {
+  id                String   @id @default(uuid())
+  returnRequestId   String   @map("return_request_id")
+  sku               String
+  productName       String?  @map("product_name")
+  qty               Int      @default(1)
+  precoUnit         Float    @map("preco_unit")
+  total             Float
+  // Status estorno Giga
+  stockReturnedAt   DateTime? @map("stock_returned_at")
+  stockError        String?   @map("stock_error")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  request           WcReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+
+  @@index([returnRequestId])
+  @@index([sku])
+  @@map("wc_return_request_items")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // NFC-e CONFIG POR LOJA
 // ═══════════════════════════════════════════════════════════════════════
 //
