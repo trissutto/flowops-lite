@@ -52,6 +52,7 @@ export class PagbankService {
     return {
       ambiente: cfg.ambiente,
       enabled: cfg.enabled,
+      email: cfg.email || null,
       hasToken: !!cfg.bearerToken,
       hasWebhookSecret: !!cfg.webhookSecret,
       // Token em si NÃO retorna (só status)
@@ -60,16 +61,22 @@ export class PagbankService {
 
   async setConfig(input: {
     ambiente?: 'sandbox' | 'production';
+    email?: string;
     bearerToken?: string;
     webhookSecret?: string;
     enabled?: boolean;
   }) {
     const data: any = {};
     if (input.ambiente) data.ambiente = input.ambiente;
+    if (input.email != null) data.email = input.email.trim() || null;
     if (input.enabled != null) data.enabled = input.enabled;
     // Sensíveis: só sobrescreve se vier valor preenchido
     if (input.bearerToken && input.bearerToken.trim()) {
-      data.bearerToken = input.bearerToken.trim();
+      // Remove espaços, quebras de linha, tabs e prefixo "Bearer " (caso colem com)
+      data.bearerToken = input.bearerToken
+        .replace(/\s+/g, '')
+        .replace(/^Bearer/i, '')
+        .trim();
     }
     if (input.webhookSecret && input.webhookSecret.trim()) {
       data.webhookSecret = input.webhookSecret.trim();
@@ -179,13 +186,14 @@ export class PagbankService {
 
     let resp: any;
     try {
+      // NÃO mandar x-api-version — esse header força modo OAuth JWT.
+      // Sem ele, a API aceita o token UUID clássico (PagSeguro Classic).
       resp = await firstValueFrom(
         this.http.post(url, body, {
           headers: {
             Authorization: `Bearer ${cfg.bearerToken}`,
             Accept: 'application/json',
             'Content-Type': 'application/json',
-            'x-api-version': '4.0',
           },
           timeout: 15000,
         }),
@@ -461,41 +469,65 @@ export class PagbankService {
     }
 
     const baseUrl = this.getBaseUrl(cfg.ambiente);
-    const url = `${baseUrl}/public-keys`;
+    // Testa com POST /orders payload vazio. Se token tá OK → 400 (validation).
+    // Se token tá errado → 401 ou 403. Bem mais conclusivo que GET /public-keys.
+    const url = `${baseUrl}/orders`;
     try {
+      // SEM x-api-version — token UUID clássico não funciona com 4.0
       const resp = await firstValueFrom(
-        this.http.get(url, {
-          headers: {
-            Authorization: `Bearer ${cfg.bearerToken}`,
-            Accept: 'application/json',
+        this.http.post(
+          url,
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${(cfg.bearerToken || '').trim()}`,
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            timeout: 10000,
+            validateStatus: (s) => s < 600,
           },
-          timeout: 10000,
-          // Aceita 404 também (endpoint pode mudar, mas se autenticou
-          // significa que o token tá OK)
-          validateStatus: (s) => s < 500,
-        }),
+        ),
       );
       const httpStatus = resp.status;
+      // 400/422 = token OK mas payload inválido (era esperado)
+      // 401/403 = token rejeitado
+      if (httpStatus === 400 || httpStatus === 422) {
+        return {
+          ok: true,
+          ambiente: cfg.ambiente,
+          enabled: !!cfg.enabled,
+          hasToken: true,
+          httpStatus,
+        };
+      }
       if (httpStatus === 401 || httpStatus === 403) {
+        const data = resp.data;
         return {
           ok: false,
           ambiente: cfg.ambiente,
           enabled: !!cfg.enabled,
           hasToken: true,
           httpStatus,
-          error: 'Token rejeitado (401/403)',
+          error:
+            data?.error_messages?.[0]?.description ||
+            data?.error_messages?.[0]?.code ||
+            data?.message ||
+            `Token rejeitado pela PagBank (${httpStatus})`,
           hint:
             cfg.ambiente === 'sandbox'
-              ? 'Confira se o token é REALMENTE de sandbox (gerado em portaldev.pagbank.com.br)'
-              : 'Confira se o token é de produção',
+              ? 'Token deve ser gerado em portaldev.pagbank.com.br → Tokens (NÃO em dev.pagbank.uol.com.br). Cuidado com espaços ao colar.'
+              : 'Confirme que é token de produção e que a app tem permissões orders.create/pix.create',
         };
       }
+      // Status inesperado — devolve pra debug
       return {
-        ok: true,
+        ok: false,
         ambiente: cfg.ambiente,
         enabled: !!cfg.enabled,
         hasToken: true,
         httpStatus,
+        error: `HTTP ${httpStatus} inesperado: ${JSON.stringify(resp.data || {}).slice(0, 200)}`,
       };
     } catch (e: any) {
       const httpStatus = e?.response?.status;

@@ -933,6 +933,8 @@ model PagbankConfig {
   id              String   @id @default("singleton")
   // Ambiente: 'sandbox' | 'production'
   ambiente        String   @default("sandbox")
+  // E-mail cadastrado no PagSeguro/PagBank (necessário pra alguns endpoints clássicos)
+  email           String?
   // Bearer Token (sandbox ou prod) — guardado as-is (não exibido no GET)
   bearerToken     String?  @map("bearer_token") @db.Text
   // Webhook secret pra validar assinatura HMAC dos POST recebidos

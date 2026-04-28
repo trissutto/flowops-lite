@@ -20,6 +20,7 @@ import { api } from '@/lib/api';
 
 type ConfigState = {
   ambiente: 'sandbox' | 'production';
+  email: string | null;
   enabled: boolean;
   hasToken: boolean;
   hasWebhookSecret: boolean;
@@ -32,6 +33,7 @@ export default function PagbankConfigPage() {
 
   const [cfg, setCfg] = useState<ConfigState>({
     ambiente: 'sandbox',
+    email: '',
     enabled: false,
     hasToken: false,
     hasWebhookSecret: false,
@@ -79,6 +81,7 @@ export default function PagbankConfigPage() {
     try {
       const body: any = {
         ambiente: cfg.ambiente,
+        email: cfg.email || '',
         enabled: cfg.enabled,
       };
       if (bearerToken.trim()) body.bearerToken = bearerToken.trim();
@@ -170,10 +173,24 @@ export default function PagbankConfigPage() {
             )}
           </Card>
 
+          {/* EMAIL CADASTRADO NO PAGBANK */}
+          <Card
+            title="E-mail cadastrado no PagBank"
+            subtitle="Mesmo e-mail que aparece no portaldev.pagbank.com.br/tokens (ex: matriz@lurds.com.br)"
+          >
+            <input
+              type="email"
+              value={cfg.email || ''}
+              onChange={(e) => setCfg({ ...cfg, email: e.target.value })}
+              placeholder="matriz@lurds.com.br"
+              className="w-full p-2.5 border-2 border-rose-200 rounded-lg focus:border-rose-400 focus:outline-none"
+            />
+          </Card>
+
           {/* BEARER TOKEN */}
           <Card
             title="Bearer Token"
-            subtitle="Geração: Portal Dev PagBank → Aplicações → Tokens. JWT longo (eyJhbGc... ou similar)."
+            subtitle="Token UUID gerado em portaldev.pagbank.com.br → Tokens. Formato: 8-4-4-4-12 caracteres hex (ex: b803a327-7ec9-...)"
           >
             <div className="mb-3">
               <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
