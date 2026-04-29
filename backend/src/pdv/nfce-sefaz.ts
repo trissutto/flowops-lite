@@ -220,20 +220,23 @@ export async function transmitNfeSefazSp(input: {
   const idLote = input.idLote || String(Date.now()).slice(-15);
   const endpoint = SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente].autorizacao;
 
-  // Monta lote (indSinc=1 = síncrono)
-  const enviNFe = `<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
-<idLote>${idLote}</idLote>
-<indSinc>1</indSinc>
-${input.xmlAssinado}
-</enviNFe>`;
+  // ═══════════════════════════════════════════════════════════════════
+  // CRÍTICO: remover QUALQUER declaração <?xml ...?> do XML assinado
+  // antes de embutir no enviNFe. SEFAZ-SP recusa HTTP 400 se houver
+  // declaração XML em qualquer lugar que não seja o topo do documento.
+  // Também remove BOM e whitespace inicial.
+  // ═══════════════════════════════════════════════════════════════════
+  const xmlAssinadoLimpo = input.xmlAssinado
+    .replace(/^﻿/, '') // BOM
+    .replace(/<\?xml[^?]*\?>\s*/g, '') // qualquer XML declaration
+    .trim();
 
-  // SOAP envelope
-  const soap = `<?xml version="1.0" encoding="UTF-8"?>
-<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
-<soap:Body>
-<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">${enviNFe}</nfeDadosMsg>
-</soap:Body>
-</soap:Envelope>`;
+  // Monta lote (indSinc=1 = síncrono) — SEM quebras de linha extras,
+  // SEFAZ é sensível a whitespace entre tags do enviNFe
+  const enviNFe = `<enviNFe xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><idLote>${idLote}</idLote><indSinc>1</indSinc>${xmlAssinadoLimpo}</enviNFe>`;
+
+  // SOAP envelope — única declaração XML no topo do documento
+  const soap = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4">${enviNFe}</nfeDadosMsg></soap:Body></soap:Envelope>`;
 
   // Cria agent HTTPS com certificado cliente (mTLS)
   const { privateKeyPem, certPem } = extractA1FromPfx(
@@ -247,14 +250,7 @@ ${input.xmlAssinado}
     key: privateKeyPem,
     rejectUnauthorized: false, // SEFAZ tem cert cadeia complicada
     minVersion: 'TLSv1.2',
-    // Ciphers compatíveis com SEFAZ-SP (alguns endpoints rejeitam ciphers modernos default)
-    ciphers: [
-      'ECDHE-RSA-AES128-GCM-SHA256',
-      'ECDHE-RSA-AES256-GCM-SHA384',
-      'AES128-SHA',
-      'AES256-SHA',
-      'DES-CBC3-SHA',
-    ].join(':'),
+    // SEM ciphers customizados — Node 20+ default funciona em SEFAZ
   });
 
   // SP NFC-e — SOAP 1.2 com action embutido no Content-Type (asmx exige)
@@ -265,9 +261,11 @@ ${input.xmlAssinado}
   try {
     const resp = await axios.post(endpoint, soap, {
       headers: {
+        // SOAP 1.2 — SEM SOAPAction header separado (action vai no Content-Type)
         'Content-Type': `application/soap+xml; charset=utf-8; action="${SOAP_ACTION}"`,
         Accept: 'application/soap+xml, text/xml, */*',
-        SOAPAction: SOAP_ACTION,
+        // ASP.NET asmx às vezes recusa requests sem User-Agent
+        'User-Agent': 'LurdsOrderOne-NFCe/1.0',
       },
       httpsAgent: agent,
       timeout: 60000,
