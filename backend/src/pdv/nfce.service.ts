@@ -411,6 +411,7 @@ export class NfceService {
     <pag>${pagLines}</pag>
     <infAdic><infCpl>Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.</infCpl></infAdic>
   </infNFe>
+  ${this.buildInfNFeSupl(chave, ambiente, config.cscId, config.cscToken)}
 </NFe>`.trim();
 
     // ═══════════════════════════════════════════════════════════════════
@@ -422,6 +423,28 @@ export class NfceService {
     const xmlMinificado = xml.replace(/>\s+</g, '><').trim();
 
     return xmlMinificado;
+  }
+
+  /**
+   * Monta <infNFeSupl> — elemento OBRIGATÓRIO em NFC-e (mod=65).
+   * Contém o QR Code e a URL pública de consulta da nota.
+   * Posição: depois de </infNFe> e antes de <Signature> (cStat 394 sem isso).
+   */
+  private buildInfNFeSupl(
+    chave: string,
+    ambiente: string,
+    cscId: string,
+    cscToken: string,
+  ): string {
+    const qrUrl = buildQrCodeUrlNfce({
+      chave,
+      ambiente: ambiente as '1' | '2',
+      idCSC: cscId || '1',
+      cscToken: cscToken || '',
+    });
+    const urlChave = buildUrlConsultaNfce(ambiente as '1' | '2');
+    // CDATA pra escapar `&` da URL (SEFAZ exige)
+    return `<infNFeSupl><qrCode><![CDATA[${qrUrl}]]></qrCode><urlChave>${urlChave}</urlChave></infNFeSupl>`;
   }
 
   private esc(s: string): string {
@@ -502,6 +525,8 @@ export class NfceService {
       regime: cfgRaw.regime || '1',
       endereco: cfgRaw.endereco ? JSON.parse(cfgRaw.endereco) : {},
       serie: cfgRaw.serie || '1',
+      cscId: cfgRaw.cscId || '1',
+      cscToken: cfgRaw.cscToken || '',
     };
     const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
 
@@ -668,6 +693,8 @@ export class NfceService {
       regime: cfgRaw.regime || '1',
       endereco: cfgRaw.endereco ? JSON.parse(cfgRaw.endereco) : {},
       serie: cfgRaw.serie || '1',
+      cscId: cfgRaw.cscId || '1',
+      cscToken: cfgRaw.cscToken || '',
     };
 
     // Venda fake R$ 1,00
