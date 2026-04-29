@@ -459,6 +459,120 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * CREATE INDEX em uma tabela do Giga (DDL admin).
+   * Usado pra criar índice composto que acelera lookup de parcelas em aberto.
+   *
+   * Idempotente: verifica via SHOW INDEX antes — se já existe, retorna ok.
+   * Em MySQL 5.6+ o CREATE INDEX é ONLINE (não bloqueia escrita).
+   * Timeout estendido pra 10min (operação lenta em tabelas grandes).
+   */
+  async createIndexIfNotExists(input: {
+    table: string;
+    indexName: string;
+    columns: string[];
+  }): Promise<{
+    ok: boolean;
+    alreadyExists?: boolean;
+    durationMs?: number;
+    error?: string;
+    table: string;
+    indexName: string;
+    columns: string[];
+  }> {
+    if (!this.isWriteEnabled) {
+      return {
+        ok: false,
+        error: 'ERP_WRITE_ENABLED precisa estar ligado',
+        table: input.table,
+        indexName: input.indexName,
+        columns: input.columns,
+      };
+    }
+    if (!this.pool) {
+      return {
+        ok: false,
+        error: 'Pool ERP não inicializado',
+        table: input.table,
+        indexName: input.indexName,
+        columns: input.columns,
+      };
+    }
+
+    // Sanitiza nomes (apenas letras/números/_ permitidos pra evitar injection)
+    const safeRx = /^[a-zA-Z0-9_]+$/;
+    if (!safeRx.test(input.table) || !safeRx.test(input.indexName)) {
+      return {
+        ok: false,
+        error: 'Nome de tabela/índice inválido',
+        table: input.table,
+        indexName: input.indexName,
+        columns: input.columns,
+      };
+    }
+    for (const c of input.columns) {
+      if (!safeRx.test(c)) {
+        return {
+          ok: false,
+          error: `Nome de coluna inválido: ${c}`,
+          table: input.table,
+          indexName: input.indexName,
+          columns: input.columns,
+        };
+      }
+    }
+
+    const conn = await this.pool.getConnection();
+    try {
+      // 1. Verifica se já existe
+      const checkSql = `SHOW INDEX FROM \`${input.table}\` WHERE Key_name = ?`;
+      const [rows]: any = await conn.execute(checkSql, [input.indexName]);
+      if (rows && rows.length > 0) {
+        this.logger.log(
+          `[createIndex] ${input.table}.${input.indexName} JÁ EXISTE (${rows.length} colunas)`,
+        );
+        return {
+          ok: true,
+          alreadyExists: true,
+          table: input.table,
+          indexName: input.indexName,
+          columns: input.columns,
+        };
+      }
+
+      // 2. Cria
+      const colList = input.columns.map((c) => `\`${c}\``).join(', ');
+      const createSql = `CREATE INDEX \`${input.indexName}\` ON \`${input.table}\` (${colList})`;
+      this.logger.log(`[createIndex] Executando: ${createSql}`);
+      const t0 = Date.now();
+      await conn.execute(createSql);
+      const durationMs = Date.now() - t0;
+      this.logger.log(
+        `[createIndex] ${input.table}.${input.indexName} CRIADO em ${durationMs}ms`,
+      );
+      return {
+        ok: true,
+        alreadyExists: false,
+        durationMs,
+        table: input.table,
+        indexName: input.indexName,
+        columns: input.columns,
+      };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[createIndex] FALHOU: ${msg}`);
+      return {
+        ok: false,
+        error: msg,
+        table: input.table,
+        indexName: input.indexName,
+        columns: input.columns,
+      };
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * BAIXA PARCELA DE CREDIÁRIO — UPDATE direto na tabela `movimento` do Giga.
    *
    * Marca a parcela como paga (PAGO='S' + DATA_PAGAMENTO=hoje + VALOR_PAGO=valorRecebido).

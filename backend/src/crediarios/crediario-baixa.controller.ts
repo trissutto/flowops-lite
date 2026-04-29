@@ -10,11 +10,17 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CrediarioBaixaService } from './crediario-baixa.service';
+import { ErpService } from '../erp/erp.service';
+import { CrediariosService } from './crediarios.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('crediarios/baixa')
 export class CrediarioBaixaController {
-  constructor(private readonly svc: CrediarioBaixaService) {}
+  constructor(
+    private readonly svc: CrediarioBaixaService,
+    private readonly erp: ErpService,
+    private readonly crediarios: CrediariosService,
+  ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
@@ -34,6 +40,33 @@ export class CrediarioBaixaController {
     const name = req?.user?.storeName || code || '';
     if (!code) throw new BadRequestException('Usuário sem loja vinculada');
     return { code, name };
+  }
+
+  // ── Admin: cria índice composto na tabela movimento do Giga ──────
+  // Acelera 10-100x as queries de listagem de parcelas em aberto.
+  // Idempotente — se já existir, retorna ok sem fazer nada.
+
+  @Post('admin/create-index-movimento')
+  async createIndexMovimento(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+
+    // Detecta colunas reais (PAGO e VENCIMENTO podem ter nome diferente
+    // dependendo da instalação Giga)
+    const map = await this.crediarios.detectColumns(true);
+    if (!map.pago || !map.vencimento) {
+      return {
+        ok: false,
+        error: `Colunas pago/vencimento não detectadas. Detectadas: ${
+          Object.entries(map).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ')
+        }`,
+      };
+    }
+
+    return this.erp.createIndexIfNotExists({
+      table: 'movimento',
+      indexName: 'idx_lurdsorder_pago_vencimento',
+      columns: [map.pago, map.vencimento],
+    });
   }
 
   // ── Config (admin) ────────────────────────────────────────────────

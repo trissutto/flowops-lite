@@ -19,7 +19,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Power, Calculator, FileWarning, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Save, Power, Calculator, FileWarning, CheckCircle2, Database, Loader2 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Config = {
@@ -41,6 +41,24 @@ export default function CrediarioJurosConfigPage() {
   // Simulação ao vivo
   const [simValor, setSimValor] = useState('100,00');
   const [simDias, setSimDias] = useState('30');
+
+  // Índice
+  const [indexLoading, setIndexLoading] = useState(false);
+  const [indexResult, setIndexResult] = useState<any>(null);
+
+  async function createIndex() {
+    if (!confirm('Criar índice composto na tabela `movimento` do Giga?\n\nFunciona como ONLINE em MySQL 5.6+ (sem travar). Em versões antigas, pode bloquear escrita por alguns minutos.\n\nRecomendado fora do horário comercial.')) return;
+    setIndexLoading(true);
+    setIndexResult(null);
+    try {
+      const r = await api<any>('/crediarios/baixa/admin/create-index-movimento', { method: 'POST' });
+      setIndexResult(r);
+    } catch (e: any) {
+      setIndexResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setIndexLoading(false);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -252,6 +270,78 @@ export default function CrediarioJurosConfigPage() {
                 <b className="tabular-nums text-emerald-700">R$ {brl(totalCalc)}</b>
               </div>
             </div>
+          </div>
+
+          {/* ÍNDICE GIGA — performance da listagem de parcelas */}
+          <div className="bg-white rounded-2xl shadow-sm p-5 border-2 border-amber-200">
+            <h2 className="text-lg font-bold text-amber-900 mb-1 flex items-center gap-2">
+              <Database size={18} /> Performance — Índice no Giga
+            </h2>
+            <p className="text-xs text-gray-600 mb-3">
+              Cria índice composto <code className="bg-gray-100 px-1 rounded">(PAGO, VENCIMENTO)</code> na tabela <code className="bg-gray-100 px-1 rounded">movimento</code>.
+              Acelera 10-100x as queries da tela RECEBIMENTOS.
+              <br />
+              <b className="text-amber-700">Recomendação:</b> rodar fora do horário comercial. Operação demora 1-5 min em tabelas grandes. Idempotente — se já existe, não faz nada.
+            </p>
+            <button
+              onClick={createIndex}
+              disabled={indexLoading}
+              className="w-full px-4 py-3 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {indexLoading ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Criando índice… (até 5 min, NÃO feche a página)
+                </>
+              ) : (
+                <>
+                  <Database size={18} />
+                  Criar índice no Giga
+                </>
+              )}
+            </button>
+
+            {indexResult && (
+              <div
+                className={`mt-3 rounded-lg p-3 text-sm ${
+                  indexResult.ok
+                    ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+                    : 'bg-red-50 border border-red-300 text-red-900'
+                }`}
+              >
+                {indexResult.ok ? (
+                  <>
+                    <div className="font-bold">
+                      ✓ {indexResult.alreadyExists ? 'Índice já existia' : 'Índice criado!'}
+                    </div>
+                    {indexResult.durationMs != null && (
+                      <div className="text-xs mt-1">
+                        Tempo: {(indexResult.durationMs / 1000).toFixed(1)}s
+                      </div>
+                    )}
+                    {indexResult.columns && (
+                      <div className="text-xs mt-1">
+                        Colunas: <code>{indexResult.columns.join(', ')}</code>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="font-bold">✗ Falha</div>
+                    <div className="text-xs mt-1">{indexResult.error}</div>
+                    {!indexResult.error?.includes('ERP_WRITE_ENABLED') && (
+                      <div className="text-xs mt-2 italic">
+                        Pode tentar de novo. Se erro persistir, peça pro técnico do Giga rodar manualmente:
+                        <pre className="mt-1 bg-white p-2 rounded text-[10px] overflow-x-auto">
+{`CREATE INDEX idx_lurdsorder_pago_vencimento
+  ON movimento (PAGO, VENCIMENTO);`}
+                        </pre>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* SAVE */}
