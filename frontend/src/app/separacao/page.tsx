@@ -48,7 +48,21 @@ import {
   Zap,
   Truck,
   Plane,
+  ArrowLeft,
+  LayoutDashboard,
+  Globe2,
+  BarChart3,
+  Settings,
 } from 'lucide-react';
+import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
+
+const SEP_NAV: AdminNavItem[] = [
+  { key: 'dashboard', label: 'Dashboard', href: '/',           icon: LayoutDashboard },
+  { key: 'site',      label: 'Site',      href: '/site',       icon: Globe2 },
+  { key: 'loja',      label: 'Loja',      href: '/loja',       icon: StoreIcon },
+  { key: 'gestao',    label: 'Gestão',    href: '/retaguarda', icon: BarChart3 },
+  { key: 'config',    label: 'Config',    href: '/config',     icon: Settings },
+];
 
 interface PickOrderLite {
   storeCode: string | null;
@@ -189,6 +203,29 @@ function SeparacaoPageInner() {
   // Alimenta o badge vermelho nas linhas e o banner no topo.
   const [issuesByWcId, setIssuesByWcId] = useState<Record<number, ActiveIssue[]>>({});
   const [recalculating, setRecalculating] = useState<Record<number, boolean>>({});
+
+  // Contadores por status pra badge nas abas (atualiza a cada 30s).
+  // Mapeia FILTROS.slug → total. "enviados" é painel próprio (sem contador).
+  const [tabCounts, setTabCounts] = useState<Record<string, number>>({});
+
+  async function loadCounts() {
+    try {
+      const r = await api<{ byStatus: Record<string, { name: string; total: number }> }>('/orders/wc/counts');
+      const next: Record<string, number> = {};
+      next['processing']  = r.byStatus['processing']?.total ?? 0;
+      next['pending']     = r.byStatus['pending']?.total ?? 0;
+      next['on-hold']     = r.byStatus['on-hold']?.total ?? 0;
+      next['separacao']   = r.byStatus['separacao']?.total ?? 0;
+      next['em-transito'] = r.byStatus['shipped']?.total ?? 0;
+      next['completed']   = r.byStatus['completed']?.total ?? 0;
+      setTabCounts(next);
+    } catch { /* silencioso */ }
+  }
+  useEffect(() => {
+    loadCounts();
+    const t = setInterval(loadCounts, 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     load();
@@ -858,42 +895,69 @@ function SeparacaoPageInner() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Package className="w-6 h-6" /> Emissão de Separações
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Selecione os pedidos e clique em <b className="text-green-700">Enviar separação</b> — em 1 clique o sistema calcula a loja, registra a separação e dispara o WhatsApp.
-          </p>
-        </div>
-        <button
-          onClick={load}
-          className="px-3 py-2 bg-white border rounded hover:bg-slate-50 flex items-center gap-2 text-sm"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
-        </button>
-      </div>
-
-      {/* Filtros de status */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {FILTROS.map((f) => (
-          <button
-            key={f.slug}
-            onClick={() => setStatus(f.slug)}
-            className={`px-3 py-1.5 rounded text-sm border transition inline-flex items-center gap-1.5 ${
-              status === f.slug
-                ? 'bg-brand text-white border-brand'
-                : 'bg-white hover:bg-slate-50'
-            }`}
+    <AdminShell
+      title="Pedidos · Separação"
+      subtitle={
+        <span>
+          Selecione os pedidos e clique em <b className="text-emerald-700">Enviar separação</b> — em 1 clique o sistema calcula a loja, registra a separação e dispara o WhatsApp.
+        </span>
+      }
+      navItems={SEP_NAV}
+      activeKey="site"
+      noSidebar
+      actions={
+        <>
+          <Link
+            href="/"
+            className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
           >
-            {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
-            {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
-            {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
-            {f.label}
+            <ArrowLeft className="w-4 h-4" />
+            Home
+          </Link>
+          <button
+            onClick={() => { load(); loadCounts(); }}
+            className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
           </button>
-        ))}
+        </>
+      }
+    >
+      {/* Filtros de status com contadores */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {FILTROS.map((f) => {
+          const count = tabCounts[f.slug];
+          const active = status === f.slug;
+          return (
+            <button
+              key={f.slug}
+              onClick={() => setStatus(f.slug)}
+              className={`px-3 py-2 rounded-lg text-sm border transition inline-flex items-center gap-2 font-semibold ${
+                active
+                  ? 'bg-[#0f7a82] text-white border-[#0f7a82] shadow-sm'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+              }`}
+            >
+              {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
+              {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
+              {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
+              <span>{f.label}</span>
+              {count != null && f.slug !== 'enviados' && (
+                <span
+                  className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full min-w-[22px] text-center ${
+                    active
+                      ? 'bg-white/25 text-white'
+                      : count > 0
+                      ? 'bg-rose-100 text-rose-700'
+                      : 'bg-slate-100 text-slate-500'
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Aba "Enviados por Loja" — mostra tracking do dia agrupado por filial,
@@ -1524,6 +1588,6 @@ function SeparacaoPageInner() {
       )}
       </>
       )}
-    </div>
+    </AdminShell>
   );
 }
