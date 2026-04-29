@@ -14,7 +14,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Save, Lock, Unlock, FileWarning, CheckCircle2, Upload,
-  Eye, EyeOff, Store, Receipt,
+  Eye, EyeOff, Store, Receipt, FlaskConical, ChevronDown, ChevronUp, XCircle, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -97,6 +97,12 @@ export default function NfceConfigPage() {
   const [pfxFileName, setPfxFileName] = useState('');
   const [cscTokenChanged, setCscTokenChanged] = useState(false);
 
+  // Teste de emissão
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [showXmlEnviado, setShowXmlEnviado] = useState(false);
+  const [showXmlResposta, setShowXmlResposta] = useState(false);
+
   const loadStatus = useCallback(async () => {
     try {
       const data = await api<StatusItem[]>('/pdv/nfce/status');
@@ -135,7 +141,28 @@ export default function NfceConfigPage() {
 
   function pickStore(storeCode: string) {
     setSelectedStore(storeCode);
+    setTestResult(null);
+    setShowXmlEnviado(false);
+    setShowXmlResposta(false);
     loadCfg(storeCode);
+  }
+
+  async function testarEmissao() {
+    if (!cfg.ready) return;
+    setTesting(true);
+    setTestResult(null);
+    setMsg(null);
+    try {
+      const r = await api<any>(`/pdv/nfce/test/${cfg.storeCode}`, { method: 'POST' });
+      setTestResult(r);
+    } catch (e: any) {
+      setTestResult({
+        status: 'error',
+        motivo: e?.message || String(e),
+      });
+    } finally {
+      setTesting(false);
+    }
   }
 
   function handleFile(file: File) {
@@ -508,6 +535,157 @@ export default function NfceConfigPage() {
                     </button>
                   </div>
                 </div>
+              </Card>
+
+              {/* CARD DE TESTE DE EMISSÃO */}
+              <Card
+                title="🧪 Testar Emissão NFC-e"
+                subtitle="Emite uma NFC-e fictícia (R$ 1,00) pra validar config + certificado + transmissão SEFAZ. Não afeta vendas reais."
+              >
+                {!cfg.ready && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
+                    <FileWarning size={14} className="inline mr-1" />
+                    Salve a configuração completa antes de testar (CNPJ, IE, CSC, certificado A1).
+                  </div>
+                )}
+
+                <button
+                  onClick={testarEmissao}
+                  disabled={!cfg.ready || testing}
+                  className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition"
+                >
+                  <FlaskConical size={18} />
+                  {testing ? 'Transmitindo SEFAZ…' : 'Testar Emissão Agora'}
+                </button>
+
+                {testResult && (
+                  <div className="mt-4 space-y-3">
+                    {/* STATUS PRINCIPAL */}
+                    <div
+                      className={`rounded-xl p-4 border-2 ${
+                        testResult.status === 'authorized'
+                          ? 'bg-emerald-50 border-emerald-400'
+                          : testResult.status === 'rejected'
+                          ? 'bg-red-50 border-red-400'
+                          : 'bg-amber-50 border-amber-400'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        {testResult.status === 'authorized' ? (
+                          <CheckCircle2 size={28} className="text-emerald-600 shrink-0" />
+                        ) : testResult.status === 'rejected' ? (
+                          <XCircle size={28} className="text-red-600 shrink-0" />
+                        ) : (
+                          <AlertTriangle size={28} className="text-amber-600 shrink-0" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div
+                            className={`font-bold text-lg ${
+                              testResult.status === 'authorized'
+                                ? 'text-emerald-900'
+                                : testResult.status === 'rejected'
+                                ? 'text-red-900'
+                                : 'text-amber-900'
+                            }`}
+                          >
+                            {testResult.status === 'authorized'
+                              ? '✓ NFC-e AUTORIZADA'
+                              : testResult.status === 'rejected'
+                              ? '✗ REJEITADA pela SEFAZ'
+                              : '⚠ Erro técnico'}
+                          </div>
+                          {testResult.cStat && (
+                            <div className="text-xs font-mono mt-1">
+                              cStat: <strong>{testResult.cStat}</strong>
+                            </div>
+                          )}
+                          {testResult.motivo && (
+                            <div className="text-sm mt-1 text-gray-800 break-words">
+                              {testResult.motivo}
+                            </div>
+                          )}
+                          {testResult.protocolo && (
+                            <div className="text-xs font-mono mt-1 text-gray-700">
+                              Protocolo: <strong>{testResult.protocolo}</strong>
+                            </div>
+                          )}
+                          {testResult.chave && (
+                            <div className="text-xs font-mono mt-1 text-gray-700 break-all">
+                              Chave: {testResult.chave}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* QR CODE */}
+                    {testResult.qrUrl && (
+                      <div className="bg-white border rounded-xl p-3">
+                        <div className="text-xs font-bold text-gray-700 mb-2 uppercase">
+                          QR Code da NFC-e
+                        </div>
+                        <div className="flex flex-col md:flex-row gap-3 items-start">
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(testResult.qrUrl)}`}
+                            alt="QR NFC-e"
+                            className="border rounded shrink-0"
+                          />
+                          <div className="text-xs text-gray-600 break-all flex-1 min-w-0">
+                            <div className="font-mono">{testResult.qrUrl}</div>
+                            {testResult.urlConsulta && (
+                              <div className="mt-2">
+                                <a
+                                  href={testResult.urlConsulta}
+                                  target="_blank"
+                                  rel="noopener"
+                                  className="text-rose-700 underline"
+                                >
+                                  Consultar na SEFAZ →
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* XML ENVIADO */}
+                    {testResult.xmlEnviado && (
+                      <div className="bg-gray-50 border rounded-xl">
+                        <button
+                          onClick={() => setShowXmlEnviado((s) => !s)}
+                          className="w-full p-3 flex items-center justify-between text-sm font-bold text-gray-700 hover:bg-gray-100"
+                        >
+                          <span>XML enviado</span>
+                          {showXmlEnviado ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                        {showXmlEnviado && (
+                          <pre className="text-[10px] font-mono p-3 border-t bg-white overflow-x-auto max-h-64 whitespace-pre-wrap break-all">
+                            {testResult.xmlEnviado}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+
+                    {/* RESPOSTA SEFAZ */}
+                    {testResult.xmlResposta && (
+                      <div className="bg-gray-50 border rounded-xl">
+                        <button
+                          onClick={() => setShowXmlResposta((s) => !s)}
+                          className="w-full p-3 flex items-center justify-between text-sm font-bold text-gray-700 hover:bg-gray-100"
+                        >
+                          <span>Resposta SEFAZ</span>
+                          {showXmlResposta ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </button>
+                        {showXmlResposta && (
+                          <pre className="text-[10px] font-mono p-3 border-t bg-white overflow-x-auto max-h-64 whitespace-pre-wrap break-all">
+                            {testResult.xmlResposta}
+                          </pre>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </Card>
 
               <div className="sticky bottom-3 bg-white shadow-lg rounded-2xl p-4 flex items-center justify-between gap-4">

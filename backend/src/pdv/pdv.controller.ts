@@ -110,6 +110,18 @@ export class PdvController {
    * POST /pdv/nfce/config — salva config (admin only).
    * Body: { storeCode, ambiente, cnpj, ie, csc..., certPfxB64?, certPfxPass? }
    */
+  /**
+   * POST /pdv/nfce/test/:storeCode — emite NFC-e fictícia pra testar
+   * config + cert + transmissão SEFAZ. Não afeta vendas reais.
+   * Admin only.
+   */
+  @Post('nfce/test/:storeCode')
+  testNfce(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.nfce.testEmit(storeCode);
+  }
+
   @Post('nfce/config')
   async setNfceConfig(@Req() req: any, @Body() body: any) {
     if (req?.user?.role !== 'admin') {

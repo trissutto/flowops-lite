@@ -1,6 +1,13 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import * as crypto from 'crypto';
+import * as QRCode from 'qrcode';
+import {
+  signXmlNfeWithA1,
+  buildQrCodeUrlNfce,
+  buildUrlConsultaNfce,
+  transmitNfeSefazSp,
+} from './nfce-sefaz';
 
 /**
  * NFC-e (NFe modelo 65) — emissão fiscal de cupom no PDV.
@@ -409,6 +416,8 @@ export class NfceService {
     xml: string;
     protocolo?: string;
     motivo?: string;
+    qrUrl?: string;
+    urlConsulta?: string;
   }> {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
@@ -485,12 +494,244 @@ export class NfceService {
       return { status: 'preview', chave, numero, serie: config.serie, xml };
     }
 
-    // TODO: assinar XML com cert A1 + transmitir SEFAZ-SP
-    this.logger.warn(
-      `[nfce] Loja ${sale.storeCode}: certificado A1 carregado mas transmissão SEFAZ ainda não plugada. Stub mode.`,
+    // ── EMISSÃO REAL: assinar + transmitir SEFAZ-SP ──
+    let xmlAssinado: string;
+    try {
+      xmlAssinado = signXmlNfeWithA1({
+        xml,
+        pfxBase64: cfgRaw.certPfxB64,
+        pfxPassword: cfgRaw.certPfxPass || '',
+      });
+    } catch (e: any) {
+      this.logger.error(`[nfce] FALHA assinatura: ${e?.message}`);
+      await (this.prisma as any).pdvSale.update({
+        where: { id: sale.id },
+        data: { nfceStatus: 'rejected', nfceMotivo: `Erro assinatura: ${e?.message}` },
+      });
+      return {
+        status: 'rejected',
+        chave,
+        numero,
+        serie: config.serie,
+        xml,
+        motivo: `Erro ao assinar XML: ${e?.message}`,
+      };
+    }
+
+    const transmit = await transmitNfeSefazSp({
+      xmlAssinado,
+      ambiente: config.ambiente as '1' | '2',
+      pfxBase64: cfgRaw.certPfxB64,
+      pfxPassword: cfgRaw.certPfxPass || '',
+    });
+
+    if (!transmit.success) {
+      this.logger.error(
+        `[nfce] SEFAZ rejeitou: cStat=${transmit.cStat} ${transmit.xMotivo}`,
+      );
+      await (this.prisma as any).pdvSale.update({
+        where: { id: sale.id },
+        data: {
+          nfceStatus: 'rejected',
+          nfceXml: xmlAssinado,
+          nfceMotivo: `${transmit.cStat}: ${transmit.xMotivo}`,
+        },
+      });
+      return {
+        status: 'rejected',
+        chave,
+        numero,
+        serie: config.serie,
+        xml: xmlAssinado,
+        motivo: `${transmit.cStat}: ${transmit.xMotivo}`,
+      };
+    }
+
+    // AUTORIZADA — gera QR Code + salva XML autorizado (procNFe)
+    const qrUrl = buildQrCodeUrlNfce({
+      chave,
+      ambiente: config.ambiente as '1' | '2',
+      idCSC: cfgRaw.cscId || '1',
+      cscToken: cfgRaw.cscToken,
+    });
+    const urlConsulta = buildUrlConsultaNfce(config.ambiente as '1' | '2');
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: {
+        nfceStatus: 'authorized',
+        nfceXml: transmit.xmlAutorizado || xmlAssinado,
+        nfceProtocolo: transmit.protocolo,
+        nfceQrUrl: qrUrl,
+        nfceUrlConsulta: urlConsulta,
+        nfceAutorizadaEm: transmit.dhRecbto ? new Date(transmit.dhRecbto) : new Date(),
+      },
+    });
+
+    this.logger.log(
+      `[nfce] AUTORIZADA: chave=${chave} prot=${transmit.protocolo} loja=${sale.storeCode}`,
     );
 
-    return { status: 'preview', chave, numero, serie: config.serie, xml };
+    return {
+      status: 'authorized',
+      chave,
+      numero,
+      serie: config.serie,
+      xml: transmit.xmlAutorizado || xmlAssinado,
+      protocolo: transmit.protocolo,
+      qrUrl,
+      urlConsulta,
+    };
+  }
+
+  /**
+   * TESTE — emite NFC-e fictícia (1 item de R$1) pra validar config + cert + SEFAZ.
+   * Não persiste no banco de vendas. Retorna tudo (XML, status, motivo, QR).
+   */
+  async testEmit(storeCode: string): Promise<{
+    status: 'authorized' | 'rejected' | 'error';
+    chave?: string;
+    cStat?: string;
+    motivo?: string;
+    protocolo?: string;
+    qrUrl?: string;
+    urlConsulta?: string;
+    xmlEnviado?: string;
+    xmlResposta?: string;
+    error?: string;
+  }> {
+    const cfgRaw: any = await (this.prisma as any).nfceConfig.findUnique({
+      where: { storeCode },
+    });
+    if (!cfgRaw) {
+      return { status: 'error', error: 'NFC-e não configurada pra essa loja' };
+    }
+    const ready = !!(cfgRaw.cnpj && cfgRaw.ie && cfgRaw.cscToken && cfgRaw.certPfxB64);
+    if (!ready) {
+      const faltam = [
+        !cfgRaw.cnpj && 'CNPJ',
+        !cfgRaw.ie && 'IE',
+        !cfgRaw.cscToken && 'CSC Token',
+        !cfgRaw.certPfxB64 && 'Certificado A1',
+      ].filter(Boolean).join(', ');
+      return { status: 'error', error: `Config incompleta. Faltam: ${faltam}` };
+    }
+
+    const config = {
+      ambiente: cfgRaw.ambiente || '2',
+      uf: cfgRaw.uf || 'SP',
+      cnpj: cfgRaw.cnpj,
+      razaoSocial: cfgRaw.razaoSocial || '',
+      fantasia: cfgRaw.fantasia || '',
+      ie: cfgRaw.ie || '',
+      regime: cfgRaw.regime || '1',
+      endereco: cfgRaw.endereco ? JSON.parse(cfgRaw.endereco) : {},
+      serie: cfgRaw.serie || '1',
+    };
+
+    // Venda fake R$ 1,00
+    const fakeSale: any = {
+      id: 'TEST' + Date.now().toString(36).toUpperCase(),
+      storeCode,
+      total: 1.0,
+      desconto: 0,
+      subtotal: 1.0,
+      customerCpf: null,
+      customerName: 'CONSUMIDOR TESTE',
+      vendedorName: 'TESTE',
+      finalizedAt: new Date(),
+      items: [
+        {
+          id: 'item-1',
+          sku: 'TESTE',
+          descricao: 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL',
+          qty: 1,
+          precoUnit: 1.0,
+          desconto: 0,
+          total: 1.0,
+        },
+      ],
+      payments: [
+        { method: 'dinheiro', valor: 1.0, details: null },
+      ],
+    };
+
+    const numero = await this.nextNumero(storeCode);
+    const chave = this.buildChave({
+      cUF: '35',
+      cnpj: config.cnpj.replace(/\D/g, ''),
+      serie: config.serie,
+      numero,
+      dataEmissao: new Date(),
+    });
+
+    let xml: string;
+    try {
+      xml = await this.buildXml(fakeSale, config, chave, numero);
+    } catch (e: any) {
+      return { status: 'error', error: `Erro ao montar XML: ${e?.message}` };
+    }
+
+    let xmlAssinado: string;
+    try {
+      xmlAssinado = signXmlNfeWithA1({
+        xml,
+        pfxBase64: cfgRaw.certPfxB64,
+        pfxPassword: cfgRaw.certPfxPass || '',
+      });
+    } catch (e: any) {
+      return {
+        status: 'error',
+        error: `Erro ao assinar (verifica senha do certificado): ${e?.message}`,
+      };
+    }
+
+    const transmit = await transmitNfeSefazSp({
+      xmlAssinado,
+      ambiente: config.ambiente as '1' | '2',
+      pfxBase64: cfgRaw.certPfxB64,
+      pfxPassword: cfgRaw.certPfxPass || '',
+    });
+
+    if (!transmit.success) {
+      return {
+        status: 'rejected',
+        chave,
+        cStat: transmit.cStat,
+        motivo: transmit.xMotivo,
+        xmlEnviado: transmit.xmlEnviado,
+        xmlResposta: transmit.xmlResposta,
+        error: transmit.error,
+      };
+    }
+
+    const qrUrl = buildQrCodeUrlNfce({
+      chave,
+      ambiente: config.ambiente as '1' | '2',
+      idCSC: cfgRaw.cscId || '1',
+      cscToken: cfgRaw.cscToken,
+    });
+    const urlConsulta = buildUrlConsultaNfce(config.ambiente as '1' | '2');
+
+    return {
+      status: 'authorized',
+      chave,
+      cStat: transmit.cStat,
+      motivo: transmit.xMotivo,
+      protocolo: transmit.protocolo,
+      qrUrl,
+      urlConsulta,
+      xmlEnviado: transmit.xmlEnviado,
+      xmlResposta: transmit.xmlResposta,
+    };
+  }
+
+  /**
+   * Gera PNG (base64) do QR Code NFC-e a partir da URL.
+   * Usado pra incluir no DANFE.
+   */
+  async qrCodePng(url: string): Promise<string> {
+    return QRCode.toDataURL(url, { width: 200, margin: 1 });
   }
 
   buildCupomText(sale: any, chave: string): string {

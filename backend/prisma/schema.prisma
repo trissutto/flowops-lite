@@ -879,8 +879,14 @@ model PdvSale {
   nfceNumber      String?  @map("nfce_number")
   nfceSerie       String?  @map("nfce_serie")
   nfceChave       String?  @map("nfce_chave")
-  nfceXml         String?  @map("nfce_xml")
+  nfceXml         String?  @map("nfce_xml") @db.Text
   nfcePdfUrl      String?  @map("nfce_pdf_url")
+  // Pós-emissão SEFAZ
+  nfceProtocolo   String?  @map("nfce_protocolo")
+  nfceMotivo      String?  @map("nfce_motivo") @db.Text
+  nfceQrUrl       String?  @map("nfce_qr_url") @db.Text
+  nfceUrlConsulta String?  @map("nfce_url_consulta")
+  nfceAutorizadaEm DateTime? @map("nfce_autorizada_em")
   // Envio
   sentEmailAt     DateTime? @map("sent_email_at")
   sentWhatsappAt  DateTime? @map("sent_whatsapp_at")
