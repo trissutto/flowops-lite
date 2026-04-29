@@ -47,6 +47,7 @@ import {
   AlertCircle,
   Zap,
   Truck,
+  Plane,
 } from 'lucide-react';
 
 interface PickOrderLite {
@@ -131,6 +132,12 @@ const FILTROS = [
   // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
   // precise ir pra /retaguarda/enviados-hoje só pra ver quem despachou.
   { slug: 'enviados',    label: 'Enviados por Loja',   color: 'bg-emerald-100 text-emerald-800' },
+  // Em trânsito: pedidos com tracking ativo e ainda não entregues. Quando a
+  // integração Correios ficar pronta, esses pedidos receberão atualizações
+  // em tempo real (postado → saiu pra entrega → entregue).
+  { slug: 'em-transito', label: 'Em trânsito',         color: 'bg-sky-100 text-sky-800' },
+  // Concluídos = WC status=completed (entregue/finalizado).
+  { slug: 'completed',   label: 'Concluídos',          color: 'bg-slate-100 text-slate-700' },
 ];
 
 // Mapa de status destino permitidos pra mudança em bloco, com label.
@@ -677,6 +684,23 @@ function SeparacaoPageInner() {
       setLoading(false);
       return;
     }
+    // "em-transito" mapeia pro status custom WC "shipped" (plugin Correios BR
+    // — ícone roxo no admin do WP). Quando a integração de tracking em tempo
+    // real ficar pronta, esses pedidos receberão atualizações automáticas
+    // (postado → saiu pra entrega → entregue) via webhook dos Correios.
+    if (status === 'em-transito') {
+      try {
+        const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
+        if (search) q.set('search', search);
+        const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
+        setOrders(res.data);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     try {
       const q = new URLSearchParams({ status, per_page: '50' });
       if (search) q.set('search', search);
@@ -865,6 +889,8 @@ function SeparacaoPageInner() {
             }`}
           >
             {f.slug === 'enviados' && <Truck className="w-3.5 h-3.5" />}
+            {f.slug === 'em-transito' && <Plane className="w-3.5 h-3.5" />}
+            {f.slug === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
             {f.label}
           </button>
         ))}
