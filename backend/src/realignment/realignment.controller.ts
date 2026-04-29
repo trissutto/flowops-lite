@@ -237,6 +237,31 @@ export class RealignmentController {
   }
 
   /**
+   * Loja origem reporta que NÃO encontrou a peça fisicamente.
+   * Body: { motivo: string }
+   * Item sai da fila de pendentes mas fica visível pra matriz revisar.
+   */
+  @Patch(':id/not-found')
+  async reportNotFound(
+    @Param('id') id: string,
+    @Body() body: { motivo?: string },
+    @Req() req: any,
+  ) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.userId || req?.user?.sub || null;
+    if (role !== 'store' || !storeId) {
+      throw new ForbiddenException('Apenas loja pode reportar');
+    }
+    return this.svc.reportNotFound({
+      transferId: id,
+      storeId,
+      userId,
+      motivo: String(body?.motivo || '').trim(),
+    });
+  }
+
+  /**
    * Loja REVERTE uma ordem já marcada como enviada — volta pra fila de
    * pendentes. Usada quando o operador clicou errado em "Enviei".
    */

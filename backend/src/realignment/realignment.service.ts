@@ -975,6 +975,69 @@ export class RealignmentService {
    *   - Limpa `realignmentSentAt`, `realignmentSentByUserId` e `shipmentId`.
    *   - Emite socket pra retaguarda + outros dispositivos da loja.
    */
+  /**
+   * Loja origem reporta que NÃO encontrou a peça fisicamente. Não é erro
+   * operacional — é informação pra matriz revisar (estoque divergente,
+   * peça sumida, etiqueta errada, etc).
+   *
+   * Status: realignment_status = 'not_found' + grava motivo + timestamp.
+   * Item sai da fila de pendentes mas APARECE na visão admin pra revisão.
+   */
+  async reportNotFound(input: {
+    transferId: string;
+    storeId: string;
+    userId?: string;
+    motivo: string;
+  }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true },
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    // Verifica que a ordem é da loja
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT id, tipo, ref_code as "refCode",
+             loja_origem_code as "lojaOrigemCode",
+             loja_destino_code as "lojaDestinoCode",
+             realignment_status as "realignmentStatus"
+      FROM transfer_orders
+      WHERE id = ${input.transferId}
+      LIMIT 1
+    `;
+    const order = rows[0];
+    if (!order) throw new NotFoundException('Ordem não encontrada');
+    if (order.tipo !== 'REALINHAMENTO')
+      throw new BadRequestException('Ordem não é de realinhamento');
+    if (order.lojaOrigemCode !== store.code)
+      throw new ForbiddenException('Essa ordem não é da sua loja');
+    if (order.realignmentStatus === 'sent')
+      throw new BadRequestException('Item já foi enviado — não dá pra reportar como não encontrado');
+
+    const motivo = String(input.motivo || '').trim();
+    const now = new Date();
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE transfer_orders
+        SET realignment_status = 'not_found',
+            realignment_not_found_at = ${now},
+            realignment_not_found_note = ${motivo || null},
+            realignment_not_found_by_user_id = ${input.userId ?? null}
+        WHERE id = ${input.transferId}
+      `;
+      this.logger.log(
+        `[reportNotFound] OK transferId=${input.transferId} ref=${order.refCode} motivo="${motivo}"`,
+      );
+    } catch (e: any) {
+      this.logger.error(`[reportNotFound] failed: ${e?.message}`);
+      throw new BadRequestException(
+        `Erro ao reportar peça não encontrada: ${e?.message}. Provável: rodar 'prisma db push' no Railway.`,
+      );
+    }
+
+    return { ok: true, id: input.transferId, reportedAt: now.toISOString() };
+  }
+
   async markAsUnsent(input: {
     transferId: string;
     storeId: string;

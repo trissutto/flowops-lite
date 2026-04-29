@@ -353,6 +353,29 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }
 
+  /** Filial reporta que não encontrou a peça fisicamente (estoque divergente,
+   *  etiqueta errada, peça sumida). Pede motivo e marca pra matriz revisar. */
+  async function reportNotFound(item: RealignmentItem) {
+    const motivo = window.prompt(
+      `❌ Não achou a peça?\n\n` +
+        `${item.refCode} ${item.cor || ''} ${item.tamanho || ''}\n\n` +
+        `Por que? (ex: peça não está na arara, etiqueta errada, estoque divergente)`,
+      '',
+    );
+    if (motivo === null) return; // cancelou
+    try {
+      await api(`/realignment/${item.id}/not-found`, {
+        method: 'PATCH',
+        body: JSON.stringify({ motivo: motivo.trim() }),
+      });
+      // Remove dos pendentes — vai pra fila admin
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      pushToast('Reportado como não encontrado · matriz vai revisar');
+    } catch (err: any) {
+      pushToast(`Erro: ${err?.message ?? 'falha ao reportar'}`);
+    }
+  }
+
   async function markSent(itemId: string) {
     setSendingIds((prev) => new Set(prev).add(itemId));
     try {
@@ -817,6 +840,7 @@ export default function MinhaLojaRealinhamentoPage() {
                           revertingIds={revertingIds}
                           onSend={markSent}
                           onRevert={markUnsent}
+                          onReportNotFound={reportNotFound}
                           viewMode={view}
                         />
                       </div>
@@ -923,6 +947,7 @@ function RealignGrid({
   revertingIds,
   onSend,
   onRevert,
+  onReportNotFound,
   viewMode,
 }: {
   g: {
@@ -938,6 +963,7 @@ function RealignGrid({
   revertingIds: Set<string>;
   onSend: (id: string) => void;
   onRevert: (id: string) => void;
+  onReportNotFound: (item: RealignmentItem) => void;
   viewMode: ViewMode;
 }) {
   // Totais por cor (linha) e por tamanho (coluna) — ignora células vazias.
@@ -1010,6 +1036,7 @@ function RealignGrid({
                           reverting={it ? revertingIds.has(it.id) : false}
                           onSend={onSend}
                           onRevert={onRevert}
+                          onReportNotFound={onReportNotFound}
                           viewMode={viewMode}
                         />
                       </td>
@@ -1103,6 +1130,7 @@ function RealignCell({
   reverting,
   onSend,
   onRevert,
+  onReportNotFound,
   viewMode,
 }: {
   item: RealignmentItem | null;
@@ -1110,6 +1138,7 @@ function RealignCell({
   reverting: boolean;
   onSend: (id: string) => void;
   onRevert: (id: string) => void;
+  onReportNotFound: (item: RealignmentItem) => void;
   viewMode: ViewMode;
 }) {
   const base =
@@ -1158,14 +1187,29 @@ function RealignCell({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => onSend(item.id)}
-      title={`Marcar como ENVIEI — ${item.qtyOrigem}un`}
-      className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 active:scale-95 cursor-pointer text-base`}
-    >
-      <span className="tabular-nums">{item.qtyOrigem}</span>
-      <CheckCircle2 className="w-3 h-3 absolute top-0.5 right-0.5 text-amber-700/70" />
-    </button>
+    <div className={`${base} bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 text-base`}>
+      <button
+        type="button"
+        onClick={() => onSend(item.id)}
+        title={`Marcar como ENVIEI — ${item.qtyOrigem}un`}
+        className="absolute inset-0 cursor-pointer active:scale-95 transition-transform rounded"
+        aria-label="Marcar enviada"
+      />
+      <span className="tabular-nums pointer-events-none relative">{item.qtyOrigem}</span>
+      <CheckCircle2 className="w-3 h-3 absolute top-0.5 right-0.5 text-amber-700/70 pointer-events-none" />
+      {/* Botão ❌ no canto superior esquerdo: reporta peça não encontrada */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onReportNotFound(item);
+        }}
+        title="Não achei a peça — reportar pra matriz"
+        aria-label="Não achei essa peça"
+        className="absolute top-0 left-0 w-5 h-5 rounded-tl rounded-br bg-rose-500/90 hover:bg-rose-600 text-white flex items-center justify-center text-[10px] font-black shadow z-10 active:scale-90 transition"
+      >
+        ✕
+      </button>
+    </div>
   );
 }

@@ -558,6 +558,13 @@ model TransferOrder {
   realignmentStatus     String?   @map("realignment_status")
   realignmentSentAt     DateTime? @map("realignment_sent_at")
   realignmentSentByUserId String? @map("realignment_sent_by_user_id")
+  // Loja origem reporta que NÃO encontrou a peça fisicamente na arara
+  // (peça sumiu, etiqueta errada, estoque divergente). Diferente de
+  // realignmentMissing* (que é pro DESTINO marcar item que não chegou).
+  // Matriz revê esses itens no /retaguarda/realinhamento.
+  realignmentNotFoundAt    DateTime? @map("realignment_not_found_at")
+  realignmentNotFoundNote  String?   @map("realignment_not_found_note")
+  realignmentNotFoundByUserId String? @map("realignment_not_found_by_user_id")
   // Recebimento (loja destino dá entrada)
   realignmentReceivedAt     DateTime? @map("realignment_received_at")
   realignmentReceivedByUserId String? @map("realignment_received_by_user_id")

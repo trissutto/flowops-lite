@@ -1060,6 +1060,7 @@ export default function PdvPage() {
       {showPixAvulso && (
         <PixAvulsoModal
           saleId={sale?.id || null}
+          defaultValor={sale?.total && sale.total > 0 ? sale.total : null}
           onClose={() => setShowPixAvulso(false)}
         />
       )}
@@ -2558,12 +2559,20 @@ function BigQuickActionLink({
 // venda atual — se não houver, mostra mensagem.
 function PixAvulsoModal({
   saleId,
+  defaultValor,
   onClose,
 }: {
   saleId: string | null;
+  defaultValor?: number | null;
   onClose: () => void;
 }) {
-  const [valor, setValor] = useState('');
+  // Pré-popula com o total da venda atual (se houver itens) — evita digitar
+  // valor errado. Format brasileiro: 23,90 (vírgula como separador decimal).
+  const [valor, setValor] = useState(
+    defaultValor && defaultValor > 0
+      ? defaultValor.toFixed(2).replace('.', ',')
+      : '',
+  );
   const [loading, setLoading] = useState(false);
   const [qr, setQr] = useState<{ qrImage?: string; brcode?: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
