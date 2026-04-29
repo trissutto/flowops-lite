@@ -221,10 +221,12 @@ export async function transmitNfeSefazSp(input: {
   const endpoint = SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente].autorizacao;
 
   // ═══════════════════════════════════════════════════════════════════
-  // CRÍTICO: remover QUALQUER declaração <?xml ...?> do XML assinado
-  // antes de embutir no enviNFe. SEFAZ-SP recusa HTTP 400 se houver
-  // declaração XML em qualquer lugar que não seja o topo do documento.
-  // Também remove BOM e whitespace inicial.
+  // CRÍTICO: SEFAZ-SP NFC-e exige XML totalmente minificado.
+  // - Remover declaração <?xml ...?> (não pode estar dentro do enviNFe)
+  // - Remover BOM e whitespace inicial
+  // - NÃO podemos minificar entre tags AQUI (quebraria a assinatura),
+  //   mas o XML já foi minificado antes da assinatura no buildXml.
+  //   Aqui só removemos as junções/declarações.
   // ═══════════════════════════════════════════════════════════════════
   const xmlAssinadoLimpo = input.xmlAssinado
     .replace(/^﻿/, '') // BOM

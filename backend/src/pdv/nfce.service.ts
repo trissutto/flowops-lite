@@ -410,7 +410,15 @@ export class NfceService {
   </infNFe>
 </NFe>`.trim();
 
-    return xml;
+    // ═══════════════════════════════════════════════════════════════════
+    // MINIFICA: SEFAZ NFC-e rejeita whitespace entre tags (cStat 588).
+    // Remove whitespace entre `>` e `<` mas preserva conteúdo de elementos.
+    // Isso DEVE ser feito ANTES da assinatura — caso contrário o digest
+    // calculado não baterá com o XML transmitido.
+    // ═══════════════════════════════════════════════════════════════════
+    const xmlMinificado = xml.replace(/>\s+</g, '><').trim();
+
+    return xmlMinificado;
   }
 
   private esc(s: string): string {
