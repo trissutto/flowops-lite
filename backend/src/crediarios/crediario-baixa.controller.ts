@@ -86,6 +86,15 @@ export class CrediarioBaixaController {
     return this.svc.setConfig(body);
   }
 
+  // ── Lista TODOS clientes do Giga (com ou sem parcelas) ───────────
+  // Query LEVE — só lê tabela `clientes`, não toca em `movimento`.
+  // Frontend filtra local + ao clicar carrega parcelas sob demanda.
+  @Get('clientes-todos')
+  async listAllClientes(@Req() req: any) {
+    this.requireRole(req);
+    return this.svc.listAllClientesGiga();
+  }
+
   // ── Lista TUDO (todos clientes com parcelas em aberto) ──────────
   // KILL-SWITCH: desligado por padrão. Reativar setando env var
   //   CREDIARIO_BAIXA_TODAS_ENABLED=true
@@ -130,24 +139,16 @@ export class CrediarioBaixaController {
   }
 
   // ── Lista parcelas de 1 cliente específico ────────────────────────
+  // Query LEVE — WHERE codCliente=X (com índice na tabela movimento por
+  // cliente é instantâneo). Sempre todas as lojas (cliente pode pagar
+  // promissória em qualquer filial).
   @Get('parcelas')
   async listByCodCliente(
     @Req() req: any,
     @Query('codCliente') codCliente: string,
-    @Query('storeCode') storeCodeOverride?: string,
-    @Query('todasLojas') todasLojas?: string,
   ) {
     this.requireRole(req);
-    if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
-      return [];
-    }
-    const role = req?.user?.role;
-    let storeCode: string | undefined;
-    if (todasLojas !== '1') {
-      if (role === 'admin') storeCode = storeCodeOverride || undefined;
-      else storeCode = req?.user?.storeCode;
-    }
-    return this.svc.listInstallmentsByCodCliente({ codCliente, storeCode });
+    return this.svc.listInstallmentsByCodCliente({ codCliente });
   }
 
   // ── Busca cliente + parcelas em aberto ────────────────────────────

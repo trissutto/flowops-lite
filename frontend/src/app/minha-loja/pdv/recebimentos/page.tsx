@@ -3,27 +3,28 @@
 /**
  * /minha-loja/pdv/recebimentos — RECEBIMENTOS de crediário no PDV.
  *
- * Estratégia: carrega TODAS as parcelas em aberto da rede (de qualquer loja)
- * em uma chamada única ao montar a tela. Vendedora filtra LOCAL em JS por
- * nome/código — busca instantânea, sem latência.
- *
- * Cliente pode pagar promissória em qualquer filial — por isso `todasLojas=1`.
- *
- * Fluxo:
- *  1. Mount → GET /crediarios/baixa/todas?todasLojas=1
- *  2. Vendedora digita → filtra local
- *  3. Clica no cliente → mostra parcelas dele
- *  4. Marca parcelas → escolhe PIX ou dinheiro
- *  5. Confirma → backend faz UPDATE no Giga + cupom imprime auto
+ * Estratégia:
+ *  1. Mount → carrega TODOS os clientes do Giga (query LEVE na tabela
+ *     `clientes`, não toca em `movimento`). Cache 30min no backend.
+ *  2. Frontend filtra local em JS por nome/código (busca instantânea).
+ *  3. Click no cliente → expande em CASCATA suas parcelas (carrega
+ *     sob demanda — query rápida `WHERE codcliente=X`).
+ *  4. Marca parcelas → escolhe PIX/dinheiro → confirma → cupom imprime.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, CheckCircle2, AlertCircle, Banknote, QrCode, Copy, Check, X,
-  User, RefreshCw,
+  User, RefreshCw, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+
+type Cliente = {
+  codCliente: string;
+  nome: string;
+  telefone: string | null;
+};
 
 type Installment = {
   registro: string;
@@ -39,19 +40,6 @@ type Installment = {
   codCliente: string;
   nome: string | null;
   telefone: string | null;
-};
-
-type ClienteResumo = {
-  codCliente: string;
-  nome: string;
-  telefone: string | null;
-  qtdParcelas: number;
-  total: number;
-};
-
-type ListResponse = {
-  parcelas: Installment[];
-  clientes: ClienteResumo[];
 };
 
 type PixCharge = {
@@ -73,10 +61,8 @@ const formatDate = (iso: string) => {
   }
 };
 
-// Normaliza string pra busca (lowercase + remove acentos)
 const normalize = (s: string) =>
-  s
-    .toLowerCase()
+  s.toLowerCase()
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
@@ -87,8 +73,7 @@ function printReceipt(baixaId: string) {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
   const electron = (window as any).electronAPI;
   if (electron?.silentPrintUrl) {
-    const absoluteUrl = window.location.origin + url;
-    electron.silentPrintUrl(absoluteUrl).catch(() => hiddenIframe(url));
+    electron.silentPrintUrl(window.location.origin + url).catch(() => hiddenIframe(url));
   } else {
     hiddenIframe(url);
   }
@@ -106,18 +91,20 @@ function hiddenIframe(url: string) {
 }
 
 export default function RecebimentosPage() {
-  // Carrega tudo no mount
-  const [allParcelas, setAllParcelas] = useState<Installment[]>([]);
-  const [allClientes, setAllClientes] = useState<ClienteResumo[]>([]);
-  const [loadingInicial, setLoadingInicial] = useState(true);
+  // Lista de clientes (carrega 1x)
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [loadingClientes, setLoadingClientes] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Busca local
   const [busca, setBusca] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Cliente selecionado (mostra suas parcelas)
-  const [selectedCodCliente, setSelectedCodCliente] = useState<string | null>(null);
+  // Cliente expandido + suas parcelas
+  const [expandedCod, setExpandedCod] = useState<string | null>(null);
+  const [parcelasCache, setParcelasCache] = useState<Record<string, Installment[]>>({});
+  const [parcelasLoading, setParcelasLoading] = useState<string | null>(null);
+  const [parcelasError, setParcelasError] = useState<string | null>(null);
 
   // Seleção de parcelas
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -130,77 +117,70 @@ export default function RecebimentosPage() {
   const [pixPaid, setPixPaid] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
 
-  // ── Load inicial ─────────────────────────────────────────────
+  // ── Load clientes ───────────────────────────────────────────
 
-  async function loadAll() {
-    setLoadingInicial(true);
+  async function loadClientes() {
+    setLoadingClientes(true);
     setLoadError(null);
     try {
-      // todasLojas=1 → cliente pode pagar promissória em qualquer filial
-      const data = await api<ListResponse & { _disabled?: boolean; _message?: string }>(
-        '/crediarios/baixa/todas?todasLojas=1',
-      );
-      if (data._disabled) {
-        setLoadError(
-          'Tela de RECEBIMENTOS está temporariamente desligada (em manutenção). Use o sistema do Giga pra dar baixa por enquanto.',
-        );
-        setAllParcelas([]);
-        setAllClientes([]);
-      } else {
-        setAllParcelas(data.parcelas);
-        setAllClientes(data.clientes);
-      }
+      const data = await api<Cliente[]>('/crediarios/baixa/clientes-todos');
+      setClientes(data);
     } catch (e: any) {
       setLoadError(e?.message || String(e));
     } finally {
-      setLoadingInicial(false);
+      setLoadingClientes(false);
     }
   }
 
   useEffect(() => {
-    loadAll();
+    loadClientes();
     inputRef.current?.focus();
   }, []);
 
-  // ── Filtro local ─────────────────────────────────────────────
+  // ── Filtro local ────────────────────────────────────────────
 
   const clientesFiltrados = useMemo(() => {
     const q = normalize(busca);
-    if (q.length === 0) return allClientes.slice(0, 100); // Top 100 pra não pesar render inicial
-    return allClientes.filter((c) => {
+    if (q.length === 0) return clientes.slice(0, 200); // top 200 inicial
+    const tokens = q.split(' ').filter(Boolean);
+    return clientes.filter((c) => {
       const nome = normalize(c.nome);
       const cod = normalize(c.codCliente);
       const tel = c.telefone ? normalize(c.telefone) : '';
-      // Busca por palavras-chave: divide busca por espaços, todas precisam bater
-      const tokens = q.split(' ').filter(Boolean);
-      return tokens.every(
-        (t) => nome.includes(t) || cod.includes(t) || tel.includes(t),
-      );
+      return tokens.every((t) => nome.includes(t) || cod.includes(t) || tel.includes(t));
     });
-  }, [busca, allClientes]);
+  }, [busca, clientes]);
 
-  // Parcelas filtradas pelo cliente selecionado
-  const parcelasDoCliente = useMemo(() => {
-    if (!selectedCodCliente) return [] as Installment[];
-    return allParcelas.filter((p) => p.codCliente === selectedCodCliente);
-  }, [allParcelas, selectedCodCliente]);
+  // ── Expandir cliente → carrega parcelas ─────────────────────
 
-  const cliente = parcelasDoCliente[0] ||
-    allClientes.find((c) => c.codCliente === selectedCodCliente) || null;
-
-  function selectCliente(codCliente: string) {
-    setSelectedCodCliente(codCliente);
-    setSelected(new Set());
+  async function toggleExpand(cod: string) {
+    if (expandedCod === cod) {
+      setExpandedCod(null);
+      return;
+    }
+    setExpandedCod(cod);
+    setParcelasError(null);
+    if (parcelasCache[cod]) return; // já carregado
+    setParcelasLoading(cod);
+    try {
+      const parcelas = await api<Installment[]>(
+        `/crediarios/baixa/parcelas?codCliente=${encodeURIComponent(cod)}`,
+      );
+      setParcelasCache((prev) => ({ ...prev, [cod]: parcelas }));
+    } catch (e: any) {
+      setParcelasError(e?.message || String(e));
+    } finally {
+      setParcelasLoading(null);
+    }
   }
 
-  function backToList() {
-    setSelectedCodCliente(null);
-    setSelected(new Set());
-    setTimeout(() => inputRef.current?.focus(), 100);
+  const parcelasExpandido = expandedCod ? parcelasCache[expandedCod] || [] : [];
+
+  // ── Seleção ────────────────────────────────────────────────
+
+  function keyOf(p: Installment) {
+    return `${p.registro}/${p.controle}`;
   }
-
-  // ── Seleção de parcelas ─────────────────────────────────────
-
   function toggleSelect(key: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -210,16 +190,13 @@ export default function RecebimentosPage() {
     });
   }
   function selectAll() {
-    if (selected.size === parcelasDoCliente.length) setSelected(new Set());
-    else setSelected(new Set(parcelasDoCliente.map(keyOf)));
-  }
-  function keyOf(p: Installment) {
-    return `${p.registro}/${p.controle}`;
+    if (selected.size === parcelasExpandido.length) setSelected(new Set());
+    else setSelected(new Set(parcelasExpandido.map(keyOf)));
   }
 
   const selecionadas = useMemo(
-    () => parcelasDoCliente.filter((p) => selected.has(keyOf(p))),
-    [parcelasDoCliente, selected],
+    () => parcelasExpandido.filter((p) => selected.has(keyOf(p))),
+    [parcelasExpandido, selected],
   );
   const totalPrincipal = useMemo(
     () => Math.round(selecionadas.reduce((s, p) => s + p.valorParcela, 0) * 100) / 100,
@@ -231,7 +208,7 @@ export default function RecebimentosPage() {
   );
   const totalPago = Math.round((totalPrincipal + totalJuros) * 100) / 100;
 
-  // ── Pagamento ───────────────────────────────────────────────
+  // ── Pagamento ──────────────────────────────────────────────
 
   function abrirPagamento() {
     if (selecionadas.length === 0) return;
@@ -240,6 +217,8 @@ export default function RecebimentosPage() {
     setPixCharge(null);
     setPixPaid(false);
   }
+
+  const clienteAtual = clientes.find((c) => c.codCliente === expandedCod) || null;
 
   async function aplicarDinheiro() {
     setAplicando(true);
@@ -266,8 +245,8 @@ export default function RecebimentosPage() {
         method: 'POST',
         body: JSON.stringify({
           parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
-          customerName: cliente?.nome || undefined,
-          customerPhone: cliente?.telefone || undefined,
+          customerName: clienteAtual?.nome || undefined,
+          customerPhone: clienteAtual?.telefone || undefined,
         }),
       });
       setPixCharge(r);
@@ -278,7 +257,7 @@ export default function RecebimentosPage() {
     }
   }
 
-  // Polling status PIX (1s)
+  // Polling status PIX
   useEffect(() => {
     if (!pixCharge || pixPaid) return;
     let cancelled = false;
@@ -291,7 +270,7 @@ export default function RecebimentosPage() {
           printReceipt(pixCharge.baixaId);
           setTimeout(() => finalizarTudo(), 1500);
         }
-      } catch {/* noop */}
+      } catch {}
     };
     tick();
     const id = setInterval(tick, 1000);
@@ -301,13 +280,19 @@ export default function RecebimentosPage() {
   function finalizarTudo() {
     setShowPagamento(false);
     setSelected(new Set());
-    setSelectedCodCliente(null);
+    // Limpa cache de parcelas do cliente atual (parcelas pagas saem)
+    if (expandedCod) {
+      setParcelasCache((prev) => {
+        const next = { ...prev };
+        delete next[expandedCod];
+        return next;
+      });
+    }
+    setExpandedCod(null);
     setBusca('');
     setForma(null);
     setPixCharge(null);
     setPixPaid(false);
-    // Recarrega a lista (parcelas pagas saem)
-    loadAll();
     setTimeout(() => inputRef.current?.focus(), 200);
   }
 
@@ -317,20 +302,16 @@ export default function RecebimentosPage() {
       await navigator.clipboard.writeText(pixCharge.qrCodeText);
       setCopyMsg(true);
       setTimeout(() => setCopyMsg(false), 2000);
-    } catch {/* noop */}
+    } catch {}
   }
 
-  // ── Render ───────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-pink-50 flex flex-col">
-      {/* Header */}
       <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-rose-100 shadow-sm">
         <div className="max-w-4xl mx-auto p-4 flex items-center gap-3">
-          <Link
-            href="/minha-loja/pdv"
-            className="p-2 rounded-lg hover:bg-rose-100 text-rose-700"
-          >
+          <Link href="/minha-loja/pdv" className="p-2 rounded-lg hover:bg-rose-100 text-rose-700">
             <ArrowLeft size={20} />
           </Link>
           <h1 className="text-xl md:text-2xl font-bold text-rose-900">RECEBIMENTOS</h1>
@@ -338,25 +319,22 @@ export default function RecebimentosPage() {
             crediário · baixa de parcelas
           </span>
           <button
-            onClick={loadAll}
-            disabled={loadingInicial}
+            onClick={loadClientes}
+            disabled={loadingClientes}
             className="p-2 rounded-lg hover:bg-rose-100 text-rose-700 disabled:opacity-50"
-            title="Recarregar"
+            title="Recarregar lista"
           >
-            <RefreshCw size={18} className={loadingInicial ? 'animate-spin' : ''} />
+            <RefreshCw size={18} className={loadingClientes ? 'animate-spin' : ''} />
           </button>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto w-full p-4 md:p-6">
-        {/* Estado de carga inicial */}
-        {loadingInicial && allClientes.length === 0 && (
+        {loadingClientes && clientes.length === 0 && (
           <div className="bg-white rounded-2xl shadow-sm p-12 text-center">
             <Loader2 className="w-10 h-10 animate-spin mx-auto text-rose-600" />
             <div className="mt-3 text-gray-700 font-bold">Carregando clientes…</div>
-            <div className="text-xs text-gray-500 mt-1">
-              Carrega tudo 1 vez. Próximas buscas são instantâneas.
-            </div>
+            <div className="text-xs text-gray-500 mt-1">Próximas buscas são instantâneas (cache).</div>
           </div>
         )}
 
@@ -364,161 +342,63 @@ export default function RecebimentosPage() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-900 mb-4 flex items-start gap-2">
             <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
             <div>
-              <b>Erro ao carregar:</b> {loadError}
-              <button onClick={loadAll} className="ml-2 underline">tentar de novo</button>
+              <b>Erro:</b> {loadError}{' '}
+              <button onClick={loadClientes} className="ml-2 underline">tentar de novo</button>
             </div>
           </div>
         )}
 
-        {/* Quando JÁ tem cliente selecionado → mostra parcelas dele */}
-        {selectedCodCliente && cliente ? (
-          <>
-            <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs uppercase text-gray-500 font-bold">Cliente</div>
-                  <div className="text-lg font-bold text-rose-900 flex items-center gap-2">
-                    <User size={18} />
-                    {('nome' in cliente ? cliente.nome : null) || `Cód. ${cliente.codCliente}`}
-                  </div>
-                  <div className="text-xs text-gray-600 mt-0.5">
-                    Cód: <b>{cliente.codCliente}</b>
-                    {cliente.telefone && <> · Tel: <b>{cliente.telefone}</b></>}
-                  </div>
-                </div>
-                <button
-                  onClick={backToList}
-                  className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold rounded"
-                >
-                  ← Trocar cliente
-                </button>
-                <button
-                  onClick={selectAll}
-                  className="text-sm px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 font-semibold rounded"
-                >
-                  {selected.size === parcelasDoCliente.length ? 'Desmarcar todas' : 'Marcar todas'}
-                </button>
-              </div>
-            </div>
+        {/* Busca */}
+        <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
+          <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">
+            Buscar cliente {!loadingClientes && clientes.length > 0 && (
+              <span className="text-gray-500 normal-case">({clientes.length} cadastrados)</span>
+            )}
+          </label>
+          <div className="relative">
+            <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              ref={inputRef}
+              type="text"
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              placeholder="Digita o nome (ELISA, MARIA SILVA), CPF ou código..."
+              className="w-full p-3 pl-10 border-2 rounded-lg text-base"
+              autoComplete="off"
+              disabled={loadingClientes && clientes.length === 0}
+            />
+          </div>
+        </div>
 
-            {parcelasDoCliente.length === 0 ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-amber-900 text-sm">
-                Esse cliente não tem parcelas em aberto.
+        {!loadingClientes && clientes.length > 0 && (
+          <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-32">
+            <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
+              <span>
+                {busca.trim() ? `${clientesFiltrados.length} resultado${clientesFiltrados.length !== 1 ? 's' : ''}` : `${clientes.length} clientes`}
+              </span>
+              {!busca.trim() && clientes.length > 200 && (
+                <span className="text-gray-500 normal-case">mostrando 200 — digite pra filtrar</span>
+              )}
+            </div>
+            {clientesFiltrados.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-sm">
+                Nenhum cliente. Tente parte do nome ou código.
               </div>
             ) : (
-              <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-32">
-                <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
-                  <span>{parcelasDoCliente.length} parcelas em aberto</span>
-                  <span>{selected.size} selecionadas</span>
-                </div>
-                <ul className="divide-y divide-gray-100">
-                  {parcelasDoCliente.map((p) => {
-                    const k = keyOf(p);
-                    const isSel = selected.has(k);
-                    const isVencida = p.diasAtraso > 0;
-                    return (
-                      <li
-                        key={k}
-                        onClick={() => toggleSelect(k)}
-                        className={`p-4 cursor-pointer transition flex items-start gap-3 ${
-                          isSel ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-rose-50'
+              <ul className="divide-y divide-gray-100 max-h-[70vh] overflow-y-auto">
+                {clientesFiltrados.map((c) => {
+                  const isExpanded = expandedCod === c.codCliente;
+                  const parcelas = parcelasCache[c.codCliente] || [];
+                  const isLoadingThis = parcelasLoading === c.codCliente;
+                  return (
+                    <li key={c.codCliente}>
+                      <div
+                        onClick={() => toggleExpand(c.codCliente)}
+                        className={`p-3 cursor-pointer transition flex items-center gap-3 ${
+                          isExpanded ? 'bg-rose-100' : 'hover:bg-rose-50'
                         }`}
                       >
-                        <div className={`w-5 h-5 rounded border-2 flex-shrink-0 mt-1 flex items-center justify-center ${
-                          isSel ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'
-                        }`}>
-                          {isSel && <Check size={14} className="text-white" />}
-                        </div>
-                        <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                          <div>
-                            <div className="text-[10px] uppercase text-gray-500 font-bold">Promissória</div>
-                            <div className="font-mono font-bold">
-                              {p.numeroCompra || '—'}/{p.parcela}
-                            </div>
-                            {p.totalParcelas && (
-                              <div className="text-[10px] text-gray-500">de {p.totalParcelas}</div>
-                            )}
-                          </div>
-                          <div>
-                            <div className="text-[10px] uppercase text-gray-500 font-bold">Vencimento</div>
-                            <div className={`font-mono ${isVencida ? 'text-rose-700 font-bold' : ''}`}>
-                              {formatDate(p.vencimento)}
-                            </div>
-                            {isVencida && (
-                              <div className="text-[10px] text-rose-700 font-bold">
-                                {p.diasAtraso} dia{p.diasAtraso > 1 ? 's' : ''} atraso
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-right md:text-left">
-                            <div className="text-[10px] uppercase text-gray-500 font-bold">Valor</div>
-                            <div className="font-mono">{brl(p.valorParcela)}</div>
-                            {p.jurosCalculado > 0 && (
-                              <div className="text-[10px] text-rose-700 font-bold">
-                                + juros {brl(p.jurosCalculado)}
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-right">
-                            <div className="text-[10px] uppercase text-gray-500 font-bold">Total</div>
-                            <div className="font-bold text-emerald-700 tabular-nums">
-                              {brl(p.valorComJuros)}
-                            </div>
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-          </>
-        ) : (
-          /* Sem cliente selecionado → busca + lista de clientes */
-          <>
-            <div className="bg-white rounded-2xl shadow-sm p-4 mb-4">
-              <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">
-                Buscar cliente {!loadingInicial && allClientes.length > 0 && (
-                  <span className="text-gray-500 normal-case">({allClientes.length} cadastrados com parcelas em aberto)</span>
-                )}
-              </label>
-              <div className="relative">
-                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={busca}
-                  onChange={(e) => setBusca(e.target.value)}
-                  placeholder="Digita o nome (ELISA, MARIA SILVA), CPF ou código..."
-                  className="w-full p-3 pl-10 border-2 rounded-lg text-base"
-                  autoComplete="off"
-                  disabled={loadingInicial && allClientes.length === 0}
-                />
-              </div>
-            </div>
-
-            {!loadingInicial && allClientes.length > 0 && (
-              <div className="bg-white rounded-2xl shadow-sm overflow-hidden mb-4">
-                <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs font-bold uppercase text-rose-900 flex justify-between">
-                  <span>
-                    {busca.trim() ? `${clientesFiltrados.length} resultado${clientesFiltrados.length !== 1 ? 's' : ''}` : `${allClientes.length} clientes`}
-                  </span>
-                  {!busca.trim() && allClientes.length > 100 && (
-                    <span className="text-gray-500 normal-case">mostrando 100 — digite pra filtrar</span>
-                  )}
-                </div>
-                {clientesFiltrados.length === 0 ? (
-                  <div className="p-8 text-center text-gray-500 text-sm">
-                    Nenhum cliente encontrado. Tente parte do nome ou número.
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-gray-100 max-h-[60vh] overflow-y-auto">
-                    {clientesFiltrados.map((c) => (
-                      <li
-                        key={c.codCliente}
-                        onClick={() => selectCliente(c.codCliente)}
-                        className="p-3 cursor-pointer hover:bg-rose-50 transition flex items-center gap-3"
-                      >
+                        {isExpanded ? <ChevronDown size={18} className="text-rose-700" /> : <ChevronRight size={18} className="text-gray-400" />}
                         <div className="w-9 h-9 rounded-full bg-rose-200 text-rose-900 flex items-center justify-center flex-shrink-0">
                           <User size={16} />
                         </div>
@@ -529,21 +409,100 @@ export default function RecebimentosPage() {
                             {c.telefone && <> · Tel: <b>{c.telefone}</b></>}
                           </div>
                         </div>
-                        <div className="text-right flex-shrink-0">
-                          <div className="font-bold text-emerald-700 tabular-nums text-sm">
-                            {brl(c.total)}
-                          </div>
-                          <div className="text-[10px] text-gray-500 uppercase font-bold">
-                            {c.qtdParcelas} parc.
-                          </div>
+                        {isLoadingThis && <Loader2 className="w-4 h-4 animate-spin text-rose-600 flex-shrink-0" />}
+                      </div>
+
+                      {/* Cascata: parcelas do cliente */}
+                      {isExpanded && (
+                        <div className="bg-white border-l-4 border-rose-300 ml-3">
+                          {isLoadingThis ? (
+                            <div className="p-4 text-center text-sm text-gray-500">
+                              <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+                              <div className="mt-2">Carregando parcelas…</div>
+                            </div>
+                          ) : parcelasError ? (
+                            <div className="p-4 text-sm text-red-700 flex items-start gap-2">
+                              <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+                              {parcelasError}
+                            </div>
+                          ) : parcelas.length === 0 ? (
+                            <div className="p-4 text-center text-sm text-gray-500">
+                              Esse cliente não tem parcelas em aberto.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="px-3 py-2 bg-rose-50/50 text-[10px] font-bold uppercase text-rose-900 flex justify-between">
+                                <span>{parcelas.length} parcela{parcelas.length > 1 ? 's' : ''} em aberto</span>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); selectAll(); }}
+                                  className="px-2 py-0.5 bg-rose-200 hover:bg-rose-300 text-rose-900 rounded text-[10px] font-bold normal-case"
+                                >
+                                  {selected.size === parcelas.length ? 'Desmarcar todas' : 'Marcar todas'}
+                                </button>
+                              </div>
+                              <ul className="divide-y divide-gray-100">
+                                {parcelas.map((p) => {
+                                  const k = keyOf(p);
+                                  const isSel = selected.has(k);
+                                  const isVencida = p.diasAtraso > 0;
+                                  return (
+                                    <li
+                                      key={k}
+                                      onClick={(e) => { e.stopPropagation(); toggleSelect(k); }}
+                                      className={`p-3 cursor-pointer flex items-start gap-3 ${
+                                        isSel ? 'bg-emerald-50' : 'hover:bg-gray-50'
+                                      }`}
+                                    >
+                                      <div className={`w-5 h-5 rounded border-2 flex-shrink-0 mt-0.5 flex items-center justify-center ${
+                                        isSel ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300 bg-white'
+                                      }`}>
+                                        {isSel && <Check size={14} className="text-white" />}
+                                      </div>
+                                      <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                                        <div>
+                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Promissória</div>
+                                          <div className="font-mono font-bold text-xs">
+                                            {p.numeroCompra || '—'}/{p.parcela}
+                                          </div>
+                                          {p.totalParcelas && <div className="text-[9px] text-gray-500">de {p.totalParcelas}</div>}
+                                        </div>
+                                        <div>
+                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Vencto</div>
+                                          <div className={`font-mono text-xs ${isVencida ? 'text-rose-700 font-bold' : ''}`}>
+                                            {formatDate(p.vencimento)}
+                                          </div>
+                                          {isVencida && (
+                                            <div className="text-[9px] text-rose-700 font-bold">{p.diasAtraso}d atraso</div>
+                                          )}
+                                        </div>
+                                        <div className="text-right md:text-left">
+                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Valor</div>
+                                          <div className="font-mono text-xs">{brl(p.valorParcela)}</div>
+                                          {p.jurosCalculado > 0 && (
+                                            <div className="text-[9px] text-rose-700 font-bold">+ juros {brl(p.jurosCalculado)}</div>
+                                          )}
+                                        </div>
+                                        <div className="text-right">
+                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Total</div>
+                                          <div className="font-bold text-emerald-700 tabular-nums text-sm">
+                                            {brl(p.valorComJuros)}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </>
+                          )}
                         </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-          </>
+          </div>
         )}
 
         {/* Footer fixo: total + receber */}
@@ -552,7 +511,7 @@ export default function RecebimentosPage() {
             <div className="max-w-4xl mx-auto flex items-center gap-4 flex-wrap">
               <div className="flex-1 min-w-[200px]">
                 <div className="text-xs uppercase text-gray-500 font-bold">
-                  {selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''}
+                  {selecionadas.length} parcela{selecionadas.length > 1 ? 's' : ''} · {clienteAtual?.nome || ''}
                 </div>
                 <div className="text-2xl md:text-3xl font-black text-emerald-700 tabular-nums">
                   {brl(totalPago)}
@@ -575,7 +534,7 @@ export default function RecebimentosPage() {
         )}
       </main>
 
-      {/* Modal Pagamento */}
+      {/* Modal Pagamento (mantido igual) */}
       {showPagamento && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
@@ -647,11 +606,7 @@ export default function RecebimentosPage() {
                         <>
                           <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-3 flex justify-center">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={pixCharge.qrCodeImageUrl}
-                              alt="QR PIX"
-                              className="max-w-[240px] w-full"
-                            />
+                            <img src={pixCharge.qrCodeImageUrl} alt="QR PIX" className="max-w-[240px] w-full" />
                           </div>
                           <button
                             onClick={copyPix}

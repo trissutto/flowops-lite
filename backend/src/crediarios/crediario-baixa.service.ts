@@ -333,6 +333,73 @@ export class CrediarioBaixaService {
     this.listCache.clear();
   }
 
+  // ── LISTA TODOS CLIENTES DO GIGA (com ou sem parcelas) ────────────
+  //
+  // Query LEVE — só lê a tabela `clientes` (1 SELECT simples) sem mexer
+  // em `movimento`. Cobre TODA a base de clientes da rede Lurd's.
+  //
+  // Frontend filtra local em JS. Quando clica num cliente, faz request
+  // separado pras parcelas DELE específico (também rápido).
+  //
+  // Cache 30min — já que mudanças em clientes (cadastro novo) são raras.
+
+  private clientesCache: { data: any[]; expiresAt: number } | null = null;
+  private readonly CLIENTES_CACHE_TTL_MS = 30 * 60 * 1000;
+
+  async listAllClientesGiga(): Promise<Array<{
+    codCliente: string;
+    nome: string;
+    telefone: string | null;
+  }>> {
+    if (this.clientesCache && Date.now() < this.clientesCache.expiresAt) {
+      return this.clientesCache.data;
+    }
+
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm || !cm.nome) {
+      throw new BadRequestException(
+        'Tabela de clientes do Giga não detectada',
+      );
+    }
+
+    const cols: string[] = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
+    if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
+    if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS tel2`);
+
+    // LIMIT alto MAS query simples — só lê tabela clientes (sem JOIN, sem movimento)
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' ORDER BY \`${cm.nome}\` ASC LIMIT 50000`;
+    this.logger.log(`[crediario-baixa] listAllClientes SQL: ${sql.slice(0, 300)}`);
+    const t0 = Date.now();
+    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 30000 });
+    this.logger.log(`[crediario-baixa] listAllClientes retornou ${result.rows.length} em ${Date.now() - t0}ms`);
+
+    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+
+    const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+    for (const row of result.rows as any[]) {
+      const cod = String(row.cod || '').trim();
+      if (!cod) continue;
+      const codNum = parseInt(cod.replace(/\D/g, ''), 10);
+      if (isNaN(codNum) || codNum <= 3) continue; // exclui cartões 0-3
+      const nome = String(row.nome || '').trim();
+      if (!nome) continue;
+      if (cardRegex.test(nome)) continue; // exclui cartões pelo nome
+      const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
+      out.push({ codCliente: cod, nome, telefone: tel });
+    }
+
+    this.clientesCache = {
+      data: out,
+      expiresAt: Date.now() + this.CLIENTES_CACHE_TTL_MS,
+    };
+    return out;
+  }
+
+  /** Limpa cache (chamado após cada baixa) */
+  clearClientesCache() {
+    this.clientesCache = null;
+  }
+
   // ── Autocomplete: busca rápida de clientes ────────────────────────
 
   /**
