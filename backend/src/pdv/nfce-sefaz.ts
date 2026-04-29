@@ -246,27 +246,63 @@ ${input.xmlAssinado}
     cert: certPem,
     key: privateKeyPem,
     rejectUnauthorized: false, // SEFAZ tem cert cadeia complicada
+    minVersion: 'TLSv1.2',
+    // Ciphers compatíveis com SEFAZ-SP (alguns endpoints rejeitam ciphers modernos default)
+    ciphers: [
+      'ECDHE-RSA-AES128-GCM-SHA256',
+      'ECDHE-RSA-AES256-GCM-SHA384',
+      'AES128-SHA',
+      'AES256-SHA',
+      'DES-CBC3-SHA',
+    ].join(':'),
   });
+
+  // SP NFC-e — SOAP 1.2 com action embutido no Content-Type (asmx exige)
+  const SOAP_ACTION =
+    'http://www.portalfiscal.inf.br/nfe/wsdl/NFeAutorizacao4/nfeAutorizacaoLote';
 
   let xmlResposta = '';
   try {
     const resp = await axios.post(endpoint, soap, {
       headers: {
-        'Content-Type': 'application/soap+xml; charset=utf-8',
-        SOAPAction: '',
+        'Content-Type': `application/soap+xml; charset=utf-8; action="${SOAP_ACTION}"`,
+        Accept: 'application/soap+xml, text/xml, */*',
+        SOAPAction: SOAP_ACTION,
       },
       httpsAgent: agent,
       timeout: 60000,
       maxBodyLength: 10 * 1024 * 1024,
+      // Não rejeitar erros 4xx — capturamos pra mostrar resposta da SEFAZ
+      validateStatus: () => true,
     });
-    xmlResposta = String(resp.data);
+
+    xmlResposta = String(resp.data || '');
+
+    // Se HTTP não-2xx, tratamos como erro de comunicação mas com body capturado
+    if (resp.status < 200 || resp.status >= 300) {
+      return {
+        success: false,
+        cStat: '999',
+        xMotivo: `SEFAZ retornou HTTP ${resp.status} ${resp.statusText || ''}`.trim(),
+        xmlEnviado: enviNFe,
+        xmlResposta:
+          xmlResposta ||
+          `(sem body) headers: ${JSON.stringify(resp.headers || {}, null, 2)}`,
+        error: `HTTP ${resp.status}`,
+      };
+    }
   } catch (e: any) {
+    const respData = e?.response?.data ? String(e.response.data) : '';
+    const respStatus = e?.response?.status ? `HTTP ${e.response.status}` : '';
+    const respHeaders = e?.response?.headers
+      ? `\nHeaders: ${JSON.stringify(e.response.headers, null, 2)}`
+      : '';
     return {
       success: false,
       cStat: '999',
       xMotivo: e?.message || 'Erro de comunicação com SEFAZ',
       xmlEnviado: enviNFe,
-      xmlResposta: e?.response?.data ? String(e.response.data) : '',
+      xmlResposta: respData || `${respStatus}${respHeaders}`,
       error: e?.message,
     };
   }
