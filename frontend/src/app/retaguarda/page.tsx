@@ -13,13 +13,14 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode, CreditCard, Percent,
+  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode, CreditCard, Percent, LayoutDashboard,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
 import CircleNav, { type CircleNavItem } from '@/components/CircleNav';
 
 const RETAGUARDA_ITEMS: CircleNavItem[] = [
+  { href: '/retaguarda/dashboard',     label: 'Dashboard NEW', subtitle: 'Pilot novo visual',        icon: LayoutDashboard, tone: 'sky'      },
   { href: '/configuracoes',            label: 'Configurações', subtitle: 'Prioridades, integrações', icon: Settings,       tone: 'lavender' },
   { href: '/lojas',                    label: 'Lojas',         subtitle: 'Cadastro da rede',         icon: Store,          tone: 'rose'     },
   { href: '/usuarios',                 label: 'Usuários',      subtitle: 'Acesso e permissões',      icon: UserCog,        tone: 'sky'      },
