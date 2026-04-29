@@ -1595,8 +1595,51 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     term: string,
   ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>> {
     if (!this.pool || !term) return [];
-    const words = String(term)
-      .trim()
+    const trimmed = String(term).trim();
+    if (!trimmed) return [];
+
+    // ─── Detecção de REF: quando o termo é uma única palavra "REF-like" ───
+    // (só dígitos ex: "9002", ou padrão com hífen ex: "VMS-223"), busca
+    // EXATA pela coluna REF. Isso evita "9002" trazer "900246", "900201"
+    // (que contêm "9002" mas são REFs totalmente diferentes).
+    const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
+    if (isRefLike) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT REF,
+                  MAX(DESCRICAOCOMPLETA) AS DESCRICAOCOMPLETA,
+                  COUNT(*) AS VARIANT_COUNT
+             FROM produtos
+            WHERE REF = ?
+            GROUP BY REF
+            LIMIT 10`,
+          [trimmed],
+        );
+        if (rows.length > 0) return rows as any[];
+        // Fallback: se não bateu exato, tenta prefixo (ex: usuário digitou
+        // só parte da REF). Evita o LIKE %term% que confunde "9002"/"900246".
+        const [prefRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT REF,
+                  MAX(DESCRICAOCOMPLETA) AS DESCRICAOCOMPLETA,
+                  COUNT(*) AS VARIANT_COUNT
+             FROM produtos
+            WHERE REF LIKE ?
+              AND REF IS NOT NULL
+              AND REF <> ''
+            GROUP BY REF
+            ORDER BY REF ASC
+            LIMIT 50`,
+          [`${trimmed}%`],
+        );
+        return prefRows as any[];
+      } catch (e) {
+        this.logger.error(`searchByDescriptionGrouped (ref) falhou: ${(e as Error).message}`);
+        return [];
+      }
+    }
+
+    // ─── Busca por descrição (texto livre): LIKE %palavra% por palavra ───
+    const words = trimmed
       .split(/\s+/)
       .filter((w) => w.length >= 2)
       .slice(0, 6); // limite de palavras pra não explodir SQL
