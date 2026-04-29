@@ -410,9 +410,9 @@ export class NfceService {
     <transp><modFrete>9</modFrete></transp>
     <pag>${pagLines}</pag>
     <infAdic><infCpl>Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.</infCpl></infAdic>
-  </infNFe>
-  ${this.buildInfNFeSupl(chave, ambiente, config.cscId, config.cscToken)}
-</NFe>`.trim();
+  </infNFe>${this.buildInfNFeSupl(chave, ambiente, config.cscId, config.cscToken)}</NFe>`.trim();
+    // BUILD VERSION: NFCE-INFSUPL-V2 (cache bust)
+    this.logger.log(`[NFCe] XML gerado COM infNFeSupl. Tamanho: ${xml.length} chars`);
 
     // ═══════════════════════════════════════════════════════════════════
     // MINIFICA: SEFAZ NFC-e rejeita whitespace entre tags (cStat 588).
