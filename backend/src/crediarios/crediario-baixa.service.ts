@@ -849,6 +849,9 @@ export class CrediarioBaixaService {
     customerCpf?: string;
     customerPhone?: string;
     customerEmail?: string;
+    /** Validade do PIX em minutos. Default 15min (cliente presente).
+     *  Pra link compartilhável usar 1440 (24h). */
+    expiresInMinutes?: number;
   }): Promise<{
     baixaId: string;
     pagarmeOrderId: string;
@@ -883,7 +886,7 @@ export class CrediarioBaixaService {
       customerCpf: input.customerCpf,
       customerEmail: input.customerEmail,
       customerPhone: input.customerPhone,
-      expiresInMinutes: 15,
+      expiresInMinutes: input.expiresInMinutes || 15,
     });
 
     // Vincula a order Pagar.me ao header da baixa

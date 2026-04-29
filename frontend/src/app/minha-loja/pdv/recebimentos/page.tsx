@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, CheckCircle2, AlertCircle, Banknote, QrCode, Copy, Check, X,
-  User, RefreshCw, ChevronDown, ChevronRight,
+  User, RefreshCw, ChevronDown, ChevronRight, Link as LinkIcon, MessageCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -121,11 +121,13 @@ export default function RecebimentosPage() {
 
   // Pagamento
   const [showPagamento, setShowPagamento] = useState(false);
-  const [forma, setForma] = useState<'pix' | 'dinheiro' | null>(null);
+  const [forma, setForma] = useState<'pix' | 'dinheiro' | 'pix-link' | null>(null);
   const [aplicando, setAplicando] = useState(false);
   const [pixCharge, setPixCharge] = useState<PixCharge | null>(null);
   const [pixPaid, setPixPaid] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
+  const [pixLinkUrl, setPixLinkUrl] = useState<string | null>(null);
+  const [copyLinkMsg, setCopyLinkMsg] = useState(false);
 
   // ── Load clientes ───────────────────────────────────────────
 
@@ -277,6 +279,49 @@ export default function RecebimentosPage() {
     }
   }
 
+  async function gerarPixLink() {
+    setAplicando(true);
+    try {
+      const r = await api<PixCharge>('/crediarios/baixa/pix-link', {
+        method: 'POST',
+        body: JSON.stringify({
+          parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          customerName: clienteAtual?.nome || undefined,
+          customerPhone: clienteAtual?.telefone || undefined,
+        }),
+      });
+      // Monta URL pública
+      const url = `${window.location.origin}/pix/${r.baixaId}`;
+      setPixLinkUrl(url);
+      setPixCharge(r); // pra polling reaproveitar
+    } catch (e: any) {
+      alert('Erro ao gerar link PIX: ' + (e?.message || e));
+    } finally {
+      setAplicando(false);
+    }
+  }
+
+  async function copyLink() {
+    if (!pixLinkUrl) return;
+    try {
+      await navigator.clipboard.writeText(pixLinkUrl);
+      setCopyLinkMsg(true);
+      setTimeout(() => setCopyLinkMsg(false), 2500);
+    } catch {/* noop */}
+  }
+
+  function abrirWhatsApp() {
+    if (!pixLinkUrl) return;
+    const tel = (clienteAtual?.telefone || '').replace(/\D/g, '');
+    const nome = clienteAtual?.nome?.split(' ')[0] || 'cliente';
+    const msg = `Olá, ${nome}! Aqui é da Lurd's Plus Size 🛍️\n\nSegue o link para pagar suas parcelas de crediário via PIX:\n\n${pixLinkUrl}\n\nValor total: ${brl(totalPago)}\n\nÉ só abrir, copiar o código PIX e pagar no app do seu banco. Assim que pagar, sua dívida é quitada automaticamente.\n\nValidade: 24 horas.\n\nQualquer dúvida estamos à disposição 😊`;
+    const phone = tel.length >= 10 ? `55${tel}` : '';
+    const url = phone
+      ? `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`
+      : `https://web.whatsapp.com/send?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   // Polling status PIX
   useEffect(() => {
     if (!pixCharge || pixPaid) return;
@@ -300,7 +345,6 @@ export default function RecebimentosPage() {
   function finalizarTudo() {
     setShowPagamento(false);
     setSelected(new Set());
-    // Limpa cache de parcelas do cliente atual (parcelas pagas saem)
     if (expandedCod) {
       setParcelasCache((prev) => {
         const next = { ...prev };
@@ -313,6 +357,7 @@ export default function RecebimentosPage() {
     setForma(null);
     setPixCharge(null);
     setPixPaid(false);
+    setPixLinkUrl(null);
     setTimeout(() => inputRef.current?.focus(), 200);
   }
 
@@ -588,24 +633,38 @@ export default function RecebimentosPage() {
               </div>
 
               {!forma && !pixCharge && (
-                <div className="grid grid-cols-2 gap-3">
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => { setForma('dinheiro'); aplicarDinheiro(); }}
+                      disabled={aplicando}
+                      className="p-4 bg-amber-100 hover:bg-amber-200 border-2 border-amber-300 rounded-xl flex flex-col items-center gap-2 disabled:opacity-50"
+                    >
+                      <Banknote size={32} className="text-amber-700" />
+                      <span className="font-bold text-amber-900">Dinheiro</span>
+                    </button>
+                    <button
+                      onClick={() => { setForma('pix'); gerarPix(); }}
+                      disabled={aplicando}
+                      className="p-4 bg-emerald-100 hover:bg-emerald-200 border-2 border-emerald-300 rounded-xl flex flex-col items-center gap-2 disabled:opacity-50"
+                    >
+                      <QrCode size={32} className="text-emerald-700" />
+                      <span className="font-bold text-emerald-900">PIX agora</span>
+                      <span className="text-[10px] text-emerald-700">Cliente presente</span>
+                    </button>
+                  </div>
                   <button
-                    onClick={() => { setForma('dinheiro'); aplicarDinheiro(); }}
+                    onClick={() => { setForma('pix-link'); gerarPixLink(); }}
                     disabled={aplicando}
-                    className="p-4 bg-amber-100 hover:bg-amber-200 border-2 border-amber-300 rounded-xl flex flex-col items-center gap-2 disabled:opacity-50"
+                    className="w-full p-4 bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl flex items-center justify-center gap-3 disabled:opacity-50 shadow-md"
                   >
-                    <Banknote size={32} className="text-amber-700" />
-                    <span className="font-bold text-amber-900">Dinheiro</span>
+                    <LinkIcon size={24} />
+                    <div className="text-left">
+                      <div className="font-bold">PIX por LINK</div>
+                      <div className="text-[10px] opacity-90">Manda WhatsApp pro cliente pagar (válido 24h)</div>
+                    </div>
                   </button>
-                  <button
-                    onClick={() => { setForma('pix'); gerarPix(); }}
-                    disabled={aplicando}
-                    className="p-4 bg-emerald-100 hover:bg-emerald-200 border-2 border-emerald-300 rounded-xl flex flex-col items-center gap-2 disabled:opacity-50"
-                  >
-                    <QrCode size={32} className="text-emerald-700" />
-                    <span className="font-bold text-emerald-900">PIX</span>
-                  </button>
-                </div>
+                </>
               )}
 
               {forma === 'pix' && (
@@ -650,6 +709,76 @@ export default function RecebimentosPage() {
                 <div className="text-center p-6">
                   <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-600" />
                   <div className="text-sm text-gray-600 mt-2">Registrando baixa…</div>
+                </div>
+              )}
+
+              {forma === 'pix-link' && (
+                <div className="space-y-3">
+                  {aplicando && !pixLinkUrl && (
+                    <div className="text-center p-6">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-600" />
+                      <div className="text-sm text-gray-600 mt-2">Gerando link PIX…</div>
+                    </div>
+                  )}
+                  {pixLinkUrl && (
+                    <>
+                      {pixPaid ? (
+                        <div className="bg-emerald-100 border-2 border-emerald-400 rounded-lg p-4 text-center text-emerald-900 font-bold">
+                          <CheckCircle2 size={32} className="mx-auto mb-2" />
+                          Cliente pagou! Imprimindo recibo…
+                        </div>
+                      ) : (
+                        <>
+                          <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-3">
+                            <div className="text-[10px] uppercase font-bold text-emerald-900 mb-1">
+                              Link gerado — válido 24h
+                            </div>
+                            <div className="bg-white rounded p-2 break-all text-xs font-mono text-emerald-900 border border-emerald-200">
+                              {pixLinkUrl}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={copyLink}
+                              className="p-3 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold rounded-lg flex items-center justify-center gap-2 text-sm"
+                            >
+                              <Copy size={18} />
+                              {copyLinkMsg ? 'Copiado!' : 'Copiar link'}
+                            </button>
+                            <button
+                              onClick={abrirWhatsApp}
+                              className="p-3 bg-green-500 hover:bg-green-600 text-white font-bold rounded-lg flex items-center justify-center gap-2 text-sm shadow"
+                            >
+                              <MessageCircle size={18} />
+                              Enviar WhatsApp
+                            </button>
+                          </div>
+
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+                            <b>📱 Como funciona:</b>
+                            <ol className="list-decimal pl-4 mt-1 space-y-0.5">
+                              <li>Manda o link pro cliente pelo WhatsApp</li>
+                              <li>Ele abre, copia o PIX e paga no app do banco</li>
+                              <li>Quando pagar, suas parcelas baixam <b>automaticamente</b></li>
+                              <li>Você nem precisa ficar olhando — o sistema avisa</li>
+                            </ol>
+                          </div>
+
+                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs text-blue-900 text-center">
+                            ⏱ Aguardando pagamento… pode fechar essa janela.
+                          </div>
+
+                          <button
+                            onClick={finalizarTudo}
+                            className="w-full p-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-lg text-sm"
+                          >
+                            Fechar (continua aguardando em segundo plano)
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>

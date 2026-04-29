@@ -8,10 +8,11 @@ import { CrediariosController } from './crediarios.controller';
 import { CobrancaAutoService } from './cobranca-auto.service';
 import { CrediarioBaixaService } from './crediario-baixa.service';
 import { CrediarioBaixaController } from './crediario-baixa.controller';
+import { CrediarioBaixaPublicController } from './crediario-baixa-public.controller';
 
 @Module({
   imports: [ScheduleModule.forRoot(), ErpModule, WhatsappModule, PagarmeModule],
-  controllers: [CrediariosController, CrediarioBaixaController],
+  controllers: [CrediariosController, CrediarioBaixaController, CrediarioBaixaPublicController],
   providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
   exports: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
 })

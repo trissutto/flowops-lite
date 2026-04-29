@@ -210,6 +210,39 @@ export class CrediarioBaixaController {
     });
   }
 
+  // ── Gerar PIX-LINK (cliente remoto — recebe URL pelo WhatsApp) ───
+  // Mesmo fluxo do PIX presencial, mas com validade 24h pra dar tempo
+  // do cliente abrir o link e pagar com calma.
+  @Post('pix-link')
+  async gerarPixLink(
+    @Req() req: any,
+    @Body()
+    body: {
+      parcelas: Array<{ registro: string; controle: string }>;
+      storeCode?: string;
+      customerName?: string;
+      customerCpf?: string;
+      customerEmail?: string;
+      customerPhone?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const { code, name } = this.resolveStore(req, body?.storeCode);
+    const result = await this.svc.createPendingBaixaPix({
+      parcelas: body?.parcelas || [],
+      lojaCode: code,
+      lojaName: name,
+      userId: req?.user?.sub || req?.user?.id || null,
+      userName: req?.user?.name || req?.user?.email || null,
+      customerName: body?.customerName,
+      customerCpf: body?.customerCpf,
+      customerPhone: body?.customerPhone,
+      customerEmail: body?.customerEmail,
+      expiresInMinutes: 1440, // 24h pra link compartilhável
+    });
+    return result;
+  }
+
   // ── Aplicar baixa (PIX — gera Pagar.me) ──────────────────────────
 
   @Post('pix')
