@@ -144,13 +144,28 @@ export class CrediarioBaixaService {
       total: number;
     }>;
   }> {
-    let map = await this.crediarios.detectColumns();
+    // Sempre força refresh do detectColumns aqui — algumas instâncias do Giga
+    // têm timeouts intermitentes na primeira chamada que cacheiam EMPTY_MAP.
+    let map = await this.crediarios.detectColumns(true);
     if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      // Tenta de novo após 500ms (rede pode estar lenta)
+      await new Promise((r) => setTimeout(r, 500));
       map = await this.crediarios.detectColumns(true);
     }
     if (!map.codCliente || !map.vencimento || !map.valorParcela) {
+      const detectadas = Object.entries(map)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ');
+      const faltam = ['codCliente', 'vencimento', 'valorParcela']
+        .filter((k) => !(map as any)[k])
+        .join(', ');
+      this.logger.error(
+        `[crediario-baixa] detectColumns FALHOU. Faltam: ${faltam}. Detectadas: ${detectadas || '(nenhuma)'}`,
+      );
       throw new BadRequestException(
-        'Colunas essenciais não detectadas no Giga (codCliente, vencimento, valorParcela)',
+        `Falha ao ler estrutura do Giga (faltam: ${faltam}). ` +
+          `Detectadas: ${detectadas || '(nenhuma — problema de conexão MySQL)'}. Tente novamente.`,
       );
     }
 
@@ -185,16 +200,26 @@ export class CrediarioBaixaService {
     if (safeStore && map.loja) {
       where.push(`\`${map.loja}\` = '${safeStore}'`);
     }
-    // Exclui codCliente 0-3 e null/vazio
+    // Exclui null/vazio (cód 0-3 são filtrados depois no JS pra evitar
+    // CAST UNSIGNED que pode falhar dependendo do tipo da coluna)
     where.push(`\`${map.codCliente}\` IS NOT NULL`);
     where.push(`\`${map.codCliente}\` <> ''`);
-    where.push(`CAST(\`${map.codCliente}\` AS UNSIGNED) > 3`);
+    where.push(`\`${map.codCliente}\` <> '0'`);
 
     const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 50000`;
+    this.logger.log(`[crediario-baixa] listAllOpen SQL: ${sql.slice(0, 500)}`);
     const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 60000 });
+    this.logger.log(`[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas`);
+
+    // Filtra códigos 0-3 (cartões clássicos: CREDICARD, REDESHOP, AMEX, etc)
+    const filteredRows = result.rows.filter((r: any) => {
+      const cod = String(r.codCliente || '').replace(/\D/g, '');
+      const n = parseInt(cod, 10);
+      return !isNaN(n) && n > 3;
+    });
 
     // Enriquece com telefone + filtra clientes-cartão
-    const codClientes = Array.from(new Set(result.rows.map((r: any) => String(r.codCliente))));
+    const codClientes = Array.from(new Set(filteredRows.map((r: any) => String(r.codCliente))));
     const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes);
 
     // Filtra cartões pelo nome
@@ -221,7 +246,7 @@ export class CrediarioBaixaService {
 
     const cfg = await this.getConfig();
     const out: OpenInstallment[] = [];
-    for (const row of result.rows) {
+    for (const row of filteredRows) {
       const codCli = String(row.codCliente);
       if (cardCodes.has(codCli)) continue;
       const valor = Number(row.valorParcela || 0);
