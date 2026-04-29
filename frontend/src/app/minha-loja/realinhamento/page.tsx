@@ -427,9 +427,33 @@ export default function MinhaLojaRealinhamentoPage() {
             }
             const totalQty = list.reduce((a, it) => a + it.qtyOrigem, 0);
             // Descrição: pega a primeira não-vazia (todas as variações da mesma
-            // REF compartilham a descrição base do produto)
+            // REF compartilham a descrição base do produto). Remove o sufixo
+            // "REF COR TAMANHO" do final pra não duplicar (já aparece na grade
+            // Cor × Tamanho abaixo).
             const rawDesc = list.find((it) => it.descricao && it.descricao.trim())?.descricao || '';
-            const descricao = rawDesc ? toTitleCase(rawDesc) : '';
+            let cleanDesc = rawDesc;
+            if (cleanDesc) {
+              // Remove "REF COR TAM" do final (em qualquer ordem). Coleta todas
+              // as cores e tamanhos das variações pra varrer e tirar.
+              const cores = new Set(
+                list.map((i) => (i.cor || '').toUpperCase().trim()).filter(Boolean),
+              );
+              const tams = new Set(
+                list.map((i) => (i.tamanho || '').toUpperCase().trim()).filter(Boolean),
+              );
+              // Tokeniza descrição e remove tokens que são REF, COR ou TAM
+              const tokens = cleanDesc.split(/\s+/);
+              const filtered = tokens.filter((tok) => {
+                const t = tok.toUpperCase().trim();
+                if (!t) return false;
+                if (t === ref.toUpperCase()) return false; // REF
+                if (cores.has(t)) return false;
+                if (tams.has(t)) return false;
+                return true;
+              });
+              cleanDesc = filtered.join(' ').trim();
+            }
+            const descricao = cleanDesc ? toTitleCase(cleanDesc) : '';
             // Imagem: primeira URL válida (todas variações da mesma REF usam a mesma)
             const imageUrl = list.find((it) => it.imageUrl && it.imageUrl.trim())?.imageUrl || null;
             return { ref, descricao, imageUrl, cores, tams, matrix, totalQty, items: list };
