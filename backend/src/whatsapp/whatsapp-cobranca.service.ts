@@ -138,12 +138,9 @@ export class WhatsappCobrancaService implements OnModuleInit {
   }
 
   private toJid(raw: string): string | null {
-    if (!raw) return null;
-    let n = String(raw).replace(/\D/g, '');
+    const { normalizeBrPhone } = require('../lib/phone-br');
+    const n = normalizeBrPhone(raw);
     if (!n) return null;
-    if (n.startsWith('0')) n = n.slice(1);
-    if (n.length === 10 || n.length === 11) n = '55' + n;
-    if (n.length < 12) return null;
     return `${n}@s.whatsapp.net`;
   }
 

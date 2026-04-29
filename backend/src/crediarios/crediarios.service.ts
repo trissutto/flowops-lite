@@ -304,11 +304,17 @@ export class CrediariosService {
     const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${ids.length + 100}`;
 
     try {
+      const { normalizeBrPhone } = await import('../lib/phone-br');
       const result = await this.erp.runReadOnly(sql, { maxRows: ids.length + 100, timeoutMs: 20000 });
       for (const r of result.rows) {
         const id = String(r.codCliente);
-        // Prefere telefone1; se vazio, telefone2
-        const tel = (String(r.telefone || '').trim()) || (String(r.telefone2 || '').trim()) || null;
+        // Prefere telefone1 (FONECEL); se vazio, telefone2 (FONERES).
+        // Normaliza pra formato BR — adiciona DDD 13 (Lurd's default) se faltar.
+        const raw1 = String(r.telefone || '').trim();
+        const raw2 = String(r.telefone2 || '').trim();
+        const norm1 = normalizeBrPhone(raw1);
+        const norm2 = normalizeBrPhone(raw2);
+        const tel = norm1 || norm2 || null;
         out.set(id, { telefone: tel, nome: r.nome ? String(r.nome) : null });
       }
     } catch (e: any) {

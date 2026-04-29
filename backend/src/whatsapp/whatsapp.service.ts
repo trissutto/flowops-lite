@@ -178,21 +178,14 @@ export class WhatsappService implements OnModuleInit {
   }
 
   /**
-   * Normaliza número brasileiro pro formato WhatsApp (JID):
-   *   - Remove tudo que não é dígito
-   *   - Se começa com 0, remove
-   *   - Se tem 10 ou 11 dígitos (sem 55), prefixa 55
-   *   - Resultado: 55 + DDD + número → JID "55XXXXXXXXXXX@s.whatsapp.net"
+   * Normaliza número brasileiro pro formato WhatsApp (JID).
+   * Usa normalizeBrPhone (suporta 8/9 dígitos sem DDD → adiciona padrão 13).
    */
   private toJid(raw: string): string | null {
-    if (!raw) return null;
-    let n = String(raw).replace(/\D/g, '');
+    // Lazy require pra evitar circular import em alguns paths
+    const { normalizeBrPhone } = require('../lib/phone-br');
+    const n = normalizeBrPhone(raw);
     if (!n) return null;
-    if (n.startsWith('0')) n = n.slice(1);
-    // 10 (fixo sem 55) ou 11 (celular sem 55) → prefixa 55
-    if (n.length === 10 || n.length === 11) n = '55' + n;
-    // 12 ou 13 já deve ter 55 na frente
-    if (n.length < 12) return null;
     return `${n}@s.whatsapp.net`;
   }
 
