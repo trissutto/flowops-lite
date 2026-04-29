@@ -61,13 +61,23 @@ const formatDate = (iso: string) => {
   }
 };
 
-const normalize = (s: string) =>
-  s.toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+// Normalize SIMPLES — só lowercase + substituição manual de acentos.
+// Sem regex Unicode (que estava bugando o filtro). Robusto e à prova de
+// problemas de encoding do arquivo fonte.
+const ACENTOS: Record<string, string> = {
+  'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a',
+  'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+  'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+  'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+  'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+  'ç': 'c', 'ñ': 'n',
+};
+const normalize = (s: string): string => {
+  if (!s) return '';
+  let out = String(s).toLowerCase().trim();
+  out = out.replace(/[áàâãäéèêëíìîïóòôõöúùûüçñ]/g, (c) => ACENTOS[c] || c);
+  return out;
+};
 
 function printReceipt(baixaId: string) {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
@@ -142,13 +152,23 @@ export default function RecebimentosPage() {
   const clientesFiltrados = useMemo(() => {
     const q = normalize(busca);
     if (q.length === 0) return clientes.slice(0, 200); // top 200 inicial
-    const tokens = q.split(' ').filter(Boolean);
-    return clientes.filter((c) => {
+    const tokens = q.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return clientes.slice(0, 200);
+    const filtered = clientes.filter((c) => {
       const nome = normalize(c.nome);
-      const cod = normalize(c.codCliente);
-      const tel = c.telefone ? normalize(c.telefone) : '';
+      const cod = String(c.codCliente || '').toLowerCase();
+      const tel = c.telefone ? String(c.telefone).toLowerCase() : '';
+      // TODOS os tokens precisam bater em pelo menos um campo
       return tokens.every((t) => nome.includes(t) || cod.includes(t) || tel.includes(t));
     });
+    // Debug temporário no console pra diagnóstico
+    if (typeof window !== 'undefined') {
+      console.log(`[recebimentos] filtro "${busca}" → q="${q}" tokens=${JSON.stringify(tokens)} → ${filtered.length} resultados`);
+      if (filtered.length > 0 && filtered.length < 5) {
+        console.log('[recebimentos] primeiros:', filtered.slice(0, 3).map(c => `${c.nome} (cod ${c.codCliente})`));
+      }
+    }
+    return filtered;
   }, [busca, clientes]);
 
   // ── Expandir cliente → carrega parcelas ─────────────────────
