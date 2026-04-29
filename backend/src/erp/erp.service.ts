@@ -1525,13 +1525,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool || !ref) return [];
     const clean = String(ref).trim();
     try {
+      // BUG anterior: WHERE REF LIKE '9002%' pegava 9002, 900271, 900215, etc
+      // (todas as REFs que COMEÇAM com o número). Isso é catastrófico em
+      // realinhamento: gerava plano com 492 variações ao pedir REF "9002".
+      //
+      // Wincred usa sufixo " X" (espaço + letra de cor) pra cada cor:
+      //   VMS-223     → REF base
+      //   VMS-223 P   → cor preta
+      //   VMS-223 V   → cor vermelha
+      //
+      // Solução: REF EXATA + variações com " X" (espaço obrigatório). Assim
+      // "9002" só pega "9002" e "9002 X" (se existir). "900271" não casa.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
            FROM produtos
           WHERE REF = ? OR REF LIKE ?
           ORDER BY COR, TAMANHO
           LIMIT 500`,
-        [clean, `${clean}%`], // exata + começando com (ex: "123" pega "123A")
+        [clean, `${clean} %`], // exata + variações com espaço (sufixo de cor)
       );
       return rows as any[];
     } catch (e) {
