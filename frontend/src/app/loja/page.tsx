@@ -10,7 +10,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store, FileSearch, Truck, BarChart3,
+  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store, FileSearch, Truck, BarChart3, Percent,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -22,6 +22,7 @@ const LOJA_ITEMS: CircleNavItem[] = [
   { href: '/retaguarda/remessas',      label: 'Remessas',       subtitle: 'Caixas em trânsito',    icon: Truck,        tone: 'sky'      },
   { href: '/auditoria-sku',            label: 'Produtos Loja',  subtitle: 'Gigasistemas (ERP)',    icon: Database,     tone: 'yellow'   },
   { href: '/retaguarda/crediario',     label: 'Crediário',      subtitle: 'Cobrança + parcelas',   icon: CreditCard,   tone: 'rose'     },
+  { href: '/loja/juros-crediario',     label: 'Juros Crediário',subtitle: 'Carência + taxa mensal',icon: Percent,      tone: 'yellow'   },
   { href: '/retaguarda/almoxarifado',  label: 'Almoxarifado',   subtitle: 'Estoque interno',       icon: Boxes,        tone: 'lavender' },
   { href: '/retaguarda/venda-certa',   label: 'Venda Certa',    subtitle: 'Anti-malandragem',      icon: CheckCircle2, tone: 'mint'     },
   { href: '/retaguarda/materiais',     label: 'Materiais',      subtitle: 'Pedidos das filiais',   icon: Package2,     tone: 'peach'    },

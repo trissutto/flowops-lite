@@ -13,23 +13,18 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Settings, Store, UserCog, Activity, Shield, Receipt, ArrowRightLeft, QrCode, CreditCard, Percent, LayoutDashboard,
+  Shield, LayoutDashboard,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
 import CircleNav, { type CircleNavItem } from '@/components/CircleNav';
 
+// REORG-F3 · "Retaguarda" foi rebrandeada pra "Gestão" (URL preservada).
+// Itens de configuração/cadastro foram movidos pra /config:
+//   NFC-e, PagBank, Pagar.me, Configurações, Lojas, Usuários, Logs.
+// Trocas Site foi pro hub /site. Juros Crediário foi pro hub /loja.
 const RETAGUARDA_ITEMS: CircleNavItem[] = [
-  { href: '/retaguarda/dashboard',     label: 'Dashboard NEW', subtitle: 'Pilot novo visual',        icon: LayoutDashboard, tone: 'sky'      },
-  { href: '/configuracoes',            label: 'Configurações', subtitle: 'Prioridades, integrações', icon: Settings,       tone: 'lavender' },
-  { href: '/lojas',                    label: 'Lojas',         subtitle: 'Cadastro da rede',         icon: Store,          tone: 'rose'     },
-  { href: '/usuarios',                 label: 'Usuários',      subtitle: 'Acesso e permissões',      icon: UserCog,        tone: 'sky'      },
-  { href: '/retaguarda/trocas-site',   label: 'Trocas Site',   subtitle: 'Devolução pedidos WC',     icon: ArrowRightLeft, tone: 'mint'     },
-  { href: '/retaguarda/nfce-config',    label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
-  { href: '/retaguarda/pagarme-config',  label: 'Pagar.me',      subtitle: 'PIX no PDV (recomendado)', icon: CreditCard,     tone: 'mint'     },
-  { href: '/retaguarda/pagbank-config',  label: 'PagBank',       subtitle: 'PIX (requer homologação)', icon: QrCode,         tone: 'sky'      },
-  { href: '/retaguarda/crediario-juros', label: 'Juros Crediário', subtitle: 'Carência + taxa mensal', icon: Percent,       tone: 'rose'     },
-  { href: '/logs',                      label: 'Logs',          subtitle: 'Eventos do sistema',       icon: Activity,       tone: 'mint'     },
+  { href: '/retaguarda/dashboard', label: 'Dashboard',     subtitle: 'Visão geral da operação', icon: LayoutDashboard, tone: 'sky'  },
 ];
 
 export default function RetaguardaHub() {

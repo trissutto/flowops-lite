@@ -33,12 +33,12 @@ const CONFIG_ITEMS: CircleNavItem[] = [
   { href: '/retaguarda/almoxarifado',   label: 'Almoxarifado',  subtitle: 'Itens internos',           icon: Boxes,          tone: 'lavender' },
 
   // === Fiscal + Pagamentos (PDV) ===
-  { href: '/retaguarda/nfce-config',    label: 'NFC-e',         subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
-  { href: '/retaguarda/pagarme-config', label: 'Pagar.me',      subtitle: 'PIX no PDV (recomendado)', icon: CreditCard,     tone: 'mint'     },
-  { href: '/retaguarda/pagbank-config', label: 'PagBank',       subtitle: 'PIX (homologação)',        icon: QrCode,         tone: 'sky'      },
+  { href: '/config/nfce',     label: 'NFC-e',    subtitle: 'Certificado A1 + CSC',     icon: Receipt,        tone: 'rose'     },
+  { href: '/config/pagarme',  label: 'Pagar.me', subtitle: 'PIX no PDV (recomendado)', icon: CreditCard,     tone: 'mint'     },
+  { href: '/config/pagbank',  label: 'PagBank',  subtitle: 'PIX (homologação)',        icon: QrCode,         tone: 'sky'      },
 
   // === Integrações ===
-  { href: '/retaguarda/whatsapp',       label: 'WhatsApp',      subtitle: 'Baileys + bulk',           icon: MessageCircle,  tone: 'mint'     },
+  { href: '/config/whatsapp', label: 'WhatsApp', subtitle: 'Baileys + bulk',           icon: MessageCircle,  tone: 'mint'     },
 
   // === Sistema ===
   { href: '/configuracoes',             label: 'Configurações', subtitle: 'Prioridades, integrações', icon: Settings,       tone: 'lavender' },

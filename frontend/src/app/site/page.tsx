@@ -12,7 +12,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
-  FileSearch, MessageCircle, Store, Globe2,
+  FileSearch, MessageCircle, Store, Globe2, ArrowRightLeft,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import PastelShell from '@/components/PastelShell';
@@ -25,7 +25,8 @@ const SITE_ITEMS: CircleNavItem[] = [
   { href: '/retaguarda/publicar-site', label: 'Publicar no Site', subtitle: 'Cadastros via IA',  icon: Globe,         tone: 'mint'     },
   { href: '/produtos',              label: 'Produtos Site',   subtitle: 'Catálogo WooCommerce',  icon: ShoppingBag,   tone: 'lavender' },
   { href: '/retaguarda/baixas-log', label: 'Log de Baixas',   subtitle: 'Auditoria ERP→WC',      icon: FileSearch,    tone: 'peach'    },
-  { href: '/retaguarda/whatsapp',   label: 'WhatsApp',        subtitle: 'Conexão + bulk',        icon: MessageCircle, tone: 'mint'     },
+  { href: '/site/trocas',           label: 'Trocas Site',     subtitle: 'Devolução pedidos WC',  icon: ArrowRightLeft, tone: 'rose'    },
+  { href: '/config/whatsapp',       label: 'WhatsApp',        subtitle: 'Conexão + bulk',        icon: MessageCircle, tone: 'mint'     },
   { href: '/vitrine',               label: 'Vitrine',         subtitle: 'Vitrine pública',       icon: Store,         tone: 'cream'    },
 ];
 
