@@ -217,16 +217,7 @@ export default function DashboardHome() {
           />
         </header>
 
-        {/* KPIs ---------------------------------------------------------- */}
-        <section
-          className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-12 fade-up"
-          style={{ animationDelay: '0.05s' }}
-        >
-          <MiniKpi label="Pendentes" value={totalPending} tone="rose" />
-          <MiniKpi label="Processando" value={counts['processing']?.total ?? 0} tone="peach" />
-          <MiniKpi label="Em separação" value={counts['separacao']?.total ?? 0} tone="lavender" />
-          <MiniKpi label="Concluídos hoje" value={concluidosHoje} tone="mint" />
-        </section>
+        {/* KPIs removidos na home — agora vivem só no /retaguarda/dashboard */}
 
         {/* 4 HUBS GIGANTES --------------------------------------------- */}
         <section
