@@ -1121,21 +1121,6 @@ function PickOrderCard({
                 Transferência
               </span>
             )}
-            {(() => {
-              // Badge de forma de envio — destaque colorido pra filial identificar de longe.
-              // Fonte: order.shippingMethod (preenchido pelo backend no pick-order).
-              const raw = order.shippingMethod ?? null;
-              if (!raw) return null;
-              const m = classifyShipping(raw);
-              return (
-                <span
-                  className={`text-xs font-bold uppercase tracking-wide px-2 py-1 rounded ${m.colorBold}`}
-                  title={m.raw}
-                >
-                  {m.label}
-                </span>
-              );
-            })()}
           </div>
           <div className="text-sm text-slate-700 font-medium mt-1 truncate">
             {customerName ?? '—'}
@@ -1153,6 +1138,51 @@ function PickOrderCard({
           </div>
         </div>
       </header>
+
+      {/* ─── FAIXA DE MODALIDADE DE ENVIO ─── */}
+      {/* Destaque MÁXIMO pra filial bater o olho e saber se é SEDEX/PAC/RETIRADA. */}
+      {(() => {
+        const raw = order.shippingMethod ?? null;
+        if (!raw) return null;
+        const m = classifyShipping(raw);
+        const Icon =
+          m.kind === 'sedex'
+            ? Truck
+            : m.kind === 'pac'
+            ? Package
+            : m.kind === 'pickup'
+            ? Package2
+            : m.kind === 'transportadora'
+            ? Truck
+            : Package2;
+        // Cores fortes inline pra garantir contraste alto
+        const bg =
+          m.kind === 'sedex'
+            ? 'bg-red-600'
+            : m.kind === 'pac'
+            ? 'bg-blue-600'
+            : m.kind === 'pickup'
+            ? 'bg-amber-500'
+            : m.kind === 'transportadora'
+            ? 'bg-purple-600'
+            : 'bg-slate-700';
+        return (
+          <div
+            className={`${bg} text-white px-4 py-3 flex items-center gap-3 shadow-inner`}
+            title={m.raw}
+          >
+            <Icon className="w-8 h-8 shrink-0" strokeWidth={2.5} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] uppercase tracking-widest opacity-80 leading-none">
+                Modalidade de Envio
+              </div>
+              <div className="text-2xl md:text-3xl font-black uppercase tracking-wide leading-tight truncate">
+                {m.label}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Itens — qty em badge circular de destaque */}
       <section className="px-4 py-3 space-y-2 text-sm">
