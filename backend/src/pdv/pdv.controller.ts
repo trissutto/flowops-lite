@@ -88,6 +88,26 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/nfce/cancel { justificativa }
+   * Cancela NFC-e autorizada via evento 110111. Janela: 30min após autorização.
+   * Justificativa: 15-255 chars (regra SEFAZ).
+   */
+  @Post('sales/:id/nfce/cancel')
+  cancelNfce(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { justificativa: string },
+  ) {
+    this.requireRole(req);
+    if (!body?.justificativa || String(body.justificativa).trim().length < 15) {
+      throw new BadRequestException(
+        'Justificativa do cancelamento deve ter pelo menos 15 caracteres',
+      );
+    }
+    return this.nfce.cancel(id, body.justificativa);
+  }
+
+  /**
    * GET /pdv/nfce/config?storeCode=01 — leitura da config NFC-e da loja.
    */
   @Get('nfce/config')

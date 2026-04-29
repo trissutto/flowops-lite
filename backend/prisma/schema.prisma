@@ -887,6 +887,11 @@ model PdvSale {
   nfceQrUrl       String?  @map("nfce_qr_url") @db.Text
   nfceUrlConsulta String?  @map("nfce_url_consulta")
   nfceAutorizadaEm DateTime? @map("nfce_autorizada_em")
+  // Cancelamento NFC-e (evento 110111)
+  nfceCanceladaEm        DateTime? @map("nfce_cancelada_em")
+  nfceCancelamentoProto  String?   @map("nfce_cancelamento_proto")
+  nfceCancelamentoMotivo String?   @map("nfce_cancelamento_motivo") @db.Text
+  nfceCancelamentoXml    String?   @map("nfce_cancelamento_xml") @db.Text
   // Envio
   sentEmailAt     DateTime? @map("sent_email_at")
   sentWhatsappAt  DateTime? @map("sent_whatsapp_at")

@@ -50,6 +50,14 @@ type Sale = {
   nfceNumber: string | null;
   nfceChave: string | null;
   nfceXml: string | null;
+  nfceStatus?: string | null;
+  nfceMotivo?: string | null;
+  nfceProtocolo?: string | null;
+  nfceQrUrl?: string | null;
+  nfceUrlConsulta?: string | null;
+  nfceAutorizadaEm?: string | null;
+  nfceCanceladaEm?: string | null;
+  nfceCancelamentoMotivo?: string | null;
   finalizedAt: string | null;
   items: Array<{
     id: string;
@@ -1921,8 +1929,71 @@ function PaymentModal({
   );
 }
 
-function FinalizedModal({ sale, onNew }: { sale: Sale; onNew: () => void }) {
-  const [showXml, setShowXml] = useState(false);
+function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () => void }) {
+  const [sale, setSale] = useState<Sale>(initialSale);
+  const [emitting, setEmitting] = useState(false);
+  const [emitError, setEmitError] = useState<string | null>(null);
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelMotivo, setCancelMotivo] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  const isAuthorized = sale.nfceStatus === 'authorized';
+  const isCancelled = sale.nfceStatus === 'cancelled' || !!sale.nfceCanceladaEm;
+  const isRejected = sale.nfceStatus === 'rejected' || sale.nfceStatus === 'error';
+
+  // Calcula janela de cancelamento (30min)
+  const minutosDesdeEmissao = sale.nfceAutorizadaEm
+    ? (Date.now() - new Date(sale.nfceAutorizadaEm).getTime()) / 60000
+    : 999;
+  const podeCancelar = isAuthorized && !isCancelled && minutosDesdeEmissao <= 30;
+  const minutosRestantes = Math.max(0, Math.floor(30 - minutosDesdeEmissao));
+
+  async function emitirNfce() {
+    setEmitting(true);
+    setEmitError(null);
+    try {
+      const r = await api<any>(`/pdv/sales/${sale.id}/nfce`, { method: 'POST' });
+      // Recarrega venda pra puxar status atualizado
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      if (r?.status === 'rejected' || r?.status === 'error') {
+        setEmitError(r?.motivo || r?.error || 'NFC-e rejeitada pela SEFAZ');
+      }
+    } catch (e: any) {
+      setEmitError(e?.message || String(e));
+    } finally {
+      setEmitting(false);
+    }
+  }
+
+  async function cancelarNfce() {
+    if (cancelMotivo.trim().length < 15) {
+      setCancelError('Justificativa precisa ter no mínimo 15 caracteres');
+      return;
+    }
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      const r = await api<any>(`/pdv/sales/${sale.id}/nfce/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ justificativa: cancelMotivo.trim() }),
+      });
+      if (r?.success) {
+        const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+        setSale(fresh);
+        setShowCancelForm(false);
+        setCancelMotivo('');
+      } else {
+        setCancelError(r?.motivo || r?.error || 'Falha ao cancelar');
+      }
+    } catch (e: any) {
+      setCancelError(e?.message || String(e));
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-lg w-full max-w-md my-8 overflow-hidden">
@@ -1930,21 +2001,140 @@ function FinalizedModal({ sale, onNew }: { sale: Sale; onNew: () => void }) {
           <Check className="w-10 h-10 mx-auto text-emerald-600 mb-1" />
           <h2 className="font-bold text-lg text-emerald-900">Venda Finalizada</h2>
           <p className="text-xs text-emerald-700">
-            {brl(sale.total)} · {sale.paymentMethod?.toUpperCase()}
+            {brl(sale.total)} · {sale.paymentMethod?.toUpperCase() || 'SPLIT'}
           </p>
         </div>
         <div className="p-4 space-y-3">
-          {/* Mini cupom */}
-          <div className="bg-slate-50 border border-dashed rounded p-3 text-xs font-mono space-y-1">
-            <div className="text-center font-bold mb-1">CUPOM FISCAL ELETRÔNICO</div>
-            <div className="text-center text-[10px] text-slate-500">
-              {sale.storeName} · NFC-e {sale.nfceNumber || '—'}
+          {/* ─── Status NFC-e ─── */}
+          {!sale.nfceStatus && (
+            <div className="bg-slate-50 border border-slate-200 rounded p-3 text-center text-sm text-slate-600">
+              <FileText className="w-6 h-6 mx-auto mb-1 text-slate-400" />
+              NFC-e ainda não emitida
             </div>
-            {sale.nfceChave && (
-              <div className="text-center text-[9px] text-slate-400 break-all">
-                Chave: {sale.nfceChave}
+          )}
+
+          {isAuthorized && !isCancelled && (
+            <div className="bg-emerald-50 border-2 border-emerald-300 rounded p-3 space-y-1">
+              <div className="flex items-center gap-2 font-bold text-emerald-900 text-sm">
+                <Check className="w-4 h-4" /> NFC-e {sale.nfceNumber} AUTORIZADA
               </div>
-            )}
+              {sale.nfceProtocolo && (
+                <div className="text-xs text-emerald-800 font-mono">
+                  Protocolo: {sale.nfceProtocolo}
+                </div>
+              )}
+              {sale.nfceChave && (
+                <div className="text-[10px] text-emerald-700 break-all font-mono">
+                  Chave: {sale.nfceChave}
+                </div>
+              )}
+              {podeCancelar && (
+                <div className="text-xs text-amber-700 mt-1">
+                  ⏱ Pode cancelar por mais {minutosRestantes} min
+                </div>
+              )}
+            </div>
+          )}
+
+          {isCancelled && (
+            <div className="bg-red-50 border-2 border-red-300 rounded p-3 space-y-1">
+              <div className="flex items-center gap-2 font-bold text-red-900 text-sm">
+                <X className="w-4 h-4" /> NFC-e {sale.nfceNumber} CANCELADA
+              </div>
+              {sale.nfceCancelamentoMotivo && (
+                <div className="text-xs text-red-800 italic">
+                  Motivo: {sale.nfceCancelamentoMotivo}
+                </div>
+              )}
+            </div>
+          )}
+
+          {isRejected && (
+            <div className="bg-red-50 border-2 border-red-300 rounded p-3 space-y-1">
+              <div className="flex items-center gap-2 font-bold text-red-900 text-sm">
+                <X className="w-4 h-4" /> NFC-e REJEITADA
+              </div>
+              {sale.nfceMotivo && (
+                <div className="text-xs text-red-800">{sale.nfceMotivo}</div>
+              )}
+            </div>
+          )}
+
+          {/* ─── Ações NFC-e ─── */}
+          {!isAuthorized && !isCancelled && (
+            <button
+              onClick={emitirNfce}
+              disabled={emitting}
+              className="w-full px-3 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold rounded flex items-center justify-center gap-2 text-base"
+            >
+              <FileText className="w-5 h-5" />
+              {emitting ? 'Transmitindo SEFAZ…' : '🧾 EMITIR NFC-e'}
+            </button>
+          )}
+
+          {emitError && (
+            <div className="bg-red-50 border border-red-300 rounded p-2 text-xs text-red-800">
+              <strong>Falhou:</strong> {emitError}
+            </div>
+          )}
+
+          {podeCancelar && !showCancelForm && (
+            <button
+              onClick={() => setShowCancelForm(true)}
+              className="w-full px-3 py-2 border-2 border-red-300 text-red-700 hover:bg-red-50 rounded flex items-center justify-center gap-2 text-sm font-bold"
+            >
+              <X className="w-4 h-4" />
+              🚫 CANCELAR NFC-e
+            </button>
+          )}
+
+          {showCancelForm && (
+            <div className="bg-red-50 border-2 border-red-300 rounded p-3 space-y-2">
+              <div className="text-xs font-bold text-red-900 uppercase">
+                Motivo do cancelamento (15-255 chars)
+              </div>
+              <textarea
+                value={cancelMotivo}
+                onChange={(e) => setCancelMotivo(e.target.value.slice(0, 255))}
+                placeholder="Ex: Cliente desistiu da compra após emissão"
+                rows={3}
+                className="w-full border border-red-300 rounded p-2 text-sm"
+              />
+              <div className="text-[10px] text-red-700 text-right">
+                {cancelMotivo.trim().length}/255 (mín 15)
+              </div>
+              {cancelError && (
+                <div className="text-xs text-red-800 bg-red-100 rounded p-1.5">
+                  {cancelError}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowCancelForm(false);
+                    setCancelMotivo('');
+                    setCancelError(null);
+                  }}
+                  className="flex-1 px-3 py-2 border border-slate-300 rounded text-sm"
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={cancelarNfce}
+                  disabled={cancelling || cancelMotivo.trim().length < 15}
+                  className="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white font-bold rounded text-sm"
+                >
+                  {cancelling ? 'Cancelando…' : 'Confirmar Cancelamento'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ─── Mini cupom ─── */}
+          <div className="bg-slate-50 border border-dashed rounded p-3 text-xs font-mono space-y-1">
+            <div className="text-center text-[10px] text-slate-500">
+              {sale.storeName}
+            </div>
             {sale.customerCpf && (
               <div className="text-[10px]">CPF: {sale.customerCpf}</div>
             )}
@@ -1960,43 +2150,7 @@ function FinalizedModal({ sale, onNew }: { sale: Sale; onNew: () => void }) {
               <span>TOTAL</span>
               <span className="tabular-nums">{brl(sale.total)}</span>
             </div>
-            <div className="text-[10px] text-amber-700 text-center mt-2 italic">
-              ⚠ NFC-e MODO PREVIEW — não emitida na SEFAZ
-            </div>
           </div>
-
-          {/* Ações de envio (mockadas) */}
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => alert('Envio por email — a integrar (Resend/SES)')}
-              disabled={!sale.customerEmail}
-              className="px-3 py-2 text-sm border-2 border-blue-200 text-blue-700 rounded hover:bg-blue-50 flex items-center justify-center gap-1.5 disabled:opacity-40"
-            >
-              <Mail className="w-4 h-4" />
-              Email
-            </button>
-            <button
-              onClick={() => alert('Envio por WhatsApp — a integrar (Baileys)')}
-              disabled={!sale.customerPhone}
-              className="px-3 py-2 text-sm border-2 border-emerald-200 text-emerald-700 rounded hover:bg-emerald-50 flex items-center justify-center gap-1.5 disabled:opacity-40"
-            >
-              <MessageSquare className="w-4 h-4" />
-              WhatsApp
-            </button>
-          </div>
-
-          <button
-            onClick={() => setShowXml(!showXml)}
-            className="w-full text-xs text-slate-500 hover:text-slate-700 flex items-center justify-center gap-1"
-          >
-            <FileText className="w-3 h-3" />
-            {showXml ? 'Esconder XML NFC-e' : 'Ver XML NFC-e (preview)'}
-          </button>
-          {showXml && sale.nfceXml && (
-            <pre className="bg-slate-900 text-emerald-300 text-[9px] font-mono p-2 rounded max-h-60 overflow-auto">
-              {sale.nfceXml}
-            </pre>
-          )}
 
           <button
             onClick={onNew}

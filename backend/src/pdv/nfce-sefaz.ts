@@ -184,6 +184,9 @@ const SEFAZ_SP_NFCE_ENDPOINTS = {
       'https://nfce.fazenda.sp.gov.br/ws/NFeConsultaProtocolo4.asmx',
     consultaRecibo:
       'https://nfce.fazenda.sp.gov.br/ws/NFeRetAutorizacao4.asmx',
+    // Eventos (cancelamento, carta de correção): SVRS centralizado
+    eventos:
+      'https://www.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx',
   },
   '2': {
     autorizacao:
@@ -372,4 +375,250 @@ function buildProcNFe(nfeAssinada: string, protXml: string): string {
 ${nfe}
 ${protXml}
 </nfeProc>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4. CANCELAMENTO NFC-e (evento 110111)
+// ═══════════════════════════════════════════════════════════════════════
+
+export interface CancelResult {
+  success: boolean;
+  cStat: string;
+  xMotivo: string;
+  nProtCancelamento?: string;
+  dhRegEvento?: string;
+  xmlEnviado: string;
+  xmlResposta: string;
+  error?: string;
+}
+
+/**
+ * Assina XML de evento (infEvento). Diferente da NFe normal:
+ * Reference URI aponta pra #ID do <infEvento>.
+ */
+function signXmlEvento(input: {
+  xml: string;
+  pfxBase64: string;
+  pfxPassword: string;
+}): string {
+  const { privateKeyPem, certPem } = extractA1FromPfx(
+    input.pfxBase64,
+    input.pfxPassword,
+  );
+
+  const certBase64 = certPem
+    .replace(/-----BEGIN CERTIFICATE-----/, '')
+    .replace(/-----END CERTIFICATE-----/, '')
+    .replace(/\s+/g, '');
+
+  const sig = new SignedXml({
+    privateKey: privateKeyPem,
+    publicCert: certPem,
+    canonicalizationAlgorithm: 'http://www.w3.org/TR/2001/REC-xml-c14n-20010315',
+    signatureAlgorithm: 'http://www.w3.org/2000/09/xmldsig#rsa-sha1',
+  });
+
+  sig.addReference({
+    xpath: "//*[local-name(.)='infEvento']",
+    digestAlgorithm: 'http://www.w3.org/2000/09/xmldsig#sha1',
+    transforms: [
+      'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
+      'http://www.w3.org/TR/2001/REC-xml-c14n-20010315',
+    ],
+  });
+
+  sig.computeSignature(input.xml, {
+    location: { reference: "//*[local-name(.)='evento']", action: 'append' },
+  });
+
+  let signed = sig.getSignedXml();
+  if (!/<X509Certificate>/.test(signed)) {
+    signed = signed.replace(
+      /<KeyInfo>/,
+      `<KeyInfo><X509Data><X509Certificate>${certBase64}</X509Certificate></X509Data>`,
+    );
+  }
+  return signed;
+}
+
+/**
+ * Cancela NFC-e via evento 110111. Funciona até 30min após autorização (NFC-e).
+ *
+ * @param input.chave - chave de 44 dígitos da NFC-e a cancelar
+ * @param input.protocolo - protocolo de autorização original (nProt)
+ * @param input.justificativa - texto 15-255 chars (obrigatório SEFAZ)
+ */
+export async function cancelNfceSefazSp(input: {
+  chave: string;
+  protocolo: string;
+  justificativa: string;
+  cnpj: string; // 14 dígitos
+  ambiente: '1' | '2';
+  pfxBase64: string;
+  pfxPassword: string;
+}): Promise<CancelResult> {
+  // Validações de input
+  const just = (input.justificativa || '').trim();
+  if (just.length < 15 || just.length > 255) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo: 'Justificativa precisa ter entre 15 e 255 caracteres',
+      xmlEnviado: '',
+      xmlResposta: '',
+      error: 'Justificativa inválida',
+    };
+  }
+  if (!input.chave || input.chave.length !== 44) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo: 'Chave da NFC-e inválida (precisa ter 44 dígitos)',
+      xmlEnviado: '',
+      xmlResposta: '',
+      error: 'Chave inválida',
+    };
+  }
+  if (!input.protocolo) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo: 'Protocolo de autorização original não informado',
+      xmlEnviado: '',
+      xmlResposta: '',
+      error: 'Protocolo ausente',
+    };
+  }
+
+  const cnpj = input.cnpj.replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+  const cOrgao = '35'; // SP
+  const tpAmb = input.ambiente;
+  const nSeqEvento = '1'; // primeira (e geralmente única) tentativa
+
+  // dhEvento no mesmo formato do dhEmi (offset -03:00)
+  const now = new Date();
+  const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+  const dhEvento = local.toISOString().slice(0, 19) + '-03:00';
+
+  // ID do evento: "ID" + tpEvento(6) + chNFe(44) + nSeqEvento(2 dígitos)
+  const tpEvento = '110111';
+  const idEvento = `ID${tpEvento}${input.chave}${nSeqEvento.padStart(2, '0')}`;
+
+  // Escapa caracteres XML na justificativa
+  const justEsc = just
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
+  const eventoXml = `<evento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><infEvento Id="${idEvento}"><cOrgao>${cOrgao}</cOrgao><tpAmb>${tpAmb}</tpAmb><CNPJ>${cnpj}</CNPJ><chNFe>${input.chave}</chNFe><dhEvento>${dhEvento}</dhEvento><tpEvento>${tpEvento}</tpEvento><nSeqEvento>${nSeqEvento}</nSeqEvento><verEvento>1.00</verEvento><detEvento versao="1.00"><descEvento>Cancelamento</descEvento><nProt>${input.protocolo}</nProt><xJust>${justEsc}</xJust></detEvento></infEvento></evento>`;
+
+  let eventoAssinado: string;
+  try {
+    eventoAssinado = signXmlEvento({
+      xml: eventoXml,
+      pfxBase64: input.pfxBase64,
+      pfxPassword: input.pfxPassword,
+    });
+    eventoAssinado = eventoAssinado
+      .replace(/^﻿/, '')
+      .replace(/<\?xml[^?]*\?>\s*/g, '')
+      .trim();
+  } catch (e: any) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo: `Erro ao assinar evento: ${e?.message}`,
+      xmlEnviado: eventoXml,
+      xmlResposta: '',
+      error: e?.message,
+    };
+  }
+
+  const idLote = String(Date.now()).slice(-15);
+  const envEvento = `<envEvento xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.00"><idLote>${idLote}</idLote>${eventoAssinado}</envEvento>`;
+
+  const SOAP_ACTION =
+    'http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento';
+  const soap = `<?xml version="1.0" encoding="UTF-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope"><soap:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">${envEvento}</nfeDadosMsg></soap:Body></soap:Envelope>`;
+
+  const endpoint = (SEFAZ_SP_NFCE_ENDPOINTS[input.ambiente] as any).eventos
+    || 'https://www.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx';
+
+  const { privateKeyPem, certPem } = extractA1FromPfx(
+    input.pfxBase64,
+    input.pfxPassword,
+  );
+
+  const https = require('https');
+  const agent = new https.Agent({
+    cert: certPem,
+    key: privateKeyPem,
+    rejectUnauthorized: false,
+    minVersion: 'TLSv1.2',
+  });
+
+  let xmlResposta = '';
+  try {
+    const resp = await axios.post(endpoint, soap, {
+      headers: {
+        'Content-Type': `application/soap+xml; charset=utf-8; action="${SOAP_ACTION}"`,
+        Accept: 'application/soap+xml, text/xml, */*',
+        'User-Agent': 'LurdsOrderOne-NFCe/1.0',
+      },
+      httpsAgent: agent,
+      timeout: 60000,
+      validateStatus: () => true,
+    });
+    xmlResposta = String(resp.data || '');
+    if (resp.status < 200 || resp.status >= 300) {
+      return {
+        success: false,
+        cStat: '999',
+        xMotivo: `SEFAZ retornou HTTP ${resp.status}`.trim(),
+        xmlEnviado: envEvento,
+        xmlResposta: xmlResposta || `(sem body)`,
+        error: `HTTP ${resp.status}`,
+      };
+    }
+  } catch (e: any) {
+    return {
+      success: false,
+      cStat: '999',
+      xMotivo: e?.message || 'Erro de comunicação com SEFAZ',
+      xmlEnviado: envEvento,
+      xmlResposta: e?.response?.data ? String(e.response.data) : '',
+      error: e?.message,
+    };
+  }
+
+  // Parse retorno: cStat 135 = evento registrado e vinculado a NF-e (sucesso)
+  // cStat 136 = evento registrado mas NÃO vinculado (alguma divergência, mas válido)
+  // Outros = erro
+  const retEvtMatch = xmlResposta.match(/<retEvento[\s\S]*?<\/retEvento>/);
+  const retEvt = retEvtMatch?.[0] || xmlResposta;
+
+  const cStat =
+    (retEvt.match(/<cStat>([^<]+)<\/cStat>/) || [])[1] ||
+    (xmlResposta.match(/<cStat>([^<]+)<\/cStat>/) || [])[1] ||
+    '';
+  const xMotivo =
+    (retEvt.match(/<xMotivo>([^<]+)<\/xMotivo>/) || [])[1] ||
+    (xmlResposta.match(/<xMotivo>([^<]+)<\/xMotivo>/) || [])[1] ||
+    '';
+  const nProtCancelamento =
+    (retEvt.match(/<nProt>([^<]+)<\/nProt>/) || [])[1] || '';
+  const dhRegEvento =
+    (retEvt.match(/<dhRegEvento>([^<]+)<\/dhRegEvento>/) || [])[1] || '';
+
+  return {
+    success: cStat === '135' || cStat === '136',
+    cStat,
+    xMotivo,
+    nProtCancelamento,
+    dhRegEvento,
+    xmlEnviado: envEvento,
+    xmlResposta,
+  };
 }

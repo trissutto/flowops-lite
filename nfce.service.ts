@@ -7,7 +7,6 @@ import {
   buildQrCodeUrlNfce,
   buildUrlConsultaNfce,
   transmitNfeSefazSp,
-  cancelNfceSefazSp,
 } from './nfce-sefaz';
 
 /**
@@ -791,97 +790,6 @@ export class NfceService {
       urlConsulta,
       xmlEnviado: transmit.xmlEnviado,
       xmlResposta: transmit.xmlResposta,
-    };
-  }
-
-  /**
-   * Cancela NFC-e via evento 110111 (até 30min após autorização).
-   *
-   * @param saleId    - ID da venda PDV
-   * @param justificativa - 15-255 chars (regra SEFAZ)
-   */
-  async cancel(saleId: string, justificativa: string): Promise<{
-    success: boolean;
-    cStat: string;
-    motivo: string;
-    nProtCancelamento?: string;
-    error?: string;
-  }> {
-    const sale: any = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: saleId },
-    });
-    if (!sale) throw new BadRequestException('Venda não encontrada');
-    if (sale.nfceStatus !== 'authorized') {
-      throw new BadRequestException(
-        `NFC-e dessa venda não está autorizada (status: ${sale.nfceStatus || '—'}). Não há nada pra cancelar.`,
-      );
-    }
-    if (sale.nfceCanceladaEm) {
-      throw new BadRequestException(
-        `NFC-e já foi cancelada em ${new Date(sale.nfceCanceladaEm).toLocaleString('pt-BR')}.`,
-      );
-    }
-    if (!sale.nfceChave || !sale.nfceProtocolo) {
-      throw new BadRequestException(
-        'Venda sem chave ou protocolo de NFC-e — impossível cancelar.',
-      );
-    }
-
-    // Janela de 30min — checa antes de queimar request SEFAZ
-    if (sale.nfceAutorizadaEm) {
-      const minutosDesdeAutorizacao =
-        (Date.now() - new Date(sale.nfceAutorizadaEm).getTime()) / 60000;
-      if (minutosDesdeAutorizacao > 30) {
-        throw new BadRequestException(
-          `NFC-e autorizada há ${Math.floor(minutosDesdeAutorizacao)} minutos. ` +
-          `Cancelamento permitido só até 30 minutos após autorização.`,
-        );
-      }
-    }
-
-    const cfgRaw: any = await (this.prisma as any).nfceConfig.findUnique({
-      where: { storeCode: sale.storeCode },
-    });
-    if (!cfgRaw?.certPfxB64) {
-      throw new BadRequestException(
-        `Loja ${sale.storeCode} sem certificado A1 — impossível assinar cancelamento.`,
-      );
-    }
-
-    const result = await cancelNfceSefazSp({
-      chave: sale.nfceChave,
-      protocolo: sale.nfceProtocolo,
-      justificativa,
-      cnpj: cfgRaw.cnpj || '',
-      ambiente: (cfgRaw.ambiente || '2') as '1' | '2',
-      pfxBase64: cfgRaw.certPfxB64,
-      pfxPassword: cfgRaw.certPfxPass || '',
-    });
-
-    if (result.success) {
-      await (this.prisma as any).pdvSale.update({
-        where: { id: sale.id },
-        data: {
-          nfceCanceladaEm: new Date(),
-          nfceCancelamentoProto: result.nProtCancelamento || null,
-          nfceCancelamentoMotivo: justificativa,
-          nfceCancelamentoXml: result.xmlResposta,
-          nfceStatus: 'cancelled',
-        },
-      });
-      return {
-        success: true,
-        cStat: result.cStat,
-        motivo: result.xMotivo,
-        nProtCancelamento: result.nProtCancelamento,
-      };
-    }
-
-    return {
-      success: false,
-      cStat: result.cStat,
-      motivo: result.xMotivo,
-      error: result.error,
     };
   }
 
