@@ -152,6 +152,17 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/stats/today?storeCode=01
+   * Vendas finalizadas hoje da loja, total vendido e ticket médio.
+   */
+  @Get('stats/today')
+  statsToday(@Req() req: any, @Query('storeCode') storeCode: string) {
+    this.requireRole(req);
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.statsToday(storeCode);
+  }
+
+  /**
    * GET /pdv/sales?storeCode=01&status=open&limit=20
    */
   @Get('sales')

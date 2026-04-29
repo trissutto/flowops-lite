@@ -640,8 +640,22 @@ export default function PdvPage() {
           </button>
         </div>
 
-        {/* Linha 2 — Atalhos rápidos (5 pílulas modernas) */}
-        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-3 md:grid-cols-5 gap-2">
+        {/* Linha 2 — Atalhos rápidos (6 pílulas modernas) */}
+        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-3 md:grid-cols-6 gap-2">
+          <button
+            type="button"
+            onClick={() => setShowPixAvulso(true)}
+            className="bg-gradient-to-br from-emerald-100 to-teal-200 hover:from-emerald-200 hover:to-teal-300 border border-emerald-300 text-emerald-900 rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group"
+            title="Cobrança PIX avulsa"
+          >
+            <div className="w-9 h-9 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+              <DollarSign className="w-5 h-5" />
+            </div>
+            <div className="text-center leading-tight">
+              <div className="text-[11px] font-black uppercase tracking-wide">PIX</div>
+              <div className="text-[9px] opacity-70 font-semibold">Avulso</div>
+            </div>
+          </button>
           <ShortcutPill
             href="/minha-loja/consultar"
             icon={<Search className="w-5 h-5" />}
@@ -704,6 +718,9 @@ export default function PdvPage() {
           </button>
         </div>
       </header>
+
+      {/* Stats Bar — vendas do dia, sempre visível */}
+      <StatsBar storeCode={storeCode} salesVersion={sale?.id} />
 
       <main className="flex-1 max-w-3xl mx-auto w-full p-3 space-y-3 pb-32">
         {error && (
@@ -919,7 +936,10 @@ export default function PdvPage() {
             </div>
           </div>
         ) : sale?.status === 'open' ? (
-          <EmptyCartDashboard onPixAvulso={() => setShowPixAvulso(true)} />
+          <div className="text-center py-10 text-slate-400 bg-white rounded-lg border-2 border-dashed">
+            <ShoppingCart className="w-10 h-10 inline-block mb-2 opacity-50" />
+            <div className="text-sm">Carrinho vazio · bipe o primeiro produto</div>
+          </div>
         ) : null}
       </main>
 
@@ -2645,6 +2665,65 @@ function PixAvulsoModal({
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── STATS BAR ──────────────────────────────────────────────────────────
+// Linha compacta de métricas do dia: vendas finalizadas, total vendido,
+// ticket médio. Sempre visível abaixo do header. Recarrega quando a
+// venda muda (ex: pós-finalização aparece nova métrica em segundos).
+function StatsBar({ storeCode, salesVersion }: { storeCode?: string; salesVersion?: string }) {
+  const [stats, setStats] = useState<{ count: number; total: number; ticketMedio: number } | null>(null);
+  useEffect(() => {
+    if (!storeCode) return;
+    let cancel = false;
+    api<{ count: number; total: number; ticketMedio: number }>(
+      `/pdv/stats/today?storeCode=${encodeURIComponent(storeCode)}`,
+    )
+      .then((d) => { if (!cancel) setStats(d); })
+      .catch(() => { /* silencioso — não polui UI por stat não carregar */ });
+    return () => { cancel = true; };
+  }, [storeCode, salesVersion]);
+
+  if (!storeCode) return null;
+  return (
+    <div className="max-w-3xl mx-auto px-4 pb-2">
+      <div className="flex gap-2 text-[11px]">
+        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+            <Check className="w-3.5 h-3.5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Vendas hoje</div>
+            <div className="text-base font-black text-slate-900 leading-tight tabular-nums">
+              {stats?.count ?? '—'}
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+            <DollarSign className="w-3.5 h-3.5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Total</div>
+            <div className="text-base font-black text-rose-700 leading-tight tabular-nums truncate">
+              {stats ? brl(stats.total) : '—'}
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0">
+            <Sparkles className="w-3.5 h-3.5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[9px] uppercase font-bold text-slate-500 leading-none">Ticket médio</div>
+            <div className="text-base font-black text-violet-700 leading-tight tabular-nums truncate">
+              {stats && stats.count > 0 ? brl(stats.ticketMedio) : '—'}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -225,6 +225,52 @@ export class PdvService {
     });
   }
 
+  /**
+   * Estatísticas do dia da loja: vendas finalizadas hoje, total vendido,
+   * ticket médio. Usa data local (Brasília).
+   */
+  async statsToday(storeCode: string): Promise<{
+    count: number;
+    total: number;
+    ticketMedio: number;
+  }> {
+    if (!storeCode) return { count: 0, total: 0, ticketMedio: 0 };
+    // Início do dia em Brasília (UTC-3) → converte pra UTC pra query
+    const now = new Date();
+    const inicioBrasilia = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      0,
+      0,
+      0,
+    );
+    // Ajusta pro timezone local do servidor (Railway = UTC)
+    // Brasília hoje 00:00 = UTC hoje 03:00
+    const inicioUtc = new Date(inicioBrasilia.getTime() + 3 * 60 * 60 * 1000);
+
+    try {
+      const sales = await (this.prisma as any).pdvSale.findMany({
+        where: {
+          storeCode,
+          status: 'finalized',
+          finalizedAt: { gte: inicioUtc },
+        },
+        select: { total: true },
+      });
+      const count = sales.length;
+      const total = sales.reduce(
+        (s: number, x: any) => s + Number(x.total || 0),
+        0,
+      );
+      const ticketMedio = count > 0 ? total / count : 0;
+      return { count, total, ticketMedio };
+    } catch (e: any) {
+      this.logger.warn(`[statsToday] falhou: ${e?.message}`);
+      return { count: 0, total: 0, ticketMedio: 0 };
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // ITENS DO CARRINHO
   // ═══════════════════════════════════════════════════════════════════════
