@@ -17,28 +17,15 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Globe2, Store, BarChart3, Settings, ShoppingBag,
-  Receipt, Truck, Wifi, RefreshCw, Zap, Bot, ArrowUpRight,
+  LayoutDashboard, Globe2, Store, BarChart3, Settings,
+  RefreshCw, Zap, Bot, ArrowUpRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { getSocket } from '@/lib/socket';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
 import { getDailyQuote } from '@/lib/daily-quote';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
-import KpiCard from '@/components/KpiCard';
 
-interface CountsResp {
-  byStatus: Record<string, { name: string; total: number }>;
-  grand: number;
-}
-interface PresenceItem {
-  code: string;
-  name: string;
-  online: boolean;
-  active: boolean;
-}
-
-// === Sidebar: 5 itens (Dashboard + 4 hubs) ===
+// === Sidebar: 5 itens (Dashboard + 4 hubs) — usado quando a sidebar volta ===
 const NAV: AdminNavItem[] = [
   { key: 'dashboard', label: 'Dashboard',  href: '/',                       icon: LayoutDashboard },
   { key: 'site',      label: 'Site',       href: '/site',                   icon: Globe2 },
@@ -50,10 +37,6 @@ const NAV: AdminNavItem[] = [
 export default function DashboardHome() {
   const router = useRouter();
   const [userName, setUserName] = useState<string>('');
-  const [counts, setCounts] = useState<Record<string, { name: string; total: number }>>({});
-  const [concluidosHoje, setConcluidosHoje] = useState<number>(0);
-  const [presence, setPresence] = useState<PresenceItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Pilot
@@ -108,35 +91,7 @@ export default function DashboardHome() {
     };
   }, []);
 
-  // KPIs reais (counts + presence + completed-today)
-  async function loadKpis() {
-    try {
-      const [cnt, done, pres] = await Promise.all([
-        api<CountsResp>('/orders/wc/counts').catch(() => null),
-        api<{ total: number }>('/orders/wc/completed-today').catch(() => null),
-        api<PresenceItem[]>('/stores/presence').catch(() => []),
-      ]);
-      if (cnt) setCounts(cnt.byStatus);
-      if (done?.total != null) setConcluidosHoje(done.total);
-      if (Array.isArray(pres)) setPresence(pres);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }
-  useEffect(() => {
-    loadKpis();
-    const timer = setInterval(loadKpis, 30_000);
-    const sock = getSocket();
-    const onAny = () => loadKpis();
-    sock.on('order:new', onAny);
-    sock.on('order:status-changed', onAny);
-    return () => {
-      clearInterval(timer);
-      sock.off('order:new', onAny);
-      sock.off('order:status-changed', onAny);
-    };
-  }, []);
+  // Sem KPIs/contadores na home — só feedback visual no botão Atualizar.
 
   async function togglePilot() {
     if (pilotBusy) return;
@@ -163,20 +118,10 @@ export default function DashboardHome() {
 
   function handleRefresh() {
     setRefreshing(true);
-    loadKpis();
+    // Recarrega frase do dia + força re-render do clock
+    setNow(new Date());
+    setTimeout(() => setRefreshing(false), 400);
   }
-
-  // Derivações
-  const totalPending =
-    (counts['processing']?.total ?? 0) +
-    (counts['separacao']?.total ?? 0) +
-    (counts['pending']?.total ?? 0) +
-    (counts['on-hold']?.total ?? 0);
-
-  const emSeparacao = counts['separacao']?.total ?? 0;
-  const emTransito = counts['shipped']?.total ?? 0;
-  const lojasOnline = presence.filter((p) => p.online).length;
-  const lojasTotal = presence.filter((p) => p.active).length;
 
   const today = now.toLocaleDateString('pt-BR', {
     weekday: 'long', day: '2-digit', month: 'long',
@@ -265,50 +210,6 @@ export default function DashboardHome() {
               Horário local
             </div>
           </div>
-        </div>
-      </section>
-
-      {/* === Visão geral · 4 KPIs coloridos FUNCIONAIS === */}
-      <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm mb-5">
-        <div className="mb-4">
-          <h2 className="text-lg font-bold text-slate-900">Visão geral</h2>
-          <p className="text-sm text-slate-500">
-            Acompanhe pedidos, separação e remessas em tempo real. Clique em qualquer card pra ver detalhe.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          <KpiCard
-            tone="teal"
-            label="Pedidos pendentes"
-            value={loading ? '…' : totalPending}
-            hint="Pagar · processar · aguardar"
-            icon={ShoppingBag}
-            onClick={() => router.push('/separacao?status=processing')}
-          />
-          <KpiCard
-            tone="green"
-            label="Concluídos hoje"
-            value={loading ? '…' : concluidosHoje}
-            hint="WC completed após 00h"
-            icon={Receipt}
-            onClick={() => router.push('/separacao?status=completed')}
-          />
-          <KpiCard
-            tone="orange"
-            label="Em separação"
-            value={loading ? '…' : emSeparacao}
-            hint="Filiais separando agora"
-            icon={Truck}
-            onClick={() => router.push('/separacao?status=separacao')}
-          />
-          <KpiCard
-            tone="purple"
-            label="Lojas online"
-            value={loading ? '…' : `${lojasOnline}/${lojasTotal}`}
-            hint={`${emTransito} pedido(s) em trânsito`}
-            icon={Wifi}
-            onClick={() => router.push('/separacao?status=em-transito')}
-          />
         </div>
       </section>
 
