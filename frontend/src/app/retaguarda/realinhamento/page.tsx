@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles, Shirt } from 'lucide-react';
 
@@ -638,6 +639,15 @@ export default function RealinhamentoPage() {
             Informe as referências, o sistema busca todas as variações no Gigasistemas e gera as ordens de transferência.
           </p>
         </div>
+        {/* Atalhos admin */}
+        <Link
+          href="/retaguarda/realinhamento/nao-encontrados"
+          className="flex items-center gap-1.5 text-xs text-amber-800 hover:bg-amber-50 border border-amber-300 hover:border-amber-400 rounded-lg px-3 py-2 transition font-semibold"
+          title="Revisar peças não encontradas pelas lojas origem"
+        >
+          <AlertTriangle className="w-3.5 h-3.5" />
+          Não encontradas
+        </Link>
         {/* Admin: zerar realinhamentos de teste */}
         <button
           type="button"

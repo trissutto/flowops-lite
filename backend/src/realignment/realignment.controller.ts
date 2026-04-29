@@ -237,6 +237,56 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/not-found — lista de itens reportados como não encontrados.
+   * Tela admin de revisão.
+   */
+  @Get('not-found')
+  async listNotFound(@Req() req: any) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.svc.listNotFound();
+  }
+
+  /**
+   * PATCH /realignment/:id/cancel-not-found — cancela definitivamente.
+   */
+  @Patch(':id/cancel-not-found')
+  async cancelNotFound(@Param('id') id: string, @Req() req: any) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.svc.cancelNotFound(id);
+  }
+
+  /**
+   * PATCH /realignment/:id/restore-not-found — volta pra fila pendente.
+   */
+  @Patch(':id/restore-not-found')
+  async restoreNotFound(@Param('id') id: string, @Req() req: any) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.svc.restoreNotFound(id);
+  }
+
+  /**
+   * PATCH /realignment/:id/swap-origin — troca loja origem do item.
+   * Body: { newOriginCode, newOriginName? }
+   */
+  @Patch(':id/swap-origin')
+  async swapOriginStore(
+    @Param('id') id: string,
+    @Body() body: { newOriginCode: string; newOriginName?: string },
+    @Req() req: any,
+  ) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.svc.swapOriginStore({
+      transferId: id,
+      newOriginCode: body?.newOriginCode,
+      newOriginName: body?.newOriginName,
+    });
+  }
+
+  /**
    * Loja origem reporta que NÃO encontrou a peça fisicamente.
    * Body: { motivo: string }
    * Item sai da fila de pendentes mas fica visível pra matriz revisar.

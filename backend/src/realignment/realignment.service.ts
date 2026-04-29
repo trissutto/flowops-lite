@@ -976,6 +976,98 @@ export class RealignmentService {
    *   - Emite socket pra retaguarda + outros dispositivos da loja.
    */
   /**
+   * Lista TODOS os itens reportados como "não encontrado" pela loja origem.
+   * Usado pela tela admin /retaguarda/realinhamento/nao-encontrados.
+   * Agrupa por REF pra facilitar análise.
+   */
+  async listNotFound() {
+    const rows: any[] = await this.prisma.$queryRaw`
+      SELECT id, tipo, ref_code as "refCode", descricao, cor, tamanho,
+             qty_origem as "qtyOrigem",
+             loja_origem_code as "lojaOrigemCode",
+             loja_origem_name as "lojaOrigemName",
+             loja_destino_code as "lojaDestinoCode",
+             loja_destino_name as "lojaDestinoName",
+             solicitante_nome as "solicitanteNome",
+             realignment_not_found_at as "notFoundAt",
+             realignment_not_found_note as "notFoundNote",
+             created_at as "createdAt"
+        FROM transfer_orders
+       WHERE realignment_status = 'not_found'
+       ORDER BY realignment_not_found_at DESC
+       LIMIT 500
+    `;
+    return rows.map((r) => ({
+      ...r,
+      notFoundAt: r.notFoundAt ? new Date(r.notFoundAt).toISOString() : null,
+      createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+    }));
+  }
+
+  /**
+   * Cancela definitivamente um item "não encontrado" (status='cancelled').
+   * Não tenta mais — desiste.
+   */
+  async cancelNotFound(transferId: string) {
+    await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET realignment_status = 'cancelled'
+      WHERE id = ${transferId} AND realignment_status = 'not_found'
+    `;
+    return { ok: true, id: transferId };
+  }
+
+  /**
+   * Devolve item "não encontrado" pra fila pendente (loja tenta de novo).
+   * Útil quando o problema foi resolvido (peça foi achada, etiqueta corrigida).
+   */
+  async restoreNotFound(transferId: string) {
+    await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET realignment_status = NULL,
+          realignment_not_found_at = NULL,
+          realignment_not_found_note = NULL,
+          realignment_not_found_by_user_id = NULL
+      WHERE id = ${transferId} AND realignment_status = 'not_found'
+    `;
+    return { ok: true, id: transferId };
+  }
+
+  /**
+   * Troca a loja ORIGEM de um item não encontrado pra outra loja que tem
+   * estoque. Reseta status. Loja nova vai ver na fila dela na próxima recarga.
+   */
+  async swapOriginStore(input: {
+    transferId: string;
+    newOriginCode: string;
+    newOriginName?: string;
+  }) {
+    if (!input.newOriginCode) {
+      throw new BadRequestException('Loja origem nova é obrigatória');
+    }
+    // Busca nome da loja se não veio
+    let name = input.newOriginName;
+    if (!name) {
+      const store = await this.prisma.store.findFirst({
+        where: { code: input.newOriginCode },
+        select: { name: true },
+      });
+      name = store?.name || input.newOriginCode;
+    }
+    await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET loja_origem_code = ${input.newOriginCode},
+          loja_origem_name = ${name},
+          realignment_status = NULL,
+          realignment_not_found_at = NULL,
+          realignment_not_found_note = NULL,
+          realignment_not_found_by_user_id = NULL
+      WHERE id = ${input.transferId}
+    `;
+    return { ok: true, id: input.transferId, newOrigin: input.newOriginCode };
+  }
+
+  /**
    * Loja origem reporta que NÃO encontrou a peça fisicamente. Não é erro
    * operacional — é informação pra matriz revisar (estoque divergente,
    * peça sumida, etiqueta errada, etc).

@@ -352,12 +352,23 @@ export class PdvService {
       throw new BadRequestException(`Desconto (${newDesconto.toFixed(2)}) maior que o total do item (${bruto.toFixed(2)})`);
     }
 
+    // Se usuário definiu desconto MANUAL (>0) via PATCH, marca com tag
+    // "MANUAL" pra applyAutoDiscounts não sobrescrever depois. Se zerou
+    // o desconto, deixa tag null (volta ao automático).
+    const isManualDiscount = input.desconto != null && newDesconto > 0;
+    const newTag = isManualDiscount
+      ? 'MANUAL'
+      : input.desconto != null && newDesconto === 0
+      ? null
+      : item.promoTag;
+
     const updated = await (this.prisma as any).pdvSaleItem.update({
       where: { id: item.id },
       data: {
         qty: newQty,
         desconto: newDesconto,
         total: bruto - newDesconto,
+        promoTag: newTag,
       },
     });
     await this.applyAutoDiscounts(input.saleId);
@@ -443,9 +454,15 @@ export class PdvService {
     // Função pra zerar promo automática de todos itens (preserva desconto manual? não — autodesconto sobrescreve)
     const updates: Array<{ id: string; desconto: number; total: number; tag: string | null }> = [];
 
+    // Helper: item com promoTag='MANUAL' tem desconto fixado pela vendedora.
+    // applyAutoDiscounts NUNCA sobrescreve esses — promoção automática só
+    // mexe em itens sem manual.
+    const isManual = (it: any) => it.promoTag === 'MANUAL';
+
     if (activePromotion === 'NONE' || !activePromotion) {
       // Zera tudo (apenas resetando o que veio de promo automática)
       for (const it of items as any[]) {
+        if (isManual(it)) continue; // preserva manual
         // Se o promoTag começa com "PROMO" ou "4 LEVA", é auto e zera
         const wasAuto = !it.promoTag || /^(PROMO|4 LEVA)/.test(it.promoTag);
         if (wasAuto) {
@@ -464,6 +481,7 @@ export class PdvService {
         return null;
       };
       for (const it of items as any[]) {
+        if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
         const promo = promoByYear(it.dataCadastro || null);
         if (promo) {
@@ -485,26 +503,33 @@ export class PdvService {
       }
     } else if (activePromotion === 'FOUR_FOR_THREE') {
       const totalPecas = (items as any[]).reduce((s, i) => s + i.qty, 0);
-      // Zera todos os descontos auto primeiro
+      // Zera todos os descontos auto primeiro (preserva manuais)
       for (const it of items as any[]) {
+        if (isManual(it)) continue;
         const bruto = it.precoUnit * it.qty;
         updates.push({ id: it.id, desconto: 0, total: bruto, tag: null });
       }
       if (totalPecas >= 4) {
-        // Acha o item de MENOR preço unitário (não líquido — não tem outra promo aqui)
-        const menorPreco = Math.min(...(items as any[]).map((i) => i.precoUnit));
-        const menorIdx = (items as any[]).findIndex((i) => i.precoUnit === menorPreco);
-        if (menorIdx >= 0) {
-          const it = (items as any[])[menorIdx];
-          const bruto = it.precoUnit * it.qty;
-          // Desconta 1 unidade
-          const desconto = Math.round(it.precoUnit * 100) / 100;
-          updates[menorIdx] = {
-            id: it.id,
-            desconto,
-            total: Math.round((bruto - desconto) * 100) / 100,
-            tag: '4 LEVA 3 · 1 grátis',
-          };
+        // Acha o item de MENOR preço unitário (ignorando os com desconto MANUAL,
+        // que ficam preservados — não pode dar de graça um que já tem desconto fixo)
+        const elegiveis = (items as any[]).filter((i) => !isManual(i));
+        if (elegiveis.length > 0) {
+          const menorPreco = Math.min(...elegiveis.map((i) => i.precoUnit));
+          const menorIdx = (items as any[]).findIndex(
+            (i) => !isManual(i) && i.precoUnit === menorPreco,
+          );
+          if (menorIdx >= 0) {
+            const it = (items as any[])[menorIdx];
+            const bruto = it.precoUnit * it.qty;
+            // Desconta 1 unidade
+            const desconto = Math.round(it.precoUnit * 100) / 100;
+            updates[menorIdx] = {
+              id: it.id,
+              desconto,
+              total: Math.round((bruto - desconto) * 100) / 100,
+              tag: '4 LEVA 3 · 1 grátis',
+            };
+          }
         }
       }
     }
