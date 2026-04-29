@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { PilotService } from './pilot.service';
 
 /**
@@ -12,7 +13,8 @@ import { PilotService } from './pilot.service';
  *
  * Tudo autenticado (JWT) — só matriz liga/desliga.
  */
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
+@AdminOnly()
 @Controller('pilot')
 export class PilotController {
   constructor(private readonly svc: PilotService) {}

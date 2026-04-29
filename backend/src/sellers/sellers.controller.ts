@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { SellersService } from './sellers.service';
 
 /**
@@ -11,7 +12,7 @@ import { SellersService } from './sellers.service';
  *   PATCH /sellers/assign/:wcOrderId         → { sellerId: string | null } atribui
  *   GET  /sellers/report?from=ISO&to=ISO     → relatório do período
  */
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
 @Controller('sellers')
 export class SellersController {
   constructor(private readonly svc: SellersService) {}
@@ -22,11 +23,13 @@ export class SellersController {
   }
 
   @Post()
+  @AdminOnly()
   create(@Body() body: { name: string; whatsapp?: string }) {
     return this.svc.create(body);
   }
 
   @Patch(':id')
+  @AdminOnly()
   update(
     @Param('id') id: string,
     @Body() body: { name?: string; whatsapp?: string | null; active?: boolean },

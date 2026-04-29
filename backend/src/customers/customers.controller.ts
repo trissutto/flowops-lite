@@ -1,9 +1,11 @@
 import { Controller, Get, HttpCode, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { CustomersService, CustomersQuery } from './customers.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 
 @Controller('customers')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
+@AdminOnly()
 export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
 

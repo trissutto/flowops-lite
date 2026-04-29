@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { IsArray, IsOptional, IsString, ValidateNested, IsInt, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { WhatsappService } from './whatsapp.service';
 
 class SendItemDto {
@@ -24,7 +25,8 @@ class SendDto {
 }
 
 @Controller('whatsapp')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
+@AdminOnly()
 export class WhatsappController {
   constructor(private readonly wa: WhatsappService) {}
 

@@ -89,7 +89,8 @@ export default function DashboardHome() {
     }
     api<{ role: string; name?: string }>('/auth/me')
       .then((me) => {
-        if (me.role === 'store') router.push('/minha-loja');
+        // store sempre cai no PDV; admin/operator ficam no hub raiz
+        if (me.role === 'store') router.push('/minha-loja/pdv');
         if (me.name) setUserName(me.name);
       })
       .catch(() => {});

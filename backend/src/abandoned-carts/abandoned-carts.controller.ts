@@ -8,9 +8,11 @@ import {
 } from '@nestjs/common';
 import { AbandonedCartsService } from './abandoned-carts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 
 @Controller('abandoned-carts')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
+@AdminOnly()
 export class AbandonedCartsController {
   constructor(private readonly service: AbandonedCartsService) {}
 

@@ -26,11 +26,13 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       localStorage.setItem('flowops_token', res.accessToken);
-      // Redireciona por papel: loja vai direto pra /minha-loja
+      // Redireciona por papel:
+      //   store    → PDV direto (vendedora vive aqui)
+      //   admin/op → dashboard matriz (visão geral da operação)
       if (res.user?.role === 'store') {
-        router.push('/minha-loja');
+        router.push('/minha-loja/pdv');
       } else {
-        router.push('/');
+        router.push('/retaguarda/dashboard');
       }
     } catch (err: any) {
       setError('Credenciais inválidas.');
