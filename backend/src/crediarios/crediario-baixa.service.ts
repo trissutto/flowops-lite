@@ -346,6 +346,15 @@ export class CrediarioBaixaService {
   private clientesCache: { data: any[]; expiresAt: number } | null = null;
   private readonly CLIENTES_CACHE_TTL_MS = 30 * 60 * 1000;
 
+  // Lock anti-stampede: se múltiplas vendedoras abrem RECEBIMENTOS ao mesmo
+  // tempo (cache vazio), só 1 query roda — as demais aguardam o resultado.
+  private clientesPromise: Promise<Array<{ codCliente: string; nome: string; telefone: string | null }>> | null = null;
+
+  // Circuit breaker: se Giga falhar 3x seguidas, bloqueia por 5min
+  // (evita rebloquear o IP por excesso de erros).
+  private breakerFailCount = 0;
+  private breakerOpenUntil = 0;
+
   async listAllClientesGiga(): Promise<Array<{
     codCliente: string;
     nome: string;
@@ -354,6 +363,40 @@ export class CrediarioBaixaService {
     if (this.clientesCache && Date.now() < this.clientesCache.expiresAt) {
       return this.clientesCache.data;
     }
+
+    // Circuit breaker aberto?
+    if (Date.now() < this.breakerOpenUntil) {
+      throw new BadRequestException(
+        `Giga temporariamente indisponível. Tente em ${Math.ceil((this.breakerOpenUntil - Date.now()) / 1000)}s.`,
+      );
+    }
+
+    // Já tem outra request rodando? Espera ela.
+    if (this.clientesPromise) {
+      return this.clientesPromise;
+    }
+
+    // Encadeia: cria a promise UNA, todas as chamadas concorrentes pegam a mesma
+    this.clientesPromise = this._doListAllClientesGiga()
+      .then((data) => {
+        this.breakerFailCount = 0;
+        this.clientesPromise = null;
+        return data;
+      })
+      .catch((err) => {
+        this.breakerFailCount++;
+        this.clientesPromise = null;
+        if (this.breakerFailCount >= 3) {
+          this.breakerOpenUntil = Date.now() + 5 * 60 * 1000;
+          this.logger.error(`[crediario-baixa] CIRCUIT BREAKER aberto por 5min — ${this.breakerFailCount} falhas seguidas`);
+        }
+        throw err;
+      });
+
+    return this.clientesPromise;
+  }
+
+  private async _doListAllClientesGiga(): Promise<Array<{ codCliente: string; nome: string; telefone: string | null }>> {
 
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
@@ -366,11 +409,12 @@ export class CrediarioBaixaService {
     if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
     if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS tel2`);
 
-    // LIMIT alto MAS query simples — só lê tabela clientes (sem JOIN, sem movimento)
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' ORDER BY \`${cm.nome}\` ASC LIMIT 50000`;
+    // LIMIT conservador — 15000 cobre Lurd's (7k clientes hoje, espaço pra crescer)
+    // sem segurar conexão MySQL por muito tempo.
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' ORDER BY \`${cm.nome}\` ASC LIMIT 15000`;
     this.logger.log(`[crediario-baixa] listAllClientes SQL: ${sql.slice(0, 300)}`);
     const t0 = Date.now();
-    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 30000 });
+    const result = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
     this.logger.log(`[crediario-baixa] listAllClientes retornou ${result.rows.length} em ${Date.now() - t0}ms`);
 
     const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
