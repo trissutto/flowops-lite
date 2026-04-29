@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { CrediariosService } from './crediarios.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
+import { WhatsappCobrancaService } from '../whatsapp/whatsapp-cobranca.service';
 import {
   CobrancaContext, ParcelaCobranca, renderCobranca,
 } from './cobranca-templates';
@@ -41,6 +42,7 @@ export class CobrancaAutoService {
     private readonly prisma: PrismaService,
     private readonly svc: CrediariosService,
     private readonly wa: WhatsappService,
+    private readonly waCobranca: WhatsappCobrancaService,
   ) {}
 
   /**
@@ -199,8 +201,19 @@ export class CobrancaAutoService {
 
       const usedNumber = testMode ? testPhone! : tel;
 
+      // Re-check janela de horário ANTES de cada envio (rodadas longas).
+      // Em modo teste pula esse gate pra agilizar QA.
+      if (!testMode) {
+        const sched = await this.waCobranca.isWithinSchedule();
+        if (!sched.ok) {
+          this.logger.warn(`[cobranca-auto] aborto: fora da janela (${sched.reason})`);
+          break;
+        }
+      }
+
       try {
-        const r = await this.wa.sendText(usedNumber, text);
+        // USA WhatsApp DEDICADO de cobrança (não o do site)
+        const r = await this.waCobranca.sendText(usedNumber, text);
         const ok = !!r.ok;
         await (this.prisma as any).cobrancaTentativa.create({
           data: {

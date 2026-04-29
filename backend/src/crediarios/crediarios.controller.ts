@@ -54,6 +54,17 @@ export class CrediariosController {
     return this.svc.diagnoseRawColumns();
   }
 
+  /**
+   * GET /crediarios/diagnose-clientes
+   * Diagnóstico do universo total de clientes no Giga + cobertura de telefones.
+   * Retorna: total, com FONECEL preenchido, com FONERES preenchido, sem nenhum.
+   */
+  @Get('diagnose-clientes')
+  async diagnoseClientes(@Req() req: any) {
+    this.ensureMatriz(req);
+    return this.svc.diagnoseClientesPhones();
+  }
+
   @Get('vencidos')
   async vencidos(
     @Req() req: any,

@@ -54,7 +54,8 @@ const CONFIG_ITEMS: ConfigItem[] = [
   { href: '/config/pagbank',          label: 'PagBank',       subtitle: 'PIX',         description: 'Requer homologação',      tone: 'sky',    icon: QrCode       },
 
   // === Integrações ===
-  { href: '/config/whatsapp',         label: 'WhatsApp',      subtitle: 'Baileys',     description: 'Conexão + bulk send',     tone: 'green',  icon: MessageCircle },
+  { href: '/config/whatsapp',           label: 'WhatsApp Site',      subtitle: 'Baileys',   description: 'Avisos pra lojas + alertas',  tone: 'green',  icon: MessageCircle },
+  { href: '/config/whatsapp-cobranca',  label: 'WhatsApp Cobrança',  subtitle: 'Dedicado',  description: 'Linha exclusiva pra cobrança', tone: 'orange', icon: MessageCircle },
 
   // === Sistema ===
   { href: '/configuracoes',           label: 'Configurações', subtitle: 'Gerais',      description: 'Prioridades + integrações', tone: 'amber',icon: Settings     },

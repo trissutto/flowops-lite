@@ -179,12 +179,16 @@ export class CrediariosService {
         const cols = schema.columns.map((c) => c.field);
         const codCliente = pickColumn(cols, /^cod_?cliente$/i, /^codcli$/i, /^codigo$/i, /^id_?cliente$/i, /^id$/i);
         const nome = pickColumn(cols, /^nome$/i, /^nome_?cliente$/i, /^cliente$/i, /^razao_?social$/i);
+        // PRINCIPAL → CELULAR. Lurd's usa FONECEL no Gigasistemas.
         const telefone = pickColumn(cols,
+          /^fonecel$/i, /^fone_?cel$/i,             // ← Lurd's / Giga (PRIORIDADE)
           /^celular$/i, /^cel$/i, /^whatsapp$/i, /^wpp$/i,
           /^telefone$/i, /^tel$/i, /^fone$/i,
           /^telefone1$/i, /^tel1$/i, /^fone1$/i,
         );
+        // FALLBACK → RESIDENCIAL. Lurd's usa FONERES.
         const telefone2 = pickColumn(cols,
+          /^foneres$/i, /^fone_?res$/i,             // ← Lurd's / Giga (PRIORIDADE)
           /^telefone2$/i, /^tel2$/i, /^fone2$/i, /^celular2$/i, /^contato$/i,
         );
         if (!codCliente) continue;
@@ -198,6 +202,83 @@ export class CrediariosService {
     }
     this.logger.warn('detectClientesTable: nenhuma tabela de clientes encontrada');
     return null;
+  }
+
+  /**
+   * Diagnóstico do universo de clientes do Giga: totais + cobertura de telefone.
+   * Útil pra responder "286 sem telefone do total de quantos?".
+   */
+  async diagnoseClientesPhones(): Promise<{
+    table: string | null;
+    columnMap: any;
+    total: number;
+    comTelefonePrincipal: number;
+    comTelefoneFallback: number;
+    semNenhum: number;
+    sample: any[];
+  }> {
+    const cm = await this.detectClientesTable(true);
+    if (!cm) {
+      return {
+        table: null, columnMap: null, total: 0,
+        comTelefonePrincipal: 0, comTelefoneFallback: 0, semNenhum: 0,
+        sample: [],
+      };
+    }
+
+    const tel1 = cm.telefone ? `\`${cm.telefone}\`` : null;
+    const tel2 = cm.telefone2 ? `\`${cm.telefone2}\`` : null;
+
+    // Conta total + cobertura
+    const cond1 = tel1 ? `${tel1} IS NOT NULL AND TRIM(${tel1}) <> ''` : 'FALSE';
+    const cond2 = tel2 ? `${tel2} IS NOT NULL AND TRIM(${tel2}) <> ''` : 'FALSE';
+    const sql = `
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN ${cond1} THEN 1 ELSE 0 END) AS comTel1,
+        SUM(CASE WHEN ${cond2} THEN 1 ELSE 0 END) AS comTel2,
+        SUM(CASE WHEN NOT (${cond1}) AND NOT (${cond2}) THEN 1 ELSE 0 END) AS semNenhum
+      FROM \`${cm.table}\`
+    `;
+
+    let total = 0, comTel1 = 0, comTel2 = 0, semNenhum = 0;
+    try {
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 30000 });
+      const row = r.rows[0] || {};
+      total = Number(row.total ?? 0);
+      comTel1 = Number(row.comTel1 ?? 0);
+      comTel2 = Number(row.comTel2 ?? 0);
+      semNenhum = Number(row.semNenhum ?? 0);
+    } catch (e: any) {
+      this.logger.warn(`diagnoseClientesPhones: count falhou: ${e?.message}`);
+    }
+
+    // Amostra de 5 clientes pra ver os dados (NOMES MASCARADOS, telefones FULL pra debug)
+    const sampleCols: string[] = [];
+    if (cm.codCliente) sampleCols.push(`\`${cm.codCliente}\` AS codCliente`);
+    if (cm.nome) sampleCols.push(`\`${cm.nome}\` AS nome`);
+    if (cm.telefone) sampleCols.push(`\`${cm.telefone}\` AS telefonePrincipal`);
+    if (cm.telefone2) sampleCols.push(`\`${cm.telefone2}\` AS telefoneFallback`);
+    let sample: any[] = [];
+    try {
+      const r = await this.erp.runReadOnly(
+        `SELECT ${sampleCols.join(', ')} FROM \`${cm.table}\` LIMIT 5`,
+        { maxRows: 5, timeoutMs: 10000 },
+      );
+      sample = r.rows;
+    } catch (e: any) {
+      this.logger.warn(`diagnoseClientesPhones: sample falhou: ${e?.message}`);
+    }
+
+    return {
+      table: cm.table,
+      columnMap: { codCliente: cm.codCliente, nome: cm.nome, telefonePrincipal: cm.telefone, telefoneFallback: cm.telefone2 },
+      total,
+      comTelefonePrincipal: comTel1,
+      comTelefoneFallback: comTel2,
+      semNenhum,
+      sample,
+    };
   }
 
   /**
