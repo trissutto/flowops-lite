@@ -381,6 +381,7 @@ export default function PdvPage() {
   // ── Vendas em aberto (badge) ──
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
+  const [showPixAvulso, setShowPixAvulso] = useState(false);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -918,10 +919,7 @@ export default function PdvPage() {
             </div>
           </div>
         ) : sale?.status === 'open' ? (
-          <div className="text-center py-10 text-slate-400 bg-white rounded-lg border-2 border-dashed">
-            <ShoppingCart className="w-10 h-10 inline-block mb-2 opacity-50" />
-            <div className="text-sm">Carrinho vazio · bipe o primeiro produto</div>
-          </div>
+          <EmptyCartDashboard onPixAvulso={() => setShowPixAvulso(true)} />
         ) : null}
       </main>
 
@@ -1036,6 +1034,14 @@ export default function PdvPage() {
       {/* Modal Finalizada */}
       {showFinalized && sale && sale.status === 'finalized' && (
         <FinalizedModal sale={sale} onNew={startNewSale} />
+      )}
+
+      {/* Modal PIX Rápido (cobrança avulsa) */}
+      {showPixAvulso && (
+        <PixAvulsoModal
+          saleId={sale?.id || null}
+          onClose={() => setShowPixAvulso(false)}
+        />
       )}
     </div>
   );
@@ -2390,6 +2396,259 @@ function BandeiraLogo({ brand }: { brand: string }) {
   }
 }
 
+
+// ── EMPTY CART DASHBOARD ──────────────────────────────────────────────
+// Quando o carrinho está vazio, em vez de mostrar só "Carrinho vazio",
+// exibe um dashboard bonito com atalhos grandes touch-friendly e dicas
+// pra vendedora bater o olho e saber o que fazer.
+function EmptyCartDashboard({ onPixAvulso }: { onPixAvulso: () => void }) {
+  return (
+    <div className="space-y-3">
+      {/* Hero card — call to action principal */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-rose-500 via-pink-500 to-fuchsia-600 rounded-2xl p-5 shadow-xl shadow-rose-300/40">
+        {/* Padrão decorativo */}
+        <div className="absolute -right-10 -top-10 w-40 h-40 bg-white/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -left-8 -bottom-8 w-32 h-32 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="relative flex items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0 ring-2 ring-white/30">
+            <Barcode className="w-9 h-9 text-white" strokeWidth={2.5} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-black text-xl leading-tight">Pronto pra vender</div>
+            <div className="text-white/90 text-sm font-medium">
+              Bipe um produto acima ou use os atalhos abaixo
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Grid 2×2 de atalhos GRANDES touch-friendly */}
+      <div className="grid grid-cols-2 gap-3">
+        <BigQuickAction
+          onClick={onPixAvulso}
+          icon={<DollarSign className="w-8 h-8" strokeWidth={2.5} />}
+          label="PIX RÁPIDO"
+          sub="Cobrança avulsa"
+          fromColor="from-emerald-500"
+          toColor="to-teal-600"
+          shadowColor="shadow-emerald-300/50"
+        />
+        <BigQuickActionLink
+          href="/minha-loja/consultar"
+          icon={<Search className="w-8 h-8" strokeWidth={2.5} />}
+          label="CONSULTAR"
+          sub="Estoque rede"
+          fromColor="from-sky-500"
+          toColor="to-blue-600"
+          shadowColor="shadow-sky-300/50"
+        />
+        <BigQuickActionLink
+          href="/minha-loja/pdv/recebimentos"
+          icon={<Receipt className="w-8 h-8" strokeWidth={2.5} />}
+          label="RECEBIMENTOS"
+          sub="Crediário"
+          fromColor="from-rose-500"
+          toColor="to-pink-600"
+          shadowColor="shadow-rose-300/50"
+        />
+        <BigQuickActionLink
+          href="/minha-loja/pdv/caixa"
+          icon={<DollarSign className="w-8 h-8" strokeWidth={2.5} />}
+          label="CAIXA"
+          sub="Sangria · Z"
+          fromColor="from-amber-500"
+          toColor="to-orange-600"
+          shadowColor="shadow-amber-300/50"
+        />
+      </div>
+
+      {/* Dica de fluxo */}
+      <div className="bg-white border border-slate-200 rounded-xl p-3 flex items-center gap-3">
+        <div className="w-10 h-10 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center shrink-0">
+          <Sparkles className="w-5 h-5" />
+        </div>
+        <div className="text-xs text-slate-600 leading-snug">
+          <span className="font-bold text-slate-800">Dica:</span> também dá pra
+          buscar pela <span className="font-mono font-bold">REF</span> ou{' '}
+          <span className="font-mono font-bold">EAN</span> no campo acima — o
+          sistema reconhece automaticamente.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BigQuickAction({
+  onClick, icon, label, sub, fromColor, toColor, shadowColor,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  sub: string;
+  fromColor: string;
+  toColor: string;
+  shadowColor: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`bg-gradient-to-br ${fromColor} ${toColor} hover:brightness-110 active:brightness-95 text-white rounded-2xl p-4 flex flex-col items-start gap-2 transition shadow-lg ${shadowColor} hover:shadow-xl hover:-translate-y-0.5 ring-1 ring-white/20`}
+    >
+      <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+        {icon}
+      </div>
+      <div className="text-left">
+        <div className="text-base font-black uppercase tracking-tight leading-none">{label}</div>
+        <div className="text-xs opacity-90 font-semibold mt-1">{sub}</div>
+      </div>
+    </button>
+  );
+}
+
+function BigQuickActionLink({
+  href, icon, label, sub, fromColor, toColor, shadowColor,
+}: {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  sub: string;
+  fromColor: string;
+  toColor: string;
+  shadowColor: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`bg-gradient-to-br ${fromColor} ${toColor} hover:brightness-110 active:brightness-95 text-white rounded-2xl p-4 flex flex-col items-start gap-2 transition shadow-lg ${shadowColor} hover:shadow-xl hover:-translate-y-0.5 ring-1 ring-white/20`}
+    >
+      <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
+        {icon}
+      </div>
+      <div className="text-left">
+        <div className="text-base font-black uppercase tracking-tight leading-none">{label}</div>
+        <div className="text-xs opacity-90 font-semibold mt-1">{sub}</div>
+      </div>
+    </Link>
+  );
+}
+
+// ── PIX AVULSO MODAL ──────────────────────────────────────────────────
+// Cobrança PIX sem precisar criar venda no PDV. Útil pra cobrar cliente
+// avulso (entrada, sinal, etc). Usa o próprio endpoint pix-charge da
+// venda atual — se não houver, mostra mensagem.
+function PixAvulsoModal({
+  saleId,
+  onClose,
+}: {
+  saleId: string | null;
+  onClose: () => void;
+}) {
+  const [valor, setValor] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [qr, setQr] = useState<{ qrImage?: string; brcode?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function gerar() {
+    setError(null);
+    const v = Number(valor.replace(/\./g, '').replace(',', '.'));
+    if (!v || v <= 0) {
+      setError('Valor inválido');
+      return;
+    }
+    if (!saleId) {
+      setError('Crie uma venda primeiro pra usar o PIX (botão "Nova venda")');
+      return;
+    }
+    setLoading(true);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
+      setQr({ qrImage: r?.qrImage, brcode: r?.brcode });
+    } catch (e: any) {
+      setError(e?.message || 'Falha ao gerar PIX');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-black text-lg text-emerald-700 flex items-center gap-2">
+            <DollarSign className="w-5 h-5" /> PIX Rápido
+          </h2>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        {!qr && (
+          <>
+            <div>
+              <label className="text-xs uppercase font-bold text-slate-600 mb-1 block">
+                Valor (R$)
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                autoFocus
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                placeholder="0,00"
+                className="w-full px-4 py-4 text-3xl font-bold tabular-nums text-emerald-700 border-2 border-emerald-200 rounded-xl focus:outline-none focus:ring-4 focus:ring-emerald-300 focus:border-emerald-400"
+              />
+            </div>
+
+            {error && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded text-sm">
+                {error}
+              </div>
+            )}
+
+            <button
+              onClick={gerar}
+              disabled={loading || !valor}
+              className="w-full px-4 py-4 bg-gradient-to-br from-emerald-500 to-teal-600 hover:brightness-110 disabled:opacity-40 text-white font-black rounded-xl text-base shadow-lg shadow-emerald-300/40 flex items-center justify-center gap-2"
+            >
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <DollarSign className="w-5 h-5" />}
+              Gerar QR Code
+            </button>
+          </>
+        )}
+
+        {qr && (
+          <div className="text-center space-y-3">
+            {qr.qrImage && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={qr.qrImage} alt="QR PIX" className="w-56 h-56 mx-auto border rounded-lg" />
+            )}
+            {qr.brcode && (
+              <div>
+                <div className="text-xs text-slate-500 mb-1">Copia e Cola</div>
+                <div className="bg-slate-100 rounded-lg p-2 text-[10px] font-mono break-all">
+                  {qr.brcode}
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(qr.brcode!);
+                    alert('Copiado!');
+                  }}
+                  className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg"
+                >
+                  Copiar código PIX
+                </button>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className="w-full px-4 py-3 border border-slate-300 rounded-lg text-sm font-bold"
+            >
+              Fechar
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── SHORTCUT PILL: atalho colorido grande do header do PDV ───────────
 function ShortcutPill({
