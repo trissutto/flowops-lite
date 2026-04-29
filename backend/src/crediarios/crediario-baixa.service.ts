@@ -56,6 +56,11 @@ export interface OpenInstallment {
 export class CrediarioBaixaService {
   private readonly logger = new Logger(CrediarioBaixaService.name);
 
+  // Cache da listagem completa por 5 minutos pra não saturar o pool MySQL
+  // (a query é cara — varre toda a tabela movimento). Key = storeCode || 'all'.
+  private listCache = new Map<string, { data: any; expiresAt: number }>();
+  private readonly LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
@@ -144,6 +149,16 @@ export class CrediarioBaixaService {
       total: number;
     }>;
   }> {
+    // CACHE — protege o pool MySQL Giga. Query é cara (varre toda tabela
+    // movimento). Sem cache, cada open de tela RECEBIMENTOS por uma vendedora
+    // diferente derruba o sistema inteiro (consulta estoque, PDV, etc).
+    const cacheKey = input.storeCode || 'all';
+    const cached = this.listCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      this.logger.log(`[crediario-baixa] cache HIT (${cacheKey})`);
+      return cached.data;
+    }
+    this.logger.log(`[crediario-baixa] cache MISS (${cacheKey}) — vai bater no Giga`);
     // Sempre força refresh do detectColumns aqui — algumas instâncias do Giga
     // têm timeouts intermitentes na primeira chamada que cacheiam EMPTY_MAP.
     let map = await this.crediarios.detectColumns(true);
@@ -206,10 +221,13 @@ export class CrediarioBaixaService {
     where.push(`\`${map.codCliente}\` <> ''`);
     where.push(`\`${map.codCliente}\` <> '0'`);
 
-    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 50000`;
+    // LIMIT conservador pra não saturar o pool MySQL.
+    // 5000 cobre uns 800-1500 clientes em aberto — suficiente pra Lurd's.
+    const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 5000`;
     this.logger.log(`[crediario-baixa] listAllOpen SQL: ${sql.slice(0, 500)}`);
-    const result = await this.erp.runReadOnly(sql, { maxRows: 50000, timeoutMs: 60000 });
-    this.logger.log(`[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas`);
+    const t0 = Date.now();
+    const result = await this.erp.runReadOnly(sql, { maxRows: 5000, timeoutMs: 30000 });
+    this.logger.log(`[crediario-baixa] listAllOpen retornou ${result.rows.length} linhas em ${Date.now() - t0}ms`);
 
     // Filtra códigos 0-3 (cartões clássicos: CREDICARD, REDESHOP, AMEX, etc)
     const filteredRows = result.rows.filter((r: any) => {
@@ -295,11 +313,24 @@ export class CrediarioBaixaService {
       }
     }
 
-    return {
+    const response = {
       parcelas: out,
       clientes: Array.from(byCliente.values())
         .sort((a, b) => a.nome.localeCompare(b.nome)),
     };
+
+    // Cacheia 5 min — evita matar o pool com requests repetidas
+    this.listCache.set(cacheKey, {
+      data: response,
+      expiresAt: Date.now() + this.LIST_CACHE_TTL_MS,
+    });
+
+    return response;
+  }
+
+  /** Limpa cache (chamado após cada baixa pra refletir parcelas pagas) */
+  clearListCache() {
+    this.listCache.clear();
   }
 
   // ── Autocomplete: busca rápida de clientes ────────────────────────
@@ -729,6 +760,7 @@ export class CrediarioBaixaService {
     });
     // Executa UPDATE no Giga
     await this.executeGigaUpdates(baixaId);
+    this.clearListCache();
     return { baixaId };
   }
 
@@ -821,6 +853,7 @@ export class CrediarioBaixaService {
 
     // Executa UPDATE no Giga
     await this.executeGigaUpdates(baixaId);
+    this.clearListCache();
     return { confirmed: true };
   }
 
