@@ -18,12 +18,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   LayoutDashboard, Globe2, Store, BarChart3, Settings, ShoppingBag,
-  Receipt, Truck, Wifi, WifiOff, Filter, Loader2, Download, RefreshCw,
-  Zap, Bot, ArrowUpRight,
+  Receipt, Truck, Wifi, RefreshCw, Zap, Bot, ArrowUpRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
+import { getDailyQuote } from '@/lib/daily-quote';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
 import KpiCard from '@/components/KpiCard';
 
@@ -61,10 +61,12 @@ export default function DashboardHome() {
   const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
   const [pilotBusy, setPilotBusy] = useState(false);
 
-  // Filtros (visual — ainda não plugados)
-  const [filterStore, setFilterStore] = useState('');
-  const [filterFrom, setFilterFrom] = useState('');
-  const [filterTo, setFilterTo] = useState('');
+  // Relógio live (atualiza a cada segundo)
+  const [now, setNow] = useState<Date>(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Auth + redirect store→PDV
   useEffect(() => {
@@ -176,18 +178,30 @@ export default function DashboardHome() {
   const lojasOnline = presence.filter((p) => p.online).length;
   const lojasTotal = presence.filter((p) => p.active).length;
 
-  const today = new Date().toLocaleDateString('pt-BR', {
+  const today = now.toLocaleDateString('pt-BR', {
     weekday: 'long', day: '2-digit', month: 'long',
   });
 
-  const filteredPresence = useMemo(() => {
-    if (!filterStore) return presence;
-    return presence.filter((p) => p.code === filterStore);
-  }, [presence, filterStore]);
+  // Saudação dinâmica por horário
+  const hour = now.getHours();
+  const greeting =
+    hour < 5 ? 'Boa madrugada' :
+    hour < 12 ? 'Bom dia' :
+    hour < 18 ? 'Boa tarde' :
+    'Boa noite';
+  const firstName = userName ? userName.split(' ')[0] : '';
+  const heading = firstName ? `${greeting}, ${firstName}` : greeting;
+
+  // Frase do dia (determinística — mesma o dia inteiro)
+  const quote = useMemo(() => getDailyQuote(now), [now.toDateString()]);
+
+  // Relógio HH:MM:SS
+  const clockHHMM = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const clockSS = now.toLocaleTimeString('pt-BR', { second: '2-digit' });
 
   return (
     <AdminShell
-      title={userName ? `Olá, ${userName.split(' ')[0]}` : 'Bem-vinda'}
+      title={heading}
       subtitle={
         <span className="capitalize">
           {today} · <span className="text-slate-700 font-semibold">Lurds Order One</span>
@@ -195,6 +209,7 @@ export default function DashboardHome() {
       }
       navItems={NAV}
       activeKey="dashboard"
+      noSidebar
       actions={
         <>
           <PilotPill pilot={pilot} busy={pilotBusy} status={pilotStatus} onToggle={togglePilot} />
@@ -209,6 +224,50 @@ export default function DashboardHome() {
         </>
       }
     >
+      {/* === Frase do dia + Relógio === */}
+      <section
+        className="rounded-2xl mb-5 overflow-hidden shadow-sm border border-slate-200 relative"
+        style={{
+          background: 'linear-gradient(120deg, #fdfaf3 0%, #fdf2f8 50%, #f5e6e3 100%)',
+        }}
+      >
+        {/* Decoração: círculo claro no canto direito */}
+        <div
+          className="absolute -top-12 -right-12 w-48 h-48 rounded-full opacity-40"
+          style={{ background: 'radial-gradient(circle, #f5d9e6 0%, transparent 70%)' }}
+        />
+        <div className="relative grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 p-5 sm:p-6 items-center">
+          {/* Frase */}
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-rose-700/70 mb-2">
+              Frase do dia
+            </div>
+            <blockquote
+              className="text-lg sm:text-xl text-slate-800 leading-snug italic"
+              style={{ fontFamily: 'var(--font-display), Georgia, serif' }}
+            >
+              "{quote.text}"
+            </blockquote>
+            {quote.author && (
+              <div className="text-xs text-slate-500 mt-2">— {quote.author}</div>
+            )}
+          </div>
+          {/* Relógio */}
+          <div className="md:border-l md:border-rose-200/60 md:pl-6 flex md:flex-col items-center md:items-end justify-center gap-2 md:gap-1">
+            <div
+              className="font-bold text-3xl sm:text-4xl tabular-nums text-slate-800 leading-none"
+              style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace' }}
+            >
+              {clockHHMM}
+              <span className="text-base sm:text-lg text-rose-500/70 ml-1.5">{clockSS}</span>
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-semibold">
+              Horário local
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* === Visão geral · 4 KPIs coloridos FUNCIONAIS === */}
       <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm mb-5">
         <div className="mb-4">
@@ -261,107 +320,6 @@ export default function DashboardHome() {
         <HubCard href="/config"     label="Config" subtitle="Setup técnico"  description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
       </section>
 
-      {/* === Filtros + Status lojas === */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Filtros */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm lg:col-span-2">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Filter className="w-4 h-4 text-slate-500" />
-                Filtros
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">Loja · período</p>
-            </div>
-            <button
-              onClick={() => { setFilterStore(''); setFilterFrom(''); setFilterTo(''); }}
-              className="text-xs px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-bold"
-            >
-              Limpar
-            </button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Loja</label>
-              <select
-                value={filterStore}
-                onChange={(e) => setFilterStore(e.target.value)}
-                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
-              >
-                <option value="">Todas</option>
-                {presence.map((p) => (
-                  <option key={p.code} value={p.code}>{p.code} · {p.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Data inicial</label>
-              <input
-                type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)}
-                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Data final</label>
-              <input
-                type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)}
-                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
-              />
-            </div>
-          </div>
-          {/* Breakdown de status */}
-          {Object.keys(counts).length > 0 && (
-            <div className="mt-5 pt-4 border-t border-slate-100">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">Pedidos por status</div>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(counts)
-                  .sort((a, b) => (b[1].total || 0) - (a[1].total || 0))
-                  .filter(([_, info]) => (info.total || 0) > 0)
-                  .map(([slug, info]) => (
-                    <div key={slug} className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs">
-                      <span className="font-semibold text-slate-700">{info.name}</span>{' '}
-                      <span className="font-bold text-slate-900">{info.total}</span>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Resumo das lojas (online/offline) */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Store className="w-4 h-4 text-slate-500" />
-                Status lojas
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">Online · offline em tempo real</p>
-            </div>
-          </div>
-          {loading && (
-            <div className="text-center py-6 text-slate-400">
-              <Loader2 className="w-5 h-5 animate-spin inline" />
-            </div>
-          )}
-          {!loading && filteredPresence.length === 0 && (
-            <div className="text-center py-6 text-slate-400 text-sm">Nenhuma loja com os filtros atuais.</div>
-          )}
-          {!loading && filteredPresence.length > 0 && (
-            <div className="space-y-1.5 max-h-[320px] overflow-y-auto pr-1">
-              {filteredPresence.map((p) => (
-                <div key={p.code} className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg hover:bg-slate-50 transition">
-                  <span className={`w-2 h-2 rounded-full ${p.online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-semibold text-slate-800 truncate">{p.code} · {p.name}</div>
-                  </div>
-                  {p.online ? <Wifi className="w-3.5 h-3.5 text-emerald-600" /> : <WifiOff className="w-3.5 h-3.5 text-slate-400" />}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
     </AdminShell>
   );
 }

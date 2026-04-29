@@ -43,6 +43,8 @@ interface AdminShellProps {
   actions?: ReactNode;
   showLogout?: boolean;
   onLogout?: () => void;
+  /** Esconde a sidebar (útil pra tela de home/launchpad limpa) */
+  noSidebar?: boolean;
   children: ReactNode;
 }
 
@@ -55,6 +57,7 @@ export default function AdminShell({
   actions,
   showLogout = true,
   onLogout,
+  noSidebar = false,
   children,
 }: AdminShellProps) {
   const router = useRouter();
@@ -80,7 +83,7 @@ export default function AdminShell({
   return (
     <div className="min-h-screen bg-[#f4f1ec] text-slate-800">
       {/* Sidebar mobile overlay */}
-      {mobileOpen && (
+      {!noSidebar && mobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/30 md:hidden"
           onClick={() => setMobileOpen(false)}
@@ -88,6 +91,7 @@ export default function AdminShell({
       )}
 
       {/* Sidebar */}
+      {!noSidebar && (
       <aside
         className={`fixed top-0 left-0 z-50 h-screen w-[260px] bg-[#f7f5f0] border-r border-slate-200 flex flex-col transition-transform md:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
@@ -157,19 +161,22 @@ export default function AdminShell({
           </div>
         )}
       </aside>
+      )}
 
       {/* Main */}
-      <div className="md:ml-[260px] min-h-screen flex flex-col">
+      <div className={`${noSidebar ? '' : 'md:ml-[260px]'} min-h-screen flex flex-col`}>
         {/* Top header */}
         <header className="bg-[#f4f1ec] px-4 sm:px-8 pt-5 sm:pt-7 pb-4 flex items-start justify-between gap-4 flex-wrap">
           <div className="flex items-start gap-3 min-w-0 flex-1">
-            <button
-              onClick={() => setMobileOpen(true)}
-              className="md:hidden p-1.5 rounded hover:bg-slate-200/60 mt-1"
-              aria-label="Abrir menu"
-            >
-              <Menu className="w-6 h-6 text-slate-700" />
-            </button>
+            {!noSidebar && (
+              <button
+                onClick={() => setMobileOpen(true)}
+                className="md:hidden p-1.5 rounded hover:bg-slate-200/60 mt-1"
+                aria-label="Abrir menu"
+              >
+                <Menu className="w-6 h-6 text-slate-700" />
+              </button>
+            )}
             <div className="min-w-0">
               <h1 className="text-2xl sm:text-[28px] font-bold text-slate-900 leading-tight truncate">
                 {title}
@@ -179,7 +186,19 @@ export default function AdminShell({
               )}
             </div>
           </div>
-          {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
+          <div className="flex items-center gap-2 flex-wrap">
+            {actions}
+            {noSidebar && showLogout && (
+              <button
+                onClick={handleLogout}
+                className="px-3 py-2 rounded-lg bg-white border border-rose-200 text-sm font-semibold text-rose-700 hover:bg-rose-50 flex items-center gap-1.5"
+                title="Sair"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Sair</span>
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Content */}
