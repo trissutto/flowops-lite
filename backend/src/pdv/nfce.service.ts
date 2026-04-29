@@ -317,9 +317,20 @@ export class NfceService {
       })
       .join('\n');
 
-    const vTotProd = items.reduce((s, it) => s + (it.qty || 0) * (it.precoUnit || 0), 0).toFixed(2);
-    const vDescTot = items.reduce((s, it) => s + (it.desconto || 0), 0).toFixed(2);
-    const vNF = (sale.total || 0).toFixed(2);
+    // vProd = soma dos (qty × precoUnit) sem descontos — bruto
+    const vTotProdNum = items.reduce(
+      (s, it) => s + (it.qty || 0) * (it.precoUnit || 0),
+      0,
+    );
+    const vNFNum = Number(sale.total || 0);
+    // SEFAZ valida: vNF = vProd - vDesc. Calcula vDesc TOTAL como diferença
+    // entre o bruto e o que cliente realmente pagou. Cobre tanto descontos
+    // por item quanto descontos aplicados na venda inteira (ex: -R$ 22,90
+    // aplicados via /sales/:id/discount).
+    const vDescTotNum = Math.max(0, vTotProdNum - vNFNum);
+    const vTotProd = vTotProdNum.toFixed(2);
+    const vDescTot = vDescTotNum.toFixed(2);
+    const vNF = vNFNum.toFixed(2);
 
     const payments = (sale.payments || []) as any[];
     const pagLines = payments
