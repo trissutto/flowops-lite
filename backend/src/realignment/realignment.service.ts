@@ -620,30 +620,42 @@ export class RealignmentService {
     storeId: string;
     userId?: string;
   }) {
-    const store = await this.prisma.store.findUnique({
-      where: { id: input.storeId },
-      select: { id: true, code: true },
-    });
+    this.logger.log(`[markAsSent] START transferId=${input.transferId} storeId=${input.storeId}`);
+
+    let store: any;
+    try {
+      store = await this.prisma.store.findUnique({
+        where: { id: input.storeId },
+        select: { id: true, code: true },
+      });
+    } catch (e: any) {
+      this.logger.error(`[markAsSent] step=findStore failed: ${e?.message}`);
+      throw new BadRequestException(`Erro ao buscar loja: ${e?.message}`);
+    }
     if (!store) throw new ForbiddenException('Loja inválida');
 
-    const order = await this.prisma.transferOrder.findUnique({
-      where: { id: input.transferId },
-      // Pega TODOS campos relevantes pro snapshot financeiro (sku, qty, descrição, etc)
-      select: {
-        id: true,
-        tipo: true,
-        lojaOrigemCode: true,
-        lojaOrigemName: true,
-        lojaDestinoCode: true,
-        lojaDestinoName: true,
-        realignmentStatus: true,
-        refCode: true,
-        descricao: true,
-        cor: true,
-        tamanho: true,
-        qtyOrigem: true,
-      } as any,
-    });
+    // Usa SQL raw pra independer do Prisma client conhecer todos os campos
+    let order: any;
+    try {
+      const rows: any[] = await this.prisma.$queryRaw`
+        SELECT id, tipo, ref_code as "refCode", descricao,
+               cor, tamanho, qty_origem as "qtyOrigem",
+               loja_origem_code as "lojaOrigemCode",
+               loja_origem_name as "lojaOrigemName",
+               loja_destino_code as "lojaDestinoCode",
+               loja_destino_name as "lojaDestinoName",
+               realignment_status as "realignmentStatus"
+        FROM transfer_orders
+        WHERE id = ${input.transferId}
+        LIMIT 1
+      `;
+      order = rows[0] || null;
+    } catch (e: any) {
+      this.logger.error(`[markAsSent] step=findOrder failed: ${e?.message}`);
+      throw new BadRequestException(
+        `Erro ao buscar ordem: ${e?.message}. Provável: rodar 'prisma db push' no Railway.`,
+      );
+    }
     if (!order) throw new NotFoundException('Ordem não encontrada');
     if ((order as any).tipo !== 'REALINHAMENTO')
       throw new BadRequestException('Ordem não é de realinhamento');
@@ -656,43 +668,69 @@ export class RealignmentService {
     const o = order as any;
 
     // Procura ou cria a remessa OPEN do par origem→destino
-    let shipment = await (this.prisma as any).realignmentShipment.findFirst({
-      where: {
-        fromStoreCode: o.lojaOrigemCode,
-        toStoreCode: o.lojaDestinoCode,
-        status: 'open',
-      },
-    });
-    if (!shipment) {
-      // Gera código sequencial REM-YYYY-NNNNNN
-      const year = now.getFullYear();
-      const prefix = `REM-${year}-`;
-      const count = await (this.prisma as any).realignmentShipment.count({
-        where: { code: { startsWith: prefix } },
-      });
-      const code = `${prefix}${String(count + 1).padStart(6, '0')}`;
-      shipment = await (this.prisma as any).realignmentShipment.create({
-        data: {
-          code,
+    let shipment: any;
+    try {
+      shipment = await (this.prisma as any).realignmentShipment.findFirst({
+        where: {
           fromStoreCode: o.lojaOrigemCode,
-          fromStoreName: o.lojaOrigemName,
           toStoreCode: o.lojaDestinoCode,
-          toStoreName: o.lojaDestinoName,
           status: 'open',
-          openedByUserId: input.userId ?? null,
         },
       });
+    } catch (e: any) {
+      this.logger.error(`[markAsSent] step=findShipment failed: ${e?.message}`);
+      throw new BadRequestException(
+        `Tabela RealignmentShipment não existe no Postgres. Rode "prisma db push" no Railway. Erro: ${e?.message}`,
+      );
     }
 
-    const updated = await this.prisma.transferOrder.update({
-      where: { id: o.id },
-      data: {
-        realignmentStatus: 'sent',
-        realignmentSentAt: now,
-        realignmentSentByUserId: input.userId ?? null,
-        shipmentId: shipment.id,
-      } as any,
-    });
+    if (!shipment) {
+      try {
+        const year = now.getFullYear();
+        const prefix = `REM-${year}-`;
+        const count = await (this.prisma as any).realignmentShipment.count({
+          where: { code: { startsWith: prefix } },
+        });
+        const code = `${prefix}${String(count + 1).padStart(6, '0')}`;
+        shipment = await (this.prisma as any).realignmentShipment.create({
+          data: {
+            code,
+            fromStoreCode: o.lojaOrigemCode,
+            fromStoreName: o.lojaOrigemName,
+            toStoreCode: o.lojaDestinoCode,
+            toStoreName: o.lojaDestinoName,
+            status: 'open',
+            openedByUserId: input.userId ?? null,
+          },
+        });
+        this.logger.log(`[markAsSent] created shipment ${code}`);
+      } catch (e: any) {
+        this.logger.error(`[markAsSent] step=createShipment failed: ${e?.message}`);
+        throw new BadRequestException(`Erro ao criar remessa: ${e?.message}`);
+      }
+    }
+
+    // Usa SQL raw pra evitar dependência do Prisma Client estar atualizado
+    // com os campos realignmentStatus/realignmentSentAt/shipmentId (que são
+    // novos e podem ainda não estar no client gerado em produção).
+    let updated: any;
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE transfer_orders
+        SET realignment_status = 'sent',
+            realignment_sent_at = ${now},
+            realignment_sent_by_user_id = ${input.userId ?? null},
+            shipment_id = ${shipment.id}
+        WHERE id = ${o.id}
+      `;
+      updated = { id: o.id };
+      this.logger.log(`[markAsSent] OK transferId=${o.id} shipmentId=${shipment.id}`);
+    } catch (e: any) {
+      this.logger.error(`[markAsSent] step=updateOrder failed: ${e?.message}`);
+      throw new BadRequestException(
+        `Erro ao atualizar ordem: ${e?.message}. Provável: rodar 'prisma db push' no Railway pra criar colunas novas.`,
+      );
+    }
 
     // ── FINANCEIRO: a obrigação NÃO é mais criada aqui. Será criada em
     //    closeAndSend() do shipment service quando a remessa for fechada e
