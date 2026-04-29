@@ -54,7 +54,12 @@ export class CrediarioBaixaController {
   }
 
   // ── Lista TUDO (todos clientes com parcelas em aberto) ──────────
-  // Frontend filtra local em JS depois — busca instantânea sem ir no servidor.
+  // KILL-SWITCH: desligado por padrão. Reativar setando env var
+  //   CREDIARIO_BAIXA_TODAS_ENABLED=true
+  // no Railway. A query é cara (varre tabela movimento de 700k+ linhas)
+  // e estava saturando o pool MySQL Giga, derrubando o resto do sistema
+  // (consulta estoque, PDV, etc). Quando reativado, garantir que tem
+  // índice em (pago, vencimento) na tabela movimento.
   @Get('todas')
   async listAll(
     @Req() req: any,
@@ -62,6 +67,15 @@ export class CrediarioBaixaController {
     @Query('todasLojas') todasLojas?: string,
   ) {
     this.requireRole(req);
+    if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
+      return {
+        parcelas: [],
+        clientes: [],
+        _disabled: true,
+        _message:
+          'Endpoint desligado pra proteger o servidor. Reative com CREDIARIO_BAIXA_TODAS_ENABLED=true.',
+      };
+    }
     let storeCode: string | undefined;
     if (todasLojas !== '1') {
       const role = req?.user?.role;
@@ -72,15 +86,17 @@ export class CrediarioBaixaController {
   }
 
   // ── Autocomplete cliente (rápido) ─────────────────────────────────
-
+  // Mesmo kill-switch que /todas — protege contra saturação do pool MySQL
   @Get('clientes-autocomplete')
   async searchClientes(@Req() req: any, @Query('q') q: string) {
     this.requireRole(req);
+    if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
+      return [];
+    }
     return this.svc.searchClientes({ q: q || '' });
   }
 
   // ── Lista parcelas de 1 cliente específico ────────────────────────
-
   @Get('parcelas')
   async listByCodCliente(
     @Req() req: any,
@@ -89,6 +105,9 @@ export class CrediarioBaixaController {
     @Query('todasLojas') todasLojas?: string,
   ) {
     this.requireRole(req);
+    if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
+      return [];
+    }
     const role = req?.user?.role;
     let storeCode: string | undefined;
     if (todasLojas !== '1') {
@@ -108,6 +127,9 @@ export class CrediarioBaixaController {
     @Query('todasLojas') todasLojas?: string,
   ) {
     this.requireRole(req);
+    if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
+      return [];
+    }
     const role = req?.user?.role;
     let storeCode: string | undefined;
     if (todasLojas !== '1') {

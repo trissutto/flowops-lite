@@ -137,9 +137,19 @@ export default function RecebimentosPage() {
     setLoadError(null);
     try {
       // todasLojas=1 → cliente pode pagar promissória em qualquer filial
-      const data = await api<ListResponse>('/crediarios/baixa/todas?todasLojas=1');
-      setAllParcelas(data.parcelas);
-      setAllClientes(data.clientes);
+      const data = await api<ListResponse & { _disabled?: boolean; _message?: string }>(
+        '/crediarios/baixa/todas?todasLojas=1',
+      );
+      if (data._disabled) {
+        setLoadError(
+          'Tela de RECEBIMENTOS está temporariamente desligada (em manutenção). Use o sistema do Giga pra dar baixa por enquanto.',
+        );
+        setAllParcelas([]);
+        setAllClientes([]);
+      } else {
+        setAllParcelas(data.parcelas);
+        setAllClientes(data.clientes);
+      }
     } catch (e: any) {
       setLoadError(e?.message || String(e));
     } finally {
