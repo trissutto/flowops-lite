@@ -143,11 +143,19 @@ export class PilotService {
 
     try {
       // Gate 0: kill-switch + flag
-      if (!(await this.isOn())) return;
+      if (this.isKillSwitchOn()) {
+        await this.audit('skip', { wcOrderId, reason: 'kill-switch-env' }, 503);
+        return;
+      }
+      if (!(await this.isOn())) {
+        await this.audit('skip', { wcOrderId, reason: 'pilot-off-flag' }, 503);
+        return;
+      }
 
       // Gate 1: dedup em memória
       if (this.inflight.has(wcOrderId)) {
         this.logger.debug(`[pilot] #${wcOrderId} já em execução, pulando`);
+        await this.audit('skip', { wcOrderId, reason: 'inflight-dedup' }, 409);
         return;
       }
       this.inflight.add(wcOrderId);
@@ -156,7 +164,7 @@ export class PilotService {
         // Gate 2: rate limit
         if (!this.canFire()) {
           this.logger.warn(`[pilot] rate limit atingido (${this.recentFires.length}/${this.rateLimitMax()} em 60s), pulando #${wcOrderId}`);
-          await this.audit('skip', { wcOrderId, reason: 'rate-limit' }, 429);
+          await this.audit('skip', { wcOrderId, reason: 'rate-limit', fires: this.recentFires.length, max: this.rateLimitMax() }, 429);
           return;
         }
 
@@ -165,6 +173,7 @@ export class PilotService {
           const ageMs = Date.now() - new Date(orderCreatedAtIso).getTime();
           if (ageMs > this.maxAgeMs()) {
             this.logger.debug(`[pilot] #${wcOrderId} velho demais (${Math.round(ageMs/60000)}min), pulando`);
+            await this.audit('skip', { wcOrderId, reason: 'too-old', ageMin: Math.round(ageMs/60000), maxMin: this.maxAgeMs()/60000 }, 410);
             return;
           }
         }
@@ -181,6 +190,11 @@ export class PilotService {
         });
         if (already && already.pickOrders.length > 0) {
           this.logger.debug(`[pilot] #${wcOrderId} já tem pick-order, pulando`);
+          await this.audit('skip', {
+            wcOrderId,
+            reason: 'pick-order-exists',
+            existingPickOrders: already.pickOrders.map((p: any) => ({ id: p.id, status: p.status })),
+          }, 409);
           return;
         }
 
@@ -194,6 +208,127 @@ export class PilotService {
       this.logger.error(`[pilot] erro inesperado em #${wcOrderId}: ${e?.message}`, e?.stack);
       await this.audit('error', { wcOrderId, message: e?.message }, 500);
     }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // DIAGNÓSTICO — dry-run pra um wcOrderId específico
+  // ───────────────────────────────────────────────────────────────────────
+
+  /**
+   * Simula o piloto pra um pedido específico SEM disparar nada.
+   * Retorna em qual gate parou (ou que vai disparar) e a razão.
+   *
+   * Uso: GET /pilot/diagnose/:wcOrderId — útil pra Thiago testar com pedido
+   * real e ver onde o fluxo emperra.
+   */
+  async diagnoseOrder(wcOrderId: number): Promise<{
+    wouldFire: boolean;
+    blocked?: string;
+    details: any;
+  }> {
+    if (!wcOrderId || Number.isNaN(wcOrderId)) {
+      return { wouldFire: false, blocked: 'invalid-id', details: { wcOrderId } };
+    }
+
+    // Gate 0
+    if (this.isKillSwitchOn()) {
+      return { wouldFire: false, blocked: 'kill-switch-env', details: { hint: 'env PILOT_DISABLED=1' } };
+    }
+    if (!(await this.isOn())) {
+      return { wouldFire: false, blocked: 'pilot-off-flag', details: { hint: 'flag pilot_automatic_on != 1 no DB' } };
+    }
+
+    // Gate 1
+    if (this.inflight.has(wcOrderId)) {
+      return { wouldFire: false, blocked: 'inflight-dedup', details: { hint: 'pedido em processamento agora' } };
+    }
+
+    // Gate 2
+    if (!this.canFire()) {
+      return {
+        wouldFire: false,
+        blocked: 'rate-limit',
+        details: { fires: this.recentFires.length, max: this.rateLimitMax() },
+      };
+    }
+
+    // Gate 5 — pick-order ativo
+    const already: any = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId },
+      include: { pickOrders: { select: { id: true, status: true, storeCode: true } } },
+    });
+    if (already && already.pickOrders?.length > 0) {
+      return {
+        wouldFire: false,
+        blocked: 'pick-order-exists',
+        details: { existingPickOrders: already.pickOrders },
+      };
+    }
+
+    // Roda preview pra ver se daria split ou quebra
+    let wcOrder: any;
+    try {
+      wcOrder = await this.wc.getOrder(wcOrderId);
+    } catch (e: any) {
+      return { wouldFire: false, blocked: 'wc-fetch-failed', details: { error: e?.message } };
+    }
+
+    // Gate 3 — idade
+    const orderCreatedAtIso = wcOrder.date_created_gmt || wcOrder.date_created;
+    if (orderCreatedAtIso) {
+      const ageMs = Date.now() - new Date(orderCreatedAtIso).getTime();
+      if (ageMs > this.maxAgeMs()) {
+        return {
+          wouldFire: false,
+          blocked: 'too-old',
+          details: { ageMin: Math.round(ageMs / 60000), maxMin: this.maxAgeMs() / 60000 },
+        };
+      }
+    }
+
+    // Preview de routing
+    let preview: any;
+    try {
+      const input = await this.buildPreviewInput(wcOrder, wcOrderId);
+      preview = await this.routing.previewSeparationForWc(input);
+    } catch (e: any) {
+      return { wouldFire: false, blocked: 'preview-error', details: { error: e?.message } };
+    }
+
+    if (!preview.success) {
+      return {
+        wouldFire: false,
+        blocked: preview.strategy === 'insufficient-stock' ? 'no-stock' : preview.strategy,
+        details: {
+          strategy: preview.strategy,
+          missing: preview.missing?.map((m: any) => ({ sku: m.sku, qty: m.qty })),
+        },
+      };
+    }
+
+    if (preview.strategy === 'multi-store') {
+      return {
+        wouldFire: false,
+        blocked: 'split-needs-approval',
+        details: {
+          groupCount: preview.groups.length,
+          stores: preview.groups.map((g: any) => g.storeCode),
+          hint: 'split de >1 loja exige aprovação manual em /separacao',
+        },
+      };
+    }
+
+    // Tudo passou — disparara
+    return {
+      wouldFire: true,
+      details: {
+        strategy: preview.strategy,
+        targetStore: preview.groups[0]?.storeCode,
+        targetStoreName: preview.groups[0]?.storeName,
+        items: preview.groups[0]?.items?.length,
+        whatsappWillSend: this.whatsapp.getStatus().connected,
+      },
+    };
   }
 
   // ───────────────────────────────────────────────────────────────────────
