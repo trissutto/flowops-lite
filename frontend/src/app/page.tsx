@@ -1,29 +1,27 @@
 'use client';
 
 /**
- * / — Home/Launchpad LURDS (v9 — 3 HUBS PRINCIPAIS).
+ * / — Home/Launchpad LURDS (v10 — 4 HUBS PRINCIPAIS · REORG-F2).
  *
- * Reorganizado em 3 grandes hubs por DOMÍNIO:
+ * Reorganizado em 4 grandes hubs por CONTEXTO DE USO:
  *
- *   1. SITE       — tudo que é e-commerce online (pedidos, marketing,
- *                   vendedoras, publicar no site, produtos WC, log de baixas,
- *                   WhatsApp, vitrine).
- *   2. LOJA       — operação física + ERP Gigasistemas (realinhamento,
- *                   produtos loja, crediário, almoxarifado, venda certa,
- *                   materiais).
- *   3. RETAGUARDA — admin do sistema (configurações, lojas, usuários, logs).
+ *   1. SITE   — e-commerce (pedidos WC, marketing, publicar, vitrine, trocas).
+ *   2. LOJA   — operação física + ERP (realinhamento exec, crediário receber,
+ *               materiais, venda certa, juros crediário).
+ *   3. GESTÃO — estratégico (dashboard, inteligência, financeiro, vendas
+ *               vendedora, cobrança, clientes). Continua em URL /retaguarda
+ *               por compatibilidade — só o LABEL mudou.
+ *   4. CONFIG — setup técnico (lojas, usuários, NFC-e, pagamentos, WhatsApp).
  *
- * Cada hub vira um botão circular GIGANTE (170px) na home; clicar abre uma
- * tela /site, /loja ou /retaguarda com seus submódulos.
- *
- * Mantém: pílula do Piloto Automático e KPIs do dia.
+ * Filial (role=store) é redirecionada pro PDV automaticamente — esses 4 hubs
+ * são só pra matriz.
  */
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Globe2, Store, Shield, Zap, Bot, type LucideIcon,
+  Globe2, Store, Shield, Zap, Bot, BarChart3, Settings, type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -44,7 +42,7 @@ type Hub = {
   description: string;
 };
 
-// 3 HUBS principais — botões GIGANTES
+// 4 HUBS principais — botões GIGANTES (REORG-F2)
 const HUBS: Hub[] = [
   {
     href: '/site',
@@ -52,7 +50,7 @@ const HUBS: Hub[] = [
     icon: Globe2,
     tone: 'sky',
     subtitle: 'E-commerce',
-    description: 'Pedidos · Marketing · WhatsApp · Vitrine',
+    description: 'Pedidos · Marketing · Vitrine · Trocas',
   },
   {
     href: '/loja',
@@ -60,15 +58,23 @@ const HUBS: Hub[] = [
     icon: Store,
     tone: 'peach',
     subtitle: 'Operação física',
-    description: 'Estoque · ERP · Crediário · Almoxarifado',
+    description: 'Estoque · Crediário · Materiais · Juros',
   },
   {
     href: '/retaguarda',
-    label: 'Retaguarda',
-    icon: Shield,
+    label: 'Gestão',
+    icon: BarChart3,
+    tone: 'mint',
+    subtitle: 'Estratégico',
+    description: 'Dashboard · Inteligência · Financeiro · Cobrança',
+  },
+  {
+    href: '/config',
+    label: 'Config',
+    icon: Settings,
     tone: 'lavender',
-    subtitle: 'Admin',
-    description: 'Configurações · Lojas · Usuários · Logs',
+    subtitle: 'Setup técnico',
+    description: 'Lojas · Usuários · NFC-e · Pagamentos · WhatsApp',
   },
 ];
 
@@ -222,12 +228,12 @@ export default function DashboardHome() {
           <MiniKpi label="Concluídos hoje" value={concluidosHoje} tone="mint" />
         </section>
 
-        {/* 3 HUBS GIGANTES --------------------------------------------- */}
+        {/* 4 HUBS GIGANTES --------------------------------------------- */}
         <section
-          className="panel-pastel p-6 sm:p-12 mb-6 fade-up"
+          className="panel-pastel p-6 sm:p-10 mb-6 fade-up"
           style={{ animationDelay: '0.1s' }}
         >
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-10 justify-items-center">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 sm:gap-8 justify-items-center">
             {HUBS.map((hub, idx) => (
               <HubCircle key={hub.href} hub={hub} index={idx} />
             ))}
@@ -237,7 +243,7 @@ export default function DashboardHome() {
         {/* Footer */}
         <footer className="mt-8 flex items-center justify-between text-xs text-slate-400">
           <span>Lurds · Plus Size</span>
-          <span style={{ color: '#8b4f55' }} className="font-semibold">Launchpad v9</span>
+          <span style={{ color: '#8b4f55' }} className="font-semibold">Launchpad v10</span>
         </footer>
       </div>
     </div>
