@@ -273,13 +273,41 @@ export class NfceService {
       ? `<dest><CPF>${sale.customerCpf.replace(/\D/g, '')}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`
       : '';
 
+    // ─── Distribuição de desconto da venda inteira nos itens ───
+    // SEFAZ exige que vDesc(total) = SOMA dos vDesc(por item) (cStat 537).
+    // Se o usuário aplicou desconto na venda toda (sale.desconto), distribui
+    // proporcionalmente entre os itens conforme o valor bruto de cada um.
+    // Se já houver desconto por item, soma pra cada um.
+    const brutoTotal = items.reduce(
+      (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
+      0,
+    );
+    const totalLiquido = Number(sale.total || 0);
+    const descontoVendaInteira = Math.max(0, brutoTotal - totalLiquido);
+    const descontoPorItem = new Map<number, number>();
+    let descAcumulado = 0;
+    items.forEach((it: any, idx: number) => {
+      const bruto = (it.qty || 0) * (it.precoUnit || 0);
+      const descItemOriginal = Number(it.desconto || 0);
+      let parcela: number;
+      if (idx === items.length - 1) {
+        // Último item: pega o resíduo pra fechar o total exato (anti-rounding)
+        parcela = Math.max(0, descontoVendaInteira - descAcumulado);
+      } else if (brutoTotal > 0) {
+        parcela = Number(((bruto / brutoTotal) * descontoVendaInteira).toFixed(2));
+        descAcumulado += parcela;
+      } else {
+        parcela = 0;
+      }
+      descontoPorItem.set(idx, descItemOriginal + parcela);
+    });
+
     const detLines = items
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
         const cProd = it.sku || `SEM-CODIGO-${nItem}`;
         // Em homologação, o PRIMEIRO item DEVE ter exatamente esta descrição
         // (regra fixa SEFAZ — cStat 373 se diferente).
-        // Demais itens podem ter qualquer descrição.
         const xProd =
           ambiente === '2' && idx === 0
             ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
@@ -287,8 +315,10 @@ export class NfceService {
         const ncm = it.ncm || '00000000';
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
-        const vProd = (it.total || 0).toFixed(2);
-        const vDesc = (it.desconto || 0).toFixed(2);
+        // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
+        const brutoItem = (it.qty || 0) * (it.precoUnit || 0);
+        const vProd = brutoItem.toFixed(2);
+        const vDesc = (descontoPorItem.get(idx) || 0).toFixed(2);
         return `
     <det nItem="${nItem}">
       <prod>
