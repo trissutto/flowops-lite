@@ -329,6 +329,27 @@ export class NfceService {
     const cMun = ender.codMunicipio || '3550308';
     const xMun = ender.municipio || 'SAO PAULO';
 
+    // ── Sanitização blindada (evita cStat 225 - falha de schema) ────────
+    // CEP: SEFAZ exige EXATAMENTE 8 dígitos. Padding curto, truncamento longo.
+    const sanitizeCep = (raw: string): string => {
+      const onlyDigits = String(raw || '').replace(/\D/g, '');
+      if (onlyDigits.length === 0) return '00000000';
+      if (onlyDigits.length >= 8) return onlyDigits.slice(0, 8);
+      return onlyDigits.padStart(8, '0');
+    };
+    const cepFinal = sanitizeCep(ender.cep);
+
+    // CNPJ: 14 dígitos exatos
+    const cnpjFinal = String(config.cnpj || '').replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+    // IE: só dígitos, max 14
+    const ieFinal = String(config.ie || '').replace(/\D/g, '').slice(0, 14);
+    // Strings de endereço/empresa: trim + max 60 chars (pattern xs:string da NFe)
+    const trim60 = (s: string) => String(s || '').trim().slice(0, 60);
+    const trim2to60 = (s: string, fb = 'NAO INFORMADO') => {
+      const v = trim60(s);
+      return v.length >= 2 ? v : fb;
+    };
+
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
   <infNFe Id="NFe${chave}" versao="4.00">
@@ -354,19 +375,19 @@ export class NfceService {
       <verProc>LURDS-PDV-1.0</verProc>
     </ide>
     <emit>
-      <CNPJ>${(config.cnpj || '').padStart(14, '0')}</CNPJ>
-      <xNome>${this.esc(config.razaoSocial || '')}</xNome>
-      <xFant>${this.esc(config.fantasia || '')}</xFant>
+      <CNPJ>${cnpjFinal}</CNPJ>
+      <xNome>${this.esc(trim2to60(config.razaoSocial))}</xNome>
+      <xFant>${this.esc(trim2to60(config.fantasia, trim2to60(config.razaoSocial)))}</xFant>
       <enderEmit>
-        <xLgr>${this.esc(ender.logradouro || '')}</xLgr>
-        <nro>${this.esc(ender.numero || 'S/N')}</nro>
-        <xBairro>${this.esc(ender.bairro || '')}</xBairro>
+        <xLgr>${this.esc(trim2to60(ender.logradouro))}</xLgr>
+        <nro>${this.esc(String(ender.numero || 'S/N').trim().slice(0, 60))}</nro>
+        <xBairro>${this.esc(trim2to60(ender.bairro))}</xBairro>
         <cMun>${cMun}</cMun>
-        <xMun>${this.esc(xMun)}</xMun>
-        <UF>${config.uf || 'SP'}</UF>
-        <CEP>${(ender.cep || '').replace(/\D/g, '').padStart(8, '0')}</CEP>
+        <xMun>${this.esc(trim2to60(xMun))}</xMun>
+        <UF>${(config.uf || 'SP').trim().toUpperCase().slice(0, 2)}</UF>
+        <CEP>${cepFinal}</CEP>
       </enderEmit>
-      <IE>${(config.ie || '').replace(/\D/g, '')}</IE>
+      <IE>${ieFinal}</IE>
       <CRT>${config.regime || '1'}</CRT>
     </emit>
     ${dest}
