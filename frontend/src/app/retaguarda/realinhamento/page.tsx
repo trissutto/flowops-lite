@@ -76,6 +76,10 @@ interface PreviewResponse {
   perSku: PerSkuReport[];
   perRef: PerRefReport[];
   notFoundRefs: string[];
+  ambiguousRefs?: Array<{
+    ref: string;
+    familias: Array<{ desc: string; count: number }>;
+  }>;
   totals: {
     totalMoves: number;
     totalUnits: number;
@@ -111,6 +115,12 @@ export default function RealinhamentoPage() {
     Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>
   >([]);
   const [searchSelected, setSearchSelected] = useState<Set<string>>(new Set());
+  // Mapa REF → descrição-filtro. Quando usuário seleciona REF via busca por
+  // descrição, guardamos a descrição pra mandar como filtro no preview.
+  // Isso evita REF com 2 famílias (ex: 9002 = Calça Mom + Pijama Masculino)
+  // serem confundidas no plano final. Sem filtro, o backend detecta a
+  // ambiguidade e devolve em ambiguousRefs pra escolha manual.
+  const [refFilters, setRefFilters] = useState<Record<string, string>>({});
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirmResult, setConfirmResult] = useState<{
@@ -459,6 +469,16 @@ export default function RealinhamentoPage() {
       setSearchError('Essas REFs já estavam na lista.');
       return;
     }
+    // Captura a descrição de cada REF selecionada pra usar como FILTRO no
+    // plano. Evita o bug de "9002" pegar pijama quando o usuário queria calça.
+    const newFilters: Record<string, string> = { ...refFilters };
+    for (const ref of toAdd) {
+      const row = searchResults.find((r) => r.REF === ref);
+      if (row?.DESCRICAOCOMPLETA) {
+        newFilters[ref] = row.DESCRICAOCOMPLETA;
+      }
+    }
+    setRefFilters(newFilters);
     const next = [
       ...existing,
       ...toAdd,
@@ -497,6 +517,12 @@ export default function RealinhamentoPage() {
 
     setLoading(true);
     try {
+      // Filtra refFilters só pras REFs que estão na lista atual
+      // (evita mandar lixo de REFs antigas removidas do textarea)
+      const cleanFilters: Record<string, string> = {};
+      for (const ref of refs) {
+        if (refFilters[ref]) cleanFilters[ref] = refFilters[ref];
+      }
       const data = await api<PreviewResponse>('/realignment/preview', {
         method: 'POST',
         body: JSON.stringify({
@@ -505,6 +531,7 @@ export default function RealinhamentoPage() {
           destStoreCodes: Array.from(destCodes),
           minPerDest,
           keepMinOrigin,
+          refFilters: Object.keys(cleanFilters).length ? cleanFilters : undefined,
         }),
       });
       setPreview(data);
@@ -1252,6 +1279,34 @@ export default function RealinhamentoPage() {
               )}
             </div>
           </div>
+
+          {preview.ambiguousRefs && preview.ambiguousRefs.length > 0 && (
+            <div className="bg-amber-100 border-2 border-amber-400 text-amber-950 rounded-lg px-4 py-3 mb-3">
+              <div className="font-bold text-sm mb-2 flex items-center gap-2">
+                ⚠️ {preview.ambiguousRefs.length} REF(s) ambíguas — peças NÃO foram incluídas no plano
+              </div>
+              <div className="text-xs mb-2">
+                Cada uma dessas REFs tem mais de 1 produto cadastrado no Giga.
+                Pra resolver: vai em "Busque pela descrição" acima e selecione a versão correta.
+              </div>
+              <div className="space-y-2">
+                {preview.ambiguousRefs.map((a) => (
+                  <div key={a.ref} className="bg-white rounded p-2 border border-amber-300">
+                    <div className="font-mono font-bold text-amber-900 text-sm">REF: {a.ref}</div>
+                    <div className="text-[11px] text-slate-700 mt-1 space-y-0.5">
+                      {a.familias.map((f, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="text-amber-600 font-bold">•</span>
+                          <span className="flex-1">{f.desc}</span>
+                          <span className="text-slate-500">({f.count}var)</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {preview.notFoundRefs.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 text-xs">

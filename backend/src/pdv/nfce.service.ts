@@ -273,33 +273,54 @@ export class NfceService {
       ? `<dest><CPF>${sale.customerCpf.replace(/\D/g, '')}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`
       : '';
 
-    // ─── Distribuição de desconto da venda inteira nos itens ───
+    // ─── Distribuição de desconto nos itens ───
     // SEFAZ exige que vDesc(total) = SOMA dos vDesc(por item) (cStat 537).
-    // Se o usuário aplicou desconto na venda toda (sale.desconto), distribui
-    // proporcionalmente entre os itens conforme o valor bruto de cada um.
-    // Se já houver desconto por item, soma pra cada um.
+    // E vNF = vProd − vDesc (cStat 610).
+    //
+    // Cenários cobertos:
+    //   1. Promoção desconta NO ITEM (it.desconto > 0, sale.desconto = 0)
+    //      → usa it.desconto direto, não distribui nada extra
+    //   2. Vendedora aplica desconto NA VENDA TODA (sale.desconto > 0)
+    //      → distribui proporcionalmente entre os itens
+    //   3. Misto (promoção + desconto venda)
+    //      → soma os dois corretamente sem duplicar
+    //
+    // Lógica: o desconto EFETIVO total = brutoTotal − sale.total. Subtrai a
+    // soma dos descontos JÁ aplicados nos itens — o que sobra é o desconto
+    // adicional na venda toda, que distribuímos proporcionalmente.
     const brutoTotal = items.reduce(
       (s: number, it: any) => s + (it.qty || 0) * (it.precoUnit || 0),
       0,
     );
     const totalLiquido = Number(sale.total || 0);
-    const descontoVendaInteira = Math.max(0, brutoTotal - totalLiquido);
+    const descontoEfetivoTotal = Math.max(0, brutoTotal - totalLiquido);
+    const somaDescontosItens = items.reduce(
+      (s: number, it: any) => s + Number(it.desconto || 0),
+      0,
+    );
+    const descontoVendaExtra = Math.max(
+      0,
+      descontoEfetivoTotal - somaDescontosItens,
+    );
+
     const descontoPorItem = new Map<number, number>();
     let descAcumulado = 0;
     items.forEach((it: any, idx: number) => {
       const bruto = (it.qty || 0) * (it.precoUnit || 0);
       const descItemOriginal = Number(it.desconto || 0);
-      let parcela: number;
+      let parcelaExtra: number;
       if (idx === items.length - 1) {
         // Último item: pega o resíduo pra fechar o total exato (anti-rounding)
-        parcela = Math.max(0, descontoVendaInteira - descAcumulado);
+        parcelaExtra = Math.max(0, descontoVendaExtra - descAcumulado);
       } else if (brutoTotal > 0) {
-        parcela = Number(((bruto / brutoTotal) * descontoVendaInteira).toFixed(2));
-        descAcumulado += parcela;
+        parcelaExtra = Number(
+          ((bruto / brutoTotal) * descontoVendaExtra).toFixed(2),
+        );
+        descAcumulado += parcelaExtra;
       } else {
-        parcela = 0;
+        parcelaExtra = 0;
       }
-      descontoPorItem.set(idx, descItemOriginal + parcela);
+      descontoPorItem.set(idx, descItemOriginal + parcelaExtra);
     });
 
     const detLines = items

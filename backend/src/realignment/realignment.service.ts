@@ -88,6 +88,14 @@ export class RealignmentService {
     destStoreCodes: string[];
     minPerDest: number;
     keepMinOrigin?: number;
+    /**
+     * Filtro de descrição por REF. Quando uma REF tem múltiplas "famílias"
+     * de produtos (ex: REF 9002 = "Calça Mom" E "Pijama"), passar aqui
+     * a descrição da família desejada faz o sistema filtrar.
+     * Exemplo: { "9002": "calça mom" } → só pega variações cuja descrição
+     * contém "calça" E "mom".
+     */
+    refFilters?: Record<string, string>;
   }) {
     // 1) Expande REFs → SKUs via Giga (searchByRef retorna todas as variações de cor/tamanho)
     const refsIn = Array.from(
@@ -107,6 +115,14 @@ export class RealignmentService {
 
     const refMap: Record<string, Array<{ sku: string; cor: string | null; tamanho: string | null; desc: string }>> = {};
     const notFoundRefs: string[] = [];
+    const ambiguousRefs: Array<{ ref: string; familias: Array<{ desc: string; count: number }> }> = [];
+
+    // Normaliza string pra match (lowercase + sem acento)
+    const norm = (s: string) =>
+      String(s || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '');
 
     for (const ref of refsIn) {
       const rows = await this.erp.searchByRef(ref);
@@ -114,7 +130,7 @@ export class RealignmentService {
         notFoundRefs.push(ref);
         continue;
       }
-      const variations = rows
+      let variations = rows
         .map((r: any) => ({
           sku: String(r.CODIGO || '').trim(),
           cor: r.COR ? String(r.COR).trim() : null,
@@ -123,6 +139,48 @@ export class RealignmentService {
         }))
         .filter((x) => x.sku)
         .filter((x) => isPlusSizeTamanho(x.tamanho));
+
+      // Aplica filtro de descrição se fornecido (caso "calça mom 9002" → só calças)
+      const descFilter = input.refFilters?.[ref];
+      if (descFilter) {
+        const palavras = norm(descFilter)
+          .split(/\s+/)
+          .filter((w) => w.length >= 2);
+        if (palavras.length > 0) {
+          variations = variations.filter((v) => {
+            const d = norm(v.desc);
+            return palavras.every((w) => d.includes(w));
+          });
+        }
+      } else {
+        // ─── Detecção de AMBIGUIDADE ───
+        // Sem filtro de descrição, checa se a REF tem múltiplas "famílias".
+        // Agrupa variações pelas 3 primeiras palavras da descrição. Se vier
+        // mais de 1 grupo significativo, marca como ambígua e retorna pro
+        // frontend pedir desambiguação.
+        const familias = new Map<string, { desc: string; count: number }>();
+        for (const v of variations) {
+          const palavras = norm(v.desc).split(/\s+/).filter(Boolean);
+          // Ignora palavras genéricas e pega 3 primeiras significativas
+          const chave = palavras.slice(0, 3).join(' ');
+          if (!chave) continue;
+          const existing = familias.get(chave);
+          if (existing) {
+            existing.count++;
+          } else {
+            familias.set(chave, { desc: v.desc, count: 1 });
+          }
+        }
+        if (familias.size > 1) {
+          ambiguousRefs.push({
+            ref,
+            familias: Array.from(familias.values()).sort(
+              (a, b) => b.count - a.count,
+            ),
+          });
+          continue; // Não inclui essa REF no plano até desambiguar
+        }
+      }
 
       if (variations.length > 0) {
         refMap[ref] = variations;
@@ -329,6 +387,7 @@ export class RealignmentService {
       perSku,
       perRef,
       notFoundRefs,
+      ambiguousRefs,
       totals: {
         totalMoves,
         totalUnits,

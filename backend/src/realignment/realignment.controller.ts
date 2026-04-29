@@ -157,6 +157,8 @@ export class RealignmentController {
       destStoreCodes: string[];
       minPerDest: number;
       keepMinOrigin?: number;
+      /** mapa { ref: descFiltro } pra desambiguar REFs com múltiplas famílias */
+      refFilters?: Record<string, string>;
     },
   ) {
     return this.svc.preview(body);
