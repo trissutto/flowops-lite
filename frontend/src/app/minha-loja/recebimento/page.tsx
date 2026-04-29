@@ -126,14 +126,33 @@ export default function RecebimentoPage() {
       const sku = scanInput.trim();
       if (!sku) return;
       setScanning(true);
+      // Limpa input ANTES da resposta — vendedora pode bipar próximo já
+      setScanInput('');
       try {
         const res = await api<{ ok: boolean; transferOrderId: string; refCode: string }>(
           `/realignment/shipments/${selected.id}/scan`,
           { method: 'POST', body: JSON.stringify({ sku }) },
         );
         setFeedback({ type: 'ok', msg: `✅ ${res.refCode} conferida` });
-        setScanInput('');
-        await loadShipmentDetail(selected.id);
+        // ─── Atualização OTIMISTA local — sem refetch ───
+        // Atualiza só o item bipado pra status='received'. Evita chamada
+        // de rede pesada que carrega 61 itens a cada bipagem (gargalo
+        // principal de UX antes desta otimização).
+        setSelected((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            items: prev.items.map((it) =>
+              it.id === res.transferOrderId
+                ? {
+                    ...it,
+                    realignmentStatus: 'received',
+                    realignmentReceivedAt: new Date().toISOString(),
+                  }
+                : it,
+            ),
+          };
+        });
       } catch (e: any) {
         const msg = String(e?.message || '').replace(/^\d+:\s*/, '');
         setFeedback({ type: 'err', msg: `❌ ${msg}` });
@@ -142,7 +161,7 @@ export default function RecebimentoPage() {
         inputRef.current?.focus();
       }
     },
-    [selected, scanInput, loadShipmentDetail],
+    [selected, scanInput],
   );
 
   const handleMarkMissing = useCallback(
@@ -160,12 +179,28 @@ export default function RecebimentoPage() {
           body: JSON.stringify({ transferOrderId: item.id, note }),
         });
         setFeedback({ type: 'ok', msg: `Item marcado como faltante` });
-        await loadShipmentDetail(selected.id);
+        // Atualização otimista local (mesma estratégia do handleScan)
+        setSelected((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            items: prev.items.map((it) =>
+              it.id === item.id
+                ? {
+                    ...it,
+                    realignmentStatus: 'missing',
+                    realignmentMissingAt: new Date().toISOString(),
+                    realignmentMissingNote: note,
+                  }
+                : it,
+            ),
+          };
+        });
       } catch (e: any) {
         setFeedback({ type: 'err', msg: e?.message || 'Erro' });
       }
     },
-    [selected, loadShipmentDetail],
+    [selected],
   );
 
   const handleConfirmReceived = useCallback(async () => {
