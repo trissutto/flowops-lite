@@ -184,9 +184,9 @@ const SEFAZ_SP_NFCE_ENDPOINTS = {
       'https://nfce.fazenda.sp.gov.br/ws/NFeConsultaProtocolo4.asmx',
     consultaRecibo:
       'https://nfce.fazenda.sp.gov.br/ws/NFeRetAutorizacao4.asmx',
-    // Eventos (cancelamento, carta de correção): SVRS centralizado
+    // Eventos (cancelamento, carta de correção)
     eventos:
-      'https://www.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx',
+      'https://nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx',
   },
   '2': {
     autorizacao:
@@ -195,6 +195,8 @@ const SEFAZ_SP_NFCE_ENDPOINTS = {
       'https://homologacao.nfce.fazenda.sp.gov.br/ws/NFeConsultaProtocolo4.asmx',
     consultaRecibo:
       'https://homologacao.nfce.fazenda.sp.gov.br/ws/NFeRetAutorizacao4.asmx',
+    eventos:
+      'https://homologacao.nfce.fazenda.sp.gov.br/ws/NFeRecepcaoEvento4.asmx',
   },
 } as const;
 
