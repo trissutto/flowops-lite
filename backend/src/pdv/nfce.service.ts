@@ -276,9 +276,12 @@ export class NfceService {
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
         const cProd = it.sku || `SEM-CODIGO-${nItem}`;
+        // Em homologação, o PRIMEIRO item DEVE ter exatamente esta descrição
+        // (regra fixa SEFAZ — cStat 373 se diferente).
+        // Demais itens podem ter qualquer descrição.
         const xProd =
-          ambiente === '2'
-            ? 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
+          ambiente === '2' && idx === 0
+            ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
             : it.descricao || cProd;
         const ncm = it.ncm || '00000000';
         const cfop = it.cfop || '5102';
