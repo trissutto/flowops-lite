@@ -375,7 +375,7 @@ export class NfceService {
       <indFinal>1</indFinal>
       <indPres>1</indPres>
       <procEmi>0</procEmi>
-      <verProc>LURDS-PDV-1.0</verProc>
+      <verProc>LURDS-V3-SUPL</verProc>
     </ide>
     <emit>
       <CNPJ>${cnpjFinal}</CNPJ>
@@ -410,9 +410,8 @@ export class NfceService {
     <transp><modFrete>9</modFrete></transp>
     <pag>${pagLines}</pag>
     <infAdic><infCpl>Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.</infCpl></infAdic>
-  </infNFe>${this.buildInfNFeSupl(chave, ambiente, config.cscId, config.cscToken)}</NFe>`.trim();
-    // BUILD VERSION: NFCE-INFSUPL-V2 (cache bust)
-    this.logger.log(`[NFCe] XML gerado COM infNFeSupl. Tamanho: ${xml.length} chars`);
+  </infNFe><infNFeSupl><qrCode><![CDATA[${buildQrCodeUrlNfce({chave,ambiente:ambiente as '1'|'2',idCSC:config.cscId||'1',cscToken:config.cscToken||''})}]]></qrCode><urlChave>${buildUrlConsultaNfce(ambiente as '1'|'2')}</urlChave></infNFeSupl></NFe>`.trim();
+    this.logger.log(`[NFCe-V3-SUPL] XML gerado tamanho=${xml.length} contemSupl=${xml.includes('infNFeSupl')}`);
 
     // ═══════════════════════════════════════════════════════════════════
     // MINIFICA: SEFAZ NFC-e rejeita whitespace entre tags (cStat 588).
