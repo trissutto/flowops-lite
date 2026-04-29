@@ -744,28 +744,64 @@ export class RealignmentService {
     }
 
     if (!shipment) {
-      try {
-        const year = now.getFullYear();
-        const prefix = `REM-${year}-`;
-        const count = await (this.prisma as any).realignmentShipment.count({
-          where: { code: { startsWith: prefix } },
-        });
-        const code = `${prefix}${String(count + 1).padStart(6, '0')}`;
-        shipment = await (this.prisma as any).realignmentShipment.create({
-          data: {
-            code,
-            fromStoreCode: o.lojaOrigemCode,
-            fromStoreName: o.lojaOrigemName,
-            toStoreCode: o.lojaDestinoCode,
-            toStoreName: o.lojaDestinoName,
-            status: 'open',
-            openedByUserId: input.userId ?? null,
-          },
-        });
-        this.logger.log(`[markAsSent] created shipment ${code}`);
-      } catch (e: any) {
-        this.logger.error(`[markAsSent] step=createShipment failed: ${e?.message}`);
-        throw new BadRequestException(`Erro ao criar remessa: ${e?.message}`);
+      const year = now.getFullYear();
+      const prefix = `REM-${year}-`;
+      // Race condition: 2+ vendedoras clicando "Enviei" simultaneamente podem
+      // computar o mesmo `count` antes de qualquer create commitar. Retry até
+      // 10x incrementando o sufixo numérico — primeira que comitar ganha.
+      let lastErr: any;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        try {
+          const count = await (this.prisma as any).realignmentShipment.count({
+            where: { code: { startsWith: prefix } },
+          });
+          const next = count + 1 + attempt; // se conflitou, tenta count+2, count+3...
+          const code = `${prefix}${String(next).padStart(6, '0')}`;
+          // Antes de criar, faz outra checagem: já existe shipment OPEN do par?
+          // (alguém ganhou a corrida e criou). Se sim, reaproveita.
+          const racing = await (this.prisma as any).realignmentShipment.findFirst({
+            where: {
+              fromStoreCode: o.lojaOrigemCode,
+              toStoreCode: o.lojaDestinoCode,
+              status: 'open',
+            },
+          });
+          if (racing) {
+            shipment = racing;
+            this.logger.log(`[markAsSent] reusing concurrent shipment ${racing.code}`);
+            break;
+          }
+          shipment = await (this.prisma as any).realignmentShipment.create({
+            data: {
+              code,
+              fromStoreCode: o.lojaOrigemCode,
+              fromStoreName: o.lojaOrigemName,
+              toStoreCode: o.lojaDestinoCode,
+              toStoreName: o.lojaDestinoName,
+              status: 'open',
+              openedByUserId: input.userId ?? null,
+            },
+          });
+          this.logger.log(`[markAsSent] created shipment ${code} (attempt ${attempt + 1})`);
+          break;
+        } catch (e: any) {
+          lastErr = e;
+          // Prisma P2002 = unique constraint violation
+          const isUniqueErr =
+            e?.code === 'P2002' ||
+            String(e?.message || '').toLowerCase().includes('unique');
+          if (!isUniqueErr) {
+            this.logger.error(`[markAsSent] step=createShipment failed: ${e?.message}`);
+            throw new BadRequestException(`Erro ao criar remessa: ${e?.message}`);
+          }
+          // Conflito de unique — vai pro próximo attempt
+          this.logger.warn(`[markAsSent] race on shipment code, retrying (${attempt + 1}/10)`);
+        }
+      }
+      if (!shipment) {
+        throw new BadRequestException(
+          `Erro ao criar remessa após 10 tentativas: ${lastErr?.message}`,
+        );
       }
     }
 
