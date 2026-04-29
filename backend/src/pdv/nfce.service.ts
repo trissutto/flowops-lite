@@ -256,7 +256,16 @@ export class NfceService {
 
   private async buildXml(sale: any, config: any, chave: string, numero: number): Promise<string> {
     const ambiente = config.ambiente;
-    const dhEmi = new Date().toISOString().replace(/\.\d+/, '');
+    // dhEmi precisa estar no formato ISO com timezone OFFSET (-03:00),
+    // NÃO com Z. SEFAZ NF-e 4.00 (TDateTimeUTC) só aceita os offsets
+    // -01:00, -02:00, -03:00, -04:00, -05:00 ou +00:00. Usar Z resulta
+    // em rejeição cStat 225 (Falha no Schema XML).
+    const dhEmi = (() => {
+      const now = new Date();
+      // Brasília UTC-3 (sem horário de verão desde 2019)
+      const local = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+      return local.toISOString().slice(0, 19) + '-03:00';
+    })();
     const items = sale.items as any[];
 
     const dest = sale.customerCpf
