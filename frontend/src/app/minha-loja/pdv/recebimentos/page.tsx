@@ -150,23 +150,23 @@ export default function RecebimentosPage() {
   // ── Filtro local ────────────────────────────────────────────
 
   const clientesFiltrados = useMemo(() => {
+    // BUSCA ULTRA-SIMPLES — só lowercase + includes. Sem regex Unicode.
     const q = normalize(busca);
-    if (q.length === 0) return clientes.slice(0, 200); // top 200 inicial
-    const tokens = q.split(/\s+/).filter(Boolean);
+    console.log(`[RECEBIMENTOS-V3] busca="${busca}" q="${q}" totalClientes=${clientes.length}`);
+    if (q.length === 0) return clientes.slice(0, 200);
+
+    const tokens = q.split(' ').filter((t) => t.length > 0);
     if (tokens.length === 0) return clientes.slice(0, 200);
+
     const filtered = clientes.filter((c) => {
       const nome = normalize(c.nome);
       const cod = String(c.codCliente || '').toLowerCase();
-      const tel = c.telefone ? String(c.telefone).toLowerCase() : '';
-      // TODOS os tokens precisam bater em pelo menos um campo
-      return tokens.every((t) => nome.includes(t) || cod.includes(t) || tel.includes(t));
+      // TODOS os tokens precisam bater no nome OU código
+      return tokens.every((t) => nome.includes(t) || cod.includes(t));
     });
-    // Debug temporário no console pra diagnóstico
-    if (typeof window !== 'undefined') {
-      console.log(`[recebimentos] filtro "${busca}" → q="${q}" tokens=${JSON.stringify(tokens)} → ${filtered.length} resultados`);
-      if (filtered.length > 0 && filtered.length < 5) {
-        console.log('[recebimentos] primeiros:', filtered.slice(0, 3).map(c => `${c.nome} (cod ${c.codCliente})`));
-      }
+    console.log(`[RECEBIMENTOS-V3] tokens=${JSON.stringify(tokens)} → ${filtered.length} resultados`);
+    if (filtered.length > 0 && filtered.length < 5) {
+      console.log('[RECEBIMENTOS-V3] primeiros:', filtered.slice(0, 3).map((c) => `${c.nome}(${c.codCliente})`));
     }
     return filtered;
   }, [busca, clientes]);
@@ -335,6 +335,7 @@ export default function RecebimentosPage() {
             <ArrowLeft size={20} />
           </Link>
           <h1 className="text-xl md:text-2xl font-bold text-rose-900">RECEBIMENTOS</h1>
+          <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold">v3</span>
           <span className="text-xs text-gray-500 hidden md:inline flex-1">
             crediário · baixa de parcelas
           </span>

@@ -375,18 +375,24 @@ export class CrediarioBaixaService {
 
     const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
 
+    // DEDUP: tabela `clientes` do Giga pode ter linhas duplicadas pelo
+    // mesmo codCliente (cadastro repetido por compra antiga, etc).
+    // Mantemos só a 1ª ocorrência de cada codCliente.
+    const seen = new Set<string>();
     const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
     for (const row of result.rows as any[]) {
       const cod = String(row.cod || '').trim();
-      if (!cod) continue;
+      if (!cod || seen.has(cod)) continue;
       const codNum = parseInt(cod.replace(/\D/g, ''), 10);
       if (isNaN(codNum) || codNum <= 3) continue; // exclui cartões 0-3
       const nome = String(row.nome || '').trim();
       if (!nome) continue;
       if (cardRegex.test(nome)) continue; // exclui cartões pelo nome
       const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
+      seen.add(cod);
       out.push({ codCliente: cod, nome, telefone: tel });
     }
+    this.logger.log(`[crediario-baixa] após dedup: ${out.length} clientes únicos (de ${result.rows.length} linhas)`);
 
     this.clientesCache = {
       data: out,
