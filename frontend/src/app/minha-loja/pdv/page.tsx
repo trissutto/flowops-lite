@@ -21,7 +21,7 @@ import {
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt,
+  Receipt, Globe, Shuffle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -398,6 +398,28 @@ export default function PdvPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCode, sale?.id]);
 
+  // ── Badges de operação (pedidos site + realinhamento) ──
+  // Polling leve a cada 30s pra alertar quando matriz manda algo novo.
+  const [pedidosSitePending, setPedidosSitePending] = useState(0);
+  const [realignPending, setRealignPending] = useState(0);
+  useEffect(() => {
+    let cancel = false;
+    const load = async () => {
+      try {
+        const [picks, realigns] = await Promise.all([
+          api<any[]>('/pick-orders/mine').catch(() => []),
+          api<any[]>('/realignment/mine').catch(() => []),
+        ]);
+        if (cancel) return;
+        setPedidosSitePending(Array.isArray(picks) ? picks.length : 0);
+        setRealignPending(Array.isArray(realigns) ? realigns.length : 0);
+      } catch { /* silencioso */ }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancel = true; clearInterval(id); };
+  }, []);
+
   const retomarVenda = async (saleId: string) => {
     try {
       const s = await api<Sale>(`/pdv/sales/${saleId}`);
@@ -640,8 +662,8 @@ export default function PdvPage() {
           </button>
         </div>
 
-        {/* Linha 2 — Atalhos rápidos (6 pílulas modernas) */}
-        <div className="max-w-3xl mx-auto px-4 pb-3 grid grid-cols-3 md:grid-cols-6 gap-2">
+        {/* Linha 2 — Atalhos rápidos (8 pílulas) */}
+        <div className="max-w-4xl mx-auto px-4 pb-3 grid grid-cols-4 md:grid-cols-8 gap-2">
           <button
             type="button"
             onClick={() => setShowPixAvulso(true)}
@@ -716,11 +738,56 @@ export default function PdvPage() {
               </span>
             )}
           </button>
+
+          {/* Pedido Site — separar pedido WC da loja */}
+          <Link
+            href="/minha-loja"
+            className={`relative rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group border ${
+              pedidosSitePending > 0
+                ? 'bg-gradient-to-br from-indigo-200 to-blue-300 border-indigo-400 text-indigo-900 ring-2 ring-indigo-300 animate-pulse'
+                : 'bg-gradient-to-br from-indigo-100 to-blue-200 border-indigo-300 text-indigo-900'
+            }`}
+            title={pedidosSitePending > 0 ? `${pedidosSitePending} pedido(s) do site aguardando` : 'Pedidos do site'}
+          >
+            <div className="w-9 h-9 rounded-full bg-indigo-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+              <Globe className="w-5 h-5" />
+            </div>
+            <div className="text-center leading-tight">
+              <div className="text-[11px] font-black uppercase tracking-wide">Pedido Site</div>
+              <div className="text-[9px] opacity-70 font-semibold">Separar</div>
+            </div>
+            {pedidosSitePending > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white">
+                {pedidosSitePending}
+              </span>
+            )}
+          </Link>
+
+          {/* Realinhar — separar mercadoria pra outras lojas (realinhamento + reposição + venda certa) */}
+          <Link
+            href="/minha-loja/realinhamento"
+            className={`relative rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group border ${
+              realignPending > 0
+                ? 'bg-gradient-to-br from-fuchsia-200 to-purple-300 border-fuchsia-400 text-fuchsia-900 ring-2 ring-fuchsia-300 animate-pulse'
+                : 'bg-gradient-to-br from-fuchsia-100 to-purple-200 border-fuchsia-300 text-fuchsia-900'
+            }`}
+            title={realignPending > 0 ? `${realignPending} item(s) pra outras lojas` : 'Separar mercadoria pra outras lojas'}
+          >
+            <div className="w-9 h-9 rounded-full bg-fuchsia-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+              <Shuffle className="w-5 h-5" />
+            </div>
+            <div className="text-center leading-tight">
+              <div className="text-[11px] font-black uppercase tracking-wide">Realinhar</div>
+              <div className="text-[9px] opacity-70 font-semibold">Outras lojas</div>
+            </div>
+            {realignPending > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white">
+                {realignPending}
+              </span>
+            )}
+          </Link>
         </div>
       </header>
-
-      {/* Stats Bar — vendas do dia, sempre visível */}
-      <StatsBar storeCode={storeCode} salesVersion={sale?.id} />
 
       <main className="flex-1 max-w-3xl mx-auto w-full p-3 space-y-3 pb-32">
         {error && (
