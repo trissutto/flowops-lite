@@ -1,92 +1,72 @@
 'use client';
 
 /**
- * / — Home/Launchpad LURDS (v10 — 4 HUBS PRINCIPAIS · REORG-F2).
+ * / — Home/Launchpad LURDS (v11 — AdminShell + KpiCards funcionais).
  *
- * Reorganizado em 4 grandes hubs por CONTEXTO DE USO:
+ * Refatorada pro novo padrão visual (referência ObraFácil):
+ *   - Sidebar fixa com nav dos 4 hubs + dashboard + sair
+ *   - 4 KPI cards coloridos GRANDES (teal/green/orange/purple) clicáveis
+ *   - Card "Filtros" + Card "Resumo das lojas" abaixo
+ *   - Header com saudação + Piloto Automático + ações (Atualizar/Sair)
  *
- *   1. SITE   — e-commerce (pedidos WC, marketing, publicar, vitrine, trocas).
- *   2. LOJA   — operação física + ERP (realinhamento exec, crediário receber,
- *               materiais, venda certa, juros crediário).
- *   3. GESTÃO — estratégico (dashboard, inteligência, financeiro, vendas
- *               vendedora, cobrança, clientes). Continua em URL /retaguarda
- *               por compatibilidade — só o LABEL mudou.
- *   4. CONFIG — setup técnico (lojas, usuários, NFC-e, pagamentos, WhatsApp).
- *
- * Filial (role=store) é redirecionada pro PDV automaticamente — esses 4 hubs
- * são só pra matriz.
+ * Filial (role=store) é redirecionada pro /minha-loja/pdv automaticamente —
+ * essa home é só pra matriz.
  */
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Globe2, Store, Shield, Zap, Bot, BarChart3, Settings, type LucideIcon,
+  LayoutDashboard, Globe2, Store, BarChart3, Settings, ShoppingBag,
+  Receipt, Truck, Wifi, WifiOff, Filter, Loader2, Download, RefreshCw,
+  Zap, Bot, ArrowUpRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
-import { TONE_MAP, type PastelTone } from '@/components/PastelShell';
+import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
+import KpiCard from '@/components/KpiCard';
 
 interface CountsResp {
   byStatus: Record<string, { name: string; total: number }>;
   grand: number;
 }
+interface PresenceItem {
+  code: string;
+  name: string;
+  online: boolean;
+  active: boolean;
+}
 
-type Hub = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  tone: PastelTone;
-  subtitle: string;
-  description: string;
-};
-
-// 4 HUBS principais — botões GIGANTES (REORG-F2)
-const HUBS: Hub[] = [
-  {
-    href: '/site',
-    label: 'Site',
-    icon: Globe2,
-    tone: 'sky',
-    subtitle: 'E-commerce',
-    description: 'Pedidos · Marketing · Vitrine · Trocas',
-  },
-  {
-    href: '/loja',
-    label: 'Loja',
-    icon: Store,
-    tone: 'peach',
-    subtitle: 'Operação física',
-    description: 'Estoque · Crediário · Materiais · Juros',
-  },
-  {
-    href: '/retaguarda',
-    label: 'Gestão',
-    icon: BarChart3,
-    tone: 'mint',
-    subtitle: 'Estratégico',
-    description: 'Dashboard · Inteligência · Financeiro · Cobrança',
-  },
-  {
-    href: '/config',
-    label: 'Config',
-    icon: Settings,
-    tone: 'lavender',
-    subtitle: 'Setup técnico',
-    description: 'Lojas · Usuários · NFC-e · Pagamentos · WhatsApp',
-  },
+// === Sidebar: 5 itens (Dashboard + 4 hubs) ===
+const NAV: AdminNavItem[] = [
+  { key: 'dashboard', label: 'Dashboard',  href: '/',                       icon: LayoutDashboard },
+  { key: 'site',      label: 'Site',       href: '/site',                   icon: Globe2 },
+  { key: 'loja',      label: 'Loja',       href: '/loja',                   icon: Store },
+  { key: 'gestao',    label: 'Gestão',     href: '/retaguarda',             icon: BarChart3 },
+  { key: 'config',    label: 'Config',     href: '/config',                 icon: Settings },
 ];
 
 export default function DashboardHome() {
   const router = useRouter();
+  const [userName, setUserName] = useState<string>('');
   const [counts, setCounts] = useState<Record<string, { name: string; total: number }>>({});
   const [concluidosHoje, setConcluidosHoje] = useState<number>(0);
-  const [userName, setUserName] = useState<string>('');
+  const [presence, setPresence] = useState<PresenceItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Pilot
   const [pilot, setPilot] = useState(false);
   const [pilotStatus, setPilotStatus] = useState<PilotStatus | null>(null);
   const [pilotBusy, setPilotBusy] = useState(false);
 
+  // Filtros (visual — ainda não plugados)
+  const [filterStore, setFilterStore] = useState('');
+  const [filterFrom, setFilterFrom] = useState('');
+  const [filterTo, setFilterTo] = useState('');
+
+  // Auth + redirect store→PDV
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) {
@@ -95,7 +75,6 @@ export default function DashboardHome() {
     }
     api<{ role: string; name?: string }>('/auth/me')
       .then((me) => {
-        // store sempre cai no PDV; admin/operator ficam no hub raiz
         if (me.role === 'store') router.push('/minha-loja/pdv');
         if (me.name) setUserName(me.name);
       })
@@ -103,6 +82,7 @@ export default function DashboardHome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Pilot status
   useEffect(() => {
     setPilot(isPilotOn());
     let cancelled = false;
@@ -126,27 +106,30 @@ export default function DashboardHome() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const cnt = await api<CountsResp>('/orders/wc/counts');
-        if (!cancelled) setCounts(cnt.byStatus);
-      } catch {}
-      // Concluídos hoje: pedidos do WC com status=completed e modified_after=hoje 00:00
-      try {
-        const done = await api<{ total: number; since: string }>('/orders/wc/completed-today');
-        if (!cancelled && done?.total != null) setConcluidosHoje(done.total);
-      } catch {}
+  // KPIs reais (counts + presence + completed-today)
+  async function loadKpis() {
+    try {
+      const [cnt, done, pres] = await Promise.all([
+        api<CountsResp>('/orders/wc/counts').catch(() => null),
+        api<{ total: number }>('/orders/wc/completed-today').catch(() => null),
+        api<PresenceItem[]>('/stores/presence').catch(() => []),
+      ]);
+      if (cnt) setCounts(cnt.byStatus);
+      if (done?.total != null) setConcluidosHoje(done.total);
+      if (Array.isArray(pres)) setPresence(pres);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-    load();
-    const timer = setInterval(load, 30_000);
+  }
+  useEffect(() => {
+    loadKpis();
+    const timer = setInterval(loadKpis, 30_000);
     const sock = getSocket();
-    const onAny = () => load();
+    const onAny = () => loadKpis();
     sock.on('order:new', onAny);
     sock.on('order:status-changed', onAny);
     return () => {
-      cancelled = true;
       clearInterval(timer);
       sock.off('order:new', onAny);
       sock.off('order:status-changed', onAny);
@@ -164,11 +147,10 @@ export default function DashboardHome() {
         setPilotStatus(s);
         setPilot(!!s.on);
         if (next && !s.whatsappConnected) {
-          alert('Piloto LIGADO, mas o WhatsApp não está conectado. Conecte em /retaguarda/whatsapp antes de receber pedidos.');
+          alert('Piloto LIGADO, mas o WhatsApp não está conectado. Conecte em /config/whatsapp antes de receber pedidos.');
         }
       } else {
         setPilot(!next);
-        alert('Não foi possível mudar o estado do Piloto. Tenta de novo.');
       }
     } catch {
       setPilot(!next);
@@ -177,148 +159,260 @@ export default function DashboardHome() {
     }
   }
 
-  const today = new Date().toLocaleDateString('pt-BR', {
-    weekday: 'long', day: '2-digit', month: 'long',
-  });
+  function handleRefresh() {
+    setRefreshing(true);
+    loadKpis();
+  }
 
+  // Derivações
   const totalPending =
     (counts['processing']?.total ?? 0) +
     (counts['separacao']?.total ?? 0) +
     (counts['pending']?.total ?? 0) +
     (counts['on-hold']?.total ?? 0);
 
+  const emSeparacao = counts['separacao']?.total ?? 0;
+  const emTransito = counts['shipped']?.total ?? 0;
+  const lojasOnline = presence.filter((p) => p.online).length;
+  const lojasTotal = presence.filter((p) => p.active).length;
+
+  const today = new Date().toLocaleDateString('pt-BR', {
+    weekday: 'long', day: '2-digit', month: 'long',
+  });
+
+  const filteredPresence = useMemo(() => {
+    if (!filterStore) return presence;
+    return presence.filter((p) => p.code === filterStore);
+  }, [presence, filterStore]);
+
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        background:
-          'radial-gradient(1100px 600px at 50% -10%, #f0e6cf 0%, transparent 55%), linear-gradient(180deg, #fdfaf3 0%, #f3e9d8 100%)',
-      }}
+    <AdminShell
+      title={userName ? `Olá, ${userName.split(' ')[0]}` : 'Bem-vinda'}
+      subtitle={
+        <span className="capitalize">
+          {today} · <span className="text-slate-700 font-semibold">Lurds Order One</span>
+        </span>
+      }
+      navItems={NAV}
+      activeKey="dashboard"
+      actions={
+        <>
+          <PilotPill pilot={pilot} busy={pilotBusy} status={pilotStatus} onToggle={togglePilot} />
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            Atualizar
+          </button>
+        </>
+      }
     >
-      <div className="max-w-6xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
-
-        {/* Header ------------------------------------------------------- */}
-        <header className="flex items-center justify-between flex-wrap gap-6 mb-8 fade-up">
-          <div>
-            <div className="text-[11px] uppercase tracking-[0.3em] font-bold mb-2" style={{ color: '#8b4f55' }}>
-              Lurds Order One
-            </div>
-            <h1 className="font-display text-4xl sm:text-5xl text-slate-800 leading-tight">
-              {userName ? <>Olá, <span className="italic" style={{ color: '#8b4f55' }}>{userName.split(' ')[0]}</span></> : 'Bem-vinda'}
-            </h1>
-            <div className="text-sm text-slate-500 mt-2 capitalize">{today}</div>
-          </div>
-
-          <PilotPill
-            pilot={pilot}
-            busy={pilotBusy}
-            status={pilotStatus}
-            onToggle={togglePilot}
+      {/* === Visão geral · 4 KPIs coloridos FUNCIONAIS === */}
+      <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm mb-5">
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-slate-900">Visão geral</h2>
+          <p className="text-sm text-slate-500">
+            Acompanhe pedidos, separação e remessas em tempo real. Clique em qualquer card pra ver detalhe.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <KpiCard
+            tone="teal"
+            label="Pedidos pendentes"
+            value={loading ? '…' : totalPending}
+            hint="Pagar · processar · aguardar"
+            icon={ShoppingBag}
+            onClick={() => router.push('/separacao?status=processing')}
           />
-        </header>
+          <KpiCard
+            tone="green"
+            label="Concluídos hoje"
+            value={loading ? '…' : concluidosHoje}
+            hint="WC completed após 00h"
+            icon={Receipt}
+            onClick={() => router.push('/separacao?status=completed')}
+          />
+          <KpiCard
+            tone="orange"
+            label="Em separação"
+            value={loading ? '…' : emSeparacao}
+            hint="Filiais separando agora"
+            icon={Truck}
+            onClick={() => router.push('/separacao?status=separacao')}
+          />
+          <KpiCard
+            tone="purple"
+            label="Lojas online"
+            value={loading ? '…' : `${lojasOnline}/${lojasTotal}`}
+            hint={`${emTransito} pedido(s) em trânsito`}
+            icon={Wifi}
+            onClick={() => router.push('/separacao?status=em-transito')}
+          />
+        </div>
+      </section>
 
-        {/* KPIs removidos na home — agora vivem só no /retaguarda/dashboard */}
+      {/* === Atalhos pros 4 hubs (cores combinadas com KPIs) === */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
+        <HubCard href="/site"       label="Site"   subtitle="E-commerce"     description="Pedidos · Marketing · Vitrine" tone="teal" icon={Globe2} />
+        <HubCard href="/loja"       label="Loja"   subtitle="Operação física" description="Estoque · Crediário · Materiais" tone="green" icon={Store} />
+        <HubCard href="/retaguarda" label="Gestão" subtitle="Estratégico"    description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
+        <HubCard href="/config"     label="Config" subtitle="Setup técnico"  description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
+      </section>
 
-        {/* 4 HUBS GIGANTES --------------------------------------------- */}
-        <section
-          className="panel-pastel p-6 sm:p-10 mb-6 fade-up"
-          style={{ animationDelay: '0.1s' }}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 sm:gap-8 justify-items-center">
-            {HUBS.map((hub, idx) => (
-              <HubCircle key={hub.href} hub={hub} index={idx} />
-            ))}
+      {/* === Filtros + Status lojas === */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Filtros */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm lg:col-span-2">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Filter className="w-4 h-4 text-slate-500" />
+                Filtros
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">Loja · período</p>
+            </div>
+            <button
+              onClick={() => { setFilterStore(''); setFilterFrom(''); setFilterTo(''); }}
+              className="text-xs px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-bold"
+            >
+              Limpar
+            </button>
           </div>
-        </section>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Loja</label>
+              <select
+                value={filterStore}
+                onChange={(e) => setFilterStore(e.target.value)}
+                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
+              >
+                <option value="">Todas</option>
+                {presence.map((p) => (
+                  <option key={p.code} value={p.code}>{p.code} · {p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Data inicial</label>
+              <input
+                type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)}
+                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">Data final</label>
+              <input
+                type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)}
+                className="w-full text-sm rounded-lg border border-slate-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-500"
+              />
+            </div>
+          </div>
+          {/* Breakdown de status */}
+          {Object.keys(counts).length > 0 && (
+            <div className="mt-5 pt-4 border-t border-slate-100">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">Pedidos por status</div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(counts)
+                  .sort((a, b) => (b[1].total || 0) - (a[1].total || 0))
+                  .filter(([_, info]) => (info.total || 0) > 0)
+                  .map(([slug, info]) => (
+                    <div key={slug} className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs">
+                      <span className="font-semibold text-slate-700">{info.name}</span>{' '}
+                      <span className="font-bold text-slate-900">{info.total}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
 
-        {/* Footer */}
-        <footer className="mt-8 flex items-center justify-between text-xs text-slate-400">
-          <span>Lurds · Plus Size</span>
-          <span style={{ color: '#8b4f55' }} className="font-semibold">Launchpad v10</span>
-        </footer>
-      </div>
-    </div>
+        {/* Resumo das lojas (online/offline) */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Store className="w-4 h-4 text-slate-500" />
+                Status lojas
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">Online · offline em tempo real</p>
+            </div>
+          </div>
+          {loading && (
+            <div className="text-center py-6 text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin inline" />
+            </div>
+          )}
+          {!loading && filteredPresence.length === 0 && (
+            <div className="text-center py-6 text-slate-400 text-sm">Nenhuma loja com os filtros atuais.</div>
+          )}
+          {!loading && filteredPresence.length > 0 && (
+            <div className="space-y-1.5 max-h-[320px] overflow-y-auto pr-1">
+              {filteredPresence.map((p) => (
+                <div key={p.code} className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg hover:bg-slate-50 transition">
+                  <span className={`w-2 h-2 rounded-full ${p.online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 truncate">{p.code} · {p.name}</div>
+                  </div>
+                  {p.online ? <Wifi className="w-3.5 h-3.5 text-emerald-600" /> : <WifiOff className="w-3.5 h-3.5 text-slate-400" />}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </AdminShell>
   );
 }
 
 // ============================================================================
-// HubCircle — botão circular GIGANTE pro hub principal
+// HubCard — card grande pros 4 hubs (cores em sintonia com KpiCard)
 // ============================================================================
-function HubCircle({ hub, index }: { hub: Hub; index: number }) {
-  const Icon = hub.icon;
-  const t = TONE_MAP[hub.tone];
+const HUB_TONES = {
+  teal:   { from: '#0e7e87', to: '#0a5a62' },
+  green:  { from: '#5b9b3e', to: '#3f7029' },
+  orange: { from: '#d68a3c', to: '#b66a1f' },
+  purple: { from: '#8a5cb6', to: '#5f3e8a' },
+} as const;
+
+function HubCard({
+  href, label, subtitle, description, tone, icon: Icon,
+}: {
+  href: string;
+  label: string;
+  subtitle: string;
+  description: string;
+  tone: keyof typeof HUB_TONES;
+  icon: typeof Globe2;
+}) {
+  const t = HUB_TONES[tone];
   return (
     <Link
-      href={hub.href}
-      className="group flex flex-col items-center gap-4 fade-up"
-      style={{ animationDelay: `${0.15 + index * 0.08}s` }}
+      href={href}
+      className="relative overflow-hidden rounded-2xl px-5 py-5 text-white shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition flex flex-col gap-2"
+      style={{ background: `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)` }}
     >
-      <div className="relative">
-        <div
-          className="circle-ring flex items-center justify-center w-[150px] h-[150px] sm:w-[180px] sm:h-[180px] transition-transform duration-500 group-hover:scale-105"
-          style={{
-            border: `6px solid ${t.ring}`,
-            background: t.bg,
-            boxShadow: `0 14px 40px ${t.ring}40, 0 1px 0 rgba(255,255,255,0.95) inset`,
-          }}
-        >
-          <Icon
-            className="w-16 h-16 sm:w-20 sm:h-20 transition-transform duration-500 group-hover:scale-110"
-            style={{ color: t.icon }}
-            strokeWidth={1.4}
-          />
-        </div>
+      <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full opacity-15"
+           style={{ background: 'radial-gradient(circle, white 0%, transparent 70%)' }} />
+      <div className="relative flex items-center justify-between">
+        <Icon className="w-6 h-6 opacity-90" strokeWidth={1.7} />
+        <ArrowUpRight className="w-4 h-4 opacity-70" />
       </div>
-      <div className="text-center max-w-[200px]">
-        <div
-          className="text-[10px] uppercase tracking-[0.3em] font-bold mb-1"
-          style={{ color: t.text }}
-        >
-          {hub.subtitle}
-        </div>
-        <div className="font-display text-2xl sm:text-3xl text-slate-800 leading-tight">
-          {hub.label}
-        </div>
-        <div className="text-xs text-slate-500 mt-1.5 leading-snug">
-          {hub.description}
-        </div>
+      <div className="relative">
+        <div className="text-[11px] font-bold tracking-wider uppercase opacity-90">{subtitle}</div>
+        <div className="text-2xl font-bold leading-tight mt-0.5">{label}</div>
+        <div className="text-[11px] opacity-80 mt-1.5 leading-snug">{description}</div>
       </div>
     </Link>
   );
 }
 
 // ============================================================================
-// MiniKpi — pílula pastel pequena no topo
-// ============================================================================
-function MiniKpi({ label, value, tone }: { label: string; value: number; tone: PastelTone }) {
-  const t = TONE_MAP[tone];
-  return (
-    <div
-      className="rounded-2xl px-4 py-3 flex items-center justify-between transition hover:scale-[1.02]"
-      style={{
-        background: t.bg,
-        border: `2px solid ${t.ring}`,
-        boxShadow: `0 4px 12px ${t.ring}25`,
-      }}
-    >
-      <div className="text-[11px] uppercase tracking-wider font-bold" style={{ color: t.text }}>
-        {label}
-      </div>
-      <div className="font-display text-2xl tabular-nums font-semibold" style={{ color: t.icon }}>
-        {value.toLocaleString('pt-BR')}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================================
-// PilotPill — toggle pastel
+// PilotPill — toggle do Piloto Automático (mantido do v10)
 // ============================================================================
 function PilotPill({
-  pilot,
-  busy,
-  status,
-  onToggle,
+  pilot, busy, status, onToggle,
 }: {
   pilot: boolean;
   busy: boolean;
@@ -330,10 +424,10 @@ function PilotPill({
     <button
       onClick={onToggle}
       disabled={disabled}
-      className="group flex items-center gap-3 px-5 py-3 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
+      className="group flex items-center gap-2 px-4 py-2 rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow"
       style={{
         background: pilot ? '#e3ebd9' : 'white',
-        border: `2.5px solid ${pilot ? '#9caf88' : '#e2e8f0'}`,
+        border: `2px solid ${pilot ? '#9caf88' : '#e2e8f0'}`,
       }}
       title={
         status?.killSwitch
@@ -344,29 +438,25 @@ function PilotPill({
       }
     >
       <div
-        className={`relative flex items-center justify-center w-9 h-9 rounded-full ${pilot ? 'pulse-soft' : ''}`}
+        className={`relative flex items-center justify-center w-7 h-7 rounded-full ${pilot ? 'pulse-soft' : ''}`}
         style={{ background: pilot ? '#5d7048' : '#f1f5f9' }}
       >
         {pilot ? (
-          <Zap className="w-4 h-4 text-white" strokeWidth={2.2} fill="white" />
+          <Zap className="w-3.5 h-3.5 text-white" strokeWidth={2.2} fill="white" />
         ) : (
-          <Bot className="w-4 h-4 text-slate-400" strokeWidth={1.8} />
+          <Bot className="w-3.5 h-3.5 text-slate-400" strokeWidth={1.8} />
         )}
       </div>
       <div className="text-left">
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">
-          Piloto {status?.killSwitch && '· bloqueado'}
+        <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold leading-none">
+          Piloto {status?.killSwitch && '· bloq'}
         </div>
-        <div className="text-sm font-bold" style={{ color: pilot ? '#475636' : '#475569' }}>
+        <div className="text-xs font-bold leading-tight" style={{ color: pilot ? '#475636' : '#475569' }}>
           {busy ? '…' : pilot ? 'Ligado' : 'Desligado'}
         </div>
       </div>
       {pilot && status && !status.whatsappConnected && (
-        <span
-          className="w-2 h-2 rounded-full animate-pulse"
-          style={{ background: '#c9a96e' }}
-          title="WhatsApp desconectado"
-        />
+        <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#c9a96e' }} title="WhatsApp desconectado" />
       )}
     </button>
   );
