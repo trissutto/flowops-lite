@@ -899,43 +899,64 @@ export default function PdvPage() {
                 );
               })()}
             </div>
-            <div className="px-3 py-2 bg-slate-50 border-b text-xs uppercase font-semibold text-slate-500">
-              Carrinho ({sale.items.length})
+            {/* Cabeçalho de colunas */}
+            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[110px_1fr_110px_100px_110px_56px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+              <div>COD</div>
+              <div>Descrição</div>
+              <div className="text-center">Qtd</div>
+              <div className="text-right">Val. Unit.</div>
+              <div className="text-right">Val. Total</div>
+              <div></div>
+            </div>
+            <div className="px-3 py-1 bg-slate-50 border-b text-[11px] text-slate-500">
+              Carrinho · {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
             </div>
             <div className="divide-y">
               {sale.items.map((it) => {
                 const bruto = it.precoUnit * it.qty;
                 return (
-                <div key={it.id} className="p-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-mono text-sm font-bold text-slate-800">
+                <div
+                  key={it.id}
+                  className="px-3 py-2.5 grid grid-cols-[110px_1fr_110px_100px_110px_56px] gap-2 items-center hover:bg-slate-50/50"
+                >
+                  {/* COD — código de barras (EAN) ou SKU */}
+                  <div className="font-mono text-[11px] text-slate-700 leading-tight truncate" title={it.ean || it.sku}>
+                    {it.ean || it.sku}
+                  </div>
+
+                  {/* DESCRIÇÃO — REF + COR/TAM + descrição completa + promo */}
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs font-bold text-slate-900 truncate">
                       {it.ref || it.sku}
                       {it.cor && <span className="ml-1.5 text-slate-500 font-normal">{it.cor}</span>}
                       {it.tamanho && <span className="ml-1 text-slate-500 font-normal">/{it.tamanho}</span>}
                     </div>
                     {it.descricao && (
-                      <div className="text-[11px] text-slate-500 truncate">{it.descricao}</div>
+                      <div className="text-[11px] text-slate-500 truncate leading-tight">{it.descricao}</div>
                     )}
-                    <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-2 flex-wrap">
-                      <span>{brl(it.precoUnit)} cada</span>
-                      {it.desconto > 0 && !it.promoTag && (
-                        <span className="text-rose-600 font-semibold">−{brl(it.desconto)} desc</span>
-                      )}
-                      {it.promoTag && (
-                        <span
-                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                            it.promoTag.includes('4 LEVA 3')
-                              ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
-                              : 'bg-amber-100 text-amber-800 border border-amber-300'
-                          }`}
-                          title={`Desconto: ${brl(it.desconto)}`}
-                        >
-                          🎁 {it.promoTag}
-                        </span>
-                      )}
-                    </div>
+                    {(it.desconto > 0 || it.promoTag) && (
+                      <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        {it.desconto > 0 && !it.promoTag && (
+                          <span className="text-[10px] text-rose-600 font-semibold">−{brl(it.desconto)} desc</span>
+                        )}
+                        {it.promoTag && (
+                          <span
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              it.promoTag.includes('4 LEVA 3')
+                                ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
+                                : 'bg-amber-100 text-amber-800 border border-amber-300'
+                            }`}
+                            title={`Desconto: ${brl(it.desconto)}`}
+                          >
+                            🎁 {it.promoTag}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+
+                  {/* QTD — controles +/- com número no meio */}
+                  <div className="flex items-center justify-center gap-1">
                     <button
                       onClick={() => updateItem(it.id, { qty: it.qty - 1 })}
                       disabled={it.qty <= 1 || sale.status !== 'open'}
@@ -943,7 +964,7 @@ export default function PdvPage() {
                     >
                       <Minus className="w-3 h-3" />
                     </button>
-                    <span className="w-8 text-center font-bold tabular-nums">{it.qty}</span>
+                    <span className="w-8 text-center font-bold tabular-nums text-sm">{it.qty}</span>
                     <button
                       onClick={() => updateItem(it.id, { qty: it.qty + 1 })}
                       disabled={sale.status !== 'open'}
@@ -952,14 +973,23 @@ export default function PdvPage() {
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="w-24 text-right shrink-0">
-                    <div className="font-bold text-emerald-700 tabular-nums">{brl(it.total)}</div>
+
+                  {/* VAL UNITÁRIO */}
+                  <div className="text-right text-sm tabular-nums text-slate-700">
+                    {brl(it.precoUnit)}
+                  </div>
+
+                  {/* VAL TOTAL — com strikethrough do bruto se tem desconto */}
+                  <div className="text-right">
+                    <div className="font-bold text-emerald-700 tabular-nums text-sm">{brl(it.total)}</div>
                     {it.desconto > 0 && (
                       <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
                     )}
                   </div>
-                  {sale.status === 'open' && (
-                    <div className="flex flex-col gap-1 shrink-0">
+
+                  {/* AÇÕES — desconto + remover */}
+                  {sale.status === 'open' ? (
+                    <div className="flex flex-col gap-0.5 items-end">
                       <button
                         onClick={() => {
                           const max = bruto.toFixed(2).replace('.', ',');
@@ -989,7 +1019,7 @@ export default function PdvPage() {
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                  )}
+                  ) : <div />}
                 </div>
                 );
               })}
