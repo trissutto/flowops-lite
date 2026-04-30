@@ -660,126 +660,121 @@ export default function PdvPage() {
           </button>
         </div>
 
-        {/* Linha 2 — Atalhos rápidos (8 pílulas) */}
-        <div className="max-w-4xl mx-auto px-4 pb-3 grid grid-cols-4 md:grid-cols-8 gap-2">
+        {/* Linha 2 — 4 ATALHOS GRANDES (mais usados) */}
+        <div className="max-w-4xl mx-auto px-4 pb-2 grid grid-cols-2 md:grid-cols-4 gap-2">
+          {/* Receber Crediário — destaque rosa */}
+          <Link
+            href="/minha-loja/pdv/recebimentos"
+            className="group relative bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
+            title="Receber parcela do crediário"
+          >
+            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Receipt className="w-6 h-6" />
+            </div>
+            <div className="leading-tight min-w-0">
+              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Crediário</div>
+              <div className="text-base font-black truncate">Receber</div>
+            </div>
+          </Link>
+
+          {/* Pag Rápido PIX — usa total do carrinho */}
           <button
             type="button"
             onClick={() => setShowPixAvulso(true)}
-            className="bg-gradient-to-br from-emerald-100 to-teal-200 hover:from-emerald-200 hover:to-teal-300 border border-emerald-300 text-emerald-900 rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group"
-            title="Cobrança PIX avulsa"
+            className="group relative bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
+            title={sale?.total && sale.total > 0 ? `Cobrar ${brl(sale.total)} via PIX` : 'PIX rápido (qualquer valor)'}
           >
-            <div className="w-9 h-9 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-              <DollarSign className="w-5 h-5" />
+            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <DollarSign className="w-6 h-6" />
             </div>
-            <div className="text-center leading-tight">
-              <div className="text-[11px] font-black uppercase tracking-wide">PIX</div>
-              <div className="text-[9px] opacity-70 font-semibold">Avulso</div>
+            <div className="leading-tight min-w-0 text-left">
+              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">PIX</div>
+              <div className="text-base font-black truncate">Pag Rápido</div>
             </div>
-          </button>
-          <ShortcutPill
-            href="/minha-loja/consultar"
-            icon={<Search className="w-5 h-5" />}
-            label="Consultar"
-            sub="Estoque"
-            gradient="from-sky-100 to-blue-200"
-            border="border-sky-300"
-            text="text-sky-800"
-            iconBg="bg-sky-500"
-          />
-          <ShortcutPill
-            href="/minha-loja/pdv/caixa"
-            icon={<DollarSign className="w-5 h-5" />}
-            label="Caixa"
-            sub="Sangria · Z"
-            gradient="from-emerald-100 to-green-200"
-            border="border-emerald-300"
-            text="text-emerald-800"
-            iconBg="bg-emerald-500"
-          />
-          <ShortcutPill
-            href="/minha-loja/pdv/recebimentos"
-            icon={<Receipt className="w-5 h-5" />}
-            label="Receber"
-            sub="Crediário"
-            gradient="from-rose-100 to-pink-200"
-            border="border-rose-300"
-            text="text-rose-900"
-            iconBg="bg-rose-500"
-          />
-          <ShortcutPill
-            href="/minha-loja/pdv/devolucao"
-            icon={<ArrowRightLeft className="w-5 h-5" />}
-            label="Trocar"
-            sub="Devolução"
-            gradient="from-amber-100 to-orange-200"
-            border="border-amber-300"
-            text="text-amber-900"
-            iconBg="bg-amber-500"
-          />
-          <button
-            type="button"
-            onClick={() => setShowOpenList(true)}
-            disabled={openCount === 0}
-            className="relative bg-gradient-to-br from-violet-100 to-purple-200 hover:from-violet-200 hover:to-purple-300 border border-violet-300 text-violet-900 rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md disabled:opacity-40 disabled:cursor-not-allowed group"
-            title={openCount > 0 ? `${openCount} venda(s) pausadas` : 'Nenhuma venda pausada'}
-          >
-            <div className="w-9 h-9 rounded-full bg-violet-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-              <Pause className="w-5 h-5" />
-            </div>
-            <div className="text-center leading-tight">
-              <div className="text-[11px] font-black uppercase tracking-wide">Pausadas</div>
-              <div className="text-[9px] opacity-70 font-semibold">Retomar</div>
-            </div>
-            {openCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white animate-pulse">
-                {openCount}
-              </span>
-            )}
           </button>
 
-          {/* Pedido Site — separar pedido WC da loja */}
+          {/* Consultar — sky */}
+          <Link
+            href="/minha-loja/consultar"
+            className="group relative bg-gradient-to-br from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
+            title="Consultar estoque na rede"
+          >
+            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Search className="w-6 h-6" />
+            </div>
+            <div className="leading-tight min-w-0">
+              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Estoque</div>
+              <div className="text-base font-black truncate">Consultar</div>
+            </div>
+          </Link>
+
+          {/* Pedido Site — indigo */}
           <Link
             href="/minha-loja"
-            className={`relative rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group border ${
-              pedidosSitePending > 0
-                ? 'bg-gradient-to-br from-indigo-200 to-blue-300 border-indigo-400 text-indigo-900 ring-2 ring-indigo-300 animate-pulse'
-                : 'bg-gradient-to-br from-indigo-100 to-blue-200 border-indigo-300 text-indigo-900'
+            className={`group relative bg-gradient-to-br from-indigo-500 to-blue-700 hover:from-indigo-600 hover:to-blue-800 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition ${
+              pedidosSitePending > 0 ? 'ring-2 ring-rose-300 animate-pulse' : ''
             }`}
             title={pedidosSitePending > 0 ? `${pedidosSitePending} pedido(s) do site aguardando` : 'Pedidos do site'}
           >
-            <div className="w-9 h-9 rounded-full bg-indigo-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-              <Globe className="w-5 h-5" />
+            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+              <Globe className="w-6 h-6" />
             </div>
-            <div className="text-center leading-tight">
-              <div className="text-[11px] font-black uppercase tracking-wide">Pedido Site</div>
-              <div className="text-[9px] opacity-70 font-semibold">Separar</div>
+            <div className="leading-tight min-w-0">
+              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">WooCommerce</div>
+              <div className="text-base font-black truncate">Pedido Site</div>
             </div>
             {pedidosSitePending > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white">
+              <span className="absolute -top-1.5 -right-1.5 bg-white text-rose-700 text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1 shadow-lg ring-2 ring-rose-400">
                 {pedidosSitePending}
               </span>
             )}
           </Link>
+        </div>
 
-          {/* Realinhar — separar mercadoria pra outras lojas (realinhamento + reposição + venda certa) */}
+        {/* Linha 3 — 4 ATALHOS MENORES (uso esporádico) */}
+        <div className="max-w-4xl mx-auto px-4 pb-3 grid grid-cols-4 gap-2">
+          <Link
+            href="/minha-loja/pdv/caixa"
+            className="bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm"
+            title="Sangria + Z de caixa"
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+            Caixa
+          </Link>
+          <Link
+            href="/minha-loja/pdv/devolucao"
+            className="bg-white hover:bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm"
+            title="Trocas e devoluções"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            Trocar
+          </Link>
+          <button
+            type="button"
+            onClick={() => setShowOpenList(true)}
+            disabled={openCount === 0}
+            className="relative bg-white hover:bg-violet-50 border border-violet-200 text-violet-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+            title={openCount > 0 ? `${openCount} venda(s) pausadas` : 'Nenhuma venda pausada'}
+          >
+            <Pause className="w-3.5 h-3.5" />
+            Pausadas
+            {openCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow ring-2 ring-white animate-pulse">
+                {openCount}
+              </span>
+            )}
+          </button>
           <Link
             href="/minha-loja/realinhamento"
-            className={`relative rounded-2xl p-2.5 flex flex-col items-center gap-1 transition shadow-sm hover:shadow-md group border ${
-              realignPending > 0
-                ? 'bg-gradient-to-br from-fuchsia-200 to-purple-300 border-fuchsia-400 text-fuchsia-900 ring-2 ring-fuchsia-300 animate-pulse'
-                : 'bg-gradient-to-br from-fuchsia-100 to-purple-200 border-fuchsia-300 text-fuchsia-900'
+            className={`relative bg-white hover:bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm ${
+              realignPending > 0 ? 'ring-2 ring-fuchsia-300 animate-pulse' : ''
             }`}
-            title={realignPending > 0 ? `${realignPending} item(s) pra outras lojas` : 'Separar mercadoria pra outras lojas'}
+            title={realignPending > 0 ? `${realignPending} item(s) pra outras lojas` : 'Realinhar com outras lojas'}
           >
-            <div className="w-9 h-9 rounded-full bg-fuchsia-500 text-white flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
-              <Shuffle className="w-5 h-5" />
-            </div>
-            <div className="text-center leading-tight">
-              <div className="text-[11px] font-black uppercase tracking-wide">Realinhar</div>
-              <div className="text-[9px] opacity-70 font-semibold">Outras lojas</div>
-            </div>
+            <Shuffle className="w-3.5 h-3.5" />
+            Realinhar
             {realignPending > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg ring-2 ring-white">
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow ring-2 ring-white">
                 {realignPending}
               </span>
             )}
@@ -1027,10 +1022,11 @@ export default function PdvPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={cancelSale}
-                className="text-xs text-rose-600 hover:bg-rose-50 px-2 py-2 rounded"
+                className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-lg flex items-center gap-1.5 text-sm"
                 title="Cancelar venda"
               >
                 <X className="w-4 h-4" />
+                <span className="hidden sm:inline">Cancelar</span>
               </button>
               <button
                 onClick={() => {
@@ -1048,10 +1044,11 @@ export default function PdvPage() {
                   }
                   setSaleDiscount(n);
                 }}
-                className="text-xs text-amber-700 hover:bg-amber-50 px-2 py-2 rounded flex items-center gap-1"
-                title="Desconto na venda"
+                className="px-3 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold rounded-lg flex items-center gap-1.5 text-sm"
+                title="Aplicar desconto na venda inteira"
               >
                 <Percent className="w-4 h-4" />
+                <span className="hidden sm:inline">Desconto</span>
               </button>
               <div className="flex-1">
                 <div className="text-[10px] text-slate-500 uppercase">Total</div>
