@@ -1202,6 +1202,132 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * TRACE: executa getStock passo-a-passo e retorna cada etapa pra debug.
+   * Usado pelo endpoint /intelligence/sku-trace/:sku quando routing diz ruptura
+   * mas tela /produtos diz que tem estoque — identifica em qual passo o estoque
+   * "some".
+   */
+  async traceSkuStock(sku: string, storeCodes: string[]): Promise<{
+    input: { sku: string; storeCodes: string[] };
+    step1_skuVariants: string[];
+    step2_produtosFound: Array<{ codigoGiga: string }>;
+    step3_codigoMapping: Array<{ codigoGiga: string; originalSku: string }>;
+    step4_codigoVariantsForEstoque: string[];
+    step5_estoqueRows: Array<{ codigoEstoque: string; loja: string; qty: number }>;
+    step6_finalAggregated: Array<{ storeCode: string; sku: string; qty: number }>;
+    rawTable: Array<{ sku: string; storeCode: string; qty: number }>;
+    notes: string[];
+  }> {
+    const notes: string[] = [];
+    const cleanSku = String(sku || '').trim();
+
+    // STEP 1 — variantes do SKU (paddings)
+    const skuVariantsList = this.skuVariants(cleanSku);
+    notes.push(`SKU "${cleanSku}" expandido em ${skuVariantsList.length} variante(s)`);
+
+    if (!this.pool) {
+      notes.push('⚠️ Pool MySQL não inicializado');
+      return {
+        input: { sku: cleanSku, storeCodes },
+        step1_skuVariants: skuVariantsList,
+        step2_produtosFound: [],
+        step3_codigoMapping: [],
+        step4_codigoVariantsForEstoque: [],
+        step5_estoqueRows: [],
+        step6_finalAggregated: [],
+        rawTable: [],
+        notes,
+      };
+    }
+
+    // STEP 2 — busca em produtos
+    const { allVariants, variantToOriginal } = this.expandSkus([cleanSku]);
+    let produtosFound: Array<{ codigoGiga: string }> = [];
+    try {
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO FROM produtos WHERE CODIGO IN (?)`,
+        [allVariants],
+      );
+      produtosFound = (prodRows as any[]).map((r) => ({ codigoGiga: String(r.CODIGO).trim() }));
+      notes.push(`PASSO 1: ${produtosFound.length} produto(s) encontrado(s) em produtos`);
+    } catch (e) {
+      notes.push(`⚠️ Falha PASSO 1 (produtos): ${(e as Error).message}`);
+    }
+
+    // STEP 3 — mapeamento codigoGiga → originalSku
+    const codigoGigaToOriginal = new Map<string, string>();
+    for (const p of produtosFound) {
+      const original = variantToOriginal.get(p.codigoGiga);
+      if (original) codigoGigaToOriginal.set(p.codigoGiga, original);
+    }
+
+    // STEP 4 — expansão dos codigosGiga em variantes (NOVO FIX)
+    const codigoVariantsForEstoque: string[] = [];
+    const codigoVariantToOriginal = new Map<string, string>();
+    for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
+      for (const v of this.skuVariants(codigoGiga)) {
+        if (!codigoVariantToOriginal.has(v)) {
+          codigoVariantToOriginal.set(v, originalSku);
+          codigoVariantsForEstoque.push(v);
+        }
+      }
+    }
+    notes.push(`PASSO 2: expandido em ${codigoVariantsForEstoque.length} variantes pra buscar em estoque`);
+
+    // STEP 5 — query em estoque
+    let estoqueRows: Array<{ codigoEstoque: string; loja: string; qty: number }> = [];
+    if (codigoVariantsForEstoque.length > 0 && storeCodes.length > 0) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
+             FROM estoque
+            WHERE CODIGO IN (?) AND LOJA IN (?) AND ESTOQUE > 0`,
+          [codigoVariantsForEstoque, storeCodes],
+        );
+        estoqueRows = (rows as any[]).map((r) => ({
+          codigoEstoque: String(r.sku).trim(),
+          loja: String(r.storeCode).trim(),
+          qty: Number(r.qty) || 0,
+        }));
+        notes.push(`PASSO 3: ${estoqueRows.length} linha(s) em estoque com ESTOQUE>0 nas lojas filtradas`);
+      } catch (e) {
+        notes.push(`⚠️ Falha PASSO 3 (estoque): ${(e as Error).message}`);
+      }
+    }
+
+    // STEP 6 — agregação final
+    const agg = new Map<string, number>();
+    for (const r of estoqueRows) {
+      const original = codigoVariantToOriginal.get(r.codigoEstoque);
+      if (!original) continue;
+      const key = `${r.loja}::${original}`;
+      agg.set(key, (agg.get(key) || 0) + r.qty);
+    }
+    const finalAggregated = Array.from(agg.entries()).map(([k, qty]) => {
+      const [storeCode, sku] = k.split('::');
+      return { storeCode, sku, qty };
+    });
+
+    // RAW (sem filtros) pra comparação
+    const raw = await this.getStockRawBySku(cleanSku);
+
+    return {
+      input: { sku: cleanSku, storeCodes },
+      step1_skuVariants: skuVariantsList,
+      step2_produtosFound: produtosFound,
+      step3_codigoMapping: Array.from(codigoGigaToOriginal.entries()).map(([codigoGiga, originalSku]) => ({
+        codigoGiga,
+        originalSku,
+      })),
+      step4_codigoVariantsForEstoque: codigoVariantsForEstoque,
+      step5_estoqueRows: estoqueRows,
+      step6_finalAggregated: finalAggregated,
+      rawTable: raw,
+      notes,
+    };
+  }
+
+  /**
    * DIAGNÓSTICO RAW: busca TODAS as linhas da tabela `estoque` para um SKU,
    * sem filtrar ESTOQUE > 0 e sem agregar. Revela:
    *   - duplicatas (mesma CODIGO+LOJA com linhas múltiplas)

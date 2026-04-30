@@ -146,4 +146,24 @@ export class IntelligenceController {
     this.requireAdmin(req);
     return this.svc.diagnoseSkuStock(sku);
   }
+
+  /**
+   * GET /intelligence/sku-trace/:sku
+   * TRACE passo-a-passo do método getStock (que o routing usa). Mostra:
+   *   1. variantes do SKU (paddings)
+   *   2. produtos.CODIGO encontrados
+   *   3. mapeamento codigoGiga → originalSku
+   *   4. expansão dos codigosGiga em variantes pra buscar em estoque
+   *   5. linhas brutas retornadas pela query em estoque
+   *   6. agregado final
+   *   + tabela raw (sem filtros) pra comparação
+   *
+   * Usado pra identificar exatamente em qual passo o estoque "some" quando
+   * o diagnóstico mostra peça mas routing diz ruptura.
+   */
+  @Get('sku-trace/:sku')
+  async skuTrace(@Req() req: any, @Param('sku') sku: string) {
+    this.requireAdmin(req);
+    return this.svc.traceSkuStock(sku);
+  }
 }

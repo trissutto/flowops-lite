@@ -295,6 +295,26 @@ export class IntelligenceService {
     };
   }
 
+  /**
+   * TRACE — executa getStock real (igual o routing) e retorna cada passo.
+   * Usado pra debug quando diagnóstico mostra estoque mas pedido fica em
+   * ruptura. Carrega as lojas ATIVAS (mesmas que o routing usa) e chama
+   * o trace do ERP service.
+   */
+  async traceSkuStock(sku: string) {
+    const stores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true } as any,
+      orderBy: { code: 'asc' },
+    });
+    const storeCodes = stores.map((s: any) => s.code);
+    const trace = await this.erp.traceSkuStock(sku, storeCodes);
+    return {
+      ...trace,
+      lojasAtivas: stores.map((s: any) => ({ code: s.code, name: s.name })),
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // MOVIMENTAÇÃO DE REMESSAS (Postgres)
   // ═══════════════════════════════════════════════════════════════════════
