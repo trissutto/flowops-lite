@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as QRCode from 'qrcode';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * PixService — gera BR Code (PIX EMVCo) com valor cravado e QR Code.
@@ -22,10 +23,45 @@ import * as QRCode from 'qrcode';
 export class PixService {
   private readonly logger = new Logger(PixService.name);
 
-  // Chave do Lurd's — futuro: ler de SystemSetting
-  private readonly DEFAULT_CHAVE = '+5513996218277';
-  private readonly DEFAULT_NOME = 'LURDS PLUS SIZE';
-  private readonly DEFAULT_CIDADE = 'ITANHAEM';
+  // Defaults (sobrescritos por SystemSetting/env). CHAVE precisa estar
+  // CADASTRADA no banco do recebedor — caso contrário o QR fica inválido.
+  private readonly DEFAULT_CHAVE = process.env.PIX_DEFAULT_KEY || '+5513996218277';
+  private readonly DEFAULT_NOME = process.env.PIX_DEFAULT_NAME || 'LURDS PLUS SIZE';
+  private readonly DEFAULT_CIDADE = process.env.PIX_DEFAULT_CITY || 'ITANHAEM';
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Lê config PIX do SystemSetting (override via UI). Fallback: env/default.
+   */
+  async getConfig(): Promise<{ chave: string; nome: string; cidade: string; tipoChave: string }> {
+    const get = async (key: string, def: string) => {
+      try {
+        const r = await (this.prisma as any).systemSetting.findUnique({ where: { key } });
+        return r?.value || def;
+      } catch { return def; }
+    };
+    return {
+      chave: await get('pix_chave', this.DEFAULT_CHAVE),
+      nome: await get('pix_nome', this.DEFAULT_NOME),
+      cidade: await get('pix_cidade', this.DEFAULT_CIDADE),
+      tipoChave: await get('pix_tipo_chave', 'telefone'), // cpf | cnpj | email | telefone | aleatoria
+    };
+  }
+
+  async saveConfig(input: { chave?: string; nome?: string; cidade?: string; tipoChave?: string }): Promise<void> {
+    const upsert = async (key: string, value: string) => {
+      await (this.prisma as any).systemSetting.upsert({
+        where: { key },
+        update: { value },
+        create: { key, value },
+      });
+    };
+    if (input.chave !== undefined)     await upsert('pix_chave', String(input.chave).trim());
+    if (input.nome !== undefined)      await upsert('pix_nome', String(input.nome).trim());
+    if (input.cidade !== undefined)    await upsert('pix_cidade', String(input.cidade).trim());
+    if (input.tipoChave !== undefined) await upsert('pix_tipo_chave', String(input.tipoChave).trim());
+  }
 
   /**
    * Monta o payload PIX (string BR Code) + gera QR Code em base64 (data URL).
@@ -44,11 +80,13 @@ export class PixService {
     payload: string;
     qrCodeDataUrl: string;
   }> {
-    const chave = (input.chave || this.DEFAULT_CHAVE).trim();
-    const nome = this.sanitizeAscii(input.nome || this.DEFAULT_NOME, 25);
-    const cidade = this.sanitizeAscii(input.cidade || this.DEFAULT_CIDADE, 15);
+    const cfg = await this.getConfig();
+    const chaveRaw = (input.chave || cfg.chave).trim();
+    const chave = this.normalizeChave(chaveRaw, cfg.tipoChave);
+    const nome = this.sanitizeAscii(input.nome || cfg.nome, 25);
+    const cidade = this.sanitizeAscii(input.cidade || cfg.cidade, 15);
     const valor = Math.max(0, input.valor || 0);
-    const txid = (input.txid || this.generateTxid()).slice(0, 25);
+    const txid = this.sanitizeTxid(input.txid || this.generateTxid());
 
     const payload = this.buildBrCode({
       chave,
@@ -163,5 +201,41 @@ export class PixService {
     const ts = Date.now().toString(36).toUpperCase();
     const rnd = Math.random().toString(36).slice(2, 6).toUpperCase();
     return `LURDS${ts}${rnd}`.slice(0, 25);
+  }
+
+  /**
+   * BR Code aceita txid 1-25 chars [A-Z0-9]. Remove qualquer caractere fora
+   * do alfabeto seguro pra evitar QR rejeitado por banco.
+   */
+  private sanitizeTxid(raw: string): string {
+    const clean = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return (clean || 'LURDS').slice(0, 25);
+  }
+
+  /**
+   * Normaliza a chave PIX conforme o tipo:
+   *   - cpf       → só dígitos (11)
+   *   - cnpj      → só dígitos (14)
+   *   - telefone  → +55 + DDD + número (formato E.164)
+   *   - email     → minúsculo, trim
+   *   - aleatoria → UUID v4 (mantém como veio)
+   *
+   * Esse passo é CRÍTICO: chave mal formatada faz o QR ficar inválido no
+   * app do recebedor. Padrão BCB EMVCo (anexo II do MPM-PIX).
+   */
+  private normalizeChave(raw: string, tipo: string): string {
+    const v = String(raw || '').trim();
+    const t = String(tipo || '').toLowerCase();
+    if (t === 'cpf' || t === 'cnpj') return v.replace(/\D/g, '');
+    if (t === 'telefone') {
+      let n = v.replace(/\D/g, '');
+      if (n.startsWith('0')) n = n.slice(1);
+      if (n.length === 8 || n.length === 9) n = '13' + n; // adiciona DDD 13 se faltar
+      if (n.length === 10 || n.length === 11) n = '55' + n;
+      return '+' + n;
+    }
+    if (t === 'email') return v.toLowerCase();
+    // aleatoria (UUID): mantém como veio (já normalizada pelo banco)
+    return v;
   }
 }

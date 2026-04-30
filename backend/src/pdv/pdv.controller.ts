@@ -17,6 +17,7 @@ import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
+import { PagarmeService } from '../pagarme/pagarme.service';
 
 /**
  * /pdv — frente de caixa.
@@ -30,6 +31,7 @@ export class PdvController {
     private readonly erp: ErpService,
     private readonly pix: PixService,
     private readonly nfce: NfceService,
+    private readonly pagarme: PagarmeService,
   ) {}
 
   private requireRole(req: any) {
@@ -340,6 +342,11 @@ export class PdvController {
    * Não chama API de banco — gera localmente. Cai direto na conta da chave.
    * Vendedora confirma manualmente após ver o pagamento no app do banco.
    */
+  /**
+   * POST /pdv/sales/:id/pix-charge
+   * Gera cobrança PIX dinâmica via Pagar.me (Stone) — usa a integração já
+   * configurada em /config/pagarme. Retorna QR Code + BR Code real.
+   */
   @Post('sales/:id/pix-charge')
   async pixCharge(@Req() req: any, @Param('id') id: string) {
     this.requireRole(req);
@@ -347,11 +354,26 @@ export class PdvController {
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda já está ${sale.status}`);
     if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
-    return this.pix.generatePixCharge({
+
+    const r = await this.pagarme.createPixCharge({
+      saleId: id,
       valor: sale.total,
-      txid: `LURDS${id.slice(-8).toUpperCase()}`,
-      descricao: `Venda ${id.slice(-6).toUpperCase()}`,
+      storeCode: sale.storeCode,
+      customerName: sale.customerName || undefined,
+      customerCpf: sale.customerCpf || undefined,
+      customerEmail: sale.customerEmail || undefined,
+      customerPhone: sale.customerPhone || undefined,
     });
+
+    // Mantém os mesmos nomes de campo que o frontend já espera
+    // (qrCodeDataUrl + payload), pra não quebrar o modal.
+    return {
+      txid: r.pagarmeOrderId,
+      valor: r.valor,
+      qrCodeDataUrl: r.qrCodeImageUrl,
+      payload: r.qrCodeText,
+      expiresAt: r.expiresAt,
+    };
   }
 
   /**
