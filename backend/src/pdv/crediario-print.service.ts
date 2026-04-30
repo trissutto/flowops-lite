@@ -1,6 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { CrediariosService } from '../crediarios/crediarios.service';
 // pdfkit é CommonJS — usa require() pra evitar problema de interop runtime
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require('pdfkit');
@@ -28,7 +29,13 @@ export class CrediarioPrintService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    @Inject(forwardRef(() => CrediariosService))
+    private readonly crediarios: CrediariosService,
   ) {}
+
+  // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
+  // Empresa juridicamente responsável pela cobrança.
+  private readonly RAZAO_SOCIAL = 'T.O. RISSUTTO';
 
   // ═══════════════════════════════════════════════════════════════════════
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's
@@ -184,50 +191,93 @@ export class CrediarioPrintService {
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
 
-    // Encontra o payment crediário pra extrair parcelas/vencimentos
+    // Encontra o payment crediário pra extrair parcelas/vencimentos.
+    // Pode estar em sale.paymentMethod direto (modo legado) OU em payments[]
+    // (modo split). details JSON tem: parcelas, valorIguais, valorUltima,
+    // primeiroVencimento, entrada, observacao.
     const credPayment = (sale.payments || []).find((p: any) => p.method === 'crediario');
+    const credDetailsSrc = credPayment?.details ?? null;
+    const totalSale = Number(sale.total) || 0;
+
     let parcelas = 1;
-    let valorIguais = sale.total;
-    let valorUltima = 0;
-    let qtdIguais = 0;
+    let valorIguais = totalSale;
+    let valorUltima = totalSale;
     let primeiroVencimento: Date | null = null;
-    if (credPayment?.details) {
+    let entradaSalva = 0;
+    if (credDetailsSrc) {
       try {
-        const d = typeof credPayment.details === 'string' ? JSON.parse(credPayment.details) : credPayment.details;
-        parcelas = d.parcelas || 1;
-        valorIguais = d.valorIguais || credPayment.valor;
-        valorUltima = d.valorUltima || 0;
-        qtdIguais = d.qtdIguais || (parcelas - 1);
+        const d = typeof credDetailsSrc === 'string' ? JSON.parse(credDetailsSrc) : credDetailsSrc;
+        parcelas = Number(d.parcelas) || 1;
+        valorIguais = Number(d.valorIguais) || (totalSale / parcelas);
+        valorUltima = Number(d.valorUltima) || valorIguais;
         if (d.primeiroVencimento) primeiroVencimento = new Date(d.primeiroVencimento);
+        entradaSalva = Number(d.entrada) || 0;
       } catch {/* fallback */}
+    }
+
+    // BUG FIX: quando parcelas=1, valorUltima sempre é 0 (não há split de centavos).
+    // O cálculo antigo `i === parcelas-1 ? valorUltima : valorIguais` retornava 0.
+    // Solução: só usar valorUltima quando parcelas > 1.
+    // Também: se valorIguais ainda for 0, calcula a partir do total da venda.
+    if (parcelas === 1) {
+      valorIguais = totalSale - entradaSalva;
+      valorUltima = valorIguais; // mesma coisa, evita zero
+    }
+    if (!valorIguais || valorIguais <= 0) {
+      // Fallback robusto: divide o financiado igualmente
+      const financiado = Math.max(0, totalSale - entradaSalva);
+      valorIguais = Math.round((financiado / parcelas) * 100) / 100;
+      valorUltima = parcelas > 1
+        ? Math.round((financiado - valorIguais * (parcelas - 1)) * 100) / 100
+        : valorIguais;
     }
 
     // Gera array de parcelas com valores e vencimentos
     const parcelasArr: Array<{ num: number; valor: number; vencimento: Date }> = [];
-    const dataBase = primeiroVencimento || new Date();
+    const dataBase = primeiroVencimento || (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 30);
+      return d;
+    })();
     for (let i = 0; i < parcelas; i++) {
       const venc = new Date(dataBase);
       venc.setMonth(venc.getMonth() + i);
+      const isUltima = parcelas > 1 && i === parcelas - 1;
       parcelasArr.push({
         num: i + 1,
-        valor: i === parcelas - 1 ? valorUltima : valorIguais,
+        valor: isUltima ? valorUltima : valorIguais,
         vencimento: venc,
       });
     }
 
-    // Busca dados completos do cliente no Giga (endereço, CEP, etc)
+    // Busca dados completos do cliente no Giga via CrediariosService
+    // (que tem o detectClientesTable correto). Pega: codCliente, NOME, ENDERECO,
+    // BAIRRO, CIDADE, CEP, CPF, etc.
     let clienteFull: any = null;
+    let cmTable: any = null;
     if (sale.customerCpf) {
       try {
-        const cm = await (this.erp as any).detectClientesTable?.();
-        if (cm) {
+        cmTable = await this.crediarios.detectClientesTable();
+        if (cmTable) {
           const safeCpf = String(sale.customerCpf).replace(/\D/g, '').slice(0, 14);
-          const sql = `SELECT * FROM \`${cm.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1`;
+          // Tenta CPF primeiro, depois codCliente
+          const sql = `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1`;
           const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
           clienteFull = r.rows[0] || null;
+          this.logger.log(`[crediario-print] cliente Giga: cpf=${safeCpf} found=${!!clienteFull}`);
         }
-      } catch {/* ignora */}
+      } catch (e: any) {
+        this.logger.warn(`[crediario-print] falha buscar cliente Giga: ${e?.message}`);
+      }
     }
+
+    // codCliente: prioriza a coluna detectada dinamicamente (cm.codCliente).
+    // Senão tenta CODCLIENTE/CODIGO/cod_cliente como fallback.
+    const codCliente = clienteFull && cmTable?.codCliente
+      ? String(clienteFull[cmTable.codCliente] ?? '').trim()
+      : String(
+          clienteFull?.CODCLIENTE ?? clienteFull?.CODIGO ?? clienteFull?.cod_cliente ?? '',
+        ).trim();
 
     // Loja pra "Pagável em" (cidade)
     const store = await this.prisma.store.findFirst({
@@ -240,14 +290,15 @@ export class CrediarioPrintService {
       credPayment,
       parcelas,
       parcelasArr,
+      entrada: entradaSalva,
       cliente: {
-        codCliente: clienteFull?.CODCLIENTE || clienteFull?.CODIGO || '',
-        nome: sale.customerName || clienteFull?.NOME || '',
+        codCliente,
+        nome: sale.customerName || (clienteFull?.NOME ?? clienteFull?.nome ?? '') || '',
         cpf: sale.customerCpf || '',
-        endereco: clienteFull?.ENDERECO || '',
-        bairro: clienteFull?.BAIRRO || '',
-        cidade: clienteFull?.CIDADE || '',
-        cep: clienteFull?.CEP || '',
+        endereco: clienteFull?.ENDERECO || clienteFull?.endereco || '',
+        bairro: clienteFull?.BAIRRO || clienteFull?.bairro || '',
+        cidade: clienteFull?.CIDADE || clienteFull?.cidade || '',
+        cep: clienteFull?.CEP || clienteFull?.cep || '',
       },
       cidadeLoja: (store as any)?.city || sale.storeName || 'Itanhaém',
     };
@@ -287,7 +338,7 @@ export class CrediarioPrintService {
           this.drawAt(doc, this.PROM.fields.vencDia, blocoTopY, String(parc.vencimento.getDate()).padStart(2, '0'));
           this.drawAt(doc, this.PROM.fields.vencMes, blocoTopY, this.mesPorExtenso(parc.vencimento));
           this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, "Lurd's Plus Size");
+          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
           this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
           this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, data.cliente.cpf);
           // Quantia por extenso pode quebrar 2 linhas — usa width
@@ -347,12 +398,15 @@ export class CrediarioPrintService {
           // Total e entrada
           this.drawAt(doc, f.total, blocoY, this.fmtBRL(data.sale.total));
           // Entrada vem do payment dinheiro com flag isEntradaCrediario
-          let entrada = 0;
-          for (const p of data.sale.payments || []) {
-            try {
-              const d = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-              if (p.method === 'dinheiro' && d?.isEntradaCrediario) entrada += p.valor;
-            } catch {/* ignora */}
+          // Entrada: do details do payment crediário OU dos payments dinheiro com flag.
+          let entrada = data.entrada || 0;
+          if (entrada === 0) {
+            for (const p of data.sale.payments || []) {
+              try {
+                const d = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+                if (p.method === 'dinheiro' && d?.isEntradaCrediario) entrada += p.valor;
+              } catch {/* ignora */}
+            }
           }
           this.drawAt(doc, f.entrada, blocoY, entrada > 0 ? this.fmtBRL(entrada) : '0,00');
 
@@ -405,7 +459,7 @@ export class CrediarioPrintService {
           this.drawAt(doc, this.PROM.fields.vencDia, blocoTopY, String(parc.vencimento.getDate()).padStart(2, '0'));
           this.drawAt(doc, this.PROM.fields.vencMes, blocoTopY, this.mesPorExtenso(parc.vencimento));
           this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, "Lurd's Plus Size");
+          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
           this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
           this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, data.cliente.cpf);
           doc.text(
@@ -434,12 +488,15 @@ export class CrediarioPrintService {
           this.drawAt(doc, f.data, blocoY, this.fmtDate(new Date()));
           this.drawAt(doc, f.cliente, blocoY, data.cliente.nome);
           this.drawAt(doc, f.total, blocoY, this.fmtBRL(data.sale.total));
-          let entrada = 0;
-          for (const p of data.sale.payments || []) {
-            try {
-              const d = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-              if (p.method === 'dinheiro' && d?.isEntradaCrediario) entrada += p.valor;
-            } catch {/* ignora */}
+          // Entrada: do details do payment crediário OU dos payments dinheiro com flag.
+          let entrada = data.entrada || 0;
+          if (entrada === 0) {
+            for (const p of data.sale.payments || []) {
+              try {
+                const d = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+                if (p.method === 'dinheiro' && d?.isEntradaCrediario) entrada += p.valor;
+              } catch {/* ignora */}
+            }
           }
           this.drawAt(doc, f.entrada, blocoY, entrada > 0 ? this.fmtBRL(entrada) : '0,00');
           for (let i = 0; i < Math.min(data.parcelas, 10); i++) {
