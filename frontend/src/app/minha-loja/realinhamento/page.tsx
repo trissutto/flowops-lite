@@ -193,6 +193,9 @@ export default function MinhaLojaRealinhamentoPage() {
   /**
    * Baixa o PDF (romaneio) da remessa e abre numa nova aba.
    * Usa fetch direto com bearer pra preservar autenticação da rota /pdf.
+   *
+   * IMPORTANTE: backend tem globalPrefix='api', então a URL real é
+   * ${API_URL}/api/realignment/.../pdf. Sem o /api retorna "Cannot GET".
    */
   const handleDownloadPdf = useCallback(async (shipmentId: string, code: string) => {
     try {
@@ -202,7 +205,7 @@ export default function MinhaLojaRealinhamentoPage() {
         return;
       }
       const { API_URL } = await import('@/lib/api');
-      const r = await fetch(`${API_URL}/realignment/shipments/${shipmentId}/pdf`, {
+      const r = await fetch(`${API_URL}/api/realignment/shipments/${shipmentId}/pdf`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) {
