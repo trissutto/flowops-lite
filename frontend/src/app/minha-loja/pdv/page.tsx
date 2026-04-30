@@ -2653,7 +2653,14 @@ function PixAvulsoModal({
     setLoading(true);
     try {
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
-      setQr({ qrImage: r?.qrImage, brcode: r?.brcode });
+      // Backend retorna { qrCodeDataUrl, payload, ... } — mapeia pros nomes do front.
+      const qrImage = r?.qrCodeDataUrl || r?.qrImage;
+      const brcode = r?.payload || r?.brcode;
+      if (!qrImage && !brcode) {
+        setError('Backend não retornou QR/payload. Verifique config PIX em /config/pagarme ou /config/pagbank.');
+        return;
+      }
+      setQr({ qrImage, brcode });
     } catch (e: any) {
       setError(e?.message || 'Falha ao gerar PIX');
     } finally {
