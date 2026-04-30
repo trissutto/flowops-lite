@@ -113,6 +113,25 @@ export class RealignmentService {
       return plusFilter.has(tam.trim().toUpperCase());
     };
 
+    /**
+     * Filtro PLUS aplica em NÍVEL DE REF (não por variação individual).
+     *
+     * Justificativa: O Lurd's tem REFs que se repetem entre universos (PLUS e
+     * não-PLUS — chinelos, infantis, masculinos). Mas NUNCA mistura tamanhos
+     * pequenos COM plus na MESMA REF. Então:
+     *   - Se a REF tem alguma variação plus → é REF do universo plus, mantém
+     *     todas as variações (todas as cores, todos os tamanhos plus).
+     *   - Se a REF não tem nenhuma variação plus → é REF do universo não-plus
+     *     (chinelo etc), descarta inteira.
+     *
+     * Antes: filtrava cada variação individualmente — algumas cores caíam fora
+     * porque alguns tamanhos sai do filtro, mostrando 1 só cor.
+     */
+    const refIsPlusSize = (variations: Array<{ tamanho: string | null }>) => {
+      if (!plusFilter) return true; // sem filtro = passa
+      return variations.some((v) => isPlusSizeTamanho(v.tamanho));
+    };
+
     const refMap: Record<string, Array<{ sku: string; cor: string | null; tamanho: string | null; desc: string }>> = {};
     const notFoundRefs: string[] = [];
     const ambiguousRefs: Array<{ ref: string; familias: Array<{ desc: string; count: number }> }> = [];
@@ -130,15 +149,25 @@ export class RealignmentService {
         notFoundRefs.push(ref);
         continue;
       }
-      let variations = rows
+      const allVariations = rows
         .map((r: any) => ({
           sku: String(r.CODIGO || '').trim(),
           cor: r.COR ? String(r.COR).trim() : null,
           tamanho: r.TAMANHO ? String(r.TAMANHO).trim() : null,
           desc: r.DESCRICAOCOMPLETA ? String(r.DESCRICAOCOMPLETA).trim() : '',
         }))
-        .filter((x) => x.sku)
-        .filter((x) => isPlusSizeTamanho(x.tamanho));
+        .filter((x) => x.sku);
+
+      // FILTRO PLUS POR REF (não por variação individual):
+      // Se a REF tem alguma variação plus, todas entram. Senão, descarta a REF.
+      // (REFs do universo não-plus — chinelo, infantil — são puladas.)
+      if (!refIsPlusSize(allVariations)) {
+        notFoundRefs.push(ref); // sinaliza pro frontend que a REF foi filtrada
+        continue;
+      }
+      // Dentro de uma REF plus, ainda filtra variações individuais por tamanho —
+      // garante que tamanho 36/38 (não-plus) misturado por engano seja ignorado.
+      let variations = allVariations.filter((x) => isPlusSizeTamanho(x.tamanho));
 
       // Aplica filtro de descrição se fornecido (caso "calça mom 9002" → só calças)
       const descFilter = input.refFilters?.[ref];
@@ -153,25 +182,37 @@ export class RealignmentService {
           });
         }
       } else {
-        // ─── Detecção de AMBIGUIDADE ───
-        // Sem filtro de descrição, checa se a REF tem múltiplas "famílias".
-        // Agrupa variações pelas 3 primeiras palavras da descrição. Se vier
-        // mais de 1 grupo significativo, marca como ambígua e retorna pro
-        // frontend pedir desambiguação.
+        // ─── Detecção de AMBIGUIDADE (afrouxada) ───
+        // Quando o user digita só a REF (sem descrição), o sistema só considera
+        // ambíguo se a REF tiver produtos REALMENTE diferentes — tipo "BLUSA" e
+        // "SAPATO" no mesmo número. Variações de cor com pequenas diferenças
+        // textuais NÃO são consideradas ambíguas.
+        //
+        // Estratégia: agrupa pela 1ª palavra significativa (>=4 chars, ignorando
+        // palavras genéricas como FEMININA/MASCULINA/PLUS/SIZE). Se as primeiras
+        // palavras categóricas divergem, marca ambíguo.
+        const STOPWORDS = new Set([
+          'plus', 'size', 'feminina', 'feminino', 'masculino', 'masculina',
+          'infantil', 'unissex', 'adulto', 'manga', 'curta', 'longa', 'comum',
+          'basica', 'basico', 'alfaiataria', 'modelo',
+        ]);
         const familias = new Map<string, { desc: string; count: number }>();
         for (const v of variations) {
           const palavras = norm(v.desc).split(/\s+/).filter(Boolean);
-          // Ignora palavras genéricas e pega 3 primeiras significativas
-          const chave = palavras.slice(0, 3).join(' ');
-          if (!chave) continue;
-          const existing = familias.get(chave);
+          // Categoria = primeira palavra com >=4 chars que NÃO é stopword
+          const categoria = palavras.find((w) => w.length >= 4 && !STOPWORDS.has(w)) || '';
+          if (!categoria) continue;
+          const existing = familias.get(categoria);
           if (existing) {
             existing.count++;
           } else {
-            familias.set(chave, { desc: v.desc, count: 1 });
+            familias.set(categoria, { desc: v.desc, count: 1 });
           }
         }
-        if (familias.size > 1) {
+        // Só considera ambíguo se 2+ categorias E ambas têm pelo menos 2 variações
+        // (evita falso positivo por cor com palavra rara isolada).
+        const familiasSignificativas = Array.from(familias.values()).filter((f) => f.count >= 2);
+        if (familiasSignificativas.length > 1) {
           ambiguousRefs.push({
             ref,
             familias: Array.from(familias.values()).sort(

@@ -1527,34 +1527,64 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
-   * Busca EXATA por REF. Retorna TODAS as variações da mesma referência —
-   * pouco volume (10 a 40 linhas) porque cada REF tem N tamanhos × cores.
-   * LIKE só pra cobrir diferença de maiúscula/espaço (não wildcard %).
+   * Busca por REF base. Retorna TODAS as variações de cor/tamanho.
+   *
+   * O Lurd's tem 3 convenções de cor coexistindo no Giga:
+   *   1. REF exata (13015 = cor base, geralmente PRETO)
+   *   2. Sufixo de letra direto sem separador (13015M = MARINHO, 13015V = VINHO)
+   *   3. Sufixo com espaço + nome cor (VMS-223 PRETO, VMS-223 VERDE)
+   *   4. Sufixo com hífen (alguns cadastros legados: BMM-100-A)
+   *
+   * Estratégia: SQL traz tudo que COMEÇA com a REF base (LIKE 'X%'), depois
+   * filtramos em JS pelo padrão de sufixo válido pra excluir falsos positivos
+   * (ex: pedir "9002" não pode trazer "900271" que é outra REF inteira).
+   *
+   * Padrões aceitos como variação de cor da mesma REF base:
+   *   - exata
+   *   - base + " ALGO"          (espaço + texto)
+   *   - base + "-ALGO"          (hífen + texto)
+   *   - base + "LETRA(S)"       (sufixo só letras maiúsculas/lowercase, sem dígito)
+   * Padrões REJEITADOS (provavelmente outra REF):
+   *   - base + dígito (ex: "9002" + "71" = "900271")
    */
   async searchByRef(ref: string): Promise<any[]> {
     if (!this.pool || !ref) return [];
     const clean = String(ref).trim();
+    if (!clean) return [];
     try {
-      // BUG anterior: WHERE REF LIKE '9002%' pegava 9002, 900271, 900215, etc
-      // (todas as REFs que COMEÇAM com o número). Isso é catastrófico em
-      // realinhamento: gerava plano com 492 variações ao pedir REF "9002".
-      //
-      // Wincred usa sufixo " X" (espaço + letra de cor) pra cada cor:
-      //   VMS-223     → REF base
-      //   VMS-223 P   → cor preta
-      //   VMS-223 V   → cor vermelha
-      //
-      // Solução: REF EXATA + variações com " X" (espaço obrigatório). Assim
-      // "9002" só pega "9002" e "9002 X" (se existir). "900271" não casa.
+      // Busca tudo que começa com a REF base — cada cor pode estar com sufixo
+      // diferente no Giga. Filtramos os falsos positivos no JS abaixo.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
            FROM produtos
           WHERE REF = ? OR REF LIKE ?
           ORDER BY COR, TAMANHO
-          LIMIT 500`,
-        [clean, `${clean} %`], // exata + variações com espaço (sufixo de cor)
+          LIMIT 1000`,
+        [clean, `${clean}%`],
       );
-      return rows as any[];
+      const all = rows as any[];
+
+      const isVariationOf = (foundRef: string, baseRef: string): boolean => {
+        if (!foundRef) return false;
+        if (foundRef === baseRef) return true;
+        if (!foundRef.startsWith(baseRef)) return false;
+        const suffix = foundRef.slice(baseRef.length);
+        // Sufixos VÁLIDOS (variação de cor da mesma REF base):
+        //   " ALGO" (espaço + texto), "-ALGO" (hífen + texto),
+        //   "LETRAS" (só letras direto, sem dígitos)
+        // Sufixos REJEITADOS:
+        //   começa com dígito → outra REF (ex: 9002 + 71 = 900271)
+        if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
+        // Sufixo direto sem separador: aceita SE não começar com dígito
+        if (/^[A-Za-z]/.test(suffix)) return true;
+        return false;
+      };
+
+      const filtered = all.filter((r: any) => isVariationOf(String(r.REF || ''), clean));
+      this.logger.log(
+        `[erp] searchByRef("${clean}"): SQL retornou ${all.length}, filtrado pra ${filtered.length} variações.`,
+      );
+      return filtered;
     } catch (e) {
       this.logger.error(`searchByRef falhou: ${(e as Error).message}`);
       return [];
