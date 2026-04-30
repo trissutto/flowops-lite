@@ -34,6 +34,8 @@ type Sale = {
   storeCode: string;
   storeName: string;
   vendedorName: string | null;
+  sellerId: string | null;
+  sellerName: string | null;
   customerCpf: string | null;
   customerName: string | null;
   customerEmail: string | null;
@@ -197,6 +199,7 @@ function PdvPageInner() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [showCustomer, setShowCustomer] = useState(false);
+  const [showVendedora, setShowVendedora] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
@@ -280,10 +283,28 @@ function PdvPageInner() {
   // ── Foco automático ──
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
-    if (!showCustomer && !showPayment && !showFinalized) {
+    if (!showCustomer && !showVendedora && !showPayment && !showFinalized) {
       inputRef.current?.focus();
     }
-  }, [sale, showCustomer, showPayment, showFinalized]);
+  }, [sale, showCustomer, showVendedora, showPayment, showFinalized]);
+
+  // ── Auto-abrir modal de vendedora ao iniciar venda nova SEM vendedora ──
+  // Política: comissão é obrigatória. Se a venda OPEN ainda não tem sellerName,
+  // mostra o modal automaticamente (1x — só se não tem itens ainda, pra não
+  // atrapalhar quem já tá no meio da venda quando deploy passa).
+  const askedVendedoraRef = useRef(false);
+  useEffect(() => {
+    if (!sale || sale.status !== 'open') return;
+    if (sale.sellerName) return;
+    if (askedVendedoraRef.current) return;
+    if ((sale.items?.length || 0) > 0) return; // já bipou — não interrompe
+    askedVendedoraRef.current = true;
+    setShowVendedora(true);
+  }, [sale]);
+  // Reset do gate quando troca de venda
+  useEffect(() => {
+    askedVendedoraRef.current = false;
+  }, [sale?.id]);
 
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
@@ -529,6 +550,24 @@ function PdvPageInner() {
     }
   };
 
+  // ── Vendedora ──
+  const saveVendedora = async (data: { codigo: string; nome: string }) => {
+    if (!sale) return;
+    try {
+      await api(`/pdv/sales/${sale.id}/vendedora`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      setShowVendedora(false);
+      toast('success', 'Vendedora identificada', data.nome);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    }
+  };
+
   // ── Cliente ──
   const saveCustomer = async (data: { cpf: string; name: string; email: string; phone: string }) => {
     if (!sale) return;
@@ -726,6 +765,23 @@ function PdvPageInner() {
                 : 'Carregando…'}
             </p>
           </div>
+
+          {/* Botão Vendedora — quem está atendendo essa venda */}
+          <button
+            onClick={() => setShowVendedora(true)}
+            disabled={!sale || sale.status !== 'open'}
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
+              sale?.sellerName
+                ? 'bg-emerald-400 hover:bg-emerald-300 text-emerald-950 ring-2 ring-emerald-200/50'
+                : 'bg-white/90 hover:bg-white text-rose-700 ring-2 ring-rose-300/50 animate-pulse'
+            }`}
+            title={sale?.sellerName ? `Trocar vendedora (atual: ${sale.sellerName})` : 'Identificar vendedora'}
+          >
+            <Sparkles className="w-4 h-4" />
+            <span className="hidden sm:inline truncate max-w-[100px]">
+              {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
+            </span>
+          </button>
 
           {/* Botão Cliente — destaca-se sobre o roxo do header */}
           <button
@@ -1202,6 +1258,15 @@ function PdvPageInner() {
         />
       )}
 
+      {/* Modal Vendedora */}
+      {showVendedora && sale && (
+        <VendedoraModal
+          atual={sale.sellerName || ''}
+          onClose={() => setShowVendedora(false)}
+          onSave={saveVendedora}
+        />
+      )}
+
       {/* Modal Pagamento */}
       {showPayment && sale && (
         <PaymentModal
@@ -1332,6 +1397,137 @@ function PdvPageInner() {
 
 // ─── Modals ────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────
+// VendedoraModal — busca funcionária na tabela `funcionarios` do Giga.
+// Aparece ao clicar no botão "Vendedora" do header (e idealmente automático
+// ao abrir venda nova). Necessário pra atribuir comissão.
+// ─────────────────────────────────────────────────────────────────────────
+function VendedoraModal({
+  atual,
+  onClose,
+  onSave,
+}: {
+  atual: string;
+  onClose: () => void;
+  onSave: (d: { codigo: string; nome: string }) => void;
+}) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [results, setResults] = useState<Array<{ codigo: string; nome: string }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [tabelaOk, setTabelaOk] = useState<boolean | null>(null);
+
+  // Carrega lista inicial sem filtro (top 20 por nome) ao abrir
+  useEffect(() => {
+    (async () => {
+      setSearching(true);
+      try {
+        const r = await api<{ results: typeof results; table?: string; message?: string }>(`/pdv/funcionarios-search?q=&limit=20`);
+        setResults(r.results || []);
+        setTabelaOk(r.results && r.results.length > 0);
+      } catch {
+        setTabelaOk(false);
+      } finally {
+        setSearching(false);
+      }
+    })();
+  }, []);
+
+  // Refaz busca com debounce ao digitar
+  useEffect(() => {
+    if (searchTerm.length < 2 && searchTerm.length > 0) return;
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await api<{ results: typeof results }>(`/pdv/funcionarios-search?q=${encodeURIComponent(searchTerm)}&limit=30`);
+        setResults(r.results || []);
+      } catch {/* ignora */} finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold flex items-center gap-2 text-emerald-900">
+            <Sparkles className="w-4 h-4" /> Quem está atendendo?
+          </h2>
+          <button onClick={onClose}><X className="w-4 h-4" /></button>
+        </div>
+
+        {atual && (
+          <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded">
+            <strong>Atual:</strong> {atual}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 border-2 border-emerald-300 bg-emerald-50 rounded px-2 py-2 focus-within:border-emerald-500">
+          <Search className="w-4 h-4 text-emerald-600 shrink-0" />
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Nome da vendedora…"
+            className="flex-1 bg-transparent text-sm focus:outline-none"
+            autoFocus
+            autoComplete="off"
+          />
+          {searching && <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />}
+        </div>
+
+        {tabelaOk === false && (
+          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            Tabela <code>funcionarios</code> não encontrada no Giga. Digite o nome manualmente embaixo.
+          </div>
+        )}
+
+        <div className="max-h-72 overflow-y-auto border border-slate-200 rounded">
+          {results.length === 0 && !searching && (
+            <div className="text-center text-xs text-slate-400 py-6">
+              {searchTerm ? 'Nenhuma vendedora encontrada' : 'Digite pra buscar…'}
+            </div>
+          )}
+          {results.map((f) => (
+            <button
+              key={f.codigo + f.nome}
+              type="button"
+              onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
+              className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 border-b border-slate-100 last:border-b-0 transition flex items-center gap-2"
+            >
+              <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold shrink-0">
+                {f.nome.charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold text-sm text-slate-800 truncate">{f.nome}</div>
+                {f.codigo && <div className="text-[10px] text-slate-400">cód {f.codigo}</div>}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Fallback manual — útil se a vendedora ainda não foi cadastrada no Giga */}
+        {tabelaOk === false && (
+          <button
+            onClick={() => {
+              const nome = searchTerm.trim();
+              if (!nome) return;
+              onSave({ codigo: '', nome });
+            }}
+            disabled={searchTerm.trim().length < 3}
+            className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-sm disabled:opacity-40"
+          >
+            Usar &ldquo;{searchTerm.trim() || '...'}&rdquo; manualmente
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CustomerModal({
   initial,
   onClose,
@@ -1415,21 +1611,32 @@ function CustomerModal({
 
           {showResults && results.length > 0 && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">
-              {results.map((c) => (
-                <button
-                  key={c.codCliente + c.cpf}
-                  type="button"
-                  onClick={() => pickResult(c)}
-                  className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0 transition"
-                >
-                  <div className="font-bold text-sm text-slate-800 truncate">{c.nome || '— sem nome —'}</div>
-                  <div className="text-[11px] text-slate-500 flex gap-2 mt-0.5">
-                    {c.cpf && <span>CPF {c.cpf}</span>}
-                    {c.codCliente && <span>· cód {c.codCliente}</span>}
-                    {c.cidade && <span>· {c.cidade}</span>}
-                  </div>
-                </button>
-              ))}
+              {results.map((c) => {
+                const semCpf = !c.cpf || c.cpf.length < 11;
+                return (
+                  <button
+                    key={c.codCliente + c.cpf}
+                    type="button"
+                    onClick={() => pickResult(c)}
+                    className={`w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0 transition ${
+                      semCpf ? 'opacity-60' : ''
+                    }`}
+                    title={semCpf ? 'Cliente sem CPF cadastrado — não consegue fazer crediário' : ''}
+                  >
+                    <div className="font-bold text-sm text-slate-800 truncate flex items-center gap-1.5">
+                      {c.nome || '— sem nome —'}
+                      {semCpf && (
+                        <span className="text-[9px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded font-bold">SEM CPF</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 flex gap-2 mt-0.5">
+                      {c.cpf && <span>CPF {c.cpf}</span>}
+                      {c.codCliente && <span>· cód {c.codCliente}</span>}
+                      {c.cidade && <span>· {c.cidade}</span>}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
 

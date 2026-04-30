@@ -5,6 +5,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -430,10 +431,13 @@ export class PdvController {
   @Get('customer-info')
   async getCustomerInfo(@Req() req: any, @Query('cpf') cpf: string) {
     this.requireRole(req);
-    if (!cpf || cpf.length < 11) {
-      throw new BadRequestException('CPF obrigatório (mínimo 11 dígitos)');
+    if (!cpf) {
+      throw new BadRequestException('CPF ou código do cliente obrigatório');
     }
     const cleanCpf = cpf.replace(/\D/g, '');
+    if (cleanCpf.length < 3) {
+      throw new BadRequestException('Mínimo 3 dígitos');
+    }
 
     // Busca cliente no Giga (tabela clientes detectada dinamicamente)
     const cm = await this.crediarios.detectClientesTable();
@@ -442,11 +446,17 @@ export class PdvController {
     }
 
     // Procura por CPF (coluna pode variar). Escape inline pra evitar SQL injection.
+    // BUG FIX: CPF no Giga pode estar FORMATADO (108.458.788-24) ou só dígitos.
+    // Comparar via REPLACE pra extrair só os dígitos antes de igualar.
     const safeCpf = cleanCpf.replace(/[^0-9]/g, '').slice(0, 14);
-    const safeCpfRaw = String(cpf).replace(/['"\\;]/g, '').slice(0, 20);
     let cliente: any = null;
     try {
-      const sql = `SELECT * FROM \`${cm.table}\` WHERE \`CPF\` = '${safeCpf}' OR \`CPF\` = '${safeCpfRaw}' LIMIT 1`;
+      // Compara CPF normalizado (só dígitos) com query normalizada
+      const sql = `
+        SELECT * FROM \`${cm.table}\`
+        WHERE REPLACE(REPLACE(REPLACE(\`CPF\`, '.', ''), '-', ''), '/', '') = '${safeCpf}'
+           OR \`CPF\` = '${safeCpf}'
+        LIMIT 1`;
       const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
       cliente = r.rows[0] || null;
     } catch {
@@ -455,6 +465,15 @@ export class PdvController {
         const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
         const r2 = await this.erp.runReadOnly(sql2, { maxRows: 1, timeoutMs: 10000 });
         cliente = r2.rows[0] || null;
+      } catch {/* ignora */}
+    }
+    // Fallback: se ainda não achou e o "cpf" era na verdade um codCliente,
+    // tenta por código direto (ex: 4 dígitos = código, não CPF)
+    if (!cliente && safeCpf.length > 0 && safeCpf.length < 11) {
+      try {
+        const sql3 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
+        const r3 = await this.erp.runReadOnly(sql3, { maxRows: 1, timeoutMs: 10000 });
+        cliente = r3.rows[0] || null;
       } catch {/* ignora */}
     }
 
@@ -545,10 +564,11 @@ export class PdvController {
     cols.push('CPF', 'CIDADE');
     if (cm.telefone) cols.push(`\`${cm.telefone}\``);
 
-    // WHERE: combina busca por CPF, codCliente e nome (OR)
+    // WHERE: combina busca por CPF (normalizado), codCliente e nome (OR)
     const wheres: string[] = [];
     if (isNumeric) {
-      wheres.push(`\`CPF\` LIKE '${safeNum}%'`);
+      // CPF no Giga pode estar formatado — comparar normalizado (só dígitos)
+      wheres.push(`REPLACE(REPLACE(REPLACE(\`CPF\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
       wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
     }
     if (cm.nome) {
@@ -581,6 +601,95 @@ export class PdvController {
         telefone: cm.telefone ? String(r[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
       })),
     };
+  }
+
+  /**
+   * GET /pdv/funcionarios-search?q=texto&limit=20
+   * Busca funcionária na tabela `funcionarios` do Giga (vendedora).
+   * Usado pelo modal de identificação no início da venda.
+   */
+  @Get('funcionarios-search')
+  async searchFuncionarios(
+    @Req() req: any,
+    @Query('q') q: string,
+    @Query('limit') limitStr?: string,
+  ) {
+    this.requireRole(req);
+    const term = String(q || '').trim();
+    const limit = Math.min(Math.max(Number(limitStr) || 20, 1), 50);
+
+    // Tenta tabelas comuns: funcionarios, vendedores, usuarios
+    const candidates = ['funcionarios', 'funcionario', 'vendedores', 'vendedor', 'usuarios'];
+    let table: string | null = null;
+    let codigoCol: string | null = null;
+    let nomeCol: string | null = null;
+
+    for (const tbl of candidates) {
+      try {
+        const schema = await this.erp.getTableSchema(tbl, 1);
+        if (!schema) continue;
+        const cols = schema.columns.map((c: any) => c.field);
+        const nome = cols.find((c: string) => /^nome$/i.test(c) || /^razao$/i.test(c) || /^funcionario$/i.test(c));
+        const codigo = cols.find((c: string) => /^codigo$/i.test(c) || /^cod_?func/i.test(c) || /^id_?func/i.test(c) || /^id$/i.test(c));
+        if (!nome || !codigo) continue;
+        table = tbl;
+        codigoCol = codigo;
+        nomeCol = nome;
+        break;
+      } catch {/* tabela não existe — tenta próxima */}
+    }
+
+    if (!table || !codigoCol || !nomeCol) {
+      return { results: [], message: 'Tabela de funcionários não encontrada no Giga' };
+    }
+
+    const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
+    const where = term.length >= 2
+      ? `WHERE UPPER(\`${nomeCol}\`) LIKE UPPER('%${safeText}%')`
+      : ''; // sem filtro = lista tudo (limite ainda aplica)
+
+    const sql = `SELECT \`${codigoCol}\` AS codigo, \`${nomeCol}\` AS nome FROM \`${table}\` ${where} ORDER BY \`${nomeCol}\` ASC LIMIT ${limit}`;
+    let rows: any[] = [];
+    try {
+      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 8000 });
+      rows = r.rows || [];
+    } catch (e: any) {
+      console.warn('[funcionarios-search] erro:', e?.message);
+    }
+
+    return {
+      table,
+      results: rows.map((r) => ({
+        codigo: String(r.codigo ?? '').trim(),
+        nome: String(r.nome ?? '').trim(),
+      })).filter((r) => r.nome),
+    };
+  }
+
+  /**
+   * PATCH /pdv/sales/:id/vendedora — atribui vendedora à venda.
+   * Aceita codigo+nome direto do Giga (sem precisar do Seller cadastrado no Postgres).
+   */
+  @Patch('sales/:id/vendedora')
+  async setVendedora(
+    @Req() req: any,
+    @Param('id') saleId: string,
+    @Body() body: { codigo?: string; nome: string },
+  ) {
+    this.requireRole(req);
+    if (!body?.nome) throw new BadRequestException('Nome da vendedora obrigatório');
+    const sale = await (this.svc as any).prisma.pdvSale.findUnique({ where: { id: saleId } });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
+    return (this.svc as any).prisma.pdvSale.update({
+      where: { id: saleId },
+      data: {
+        sellerName: body.nome.trim(),
+        // Guarda o código do Giga em sellerId (string livre — não é FK física aqui)
+        sellerId: body.codigo?.trim() || null,
+      },
+    });
   }
 
   /**
