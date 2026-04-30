@@ -458,6 +458,8 @@ function PdvPageInner() {
   const [showManualItem, setShowManualItem] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
   const [showSimular, setShowSimular] = useState(false);
+  // ── Banner de campanha promocional (colapsado por padrão pra não poluir tela) ──
+  const [promoExpanded, setPromoExpanded] = useState(false);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -806,21 +808,26 @@ function PdvPageInner() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-lg border overflow-hidden">
-            {/* Seletor de campanha */}
-            <div className="px-3 py-2 bg-gradient-to-r from-fuchsia-50 to-amber-50 border-b border-fuchsia-200">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="text-xs uppercase font-bold text-fuchsia-700 flex items-center gap-1">
-                  <span>🎁</span> Campanha promocional ativa
-                </div>
-                {sale.activePromotion && (
-                  <button
-                    onClick={() => setPromotion('NONE')}
-                    className="text-[10px] text-rose-600 hover:underline"
-                  >
-                    Remover
-                  </button>
-                )}
+            {/* Seletor de campanha — COLAPSADO por padrão pra economizar vertical.
+                Mostra só linha resumo. Clique expande os 3 botões. */}
+            <button
+              type="button"
+              onClick={() => setPromoExpanded((v) => !v)}
+              className="w-full px-3 py-2 bg-fuchsia-50/50 border-b border-fuchsia-100 flex items-center justify-between gap-2 hover:bg-fuchsia-50 transition"
+            >
+              <div className="flex items-center gap-2 text-[11px] font-bold text-fuchsia-800">
+                <span>🎁</span>
+                <span className="uppercase tracking-wider">Campanha:</span>
+                <span className="font-black">
+                  {sale.activePromotion === 'YEAR_BASED' ? 'Por ano' :
+                   sale.activePromotion === 'FOUR_FOR_THREE' ? '4 LEVA 3' :
+                   <span className="text-slate-500 font-medium">Nenhuma</span>}
+                </span>
               </div>
+              <ChevronRight className={`w-3.5 h-3.5 text-fuchsia-700 transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
+            </button>
+            {promoExpanded && (
+            <div className="px-3 py-2 bg-fuchsia-50/30 border-b border-fuchsia-100">
               <div className="grid grid-cols-3 gap-1.5">
                 <button
                   onClick={() => setPromotion('NONE')}
@@ -873,6 +880,7 @@ function PdvPageInner() {
                 );
               })()}
             </div>
+            )}
             {/* Cabeçalho de colunas — alinhado com as linhas (cols idênticas) */}
             <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[100px_1fr_70px_90px_110px_72px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
               <div>COD</div>
@@ -1006,78 +1014,63 @@ function PdvPageInner() {
         ) : null}
       </main>
 
-      {/* SIDEBAR DIREITA — ações do PDV (rose/amber/sky/purple + green/teal/slate/orange).
-          Em mobile (<lg) vira uma faixa horizontal com scroll no topo.
-          PIX foi pro footer (perto do Finalizar) — sidebar livre pra Simular Cartão. */}
-      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+      {/* SIDEBAR DIREITA — ações do PDV em modo COMPACT (linha única, w-52).
+          Paleta reduzida: só rose/teal/sky/slate pra primárias.
+          Secundárias usam outline branca pra não competir visualmente.
+          Em mobile (<lg) vira faixa horizontal com scroll no topo. */}
+      <aside className="w-52 shrink-0 hidden lg:flex flex-col gap-1.5 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
         <PdvSidebarCard
           tone="rose"
           href="/minha-loja/pdv/recebimentos"
           icon={Receipt}
-          subtitle="Crediário"
-          label="Receber"
+          subtitle=""
+          label="Receber Crediário"
+          compact
         />
         <PdvSidebarCard
-          tone="amber"
+          tone="teal"
           onClick={() => setShowSimular(true)}
           disabled={!sale?.total || sale.total <= 0}
           icon={CreditCard}
-          subtitle="Cartão"
-          label="Simular"
-          description={sale?.total && sale.total > 0 ? `1× ${brl(sale.total)}` : undefined}
+          subtitle=""
+          label="Simular Cartão"
+          compact
         />
         <PdvSidebarCard
           tone="sky"
           href="/minha-loja/consultar"
           icon={Search}
-          subtitle="Estoque"
+          subtitle=""
           label="Consultar"
-        />
-        <PdvSidebarCard
-          tone="purple"
-          href="/minha-loja"
-          icon={Globe}
-          subtitle="WooCommerce"
-          label="Pedido Site"
-          badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
-          pulse={pedidosSitePending > 0}
-        />
-        <div className="h-px bg-slate-300/70 my-1" />
-        <PdvSidebarCard
-          tone="green"
-          href="/minha-loja/pdv/caixa"
-          icon={DollarSign}
-          subtitle=""
-          label="Caixa"
-          compact
-        />
-        <PdvSidebarCard
-          tone="amber"
-          href="/minha-loja/pdv/devolucao"
-          icon={ArrowRightLeft}
-          subtitle=""
-          label="Trocar"
           compact
         />
         <PdvSidebarCard
           tone="slate"
+          href="/minha-loja"
+          icon={Globe}
+          subtitle=""
+          label="Pedido Site"
+          badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
+          pulse={pedidosSitePending > 0}
+          compact
+        />
+        <div className="h-px bg-slate-300/40 my-1.5" />
+        {/* Secundárias — outline branco, ícone pequeno + label, paleta neutra */}
+        <PdvOutlinePill href="/minha-loja/pdv/caixa" icon={DollarSign} label="Caixa" />
+        <PdvOutlinePill href="/minha-loja/pdv/devolucao" icon={ArrowRightLeft} label="Trocar" />
+        <PdvOutlinePill
           onClick={() => setShowOpenList(true)}
           disabled={openCount === 0}
           icon={Pause}
-          subtitle=""
           label="Pausadas"
           badge={openCount > 0 ? openCount : undefined}
-          compact
         />
-        <PdvSidebarCard
-          tone="orange"
+        <PdvOutlinePill
           href="/minha-loja/realinhamento"
           icon={Shuffle}
-          subtitle=""
           label="Realinhar"
           badge={realignPending > 0 ? realignPending : undefined}
-          pulse={realignPending > 0}
-          compact
+          attention={realignPending > 0}
         />
       </aside>
 
@@ -1130,28 +1123,26 @@ function PdvPageInner() {
 
             {/* Linha principal: ações + TOTAL grande + FINALIZAR */}
             <div className="flex items-center gap-2">
-              {/* Cancelar (sutil, vermelho discreto) */}
+              {/* Cancelar — ICON ONLY (uso esporádico, não merece label) */}
               <button
                 onClick={cancelSale}
-                className="px-3 py-3 bg-white hover:bg-rose-50 border-2 border-rose-200 text-rose-700 font-bold rounded-xl flex items-center gap-1.5 text-sm transition shrink-0"
-                title="Cancelar venda (limpa o carrinho)"
+                className="w-11 h-11 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-700 rounded-xl flex items-center justify-center transition shrink-0"
+                title="Cancelar venda"
               >
                 <X className="w-5 h-5" />
-                <span className="hidden md:inline">Cancelar</span>
               </button>
 
-              {/* Desconto — abre modal com % e R$ sincronizados */}
+              {/* Desconto — ICON ONLY */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="px-3 py-3 bg-white hover:bg-amber-50 border-2 border-amber-200 text-amber-800 font-bold rounded-xl flex items-center gap-1.5 text-sm transition shrink-0"
-                title="Aplicar desconto na venda inteira"
+                className="w-11 h-11 bg-white hover:bg-amber-50 border border-slate-200 hover:border-amber-200 text-slate-500 hover:text-amber-700 rounded-xl flex items-center justify-center transition shrink-0"
+                title="Aplicar desconto"
               >
                 <Percent className="w-5 h-5" />
-                <span className="hidden md:inline">Desconto</span>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
-              <div className="flex-1 px-3 min-w-0">
+              <div className="flex-1 px-2 min-w-0">
                 <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
                 <div className="text-3xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 truncate">
                   {brl(sale.total)}
@@ -1162,7 +1153,7 @@ function PdvPageInner() {
               <button
                 onClick={() => setShowPixAvulso(true)}
                 disabled={!sale.items?.length || sale.total <= 0}
-                className="px-3 sm:px-5 py-4 text-white font-black rounded-xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm sm:text-base shadow-md transition shrink-0"
+                className="px-3 sm:px-4 py-3.5 text-white font-bold rounded-xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm sm:text-base transition shrink-0"
                 style={{ background: `linear-gradient(135deg, ${HUB_TONES.teal.from}, ${HUB_TONES.teal.to})` }}
                 title="Cobrar via PIX agora (Pagar.me/Stone)"
               >
@@ -1170,16 +1161,16 @@ function PdvPageInner() {
                 <span className="hidden sm:inline">PIX</span>
               </button>
 
-              {/* FINALIZAR — botão verde gigante */}
+              {/* FINALIZAR — botão verde gigante (CTA primário) */}
               <button
                 onClick={() => setShowPayment(true)}
                 disabled={!sale.items?.length || sale.total <= 0}
-                className="px-4 sm:px-7 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-lg shadow-emerald-300 transition shrink-0"
+                className="px-4 sm:px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-md shadow-emerald-200 transition shrink-0"
                 title="Finalizar venda (F4)"
               >
-                <Check className="w-6 h-6" />
+                <Check className="w-5 h-5" />
                 <span className="hidden sm:inline">Finalizar</span>
-                <kbd className="hidden lg:inline-block ml-1 px-1.5 py-0.5 bg-white/20 text-white/90 text-[10px] font-mono rounded">F4</kbd>
+                <kbd className="hidden lg:inline-block ml-0.5 px-1.5 py-0.5 bg-white/20 text-white/90 text-[10px] font-mono rounded">F4</kbd>
               </button>
             </div>
           </div>
@@ -3248,6 +3239,49 @@ function PdvMobilePill({
     return <Link href={href} className={cls} style={style}>{inner}</Link>;
   }
   return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
+}
+
+// ── PDV OUTLINE PILL ──────────────────────────────────────────────────
+// Pílula compacta outline pra ações secundárias da sidebar (Caixa, Trocar,
+// Pausadas, Realinhar). Visual neutro (branco com borda slate) — não compete
+// com os 4 cards coloridos primários. Suporta badge e flag de atenção.
+function PdvOutlinePill({
+  href,
+  onClick,
+  disabled,
+  icon: Icon,
+  label,
+  badge,
+  attention,
+}: {
+  href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  icon: LucideIcon;
+  label: string;
+  badge?: number;
+  attention?: boolean;
+}) {
+  const cls = `relative px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed ${
+    attention
+      ? 'bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100'
+      : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+  }`;
+  const inner = (
+    <>
+      <Icon className={`w-4 h-4 ${attention ? 'text-rose-600' : 'text-slate-500'}`} />
+      <span className="flex-1 text-left">{label}</span>
+      {badge && badge > 0 && (
+        <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
+          attention ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white'
+        }`}>
+          {badge}
+        </span>
+      )}
+    </>
+  );
+  if (href) return <Link href={href} className={cls}>{inner}</Link>;
+  return <button type="button" onClick={onClick} disabled={disabled} className={cls}>{inner}</button>;
 }
 
 // ── SIMULADOR DE PARCELAMENTO CARTÃO ──────────────────────────────────
