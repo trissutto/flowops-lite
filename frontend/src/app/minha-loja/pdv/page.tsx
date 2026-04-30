@@ -1100,76 +1100,150 @@ function PdvPageInner() {
 
         {/* ─── RESUMO DA VENDA ───────────────────────────────────────────── */}
         {sale?.status === 'open' && (
-          <div className="bg-white/95 backdrop-blur rounded-xl border border-white/40 shadow-md p-3 space-y-1.5">
-            <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-1">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+            <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
               Resumo da venda
             </div>
-            <div className="flex justify-between text-xs text-slate-600">
-              <span>Itens</span>
-              <span className="font-bold text-slate-800 tabular-nums">{sale.items?.length || 0}</span>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600 uppercase text-xs tracking-wide">Itens</span>
+                <span className="font-bold text-slate-800 tabular-nums">{sale.items?.length || 0}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-600 uppercase text-xs tracking-wide">Subtotal</span>
+                <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
+              </div>
+              {(() => {
+                const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
+                const totalDesc = descontoItens + (sale.desconto || 0);
+                if (totalDesc <= 0) return null;
+                return (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600 uppercase text-xs tracking-wide">Descontos</span>
+                    <span className="font-bold text-rose-600 tabular-nums">− {brl(totalDesc)}</span>
+                  </div>
+                );
+              })()}
             </div>
-            <div className="flex justify-between text-xs text-slate-600">
-              <span>Subtotal</span>
-              <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
-            </div>
-            {(() => {
-              const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
-              const totalDesc = descontoItens + (sale.desconto || 0);
-              if (totalDesc <= 0) return null;
-              return (
-                <div className="flex justify-between text-xs text-rose-600">
-                  <span>Descontos</span>
-                  <span className="font-bold tabular-nums">−{brl(totalDesc)}</span>
-                </div>
-              );
-            })()}
-            <div className="border-t border-slate-200 mt-1.5 pt-1.5 flex justify-between items-baseline">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</span>
-              <span className="text-xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
+            <div className="border-t border-dashed border-slate-300 mt-3 pt-3 flex justify-between items-baseline">
+              <span className="text-sm font-black uppercase tracking-wider text-slate-700">Total</span>
+              <span className="text-2xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
             </div>
           </div>
         )}
 
         {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-2.5">
-          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2 px-1">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
             Formas de pagamento
           </div>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => { setPaymentFilter('pix'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-teal-200 shadow-sm"
+              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-teal-300"
               title="Cobrar via PIX"
             >
-              <QrCode className="w-5 h-5 text-teal-600" />
-              <span className="text-[10px] font-bold text-teal-800">PIX</span>
+              <QrCode className="w-5 h-5 text-teal-500" />
+              <span className="text-[11px] font-bold text-slate-700">PIX</span>
             </button>
             <button
               onClick={() => { setPaymentFilter('cartao'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-sky-200 shadow-sm"
+              className="bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-violet-300"
               title="Cobrar com cartão (débito ou crédito)"
             >
-              <CreditCard className="w-5 h-5 text-sky-600" />
-              <span className="text-[10px] font-bold text-sky-800">CARTÃO</span>
+              <CreditCard className="w-5 h-5 text-violet-500" />
+              <span className="text-[11px] font-bold text-slate-700">CARTÃO</span>
             </button>
             <button
               onClick={() => { setPaymentFilter('crediario'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-rose-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-rose-200 shadow-sm"
+              className="bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-amber-300"
               title="Vender no crediário"
             >
-              <Receipt className="w-5 h-5 text-rose-600" />
-              <span className="text-[10px] font-bold text-rose-800">CRED.</span>
+              <Receipt className="w-5 h-5 text-amber-500" />
+              <span className="text-[11px] font-bold text-slate-700">CREDIÁRIO</span>
             </button>
           </div>
         </div>
 
         {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-2.5 space-y-1.5">
-          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-1 px-1">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
             Ações do PDV
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Link
+              href="/minha-loja/consultar"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
+              title="Consultar estoque"
+            >
+              <Search className="w-4 h-4 text-slate-600" />
+              <span className="text-[11px] font-bold text-slate-700">Consultar</span>
+            </Link>
+            <Link
+              href="/minha-loja/pdv/devolucao"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
+              title="Trocar / devolver"
+            >
+              <ArrowRightLeft className="w-4 h-4 text-slate-600" />
+              <span className="text-[11px] font-bold text-slate-700">Trocar</span>
+            </Link>
+            <Link
+              href="/minha-loja/pdv/caixa"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
+              title="Caixa"
+            >
+              <DollarSign className="w-4 h-4 text-slate-600" />
+              <span className="text-[11px] font-bold text-slate-700">Caixa</span>
+            </Link>
+          </div>
+        </div>
+
+        {/* ─── ALERTAS ───────────────────────────────────────────────────── */}
+        {(openCount > 0 || realignPending > 0) && (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-2">
+            <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-1">
+              Alertas
+            </div>
+            {openCount > 0 && (
+              <button
+                onClick={() => setShowOpenList(true)}
+                className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg px-3 py-2.5 flex items-center justify-between transition"
+                title="Vendas pausadas"
+              >
+                <span className="flex items-center gap-2 text-sm font-bold text-amber-800">
+                  <Pause className="w-4 h-4 text-amber-600" />
+                  Pausadas
+                </span>
+                <span className="bg-amber-500 text-white text-xs font-black rounded-full min-w-[28px] h-7 flex items-center justify-center px-2">
+                  {openCount}
+                </span>
+              </button>
+            )}
+            {realignPending > 0 && (
+              <Link
+                href="/minha-loja/realinhamento"
+                className="w-full bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg px-3 py-2.5 flex items-center justify-between transition"
+                title="Realinhamento pendente"
+              >
+                <span className="flex items-center gap-2 text-sm font-bold text-rose-800">
+                  <Shuffle className="w-4 h-4 text-rose-600" />
+                  Realinhar
+                </span>
+                <span className="bg-rose-500 text-white text-xs font-black rounded-full min-w-[28px] h-7 flex items-center justify-center px-2">
+                  {realignPending}
+                </span>
+              </Link>
+            )}
+          </div>
+        )}
+
+        {/* ─── EXTRAS (Receber Crediário, Simular, Pedido Site) ─────────── */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-1.5">
+          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-2">
+            Outras ações
           </div>
           <PdvSidebarCard
             tone="rose"
@@ -1189,14 +1263,6 @@ function PdvPageInner() {
             compact
           />
           <PdvSidebarCard
-            tone="sky"
-            href="/minha-loja/consultar"
-            icon={Search}
-            subtitle=""
-            label="Consultar"
-            compact
-          />
-          <PdvSidebarCard
             tone="slate"
             href="/minha-loja"
             icon={Globe}
@@ -1206,32 +1272,7 @@ function PdvPageInner() {
             pulse={pedidosSitePending > 0}
             compact
           />
-          <PdvOutlinePill href="/minha-loja/pdv/caixa" icon={DollarSign} label="Caixa" />
-          <PdvOutlinePill href="/minha-loja/pdv/devolucao" icon={ArrowRightLeft} label="Trocar" />
         </div>
-
-        {/* ─── ALERTAS ───────────────────────────────────────────────────── */}
-        {(openCount > 0 || realignPending > 0) && (
-          <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm p-2.5 space-y-1.5">
-            <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 mb-1 px-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" /> Alertas
-            </div>
-            <PdvOutlinePill
-              onClick={() => setShowOpenList(true)}
-              disabled={openCount === 0}
-              icon={Pause}
-              label="Pausadas"
-              badge={openCount > 0 ? openCount : undefined}
-            />
-            <PdvOutlinePill
-              href="/minha-loja/realinhamento"
-              icon={Shuffle}
-              label="Realinhar"
-              badge={realignPending > 0 ? realignPending : undefined}
-              attention={realignPending > 0}
-            />
-          </div>
-        )}
 
       </aside>
 
