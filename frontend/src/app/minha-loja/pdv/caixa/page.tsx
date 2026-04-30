@@ -145,14 +145,14 @@ export default function CaixaPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-pink-50 p-6 flex items-center justify-center">
+      <div className="min-h-screen bg-[#f4f1ec] p-6 flex items-center justify-center">
         <div className="text-rose-700">Carregando caixa…</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-pink-50 p-4 md:p-6">
+    <div className="min-h-screen bg-[#f4f1ec] p-4 md:p-6">
       <div className="max-w-4xl mx-auto">
         <Link
           href="/minha-loja/pdv"

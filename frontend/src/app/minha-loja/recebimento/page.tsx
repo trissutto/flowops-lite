@@ -253,7 +253,7 @@ export default function RecebimentoPage() {
     const allDone = pendingCount === 0;
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-emerald-50/40 to-teal-50/30 pb-16">
+      <div className="min-h-screen bg-[#f4f1ec] pb-16">
         {/* Header */}
         <header className="bg-gradient-to-r from-emerald-700 via-teal-700 to-cyan-700 text-white sticky top-0 z-30 shadow-2xl">
           <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">

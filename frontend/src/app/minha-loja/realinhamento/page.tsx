@@ -506,10 +506,7 @@ export default function MinhaLojaRealinhamentoPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-violet-50/40 to-fuchsia-50/30 pb-16 relative">
-      {/* Decor blob sutil — visual moderno sem poluir. */}
-      <div className="no-print fixed top-40 -left-32 w-96 h-96 rounded-full bg-gradient-to-br from-violet-300/30 to-fuchsia-300/20 blur-3xl pointer-events-none" />
-      <div className="no-print fixed bottom-20 -right-32 w-[28rem] h-[28rem] rounded-full bg-gradient-to-tl from-indigo-300/20 to-pink-300/20 blur-3xl pointer-events-none" />
+    <div className="min-h-screen bg-[#f4f1ec] pb-16 relative">
 
       {/* Header — glass sutil com gradiente. Sticky pra manter contexto. */}
       <header className="bg-gradient-to-r from-indigo-700 via-violet-700 to-fuchsia-700 text-white sticky top-0 z-30 shadow-2xl relative overflow-hidden">

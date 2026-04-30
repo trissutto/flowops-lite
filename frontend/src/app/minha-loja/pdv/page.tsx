@@ -591,11 +591,9 @@ export default function PdvPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-fuchsia-50 flex flex-col">
-      {/* ╔══════════════════════════════════════════════════════════════╗
-          ║  HEADER MODERNO — hero card com logo grande + ações         ║
-          ╚══════════════════════════════════════════════════════════════╝ */}
-      <header className="sticky top-0 z-20 bg-white/70 backdrop-blur-xl border-b border-rose-100/60 shadow-[0_2px_24px_-8px_rgba(244,63,94,0.15)]">
+    <div className="min-h-screen bg-[#f4f1ec] flex flex-col">
+      {/* Header unificado com a retaguarda — fundo branco, borda sutil */}
+      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-sm">
         {/* Linha 1 — logo grande + título + status */}
         <div className="max-w-3xl mx-auto px-4 pt-3 pb-2 flex items-center gap-3">
           <Link

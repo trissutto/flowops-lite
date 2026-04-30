@@ -599,18 +599,9 @@ export default function MinhaLojaPage() {
   }
 
   return (
-    <div
-      className="min-h-screen"
-      style={{
-        background:
-          'radial-gradient(900px 400px at 50% -10%, #f0e6cf 0%, transparent 55%), linear-gradient(180deg, #fdfaf3 0%, #f3e9d8 100%)',
-      }}
-    >
-      {/* Header boutique — fixo, suave */}
-      <header
-        className="sticky top-0 z-30 bg-white/85 backdrop-blur"
-        style={{ borderBottom: '1px solid #ead7d4' }}
-      >
+    <div className="min-h-screen bg-[#f4f1ec]">
+      {/* Header unificado com a retaguarda — fundo branco, borda sutil */}
+      <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
         <div className="px-4 py-3 flex items-center justify-between max-w-3xl mx-auto">
           <div className="flex items-center gap-3">
             <div

@@ -373,8 +373,8 @@ export default function RecebimentosPage() {
   // ── Render ─────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-amber-50 via-rose-50 to-pink-50 flex flex-col">
-      <header className="sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-rose-100 shadow-sm">
+    <div className="min-h-screen bg-[#f4f1ec] flex flex-col">
+      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-4xl mx-auto p-4 flex items-center gap-3">
           <Link href="/minha-loja/pdv" className="p-2 rounded-lg hover:bg-rose-100 text-rose-700">
             <ArrowLeft size={20} />

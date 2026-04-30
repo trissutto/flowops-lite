@@ -155,7 +155,7 @@ export default function DevolucaoPage() {
   }
 
   return (
-    <div className="min-h-screen bg-pink-50 p-4 md:p-6">
+    <div className="min-h-screen bg-[#f4f1ec] p-4 md:p-6">
       <div className="max-w-4xl mx-auto">
         <Link
           href="/minha-loja/pdv"

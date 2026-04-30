@@ -310,7 +310,7 @@ function ConsultarInner() {
   }
 
   return (
-    <div className="min-h-screen pastel-page">
+    <div className="min-h-screen bg-[#f4f1ec]">
       {/* Header */}
       <header className="bg-brand text-white sticky top-0 z-30 shadow">
         <div className="px-4 py-3 flex items-center justify-between max-w-4xl mx-auto gap-3">
