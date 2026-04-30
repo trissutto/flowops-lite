@@ -153,24 +153,26 @@ function printViaHiddenIframe(url: string) {
 }
 
 /**
- * Calcula parcelas com regra "centavos só na primeira":
- *   total = R$ 153,10, n = 3 → primeira: R$ 51,10 · demais: R$ 51,00 (×2)
+ * Calcula parcelas IGUAIS com ajuste só na ÚLTIMA pra bater o total:
+ *   total = R$ 155,20, n = 9 → 8× R$ 17,24 + última R$ 17,28
+ *   total = R$ 153,10, n = 3 → 2× R$ 51,03 + última R$ 51,04
+ *   total = R$ 100,00, n = 4 → 4× R$ 25,00 (caso exato — todas iguais)
  *
  * Regra:
- *   - Demais parcelas = floor(total / n) em REAIS (sem centavos)
- *   - Primeira parcela = total − demais × (n−1)  (absorve o resto)
+ *   - iguais = round(total / n) com 2 casas decimais (centavos)
+ *   - ultima = total - iguais × (n − 1)  (absorve diferença pra fechar)
  *
- * Quando parcela = 1, primeira = total e demais = 0.
+ * Quando n = 1: iguais = total, qtdIguais = 0, ultima = 0 (não usada).
  */
 function calcularParcelas(total: number, n: number): {
-  primeira: number;
-  demais: number;
-  qtdDemais: number;
+  iguais: number;
+  ultima: number;
+  qtdIguais: number;
 } {
-  if (n <= 1) return { primeira: total, demais: 0, qtdDemais: 0 };
-  const demais = Math.floor(total / n); // em reais inteiros
-  const primeira = Math.round((total - demais * (n - 1)) * 100) / 100;
-  return { primeira, demais, qtdDemais: n - 1 };
+  if (n <= 1) return { iguais: total, ultima: 0, qtdIguais: 0 };
+  const iguais = Math.round((total / n) * 100) / 100;
+  const ultima = Math.round((total - iguais * (n - 1)) * 100) / 100;
+  return { iguais, ultima, qtdIguais: n - 1 };
 }
 
 export default function PdvPage() {
@@ -1490,9 +1492,9 @@ function PaymentModal({
     if (selected === 'credito' || selected === 'crediario') {
       details.parcelas = parcelas;
       const calc = calcularParcelas(valor, parcelas);
-      details.valorPrimeira = calc.primeira;
-      details.valorDemais = calc.demais;
-      details.qtdDemais = calc.qtdDemais;
+      details.valorIguais = calc.iguais;
+      details.qtdIguais = calc.qtdIguais;
+      details.valorUltima = calc.ultima;
     }
     if (selected === 'dinheiro') {
       const trocoP = recebidoNum > valor ? recebidoNum - valor : 0;
@@ -1773,9 +1775,9 @@ function PaymentModal({
     if (selected === 'credito' || selected === 'crediario') {
       details.parcelas = parcelas;
       const calc = calcularParcelas(total, parcelas);
-      details.valorPrimeira = calc.primeira;
-      details.valorDemais = calc.demais;
-      details.qtdDemais = calc.qtdDemais;
+      details.valorIguais = calc.iguais;
+      details.qtdIguais = calc.qtdIguais;
+      details.valorUltima = calc.ultima;
     }
     if (selected === 'dinheiro') {
       details.recebido = recebidoNum;
@@ -1997,7 +1999,7 @@ function PaymentModal({
                 </button>
               ))}
             </div>
-            {/* Simulador com regra "centavos só na primeira" */}
+            {/* Simulador: parcelas iguais, com ajuste só na ÚLTIMA pra fechar o total */}
             {(() => {
               const calc = calcularParcelas(total, parcelas);
               if (parcelas === 1) {
@@ -2008,31 +2010,32 @@ function PaymentModal({
                   </div>
                 );
               }
-              const parcelasIguais = calc.primeira === calc.demais;
+              // Caso ideal — divisão exata, todas as N parcelas iguais
+              const todasIguais = calc.iguais === calc.ultima;
               return (
                 <div className="bg-emerald-50 rounded p-3 space-y-1.5">
-                  {parcelasIguais ? (
+                  {todasIguais ? (
                     <div className="text-center">
                       <span className="text-slate-600 text-sm">{parcelas}× de </span>
-                      <span className="font-bold text-emerald-700 text-lg">{brl(calc.primeira)}</span>
+                      <span className="font-bold text-emerald-700 text-lg tabular-nums">{brl(calc.iguais)}</span>
                     </div>
                   ) : (
                     <>
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-slate-700">
-                          <b>1ª</b> parcela
-                          <span className="text-[10px] text-slate-500 ml-1">(com centavos)</span>
+                          <b>{calc.qtdIguais}×</b> parcelas iguais
                         </span>
                         <span className="font-bold text-emerald-700 tabular-nums">
-                          {brl(calc.primeira)}
+                          {brl(calc.iguais)}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-sm border-t pt-1.5 border-emerald-200">
                         <span className="text-slate-700">
-                          <b>{calc.qtdDemais}×</b> demais parcelas
+                          <b>1×</b> última parcela
+                          <span className="text-[10px] text-slate-500 ml-1">(ajuste de centavos)</span>
                         </span>
                         <span className="font-bold text-emerald-700 tabular-nums">
-                          {brl(calc.demais)}
+                          {brl(calc.ultima)}
                         </span>
                       </div>
                     </>
