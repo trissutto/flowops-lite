@@ -19,6 +19,7 @@ import Image from 'next/image';
 import {
   ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
+  AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle,
@@ -1427,6 +1428,49 @@ function PaymentModal({
   const [valorParcial, setValorParcial] = useState('');
   const [addingPayment, setAddingPayment] = useState(false);
 
+  // ── Crediário ──
+  // Entrada (pagamento avulso descontado do total antes de parcelar)
+  const [credEntrada, setCredEntrada] = useState('');
+  // Primeiro vencimento (formato YYYY-MM-DD), default +30d
+  const [credVencto, setCredVencto] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [credObs, setCredObs] = useState('');
+  // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
+  const [credCustomerInfo, setCredCustomerInfo] = useState<{
+    found: boolean;
+    cliente?: { codCliente: string; nome: string | null; cpf: string };
+    pendencias?: Array<{ vencimento: string; valor: number; diasAtraso: number }>;
+    totalDevido?: number;
+    totalAtraso?: number;
+    qtdPendencias?: number;
+    qtdAtrasadas?: number;
+    message?: string;
+  } | null>(null);
+  const [credLoading, setCredLoading] = useState(false);
+
+  // Busca info do cliente quando seleciona crediário (1x por venda)
+  useEffect(() => {
+    if (selected !== 'crediario' || !customerCpf) return;
+    if (credCustomerInfo) return; // já carregou
+    let cancelled = false;
+    (async () => {
+      setCredLoading(true);
+      try {
+        const r = await api<any>(`/pdv/customer-info?cpf=${encodeURIComponent(customerCpf)}`);
+        if (!cancelled) setCredCustomerInfo(r);
+      } catch (e: any) {
+        if (!cancelled) setCredCustomerInfo({ found: false, message: e?.message || 'Erro ao buscar cliente' });
+      } finally {
+        if (!cancelled) setCredLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, customerCpf]);
+
   // Quando muda o restante, sugere preencher o valor parcial
   useEffect(() => {
     if (restante > 0 && selected && !valorParcial) {
@@ -1466,6 +1510,14 @@ function PaymentModal({
       toast('warning', 'Crediário exige CPF', 'Identifique o cliente antes de fechar no crediário');
       return;
     }
+    if (selected === 'crediario' && credCustomerInfo && !credCustomerInfo.found) {
+      toast('error', 'Cliente não cadastrado no Giga', 'Cadastre antes de fechar no crediário');
+      return;
+    }
+    if (selected === 'crediario' && !credVencto) {
+      toast('warning', 'Defina o primeiro vencimento');
+      return;
+    }
     if (needsBandeira && !bandeira) {
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
@@ -1500,11 +1552,66 @@ function PaymentModal({
 
     setAddingPayment(true);
     try {
-      const newPayment = await api<any>(`/pdv/sales/${saleId}/payments`, {
-        method: 'POST',
-        body: JSON.stringify({ method: selected, valor, details }),
-      });
-      setPayments((prev) => [...prev, newPayment]);
+      // CREDIÁRIO com ENTRADA: divide em 2 pagamentos paralelos.
+      //   1. Entrada como "dinheiro" (vai pro caixa do dia)
+      //   2. Restante como "crediario" (parcelas vão pro Giga)
+      // Sem entrada: só payment crediário do valor total.
+      const entradaNum = selected === 'crediario'
+        ? Math.max(0, Math.round((Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100)
+        : 0;
+      const valorFinanciado = selected === 'crediario' ? Math.max(0, Math.round((valor - entradaNum) * 100) / 100) : valor;
+
+      if (selected === 'crediario' && entradaNum > 0) {
+        // 1) Cria pagamento da entrada como dinheiro
+        const pEntrada = await api<any>(`/pdv/sales/${saleId}/payments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            method: 'dinheiro',
+            valor: entradaNum,
+            details: { recebido: entradaNum, troco: 0, isEntradaCrediario: true },
+          }),
+        });
+        setPayments((prev) => [...prev, pEntrada]);
+      }
+
+      // Cria pagamento principal (valor restante se houve entrada, senão valor inteiro)
+      const valorPayment = selected === 'crediario' ? valorFinanciado : valor;
+      if (valorPayment > 0) {
+        const newPayment = await api<any>(`/pdv/sales/${saleId}/payments`, {
+          method: 'POST',
+          body: JSON.stringify({ method: selected, valor: valorPayment, details }),
+        });
+        setPayments((prev) => [...prev, newPayment]);
+      }
+
+      // CRIA PARCELAS NO GIGA (só se for crediário) — escreve N linhas em movimento
+      if (selected === 'crediario' && valorFinanciado > 0) {
+        try {
+          const r = await api<any>(`/pdv/sales/${saleId}/crediario`, {
+            method: 'POST',
+            body: JSON.stringify({
+              parcelas,
+              primeiroVencimento: credVencto,
+              entrada: entradaNum,
+              observacao: credObs || undefined,
+            }),
+          });
+          toast(
+            'success',
+            `${parcelas}× parcela(s) criada(s) no Giga`,
+            `Controle ${r.controle} · ${brl(valorFinanciado)} dividido em ${parcelas}×`,
+          );
+        } catch (e: any) {
+          // Se falhar a criação no Giga, ainda mantém os pagamentos no PDV mas avisa
+          const h = humanizeError(e);
+          toast(
+            'error',
+            'Pagamento registrado, mas FALHOU criar parcelas no Giga',
+            h.hint || h.title,
+          );
+        }
+      }
+
       // Reset form pra próximo pagamento
       setSelected(null);
       setBandeira(null);
@@ -1512,6 +1619,9 @@ function PaymentModal({
       setRecebido('');
       setValorParcial('');
       setPixCharge(null);
+      setCredEntrada('');
+      setCredObs('');
+      setCredCustomerInfo(null);
       onPaymentsChange?.();
     } catch (e: any) {
       const h = humanizeError(e);
@@ -1970,11 +2080,126 @@ function PaymentModal({
           </div>
         )}
 
+        {/* CREDIÁRIO — banner pendências + entrada + primeiro vencimento */}
+        {selected === 'crediario' && customerCpf && (
+          <div className="space-y-2 pt-2 border-t">
+            {credLoading && (
+              <div className="text-xs text-slate-500 flex items-center gap-2">
+                <Loader2 className="w-3 h-3 animate-spin" /> Buscando cliente no Giga…
+              </div>
+            )}
+            {credCustomerInfo && !credCustomerInfo.found && (
+              <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2.5 text-xs text-rose-900">
+                <b>⚠️ Cliente não encontrado no Giga.</b> {credCustomerInfo.message}
+                <br />
+                Cadastre o cliente no Wincred antes de fechar a venda no crediário.
+              </div>
+            )}
+            {credCustomerInfo?.found && credCustomerInfo.qtdPendencias === 0 && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded px-2.5 py-1.5 text-xs text-emerald-800 flex items-center gap-2">
+                <Check className="w-3.5 h-3.5" />
+                Cliente <b>{credCustomerInfo.cliente?.nome || '—'}</b> sem pendências.
+              </div>
+            )}
+            {credCustomerInfo?.found && (credCustomerInfo.qtdPendencias || 0) > 0 && (
+              <div className={`border-2 rounded-lg p-2.5 ${
+                (credCustomerInfo.qtdAtrasadas || 0) > 0
+                  ? 'bg-rose-50 border-rose-300'
+                  : 'bg-amber-50 border-amber-300'
+              }`}>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className={`text-xs font-bold flex items-center gap-1.5 ${
+                    (credCustomerInfo.qtdAtrasadas || 0) > 0 ? 'text-rose-800' : 'text-amber-800'
+                  }`}>
+                    <AlertTriangle className="w-4 h-4" />
+                    {(credCustomerInfo.qtdAtrasadas || 0) > 0
+                      ? `Cliente DEVENDO — ${credCustomerInfo.qtdAtrasadas}× vencidas`
+                      : `Cliente tem ${credCustomerInfo.qtdPendencias} parcelas em aberto`}
+                  </div>
+                  <div className={`text-sm font-black tabular-nums ${
+                    (credCustomerInfo.qtdAtrasadas || 0) > 0 ? 'text-rose-700' : 'text-amber-700'
+                  }`}>
+                    {brl(credCustomerInfo.totalDevido || 0)}
+                  </div>
+                </div>
+                {(credCustomerInfo.totalAtraso || 0) > 0 && (
+                  <div className="text-[11px] text-rose-700 font-semibold">
+                    Atrasado: {brl(credCustomerInfo.totalAtraso || 0)}
+                  </div>
+                )}
+                <div className="text-[10px] text-slate-600 mt-1 italic">
+                  Você pode prosseguir com a venda — só um aviso.
+                </div>
+              </div>
+            )}
+
+            {/* Entrada + Primeiro vencimento lado a lado */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+                  Entrada (R$)
+                </label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={credEntrada}
+                  onChange={(e) => setCredEntrada(e.target.value)}
+                  placeholder="0,00"
+                  className="w-full px-3 py-2 text-base font-bold tabular-nums text-emerald-700 border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+                />
+                <div className="text-[10px] text-slate-500 mt-0.5">
+                  Vai como dinheiro/PIX paralelo
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+                  Primeiro vencimento
+                </label>
+                <input
+                  type="date"
+                  value={credVencto}
+                  onChange={(e) => setCredVencto(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-bold border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+                />
+                <div className="text-[10px] text-slate-500 mt-0.5">
+                  Demais a cada 30 dias
+                </div>
+              </div>
+            </div>
+
+            {/* Observação livre na promissória */}
+            <div>
+              <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+                Observação (opcional)
+              </label>
+              <input
+                type="text"
+                value={credObs}
+                onChange={(e) => setCredObs(e.target.value.slice(0, 100))}
+                placeholder="Ex: Vendedora Manu · cliente confiança"
+                className="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Parcelas (crédito ou crediário) — 1 a 12x sem juros */}
         {(selected === 'credito' || selected === 'crediario') && (
           <div className="space-y-2 pt-2 border-t">
             <label className="text-xs text-slate-600 uppercase font-semibold">
               Parcelas (sem juros)
+              {selected === 'crediario' && (() => {
+                const ent = Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                const fin = total - ent;
+                if (ent > 0) {
+                  return (
+                    <span className="ml-2 normal-case text-slate-500 text-[10px]">
+                      Financiando {brl(fin)} (total {brl(total)} − entrada {brl(ent)})
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </label>
             <div className="grid grid-cols-6 gap-1">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => (

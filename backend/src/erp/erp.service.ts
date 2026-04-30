@@ -573,6 +573,157 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * CRIA PARCELAS DE CREDIÁRIO no Giga — INSERT direto na tabela `movimento`.
+   *
+   * Pega o último REGISTRO existente, incrementa pra cada nova parcela.
+   * CONTROLE compartilhado entre as parcelas da mesma compra (= número de
+   * compra). Cria N linhas com vencimentos mensais a partir do primeiro.
+   *
+   * Padrão Wincred:
+   *   - REGISTRO  = sequencial único por linha
+   *   - CONTROLE  = mesmo pra todas as parcelas da compra (numero da compra)
+   *   - PARCELA   = 1, 2, 3, ..., N
+   *   - VENCIMENTO = primeiro + (parcela − 1) × 30 dias (calendário mensal)
+   *   - VALORPARCELA = ajustado pra fechar exato (última absorve diferença)
+   *   - PAGO       = 'N'
+   *
+   * Retorna { success, registroInicial, controleUsado, parcelas[] } ou erro.
+   */
+  async createCrediarioParcelas(input: {
+    codCliente: string;
+    nomeCliente: string;
+    valorTotal: number;          // valor financiado (já descontada entrada)
+    parcelas: number;             // qtd N
+    primeiroVencimento: Date;
+    dataCompra: Date;
+    loja: string;                 // código da loja onde foi feita a venda
+    observacao?: string;
+    columns: {
+      registro: string | null;
+      controle: string | null;
+      numeroCompra: string | null;
+      loja: string | null;
+      codCliente: string | null;
+      nome: string | null;
+      dataCompra: string | null;
+      valorCompra: string | null;
+      parcela: string | null;
+      totalParcelas: string | null;
+      vencimento: string | null;
+      valorParcela: string | null;
+      pago: string | null;
+      obs: string | null;
+    };
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    registroInicial?: number;
+    controleUsado?: number;
+    parcelas?: Array<{ parcela: number; vencimento: string; valor: number; registro: number }>;
+  }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) return { success: false, error: 'Pool ERP não inicializado' };
+
+    const c = input.columns;
+    if (!c.registro || !c.controle || !c.codCliente || !c.vencimento || !c.valorParcela || !c.parcela) {
+      return {
+        success: false,
+        error: 'Colunas obrigatórias não detectadas (registro/controle/codCliente/vencimento/valorParcela/parcela)',
+      };
+    }
+    if (input.parcelas < 1 || input.parcelas > 24) {
+      return { success: false, error: 'Parcelas deve estar entre 1 e 24' };
+    }
+    if (input.valorTotal <= 0) {
+      return { success: false, error: 'Valor total deve ser maior que zero' };
+    }
+
+    // Cálculo das parcelas: iguais com ajuste na última pra bater o total
+    const valorIgual = Math.round((input.valorTotal / input.parcelas) * 100) / 100;
+    const valorUltima = Math.round((input.valorTotal - valorIgual * (input.parcelas - 1)) * 100) / 100;
+
+    const conn = await this.pool.getConnection();
+    try {
+      // Pega último REGISTRO + último CONTROLE pra incrementar
+      const [maxRows]: any = await conn.execute(
+        `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl FROM \`movimento\``,
+      );
+      const startRegistro = Number(maxRows[0]?.maxReg || 0) + 1;
+      const novoControle = Number(maxRows[0]?.maxCtl || 0) + 1;
+
+      const parcelasDetalhe: Array<{ parcela: number; vencimento: string; valor: number; registro: number }> = [];
+
+      // Insere cada parcela
+      for (let i = 0; i < input.parcelas; i++) {
+        const numeroParcela = i + 1;
+        const isUltima = numeroParcela === input.parcelas;
+        const valor = isUltima ? valorUltima : valorIgual;
+        const registro = startRegistro + i;
+
+        // Vencimento: primeiro + N meses (preserva o dia)
+        const venc = new Date(input.primeiroVencimento);
+        venc.setMonth(venc.getMonth() + i);
+
+        // Monta INSERT dinâmico (só inclui colunas detectadas)
+        const fields: string[] = [];
+        const placeholders: string[] = [];
+        const values: any[] = [];
+
+        const add = (col: string | null, val: any) => {
+          if (col == null) return;
+          fields.push(`\`${col}\``);
+          placeholders.push('?');
+          values.push(val);
+        };
+
+        add(c.registro, registro);
+        add(c.controle, novoControle);
+        if (c.numeroCompra) add(c.numeroCompra, novoControle); // numeroCompra = controle (mesma sequência)
+        add(c.codCliente, input.codCliente);
+        if (c.nome) add(c.nome, input.nomeCliente);
+        if (c.loja) add(c.loja, input.loja);
+        if (c.dataCompra) add(c.dataCompra, input.dataCompra);
+        if (c.valorCompra) add(c.valorCompra, input.valorTotal);
+        add(c.parcela, numeroParcela);
+        if (c.totalParcelas) add(c.totalParcelas, input.parcelas);
+        add(c.vencimento, venc);
+        add(c.valorParcela, valor);
+        if (c.pago) add(c.pago, 'N');
+        if (c.obs && input.observacao) add(c.obs, input.observacao.slice(0, 200));
+
+        const sql = `INSERT INTO \`movimento\` (${fields.join(', ')}) VALUES (${placeholders.join(', ')})`;
+        await conn.execute(sql, values);
+
+        parcelasDetalhe.push({
+          parcela: numeroParcela,
+          vencimento: venc.toISOString().slice(0, 10),
+          valor,
+          registro,
+        });
+      }
+
+      this.logger.log(
+        `[crediario] Criou ${input.parcelas} parcelas no Giga: cliente=${input.codCliente} controle=${novoControle} total=R$${input.valorTotal.toFixed(2)}`,
+      );
+
+      return {
+        success: true,
+        registroInicial: startRegistro,
+        controleUsado: novoControle,
+        parcelas: parcelasDetalhe,
+      };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[crediario] INSERT em movimento FALHOU: ${msg}`);
+      return { success: false, error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * BAIXA PARCELA DE CREDIÁRIO — UPDATE direto na tabela `movimento` do Giga.
    *
    * Marca a parcela como paga (PAGO='S' + DATA_PAGAMENTO=hoje + VALOR_PAGO=valorRecebido).

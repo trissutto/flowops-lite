@@ -18,6 +18,8 @@ import { ErpService } from '../erp/erp.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
+import { CrediariosService } from '../crediarios/crediarios.service';
+import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 
 /**
  * /pdv — frente de caixa.
@@ -32,6 +34,8 @@ export class PdvController {
     private readonly pix: PixService,
     private readonly nfce: NfceService,
     private readonly pagarme: PagarmeService,
+    private readonly crediarios: CrediariosService,
+    private readonly crediarioBaixa: CrediarioBaixaService,
   ) {}
 
   private requireRole(req: any) {
@@ -407,5 +411,173 @@ export class PdvController {
   ) {
     this.requireRole(req);
     return this.svc.cancel({ saleId: id, reason: body?.reason });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CREDIÁRIO — busca cliente + pendências, e gera N parcelas no Giga
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * GET /pdv/customer-info?cpf=12345678900
+   * Busca cliente no Giga pelo CPF + retorna pendências (parcelas em aberto).
+   * Usado pelo PaymentModal aba crediário pra mostrar banner de inadimplência.
+   * Não bloqueia venda — só avisa.
+   */
+  @Get('customer-info')
+  async getCustomerInfo(@Req() req: any, @Query('cpf') cpf: string) {
+    this.requireRole(req);
+    if (!cpf || cpf.length < 11) {
+      throw new BadRequestException('CPF obrigatório (mínimo 11 dígitos)');
+    }
+    const cleanCpf = cpf.replace(/\D/g, '');
+
+    // Busca cliente no Giga (tabela clientes detectada dinamicamente)
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm) {
+      return { found: false, message: 'Tabela de clientes do Giga não detectada' };
+    }
+
+    // Procura por CPF (coluna pode variar). Escape inline pra evitar SQL injection.
+    const safeCpf = cleanCpf.replace(/[^0-9]/g, '').slice(0, 14);
+    const safeCpfRaw = String(cpf).replace(/['"\\;]/g, '').slice(0, 20);
+    let cliente: any = null;
+    try {
+      const sql = `SELECT * FROM \`${cm.table}\` WHERE \`CPF\` = '${safeCpf}' OR \`CPF\` = '${safeCpfRaw}' LIMIT 1`;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+      cliente = r.rows[0] || null;
+    } catch {
+      // Coluna CPF pode não existir — tenta como codCliente direto
+      try {
+        const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
+        const r2 = await this.erp.runReadOnly(sql2, { maxRows: 1, timeoutMs: 10000 });
+        cliente = r2.rows[0] || null;
+      } catch {/* ignora */}
+    }
+
+    if (!cliente) {
+      return { found: false, message: 'Cliente não encontrado no Giga — cadastre antes de fazer crediário' };
+    }
+
+    const codCliente = String(cliente[cm.codCliente] || '').trim();
+    const nome = cm.nome ? String(cliente[cm.nome] || '').trim() : null;
+
+    // Lista pendências (parcelas em aberto)
+    let pendencias: any[] = [];
+    let totalDevido = 0;
+    let totalAtraso = 0;
+    try {
+      pendencias = await this.crediarioBaixa.listOpenInstallmentsByCustomer({
+        busca: codCliente,
+      });
+      totalDevido = pendencias.reduce((s, p) => s + (p.valorParcela || 0), 0);
+      totalAtraso = pendencias.filter((p) => p.diasAtraso > 0).reduce((s, p) => s + (p.valorParcela || 0), 0);
+    } catch (e: any) {
+      // Se falhar a busca de pendências, ainda retorna o cliente
+      console.warn('[pdv/customer-info] erro ao listar pendências:', e?.message);
+    }
+
+    return {
+      found: true,
+      cliente: {
+        codCliente,
+        nome,
+        cpf: cleanCpf,
+        raw: cliente, // dados completos pra preencher form de cadastro se precisar
+      },
+      pendencias: pendencias.map((p) => ({
+        registro: p.registro,
+        controle: p.controle,
+        parcela: p.parcela,
+        totalParcelas: p.totalParcelas,
+        vencimento: p.vencimento,
+        valor: p.valorParcela,
+        diasAtraso: p.diasAtraso,
+      })),
+      totalDevido: Math.round(totalDevido * 100) / 100,
+      totalAtraso: Math.round(totalAtraso * 100) / 100,
+      qtdPendencias: pendencias.length,
+      qtdAtrasadas: pendencias.filter((p) => p.diasAtraso > 0).length,
+    };
+  }
+
+  /**
+   * POST /pdv/sales/:id/crediario
+   * Gera N parcelas no Giga (tabela movimento) pra uma venda do PDV.
+   *
+   * Recebe:
+   *   - parcelas: número (1-24)
+   *   - primeiroVencimento: 'YYYY-MM-DD'
+   *   - entrada (opcional): valor descontado do total antes de dividir
+   *   - observacao (opcional): texto livre
+   *
+   * Pré-condições: venda OPEN com customerCpf preenchido.
+   * O cliente DEVE existir no Giga (use /pdv/customer-info pra validar antes).
+   */
+  @Post('sales/:id/crediario')
+  async createCrediario(
+    @Req() req: any,
+    @Param('id') saleId: string,
+    @Body() body: {
+      parcelas: number;
+      primeiroVencimento: string; // 'YYYY-MM-DD'
+      entrada?: number;
+      observacao?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const sale = await this.svc.getSale(saleId);
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+    if (!sale.customerCpf) throw new BadRequestException('Cliente sem CPF — identifique antes');
+    if (!body?.parcelas || body.parcelas < 1 || body.parcelas > 24) {
+      throw new BadRequestException('Parcelas deve estar entre 1 e 24');
+    }
+    if (!body?.primeiroVencimento || !/^\d{4}-\d{2}-\d{2}$/.test(body.primeiroVencimento)) {
+      throw new BadRequestException('primeiroVencimento inválido (formato YYYY-MM-DD)');
+    }
+    const entrada = Math.max(0, Math.round((body.entrada || 0) * 100) / 100);
+    const valorFinanciado = Math.round((sale.total - entrada) * 100) / 100;
+    if (valorFinanciado <= 0) {
+      throw new BadRequestException('Entrada não pode ser maior ou igual ao total da venda');
+    }
+
+    // Busca cliente no Giga pra pegar codCliente
+    const info = await this.getCustomerInfo(req, sale.customerCpf);
+    if (!info.found || !info.cliente) {
+      throw new BadRequestException(
+        'Cliente não encontrado no Giga. Cadastre o cliente antes de fazer crediário.',
+      );
+    }
+
+    const cols = await this.crediarios.detectColumns();
+    if (!cols.registro || !cols.controle || !cols.codCliente || !cols.vencimento || !cols.valorParcela || !cols.parcela) {
+      throw new BadRequestException(
+        'Colunas obrigatórias da tabela movimento não detectadas — contate suporte',
+      );
+    }
+
+    const result = await this.erp.createCrediarioParcelas({
+      codCliente: info.cliente.codCliente,
+      nomeCliente: info.cliente.nome || sale.customerName || '',
+      valorTotal: valorFinanciado,
+      parcelas: body.parcelas,
+      primeiroVencimento: new Date(`${body.primeiroVencimento}T00:00:00.000Z`),
+      dataCompra: new Date(),
+      loja: sale.storeCode,
+      observacao: body.observacao || `PDV venda #${sale.id.slice(-6).toUpperCase()}`,
+      columns: cols,
+    });
+
+    if (!result.success) {
+      throw new BadRequestException(`Erro ao criar parcelas: ${result.error}`);
+    }
+
+    return {
+      ok: true,
+      parcelas: result.parcelas,
+      controle: result.controleUsado,
+      registroInicial: result.registroInicial,
+      valorFinanciado,
+      entrada,
+    };
   }
 }
