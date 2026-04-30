@@ -1107,21 +1107,21 @@ function PdvPageInner() {
           Paleta reduzida: só rose/teal/sky/slate pra primárias.
           Secundárias usam outline branca pra não competir visualmente.
           Em mobile (<lg) vira faixa horizontal com scroll no topo. */}
-      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-3 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pr-1">
 
         {/* ─── RESUMO DA VENDA ───────────────────────────────────────────── */}
         {sale?.status === 'open' && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-            <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
+            <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
               Resumo da venda
             </div>
-            <div className="space-y-2 text-sm">
+            <div className="space-y-1 text-xs">
               <div className="flex justify-between items-center">
-                <span className="text-slate-600 uppercase text-xs tracking-wide">Itens</span>
+                <span className="text-slate-600 uppercase text-[10px] tracking-wide">Itens</span>
                 <span className="font-bold text-slate-800 tabular-nums">{sale.items?.length || 0}</span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-slate-600 uppercase text-xs tracking-wide">Subtotal</span>
+                <span className="text-slate-600 uppercase text-[10px] tracking-wide">Subtotal</span>
                 <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
               </div>
               {(() => {
@@ -1130,109 +1130,140 @@ function PdvPageInner() {
                 if (totalDesc <= 0) return null;
                 return (
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-600 uppercase text-xs tracking-wide">Descontos</span>
+                    <span className="text-slate-600 uppercase text-[10px] tracking-wide">Descontos</span>
                     <span className="font-bold text-rose-600 tabular-nums">− {brl(totalDesc)}</span>
                   </div>
                 );
               })()}
             </div>
-            <div className="border-t border-dashed border-slate-300 mt-3 pt-3 flex justify-between items-baseline">
-              <span className="text-sm font-black uppercase tracking-wider text-slate-700">Total</span>
-              <span className="text-2xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
+            <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-700">Total</span>
+              <span className="text-xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
             </div>
           </div>
         )}
 
+        {/* ─── ALERTAS ─── (movido pra cima — mais visível) ───────────────── */}
+        {(openCount > 0 || realignPending > 0) && (
+          <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm p-3 space-y-1.5">
+            <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 mb-1 flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" /> Alertas
+            </div>
+            {openCount > 0 && (
+              <button
+                onClick={() => setShowOpenList(true)}
+                className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between transition"
+              >
+                <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
+                  <Pause className="w-3.5 h-3.5 text-amber-600" />
+                  Pausadas
+                </span>
+                <span className="bg-amber-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5">
+                  {openCount}
+                </span>
+              </button>
+            )}
+            {realignPending > 0 && (
+              <Link
+                href="/minha-loja/realinhamento"
+                className="w-full bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between transition"
+              >
+                <span className="flex items-center gap-1.5 text-xs font-bold text-rose-800">
+                  <Shuffle className="w-3.5 h-3.5 text-rose-600" />
+                  Realinhar
+                </span>
+                <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5">
+                  {realignPending}
+                </span>
+              </Link>
+            )}
+          </div>
+        )}
+
         {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
+          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
             Formas de pagamento
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               onClick={() => { setPaymentFilter('pix'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-teal-300"
+              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-teal-300"
               title="Cobrar via PIX"
             >
-              <QrCode className="w-5 h-5 text-teal-500" />
-              <span className="text-[11px] font-bold text-slate-700">PIX</span>
+              <QrCode className="w-4 h-4 text-teal-500" />
+              <span className="text-[10px] font-bold text-slate-700">PIX</span>
             </button>
             <button
               onClick={() => { setPaymentFilter('cartao'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-violet-300"
-              title="Cobrar com cartão (débito ou crédito)"
+              className="bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
+              title="Cobrar com cartão"
             >
-              <CreditCard className="w-5 h-5 text-violet-500" />
-              <span className="text-[11px] font-bold text-slate-700">CARTÃO</span>
+              <CreditCard className="w-4 h-4 text-violet-500" />
+              <span className="text-[10px] font-bold text-slate-700">CARTÃO</span>
             </button>
             <button
               onClick={() => { setPaymentFilter('crediario'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-3 flex flex-col items-center gap-1.5 transition border border-slate-200 hover:border-amber-300"
+              className="bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-amber-300"
               title="Vender no crediário"
             >
-              <Receipt className="w-5 h-5 text-amber-500" />
-              <span className="text-[11px] font-bold text-slate-700">CREDIÁRIO</span>
+              <Receipt className="w-4 h-4 text-amber-500" />
+              <span className="text-[10px] font-bold text-slate-700">CRED.</span>
             </button>
           </div>
         </div>
 
         {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-3">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
+          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
             Ações do PDV
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
             <Link
               href="/minha-loja/consultar"
-              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
-              title="Consultar estoque"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200"
             >
-              <Search className="w-4 h-4 text-slate-600" />
-              <span className="text-[11px] font-bold text-slate-700">Consultar</span>
+              <Search className="w-3.5 h-3.5 text-slate-600" />
+              <span className="text-[10px] font-bold text-slate-700">Consultar</span>
             </Link>
             <Link
               href="/minha-loja/pdv/devolucao"
-              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
-              title="Trocar / devolver"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200"
             >
-              <ArrowRightLeft className="w-4 h-4 text-slate-600" />
-              <span className="text-[11px] font-bold text-slate-700">Trocar</span>
+              <ArrowRightLeft className="w-3.5 h-3.5 text-slate-600" />
+              <span className="text-[10px] font-bold text-slate-700">Trocar</span>
             </Link>
             <Link
               href="/minha-loja/pdv/caixa"
-              className="bg-white hover:bg-slate-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200"
-              title="Caixa"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200"
             >
-              <DollarSign className="w-4 h-4 text-slate-600" />
-              <span className="text-[11px] font-bold text-slate-700">Caixa</span>
+              <DollarSign className="w-3.5 h-3.5 text-slate-600" />
+              <span className="text-[10px] font-bold text-slate-700">Caixa</span>
             </Link>
             <Link
               href="/minha-loja/pdv/recebimentos"
-              className="bg-white hover:bg-rose-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-rose-300"
-              title="Receber crediário"
+              className="bg-white hover:bg-rose-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-rose-300"
             >
-              <Receipt className="w-4 h-4 text-rose-600" />
-              <span className="text-[11px] font-bold text-slate-700">Crediário</span>
+              <Receipt className="w-3.5 h-3.5 text-rose-600" />
+              <span className="text-[10px] font-bold text-slate-700">Crediário</span>
             </Link>
             <button
               onClick={() => setShowSimular(true)}
               disabled={!sale?.total || sale.total <= 0}
-              className="bg-white hover:bg-teal-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-teal-300 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Simular parcelas no cartão"
+              className="bg-white hover:bg-teal-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-teal-300 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <CreditCard className="w-4 h-4 text-teal-600" />
-              <span className="text-[11px] font-bold text-slate-700">Simular</span>
+              <CreditCard className="w-3.5 h-3.5 text-teal-600" />
+              <span className="text-[10px] font-bold text-slate-700">Simular</span>
             </button>
             <Link
               href="/minha-loja"
-              className="relative bg-white hover:bg-violet-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
-              title="Pedidos do site"
+              className="relative bg-white hover:bg-violet-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
             >
-              <Globe className="w-4 h-4 text-violet-600" />
-              <span className="text-[11px] font-bold text-slate-700">Pedidos</span>
+              <Globe className="w-3.5 h-3.5 text-violet-600" />
+              <span className="text-[10px] font-bold text-slate-700">Pedidos</span>
               {pedidosSitePending > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-violet-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5">
                   {pedidosSitePending}
@@ -1241,45 +1272,6 @@ function PdvPageInner() {
             </Link>
           </div>
         </div>
-
-        {/* ─── ALERTAS ───────────────────────────────────────────────────── */}
-        {(openCount > 0 || realignPending > 0) && (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-2">
-            <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-1">
-              Alertas
-            </div>
-            {openCount > 0 && (
-              <button
-                onClick={() => setShowOpenList(true)}
-                className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg px-3 py-2.5 flex items-center justify-between transition"
-                title="Vendas pausadas"
-              >
-                <span className="flex items-center gap-2 text-sm font-bold text-amber-800">
-                  <Pause className="w-4 h-4 text-amber-600" />
-                  Pausadas
-                </span>
-                <span className="bg-amber-500 text-white text-xs font-black rounded-full min-w-[28px] h-7 flex items-center justify-center px-2">
-                  {openCount}
-                </span>
-              </button>
-            )}
-            {realignPending > 0 && (
-              <Link
-                href="/minha-loja/realinhamento"
-                className="w-full bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg px-3 py-2.5 flex items-center justify-between transition"
-                title="Realinhamento pendente"
-              >
-                <span className="flex items-center gap-2 text-sm font-bold text-rose-800">
-                  <Shuffle className="w-4 h-4 text-rose-600" />
-                  Realinhar
-                </span>
-                <span className="bg-rose-500 text-white text-xs font-black rounded-full min-w-[28px] h-7 flex items-center justify-center px-2">
-                  {realignPending}
-                </span>
-              </Link>
-            )}
-          </div>
-        )}
 
       </aside>
 
