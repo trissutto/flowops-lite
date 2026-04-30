@@ -229,6 +229,73 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, []);
 
+  /**
+   * Imprime DIRETO na impressora padrão do Windows, sem preview.
+   *
+   * Estratégia em 2 camadas (mesma lógica do PDV):
+   *  1. Electron desktop → silentPrintUrl() abre hidden window e imprime direto
+   *     na impressora padrão (a Elgin já configurada no Windows). Vendedora não vê nada.
+   *  2. Browser puro → abre o PDF em popup/iframe e dispara window.print() do dialog
+   *     (única forma sem extensão).
+   */
+  const handlePrintRemessa = useCallback(async (shipmentId: string, code: string) => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      if (!token) {
+        alert('Sessão expirada. Faça login novamente.');
+        return;
+      }
+      const { API_URL } = await import('@/lib/api');
+      const r = await fetch(`${API_URL}/api/realignment/shipments/${shipmentId}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error(txt || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      // 1) Tenta Electron silent print (PC com app desktop instalado)
+      const electron = (window as any).electronAPI;
+      if (electron?.silentPrintUrl) {
+        try {
+          await electron.silentPrintUrl(blobUrl);
+          pushToast(`🖨️ Romaneio ${code} enviado pra impressora.`);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+          return;
+        } catch (e) {
+          console.warn('Electron silent print falhou, caindo no popup:', e);
+        }
+      }
+
+      // 2) Fallback browser: abre popup que dispara print()
+      const w = window.open(blobUrl, 'lurds_remessa_print', 'width=900,height=650,resizable=yes');
+      if (!w) {
+        alert(
+          'Popup bloqueado. Habilite popups pra imprimir automático,\n' +
+          'ou clica em "PDF" pra baixar e imprimir manualmente.',
+        );
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+        return;
+      }
+      // Espera carregar e dispara print
+      const tryPrint = () => {
+        try {
+          w.focus();
+          w.print();
+        } catch {
+          // ignora — usuário pode dar Ctrl+P manual
+        }
+      };
+      // PDFs no Chrome às vezes precisam de delay pra renderizar antes do print
+      setTimeout(tryPrint, 800);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      alert(`Erro ao imprimir: ${e?.message || e}`);
+    }
+  }, [pushToast]);
+
   const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
     if (!confirm(`Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças desta remessa. Não pode desfazer.`)) return;
     setClosingShipmentId(shipmentId);
@@ -683,21 +750,33 @@ export default function MinhaLojaRealinhamentoPage() {
                       </div>
                     </div>
                     <div className="flex flex-col gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleDownloadPdf(s.id, s.code)}
-                        disabled={(s.items || []).length === 0}
-                        className="bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-4 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center gap-1.5 disabled:opacity-50"
-                        title="Baixar romaneio em PDF"
-                      >
-                        <FileText className="w-4 h-4" />
-                        PDF
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadPdf(s.id, s.code)}
+                          disabled={(s.items || []).length === 0}
+                          className="flex-1 bg-white hover:bg-amber-100 text-amber-900 border-2 border-amber-400 px-3 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          title="Baixar romaneio em PDF"
+                        >
+                          <FileText className="w-4 h-4" />
+                          PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handlePrintRemessa(s.id, s.code)}
+                          disabled={(s.items || []).length === 0}
+                          className="flex-1 bg-amber-100 hover:bg-amber-200 text-amber-900 border-2 border-amber-400 px-3 py-2 rounded-xl text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          title="Imprimir direto na impressora padrão (silencioso no PC com Electron)"
+                        >
+                          <Printer className="w-4 h-4" />
+                          Imprimir
+                        </button>
+                      </div>
                       <button
                         type="button"
                         onClick={() => handleCloseShipment(s.id, s.code)}
                         disabled={isClosing || (s.items || []).length === 0}
-                        className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center gap-2 disabled:opacity-50"
+                        className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-xl text-sm font-black shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
                       >
                         {isClosing ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
