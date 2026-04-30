@@ -3248,16 +3248,9 @@ function PdvMobilePill({
 }
 
 // ── SIMULADOR DE PARCELAMENTO CARTÃO ──────────────────────────────────
-// Mostra pra cliente quanto fica cada parcela de 1 a 12x. Vendedora pode
-// configurar:
-//   - Limite de parcelas SEM JUROS (default 3x — comum no varejo BR)
-//   - Taxa mensal de juros (default 0% — Tabela Price quando >0)
-//
-// Fórmula com juros (Tabela Price):
-//   pmt = P * (i * (1+i)^n) / ((1+i)^n - 1)
-//   onde P=principal, i=juros mensal decimal, n=parcelas
-//
-// Sem juros: pmt = P / n
+// Mostra pra cliente quanto fica cada parcela de 1× a 12×, SEMPRE SEM JUROS.
+// Vendedora fala em voz alta pra cliente "fica 5× de R$ 31,04". A tela cabe
+// todas as 12 parcelas em grade 2 colunas — sem scroll, sem configuração.
 function SimularParcelasModal({
   total,
   onClose,
@@ -3265,32 +3258,16 @@ function SimularParcelasModal({
   total: number;
   onClose: () => void;
 }) {
-  // Default: 3x sem juros, 0% taxa adicional. Ajustável.
-  const [parcelasSemJuros, setParcelasSemJuros] = useState(3);
-  const [taxaMensalStr, setTaxaMensalStr] = useState('2,99');
-
-  const taxaMensal = (() => {
-    const n = Number(taxaMensalStr.replace(/\./g, '').replace(',', '.'));
-    return isNaN(n) || n < 0 ? 0 : n;
-  })();
-
-  const calcParcela = (n: number): { valor: number; totalPago: number; comJuros: boolean } => {
-    if (n <= 1) return { valor: total, totalPago: total, comJuros: false };
-    if (n <= parcelasSemJuros || taxaMensal === 0) {
-      const valor = total / n;
-      return { valor, totalPago: valor * n, comJuros: false };
-    }
-    // Com juros — Tabela Price
-    const i = taxaMensal / 100;
-    const valor = (total * (i * Math.pow(1 + i, n))) / (Math.pow(1 + i, n) - 1);
-    return { valor, totalPago: valor * n, comJuros: true };
-  };
-
   const parcelas = Array.from({ length: 12 }, (_, idx) => idx + 1);
+  const valorParcela = (n: number) => total / n;
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl w-full max-w-2xl p-5 space-y-4 max-h-[95vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
             <CreditCard className="w-5 h-5" /> Simular parcelamento
@@ -3298,118 +3275,51 @@ function SimularParcelasModal({
           <button onClick={onClose}><X className="w-5 h-5" /></button>
         </div>
 
-        {/* Total da venda */}
+        {/* Total da venda — referência pra cliente */}
         <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-3 flex items-center justify-between">
           <span className="text-xs text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
           <span className="text-3xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
         </div>
 
-        {/* Configuração rápida — sem juros até X + taxa após */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-              Sem juros até
-            </label>
-            <select
-              value={parcelasSemJuros}
-              onChange={(e) => setParcelasSemJuros(Number(e.target.value))}
-              className="w-full px-3 py-2.5 text-base font-bold border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 bg-white"
-            >
-              {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => (
-                <option key={n} value={n}>{n}× sem juros</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-              Juros após (% ao mês)
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                inputMode="decimal"
-                value={taxaMensalStr}
-                onChange={(e) => setTaxaMensalStr(e.target.value)}
-                placeholder="0"
-                className="w-full px-3 py-2.5 pr-9 text-base font-bold tabular-nums text-rose-700 border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400"
-              />
-              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Tabela de parcelas — destaque pro valor pra falar com a cliente */}
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <div className="grid grid-cols-[60px_1fr_120px_80px] gap-2 px-3 py-2 bg-slate-100 text-[10px] uppercase tracking-wider font-bold text-slate-600">
-            <div>Parc.</div>
-            <div>Valor da parcela</div>
-            <div className="text-right">Total pago</div>
-            <div className="text-right">Juros</div>
-          </div>
-          <div className="divide-y divide-slate-100">
-            {parcelas.map((n) => {
-              const p = calcParcela(n);
-              const acrescimo = p.totalPago - total;
-              return (
-                <div
-                  key={n}
-                  className={`grid grid-cols-[60px_1fr_120px_80px] gap-2 px-3 py-2.5 items-center ${
-                    p.comJuros ? 'bg-rose-50/30' : ''
-                  }`}
-                >
-                  <div className="font-black text-base text-slate-900 tabular-nums">
-                    {n}×
-                  </div>
-                  <div>
-                    <div className="font-black text-2xl text-emerald-700 tabular-nums leading-none">
-                      {brl(p.valor)}
-                    </div>
-                    {!p.comJuros && (
-                      <div className="text-[10px] text-emerald-600 font-bold mt-0.5">
-                        SEM JUROS
-                      </div>
-                    )}
-                    {p.comJuros && (
-                      <div className="text-[10px] text-rose-600 font-bold mt-0.5">
-                        COM JUROS · {taxaMensalStr}% a.m.
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right text-sm tabular-nums text-slate-700 font-semibold">
-                    {brl(p.totalPago)}
-                  </div>
-                  <div className="text-right text-xs tabular-nums">
-                    {acrescimo > 0.01 ? (
-                      <span className="text-rose-600 font-bold">+{brl(acrescimo)}</span>
-                    ) : (
-                      <span className="text-emerald-600 font-bold">—</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Atalhos rápidos pra falar pra cliente — copiar texto pronto */}
-        <div className="grid grid-cols-3 gap-2">
-          {[3, 6, 10].map((n) => {
-            const p = calcParcela(n);
+        {/* Grade de TODAS as 12 parcelas — 2 colunas, todas visíveis sem scroll.
+            Clica no card → copia pro clipboard texto pronto pra WhatsApp da cliente. */}
+        <div className="grid grid-cols-2 gap-2">
+          {parcelas.map((n) => {
+            const valor = valorParcela(n);
             return (
               <button
                 key={n}
+                type="button"
                 onClick={() => {
-                  const txt = `${n}× de ${brl(p.valor)}${p.comJuros ? '' : ' SEM JUROS'}`;
+                  const txt = n === 1
+                    ? `À vista R$ ${valor.toFixed(2).replace('.', ',')}`
+                    : `${n}× de R$ ${valor.toFixed(2).replace('.', ',')} sem juros`;
                   navigator.clipboard.writeText(txt).catch(() => {});
                 }}
-                className="px-2 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-lg text-xs font-bold transition leading-tight"
-                title="Copiar pro WhatsApp"
+                title="Clique pra copiar texto pra WhatsApp"
+                className="group relative bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 rounded-xl px-3 py-3 flex items-center gap-3 transition active:scale-[0.98]"
               >
-                <div className="text-[10px] opacity-70">copiar {n}×</div>
-                <div className="font-black text-sm">{brl(p.valor)}</div>
+                {/* Número da parcela em pílula amber */}
+                <div className="w-12 h-12 rounded-xl bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center shrink-0 transition">
+                  <span className="font-black text-lg text-amber-800 tabular-nums">{n}×</span>
+                </div>
+                {/* Valor da parcela em verde gigante */}
+                <div className="flex-1 text-left min-w-0">
+                  <div className="font-black text-2xl text-emerald-700 tabular-nums leading-none truncate">
+                    {brl(valor)}
+                  </div>
+                  <div className="text-[10px] text-emerald-600 font-bold mt-1 tracking-wide">
+                    {n === 1 ? 'À VISTA' : 'SEM JUROS'}
+                  </div>
+                </div>
               </button>
             );
           })}
+        </div>
+
+        {/* Dica pra vendedora */}
+        <div className="text-center text-[11px] text-slate-400 italic">
+          💡 Clique numa parcela pra copiar o texto e colar no WhatsApp da cliente
         </div>
 
         <button
