@@ -677,10 +677,10 @@ function PdvPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f4f1ec] flex flex-col">
-      {/* Header enxuto — só logo + venda + cliente. Fundo creme transparente
-          igual /site, com borda inferior sutil. NÃO contém os action cards. */}
-      <header className="sticky top-0 z-20 bg-[#f4f1ec]/95 backdrop-blur border-b border-slate-200/70">
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-amber-50 to-orange-50 flex flex-col">
+      {/* Header enxuto — só logo + venda + cliente. Fundo translúcido pra
+          deixar o gradiente da página passar. */}
+      <header className="sticky top-0 z-20 bg-rose-50/85 backdrop-blur border-b border-rose-200/60">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
@@ -765,11 +765,14 @@ function PdvPageInner() {
           </div>
         )}
 
-        {/* Input bipagem — compacto. Vendedora bipa rápido sem perder tela */}
+        {/* Input bipagem — ocupa 1/3 da largura. Sobra 2/3 pra QUICK ACTIONS
+            (atalhos contextuais que aparecem só no PDV) — botões de venda
+            rápida, descontos pré-definidos, etc. */}
         {sale?.status === 'open' && (
+          <div className="flex items-stretch gap-3">
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-sm flex items-center gap-2"
+            className="bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-sm flex items-center gap-2 w-full md:w-1/3 shrink-0"
           >
             <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
             <input
@@ -777,20 +780,14 @@ function PdvPageInner() {
               type="text"
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
-              placeholder="Bipe ou digite SKU/EAN · 0 = item manual"
+              placeholder="Bipe SKU/EAN · 0 = manual"
               disabled={scanLoading}
-              className="flex-1 px-2 py-1.5 text-base font-mono font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal placeholder:text-sm tracking-wide text-slate-900"
+              className="flex-1 min-w-0 px-2 py-1.5 text-base font-mono font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal placeholder:text-sm tracking-wide text-slate-900"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
               spellCheck={false}
             />
-            <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0 mr-1">
-              <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded font-mono">F2</kbd>
-              foco
-              <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded font-mono ml-1">F4</kbd>
-              finaliza
-            </div>
             <button
               type="submit"
               disabled={!scanInput || scanLoading}
@@ -800,6 +797,24 @@ function PdvPageInner() {
               {scanLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
             </button>
           </form>
+
+          {/* QUICK ACTIONS — área reservada pra atalhos contextuais futuros.
+              Em desktop ocupa 2/3 ao lado do input de bipe. Vazia por enquanto
+              com placeholder discreto que sugere o uso. */}
+          <div className="hidden md:flex flex-1 items-center gap-2 bg-white/40 backdrop-blur rounded-xl border border-dashed border-slate-300/60 px-4 py-2">
+            <div className="flex items-center gap-2 text-[11px] text-slate-500 font-bold">
+              <kbd className="px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">F2</kbd>
+              foco
+              <kbd className="ml-1 px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">F4</kbd>
+              finaliza
+              <kbd className="ml-1 px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">0</kbd>
+              item manual
+            </div>
+            <div className="ml-auto text-[10px] text-slate-400 italic">
+              espaço pra atalhos rápidos
+            </div>
+          </div>
+          </div>
         )}
 
         {/* Carrinho */}
