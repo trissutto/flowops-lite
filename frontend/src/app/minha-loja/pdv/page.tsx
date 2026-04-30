@@ -1235,6 +1235,39 @@ function PdvPageInner() {
           saleId={sale?.id || null}
           defaultValor={sale?.total && sale.total > 0 ? sale.total : null}
           onClose={() => setShowPixAvulso(false)}
+          onPaid={async ({ valor, txid }) => {
+            // Pagar.me confirmou pagamento → registra como payment da venda
+            // e auto-finaliza se cobrir o total. Se não, deixa parcial e a
+            // vendedora finaliza manualmente depois.
+            if (!sale?.id) return;
+            try {
+              await api(`/pdv/sales/${sale.id}/payments`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  method: 'pix',
+                  valor,
+                  details: { pixTxid: txid, pixChave: 'Pagar.me' },
+                }),
+              });
+              const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+              setSale(fresh);
+              const totalPago = (fresh.payments || []).reduce((s, p) => s + (p.valor || 0), 0);
+              if (Math.abs(totalPago - fresh.total) < 0.01) {
+                // Cobriu o total: dispara auto-flow (imprime + abre nova venda)
+                autoFlowRef.current = true;
+                finalizeSale('');
+              } else {
+                toast(
+                  'info',
+                  'Pagamento parcial registrado',
+                  `Falta ${brl(Math.max(0, fresh.total - totalPago))} pra fechar`,
+                );
+              }
+            } catch (e: any) {
+              const h = humanizeError(e);
+              toast('error', `Erro ao registrar pagamento: ${h.title}`, h.hint);
+            }
+          }}
         />
       )}
     </div>
@@ -2733,17 +2766,23 @@ function BigQuickActionLink({
 }
 
 // ── PIX AVULSO MODAL ──────────────────────────────────────────────────
-// Cobrança PIX sem precisar criar venda no PDV. Útil pra cobrar cliente
-// avulso (entrada, sinal, etc). Usa o próprio endpoint pix-charge da
-// venda atual — se não houver, mostra mensagem.
+// Cobrança PIX rápida da venda atual. Gera QR via Pagar.me/Stone e faz
+// polling no /pagarme/pix/status/:saleId pra detectar pagamento confirmado
+// SEM precisar a vendedora apertar "Recebi". Quando paid:
+//   - Mostra tela "RECEBIDO!"
+//   - Chama onPaid → parent registra pagamento + finaliza venda
+//   - Auto-fecha em 1.5s
 function PixAvulsoModal({
   saleId,
   defaultValor,
   onClose,
+  onPaid,
 }: {
   saleId: string | null;
   defaultValor?: number | null;
   onClose: () => void;
+  /** Callback chamado quando webhook/polling confirma pagamento */
+  onPaid?: (data: { valor: number; txid: string }) => void;
 }) {
   const { toast } = usePdvToast();
   // Pré-popula com o total da venda atual (se houver itens) — evita digitar
@@ -2754,8 +2793,9 @@ function PixAvulsoModal({
       : '',
   );
   const [loading, setLoading] = useState(false);
-  const [qr, setQr] = useState<{ qrImage?: string; brcode?: string } | null>(null);
+  const [qr, setQr] = useState<{ qrImage?: string; brcode?: string; txid?: string; valor?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paid, setPaid] = useState(false);
 
   async function gerar() {
     setError(null);
@@ -2771,20 +2811,57 @@ function PixAvulsoModal({
     setLoading(true);
     try {
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
-      // Backend retorna { qrCodeDataUrl, payload, ... } — mapeia pros nomes do front.
+      // Backend retorna { qrCodeDataUrl, payload, txid, valor, ... } — mapeia pros nomes do front.
       const qrImage = r?.qrCodeDataUrl || r?.qrImage;
       const brcode = r?.payload || r?.brcode;
+      const txid = r?.txid;
+      const valorBack = typeof r?.valor === 'number' ? r.valor : v;
       if (!qrImage && !brcode) {
         setError('Backend não retornou QR/payload. Verifique config PIX em /config/pagarme ou /config/pagbank.');
         return;
       }
-      setQr({ qrImage, brcode });
+      setQr({ qrImage, brcode, txid, valor: valorBack });
     } catch (e: any) {
       setError(e?.message || 'Falha ao gerar PIX');
     } finally {
       setLoading(false);
     }
   }
+
+  // ── POLLING DE CONFIRMAÇÃO PAGAR.ME ──
+  // A cada 1s pergunta /pagarme/pix/status/:saleId. O backend já consulta
+  // ao vivo na Pagar.me se o status local ainda for pending — então não
+  // depende do webhook. Quando paid, dispara onPaid + auto-fecha.
+  useEffect(() => {
+    if (!qr || paid || !saleId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await api<{ found?: boolean; status: string; isPaid?: boolean }>(
+          `/pagarme/pix/status/${saleId}`,
+        );
+        if (cancelled) return;
+        if (r.isPaid || r.status === 'paid') {
+          setPaid(true);
+          toast('success', 'PIX RECEBIDO!', `${brl(qr.valor || 0)} confirmado pelo banco`);
+          if (qr.txid && qr.valor) {
+            onPaid?.({ valor: qr.valor, txid: qr.txid });
+          }
+          // Auto-fecha em 1.8s pra dar tempo da vendedora ver o feedback
+          setTimeout(() => onClose(), 1800);
+        }
+      } catch {
+        // silencioso — tenta de novo no próximo tick
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qr, paid, saleId]);
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
@@ -2830,12 +2907,43 @@ function PixAvulsoModal({
           </>
         )}
 
-        {qr && (
+        {/* TELA SUCESSO: PIX confirmado pelo Pagar.me */}
+        {qr && paid && (
+          <div className="text-center space-y-4 py-6">
+            <div className="w-24 h-24 mx-auto rounded-full bg-emerald-500 flex items-center justify-center shadow-xl shadow-emerald-300/60 animate-pulse">
+              <Check className="w-14 h-14 text-white" strokeWidth={3} />
+            </div>
+            <div>
+              <div className="text-3xl font-black text-emerald-600 tracking-tight">RECEBIDO!</div>
+              <div className="text-base text-slate-700 mt-1 font-bold tabular-nums">
+                {brl(qr.valor || 0)}
+              </div>
+              <div className="text-xs text-slate-500 mt-1">Confirmado pelo banco</div>
+            </div>
+            <div className="text-xs text-slate-400 italic flex items-center justify-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" /> Finalizando venda…
+            </div>
+          </div>
+        )}
+
+        {/* TELA QR (aguardando pagamento) */}
+        {qr && !paid && (
           <div className="text-center space-y-3">
             {qr.qrImage && (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={qr.qrImage} alt="QR PIX" className="w-56 h-56 mx-auto border rounded-lg" />
             )}
+            {/* Indicador de aguardando — conforto visual pra vendedora ver que o sistema TÁ MONITORANDO */}
+            <div className="flex items-center justify-center gap-2 text-sm font-bold text-emerald-700">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              </span>
+              Aguardando pagamento…
+            </div>
+            <div className="text-[11px] text-slate-500">
+              A confirmação aparece automática quando o cliente pagar
+            </div>
             {qr.brcode && (
               <div>
                 <div className="text-xs text-slate-500 mb-1">Copia e Cola</div>
