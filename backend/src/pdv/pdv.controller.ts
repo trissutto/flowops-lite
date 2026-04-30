@@ -651,4 +651,24 @@ export class PdvController {
       res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF', detail: e?.message });
     }
   }
+
+  /**
+   * GET /pdv/regua-calibracao — RÉGUA pra calibrar coordenadas da promissória.
+   * Imprime em folha BRANCA, sobrepõe na pré-impressa contra a janela e
+   * reporta em que Y caem cada label do form.
+   */
+  @Get('regua-calibracao')
+  async getReguaCalibracao(@Req() req: any, @Res() res: Response) {
+    this.requireRole(req);
+    try {
+      const { buffer, filename } = await this.crediarioPrint.generateRegua();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[pdv/regua-calibracao] FALHA', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro ao gerar régua' });
+    }
+  }
 }

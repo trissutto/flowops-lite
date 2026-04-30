@@ -44,11 +44,13 @@ export class CrediarioPrintService {
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's
   // ═══════════════════════════════════════════════════════════════════════
 
-  // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~280pt.
+  // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~265pt.
+  // CALIBRAÇÃO V3: blocos não são uniformes 280pt. Form pré-impresso
+  // tem blocos mais juntos (~258pt entre topos). Bloco 0 começa em 22.
   private readonly PROM = {
     // Y do TOPO de cada um dos 3 blocos
-    blocoY: [25, 305, 585],
-    blocoH: 280,
+    blocoY: [22, 280, 540],
+    blocoH: 258,
     // Offset dos campos DENTRO de cada bloco (relativo ao topo do bloco).
     // CALIBRAÇÃO V2 — baseada na impressão real (todos os campos estavam
     // deslocados ~30-50pt para baixo). Comprimi os dy pra caber em 280pt
@@ -540,6 +542,54 @@ export class CrediarioPrintService {
       }
     });
     return { buffer, filename: `credprint-${saleId.slice(-6)}.pdf` };
+  }
+
+  /**
+   * RÉGUA DE CALIBRAÇÃO — gera A4 com linhas horizontais a cada 10pt e
+   * linhas verticais a cada 50pt. O usuário imprime numa folha branca,
+   * sobrepõe na promissória pré-impressa contra a janela e me diz em
+   * que Y caem os labels do form. Aí ajustamos as constantes com precisão.
+   */
+  async generateRegua(): Promise<{ buffer: Buffer; filename: string }> {
+    const buffer = await new Promise<Buffer>((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ size: 'A4', margin: 0 });
+        const chunks: Buffer[] = [];
+        doc.on('data', (c: Buffer) => chunks.push(c));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        // Linhas horizontais a cada 10pt + label do Y
+        doc.fontSize(7).font('Helvetica');
+        for (let y = 0; y <= 842; y += 10) {
+          const isMajor = y % 50 === 0;
+          doc.lineWidth(isMajor ? 0.5 : 0.2)
+            .strokeColor(isMajor ? '#FF0000' : '#999999')
+            .moveTo(0, y).lineTo(595, y).stroke();
+          if (isMajor) {
+            doc.fillColor('#FF0000').text(`Y=${y}`, 4, y + 1, { lineBreak: false });
+            doc.fillColor('#FF0000').text(`Y=${y}`, 560, y + 1, { lineBreak: false });
+          }
+        }
+        // Linhas verticais a cada 50pt
+        for (let x = 0; x <= 595; x += 50) {
+          doc.lineWidth(0.3).strokeColor('#0000FF')
+            .moveTo(x, 0).lineTo(x, 842).stroke();
+          doc.fillColor('#0000FF').text(`X=${x}`, x + 1, 4, { lineBreak: false });
+        }
+        // Marcadores dos blocoY atuais
+        for (let i = 0; i < this.PROM.blocoY.length; i++) {
+          const y = this.PROM.blocoY[i];
+          doc.lineWidth(1.5).strokeColor('#00AA00')
+            .moveTo(0, y).lineTo(595, y).stroke();
+          doc.fillColor('#00AA00').fontSize(10)
+            .text(`BLOCO ${i + 1} - Y=${y}`, 220, y - 12, { lineBreak: false });
+        }
+
+        doc.end();
+      } catch (e) { reject(e); }
+    });
+    return { buffer, filename: 'regua-calibracao.pdf' };
   }
 
   /** Helper pra desenhar texto em coordenada absoluta (x, y_relativo + bloco_top) */
