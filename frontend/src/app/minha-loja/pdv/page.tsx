@@ -878,24 +878,35 @@ function PdvPageInner() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-lg border overflow-hidden">
-            {/* Seletor de campanha — COLAPSADO por padrão pra economizar vertical.
-                Mostra só linha resumo. Clique expande os 3 botões. */}
-            <button
-              type="button"
-              onClick={() => setPromoExpanded((v) => !v)}
-              className="w-full px-3 py-2 bg-fuchsia-50/50 border-b border-fuchsia-100 flex items-center justify-between gap-2 hover:bg-fuchsia-50 transition"
-            >
-              <div className="flex items-center gap-2 text-[11px] font-bold text-fuchsia-800">
-                <span>🎁</span>
-                <span className="uppercase tracking-wider">Campanha:</span>
-                <span className="font-black">
-                  {sale.activePromotion === 'YEAR_BASED' ? 'Por ano' :
-                   sale.activePromotion === 'FOUR_FOR_THREE' ? '4 LEVA 3' :
-                   <span className="text-slate-500 font-medium">Nenhuma</span>}
-                </span>
-              </div>
-              <ChevronRight className={`w-3.5 h-3.5 text-fuchsia-700 transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
-            </button>
+            {/* Seletor de campanha — só aparece se TEM campanha ativa OU foi
+                expandido explicitamente. Quando "Nenhuma", mostra só botão sutil
+                pra ativar (não polui a tela quando não tá em uso). */}
+            {(sale.activePromotion || promoExpanded) ? (
+              <button
+                type="button"
+                onClick={() => setPromoExpanded((v) => !v)}
+                className="w-full px-3 py-2 bg-fuchsia-50/50 border-b border-fuchsia-100 flex items-center justify-between gap-2 hover:bg-fuchsia-50 transition"
+              >
+                <div className="flex items-center gap-2 text-[11px] font-bold text-fuchsia-800">
+                  <span>🎁</span>
+                  <span className="uppercase tracking-wider">Campanha:</span>
+                  <span className="font-black">
+                    {sale.activePromotion === 'YEAR_BASED' ? 'Por ano' :
+                     sale.activePromotion === 'FOUR_FOR_THREE' ? '4 LEVA 3' :
+                     <span className="text-slate-500 font-medium">Nenhuma</span>}
+                  </span>
+                </div>
+                <ChevronRight className={`w-3.5 h-3.5 text-fuchsia-700 transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setPromoExpanded(true)}
+                className="w-full px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 hover:text-fuchsia-700 hover:bg-fuchsia-50/50 transition flex items-center justify-center gap-1.5"
+              >
+                🎁 <span>Aplicar campanha promocional</span>
+              </button>
+            )}
             {promoExpanded && (
             <div className="px-3 py-2 bg-fuchsia-50/30 border-b border-fuchsia-100">
               <div className="grid grid-cols-3 gap-1.5">
@@ -1198,6 +1209,36 @@ function PdvPageInner() {
               <DollarSign className="w-4 h-4 text-slate-600" />
               <span className="text-[11px] font-bold text-slate-700">Caixa</span>
             </Link>
+            <Link
+              href="/minha-loja/pdv/recebimentos"
+              className="bg-white hover:bg-rose-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-rose-300"
+              title="Receber crediário"
+            >
+              <Receipt className="w-4 h-4 text-rose-600" />
+              <span className="text-[11px] font-bold text-slate-700">Crediário</span>
+            </Link>
+            <button
+              onClick={() => setShowSimular(true)}
+              disabled={!sale?.total || sale.total <= 0}
+              className="bg-white hover:bg-teal-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-teal-300 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Simular parcelas no cartão"
+            >
+              <CreditCard className="w-4 h-4 text-teal-600" />
+              <span className="text-[11px] font-bold text-slate-700">Simular</span>
+            </button>
+            <Link
+              href="/minha-loja"
+              className="relative bg-white hover:bg-violet-50 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
+              title="Pedidos do site"
+            >
+              <Globe className="w-4 h-4 text-violet-600" />
+              <span className="text-[11px] font-bold text-slate-700">Pedidos</span>
+              {pedidosSitePending > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-violet-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5">
+                  {pedidosSitePending}
+                </span>
+              )}
+            </Link>
           </div>
         </div>
 
@@ -1239,40 +1280,6 @@ function PdvPageInner() {
             )}
           </div>
         )}
-
-        {/* ─── EXTRAS (Receber Crediário, Simular, Pedido Site) ─────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-1.5">
-          <div className="text-xs font-black uppercase tracking-wider text-violet-700 mb-2">
-            Outras ações
-          </div>
-          <PdvSidebarCard
-            tone="rose"
-            href="/minha-loja/pdv/recebimentos"
-            icon={Receipt}
-            subtitle=""
-            label="Receber Crediário"
-            compact
-          />
-          <PdvSidebarCard
-            tone="teal"
-            onClick={() => setShowSimular(true)}
-            disabled={!sale?.total || sale.total <= 0}
-            icon={CreditCard}
-            subtitle=""
-            label="Simular Cartão"
-            compact
-          />
-          <PdvSidebarCard
-            tone="slate"
-            href="/minha-loja"
-            icon={Globe}
-            subtitle=""
-            label="Pedido Site"
-            badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
-            pulse={pedidosSitePending > 0}
-            compact
-          />
-        </div>
 
       </aside>
 
