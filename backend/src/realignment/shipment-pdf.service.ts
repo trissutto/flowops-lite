@@ -175,57 +175,80 @@ export class ShipmentPdfService {
         doc.moveDown(0.3);
 
         const tableTop = doc.y;
+        // Larguras redistribuídas: dá MUITO mais espaço pra DESCRIÇÃO (290px)
+        // que era 160 e quebrava 2-3 linhas. Coluna COR enxugada de 130 → 80
+        // (cores típicas: MARINHO, BEGE, ESTAMPA VERDE — caem em 80 com ellipsis).
         const cols = [
-          { label: '#', x: 40, width: 25 },
-          { label: 'REF', x: 65, width: 110 },
-          { label: 'COR', x: 175, width: 130 },
-          { label: 'TAM', x: 305, width: 50 },
-          { label: 'QTY', x: 355, width: 40 },
-          { label: 'DESCRIÇÃO', x: 395, width: 160 },
+          { label: '#',          x: 40,  width: 25  },
+          { label: 'REF',        x: 65,  width: 60  },
+          { label: 'COR',        x: 125, width: 90  },
+          { label: 'TAM',        x: 215, width: 35  },
+          { label: 'QTY',        x: 250, width: 30  },
+          { label: 'DESCRIÇÃO',  x: 280, width: 275 },
         ];
 
         // Cabeçalho
         doc.rect(40, tableTop, doc.page.width - 80, 18).fill('#fef3c7');
         doc.fillColor('#5e3823').fontSize(9).font('Helvetica-Bold');
         for (const c of cols) {
-          doc.text(c.label, c.x + 3, tableTop + 5, { width: c.width });
+          doc.text(c.label, c.x + 3, tableTop + 5, { width: c.width, lineBreak: false });
         }
         doc.y = tableTop + 18;
 
         let totalQty = 0;
-        doc.font('Helvetica').fontSize(9).fillColor('#222');
         items.forEach((it: any, idx: number) => {
-          const y = doc.y;
-          // Quebra de página se passar do final
-          if (y > doc.page.height - 100) {
+          // Calcula altura dinâmica baseado na DESCRIÇÃO (coluna mais comprida).
+          // Outras colunas têm conteúdo curto (REF, COR, TAM, QTY) e ficam centralizadas
+          // verticalmente dentro da row. RowHeight = max(16, alturaDescr + 6) pra padding.
+          doc.font('Helvetica').fontSize(9);
+          const descText = String(it.descricao || '—');
+          const descHeight = doc.heightOfString(descText, {
+            width: cols[5].width - 6,
+          });
+          const rowHeight = Math.max(16, descHeight + 6);
+
+          // Quebra de página se a row próxima passar do limite
+          if (doc.y + rowHeight > doc.page.height - 100) {
             doc.addPage();
             doc.y = 50;
+            // Re-renderiza cabeçalho da tabela na nova página
+            const newTop = doc.y;
+            doc.rect(40, newTop, doc.page.width - 80, 18).fill('#fef3c7');
+            doc.fillColor('#5e3823').fontSize(9).font('Helvetica-Bold');
+            for (const c of cols) {
+              doc.text(c.label, c.x + 3, newTop + 5, { width: c.width, lineBreak: false });
+            }
+            doc.y = newTop + 18;
           }
+
           const rowY = doc.y;
           // Zebra
           if (idx % 2 === 1) {
-            doc.rect(40, rowY, doc.page.width - 80, 16).fill('#fafafa');
-            doc.fillColor('#222');
+            doc.rect(40, rowY, doc.page.width - 80, rowHeight).fill('#fafafa');
           }
-          doc.text(String(idx + 1), cols[0].x + 3, rowY + 4, { width: cols[0].width });
-          doc.text(it.refCode || '—', cols[1].x + 3, rowY + 4, { width: cols[1].width });
+          doc.fillColor('#222').font('Helvetica').fontSize(9);
+          doc.text(String(idx + 1), cols[0].x + 3, rowY + 4, { width: cols[0].width, lineBreak: false });
+          doc.text(it.refCode || '—', cols[1].x + 3, rowY + 4, { width: cols[1].width, lineBreak: false });
           doc.text(it.cor || '—', cols[2].x + 3, rowY + 4, {
             width: cols[2].width,
             ellipsis: true,
             lineBreak: false,
           });
-          doc.text(it.tamanho || '—', cols[3].x + 3, rowY + 4, { width: cols[3].width });
+          doc.text(it.tamanho || '—', cols[3].x + 3, rowY + 4, { width: cols[3].width, lineBreak: false });
           doc
             .font('Helvetica-Bold')
-            .text(String(it.qtyOrigem || 1), cols[4].x + 3, rowY + 4, { width: cols[4].width });
-          doc
-            .font('Helvetica')
-            .text(it.descricao || '—', cols[5].x + 3, rowY + 4, {
-              width: cols[5].width,
-              ellipsis: true,
+            .text(String(it.qtyOrigem || 1), cols[4].x + 3, rowY + 4, {
+              width: cols[4].width,
               lineBreak: false,
             });
-          doc.y = rowY + 16;
+          // DESCRIÇÃO — quebra em múltiplas linhas dentro da própria célula
+          doc
+            .font('Helvetica')
+            .text(descText, cols[5].x + 3, rowY + 4, {
+              width: cols[5].width - 6,
+            });
+
+          doc.y = rowY + rowHeight;
           totalQty += Number(it.qtyOrigem) || 1;
         });
 
