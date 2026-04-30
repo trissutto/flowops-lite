@@ -24,6 +24,7 @@ import {
   Receipt, Globe, Shuffle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 
 type Sale = {
   id: string;
@@ -171,6 +172,15 @@ function calcularParcelas(total: number, n: number): {
 }
 
 export default function PdvPage() {
+  return (
+    <PdvToastProvider>
+      <PdvPageInner />
+    </PdvToastProvider>
+  );
+}
+
+function PdvPageInner() {
+  const { toast } = usePdvToast();
   const [stores, setStores] = useState<Store[]>([]);
   const [storeCode, setStoreCode] = useState<string>('');
   const [sale, setSale] = useState<Sale | null>(null);
@@ -270,11 +280,37 @@ export default function PdvPage() {
     }
   }, [sale, showCustomer, showPayment, showFinalized]);
 
-  // Listener global: qualquer tecla redireciona pro input
+  // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
     if (showCustomer || showPayment || showFinalized) return;
     const handler = (e: KeyboardEvent) => {
+      // ── ATALHOS GLOBAIS (funcionam mesmo com input em foco) ──
+      // F2 → foca o input de bipagem
+      if (e.key === 'F2') {
+        e.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        return;
+      }
+      // F4 → finalizar venda (se carrinho tem itens)
+      if (e.key === 'F4') {
+        e.preventDefault();
+        if (sale.items?.length > 0 && sale.total > 0) {
+          setShowPayment(true);
+        }
+        return;
+      }
+      // ESC → cancelar venda só quando carrinho VAZIO (segurança)
+      if (e.key === 'Escape') {
+        if (sale.items?.length === 0) {
+          // Carrinho vazio: ESC é atalho seguro pra "limpar/sair"
+          // (não chama cancelSale aqui pra evitar perder venda em digitação)
+        }
+        return;
+      }
+
+      // ── Auto-focus em qualquer tecla quando NADA estiver focado ──
       const active = document.activeElement;
       if (
         active &&
@@ -332,7 +368,8 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -347,7 +384,8 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -362,7 +400,8 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -424,7 +463,7 @@ export default function PdvPage() {
     try {
       const s = await api<Sale>(`/pdv/sales/${saleId}`);
       if (s.status !== 'open') {
-        alert('Essa venda não está mais aberta');
+        toast('warning', 'Venda não está mais aberta', 'Pode ter sido finalizada ou cancelada');
         return;
       }
       setSale(s);
@@ -433,7 +472,8 @@ export default function PdvPage() {
       } catch { /* noop */ }
       setShowOpenList(false);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -444,7 +484,8 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -459,8 +500,10 @@ export default function PdvPage() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowCustomer(false);
+      toast('success', 'Cliente identificado', data.name || data.cpf);
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -475,8 +518,10 @@ export default function PdvPage() {
       });
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
       createNewSale();
+      toast('info', 'Venda cancelada', 'Carrinho limpo — pronta pra próxima');
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -542,7 +587,8 @@ export default function PdvPage() {
         }, 1500);
       }
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     } finally {
       setFinalizing(false);
     }
@@ -782,33 +828,36 @@ export default function PdvPage() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-3xl mx-auto w-full p-3 space-y-3 pb-32">
+      <main className="flex-1 max-w-4xl mx-auto w-full p-3 space-y-3 pb-44">
         {error && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded text-sm flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{error}</span>
+          <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
+            <div>
+              <div className="font-bold">{error.includes('não encontrad') ? 'Produto não encontrado' : 'Algo deu errado'}</div>
+              <div className="text-xs mt-0.5 text-rose-700">{error}</div>
+            </div>
           </div>
         )}
 
-        {/* Input bipagem — destaque rosa */}
+        {/* Input bipagem HERO — área central de foco máximo */}
         {sale?.status === 'open' && (
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-2xl border-2 border-rose-300 p-3 shadow-md ring-4 ring-rose-100/50"
+            className="bg-white rounded-2xl border-4 border-rose-400 p-5 shadow-xl ring-8 ring-rose-100/40"
           >
-            <label className="text-xs uppercase font-bold text-rose-700 flex items-center gap-1.5 mb-2 tracking-wide">
-              <Barcode className="w-3.5 h-3.5" />
-              Bipe o produto
+            <label className="text-xs uppercase font-black text-rose-700 flex items-center gap-2 mb-3 tracking-widest">
+              <Barcode className="w-4 h-4" />
+              Bipe o produto · ou digite SKU/EAN
             </label>
-            <div className="flex gap-2">
+            <div className="flex gap-3">
               <input
                 ref={inputRef}
                 type="text"
                 value={scanInput}
                 onChange={(e) => setScanInput(e.target.value)}
-                placeholder="SKU ou EAN13"
+                placeholder="SKU OU EAN13"
                 disabled={scanLoading}
-                className="flex-1 px-4 py-3.5 text-xl font-mono font-bold border-2 border-rose-200 rounded-xl focus:outline-none focus:ring-4 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 placeholder:text-rose-200 placeholder:font-normal"
+                className="flex-1 px-5 py-5 text-3xl sm:text-4xl font-mono font-black border-2 border-rose-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-rose-300 focus:border-rose-500 disabled:bg-slate-50 placeholder:text-rose-200 placeholder:font-normal placeholder:text-2xl tracking-widest"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -817,10 +866,18 @@ export default function PdvPage() {
               <button
                 type="submit"
                 disabled={!scanInput || scanLoading}
-                className="px-5 py-3.5 bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-bold rounded-xl flex items-center disabled:opacity-40 shadow-md shadow-rose-200 transition"
+                className="px-7 py-5 bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-black rounded-2xl flex items-center disabled:opacity-40 shadow-lg shadow-rose-300 transition"
               >
-                {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
+                {scanLoading ? <Loader2 className="w-7 h-7 animate-spin" /> : <ArrowRight className="w-7 h-7" />}
               </button>
+            </div>
+            <div className="mt-2 text-[10px] text-slate-400 flex items-center gap-3">
+              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">Enter</kbd>
+              adiciona ·
+              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">F4</kbd>
+              finaliza ·
+              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">Esc</kbd>
+              cancela
             </div>
           </form>
         )}
@@ -955,33 +1012,33 @@ export default function PdvPage() {
                     )}
                   </div>
 
-                  {/* QTD — controles +/- com número no meio */}
-                  <div className="flex items-center justify-center gap-1">
+                  {/* QTD — botões 36px (mais fáceis de clicar no balcão) */}
+                  <div className="flex items-center justify-center gap-1.5">
                     <button
                       onClick={() => updateItem(it.id, { qty: it.qty - 1 })}
                       disabled={it.qty <= 1 || sale.status !== 'open'}
-                      className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center disabled:opacity-30"
+                      className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-rose-100 hover:text-rose-700 active:scale-95 flex items-center justify-center disabled:opacity-30 transition"
                     >
-                      <Minus className="w-3 h-3" />
+                      <Minus className="w-4 h-4" />
                     </button>
-                    <span className="w-8 text-center font-bold tabular-nums text-sm">{it.qty}</span>
+                    <span className="w-9 text-center font-black tabular-nums text-lg text-slate-900">{it.qty}</span>
                     <button
                       onClick={() => updateItem(it.id, { qty: it.qty + 1 })}
                       disabled={sale.status !== 'open'}
-                      className="w-7 h-7 rounded bg-slate-100 hover:bg-slate-200 flex items-center justify-center disabled:opacity-30"
+                      className="w-9 h-9 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 active:scale-95 flex items-center justify-center disabled:opacity-30 transition"
                     >
-                      <Plus className="w-3 h-3" />
+                      <Plus className="w-4 h-4" />
                     </button>
                   </div>
 
                   {/* VAL UNITÁRIO */}
-                  <div className="text-right text-sm tabular-nums text-slate-700">
+                  <div className="text-right text-sm tabular-nums text-slate-700 font-semibold">
                     {brl(it.precoUnit)}
                   </div>
 
-                  {/* VAL TOTAL — com strikethrough do bruto se tem desconto */}
+                  {/* VAL TOTAL — verde forte, fonte grande */}
                   <div className="text-right">
-                    <div className="font-bold text-emerald-700 tabular-nums text-sm">{brl(it.total)}</div>
+                    <div className="font-black text-emerald-700 tabular-nums text-base">{brl(it.total)}</div>
                     {it.desconto > 0 && (
                       <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
                     )}
@@ -1001,7 +1058,7 @@ export default function PdvPage() {
                           if (v == null) return;
                           const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
                           if (isNaN(n) || n < 0) {
-                            alert('Valor inválido');
+                            toast('error', 'Valor inválido', 'Use só números (ex: 5,00)');
                             return;
                           }
                           updateItem(it.id, { desconto: n });
@@ -1026,38 +1083,56 @@ export default function PdvPage() {
             </div>
           </div>
         ) : sale?.status === 'open' ? (
-          <div className="text-center py-10 text-slate-400 bg-white rounded-lg border-2 border-dashed">
-            <ShoppingCart className="w-10 h-10 inline-block mb-2 opacity-50" />
-            <div className="text-sm">Carrinho vazio · bipe o primeiro produto</div>
+          <div className="text-center py-16 px-6 bg-white rounded-2xl border-2 border-dashed border-slate-200">
+            <div className="w-20 h-20 mx-auto rounded-full bg-rose-50 border-2 border-rose-200 flex items-center justify-center mb-4">
+              <ShoppingCart className="w-10 h-10 text-rose-400" />
+            </div>
+            <div className="text-lg font-bold text-slate-700 mb-1">Carrinho vazio</div>
+            <div className="text-sm text-slate-500">
+              Bipe o primeiro produto pra começar a venda
+            </div>
+            <div className="mt-4 inline-flex items-center gap-2 text-xs text-slate-400">
+              <kbd className="px-2 py-1 bg-slate-100 border border-slate-200 rounded font-mono">F2</kbd>
+              foca o leitor de código
+            </div>
           </div>
         ) : null}
       </main>
 
-      {/* Footer fixo: total + finalizar */}
+      {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t shadow-lg z-10">
-          <div className="max-w-3xl mx-auto px-3 py-2">
+        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-2xl z-10">
+          <div className="max-w-4xl mx-auto px-4 py-3">
+            {/* Linha de detalhamento: subtotal + desconto + economia */}
             {sale.desconto > 0 && (
-              <div className="flex items-center justify-between text-xs text-slate-500 mb-1 px-1">
-                <span>Subtotal</span>
-                <span className="tabular-nums">{brl(sale.subtotal)}</span>
+              <div className="flex items-center justify-between gap-4 text-xs mb-2 px-1 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <span className="text-slate-500">
+                    Subtotal <span className="tabular-nums font-semibold text-slate-700 ml-1">{brl(sale.subtotal)}</span>
+                  </span>
+                  <span className="text-emerald-700 font-bold flex items-center gap-1">
+                    🎁 Economia <span className="tabular-nums">−{brl(sale.desconto)}</span>
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-400">
+                  {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
+                </span>
               </div>
             )}
-            {sale.desconto > 0 && (
-              <div className="flex items-center justify-between text-xs text-emerald-700 mb-1 px-1 font-semibold">
-                <span>🎁 Você economizou</span>
-                <span className="tabular-nums">−{brl(sale.desconto)}</span>
-              </div>
-            )}
-            <div className="flex items-center gap-2">
+
+            {/* Linha principal: ações + TOTAL grande + FINALIZAR */}
+            <div className="flex items-center gap-3">
+              {/* Cancelar (sutil, vermelho discreto) */}
               <button
                 onClick={cancelSale}
-                className="px-3 py-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold rounded-lg flex items-center gap-1.5 text-sm"
-                title="Cancelar venda"
+                className="px-3 py-3 bg-white hover:bg-rose-50 border-2 border-rose-200 text-rose-700 font-bold rounded-xl flex items-center gap-1.5 text-sm transition"
+                title="Cancelar venda (limpa o carrinho)"
               >
-                <X className="w-4 h-4" />
-                <span className="hidden sm:inline">Cancelar</span>
+                <X className="w-5 h-5" />
+                <span className="hidden md:inline">Cancelar</span>
               </button>
+
+              {/* Desconto (sutil, âmbar) */}
               <button
                 onClick={() => {
                   const subtotalLiquido = sale.items.reduce((s, i) => s + i.total, 0);
@@ -1069,30 +1144,36 @@ export default function PdvPage() {
                   if (v == null) return;
                   const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
                   if (isNaN(n) || n < 0) {
-                    alert('Valor inválido');
+                    toast('error', 'Valor inválido', 'Use só números (ex: 5,00)');
                     return;
                   }
                   setSaleDiscount(n);
                 }}
-                className="px-3 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-bold rounded-lg flex items-center gap-1.5 text-sm"
+                className="px-3 py-3 bg-white hover:bg-amber-50 border-2 border-amber-200 text-amber-800 font-bold rounded-xl flex items-center gap-1.5 text-sm transition"
                 title="Aplicar desconto na venda inteira"
               >
-                <Percent className="w-4 h-4" />
-                <span className="hidden sm:inline">Desconto</span>
+                <Percent className="w-5 h-5" />
+                <span className="hidden md:inline">Desconto</span>
               </button>
-              <div className="flex-1">
-                <div className="text-[10px] text-slate-500 uppercase">Total</div>
-                <div className="text-2xl font-bold text-emerald-700 tabular-nums leading-none">
+
+              {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
+              <div className="flex-1 px-4">
+                <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
+                <div className="text-4xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1">
                   {brl(sale.total)}
                 </div>
               </div>
+
+              {/* FINALIZAR — botão verde gigante */}
               <button
                 onClick={() => setShowPayment(true)}
                 disabled={!sale.items?.length || sale.total <= 0}
-                className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg flex items-center gap-2 disabled:opacity-40"
+                className="px-6 sm:px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-lg shadow-emerald-300 transition"
+                title="Finalizar venda (F4)"
               >
-                <Check className="w-5 h-5" />
+                <Check className="w-6 h-6" />
                 Finalizar
+                <kbd className="hidden lg:inline-block ml-1 px-1.5 py-0.5 bg-white/20 text-white/90 text-[10px] font-mono rounded">F4</kbd>
               </button>
             </div>
           </div>
@@ -1254,6 +1335,7 @@ function PaymentModal({
   /** Sinaliza pro parent que entrou em fluxo automático (PIX confirmado) */
   onAutoFlowTriggered?: () => void;
 }) {
+  const { toast } = usePdvToast();
   // Lista de pagamentos parciais já adicionados
   const [payments, setPayments] = useState(initialPayments || []);
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
@@ -1295,27 +1377,27 @@ function PaymentModal({
     if (!selected) return;
     const valor = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.'));
     if (isNaN(valor) || valor <= 0) {
-      alert('Valor inválido');
+      toast('error', 'Valor inválido', 'Use só números (ex: 50,00)');
       return;
     }
     if (valor > restante + 0.01) {
-      alert(`Valor maior que o restante (${brl(restante)})`);
+      toast('warning', 'Valor maior que o restante', `Falta apenas ${brl(restante)} pra fechar a venda`);
       return;
     }
     if (selected === 'crediario' && !customerCpf) {
-      alert('Crediário exige CPF do cliente');
+      toast('warning', 'Crediário exige CPF', 'Identifique o cliente antes de fechar no crediário');
       return;
     }
     if (needsBandeira && !bandeira) {
-      alert('Escolha a bandeira');
+      toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
     }
     if (selected === 'pix' && !pixCharge) {
-      alert('Aguarde o QR PIX ser gerado');
+      toast('info', 'Gerando QR PIX', 'Aguarde alguns segundos');
       return;
     }
     if (selected === 'dinheiro' && recebidoNum > 0 && recebidoNum < valor) {
-      alert(`Recebido (${brl(recebidoNum)}) menor que o valor parcial (${brl(valor)})`);
+      toast('warning', 'Valor recebido insuficiente', `Recebido ${brl(recebidoNum)} é menor que ${brl(valor)}`);
       return;
     }
 
@@ -1354,7 +1436,8 @@ function PaymentModal({
       setPixCharge(null);
       onPaymentsChange?.();
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     } finally {
       setAddingPayment(false);
     }
@@ -1367,7 +1450,8 @@ function PaymentModal({
       setPayments((prev) => prev.filter((p) => p.id !== paymentId));
       onPaymentsChange?.();
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -1470,7 +1554,8 @@ function PaymentModal({
       const r = await api<any>(`/pdv/sales/${saleId}/pix-charge`, { method: 'POST' });
       setPixCharge({ ...r, provider: 'local' });
     } catch (e: any) {
-      alert(`Erro ao gerar PIX: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', `Erro ao gerar PIX: ${h.title}`, h.hint);
     } finally {
       setPixLoading(false);
     }
@@ -1515,7 +1600,7 @@ function PaymentModal({
       setCopyMsg(true);
       setTimeout(() => setCopyMsg(false), 2000);
     } catch {
-      alert('Não consegui copiar — selecione e copie manualmente');
+      toast('warning', 'Não consegui copiar', 'Selecione e copie manualmente');
     }
   };
 
@@ -2299,6 +2384,7 @@ function OpenSalesModal({
   onResume: (id: string) => void;
   onRefresh: () => void;
 }) {
+  const { toast } = usePdvToast();
   const [list, setList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -2329,7 +2415,8 @@ function OpenSalesModal({
       load();
       onRefresh();
     } catch (e: any) {
-      alert(`Erro: ${e?.message}`);
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
     }
   };
 
@@ -2658,6 +2745,7 @@ function PixAvulsoModal({
   defaultValor?: number | null;
   onClose: () => void;
 }) {
+  const { toast } = usePdvToast();
   // Pré-popula com o total da venda atual (se houver itens) — evita digitar
   // valor errado. Format brasileiro: 23,90 (vírgula como separador decimal).
   const [valor, setValor] = useState(
@@ -2757,7 +2845,7 @@ function PixAvulsoModal({
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(qr.brcode!);
-                    alert('Copiado!');
+                    toast('success', 'Código PIX copiado', 'Cole no app do banco do cliente');
                   }}
                   className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg"
                 >
