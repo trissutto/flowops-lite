@@ -1395,6 +1395,7 @@ function PdvPageInner() {
       {showVendedora && sale && (
         <VendedoraModal
           atual={sale.sellerName || ''}
+          storeCode={sale.storeCode}
           onClose={() => setShowVendedora(false)}
           onSave={saveVendedora}
         />
@@ -1538,33 +1539,44 @@ function PdvPageInner() {
 // ─────────────────────────────────────────────────────────────────────────
 function VendedoraModal({
   atual,
+  storeCode,
   onClose,
   onSave,
 }: {
   atual: string;
+  storeCode?: string;
   onClose: () => void;
   onSave: (d: { codigo: string; nome: string }) => void;
 }) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [results, setResults] = useState<Array<{ codigo: string; nome: string }>>([]);
+  const [results, setResults] = useState<Array<{ codigo: string; nome: string; loja?: string }>>([]);
   const [searching, setSearching] = useState(false);
   const [tabelaOk, setTabelaOk] = useState<boolean | null>(null);
+  const [lojaFiltered, setLojaFiltered] = useState(false);
 
-  // Carrega lista inicial sem filtro (top 20 por nome) ao abrir
+  // Filtro por loja: passa o storeCode da venda atual pra trazer só
+  // funcionários daquela loja. Se a tabela `funcionarios` não tiver coluna
+  // de loja, o backend ignora o filtro e retorna todos.
+  const lojaParam = storeCode ? `&loja=${encodeURIComponent(storeCode)}` : '';
+
+  // Carrega lista inicial sem filtro de nome (top 20 da loja, por nome)
   useEffect(() => {
     (async () => {
       setSearching(true);
       try {
-        const r = await api<{ results: typeof results; table?: string; message?: string }>(`/pdv/funcionarios-search?q=&limit=20`);
+        const r = await api<{ results: typeof results; table?: string; lojaFiltered?: boolean }>(
+          `/pdv/funcionarios-search?q=&limit=20${lojaParam}`,
+        );
         setResults(r.results || []);
         setTabelaOk(r.results && r.results.length > 0);
+        setLojaFiltered(!!r.lojaFiltered);
       } catch {
         setTabelaOk(false);
       } finally {
         setSearching(false);
       }
     })();
-  }, []);
+  }, [lojaParam]);
 
   // Refaz busca com debounce ao digitar
   useEffect(() => {
@@ -1572,14 +1584,17 @@ function VendedoraModal({
     const t = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await api<{ results: typeof results }>(`/pdv/funcionarios-search?q=${encodeURIComponent(searchTerm)}&limit=30`);
+        const r = await api<{ results: typeof results; lojaFiltered?: boolean }>(
+          `/pdv/funcionarios-search?q=${encodeURIComponent(searchTerm)}&limit=30${lojaParam}`,
+        );
         setResults(r.results || []);
+        setLojaFiltered(!!r.lojaFiltered);
       } catch {/* ignora */} finally {
         setSearching(false);
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [searchTerm]);
+  }, [searchTerm, lojaParam]);
 
   return (
     <div
@@ -1597,6 +1612,20 @@ function VendedoraModal({
         {atual && (
           <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded">
             <strong>Atual:</strong> {atual}
+          </div>
+        )}
+
+        {/* Indicador de filtro: "mostrando funcionárias da loja X" */}
+        {storeCode && lojaFiltered && (
+          <div className="text-[10px] text-violet-700 bg-violet-50 border border-violet-200 px-2 py-1 rounded flex items-center gap-1">
+            <span className="font-bold">Loja {storeCode}</span>
+            <span className="text-violet-500">·</span>
+            <span>filtro ativo</span>
+          </div>
+        )}
+        {storeCode && !lojaFiltered && tabelaOk && (
+          <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
+            ⚠ Tabela de funcionários sem coluna de loja — mostrando todos
           </div>
         )}
 

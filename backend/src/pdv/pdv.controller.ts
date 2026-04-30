@@ -638,17 +638,20 @@ export class PdvController {
   async searchFuncionarios(
     @Req() req: any,
     @Query('q') q: string,
+    @Query('loja') loja?: string,
     @Query('limit') limitStr?: string,
   ) {
     this.requireRole(req);
     const term = String(q || '').trim();
     const limit = Math.min(Math.max(Number(limitStr) || 20, 1), 50);
+    const lojaCode = String(loja || '').trim();
 
     // Tenta tabelas comuns: funcionarios, vendedores, usuarios
     const candidates = ['funcionarios', 'funcionario', 'vendedores', 'vendedor', 'usuarios'];
     let table: string | null = null;
     let codigoCol: string | null = null;
     let nomeCol: string | null = null;
+    let lojaCol: string | null = null;
 
     for (const tbl of candidates) {
       try {
@@ -657,10 +660,13 @@ export class PdvController {
         const cols = schema.columns.map((c: any) => c.field);
         const nome = cols.find((c: string) => /^nome$/i.test(c) || /^razao$/i.test(c) || /^funcionario$/i.test(c));
         const codigo = cols.find((c: string) => /^codigo$/i.test(c) || /^cod_?func/i.test(c) || /^id_?func/i.test(c) || /^id$/i.test(c));
+        // Loja: pode ser codloja, loja, cod_loja, filial, codfilial
+        const lojaC = cols.find((c: string) => /^cod_?loja$/i.test(c) || /^loja$/i.test(c) || /^cod_?filial$/i.test(c) || /^filial$/i.test(c));
         if (!nome || !codigo) continue;
         table = tbl;
         codigoCol = codigo;
         nomeCol = nome;
+        lojaCol = lojaC || null;
         break;
       } catch {/* tabela não existe — tenta próxima */}
     }
@@ -670,11 +676,20 @@ export class PdvController {
     }
 
     const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
-    const where = term.length >= 2
-      ? `WHERE UPPER(\`${nomeCol}\`) LIKE UPPER('%${safeText}%')`
-      : ''; // sem filtro = lista tudo (limite ainda aplica)
+    const safeLoja = lojaCode.replace(/[^0-9A-Za-z]/g, '').slice(0, 10);
 
-    const sql = `SELECT \`${codigoCol}\` AS codigo, \`${nomeCol}\` AS nome FROM \`${table}\` ${where} ORDER BY \`${nomeCol}\` ASC LIMIT ${limit}`;
+    // Monta WHERE combinando filtro de nome + filtro de loja
+    const wheres: string[] = [];
+    if (term.length >= 2) {
+      wheres.push(`UPPER(\`${nomeCol}\`) LIKE UPPER('%${safeText}%')`);
+    }
+    if (lojaCol && safeLoja) {
+      // Compara como string (CONCAT) pra evitar problema de tipo INT vs CHAR
+      wheres.push(`CONCAT('', \`${lojaCol}\`) = '${safeLoja}'`);
+    }
+    const where = wheres.length > 0 ? `WHERE ${wheres.join(' AND ')}` : '';
+
+    const sql = `SELECT \`${codigoCol}\` AS codigo, \`${nomeCol}\` AS nome${lojaCol ? `, \`${lojaCol}\` AS loja` : ''} FROM \`${table}\` ${where} ORDER BY \`${nomeCol}\` ASC LIMIT ${limit}`;
     let rows: any[] = [];
     try {
       const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 8000 });
@@ -685,9 +700,11 @@ export class PdvController {
 
     return {
       table,
+      lojaFiltered: !!(lojaCol && safeLoja),
       results: rows.map((r) => ({
         codigo: String(r.codigo ?? '').trim(),
         nome: String(r.nome ?? '').trim(),
+        loja: r.loja !== undefined ? String(r.loja ?? '').trim() : '',
       })).filter((r) => r.nome),
     };
   }
