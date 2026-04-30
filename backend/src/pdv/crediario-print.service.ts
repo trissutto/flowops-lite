@@ -35,7 +35,10 @@ export class CrediarioPrintService {
 
   // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
   // Empresa juridicamente responsável pela cobrança.
-  private readonly RAZAO_SOCIAL = 'T.O. RISSUTTO';
+  private readonly RAZAO_SOCIAL = 'T.O. RISSUTTO EIRELI';
+  // CNPJ da empresa beneficiária (vai no campo "C.P.F. C.N.P.J." ao lado da
+  // razão social — esse campo identifica a EMPRESA que recebe, NÃO o cliente).
+  private readonly CNPJ_BENEFICIARIO = '20.104.813/0001-39';
 
   // ═══════════════════════════════════════════════════════════════════════
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's
@@ -55,9 +58,9 @@ export class CrediarioPrintService {
       vencAno:          { x: 510, dy: 65 },        // ano
       beneficiarioA:    { x: 215, dy: 100 },       // "A ___" — quem recebe (Lurd's)
       devedorAa:        { x: 165, dy: 130 },       // "a ___" — devedor (cliente)
-      cpfDevedor:       { x: 480, dy: 130 },       // CPF/CNPJ no canto direito
+      cpfDevedor:       { x: 480, dy: 130 },       // C.P.F. C.N.P.J. do BENEFICIÁRIO (T.O. RISSUTTO) — não do cliente!
       quantiaExtenso:   { x: 320, dy: 165, w: 220 }, // "QUANTIA DE ___"
-      pagavelEm:        { x: 290, dy: 220 },       // cidade
+      pagavelEm:        { x: 130, dy: 220 },       // cidade — fica logo após "Pagável em" pré-impresso (lateral esquerda)
       emissaoDia:       { x: 410, dy: 220 },
       emissaoMes:       { x: 460, dy: 220 },
       emissaoAno:       { x: 520, dy: 220 },
@@ -340,7 +343,9 @@ export class CrediarioPrintService {
           this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
           this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
           this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
-          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, data.cliente.cpf);
+          // Campo "C.P.F. C.N.P.J." na linha do beneficiário (Lurd's) — vai o CNPJ
+          // da empresa que recebe (T.O. RISSUTTO), NÃO o CPF do cliente.
+          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, this.CNPJ_BENEFICIARIO);
           // Quantia por extenso pode quebrar 2 linhas — usa width
           doc.text(
             this.valorPorExtenso(parc.valor),
@@ -461,7 +466,9 @@ export class CrediarioPrintService {
           this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
           this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
           this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
-          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, data.cliente.cpf);
+          // Campo "C.P.F. C.N.P.J." na linha do beneficiário (Lurd's) — vai o CNPJ
+          // da empresa que recebe (T.O. RISSUTTO), NÃO o CPF do cliente.
+          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, this.CNPJ_BENEFICIARIO);
           doc.text(
             this.valorPorExtenso(parc.valor),
             this.PROM.fields.quantiaExtenso.x,
