@@ -120,6 +120,18 @@ function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Botões de filtro por ano de cadastro da peça (data de entrada no Giga).
+// Cores hardcoded como classes literais — Tailwind purge não suporta `bg-${x}-600`.
+const YEAR_FILTER_OPTIONS = [
+  { v: '',        label: 'Todas',  activeCls: 'bg-slate-700 text-white border border-slate-800',     idleCls: 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200' },
+  { v: 'pre2020', label: '≤ 2020', activeCls: 'bg-rose-600 text-white border border-rose-700',       idleCls: 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200' },
+  { v: '2021',    label: '2021',   activeCls: 'bg-orange-600 text-white border border-orange-700',   idleCls: 'bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200' },
+  { v: '2022',    label: '2022',   activeCls: 'bg-amber-600 text-white border border-amber-700',     idleCls: 'bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200' },
+  { v: '2023',    label: '2023',   activeCls: 'bg-emerald-600 text-white border border-emerald-700', idleCls: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200' },
+  { v: '2024',    label: '2024',   activeCls: 'bg-sky-600 text-white border border-sky-700',         idleCls: 'bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200' },
+  { v: '2025',    label: '2025',   activeCls: 'bg-violet-600 text-white border border-violet-700',   idleCls: 'bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200' },
+] as const;
+
 export default function InteligenciaEstoquePage() {
   const [tab, setTab] = useState<TabId>('overview');
 
@@ -127,6 +139,9 @@ export default function InteligenciaEstoquePage() {
   const [from, setFrom] = useState(isoTodayMinusDays(30));
   const [to, setTo] = useState(isoToday());
   const [plusSize, setPlusSize] = useState(false);
+  // Ano de cadastro da peça (data de entrada no sistema). Valores:
+  // '' (todos), 'pre2020' (≤2020), '2021', '2022', '2023', '2024', '2025'
+  const [yearFilter, setYearFilter] = useState<string>('');
 
   // Overview
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -150,8 +165,9 @@ export default function InteligenciaEstoquePage() {
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     if (plusSize) params.set('plusSize', 'true');
+    if (yearFilter) params.set('year', yearFilter);
     return params.toString();
-  }, [from, to, plusSize]);
+  }, [from, to, plusSize, yearFilter]);
 
   // ── Loaders ──
   const loadOverview = async () => {
@@ -355,6 +371,31 @@ export default function InteligenciaEstoquePage() {
               <Download className="w-3 h-3" />
               CSV
             </button>
+          )}
+        </div>
+
+        {/* Filtro por ANO DE CADASTRO da peça (data de entrada no Giga) */}
+        <div className="bg-white rounded-lg border p-3 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mr-1">
+            <Calendar className="w-3.5 h-3.5 text-violet-500" />
+            DATA DE ENTRADA DA PEÇA:
+          </div>
+          {YEAR_FILTER_OPTIONS.map((opt) => {
+            const active = yearFilter === opt.v;
+            return (
+              <button
+                key={opt.v || 'all'}
+                onClick={() => setYearFilter(opt.v)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${active ? opt.activeCls + ' shadow-sm' : opt.idleCls}`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+          {yearFilter && (
+            <span className="text-[10px] text-slate-500 ml-2 italic">
+              Filtrando peças com data de cadastro {yearFilter === 'pre2020' ? 'até 2020' : `de ${yearFilter}`}
+            </span>
           )}
         </div>
 

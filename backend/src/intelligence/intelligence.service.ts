@@ -55,9 +55,15 @@ export class IntelligenceService {
    *
    * Cada loja vira 1 linha. Inclui também totalRede + totalFranquia agregados.
    */
-  async getStoresOverview(input: { from?: string; to?: string; plusSize?: boolean }) {
+  async getStoresOverview(input: {
+    from?: string;
+    to?: string;
+    plusSize?: boolean;
+    year?: string;
+  }) {
     const { inicio, fim } = this.parseRange(input);
     const plusSize = !!input.plusSize;
+    const year = input.year;
 
     // Carrega lojas ativas
     const stores = await this.prisma.store.findMany({
@@ -68,9 +74,12 @@ export class IntelligenceService {
     const codes = (stores as any[]).map((s) => s.code);
 
     // Em paralelo: estoque + vendas (Giga) + remessas in/out (Postgres)
+    // Estoque e vendas filtram por ANO DE CADASTRO da peça (year). As remessas
+    // ficam sem esse filtro porque o histórico de envios não conhece a data
+    // de cadastro do SKU — manteve o comportamento atual.
     const [stockMap, salesMap, recebido, enviado] = await Promise.all([
-      this.erp.getStockTotalByStores(plusSize),
-      this.erp.getSalesByStoresInRange(inicio, fim, plusSize),
+      this.erp.getStockTotalByStores(plusSize, year),
+      this.erp.getSalesByStoresInRange(inicio, fim, plusSize, year),
       this.getRecebidoByStore(inicio, fim, codes),
       this.getEnviadoByStore(inicio, fim, codes),
     ]);
@@ -119,6 +128,7 @@ export class IntelligenceService {
         from: inicio.toISOString().slice(0, 10),
         to: new Date(fim.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         plusSize,
+        year: year || null,
       },
       totaisGerais: {
         estoqueRede: totalEstoqueRede,

@@ -36,12 +36,14 @@ export class IntelligenceController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('plusSize') plusSize?: string,
+    @Query('year') year?: string,
   ) {
     this.requireAdmin(req);
     return this.svc.getStoresOverview({
       from,
       to,
       plusSize: this.parseBool(plusSize),
+      year: year || undefined,
     });
   }
 

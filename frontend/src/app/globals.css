@@ -29,6 +29,28 @@
 
   .font-display { font-family: var(--font-display), ui-serif, Georgia, serif; font-feature-settings: 'liga', 'dlig'; }
   .font-sans    { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; }
+
+  /* ── Fix: texto/número some quando arrastando seleção ────────────────
+     Causa: elementos usando `bg-clip-text` + `text-transparent` (gradient text)
+     ficam REALMENTE transparentes durante a seleção, porque o ::selection
+     pinta um background mas o texto continua com fill transparente.
+     Solução: força fill visível no ::selection em qualquer elemento (inclusive
+     gradient text), e define cores de seleção consistentes em todo o sistema. */
+  ::selection {
+    background-color: #fda4af;       /* rose-300 — visível em qualquer fundo */
+    color: #1e293b;                  /* slate-800 — contraste forte */
+    -webkit-text-fill-color: #1e293b;/* sobrescreve text-transparent do gradient */
+  }
+  ::-moz-selection {
+    background-color: #fda4af;
+    color: #1e293b;
+  }
+  /* Inputs/textareas: seleção mais clara pra contrastar com fundo branco */
+  input::selection, textarea::selection {
+    background-color: #fcd34d;       /* amber-300 — destaque em campo de digitação */
+    color: #1e293b;
+    -webkit-text-fill-color: #1e293b;
+  }
 }
 
 @layer utilities {

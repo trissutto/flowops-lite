@@ -2661,27 +2661,81 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
+   * Detecta a coluna de DATA CADASTRO da tabela `produtos` (varia por versão
+   * Giga: DATACADASTRO, DATA_INC, DT_CADASTRO, CREATED_AT, etc). Cachê em
+   * memória pra evitar repetir DESCRIBE em cada query.
+   */
+  private _cadCol: string | null | undefined = undefined;
+  async getCadastroDateCol(): Promise<string | null> {
+    if (this._cadCol !== undefined) return this._cadCol;
+    const candidatas = [
+      'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO',
+      'DATA_INC', 'DATAINC', 'DT_INC', 'DATA_INCLUSAO', 'DATAINCLUSAO', 'DT_INCLUSAO',
+      'DATACRIACAO', 'DT_CRIACAO',
+      'DATA_ENT', 'DATAENT', 'DT_ENT', 'DATA_ENTRADA', 'DATAENTRADA', 'DT_ENTRADA',
+      'CREATED_AT', 'CRIADO_EM',
+    ];
+    this._cadCol = (await this.pickCol(candidatas)) || null;
+    if (this._cadCol) {
+      this.logger.log(`[erp] coluna de data cadastro detectada: ${this._cadCol}`);
+    }
+    return this._cadCol;
+  }
+
+  /**
+   * Converte filtro de ano (`pre2020`, `2021`, `2022`...) em condição SQL
+   * + bind params. Retorna `{ cond: '', params: [] }` se não tiver coluna
+   * de data ou filtro vazio.
+   */
+  private async buildYearFilter(
+    year: string | undefined,
+    pAlias: string,
+  ): Promise<{ cond: string; params: any[] }> {
+    if (!year) return { cond: '', params: [] };
+    const dataCol = await this.getCadastroDateCol();
+    if (!dataCol) return { cond: '', params: [] };
+    const colRef = `${pAlias}.\`${dataCol}\``;
+    if (year === 'pre2020') {
+      return { cond: `${colRef} < ?`, params: ['2021-01-01'] };
+    }
+    const y = parseInt(year, 10);
+    if (isNaN(y) || y < 2000 || y > 2100) return { cond: '', params: [] };
+    return {
+      cond: `${colRef} >= ? AND ${colRef} < ?`,
+      params: [`${y}-01-01`, `${y + 1}-01-01`],
+    };
+  }
+
+  /**
    * Estoque atual em PEÇAS por loja (somatório de ESTOQUE > 0).
-   * Filtra opcionalmente só PLUS SIZE (descrição contém "PLUS SIZE").
+   * Filtra opcionalmente só PLUS SIZE e/ou por ANO DE CADASTRO da peça.
    *
    * Retorna Map<storeCode, totalPecas>. Lojas sem estoque NÃO aparecem (caller trata como 0).
    */
-  async getStockTotalByStores(plusSize = false): Promise<Map<string, number>> {
+  async getStockTotalByStores(
+    plusSize = false,
+    year?: string,
+  ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!this.pool) return out;
     try {
-      const sql = plusSize
+      const yf = await this.buildYearFilter(year, 'p');
+      const needsJoin = plusSize || yf.cond;
+      const conds: string[] = ['e.ESTOQUE > 0'];
+      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'`);
+      if (yf.cond) conds.push(yf.cond);
+
+      const sql = needsJoin
         ? `SELECT e.LOJA AS storeCode, SUM(e.ESTOQUE) AS pecas
              FROM estoque e
              INNER JOIN produtos p ON p.CODIGO = e.CODIGO
-            WHERE e.ESTOQUE > 0
-              AND UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'
+            WHERE ${conds.join(' AND ')}
             GROUP BY e.LOJA`
         : `SELECT LOJA AS storeCode, SUM(ESTOQUE) AS pecas
              FROM estoque
             WHERE ESTOQUE > 0
             GROUP BY LOJA`;
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, yf.params);
       for (const r of rows as any[]) {
         const code = String(r.storeCode || '').trim();
         const pecas = Number(r.pecas) || 0;
@@ -2697,34 +2751,47 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Vendas por loja num período (data inicio/fim half-open: >= inicio, < fim).
    * Retorna peças vendidas + valor bruto. Ignora MARCADO='SIM'.
-   * Filtro PLUS SIZE opcional (JOIN com produtos pra verificar descrição).
+   * Filtros opcionais: PLUS SIZE + ANO DE CADASTRO da peça.
+   * Quando há filtro de plusSize ou year, faz JOIN com `produtos`.
    */
   async getSalesByStoresInRange(
     inicio: Date,
     fim: Date,
     plusSize = false,
+    year?: string,
   ): Promise<Map<string, { pecas: number; valor: number }>> {
     const out = new Map<string, { pecas: number; valor: number }>();
     if (!this.pool) return out;
     try {
-      const sql = plusSize
+      const yf = await this.buildYearFilter(year, 'p');
+      const needsJoin = plusSize || yf.cond;
+      const conds: string[] = [
+        'c.DATA >= ?',
+        'c.DATA < ?',
+        "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      ];
+      const params: any[] = [inicio, fim];
+      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'`);
+      if (yf.cond) {
+        conds.push(yf.cond);
+        params.push(...yf.params);
+      }
+
+      const sql = needsJoin
         ? `SELECT c.LOJA AS storeCode,
                   SUM(c.QUANTIDADE) AS pecas,
                   SUM(c.VALORTOTAL) AS valor
              FROM caixa c
              INNER JOIN produtos p ON p.CODIGO = c.CODIGO
-            WHERE c.DATA >= ? AND c.DATA < ?
-              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
-              AND UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'
+            WHERE ${conds.join(' AND ')}
             GROUP BY c.LOJA`
         : `SELECT c.LOJA AS storeCode,
                   SUM(c.QUANTIDADE) AS pecas,
                   SUM(c.VALORTOTAL) AS valor
              FROM caixa c
-            WHERE c.DATA >= ? AND c.DATA < ?
-              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+            WHERE ${conds.join(' AND ')}
             GROUP BY c.LOJA`;
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [inicio, fim]);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
       for (const r of rows as any[]) {
         const code = String(r.storeCode || '').trim();
         if (!code) continue;
