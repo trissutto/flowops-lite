@@ -948,29 +948,37 @@ function PdvPageInner() {
               })()}
             </div>
             )}
-            {/* Cabeçalho de colunas — alinhado com as linhas (cols idênticas) */}
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[100px_1fr_70px_90px_110px_72px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
-              <div>COD</div>
-              <div>Descrição</div>
+            {/* Cabeçalho de colunas — agora com coluna de THUMBNAIL antes da DESC */}
+            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[80px_56px_1fr_80px_90px_110px_72px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+              <div>SKU</div>
+              <div></div>
+              <div>Produto</div>
               <div className="text-center">Qtd</div>
-              <div className="text-right">Val. Unit.</div>
-              <div className="text-right">Val. Total</div>
+              <div className="text-right">R$ Unit</div>
+              <div className="text-right">R$ Total</div>
               <div className="text-center">Ações</div>
             </div>
-            <div className="px-3 py-1 bg-slate-50 border-b text-[11px] text-slate-500">
-              Carrinho · {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
+            <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-[11px] text-violet-700 font-bold flex items-center gap-1.5">
+              <ShoppingCart className="w-3 h-3" /> Itens da venda · {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
             </div>
             <div className="divide-y">
               {sale.items.map((it) => {
                 const bruto = it.precoUnit * it.qty;
+                // Avatar de fallback — círculo roxo com inicial da REF (pra dar identidade visual sem foto real)
+                const avatarLetter = (it.ref || it.sku || '?').charAt(0).toUpperCase();
                 return (
                 <div
                   key={it.id}
-                  className="px-3 py-2 grid grid-cols-[100px_1fr_70px_90px_110px_72px] gap-2 items-center hover:bg-slate-50/50"
+                  className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_72px] gap-2 items-center hover:bg-violet-50/40 transition"
                 >
-                  {/* COD — código de barras (EAN) ou SKU */}
+                  {/* SKU/EAN */}
                   <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
                     {it.ean || it.sku}
+                  </div>
+
+                  {/* THUMBNAIL — avatar com primeira letra da REF (placeholder visual) */}
+                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0">
+                    {avatarLetter}
                   </div>
 
                   {/* DESCRIÇÃO — REF + COR/TAM + descrição em UMA LINHA, truncada */}
@@ -1085,60 +1093,143 @@ function PdvPageInner() {
           Paleta reduzida: só rose/teal/sky/slate pra primárias.
           Secundárias usam outline branca pra não competir visualmente.
           Em mobile (<lg) vira faixa horizontal com scroll no topo. */}
-      <aside className="w-52 shrink-0 hidden lg:flex flex-col gap-1.5 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
-        <PdvSidebarCard
-          tone="rose"
-          href="/minha-loja/pdv/recebimentos"
-          icon={Receipt}
-          subtitle=""
-          label="Receber Crediário"
-          compact
-        />
-        <PdvSidebarCard
-          tone="teal"
-          onClick={() => setShowSimular(true)}
-          disabled={!sale?.total || sale.total <= 0}
-          icon={CreditCard}
-          subtitle=""
-          label="Simular Cartão"
-          compact
-        />
-        <PdvSidebarCard
-          tone="sky"
-          href="/minha-loja/consultar"
-          icon={Search}
-          subtitle=""
-          label="Consultar"
-          compact
-        />
-        <PdvSidebarCard
-          tone="slate"
-          href="/minha-loja"
-          icon={Globe}
-          subtitle=""
-          label="Pedido Site"
-          badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
-          pulse={pedidosSitePending > 0}
-          compact
-        />
-        <div className="h-px bg-slate-300/40 my-1.5" />
-        {/* Secundárias — outline branco, ícone pequeno + label, paleta neutra */}
-        <PdvOutlinePill href="/minha-loja/pdv/caixa" icon={DollarSign} label="Caixa" />
-        <PdvOutlinePill href="/minha-loja/pdv/devolucao" icon={ArrowRightLeft} label="Trocar" />
-        <PdvOutlinePill
-          onClick={() => setShowOpenList(true)}
-          disabled={openCount === 0}
-          icon={Pause}
-          label="Pausadas"
-          badge={openCount > 0 ? openCount : undefined}
-        />
-        <PdvOutlinePill
-          href="/minha-loja/realinhamento"
-          icon={Shuffle}
-          label="Realinhar"
-          badge={realignPending > 0 ? realignPending : undefined}
-          attention={realignPending > 0}
-        />
+      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-3 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+
+        {/* ─── RESUMO DA VENDA ───────────────────────────────────────────── */}
+        {sale?.status === 'open' && (
+          <div className="bg-white/95 backdrop-blur rounded-xl border border-white/40 shadow-md p-3 space-y-1.5">
+            <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-1">
+              Resumo da venda
+            </div>
+            <div className="flex justify-between text-xs text-slate-600">
+              <span>Itens</span>
+              <span className="font-bold text-slate-800 tabular-nums">{sale.items?.length || 0}</span>
+            </div>
+            <div className="flex justify-between text-xs text-slate-600">
+              <span>Subtotal</span>
+              <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
+            </div>
+            {(() => {
+              const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
+              const totalDesc = descontoItens + (sale.desconto || 0);
+              if (totalDesc <= 0) return null;
+              return (
+                <div className="flex justify-between text-xs text-rose-600">
+                  <span>Descontos</span>
+                  <span className="font-bold tabular-nums">−{brl(totalDesc)}</span>
+                </div>
+              );
+            })()}
+            <div className="border-t border-slate-200 mt-1.5 pt-1.5 flex justify-between items-baseline">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total</span>
+              <span className="text-xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
+            </div>
+          </div>
+        )}
+
+        {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
+        <div className="bg-white/10 backdrop-blur rounded-xl border border-white/20 p-2.5">
+          <div className="text-[10px] font-black uppercase tracking-wider text-white/95 mb-2 px-1">
+            Formas de pagamento
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            <button
+              onClick={() => setShowPayment(true)}
+              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
+              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-teal-200 shadow-sm"
+              title="PIX"
+            >
+              <QrCode className="w-5 h-5 text-teal-600" />
+              <span className="text-[10px] font-bold text-teal-800">PIX</span>
+            </button>
+            <button
+              onClick={() => setShowPayment(true)}
+              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
+              className="bg-white hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-sky-200 shadow-sm"
+              title="Cartão"
+            >
+              <CreditCard className="w-5 h-5 text-sky-600" />
+              <span className="text-[10px] font-bold text-sky-800">CARTÃO</span>
+            </button>
+            <button
+              onClick={() => setShowPayment(true)}
+              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
+              className="bg-white hover:bg-rose-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-rose-200 shadow-sm"
+              title="Crediário"
+            >
+              <Receipt className="w-5 h-5 text-rose-600" />
+              <span className="text-[10px] font-bold text-rose-800">CRED.</span>
+            </button>
+          </div>
+        </div>
+
+        {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
+        <div className="bg-white/10 backdrop-blur rounded-xl border border-white/20 p-2.5 space-y-1.5">
+          <div className="text-[10px] font-black uppercase tracking-wider text-white/95 mb-1 px-1">
+            Ações do PDV
+          </div>
+          <PdvSidebarCard
+            tone="rose"
+            href="/minha-loja/pdv/recebimentos"
+            icon={Receipt}
+            subtitle=""
+            label="Receber Crediário"
+            compact
+          />
+          <PdvSidebarCard
+            tone="teal"
+            onClick={() => setShowSimular(true)}
+            disabled={!sale?.total || sale.total <= 0}
+            icon={CreditCard}
+            subtitle=""
+            label="Simular Cartão"
+            compact
+          />
+          <PdvSidebarCard
+            tone="sky"
+            href="/minha-loja/consultar"
+            icon={Search}
+            subtitle=""
+            label="Consultar"
+            compact
+          />
+          <PdvSidebarCard
+            tone="slate"
+            href="/minha-loja"
+            icon={Globe}
+            subtitle=""
+            label="Pedido Site"
+            badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
+            pulse={pedidosSitePending > 0}
+            compact
+          />
+          <PdvOutlinePill href="/minha-loja/pdv/caixa" icon={DollarSign} label="Caixa" />
+          <PdvOutlinePill href="/minha-loja/pdv/devolucao" icon={ArrowRightLeft} label="Trocar" />
+        </div>
+
+        {/* ─── ALERTAS ───────────────────────────────────────────────────── */}
+        {(openCount > 0 || realignPending > 0) && (
+          <div className="bg-white/10 backdrop-blur rounded-xl border border-amber-300/40 p-2.5 space-y-1.5">
+            <div className="text-[10px] font-black uppercase tracking-wider text-amber-200 mb-1 px-1 flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" /> Alertas
+            </div>
+            <PdvOutlinePill
+              onClick={() => setShowOpenList(true)}
+              disabled={openCount === 0}
+              icon={Pause}
+              label="Pausadas"
+              badge={openCount > 0 ? openCount : undefined}
+            />
+            <PdvOutlinePill
+              href="/minha-loja/realinhamento"
+              icon={Shuffle}
+              label="Realinhar"
+              badge={realignPending > 0 ? realignPending : undefined}
+              attention={realignPending > 0}
+            />
+          </div>
+        )}
+
       </aside>
 
       </div>{/* fim do flex main+sidebar */}
