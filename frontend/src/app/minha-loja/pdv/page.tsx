@@ -716,10 +716,10 @@ function PdvPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 flex flex-col">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
           /minha-loja/realinhamento pra unificar identidade visual. */}
-      <header className="sticky top-0 z-20 bg-violet-900/40 backdrop-blur border-b border-white/10">
+      <header className="sticky top-0 z-20 bg-gradient-to-r from-violet-800 via-violet-700 to-fuchsia-700 border-b border-violet-900/40 shadow-md">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
@@ -816,24 +816,22 @@ function PdvPageInner() {
           </div>
         )}
 
-        {/* Input bipagem — ocupa 1/3 da largura. Sobra 2/3 pra QUICK ACTIONS
-            (atalhos contextuais que aparecem só no PDV) — botões de venda
-            rápida, descontos pré-definidos, etc. */}
+        {/* Input bipagem — FULL-WIDTH (estilo mockup) com botão grande à direita */}
         {sale?.status === 'open' && (
-          <div className="flex items-stretch gap-3">
+          <>
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-sm flex items-center gap-2 w-full md:w-1/3 shrink-0"
+            className="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-md flex items-center gap-3 w-full"
           >
-            <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
+            <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
             <input
               ref={inputRef}
               type="text"
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
-              placeholder="Bipe SKU/EAN · 0 = manual"
+              placeholder="Bipe ou digite SKU / nome do produto…"
               disabled={scanLoading}
-              className="flex-1 min-w-0 px-2 py-1.5 text-base font-mono font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal placeholder:text-sm tracking-wide text-slate-900"
+              className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -842,30 +840,31 @@ function PdvPageInner() {
             <button
               type="submit"
               disabled={!scanInput || scanLoading}
-              className="px-3 py-2 text-white font-bold rounded-lg flex items-center disabled:opacity-40 transition shrink-0"
-              style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
+              className="px-5 py-3 text-white font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
+              style={{ background: `linear-gradient(135deg, ${HUB_TONES.purple.from}, ${HUB_TONES.purple.to})` }}
             >
-              {scanLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+              {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
             </button>
           </form>
 
-          {/* QUICK ACTIONS — área reservada pra atalhos contextuais futuros.
-              Em desktop ocupa 2/3 ao lado do input de bipe. Sobre fundo roxo,
-              usa branco translúcido com borda branca pra contrastar. */}
-          <div className="hidden md:flex flex-1 items-center gap-2 bg-white/15 backdrop-blur rounded-xl border border-dashed border-white/40 px-4 py-2">
-            <div className="flex items-center gap-2 text-[11px] text-white/90 font-bold">
-              <kbd className="px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">F2</kbd>
-              foco
-              <kbd className="ml-1 px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">F4</kbd>
-              finaliza
-              <kbd className="ml-1 px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">0</kbd>
-              item manual
-            </div>
-            <div className="ml-auto text-[10px] text-white/70 italic">
-              espaço pra atalhos rápidos
-            </div>
+          {/* ATALHOS — barra horizontal abaixo do input (estilo mockup) */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 bg-white rounded-xl border border-slate-200 px-4 py-2.5 shadow-sm">
+            {[
+              { key: 'F2', label: 'Buscar produto' },
+              { key: 'F4', label: 'Finalizar venda' },
+              { key: 'F3', label: 'Desconto' },
+              { key: 'DEL', label: 'Remover item' },
+              { key: 'ENTER', label: 'Adicionar' },
+            ].map((sc) => (
+              <div key={sc.key} className="flex items-center gap-2 text-xs text-slate-700 font-semibold">
+                <kbd className="px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-md font-mono font-bold text-[10px]">
+                  {sc.key}
+                </kbd>
+                <span>{sc.label}</span>
+              </div>
+            ))}
           </div>
-          </div>
+          </>
         )}
 
         {/* Carrinho */}
@@ -1128,8 +1127,8 @@ function PdvPageInner() {
         )}
 
         {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
-        <div className="bg-white/10 backdrop-blur rounded-xl border border-white/20 p-2.5">
-          <div className="text-[10px] font-black uppercase tracking-wider text-white/95 mb-2 px-1">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-2.5">
+          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2 px-1">
             Formas de pagamento
           </div>
           <div className="grid grid-cols-3 gap-1.5">
@@ -1164,8 +1163,8 @@ function PdvPageInner() {
         </div>
 
         {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
-        <div className="bg-white/10 backdrop-blur rounded-xl border border-white/20 p-2.5 space-y-1.5">
-          <div className="text-[10px] font-black uppercase tracking-wider text-white/95 mb-1 px-1">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-2.5 space-y-1.5">
+          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-1 px-1">
             Ações do PDV
           </div>
           <PdvSidebarCard
@@ -1209,8 +1208,8 @@ function PdvPageInner() {
 
         {/* ─── ALERTAS ───────────────────────────────────────────────────── */}
         {(openCount > 0 || realignPending > 0) && (
-          <div className="bg-white/10 backdrop-blur rounded-xl border border-amber-300/40 p-2.5 space-y-1.5">
-            <div className="text-[10px] font-black uppercase tracking-wider text-amber-200 mb-1 px-1 flex items-center gap-1">
+          <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm p-2.5 space-y-1.5">
+            <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 mb-1 px-1 flex items-center gap-1">
               <AlertCircle className="w-3 h-3" /> Alertas
             </div>
             <PdvOutlinePill
@@ -1279,44 +1278,46 @@ function PdvPageInner() {
               );
             })()}
 
-            {/* Linha principal: ações + TOTAL grande + FINALIZAR */}
-            <div className="flex items-center gap-2">
-              {/* Cancelar — ICON ONLY (uso esporádico, não merece label) */}
+            {/* Linha principal: ações com LABEL + TOTAL grande + FINALIZAR GIGANTE */}
+            <div className="flex items-center gap-3">
+              {/* Cancelar venda — botão branco com LABEL */}
               <button
                 onClick={cancelSale}
-                className="w-11 h-11 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-500 hover:text-rose-700 rounded-xl flex items-center justify-center transition shrink-0"
+                className="px-4 py-3 bg-white hover:bg-rose-50 border-2 border-rose-300 text-rose-600 hover:text-rose-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
                 title="Cancelar venda"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
+                <span className="hidden sm:inline">Cancelar venda</span>
               </button>
 
-              {/* Desconto — ICON ONLY */}
+              {/* Desconto geral — botão branco com LABEL */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="w-11 h-11 bg-white hover:bg-amber-50 border border-slate-200 hover:border-amber-200 text-slate-500 hover:text-amber-700 rounded-xl flex items-center justify-center transition shrink-0"
-                title="Aplicar desconto"
+                className="px-4 py-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 text-slate-700 hover:text-amber-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
+                title="Aplicar desconto na venda toda"
               >
-                <Percent className="w-5 h-5" />
+                <Percent className="w-4 h-4" />
+                <span className="hidden sm:inline">Desconto geral</span>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
-              <div className="flex-1 px-2 min-w-0">
+              <div className="flex-1 px-2 min-w-0 text-center">
                 <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
                 <div className="text-3xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 truncate">
                   {brl(sale.total)}
                 </div>
               </div>
 
-              {/* PIX RÁPIDO — botão teal ao lado do Finalizar */}
+              {/* PIX RÁPIDO — escondido em telas menores, mostra só em XL */}
               <button
                 onClick={() => setShowPixAvulso(true)}
                 disabled={!sale.items?.length || sale.total <= 0}
-                className="px-3 sm:px-4 py-3.5 text-white font-bold rounded-xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm sm:text-base transition shrink-0"
+                className="hidden xl:flex px-3 py-3.5 text-white font-bold rounded-xl items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm transition shrink-0"
                 style={{ background: `linear-gradient(135deg, ${HUB_TONES.teal.from}, ${HUB_TONES.teal.to})` }}
                 title="Cobrar via PIX agora (Pagar.me/Stone)"
               >
                 <DollarSign className="w-5 h-5" />
-                <span className="hidden sm:inline">PIX</span>
+                <span>PIX</span>
               </button>
 
               {/* FINALIZAR — botão verde gigante (CTA primário) */}
