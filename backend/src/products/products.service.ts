@@ -2636,20 +2636,33 @@ export class ProductsService {
     }
 
     /**
-     * Normaliza a REF pra "base REF" — strippa sufixo tipo " P", " M", " VN"
-     * (código curto de cor depois de espaço) pra colapsar:
-     *   VMS-223 P + VMS-223 M + VMS-223 V + VMS-223 N → VMS-223
+     * Normaliza a REF pra "base REF" — strippa sufixo de cor pra colapsar
+     * variantes da mesma peça base. Cobre 3 padrões usados na Lurd's:
+     *   1. Espaço + letras (max 3): "VMS-223 P", "VMS-223 VN" → "VMS-223"
+     *   2. Hífen + letras: "BMM-100-A" → "BMM-100"
+     *   3. Letras direto após número/hífen: "206635H", "13015M" → "206635", "13015"
+     *      (só strippa 1-2 letras pra não destruir REFs como "VMS223")
      *
-     * Caso o usuário tenha buscado a REF JÁ com o sufixo (ex: "VMS-223 P"),
+     * Caso o usuário tenha buscado JÁ com sufixo (ex: "VMS-223 P", "13015M"),
      * preserva a REF original — ele quer só aquela cor específica.
      */
     const queryUpper = term.trim().toUpperCase();
-    const queryHasColorSuffix = /\s[A-Z]{1,3}$/.test(queryUpper);
+    const queryHasColorSuffix =
+      /\s[A-Z]{1,3}$/.test(queryUpper) ||      // "VMS-223 P"
+      /-[A-Z]{1,3}$/.test(queryUpper) ||       // "BMM-100-A"
+      /\d[A-Z]{1,2}$/.test(queryUpper);        // "206635H", "13015M"
     const normalizeBaseRef = (ref: string): string => {
       const s = String(ref).trim();
-      if (queryHasColorSuffix) return s; // user pediu a cor específica — não colapsa
+      if (queryHasColorSuffix) return s; // user pediu cor específica — não colapsa
       if (s.toUpperCase() === queryUpper) return s;
-      const stripped = s.replace(/\s[A-Za-z]{1,3}$/, '').trim();
+      // Strip ordenado: tenta cada padrão até reduzir
+      let stripped = s;
+      // Padrão 1: espaço + letras curtas
+      stripped = stripped.replace(/\s[A-Za-z]{1,3}$/, '').trim();
+      // Padrão 2: hífen + letras curtas (só se houve mudança ou direto)
+      if (stripped === s) stripped = stripped.replace(/-[A-Za-z]{1,3}$/, '').trim();
+      // Padrão 3: letras direto após dígito (1-2 letras pra não destruir bases curtas)
+      if (stripped === s) stripped = stripped.replace(/(\d)([A-Za-z]{1,2})$/, '$1').trim();
       return stripped || s;
     };
 
