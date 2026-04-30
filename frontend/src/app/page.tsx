@@ -18,7 +18,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   LayoutDashboard, Globe2, Store, BarChart3, Settings,
-  RefreshCw, Zap, Bot, ArrowUpRight,
+  RefreshCw, Zap, Bot, ArrowUpRight, type LucideIcon,
+  ShoppingBag, Shuffle, Package2, AlertTriangle, Truck, CreditCard, Bell,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
@@ -48,6 +49,43 @@ export default function DashboardHome() {
   const [now, setNow] = useState<Date>(new Date());
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // === ALERTAS — pendências que exigem ação da matriz ===
+  const [alerts, setAlerts] = useState<{
+    pedidosSite: number;
+    naoEncontradas: number;
+    materiaisPendentes: number;
+    remessasTransito: number;
+    crediarioAtraso: number;
+  }>({ pedidosSite: 0, naoEncontradas: 0, materiaisPendentes: 0, remessasTransito: 0, crediarioAtraso: 0 });
+
+  async function loadAlerts() {
+    try {
+      const [counts, naoEnc, materiais, shipKpis] = await Promise.all([
+        api<{ byStatus: Record<string, { name: string; total: number }> }>('/orders/wc/counts').catch(() => null),
+        api<any[]>('/realignment/not-found').catch(() => []),
+        api<any[]>('/supplies/requests?status=pending').catch(() => []),
+        api<{ inTransitCount?: number }>('/realignment/shipments/admin/kpis').catch(() => null),
+      ]);
+      const pendentesSite =
+        (counts?.byStatus['processing']?.total ?? 0) +
+        (counts?.byStatus['pending']?.total ?? 0) +
+        (counts?.byStatus['on-hold']?.total ?? 0);
+      setAlerts({
+        pedidosSite: pendentesSite,
+        naoEncontradas: Array.isArray(naoEnc) ? naoEnc.length : 0,
+        materiaisPendentes: Array.isArray(materiais) ? materiais.length : 0,
+        remessasTransito: shipKpis?.inTransitCount ?? 0,
+        crediarioAtraso: 0, // placeholder — soma por loja é caro, deixa pra clicar e ver
+      });
+    } catch { /* silencioso */ }
+  }
+
+  useEffect(() => {
+    loadAlerts();
+    const id = setInterval(loadAlerts, 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -118,8 +156,8 @@ export default function DashboardHome() {
 
   function handleRefresh() {
     setRefreshing(true);
-    // Recarrega frase do dia + força re-render do clock
     setNow(new Date());
+    loadAlerts();
     setTimeout(() => setRefreshing(false), 400);
   }
 
@@ -212,6 +250,9 @@ export default function DashboardHome() {
           </div>
         </div>
       </section>
+
+      {/* === ALERTAS · só mostra o que tem ação pendente === */}
+      <AlertsSection alerts={alerts} />
 
       {/* === Atalhos pros 4 hubs (cores combinadas com KPIs) === */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
@@ -318,5 +359,104 @@ function PilotPill({
         <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#c9a96e' }} title="WhatsApp desconectado" />
       )}
     </button>
+  );
+}
+
+// ============================================================================
+// AlertsSection — pendências que pedem ação da matriz (só mostra se > 0)
+// ============================================================================
+type AlertItem = {
+  href: string;
+  count: number;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+  tone: 'rose' | 'amber' | 'sky' | 'violet' | 'emerald' | 'orange';
+};
+
+const ALERT_TONES: Record<AlertItem['tone'], { bg: string; icon: string; text: string; border: string }> = {
+  rose:    { bg: '#fff1f3', icon: '#c95a78', text: '#9a3f59', border: '#f5c4cf' },
+  amber:   { bg: '#fff8eb', icon: '#c9a96e', text: '#8a7340', border: '#f0e0b8' },
+  sky:     { bg: '#eef7fb', icon: '#3b82a8', text: '#1f5f80', border: '#c7e0ee' },
+  violet:  { bg: '#f3eefb', icon: '#8a5cb6', text: '#5f3e8a', border: '#dccaf2' },
+  emerald: { bg: '#ecf5ed', icon: '#5b9b3e', text: '#3f7029', border: '#c8e0c8' },
+  orange:  { bg: '#fdf1e6', icon: '#d68a3c', text: '#b66a1f', border: '#f4d4b1' },
+};
+
+function AlertsSection({ alerts }: {
+  alerts: {
+    pedidosSite: number;
+    naoEncontradas: number;
+    materiaisPendentes: number;
+    remessasTransito: number;
+    crediarioAtraso: number;
+  };
+}) {
+  const items: AlertItem[] = [
+    { href: '/separacao?status=processing', count: alerts.pedidosSite,        label: 'Pedidos site pendentes',     hint: 'Aguardando separação',    icon: ShoppingBag,    tone: 'rose'    },
+    { href: '/retaguarda/realinhamento/nao-encontrados', count: alerts.naoEncontradas,    label: 'Realinhamento — não encontradas', hint: 'Filiais reportaram',  icon: AlertTriangle, tone: 'amber'   },
+    { href: '/retaguarda/materiais',         count: alerts.materiaisPendentes, label: 'Pedidos de materiais',       hint: 'Filiais aguardando',      icon: Package2,       tone: 'violet'  },
+    { href: '/retaguarda/remessas',          count: alerts.remessasTransito,   label: 'Remessas em trânsito',       hint: 'Aguardando recebimento',  icon: Truck,          tone: 'sky'     },
+    { href: '/retaguarda/crediario',         count: alerts.crediarioAtraso,    label: 'Crediário em atraso',        hint: 'Cobrança pendente',       icon: CreditCard,     tone: 'orange'  },
+  ];
+  const visible = items.filter((it) => it.count > 0);
+
+  if (visible.length === 0) {
+    return (
+      <div className="mb-5 bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3 shadow-sm">
+        <div className="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+          <Bell className="w-4 h-4" />
+        </div>
+        <div>
+          <div className="font-semibold text-sm text-slate-800">Tudo em ordem</div>
+          <div className="text-xs text-slate-500">Nenhuma pendência exigindo ação agora.</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <section className="mb-5">
+      <div className="flex items-center gap-2 mb-3">
+        <Bell className="w-4 h-4 text-rose-600" />
+        <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wider">
+          Alertas — {visible.length} {visible.length === 1 ? 'pendência' : 'pendências'}
+        </h2>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {visible.map((it) => <AlertCard key={it.href} item={it} />)}
+      </div>
+    </section>
+  );
+}
+
+function AlertCard({ item }: { item: AlertItem }) {
+  const t = ALERT_TONES[item.tone];
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      className="rounded-xl px-4 py-3 flex items-center gap-3 transition hover:shadow-md hover:-translate-y-0.5 active:translate-y-0"
+      style={{ background: t.bg, border: `1.5px solid ${t.border}` }}
+    >
+      <div
+        className="w-11 h-11 rounded-full flex items-center justify-center shrink-0 shadow-sm"
+        style={{ background: 'white' }}
+      >
+        <Icon className="w-5 h-5" style={{ color: t.icon }} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2">
+          <div className="font-bold text-2xl tabular-nums" style={{ color: t.text }}>
+            {item.count}
+          </div>
+          <div className="text-sm font-semibold truncate" style={{ color: t.text }}>
+            {item.label}
+          </div>
+        </div>
+        <div className="text-[11px] text-slate-500 truncate">{item.hint}</div>
+      </div>
+      <ArrowUpRight className="w-4 h-4 text-slate-400 shrink-0" />
+    </Link>
   );
 }

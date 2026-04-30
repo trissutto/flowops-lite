@@ -789,153 +789,72 @@ function openPrintWindow(pickOrderId: string) {
 // importantes da filial. Quando há realinhamento pendente, destaca um
 // card cheia-largura com badge pra ficar impossível de ignorar.
 function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { realignmentPending?: number; shipmentsIncoming?: number }) {
+  // 7 cards grandes coloridos — mesmo estilo da retaguarda (/site, /loja, etc.)
+  type Tone = 'teal' | 'rose' | 'orange' | 'purple' | 'amber' | 'sky' | 'green';
   const items: Array<{
     href: string;
     icon: any;
     label: string;
     subtitle: string;
-    tone: 'sky' | 'lavender' | 'peach' | 'mint' | 'rose';
+    description: string;
+    tone: Tone;
+    badge?: number;
   }> = [
-    { href: '/minha-loja/pdv',                        icon: ShoppingCart,   label: 'PDV',            subtitle: 'Frente de caixa',    tone: 'mint' },
-    { href: '/minha-loja/consultar',                  icon: Search,         label: 'Consultar',      subtitle: 'Buscar na rede',     tone: 'sky' },
-    { href: '/minha-loja/historico',                  icon: History,        label: 'Transferências', subtitle: 'Histórico',          tone: 'lavender' },
-    { href: '/minha-loja/triagem',                    icon: Package,        label: 'Triagem',        subtitle: 'Bipar e distribuir', tone: 'rose' },
-    { href: '/minha-loja/materiais',                  icon: Package2,       label: 'Materiais',      subtitle: 'Pedir saquinho…',    tone: 'peach' },
+    { href: '/minha-loja/pdv',           icon: ShoppingCart, label: 'PDV',            subtitle: 'Venda',       description: 'Frente de caixa',          tone: 'teal'   },
+    { href: '/minha-loja/consultar',     icon: Search,       label: 'Consultar',      subtitle: 'Estoque',     description: 'Buscar na rede',           tone: 'rose'   },
+    { href: '/minha-loja/historico',     icon: History,      label: 'Transferências', subtitle: 'Histórico',   description: 'Eu pedi · me pediram',     tone: 'orange' },
+    { href: '/minha-loja/triagem',       icon: Package,      label: 'Triagem',        subtitle: 'Bipar',       description: 'Distribuir mercadoria',    tone: 'purple' },
+    { href: '/minha-loja/materiais',     icon: Package2,     label: 'Materiais',      subtitle: 'Suprimentos', description: 'Sacolas, etiquetas…',      tone: 'amber'  },
+    { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
+    { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
   ];
 
-  // Boutique sofisticado — em sintonia com o TONE_MAP do PastelShell
-  const TONES: Record<string, { ring: string; bg: string; icon: string; text: string }> = {
-    rose:     { ring: '#c08081', bg: '#f5e6e3', icon: '#8b4f55', text: '#6e3a40' },
-    sky:      { ring: '#6b8a92', bg: '#dde7ea', icon: '#3e5d6a', text: '#2e4750' },
-    mint:     { ring: '#9caf88', bg: '#e3ebd9', icon: '#5d7048', text: '#475636' },
-    peach:    { ring: '#c87f5e', bg: '#f3e2d6', icon: '#8b4d31', text: '#6f3b25' },
-    lavender: { ring: '#a48ba1', bg: '#ebe2eb', icon: '#6b5870', text: '#4f4054' },
+  const TONES: Record<Tone, { from: string; to: string }> = {
+    teal:   { from: '#0e7e87', to: '#0a5a62' },
+    rose:   { from: '#c95a78', to: '#9a3f59' },
+    orange: { from: '#d68a3c', to: '#b66a1f' },
+    purple: { from: '#8a5cb6', to: '#5f3e8a' },
+    amber:  { from: '#c9a96e', to: '#8a7340' },
+    sky:    { from: '#3b82a8', to: '#1f5f80' },
+    green:  { from: '#5b9b3e', to: '#3f7029' },
   };
 
   return (
-    <div className="space-y-3 panel-pastel p-4 fade-up">
-      {/* Alerta de realinhamento — pulso boutique cobre/terracota */}
-      {realignmentPending > 0 && (
-        <Link
-          href="/minha-loja/realinhamento"
-          className="group relative overflow-hidden rounded-2xl p-4 flex items-center gap-3 animate-pulse-slow shadow-md hover:shadow-lg transition-all"
-          style={{
-            background: 'linear-gradient(135deg, #f3e2d6 0%, #ecdac9 100%)',
-            border: '2px solid #b87355',
-          }}
-        >
-          <div
-            className="circle-ring flex items-center justify-center w-12 h-12 shrink-0 pulse-soft"
-            style={{ border: '3px solid #c87f5e', background: 'white' }}
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 fade-up">
+      {items.map((a) => {
+        const t = TONES[a.tone];
+        const Icon = a.icon;
+        const hasBadge = a.badge != null && a.badge > 0;
+        return (
+          <Link
+            key={a.href}
+            href={a.href}
+            className={`relative overflow-hidden rounded-2xl px-4 py-4 text-white shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition flex flex-col gap-1.5 ${
+              hasBadge ? 'ring-2 ring-rose-300 ring-offset-2 ring-offset-[#f4f1ec]' : ''
+            }`}
+            style={{ background: `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)` }}
           >
-            <Shuffle className="w-5 h-5" style={{ color: '#7d4a30' }} strokeWidth={1.8} />
-          </div>
-          <div className="min-w-0 flex-1">
+            {/* Glow decorativo */}
             <div
-              className="font-display text-lg leading-tight flex items-center gap-2"
-              style={{ color: '#5e3823' }}
-            >
-              Realinhamento chegou!
-              <span
-                className="text-sm font-bold rounded-full px-2 min-w-[26px] h-6 inline-flex items-center justify-center tabular-nums text-white"
-                style={{ background: '#985d3f' }}
-              >
-                {realignmentPending}
-              </span>
+              className="absolute -top-8 -right-8 w-32 h-32 rounded-full opacity-15"
+              style={{ background: 'radial-gradient(circle, white 0%, transparent 70%)' }}
+            />
+            <div className="relative flex items-center justify-between">
+              <Icon className="w-6 h-6 opacity-90" strokeWidth={1.7} />
+              {hasBadge && (
+                <span className="text-[11px] font-black px-2 py-0.5 rounded-full bg-white text-rose-700 shadow animate-pulse">
+                  {a.badge}
+                </span>
+              )}
             </div>
-            <div className="text-xs leading-snug mt-0.5" style={{ color: '#8b4d31' }}>
-              Peça(s) pra separar e enviar pras lojas irmãs · toque pra abrir
+            <div className="relative">
+              <div className="text-[10px] font-bold tracking-wider uppercase opacity-90">{a.subtitle}</div>
+              <div className="text-xl font-bold leading-tight mt-0.5">{a.label}</div>
+              <div className="text-[11px] opacity-80 mt-1 leading-snug">{a.description}</div>
             </div>
-          </div>
-          <div
-            className="shrink-0 font-bold text-xs uppercase tracking-wider"
-            style={{ color: '#7d4a30' }}
-          >
-            Abrir →
-          </div>
-        </Link>
-      )}
-
-      {/* Alerta de remessa chegando — mint boutique */}
-      {shipmentsIncoming > 0 && (
-        <Link
-          href="/minha-loja/recebimento"
-          className="group relative overflow-hidden rounded-2xl p-4 flex items-center gap-3 shadow-md hover:shadow-lg transition-all"
-          style={{
-            background: 'linear-gradient(135deg, #e3ebd9 0%, #d6e3c9 100%)',
-            border: '2px solid #7d9163',
-          }}
-        >
-          <div
-            className="circle-ring flex items-center justify-center w-12 h-12 shrink-0"
-            style={{ border: '3px solid #9caf88', background: 'white' }}
-          >
-            <Inbox className="w-5 h-5" style={{ color: '#5d7048' }} strokeWidth={1.8} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div
-              className="font-display text-lg leading-tight flex items-center gap-2"
-              style={{ color: '#3d4a2c' }}
-            >
-              Mercadoria a caminho
-              <span
-                className="text-sm font-bold rounded-full px-2 min-w-[26px] h-6 inline-flex items-center justify-center tabular-nums text-white"
-                style={{ background: '#5d7048' }}
-              >
-                {shipmentsIncoming}
-              </span>
-            </div>
-            <div className="text-xs leading-snug mt-0.5" style={{ color: '#5d7048' }}>
-              Remessa(s) em trânsito · toque pra dar entrada quando chegar
-            </div>
-          </div>
-          <div
-            className="shrink-0 font-bold text-xs uppercase tracking-wider"
-            style={{ color: '#475636' }}
-          >
-            Abrir →
-          </div>
-        </Link>
-      )}
-
-      {/* Grid de 5 botões circulares — ações rápidas */}
-      <div className="grid grid-cols-5 gap-1.5 sm:gap-3 justify-items-center pt-2">
-        {items.map((a, idx) => {
-          const t = TONES[a.tone];
-          const Icon = a.icon;
-          return (
-            <Link
-              key={a.href}
-              href={a.href}
-              className="group flex flex-col items-center gap-1.5 fade-up"
-              style={{ animationDelay: `${0.1 + idx * 0.05}s` }}
-            >
-              <div
-                className="circle-ring flex items-center justify-center w-[68px] h-[68px] sm:w-20 sm:h-20"
-                style={{ border: `3px solid ${t.ring}`, background: t.bg }}
-              >
-                <Icon
-                  className="w-7 h-7 sm:w-8 sm:h-8 transition-transform duration-500 group-hover:scale-110"
-                  style={{ color: t.icon }}
-                  strokeWidth={1.6}
-                />
-              </div>
-              <div className="text-center">
-                <div className="text-xs sm:text-sm font-medium text-slate-700 leading-tight">{a.label}</div>
-                <div className="text-[10px] text-slate-400 leading-tight hidden sm:block">{a.subtitle}</div>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
-
-      <style jsx global>{`
-        @keyframes pulse-slow {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.82; }
-        }
-        .animate-pulse-slow { animation: pulse-slow 2.5s ease-in-out infinite; }
-      `}</style>
+          </Link>
+        );
+      })}
     </div>
   );
 }
