@@ -505,6 +505,85 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/customer-search?q=texto&limit=20
+   * Typeahead pra aba crediário do PaymentModal — busca cliente por:
+   *  - CPF (se q tiver só dígitos)
+   *  - codCliente (se q tiver só dígitos)
+   *  - Nome (LIKE %q% case-insensitive)
+   *
+   * Retorna lista de até `limit` clientes ordenados por nome. NÃO retorna
+   * dados sensíveis completos (sem RG, endereço completo) — só o suficiente
+   * pra escolher na lista. Pra pegar tudo, usa /customer-info?cpf=XXX.
+   */
+  @Get('customer-search')
+  async searchCustomers(
+    @Req() req: any,
+    @Query('q') q: string,
+    @Query('limit') limitStr?: string,
+  ) {
+    this.requireRole(req);
+    const term = String(q || '').trim();
+    if (term.length < 2) {
+      return { results: [] };
+    }
+    const limit = Math.min(Math.max(Number(limitStr) || 20, 1), 50);
+
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm) return { results: [] };
+
+    // Detecta se é busca numérica (CPF/cod) ou texto (nome)
+    const onlyDigits = term.replace(/\D/g, '');
+    const isNumeric = onlyDigits.length >= 3 && /^\d+$/.test(term.replace(/[\s.\-]/g, ''));
+
+    // Sanitiza pra evitar SQL injection (LIKE com escape)
+    const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
+    const safeNum = onlyDigits.slice(0, 14);
+
+    // Monta SELECT mínimo — só colunas que existem
+    const cols: string[] = [`\`${cm.codCliente}\``];
+    if (cm.nome) cols.push(`\`${cm.nome}\``);
+    cols.push('CPF', 'CIDADE');
+    if (cm.telefone) cols.push(`\`${cm.telefone}\``);
+
+    // WHERE: combina busca por CPF, codCliente e nome (OR)
+    const wheres: string[] = [];
+    if (isNumeric) {
+      wheres.push(`\`CPF\` LIKE '${safeNum}%'`);
+      wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
+    }
+    if (cm.nome) {
+      wheres.push(`UPPER(\`${cm.nome}\`) LIKE UPPER('%${safeText}%')`);
+    }
+    if (wheres.length === 0) return { results: [] };
+
+    const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${limit}`;
+
+    let rows: any[] = [];
+    try {
+      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 8000 });
+      rows = r.rows || [];
+    } catch (e: any) {
+      // Fallback caso a coluna CPF ou CIDADE não exista — busca só por nome
+      try {
+        const sql2 = `SELECT \`${cm.codCliente}\`${cm.nome ? `, \`${cm.nome}\`` : ''} FROM \`${cm.table}\` WHERE ${wheres.filter(w => !w.includes('CPF') && !w.includes('CIDADE')).join(' OR ') || '1=0'} ${orderBy} LIMIT ${limit}`;
+        const r2 = await this.erp.runReadOnly(sql2, { maxRows: limit, timeoutMs: 8000 });
+        rows = r2.rows || [];
+      } catch {/* ignora */}
+    }
+
+    return {
+      results: rows.map((r) => ({
+        codCliente: String(r[cm.codCliente] ?? '').trim(),
+        nome: cm.nome ? String(r[cm.nome] ?? '').trim() : '',
+        cpf: String(r['CPF'] ?? '').replace(/\D/g, '').trim(),
+        cidade: String(r['CIDADE'] ?? '').trim(),
+        telefone: cm.telefone ? String(r[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
+      })),
+    };
+  }
+
+  /**
    * POST /pdv/sales/:id/crediario
    * Gera N parcelas no Giga (tabela movimento) pra uma venda do PDV.
    *

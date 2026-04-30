@@ -1345,6 +1345,46 @@ function CustomerModal({
   const [name, setName] = useState(initial.name);
   const [email, setEmail] = useState(initial.email);
   const [phone, setPhone] = useState(initial.phone);
+
+  // ─── Typeahead: busca por CPF OR nome no Giga ───────────────────────────
+  // Aceita: dígitos parciais (CPF) ou texto (nome). Debounce de 300ms.
+  const [searchTerm, setSearchTerm] = useState('');
+  const [results, setResults] = useState<Array<{
+    codCliente: string; nome: string; cpf: string; cidade: string; telefone: string;
+  }>>([]);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (term.length < 2) {
+      setResults([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await api<{ results: typeof results }>(`/pdv/customer-search?q=${encodeURIComponent(term)}&limit=20`);
+        setResults(r.results || []);
+        setShowResults(true);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  function pickResult(c: { codCliente: string; nome: string; cpf: string; telefone: string }) {
+    setCpf(c.cpf);
+    setName(c.nome);
+    setPhone(c.telefone);
+    setSearchTerm('');
+    setShowResults(false);
+    setResults([]);
+  }
+
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
@@ -1357,6 +1397,51 @@ function CustomerModal({
           </h2>
           <button onClick={onClose}><X className="w-4 h-4" /></button>
         </div>
+
+        {/* TYPEAHEAD — busca rápida por CPF ou nome (puxa do Giga) */}
+        <div className="relative">
+          <div className="flex items-center gap-2 border-2 border-violet-300 bg-violet-50 rounded px-2 py-2 focus-within:border-violet-500">
+            <Search className="w-4 h-4 text-violet-600 shrink-0" />
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onFocus={() => results.length > 0 && setShowResults(true)}
+              placeholder="Buscar cliente por CPF ou nome…"
+              className="flex-1 bg-transparent text-sm focus:outline-none"
+              autoComplete="off"
+            />
+            {searching && <Loader2 className="w-4 h-4 animate-spin text-violet-500" />}
+          </div>
+
+          {showResults && results.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">
+              {results.map((c) => (
+                <button
+                  key={c.codCliente + c.cpf}
+                  type="button"
+                  onClick={() => pickResult(c)}
+                  className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0 transition"
+                >
+                  <div className="font-bold text-sm text-slate-800 truncate">{c.nome || '— sem nome —'}</div>
+                  <div className="text-[11px] text-slate-500 flex gap-2 mt-0.5">
+                    {c.cpf && <span>CPF {c.cpf}</span>}
+                    {c.codCliente && <span>· cód {c.codCliente}</span>}
+                    {c.cidade && <span>· {c.cidade}</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {showResults && !searching && searchTerm.length >= 2 && results.length === 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl px-3 py-2 text-xs text-slate-500 z-10">
+              Nenhum cliente encontrado. Preencha os campos abaixo manualmente.
+            </div>
+          )}
+        </div>
+
+        <div className="text-[10px] text-slate-400 text-center">— ou preencha manualmente —</div>
+
         <div className="space-y-2">
           <input
             value={cpf}
