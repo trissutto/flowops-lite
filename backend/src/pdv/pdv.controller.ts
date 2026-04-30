@@ -10,8 +10,10 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
@@ -20,6 +22,7 @@ import { NfceService } from './nfce.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { CrediarioPrintService } from './crediario-print.service';
 
 /**
  * /pdv — frente de caixa.
@@ -36,6 +39,7 @@ export class PdvController {
     private readonly pagarme: PagarmeService,
     private readonly crediarios: CrediariosService,
     private readonly crediarioBaixa: CrediarioBaixaService,
+    private readonly crediarioPrint: CrediarioPrintService,
   ) {}
 
   private requireRole(req: any) {
@@ -579,5 +583,72 @@ export class PdvController {
       valorFinanciado,
       entrada,
     };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // IMPRESSÃO — Promissórias e Carnê pré-impressos da Lurd's
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** GET /pdv/sales/:id/promissorias-pdf — N folhas A4, 3 promissórias por folha */
+  @Get('sales/:id/promissorias-pdf')
+  async getPromissoriasPdf(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    this.requireRole(req);
+    try {
+      const { buffer, filename } = await this.crediarioPrint.generatePromissorias(id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[pdv/promissorias-pdf] FALHA', id, '\n', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF', detail: e?.message });
+    }
+  }
+
+  /** GET /pdv/sales/:id/carne-pdf — 1 folha A4, 2 carnês iguais */
+  @Get('sales/:id/carne-pdf')
+  async getCarnePdf(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    this.requireRole(req);
+    try {
+      const { buffer, filename } = await this.crediarioPrint.generateCarne(id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[pdv/carne-pdf] FALHA', id, '\n', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF', detail: e?.message });
+    }
+  }
+
+  /**
+   * GET /pdv/sales/:id/credprint-pdf — combinado: promissórias + carnê na ordem
+   * que a vendedora carrega na impressora (folhas brancas primeiro, azul por último).
+   */
+  @Get('sales/:id/credprint-pdf')
+  async getCredPrintCompleto(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    this.requireRole(req);
+    try {
+      const { buffer, filename } = await this.crediarioPrint.generateImpressaoCompleta(id);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[pdv/credprint-pdf] FALHA', id, '\n', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF', detail: e?.message });
+    }
   }
 }

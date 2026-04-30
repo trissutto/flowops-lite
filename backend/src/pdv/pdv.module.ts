@@ -11,11 +11,12 @@ import { CashController } from './cash.controller';
 import { ReturnsService } from './returns.service';
 import { ReturnsController } from './returns.controller';
 import { NfceService } from './nfce.service';
+import { CrediarioPrintService } from './crediario-print.service';
 
 @Module({
   imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule)],
   controllers: [PdvController, CashController, ReturnsController],
-  providers: [PdvService, PixService, CashService, ReturnsService, NfceService],
-  exports: [PdvService, PixService, CashService, ReturnsService, NfceService],
+  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService],
+  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService],
 })
 export class PdvModule {}

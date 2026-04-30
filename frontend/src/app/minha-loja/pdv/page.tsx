@@ -2445,6 +2445,66 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   const [cancelMotivo, setCancelMotivo] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [printingCred, setPrintingCred] = useState(false);
+  const { toast } = usePdvToast();
+
+  // Detecta se a venda tem pagamento de crediário (mostra botões de impressão)
+  const hasCrediario = (sale.payments || []).some((p) => p.method === 'crediario');
+
+  /**
+   * Imprime promissórias + carnê (combinado) na impressora padrão.
+   * Vendedora carrega 2 folhas brancas de promissória + 1 azul de carnê
+   * antes de clicar.
+   */
+  async function imprimirCrediario(tipo: 'completo' | 'promissorias' | 'carne') {
+    setPrintingCred(true);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      if (!token) {
+        toast('error', 'Sessão expirada', 'Faça login novamente');
+        return;
+      }
+      const { API_URL } = await import('@/lib/api');
+      const path =
+        tipo === 'completo' ? 'credprint-pdf' :
+        tipo === 'promissorias' ? 'promissorias-pdf' : 'carne-pdf';
+      const r = await fetch(`${API_URL}/api/pdv/sales/${sale.id}/${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error(txt || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+
+      // Tenta Electron silent print (PC desktop)
+      const electron = (window as any).electronAPI;
+      if (electron?.silentPrintUrl) {
+        try {
+          await electron.silentPrintUrl(url);
+          toast('success', 'Enviado pra impressora', 'Confira a bandeja');
+          setTimeout(() => URL.revokeObjectURL(url), 60_000);
+          return;
+        } catch (e) {
+          console.warn('Electron print falhou, popup fallback:', e);
+        }
+      }
+      // Fallback browser
+      const w = window.open(url, 'lurds_cred_print', 'width=900,height=700');
+      if (!w) {
+        toast('warning', 'Popup bloqueado', 'Habilite popups OU baixa o PDF manual');
+      } else {
+        setTimeout(() => { try { w.focus(); w.print(); } catch {/*noop*/} }, 800);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e: any) {
+      const h = humanizeError(e);
+      toast('error', h.title, h.hint);
+    } finally {
+      setPrintingCred(false);
+    }
+  }
 
   const isAuthorized = sale.nfceStatus === 'authorized';
   const isCancelled = sale.nfceStatus === 'cancelled' || !!sale.nfceCanceladaEm;
@@ -2659,6 +2719,44 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
               <span className="tabular-nums">{brl(sale.total)}</span>
             </div>
           </div>
+
+          {/* IMPRESSÃO CREDIÁRIO — só aparece se a venda tem pagamento crediário */}
+          {hasCrediario && (
+            <div className="bg-blue-50 border-2 border-blue-200 rounded p-3 space-y-2">
+              <div className="text-xs font-bold text-blue-900 uppercase tracking-wider">
+                🖨️ Imprimir crediário
+              </div>
+              <div className="text-[11px] text-blue-700">
+                Carrega na impressora: <b>2 folhas brancas (promissória)</b> + <b>1 azul (carnê)</b> e clica abaixo.
+              </div>
+              <button
+                onClick={() => imprimirCrediario('completo')}
+                disabled={printingCred}
+                className="w-full px-3 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-black rounded flex items-center justify-center gap-2 text-base"
+              >
+                {printingCred ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                Imprimir promissórias + carnê
+              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => imprimirCrediario('promissorias')}
+                  disabled={printingCred}
+                  className="px-2 py-2 bg-white hover:bg-blue-100 border-2 border-blue-300 disabled:opacity-50 text-blue-800 font-bold rounded text-xs flex items-center justify-center gap-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Só promissórias
+                </button>
+                <button
+                  onClick={() => imprimirCrediario('carne')}
+                  disabled={printingCred}
+                  className="px-2 py-2 bg-white hover:bg-blue-100 border-2 border-blue-300 disabled:opacity-50 text-blue-800 font-bold rounded text-xs flex items-center justify-center gap-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Só carnê
+                </button>
+              </div>
+            </div>
+          )}
 
           <button
             onClick={onNew}
