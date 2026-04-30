@@ -65,11 +65,13 @@ export default function PixPublicoPage() {
   const [loading, setLoading] = useState(true);
   const [copyMsg, setCopyMsg] = useState(false);
 
-  // Carrega info uma vez no mount
+  // Carrega info uma vez no mount.
+  // IMPORTANTE: backend tem globalPrefix='api' (main.ts), então a URL real
+  // é ${API_URL}/api/pix-publico/:baixaId. Sem o /api retorna "Cannot GET".
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${API_URL}/pix-publico/${baixaId}`);
+        const r = await fetch(`${API_URL}/api/pix-publico/${baixaId}`);
         if (!r.ok) {
           const err = await r.json().catch(() => ({}));
           throw new Error(err?.message || `Erro ${r.status}`);
@@ -90,13 +92,13 @@ export default function PixPublicoPage() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await fetch(`${API_URL}/pix-publico/${baixaId}/status`);
+        const r = await fetch(`${API_URL}/api/pix-publico/${baixaId}/status`);
         if (!r.ok) return;
         const data = await r.json();
         if (cancelled) return;
         if (data.isPaid) {
           // Recarrega dados completos
-          const r2 = await fetch(`${API_URL}/pix-publico/${baixaId}`);
+          const r2 = await fetch(`${API_URL}/api/pix-publico/${baixaId}`);
           if (r2.ok) {
             const fresh = await r2.json();
             setInfo(fresh);
