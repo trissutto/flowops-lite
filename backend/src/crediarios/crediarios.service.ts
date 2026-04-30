@@ -198,8 +198,21 @@ export class CrediariosService {
           /^foneres$/i, /^fone_?res$/i,             // ← Lurd's / Giga (PRIORIDADE)
           /^telefone2$/i, /^tel2$/i, /^fone2$/i, /^celular2$/i, /^contato$/i,
         );
+        // CPF — coluna pode variar muito no Giga.
+        // Lurd's costuma usar CPF puro, mas alguns clones usam CPFCGC, CGCCPF, CPF_CNPJ.
+        const cpf = pickColumn(cols,
+          /^cpf$/i, /^cpf_?cnpj$/i, /^cnpj_?cpf$/i, /^cpfcgc$/i, /^cgccpf$/i,
+          /^doc(?:umento)?$/i, /^num_?doc$/i,
+        );
+        const cidade = pickColumn(cols, /^cidade$/i, /^municipio$/i, /^localidade$/i);
+        const endereco = pickColumn(cols, /^endereco$/i, /^logradouro$/i, /^rua$/i, /^endereço$/i);
+        const bairro = pickColumn(cols, /^bairro$/i, /^distrito$/i);
+        const cep = pickColumn(cols, /^cep$/i, /^codigo_?postal$/i);
         if (!codCliente) continue;
-        const result: ClientesMap = { table: tbl, codCliente, nome, telefone, telefone2 };
+        const result: ClientesMap = {
+          table: tbl, codCliente, nome, telefone, telefone2,
+          cpf, cidade, endereco, bairro, cep,
+        };
         this.clientesMapCache = result;
         this.logger.log(`detectClientesTable: ${JSON.stringify(result)}`);
         return result;
@@ -844,6 +857,11 @@ export interface ClientesMap {
   nome: string | null;
   telefone: string | null;
   telefone2: string | null;
+  cpf: string | null;       // ← coluna do CPF (varia: CPF, cpf, CPFCGC, CPF_CNPJ…)
+  cidade: string | null;    // ← coluna da cidade (CIDADE, cidade, MUNICIPIO…)
+  endereco: string | null;
+  bairro: string | null;
+  cep: string | null;
 }
 
 const EMPTY_MAP: ColumnMap = {

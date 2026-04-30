@@ -445,35 +445,31 @@ export class PdvController {
       return { found: false, message: 'Tabela de clientes do Giga não detectada' };
     }
 
-    // Procura por CPF (coluna pode variar). Escape inline pra evitar SQL injection.
+    // Procura por CPF (coluna detectada dinamicamente — pode chamar CPF, cpf, CPFCGC, etc).
     // BUG FIX: CPF no Giga pode estar FORMATADO (108.458.788-24) ou só dígitos.
     // Comparar via REPLACE pra extrair só os dígitos antes de igualar.
     const safeCpf = cleanCpf.replace(/[^0-9]/g, '').slice(0, 14);
     let cliente: any = null;
-    try {
-      // Compara CPF normalizado (só dígitos) com query normalizada
-      const sql = `
-        SELECT * FROM \`${cm.table}\`
-        WHERE REPLACE(REPLACE(REPLACE(\`CPF\`, '.', ''), '-', ''), '/', '') = '${safeCpf}'
-           OR \`CPF\` = '${safeCpf}'
-        LIMIT 1`;
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-      cliente = r.rows[0] || null;
-    } catch {
-      // Coluna CPF pode não existir — tenta como codCliente direto
+    if (cm.cpf) {
+      try {
+        const sql = `
+          SELECT * FROM \`${cm.table}\`
+          WHERE REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') = '${safeCpf}'
+             OR \`${cm.cpf}\` = '${safeCpf}'
+          LIMIT 1`;
+        const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+        cliente = r.rows[0] || null;
+      } catch (e: any) {
+        console.warn('[customer-info] erro buscando CPF:', e?.message);
+      }
+    }
+    // Fallback: se a "string" passada era na verdade um codCliente (não CPF),
+    // tenta por código direto (ex: 4 dígitos = código)
+    if (!cliente) {
       try {
         const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
         const r2 = await this.erp.runReadOnly(sql2, { maxRows: 1, timeoutMs: 10000 });
         cliente = r2.rows[0] || null;
-      } catch {/* ignora */}
-    }
-    // Fallback: se ainda não achou e o "cpf" era na verdade um codCliente,
-    // tenta por código direto (ex: 4 dígitos = código, não CPF)
-    if (!cliente && safeCpf.length > 0 && safeCpf.length < 11) {
-      try {
-        const sql3 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
-        const r3 = await this.erp.runReadOnly(sql3, { maxRows: 1, timeoutMs: 10000 });
-        cliente = r3.rows[0] || null;
       } catch {/* ignora */}
     }
 
@@ -558,17 +554,20 @@ export class PdvController {
     const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
     const safeNum = onlyDigits.slice(0, 14);
 
-    // Monta SELECT mínimo — só colunas que existem
-    const cols: string[] = [`\`${cm.codCliente}\``];
-    if (cm.nome) cols.push(`\`${cm.nome}\``);
-    cols.push('CPF', 'CIDADE');
-    if (cm.telefone) cols.push(`\`${cm.telefone}\``);
+    // Monta SELECT — só colunas que detectClientesTable confirmou existir
+    const selectCols: string[] = [`\`${cm.codCliente}\``];
+    if (cm.nome) selectCols.push(`\`${cm.nome}\``);
+    if (cm.cpf) selectCols.push(`\`${cm.cpf}\``);
+    if (cm.cidade) selectCols.push(`\`${cm.cidade}\``);
+    if (cm.telefone) selectCols.push(`\`${cm.telefone}\``);
 
     // WHERE: combina busca por CPF (normalizado), codCliente e nome (OR)
     const wheres: string[] = [];
     if (isNumeric) {
-      // CPF no Giga pode estar formatado — comparar normalizado (só dígitos)
-      wheres.push(`REPLACE(REPLACE(REPLACE(\`CPF\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
+      if (cm.cpf) {
+        // CPF no Giga pode estar formatado — comparar normalizado (só dígitos)
+        wheres.push(`REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
+      }
       wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
     }
     if (cm.nome) {
@@ -577,27 +576,22 @@ export class PdvController {
     if (wheres.length === 0) return { results: [] };
 
     const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${limit}`;
+    const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${limit}`;
 
     let rows: any[] = [];
     try {
       const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 8000 });
       rows = r.rows || [];
     } catch (e: any) {
-      // Fallback caso a coluna CPF ou CIDADE não exista — busca só por nome
-      try {
-        const sql2 = `SELECT \`${cm.codCliente}\`${cm.nome ? `, \`${cm.nome}\`` : ''} FROM \`${cm.table}\` WHERE ${wheres.filter(w => !w.includes('CPF') && !w.includes('CIDADE')).join(' OR ') || '1=0'} ${orderBy} LIMIT ${limit}`;
-        const r2 = await this.erp.runReadOnly(sql2, { maxRows: limit, timeoutMs: 8000 });
-        rows = r2.rows || [];
-      } catch {/* ignora */}
+      console.warn('[customer-search] erro:', e?.message);
     }
 
     return {
       results: rows.map((r) => ({
         codCliente: String(r[cm.codCliente] ?? '').trim(),
         nome: cm.nome ? String(r[cm.nome] ?? '').trim() : '',
-        cpf: String(r['CPF'] ?? '').replace(/\D/g, '').trim(),
-        cidade: String(r['CIDADE'] ?? '').trim(),
+        cpf: cm.cpf ? String(r[cm.cpf] ?? '').replace(/\D/g, '').trim() : '',
+        cidade: cm.cidade ? String(r[cm.cidade] ?? '').trim() : '',
         telefone: cm.telefone ? String(r[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
       })),
     };

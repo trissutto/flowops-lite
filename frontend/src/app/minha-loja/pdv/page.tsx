@@ -1664,12 +1664,23 @@ function CustomerModal({
   }, [searchTerm]);
 
   function pickResult(c: { codCliente: string; nome: string; cpf: string; telefone: string }) {
-    setCpf(c.cpf);
-    setName(c.nome);
-    setPhone(c.telefone);
-    setSearchTerm('');
-    setShowResults(false);
-    setResults([]);
+    // CLICK NO RESULTADO = JÁ IDENTIFICA. Não precisa clicar em "Salvar" depois.
+    // Se o cliente não tem CPF no Giga, ainda salva nome+telefone — mas avisa.
+    if (!c.cpf || c.cpf.length < 11) {
+      // Sem CPF: salva mesmo assim (vendedora pode preencher manualmente depois),
+      // mas avisa que o crediário não vai funcionar até cadastrar CPF no Giga.
+      const ok = window.confirm(
+        `${c.nome} não tem CPF cadastrado no Giga.\n\n` +
+        `Posso identificar com nome só, mas pra crediário você precisa cadastrar o CPF no Giga primeiro.\n\nIdentificar mesmo assim?`,
+      );
+      if (!ok) return;
+    }
+    onSave({
+      cpf: c.cpf || '',
+      name: c.nome || '',
+      email: '',
+      phone: c.telefone || '',
+    });
   }
 
   return (
