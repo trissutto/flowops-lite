@@ -454,6 +454,8 @@ function PdvPageInner() {
   >(null);
   // ── Modal Item Manual (digitar produto livre) ──
   const [showManualItem, setShowManualItem] = useState(false);
+  // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
+  const [showSimular, setShowSimular] = useState(false);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -1002,8 +1004,9 @@ function PdvPageInner() {
         ) : null}
       </main>
 
-      {/* SIDEBAR DIREITA — ações do PDV (rose/teal/sky/purple + green/amber/slate/orange).
-          Em mobile (<lg) vira uma faixa horizontal com scroll no topo. */}
+      {/* SIDEBAR DIREITA — ações do PDV (rose/amber/sky/purple + green/teal/slate/orange).
+          Em mobile (<lg) vira uma faixa horizontal com scroll no topo.
+          PIX foi pro footer (perto do Finalizar) — sidebar livre pra Simular Cartão. */}
       <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
         <PdvSidebarCard
           tone="rose"
@@ -1013,12 +1016,13 @@ function PdvPageInner() {
           label="Receber"
         />
         <PdvSidebarCard
-          tone="teal"
-          onClick={() => setShowPixAvulso(true)}
-          icon={DollarSign}
-          subtitle="PIX"
-          label="Pag Rápido"
-          description={sale?.total && sale.total > 0 ? brl(sale.total) : undefined}
+          tone="amber"
+          onClick={() => setShowSimular(true)}
+          disabled={!sale?.total || sale.total <= 0}
+          icon={CreditCard}
+          subtitle="Cartão"
+          label="Simular"
+          description={sale?.total && sale.total > 0 ? `1× ${brl(sale.total)}` : undefined}
         />
         <PdvSidebarCard
           tone="sky"
@@ -1081,11 +1085,11 @@ function PdvPageInner() {
       <div className="lg:hidden fixed bottom-[88px] left-0 right-0 z-10 px-3">
         <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
           <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
-          <PdvMobilePill tone="teal"   onClick={() => setShowPixAvulso(true)} icon={DollarSign} label="PIX" />
+          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
           <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
           <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
           <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
-          <PdvMobilePill tone="amber"  href="/minha-loja/pdv/devolucao"    icon={ArrowRightLeft} label="Trocar" />
+          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao"    icon={ArrowRightLeft} label="Trocar" />
           <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
           <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
         </div>
@@ -1266,6 +1270,14 @@ function PdvPageInner() {
             toast('success', 'Item manual adicionado', 'Confira descrição e valor no carrinho');
             setTimeout(() => inputRef.current?.focus(), 50);
           }}
+        />
+      )}
+
+      {/* Modal Simulador de Parcelamento Cartão */}
+      {showSimular && sale && sale.total > 0 && (
+        <SimularParcelasModal
+          total={sale.total}
+          onClose={() => setShowSimular(false)}
         />
       )}
 
@@ -3233,6 +3245,182 @@ function PdvMobilePill({
     return <Link href={href} className={cls} style={style}>{inner}</Link>;
   }
   return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
+}
+
+// ── SIMULADOR DE PARCELAMENTO CARTÃO ──────────────────────────────────
+// Mostra pra cliente quanto fica cada parcela de 1 a 12x. Vendedora pode
+// configurar:
+//   - Limite de parcelas SEM JUROS (default 3x — comum no varejo BR)
+//   - Taxa mensal de juros (default 0% — Tabela Price quando >0)
+//
+// Fórmula com juros (Tabela Price):
+//   pmt = P * (i * (1+i)^n) / ((1+i)^n - 1)
+//   onde P=principal, i=juros mensal decimal, n=parcelas
+//
+// Sem juros: pmt = P / n
+function SimularParcelasModal({
+  total,
+  onClose,
+}: {
+  total: number;
+  onClose: () => void;
+}) {
+  // Default: 3x sem juros, 0% taxa adicional. Ajustável.
+  const [parcelasSemJuros, setParcelasSemJuros] = useState(3);
+  const [taxaMensalStr, setTaxaMensalStr] = useState('2,99');
+
+  const taxaMensal = (() => {
+    const n = Number(taxaMensalStr.replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) || n < 0 ? 0 : n;
+  })();
+
+  const calcParcela = (n: number): { valor: number; totalPago: number; comJuros: boolean } => {
+    if (n <= 1) return { valor: total, totalPago: total, comJuros: false };
+    if (n <= parcelasSemJuros || taxaMensal === 0) {
+      const valor = total / n;
+      return { valor, totalPago: valor * n, comJuros: false };
+    }
+    // Com juros — Tabela Price
+    const i = taxaMensal / 100;
+    const valor = (total * (i * Math.pow(1 + i, n))) / (Math.pow(1 + i, n) - 1);
+    return { valor, totalPago: valor * n, comJuros: true };
+  };
+
+  const parcelas = Array.from({ length: 12 }, (_, idx) => idx + 1);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
+            <CreditCard className="w-5 h-5" /> Simular parcelamento
+          </h2>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        {/* Total da venda */}
+        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-3 flex items-center justify-between">
+          <span className="text-xs text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
+          <span className="text-3xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
+        </div>
+
+        {/* Configuração rápida — sem juros até X + taxa após */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Sem juros até
+            </label>
+            <select
+              value={parcelasSemJuros}
+              onChange={(e) => setParcelasSemJuros(Number(e.target.value))}
+              className="w-full px-3 py-2.5 text-base font-bold border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 bg-white"
+            >
+              {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => (
+                <option key={n} value={n}>{n}× sem juros</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Juros após (% ao mês)
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                inputMode="decimal"
+                value={taxaMensalStr}
+                onChange={(e) => setTaxaMensalStr(e.target.value)}
+                placeholder="0"
+                className="w-full px-3 py-2.5 pr-9 text-base font-bold tabular-nums text-rose-700 border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabela de parcelas — destaque pro valor pra falar com a cliente */}
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <div className="grid grid-cols-[60px_1fr_120px_80px] gap-2 px-3 py-2 bg-slate-100 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+            <div>Parc.</div>
+            <div>Valor da parcela</div>
+            <div className="text-right">Total pago</div>
+            <div className="text-right">Juros</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {parcelas.map((n) => {
+              const p = calcParcela(n);
+              const acrescimo = p.totalPago - total;
+              return (
+                <div
+                  key={n}
+                  className={`grid grid-cols-[60px_1fr_120px_80px] gap-2 px-3 py-2.5 items-center ${
+                    p.comJuros ? 'bg-rose-50/30' : ''
+                  }`}
+                >
+                  <div className="font-black text-base text-slate-900 tabular-nums">
+                    {n}×
+                  </div>
+                  <div>
+                    <div className="font-black text-2xl text-emerald-700 tabular-nums leading-none">
+                      {brl(p.valor)}
+                    </div>
+                    {!p.comJuros && (
+                      <div className="text-[10px] text-emerald-600 font-bold mt-0.5">
+                        SEM JUROS
+                      </div>
+                    )}
+                    {p.comJuros && (
+                      <div className="text-[10px] text-rose-600 font-bold mt-0.5">
+                        COM JUROS · {taxaMensalStr}% a.m.
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right text-sm tabular-nums text-slate-700 font-semibold">
+                    {brl(p.totalPago)}
+                  </div>
+                  <div className="text-right text-xs tabular-nums">
+                    {acrescimo > 0.01 ? (
+                      <span className="text-rose-600 font-bold">+{brl(acrescimo)}</span>
+                    ) : (
+                      <span className="text-emerald-600 font-bold">—</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Atalhos rápidos pra falar pra cliente — copiar texto pronto */}
+        <div className="grid grid-cols-3 gap-2">
+          {[3, 6, 10].map((n) => {
+            const p = calcParcela(n);
+            return (
+              <button
+                key={n}
+                onClick={() => {
+                  const txt = `${n}× de ${brl(p.valor)}${p.comJuros ? '' : ' SEM JUROS'}`;
+                  navigator.clipboard.writeText(txt).catch(() => {});
+                }}
+                className="px-2 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-lg text-xs font-bold transition leading-tight"
+                title="Copiar pro WhatsApp"
+              >
+                <div className="text-[10px] opacity-70">copiar {n}×</div>
+                <div className="font-black text-sm">{brl(p.valor)}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50"
+        >
+          Fechar
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ── DISCOUNT MODAL ────────────────────────────────────────────────────
