@@ -296,10 +296,45 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, [pushToast]);
 
+  /**
+   * Antes de fechar, faz PRE-CHECK pra detectar items sem estoque suficiente
+   * no Giga (vendido entre criação e fechamento, divergência ERP×físico, etc).
+   * Se tem problema, abre modal com lista — vendedora pode remover/diagnosticar
+   * antes de tentar de novo. Se OK, fecha direto.
+   */
   const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
-    if (!confirm(`Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças desta remessa. Não pode desfazer.`)) return;
     setClosingShipmentId(shipmentId);
     try {
+      // 1) Precheck — detecta problemas SEM tocar no estoque
+      const pre = await api<{
+        ok: boolean;
+        totalItems: number;
+        unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }>;
+        problemas: Array<{
+          transferOrderId: string;
+          refCode: string;
+          cor: string | null;
+          tamanho: string | null;
+          qtyRequerida: number;
+          sku: string;
+          storeCode: string;
+          estoqueGiga: number;
+        }>;
+      }>(`/realignment/shipments/${shipmentId}/precheck`);
+
+      // Se tem problema, abre modal — não tenta fechar agora
+      if (!pre.ok && (pre.problemas.length > 0 || pre.unresolved.length > 0)) {
+        setProblemasShipment({ shipmentId, code, ...pre });
+        setClosingShipmentId(null);
+        return;
+      }
+
+      // 2) Confirmação final + fechar
+      if (!confirm(`Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças. Não pode desfazer.`)) {
+        setClosingShipmentId(null);
+        return;
+      }
+
       const res = await api<{ ok: boolean; code: string; totalItems: number; totalQty: number }>(
         `/realignment/shipments/${shipmentId}/close-and-send`,
         { method: 'POST', body: '{}' },
@@ -312,6 +347,45 @@ export default function MinhaLojaRealinhamentoPage() {
       setClosingShipmentId(null);
     }
   }, [pushToast, loadOpenShipments, loadItems, loadSentItems]);
+
+  // Estado do modal de problemas detectados pelo precheck
+  const [problemasShipment, setProblemasShipment] = useState<{
+    shipmentId: string;
+    code: string;
+    totalItems: number;
+    problemas: Array<{
+      transferOrderId: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      qtyRequerida: number;
+      sku: string;
+      storeCode: string;
+      estoqueGiga: number;
+    }>;
+    unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }>;
+  } | null>(null);
+
+  /** Remove item da remessa (transferOrder) — usado no modal de problemas */
+  const handleRemoveItem = useCallback(async (transferOrderId: string, descricao: string) => {
+    if (!confirm(`Remover "${descricao}" da remessa?`)) return;
+    try {
+      await api(`/realignment/shipments/items/${transferOrderId}`, { method: 'DELETE' });
+      pushToast(`🗑️ Item removido. Reabra "Fechar e enviar" pra rever.`);
+      // Atualiza modal removendo o item da lista local
+      setProblemasShipment((prev) => {
+        if (!prev) return null;
+        const novosProblemas = prev.problemas.filter((p) => p.transferOrderId !== transferOrderId);
+        if (novosProblemas.length === 0 && prev.unresolved.length === 0) {
+          return null; // fecha modal se não tem mais nada
+        }
+        return { ...prev, problemas: novosProblemas };
+      });
+      await Promise.all([loadOpenShipments(), loadItems()]);
+    } catch (e: any) {
+      alert(`Erro ao remover item: ${e?.message || e}`);
+    }
+  }, [pushToast, loadOpenShipments, loadItems]);
 
   // Auth + initial load
   useEffect(() => {
@@ -1003,6 +1077,115 @@ export default function MinhaLojaRealinhamentoPage() {
           svg.animate-spin { display: none !important; }
         }
       `}</style>
+
+      {/* MODAL — problemas detectados pelo precheck antes de fechar remessa */}
+      {problemasShipment && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={() => setProblemasShipment(null)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-2xl my-8 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 bg-rose-50 border-b border-rose-200 flex items-center justify-between">
+              <h2 className="font-black text-base text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5" />
+                Não dá pra fechar a remessa {problemasShipment.code}
+              </h2>
+              <button onClick={() => setProblemasShipment(null)} className="text-slate-400 hover:text-slate-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
+                <b>O que aconteceu:</b> uma ou mais peças desta remessa <b>não tem mais estoque no Giga</b>.
+                Provavelmente foram <b>vendidas fisicamente</b> entre o momento de criar a remessa e agora,
+                ou o estoque tem divergência ERP × físico.
+                <br />
+                <br />
+                <b>Como resolver:</b> remova os itens problemáticos abaixo e tente fechar de novo.
+                Os outros itens da remessa continuam intactos.
+              </div>
+
+              {/* Items sem estoque */}
+              {problemasShipment.problemas.length > 0 && (
+                <div>
+                  <div className="text-xs font-bold uppercase text-rose-700 tracking-wider mb-2">
+                    {problemasShipment.problemas.length} item(s) com estoque insuficiente
+                  </div>
+                  <div className="space-y-2">
+                    {problemasShipment.problemas.map((p) => {
+                      const desc = `${p.refCode} ${p.cor || ''} ${p.tamanho || ''}`.trim();
+                      return (
+                        <div
+                          key={p.transferOrderId}
+                          className="border-2 border-rose-200 bg-rose-50/40 rounded-lg p-3"
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                            <div>
+                              <div className="font-bold text-sm text-slate-900">{desc}</div>
+                              <div className="text-xs text-slate-600 mt-0.5">
+                                SKU <span className="font-mono">{p.sku}</span> ·
+                                Loja {p.storeCode} ·
+                                <span className="text-rose-700 font-bold ml-1">
+                                  Giga tem {p.estoqueGiga}, remessa pediu {p.qtyRequerida}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleRemoveItem(p.transferOrderId, desc)}
+                              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                              Remover da remessa
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Items com SKU não resolvido (REF+cor+tamanho não bate em produtos) */}
+              {problemasShipment.unresolved.length > 0 && (
+                <div>
+                  <div className="text-xs font-bold uppercase text-amber-700 tracking-wider mb-2">
+                    {problemasShipment.unresolved.length} item(s) com SKU não identificado
+                  </div>
+                  <div className="space-y-1.5">
+                    {problemasShipment.unresolved.map((u, idx) => (
+                      <div key={idx} className="text-sm bg-amber-50 border border-amber-200 rounded p-2">
+                        <span className="font-mono font-bold">{u.refCode}</span>
+                        <span className="ml-2 text-slate-600">
+                          {u.cor || '—'} / {u.tamanho || '—'}
+                        </span>
+                        <div className="text-[10px] text-amber-700 mt-1">
+                          O sistema não conseguiu casar essa combinação no Giga (cadastro divergente).
+                          Pra resolver: remova manualmente da remessa ou conserte o cadastro no Wincred.
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-3 bg-slate-50 border-t flex justify-end gap-2">
+              <button
+                onClick={() => setProblemasShipment(null)}
+                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded font-bold text-sm"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

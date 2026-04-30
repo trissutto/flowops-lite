@@ -426,6 +426,21 @@ export class RealignmentController {
    * Remove um item de uma remessa aberta (vendedora errou, quer tirar).
    * DELETE /realignment/shipments/items/:transferOrderId · filial origem
    */
+  /**
+   * GET /realignment/shipments/:id/precheck — verifica estoque Giga ANTES de fechar.
+   * Retorna lista de items com problema (estoque insuficiente / não resolvido).
+   * Frontend chama ANTES de close-and-send pra mostrar UI clara.
+   */
+  @Get('shipments/:id/precheck')
+  async precheckCloseShipment(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId) {
+      throw new ForbiddenException('Apenas loja origem pode pré-verificar');
+    }
+    return this.shipment.precheckCloseShipment({ shipmentId: id, storeId });
+  }
+
   @Delete('shipments/items/:transferOrderId')
   removeItemFromShipment(@Param('transferOrderId') id: string, @Req() req: any) {
     const role = req?.user?.role;

@@ -225,6 +225,118 @@ export class RealignmentShipmentService {
    * Remove um item de uma remessa OPEN (vendedora errou, quer tirar).
    * Volta status pra pending.
    */
+  /**
+   * Pré-verifica estoque Giga pra todos os items da remessa, SEM fazer UPDATE.
+   * Retorna lista de items com problema (estoque insuficiente). Usado pelo
+   * fluxo de fechamento ANTES da transação real, e pelo endpoint de precheck
+   * que o frontend chama pra mostrar UI de problemas.
+   *
+   * @param items items da remessa (transferOrders) — fonte da verdade
+   * @param stockItems items já com SKU resolvido pelo findCodigoByRefCorTam
+   */
+  private async precheckStockForShipment(
+    items: Array<{ id: string; refCode: string; cor: string | null; tamanho: string | null; qtyOrigem: number }>,
+    stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }>,
+  ): Promise<{
+    problemas: Array<{
+      transferOrderId: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      qtyRequerida: number;
+      sku: string;
+      storeCode: string;
+      estoqueGiga: number;
+    }>;
+  }> {
+    const problemas: Array<any> = [];
+    // Mapeia transferOrders por (refCode, cor, tamanho) pra associar com stockItems
+    const itemByKey = new Map<string, typeof items[0]>();
+    for (const it of items) {
+      const key = `${it.refCode}::${it.cor || ''}::${it.tamanho || ''}`;
+      itemByKey.set(key, it);
+    }
+    for (const si of stockItems) {
+      // Busca a row de estoque (SELECT, sem UPDATE)
+      const variants = (this.erp as any).skuVariants?.(si.sku) ?? [si.sku];
+      let estoqueGiga = 0;
+      try {
+        const r = await this.erp.runReadOnly(
+          `SELECT MAX(ESTOQUE) AS qty FROM estoque WHERE CODIGO IN (${variants.map((v: string) => `'${v}'`).join(',')}) AND LOJA = '${si.storeCode}'`,
+          { maxRows: 1, timeoutMs: 10000 },
+        );
+        estoqueGiga = Number(r.rows[0]?.qty ?? 0) || 0;
+      } catch (e) {
+        this.logger.warn(`[precheck] falha consultar estoque ${si.sku}/${si.storeCode}: ${(e as Error).message}`);
+      }
+      if (estoqueGiga < si.qty) {
+        // Acha o transferOrderId via stockItem.refCode (não tem cor/tamanho aqui,
+        // então pega o primeiro match — caso patológico de duplicatas perde aqui).
+        const itemMatch = items.find((it) => it.refCode === si.refCode);
+        problemas.push({
+          transferOrderId: itemMatch?.id || '',
+          refCode: si.refCode,
+          cor: itemMatch?.cor || null,
+          tamanho: itemMatch?.tamanho || null,
+          qtyRequerida: si.qty,
+          sku: si.sku,
+          storeCode: si.storeCode,
+          estoqueGiga,
+        });
+      }
+    }
+    return { problemas };
+  }
+
+  /**
+   * Versão pública do precheck — usado pelo frontend ANTES de tentar fechar
+   * a remessa. Retorna lista de items com estoque problemático pra UI mostrar
+   * antes de chamar closeAndSend.
+   */
+  async precheckCloseShipment(input: { shipmentId: string; storeId: string }) {
+    const store = await this.prisma.store.findUnique({ where: { id: input.storeId } });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.fromStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'open')
+      throw new BadRequestException(`Remessa não está aberta (status=${shipment.status})`);
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: { id: true, refCode: true, cor: true, tamanho: true, qtyOrigem: true } as any,
+    });
+    if (!items.length) return { ok: true, totalItems: 0, problemas: [] };
+
+    // Resolve SKU pra cada item
+    const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
+    const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      try {
+        const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+        if (!sku) {
+          unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+          continue;
+        }
+        stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.fromStoreCode, refCode: it.refCode });
+      } catch {
+        unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+
+    const { problemas } = await this.precheckStockForShipment(items as any[], stockItems);
+    return {
+      ok: problemas.length === 0 && unresolved.length === 0,
+      totalItems: items.length,
+      unresolved,
+      problemas,
+    };
+  }
+
   async removeItemFromShipment(input: { transferOrderId: string; storeId: string }) {
     const store = await this.prisma.store.findUnique({
       where: { id: input.storeId },
@@ -330,6 +442,18 @@ export class RealignmentShipmentService {
         `Não consegui resolver SKU pra ${unresolved.length} item(ns): ` +
           unresolved.map((u) => `${u.refCode} ${u.cor || ''}/${u.tamanho || ''}`).join(', '),
       );
+    }
+
+    // Pré-verifica estoque antes de iniciar transação — se algum SKU tem
+    // estoque insuficiente, falha rápido com lista detalhada (sem precisar
+    // fazer rollback de transação). Útil pra UI mostrar quais items remover.
+    const precheck = await this.precheckStockForShipment(items as any[], stockItems);
+    if (precheck.problemas.length > 0) {
+      throw new BadRequestException({
+        message: 'Estoque insuficiente em items da remessa',
+        problemas: precheck.problemas,
+        statusCode: 400,
+      });
     }
 
     // BAIXA estoque Giga origem em transação (todos ou nada)
