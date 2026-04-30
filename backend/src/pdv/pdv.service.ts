@@ -439,6 +439,13 @@ export class PdvService {
    * dos descontos individuais dos itens).
    * Salva no campo `desconto` da venda, e o `total` é recalculado.
    */
+  /**
+   * Aplica desconto EXTRA da venda inteira (independente dos descontos de
+   * cada item). Soma com os descontos de item pra formar a economia total.
+   *
+   * Exemplo: subtotal=100, item1 tem desconto manual de 5, user define
+   * setSaleDiscount(10) → economia total = 5+10 = 15, total = 85.
+   */
   async setSaleDiscount(input: { saleId: string; desconto: number }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
@@ -448,11 +455,11 @@ export class PdvService {
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
 
     const desconto = Math.max(0, input.desconto || 0);
-    // Soma dos itens (com seus descontos individuais já aplicados)
-    const subtotalItens = sale.items.reduce((s: number, i: any) => s + (i.total || 0), 0);
-    if (desconto > subtotalItens) {
+    // Soma dos itens líquidos (já com descontos individuais aplicados)
+    const subtotalLiquido = sale.items.reduce((s: number, i: any) => s + (i.total || 0), 0);
+    if (desconto > subtotalLiquido) {
       throw new BadRequestException(
-        `Desconto total (R$${desconto.toFixed(2)}) maior que o subtotal dos itens (R$${subtotalItens.toFixed(2)})`,
+        `Desconto extra (R$${desconto.toFixed(2)}) maior que o subtotal líquido (R$${subtotalLiquido.toFixed(2)})`,
       );
     }
 
@@ -460,7 +467,7 @@ export class PdvService {
       where: { id: sale.id },
       data: {
         desconto,
-        total: subtotalItens - desconto,
+        total: Math.max(0, subtotalLiquido - desconto),
       },
     });
   }
@@ -665,6 +672,20 @@ export class PdvService {
    * (onde extraDescontoVenda é guardado em paymentDetails.saleDiscountExtra).
    * Pra MVP: total = soma items.total. Desconto manual reaplica via setSaleDiscount.
    */
+  /**
+   * SEMÂNTICA NOVA (corrigida):
+   *   sale.desconto = APENAS o desconto EXTRA da venda inteira (não inclui
+   *   descontos individuais de cada item). É independente.
+   *
+   *   subtotal      = soma(precoUnit × qty)              ← bruto da venda
+   *   descontoItens = soma(item.desconto)                ← descontos individuais
+   *   sale.desconto = extra da venda (definido em setSaleDiscount)
+   *   total         = subtotal - descontoItens - sale.desconto
+   *
+   * Antes a lógica "absorvia" o desconto do item dentro de sale.desconto
+   * mantendo o agregado fixo — confuso pra vendedora ("apliquei 10% no item
+   * e o total não muda"). Agora os 2 são independentes e somam.
+   */
   private async recalcTotals(saleId: string) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: saleId },
@@ -674,16 +695,16 @@ export class PdvService {
     const items = sale.items;
     const subtotal = items.reduce((s: number, i: any) => s + (i.precoUnit * i.qty), 0);
     const descontoItens = items.reduce((s: number, i: any) => s + (i.desconto || 0), 0);
-    const subtotalLiquido = items.reduce((s: number, i: any) => s + (i.total || 0), 0);
-    // Desconto adicional da venda inteira (aplicado por cima)
-    // sale.desconto pode incluir tanto soma de itens quanto extra. Pra simplificar:
-    // se desconto atual > descontoItens, considera o excedente como desconto da venda
-    const extraSaleDiscount = Math.max(0, (sale.desconto || 0) - descontoItens);
-    const totalDesconto = descontoItens + extraSaleDiscount;
-    const total = Math.max(0, subtotal - totalDesconto);
+    const saleExtra = sale.desconto || 0;
+    // Garante que extra + descontoItens não excede subtotal (clipa se passar)
+    const extraClipado = Math.max(0, Math.min(saleExtra, subtotal - descontoItens));
+    const total = Math.max(0, subtotal - descontoItens - extraClipado);
     await (this.prisma as any).pdvSale.update({
       where: { id: saleId },
-      data: { subtotal, desconto: totalDesconto, total },
+      // NÃO toca em sale.desconto aqui — só atualiza se foi clipado
+      data: extraClipado !== saleExtra
+        ? { subtotal, desconto: extraClipado, total }
+        : { subtotal, total },
     });
   }
 

@@ -376,6 +376,17 @@ function PdvPageInner() {
       });
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
+      // Feedback explícito quando aplica desconto manual
+      if (patch.desconto != null) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        if (item) {
+          if (patch.desconto > 0) {
+            toast('success', `Desconto aplicado · ${brl(item.desconto)}`, item.descricao || item.ref || item.sku);
+          } else {
+            toast('info', 'Desconto removido', item.descricao || item.ref || item.sku);
+          }
+        }
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -398,7 +409,7 @@ function PdvPageInner() {
     }
   };
 
-  // ── Aplicar desconto na venda inteira ──
+  // ── Aplicar desconto na venda inteira (extra, soma com descontos de item) ──
   const setSaleDiscount = async (desconto: number) => {
     if (!sale) return;
     try {
@@ -408,6 +419,11 @@ function PdvPageInner() {
       });
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
+      if (desconto > 0) {
+        toast('success', `Desconto da venda · ${brl(desconto)}`, `Total: ${brl(fresh.total)}`);
+      } else {
+        toast('info', 'Desconto da venda removido', `Total: ${brl(fresh.total)}`);
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -853,14 +869,14 @@ function PdvPageInner() {
                 );
               })()}
             </div>
-            {/* Cabeçalho de colunas */}
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[110px_1fr_110px_100px_110px_56px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+            {/* Cabeçalho de colunas — alinhado com as linhas (cols idênticas) */}
+            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[100px_1fr_70px_90px_110px_72px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
               <div>COD</div>
               <div>Descrição</div>
               <div className="text-center">Qtd</div>
               <div className="text-right">Val. Unit.</div>
               <div className="text-right">Val. Total</div>
-              <div></div>
+              <div className="text-center">Ações</div>
             </div>
             <div className="px-3 py-1 bg-slate-50 border-b text-[11px] text-slate-500">
               Carrinho · {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
@@ -871,61 +887,55 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className="px-3 py-2.5 grid grid-cols-[110px_1fr_110px_100px_110px_56px] gap-2 items-center hover:bg-slate-50/50"
+                  className="px-3 py-2 grid grid-cols-[100px_1fr_70px_90px_110px_72px] gap-2 items-center hover:bg-slate-50/50"
                 >
                   {/* COD — código de barras (EAN) ou SKU */}
-                  <div className="font-mono text-[11px] text-slate-700 leading-tight truncate" title={it.ean || it.sku}>
+                  <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
                     {it.ean || it.sku}
                   </div>
 
-                  {/* DESCRIÇÃO — REF + COR/TAM + descrição completa + promo */}
-                  <div className="min-w-0">
-                    <div className="font-mono text-xs font-bold text-slate-900 truncate">
-                      {it.ref || it.sku}
-                      {it.cor && <span className="ml-1.5 text-slate-500 font-normal">{it.cor}</span>}
-                      {it.tamanho && <span className="ml-1 text-slate-500 font-normal">/{it.tamanho}</span>}
+                  {/* DESCRIÇÃO — REF + COR/TAM + descrição em UMA LINHA, truncada */}
+                  <div className="min-w-0 flex items-center gap-2">
+                    <div className="font-mono text-xs text-slate-900 truncate flex-1 min-w-0">
+                      <span className="font-bold">{it.ref || it.sku}</span>
+                      {it.cor && <span className="ml-1.5 text-slate-500">{it.cor}</span>}
+                      {it.tamanho && <span className="ml-1 text-slate-500">/{it.tamanho}</span>}
+                      {it.descricao && (
+                        <span className="ml-2 text-slate-500 font-sans font-normal">· {it.descricao}</span>
+                      )}
                     </div>
-                    {it.descricao && (
-                      <div className="text-[11px] text-slate-500 truncate leading-tight">{it.descricao}</div>
-                    )}
-                    {(it.desconto > 0 || it.promoTag) && (
-                      <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
-                        {it.desconto > 0 && !it.promoTag && (
-                          <span className="text-[10px] text-rose-600 font-semibold">−{brl(it.desconto)} desc</span>
-                        )}
-                        {it.promoTag && (
-                          <span
-                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                              it.promoTag.includes('4 LEVA 3')
-                                ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
-                                : 'bg-amber-100 text-amber-800 border border-amber-300'
-                            }`}
-                            title={`Desconto: ${brl(it.desconto)}`}
-                          >
-                            🎁 {it.promoTag}
-                          </span>
-                        )}
-                      </div>
+                    {it.promoTag && (
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                          it.promoTag.includes('4 LEVA 3')
+                            ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
+                            : it.promoTag === 'MANUAL'
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                        }`}
+                        title={`Desconto: ${brl(it.desconto)}`}
+                      >
+                        {it.promoTag === 'MANUAL' ? '✏️ MANUAL' : `🎁 ${it.promoTag}`}
+                      </span>
                     )}
                   </div>
 
-                  {/* QTD — botões 36px (mais fáceis de clicar no balcão) */}
-                  <div className="flex items-center justify-center gap-1.5">
-                    <button
-                      onClick={() => updateItem(it.id, { qty: it.qty - 1 })}
-                      disabled={it.qty <= 1 || sale.status !== 'open'}
-                      className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-rose-100 hover:text-rose-700 active:scale-95 flex items-center justify-center disabled:opacity-30 transition"
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <span className="w-9 text-center font-black tabular-nums text-lg text-slate-900">{it.qty}</span>
-                    <button
-                      onClick={() => updateItem(it.id, { qty: it.qty + 1 })}
+                  {/* QTD — input editável direto, sem botões */}
+                  <div className="flex items-center justify-center">
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={it.qty}
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        if (!isNaN(n) && n >= 1 && n <= 99 && n !== it.qty) {
+                          updateItem(it.id, { qty: n });
+                        }
+                      }}
                       disabled={sale.status !== 'open'}
-                      className="w-9 h-9 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-800 active:scale-95 flex items-center justify-center disabled:opacity-30 transition"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                      className="w-14 h-9 text-center font-black tabular-nums text-base text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 disabled:opacity-60"
+                    />
                   </div>
 
                   {/* VAL UNITÁRIO */}
@@ -941,24 +951,32 @@ function PdvPageInner() {
                     )}
                   </div>
 
-                  {/* AÇÕES — desconto + remover */}
+                  {/* AÇÕES — % desconto destacado em âmbar + 🗑 remover */}
                   {sale.status === 'open' ? (
-                    <div className="flex flex-col gap-0.5 items-end">
+                    <div className="flex items-center justify-center gap-1">
                       <button
                         onClick={() =>
                           setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
                         }
-                        className="text-slate-400 hover:text-amber-600 p-1"
-                        title="Desconto neste item"
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-95 ${
+                          it.desconto > 0 && it.promoTag === 'MANUAL'
+                            ? 'bg-amber-500 text-white shadow hover:bg-amber-600'
+                            : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        }`}
+                        title={
+                          it.desconto > 0 && it.promoTag === 'MANUAL'
+                            ? `Desconto manual: ${brl(it.desconto)} (clique pra alterar)`
+                            : 'Aplicar desconto neste item (% ou R$)'
+                        }
                       >
-                        <Percent className="w-3.5 h-3.5" />
+                        <Percent className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => removeItem(it.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1"
-                        title="Remover"
+                        className="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
+                        title="Remover item"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   ) : <div />}
@@ -1077,22 +1095,32 @@ function PdvPageInner() {
       {sale?.status === 'open' && (
         <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-2xl z-10">
           <div className="max-w-4xl mx-auto px-4 py-3">
-            {/* Linha de detalhamento: subtotal + desconto + economia */}
-            {sale.desconto > 0 && (
-              <div className="flex items-center justify-between gap-4 text-xs mb-2 px-1 pb-2 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <span className="text-slate-500">
-                    Subtotal <span className="tabular-nums font-semibold text-slate-700 ml-1">{brl(sale.subtotal)}</span>
-                  </span>
-                  <span className="text-emerald-700 font-bold flex items-center gap-1">
-                    🎁 Economia <span className="tabular-nums">−{brl(sale.desconto)}</span>
+            {/* Linha de detalhamento: subtotal + economia agregada (descontos itens + sale.desconto extra) */}
+            {(() => {
+              const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
+              const economiaTotal = descontoItens + (sale.desconto || 0);
+              if (economiaTotal <= 0) return null;
+              return (
+                <div className="flex items-center justify-between gap-4 text-xs mb-2 px-1 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-slate-500">
+                      Subtotal <span className="tabular-nums font-semibold text-slate-700 ml-1">{brl(sale.subtotal)}</span>
+                    </span>
+                    <span className="text-emerald-700 font-bold flex items-center gap-1">
+                      🎁 Economia <span className="tabular-nums">−{brl(economiaTotal)}</span>
+                    </span>
+                    {descontoItens > 0 && (sale.desconto || 0) > 0 && (
+                      <span className="text-[10px] text-slate-400">
+                        ({brl(descontoItens)} itens + {brl(sale.desconto)} venda)
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-400">
+                    {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
                   </span>
                 </div>
-                <span className="text-[10px] text-slate-400">
-                  {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
-                </span>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Linha principal: ações + TOTAL grande + FINALIZAR */}
             <div className="flex items-center gap-2">
@@ -1201,16 +1229,19 @@ function PdvPageInner() {
         <FinalizedModal sale={sale} onNew={startNewSale} />
       )}
 
-      {/* Modal Desconto — % ou R$ sincronizados, editável pra arredondar */}
+      {/* Modal Desconto — % ou R$ sincronizados, editável pra arredondar.
+          Pra venda inteira: base = subtotal LÍQUIDO (já descontados itens) — porque
+          o desconto da venda é EXTRA por cima dos descontos individuais.
+          Pra item: base = bruto da linha (precoUnit × qty). */}
       {showDiscount && sale && (
         <DiscountModal
           base={
             showDiscount.kind === 'sale'
-              ? sale.items.reduce((s, i) => s + i.total, 0) + (sale.desconto || 0)
+              ? sale.items.reduce((s, i) => s + i.total, 0)
               : showDiscount.bruto
           }
           atual={showDiscount.kind === 'sale' ? (sale.desconto || 0) : showDiscount.atual}
-          label={showDiscount.kind === 'sale' ? 'venda inteira' : 'deste item'}
+          label={showDiscount.kind === 'sale' ? 'extra da venda' : 'deste item'}
           onClose={() => setShowDiscount(null)}
           onApply={(valor) => {
             if (showDiscount.kind === 'sale') {
