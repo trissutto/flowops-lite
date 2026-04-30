@@ -677,14 +677,14 @@ function PdvPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-amber-50 to-orange-50 flex flex-col">
-      {/* Header enxuto — só logo + venda + cliente. Fundo translúcido pra
-          deixar o gradiente da página passar. */}
-      <header className="sticky top-0 z-20 bg-rose-50/85 backdrop-blur border-b border-rose-200/60">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-700 via-violet-700 to-fuchsia-700 flex flex-col">
+      {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
+          /minha-loja/realinhamento pra unificar identidade visual. */}
+      <header className="sticky top-0 z-20 bg-violet-900/40 backdrop-blur border-b border-white/10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
-            className="text-slate-600 hover:text-slate-900 transition shrink-0"
+            className="text-white/80 hover:text-white transition shrink-0"
             aria-label="Voltar"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -696,7 +696,7 @@ function PdvPageInner() {
             className="flex items-center gap-2 shrink-0 group"
             title="Início"
           >
-            <div className="relative w-11 h-11">
+            <div className="relative w-11 h-11 bg-white/95 rounded-full p-1 shadow-md">
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
@@ -711,36 +711,31 @@ function PdvPageInner() {
           {/* Título + venda */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 leading-none tracking-tight">
+              <h1 className="text-xl sm:text-2xl font-black text-white leading-none tracking-tight drop-shadow">
                 PDV
               </h1>
               {sale?.storeCode && (
-                <span className="text-[11px] font-mono font-bold text-white bg-slate-700 px-2 py-0.5 rounded-md">
+                <span className="text-[11px] font-mono font-bold text-violet-900 bg-amber-300 px-2 py-0.5 rounded-md shadow-sm">
                   {sale.storeCode}
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-slate-500 truncate font-medium mt-0.5">
+            <p className="text-[11px] text-white/85 truncate font-medium mt-0.5">
               {sale
                 ? `Venda #${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} ${sale.items?.length === 1 ? 'item' : 'itens'} no carrinho`
                 : 'Carregando…'}
             </p>
           </div>
 
-          {/* Botão Cliente — pill sólida (não gradient) */}
+          {/* Botão Cliente — destaca-se sobre o roxo do header */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
               sale?.customerCpf
-                ? 'text-white shadow-md'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200'
+                ? 'bg-amber-400 hover:bg-amber-300 text-violet-900 ring-2 ring-amber-200/50'
+                : 'bg-white hover:bg-amber-50 text-violet-800'
             }`}
-            style={
-              sale?.customerCpf
-                ? { background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }
-                : undefined
-            }
             title="Identificar cliente"
           >
             <User className="w-4 h-4" />
@@ -799,18 +794,18 @@ function PdvPageInner() {
           </form>
 
           {/* QUICK ACTIONS — área reservada pra atalhos contextuais futuros.
-              Em desktop ocupa 2/3 ao lado do input de bipe. Vazia por enquanto
-              com placeholder discreto que sugere o uso. */}
-          <div className="hidden md:flex flex-1 items-center gap-2 bg-white/40 backdrop-blur rounded-xl border border-dashed border-slate-300/60 px-4 py-2">
-            <div className="flex items-center gap-2 text-[11px] text-slate-500 font-bold">
-              <kbd className="px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">F2</kbd>
+              Em desktop ocupa 2/3 ao lado do input de bipe. Sobre fundo roxo,
+              usa branco translúcido com borda branca pra contrastar. */}
+          <div className="hidden md:flex flex-1 items-center gap-2 bg-white/15 backdrop-blur rounded-xl border border-dashed border-white/40 px-4 py-2">
+            <div className="flex items-center gap-2 text-[11px] text-white/90 font-bold">
+              <kbd className="px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">F2</kbd>
               foco
-              <kbd className="ml-1 px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">F4</kbd>
+              <kbd className="ml-1 px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">F4</kbd>
               finaliza
-              <kbd className="ml-1 px-1.5 py-0.5 bg-white/80 border border-slate-200 rounded font-mono">0</kbd>
+              <kbd className="ml-1 px-1.5 py-0.5 bg-white/95 text-violet-900 border border-white rounded font-mono">0</kbd>
               item manual
             </div>
-            <div className="ml-auto text-[10px] text-slate-400 italic">
+            <div className="ml-auto text-[10px] text-white/70 italic">
               espaço pra atalhos rápidos
             </div>
           </div>
@@ -3659,18 +3654,19 @@ function PdvOutlinePill({
   badge?: number;
   attention?: boolean;
 }) {
-  const cls = `relative px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed ${
+  // Pílulas brancas com sombra forte pra "saltar" do fundo roxo do PDV
+  const cls = `relative px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-md ${
     attention
-      ? 'bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100'
-      : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+      ? 'bg-rose-100 border border-rose-300 text-rose-800 hover:bg-rose-200'
+      : 'bg-white border border-white text-violet-900 hover:bg-amber-50'
   }`;
   const inner = (
     <>
-      <Icon className={`w-4 h-4 ${attention ? 'text-rose-600' : 'text-slate-500'}`} />
+      <Icon className={`w-4 h-4 ${attention ? 'text-rose-700' : 'text-violet-600'}`} />
       <span className="flex-1 text-left">{label}</span>
       {badge && badge > 0 && (
         <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-          attention ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white'
+          attention ? 'bg-rose-600 text-white' : 'bg-violet-700 text-white'
         }`}>
           {badge}
         </span>
