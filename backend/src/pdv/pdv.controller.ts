@@ -210,6 +210,26 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/items/manual { descricao, valor, qty? }
+   * Adiciona item MANUAL — usado quando o produto não passa pelo bipe.
+   * Vendedora digita descrição + valor livres pra não travar o caixa.
+   */
+  @Post('sales/:id/items/manual')
+  addManualItem(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { descricao: string; valor: number; qty?: number },
+  ) {
+    this.requireRole(req);
+    return this.svc.addManualItem({
+      saleId: id,
+      descricao: body?.descricao,
+      valor: body?.valor,
+      qty: body?.qty,
+    });
+  }
+
+  /**
    * PATCH /pdv/sales/:id/items/:itemId { qty?, desconto? }
    * Atualiza qty e/ou desconto do item.
    */

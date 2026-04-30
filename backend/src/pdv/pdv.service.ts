@@ -338,6 +338,64 @@ export class PdvService {
     return { ok: true, item };
   }
 
+  /**
+   * Adiciona um item MANUAL na venda — descrição livre + valor digitado pela
+   * vendedora. Usado quando o produto não passa pelo bipe (cadastro errado,
+   * EAN ausente, peça importada sem código, etc). Não toca no Giga e marca
+   * o item com promoTag='MANUAL' pra fugir do recálculo automático.
+   *
+   * Característica:
+   *   - SKU gerado: "MANUAL-{epoch}" pra cada item (sempre nova linha, não merge)
+   *   - precoUnit = valor digitado · descricao = livre · qty = livre
+   *   - Não cai em applyAutoDiscounts (item solto, não tem campanha)
+   */
+  async addManualItem(input: {
+    saleId: string;
+    descricao: string;
+    valor: number;
+    qty?: number;
+  }) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { id: true, status: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open')
+      throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
+
+    const descricao = String(input.descricao || '').trim().slice(0, 80);
+    if (descricao.length < 2)
+      throw new BadRequestException('Descrição obrigatória (mínimo 2 caracteres)');
+    const valor = Number(input.valor);
+    if (!valor || valor <= 0)
+      throw new BadRequestException('Valor deve ser maior que zero');
+    const qty = Math.max(1, Math.min(99, Math.floor(input.qty || 1)));
+    const sku = `MANUAL-${Date.now()}`;
+
+    const item = await (this.prisma as any).pdvSaleItem.create({
+      data: {
+        saleId: sale.id,
+        sku,
+        ean: null,
+        ref: 'MANUAL',
+        cor: null,
+        tamanho: null,
+        descricao,
+        ncm: null,
+        cfop: null,
+        dataCadastro: null,
+        qty,
+        precoUnit: valor,
+        desconto: 0,
+        total: valor * qty,
+        promoTag: 'MANUAL', // tag pra não cair no applyAutoDiscounts
+      },
+    });
+
+    await this.recalcTotals(sale.id);
+    return { ok: true, item };
+  }
+
   async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },

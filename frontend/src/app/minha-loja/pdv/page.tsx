@@ -336,6 +336,13 @@ function PdvPageInner() {
     if (!sale) return;
     const sku = scanInput.trim();
     if (!sku) return;
+    // Atalho item manual: vendedora digita "0" → abre modal pra lançar
+    // produto livre (descrição + valor) sem precisar achar no Giga.
+    if (sku === '0') {
+      setScanInput('');
+      setShowManualItem(true);
+      return;
+    }
     setScanLoading(true);
     setError(null);
     try {
@@ -423,6 +430,14 @@ function PdvPageInner() {
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
   const [showPixAvulso, setShowPixAvulso] = useState(false);
+  // ── Modal de Desconto (% ou R$) — pode ser pra venda inteira ou item ──
+  const [showDiscount, setShowDiscount] = useState<
+    | null
+    | { kind: 'sale' }
+    | { kind: 'item'; itemId: string; bruto: number; atual: number }
+  >(null);
+  // ── Modal Item Manual (digitar produto livre) ──
+  const [showManualItem, setShowManualItem] = useState(false);
   const loadOpenCount = async () => {
     if (!storeCode) return;
     try {
@@ -727,47 +742,40 @@ function PdvPageInner() {
           </div>
         )}
 
-        {/* Input bipagem — presença sem dramaticidade. Borda discreta, foca rosa */}
+        {/* Input bipagem — compacto. Vendedora bipa rápido sem perder tela */}
         {sale?.status === 'open' && (
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm"
+            className="bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-sm flex items-center gap-2"
           >
-            <label className="text-[11px] uppercase font-bold text-slate-500 flex items-center gap-2 mb-2.5 tracking-widest">
-              <Barcode className="w-3.5 h-3.5" />
-              Bipe o produto · ou digite SKU/EAN
-            </label>
-            <div className="flex gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={scanInput}
-                onChange={(e) => setScanInput(e.target.value)}
-                placeholder="SKU OU EAN13"
-                disabled={scanLoading}
-                className="flex-1 px-4 py-4 text-2xl sm:text-3xl font-mono font-black border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 placeholder:text-slate-300 placeholder:font-normal placeholder:text-xl tracking-widest text-slate-900"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-              />
-              <button
-                type="submit"
-                disabled={!scanInput || scanLoading}
-                className="px-5 py-4 text-white font-black rounded-xl flex items-center disabled:opacity-40 shadow-sm transition"
-                style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
-              >
-                {scanLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <ArrowRight className="w-6 h-6" />}
-              </button>
+            <Barcode className="w-4 h-4 text-slate-400 shrink-0" />
+            <input
+              ref={inputRef}
+              type="text"
+              value={scanInput}
+              onChange={(e) => setScanInput(e.target.value)}
+              placeholder="Bipe ou digite SKU/EAN · 0 = item manual"
+              disabled={scanLoading}
+              className="flex-1 px-2 py-1.5 text-base font-mono font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal placeholder:text-sm tracking-wide text-slate-900"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+            />
+            <div className="hidden md:flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0 mr-1">
+              <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded font-mono">F2</kbd>
+              foco
+              <kbd className="px-1 py-0.5 bg-slate-100 border border-slate-200 rounded font-mono ml-1">F4</kbd>
+              finaliza
             </div>
-            <div className="mt-2 text-[10px] text-slate-400 flex items-center gap-3">
-              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">Enter</kbd>
-              adiciona ·
-              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">F4</kbd>
-              finaliza ·
-              <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono">Esc</kbd>
-              cancela
-            </div>
+            <button
+              type="submit"
+              disabled={!scanInput || scanLoading}
+              className="px-3 py-2 text-white font-bold rounded-lg flex items-center disabled:opacity-40 transition shrink-0"
+              style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
+            >
+              {scanLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+            </button>
           </form>
         )}
 
@@ -937,21 +945,9 @@ function PdvPageInner() {
                   {sale.status === 'open' ? (
                     <div className="flex flex-col gap-0.5 items-end">
                       <button
-                        onClick={() => {
-                          const max = bruto.toFixed(2).replace('.', ',');
-                          const cur = (it.desconto || 0).toFixed(2).replace('.', ',');
-                          const v = window.prompt(
-                            `Desconto desse item em R$ (máx ${max}):\nValor atual: ${cur}`,
-                            cur,
-                          );
-                          if (v == null) return;
-                          const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
-                          if (isNaN(n) || n < 0) {
-                            toast('error', 'Valor inválido', 'Use só números (ex: 5,00)');
-                            return;
-                          }
-                          updateItem(it.id, { desconto: n });
-                        }}
+                        onClick={() =>
+                          setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
+                        }
                         className="text-slate-400 hover:text-amber-600 p-1"
                         title="Desconto neste item"
                       >
@@ -1099,35 +1095,21 @@ function PdvPageInner() {
             )}
 
             {/* Linha principal: ações + TOTAL grande + FINALIZAR */}
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               {/* Cancelar (sutil, vermelho discreto) */}
               <button
                 onClick={cancelSale}
-                className="px-3 py-3 bg-white hover:bg-rose-50 border-2 border-rose-200 text-rose-700 font-bold rounded-xl flex items-center gap-1.5 text-sm transition"
+                className="px-3 py-3 bg-white hover:bg-rose-50 border-2 border-rose-200 text-rose-700 font-bold rounded-xl flex items-center gap-1.5 text-sm transition shrink-0"
                 title="Cancelar venda (limpa o carrinho)"
               >
                 <X className="w-5 h-5" />
                 <span className="hidden md:inline">Cancelar</span>
               </button>
 
-              {/* Desconto (sutil, âmbar) */}
+              {/* Desconto — abre modal com % e R$ sincronizados */}
               <button
-                onClick={() => {
-                  const subtotalLiquido = sale.items.reduce((s, i) => s + i.total, 0);
-                  const cur = (sale.desconto || 0).toFixed(2).replace('.', ',');
-                  const v = window.prompt(
-                    `Desconto na venda inteira em R$ (máx ${subtotalLiquido.toFixed(2).replace('.', ',')}):\nValor atual: ${cur}`,
-                    cur,
-                  );
-                  if (v == null) return;
-                  const n = Number(v.trim().replace(/\./g, '').replace(',', '.'));
-                  if (isNaN(n) || n < 0) {
-                    toast('error', 'Valor inválido', 'Use só números (ex: 5,00)');
-                    return;
-                  }
-                  setSaleDiscount(n);
-                }}
-                className="px-3 py-3 bg-white hover:bg-amber-50 border-2 border-amber-200 text-amber-800 font-bold rounded-xl flex items-center gap-1.5 text-sm transition"
+                onClick={() => setShowDiscount({ kind: 'sale' })}
+                className="px-3 py-3 bg-white hover:bg-amber-50 border-2 border-amber-200 text-amber-800 font-bold rounded-xl flex items-center gap-1.5 text-sm transition shrink-0"
                 title="Aplicar desconto na venda inteira"
               >
                 <Percent className="w-5 h-5" />
@@ -1135,22 +1117,34 @@ function PdvPageInner() {
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
-              <div className="flex-1 px-4">
+              <div className="flex-1 px-3 min-w-0">
                 <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
-                <div className="text-4xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1">
+                <div className="text-3xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 truncate">
                   {brl(sale.total)}
                 </div>
               </div>
+
+              {/* PIX RÁPIDO — botão teal ao lado do Finalizar */}
+              <button
+                onClick={() => setShowPixAvulso(true)}
+                disabled={!sale.items?.length || sale.total <= 0}
+                className="px-3 sm:px-5 py-4 text-white font-black rounded-xl flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm sm:text-base shadow-md transition shrink-0"
+                style={{ background: `linear-gradient(135deg, ${HUB_TONES.teal.from}, ${HUB_TONES.teal.to})` }}
+                title="Cobrar via PIX agora (Pagar.me/Stone)"
+              >
+                <DollarSign className="w-5 h-5" />
+                <span className="hidden sm:inline">PIX</span>
+              </button>
 
               {/* FINALIZAR — botão verde gigante */}
               <button
                 onClick={() => setShowPayment(true)}
                 disabled={!sale.items?.length || sale.total <= 0}
-                className="px-6 sm:px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-lg shadow-emerald-300 transition"
+                className="px-4 sm:px-7 py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-lg shadow-emerald-300 transition shrink-0"
                 title="Finalizar venda (F4)"
               >
                 <Check className="w-6 h-6" />
-                Finalizar
+                <span className="hidden sm:inline">Finalizar</span>
                 <kbd className="hidden lg:inline-block ml-1 px-1.5 py-0.5 bg-white/20 text-white/90 text-[10px] font-mono rounded">F4</kbd>
               </button>
             </div>
@@ -1205,6 +1199,43 @@ function PdvPageInner() {
       {/* Modal Finalizada */}
       {showFinalized && sale && sale.status === 'finalized' && (
         <FinalizedModal sale={sale} onNew={startNewSale} />
+      )}
+
+      {/* Modal Desconto — % ou R$ sincronizados, editável pra arredondar */}
+      {showDiscount && sale && (
+        <DiscountModal
+          base={
+            showDiscount.kind === 'sale'
+              ? sale.items.reduce((s, i) => s + i.total, 0) + (sale.desconto || 0)
+              : showDiscount.bruto
+          }
+          atual={showDiscount.kind === 'sale' ? (sale.desconto || 0) : showDiscount.atual}
+          label={showDiscount.kind === 'sale' ? 'venda inteira' : 'deste item'}
+          onClose={() => setShowDiscount(null)}
+          onApply={(valor) => {
+            if (showDiscount.kind === 'sale') {
+              setSaleDiscount(valor);
+            } else {
+              updateItem(showDiscount.itemId, { desconto: valor });
+            }
+            setShowDiscount(null);
+          }}
+        />
+      )}
+
+      {/* Modal Item Manual — digitado quando produto não passa */}
+      {showManualItem && sale && (
+        <ManualItemModal
+          saleId={sale.id}
+          onClose={() => setShowManualItem(false)}
+          onAdded={async () => {
+            const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+            setSale(fresh);
+            setShowManualItem(false);
+            toast('success', 'Item manual adicionado', 'Confira descrição e valor no carrinho');
+            setTimeout(() => inputRef.current?.focus(), 50);
+          }}
+        />
       )}
 
       {/* Modal PIX Rápido (cobrança avulsa) */}
@@ -3171,4 +3202,329 @@ function PdvMobilePill({
     return <Link href={href} className={cls} style={style}>{inner}</Link>;
   }
   return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
+}
+
+// ── DISCOUNT MODAL ────────────────────────────────────────────────────
+// Modal de desconto unificado — usado pra venda inteira e por item.
+// Vendedora digita % e o R$ é calculado automaticamente. Pode editar o R$
+// pra arredondar (ex: cálculo deu 9,34 e ela ajusta pra 9,00). Os 2 campos
+// ficam SINCRONIZADOS: digitou em um, atualiza o outro.
+function DiscountModal({
+  base,
+  atual,
+  label,
+  onClose,
+  onApply,
+}: {
+  /** Valor bruto sobre o qual o desconto é aplicado (subtotal/preço bruto) */
+  base: number;
+  /** Desconto atual em R$ */
+  atual: number;
+  /** Texto descritivo: "venda inteira" / "deste item" */
+  label: string;
+  onClose: () => void;
+  onApply: (valor: number) => void;
+}) {
+  const initialPct = base > 0 ? (atual / base) * 100 : 0;
+  const [pctStr, setPctStr] = useState(initialPct ? initialPct.toFixed(1).replace('.', ',') : '');
+  const [reaisStr, setReaisStr] = useState(atual ? atual.toFixed(2).replace('.', ',') : '');
+  const [error, setError] = useState<string | null>(null);
+
+  // Helpers de parsing
+  const parseNum = (s: string) => {
+    const n = Number(String(s).trim().replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  };
+
+  // Quando muda %, recalcula R$
+  const onPctChange = (v: string) => {
+    setPctStr(v);
+    setError(null);
+    const pct = parseNum(v);
+    if (pct == null) return;
+    const reais = Math.max(0, Math.min(base, (base * pct) / 100));
+    setReaisStr(reais.toFixed(2).replace('.', ','));
+  };
+
+  // Quando muda R$, recalcula %
+  const onReaisChange = (v: string) => {
+    setReaisStr(v);
+    setError(null);
+    const reais = parseNum(v);
+    if (reais == null) return;
+    const pct = base > 0 ? (reais / base) * 100 : 0;
+    setPctStr(pct.toFixed(1).replace('.', ','));
+  };
+
+  const aplicar = () => {
+    const reais = parseNum(reaisStr);
+    if (reais == null || reais < 0) {
+      setError('Valor inválido — use só números');
+      return;
+    }
+    if (reais > base + 0.01) {
+      setError(`Desconto maior que o valor bruto (${brl(base)})`);
+      return;
+    }
+    onApply(Math.round(reais * 100) / 100);
+  };
+
+  const valorFinal = Math.max(0, base - (parseNum(reaisStr) || 0));
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
+            <Percent className="w-5 h-5" /> Aplicar desconto
+          </h2>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="text-xs text-slate-500">
+          Desconto {label} · Bruto <span className="font-bold tabular-nums text-slate-700">{brl(base)}</span>
+        </div>
+
+        {/* Inputs lado a lado: % | R$ */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Porcentagem
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                inputMode="decimal"
+                autoFocus
+                value={pctStr}
+                onChange={(e) => onPctChange(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && aplicar()}
+                placeholder="0"
+                className="w-full px-3 py-3 pr-9 text-2xl font-bold tabular-nums text-amber-700 border-2 border-amber-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-amber-500 font-bold">%</span>
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Em reais (editável)
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">R$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={reaisStr}
+                onChange={(e) => onReaisChange(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && aplicar()}
+                placeholder="0,00"
+                className="w-full px-3 py-3 pl-10 text-2xl font-bold tabular-nums text-emerald-700 border-2 border-emerald-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Sugestões rápidas — atalhos comuns no PDV */}
+        <div className="flex flex-wrap gap-1.5">
+          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider self-center mr-1">Atalhos:</span>
+          {[5, 10, 15, 20, 30, 50].map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onPctChange(String(p))}
+              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-xs font-bold rounded-lg transition"
+            >
+              {p}%
+            </button>
+          ))}
+        </div>
+
+        {/* Preview do valor final */}
+        <div className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
+          <span className="text-xs text-slate-500 font-bold uppercase tracking-wide">Vai pagar</span>
+          <span className="text-2xl font-black text-emerald-600 tabular-nums">{brl(valorFinal)}</span>
+        </div>
+
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={aplicar}
+            className="px-4 py-3 text-white font-black rounded-xl shadow-md transition"
+            style={{ background: `linear-gradient(135deg, ${HUB_TONES.amber.from}, ${HUB_TONES.amber.to})` }}
+          >
+            Aplicar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── MANUAL ITEM MODAL ─────────────────────────────────────────────────
+// Quando o produto não passa pelo bipe (cadastro errado, EAN ausente, etc),
+// vendedora digita "0" no input → abre este modal pra lançar item manual
+// com descrição e valor livres. Não trava o caixa.
+function ManualItemModal({
+  saleId,
+  onClose,
+  onAdded,
+}: {
+  saleId: string;
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const { toast } = usePdvToast();
+  const [descricao, setDescricao] = useState('');
+  const [valor, setValor] = useState('');
+  const [qty, setQty] = useState('1');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const parseNum = (s: string) => {
+    const n = Number(String(s).trim().replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  };
+
+  const adicionar = async () => {
+    setError(null);
+    if (descricao.trim().length < 2) {
+      setError('Descreva o produto (ex: "Brinco prata", "Camisa azul P")');
+      return;
+    }
+    const v = parseNum(valor);
+    if (v == null || v <= 0) {
+      setError('Valor inválido — use só números (ex: 49,90)');
+      return;
+    }
+    const q = Number(qty);
+    if (!q || q < 1 || !Number.isInteger(q)) {
+      setError('Quantidade deve ser número inteiro ≥ 1');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api(`/pdv/sales/${saleId}/items/manual`, {
+        method: 'POST',
+        body: JSON.stringify({ descricao: descricao.trim(), valor: v, qty: q }),
+      });
+      onAdded();
+    } catch (e: any) {
+      const h = humanizeError(e);
+      setError(`${h.title}${h.hint ? ' · ' + h.hint : ''}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const total = (parseNum(valor) || 0) * (Number(qty) || 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="font-black text-lg text-rose-700 flex items-center gap-2">
+            <FileText className="w-5 h-5" /> Item Manual
+          </h2>
+          <button onClick={onClose}><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-800 leading-snug">
+          ⚠️ Use só quando o produto não passa pelo bipe. Não atualiza estoque no Gigasistemas.
+        </div>
+
+        <div>
+          <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+            Descrição
+          </label>
+          <input
+            type="text"
+            autoFocus
+            value={descricao}
+            onChange={(e) => setDescricao(e.target.value.slice(0, 80))}
+            onKeyDown={(e) => e.key === 'Enter' && document.getElementById('manual-valor')?.focus()}
+            placeholder="Ex: Brinco prata · Camisa P azul"
+            className="w-full px-3 py-3 text-base font-medium border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
+          />
+          <div className="text-[10px] text-slate-400 text-right mt-0.5">
+            {descricao.length}/80
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Valor unitário
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">R$</span>
+              <input
+                id="manual-valor"
+                type="text"
+                inputMode="decimal"
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && adicionar()}
+                placeholder="0,00"
+                className="w-full px-3 py-3 pl-10 text-xl font-bold tabular-nums text-emerald-700 border-2 border-emerald-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
+              Quantidade
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && adicionar()}
+              className="w-full px-3 py-3 text-xl font-bold tabular-nums text-slate-800 border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400"
+            />
+          </div>
+        </div>
+
+        <div className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
+          <span className="text-xs text-slate-500 font-bold uppercase tracking-wide">Total do item</span>
+          <span className="text-2xl font-black text-emerald-600 tabular-nums">{brl(total)}</span>
+        </div>
+
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 p-2 rounded text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={adicionar}
+            disabled={saving}
+            className="px-4 py-3 text-white font-black rounded-xl shadow-md transition disabled:opacity-50 flex items-center justify-center gap-2"
+            style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
+          >
+            {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
+            Adicionar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
