@@ -135,4 +135,15 @@ export class IntelligenceController {
       plusSize: this.parseBool(plusSize),
     });
   }
+
+  /**
+   * GET /intelligence/sku-diagnose/:sku
+   * Diagnóstico de estoque pra debugar "tem estoque mas pedido em ruptura".
+   * Retorna real (Giga), committed (pick-orders ativos) e líquido por loja.
+   */
+  @Get('sku-diagnose/:sku')
+  skuDiagnose(@Req() req: any, @Param('sku') sku: string) {
+    this.requireAdmin(req);
+    return this.svc.diagnoseSkuStock(sku);
+  }
 }

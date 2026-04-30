@@ -146,6 +146,153 @@ export class IntelligenceService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // DIAGNÓSTICO DE SKU — pra debugar "tem estoque mas sistema não acha"
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Pra um SKU específico, retorna:
+   *   - Estoque REAL no Giga por loja (o que aparece em /produtos)
+   *   - Pick-orders ATIVOS consumindo esse SKU (quem reservou e em qual pedido WC)
+   *   - Estoque LÍQUIDO (real − committed) — o que o routing usa pra decidir
+   *
+   * Usado pra explicar à matriz por que um SKU "tem estoque" na tela mas o pedido
+   * fica em ruptura (estoque comprometido em outro pick-order ativo).
+   */
+  async diagnoseSkuStock(sku: string) {
+    const cleanSku = String(sku || '').trim();
+    if (!cleanSku) {
+      throw new BadRequestException('SKU obrigatório');
+    }
+
+    // 1) Lojas ativas
+    const stores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { id: true, code: true, name: true, tipo: true } as any,
+      orderBy: { code: 'asc' },
+    });
+    const storeIds = stores.map((s: any) => s.id);
+    const codeByStoreId = new Map(stores.map((s: any) => [s.id, s.code]));
+    const nameByCode = new Map(stores.map((s: any) => [s.code, s.name]));
+    const tipoByCode = new Map(stores.map((s: any) => [s.code, (s as any).tipo || 'REDE']));
+
+    // 2) Estoque REAL no Giga por loja (1 query)
+    const realStockMap = await this.erp.getStockRawBySku(cleanSku);
+    const realByStore = new Map<string, number>();
+    for (const r of realStockMap) {
+      const code = String(r.storeCode || '').trim();
+      if (code) realByStore.set(code, (realByStore.get(code) || 0) + (r.qty || 0));
+    }
+
+    // 3) Pick-orders ATIVOS (não enviados / não baixados) que tocam esse SKU
+    const activePickOrders = await this.prisma.pickOrder.findMany({
+      where: {
+        storeId: { in: storeIds },
+        status: { in: ['new', 'separating', 'separated'] },
+      },
+      select: { id: true, orderId: true, storeId: true, status: true, createdAt: true },
+    });
+    const orderIds = [...new Set(activePickOrders.map((p) => p.orderId))];
+    const itemsActive = orderIds.length
+      ? await this.prisma.orderItem.findMany({
+          where: { orderId: { in: orderIds }, sku: cleanSku },
+          select: { orderId: true, sku: true, quantity: true, assignedStoreId: true },
+        })
+      : [];
+
+    // Agrupar por (storeCode) e enriquecer com info do pedido WC
+    const ordersInfo = orderIds.length
+      ? await this.prisma.order.findMany({
+          where: { id: { in: orderIds } },
+          select: {
+            id: true,
+            wcOrderId: true,
+            wcOrderNumber: true,
+            customerName: true,
+            status: true,
+            createdAt: true,
+          },
+        })
+      : [];
+    const orderById = new Map(ordersInfo.map((o) => [o.id, o]));
+    const pickStoreByOrderId = new Map<string, string>();
+    for (const po of activePickOrders) pickStoreByOrderId.set(po.orderId, po.storeId);
+
+    // Lista de "compromissos" detalhados (1 por item do pedido)
+    type Commitment = {
+      storeCode: string;
+      storeName: string;
+      qty: number;
+      pickOrderId: string;
+      pickOrderStatus: string;
+      wcOrderId: number | null;
+      wcOrderNumber: string | null;
+      customerName: string | null;
+      orderStatus: string | null;
+      orderCreatedAt: string | null;
+    };
+    const commitments: Commitment[] = [];
+    const committedByStore = new Map<string, number>();
+    for (const it of itemsActive) {
+      const targetStoreId = it.assignedStoreId ?? pickStoreByOrderId.get(it.orderId) ?? null;
+      if (!targetStoreId) continue;
+      const code = codeByStoreId.get(targetStoreId);
+      if (!code) continue;
+      const order = orderById.get(it.orderId);
+      const po = activePickOrders.find((p) => p.orderId === it.orderId && p.storeId === targetStoreId);
+      committedByStore.set(code, (committedByStore.get(code) || 0) + it.quantity);
+      commitments.push({
+        storeCode: code,
+        storeName: nameByCode.get(code) || code,
+        qty: it.quantity,
+        pickOrderId: po?.id || '?',
+        pickOrderStatus: po?.status || '?',
+        wcOrderId: order?.wcOrderId || null,
+        wcOrderNumber: order?.wcOrderNumber || null,
+        customerName: order?.customerName || null,
+        orderStatus: order?.status || null,
+        orderCreatedAt: order?.createdAt ? order.createdAt.toISOString() : null,
+      });
+    }
+
+    // 4) Monta linhas por loja com real / committed / liquid
+    const allCodes = new Set<string>([
+      ...realByStore.keys(),
+      ...committedByStore.keys(),
+    ]);
+    const rows = Array.from(allCodes).map((code) => {
+      const real = realByStore.get(code) || 0;
+      const committed = committedByStore.get(code) || 0;
+      const liquid = Math.max(0, real - committed);
+      return {
+        storeCode: code,
+        storeName: nameByCode.get(code) || code,
+        tipo: tipoByCode.get(code) || 'REDE',
+        real,
+        committed,
+        liquid,
+      };
+    });
+    // Ordena: lojas com algum real ou committed primeiro, por nome
+    rows.sort((a, b) => {
+      const hasA = a.real > 0 || a.committed > 0 ? 0 : 1;
+      const hasB = b.real > 0 || b.committed > 0 ? 0 : 1;
+      if (hasA !== hasB) return hasA - hasB;
+      return a.storeCode.localeCompare(b.storeCode);
+    });
+
+    const totalReal = rows.reduce((s, r) => s + r.real, 0);
+    const totalCommitted = rows.reduce((s, r) => s + r.committed, 0);
+    const totalLiquid = rows.reduce((s, r) => s + r.liquid, 0);
+
+    return {
+      sku: cleanSku,
+      totals: { real: totalReal, committed: totalCommitted, liquid: totalLiquid },
+      rows: rows.filter((r) => r.real > 0 || r.committed > 0),
+      commitments: commitments.sort((a, b) => a.storeCode.localeCompare(b.storeCode)),
+    };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // MOVIMENTAÇÃO DE REMESSAS (Postgres)
   // ═══════════════════════════════════════════════════════════════════════
 

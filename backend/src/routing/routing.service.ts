@@ -630,6 +630,15 @@ export class RoutingService {
     const out = new Map<string, number>();
     if (!skus.length || !storeCodes.length) return out;
 
+    // FLAG GLOBAL: anti-overbooking desligado por padrão.
+    // Justificativa: lojista prefere PROMETER a venda (peça pode estar fisicamente
+    // disponível mesmo "comprometida" — pedido conflitante pode ser cancelado,
+    // pode haver divergência ERP×físico, etc). Routing usa estoque REAL do Giga.
+    // Pra ativar proteção contra overbooking, setar `ROUTING_ANTI_OVERBOOKING=true`.
+    if (process.env.ROUTING_ANTI_OVERBOOKING !== 'true') {
+      return out; // map vazio → subtractCommitted não tira nada → liquid = real
+    }
+
     // Map storeId → storeCode (engine trabalha com storeCode mas FK é storeId)
     const stores = await this.prisma.store.findMany({
       where: { code: { in: storeCodes } },

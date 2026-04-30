@@ -7,7 +7,7 @@ import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import SellerTag from '@/components/SellerTag';
-import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap } from 'lucide-react';
+import { ArrowLeft, Save, ExternalLink, Truck, Package, Loader2, Check, Send, Store as StoreIcon, AlertTriangle, AlertCircle, Zap, Search, X } from 'lucide-react';
 
 const WC_ADMIN_URL = 'https://www.lurds.com.br/wp-admin/admin.php?page=wc-orders&action=edit&id=';
 
@@ -152,6 +152,9 @@ export default function PedidoDetailPage() {
   // Impressão remota: state por pickOrderId
   const [printState, setPrintState] = useState<Record<string, 'idle' | 'sending' | 'sent' | 'error'>>({});
   const [printError, setPrintError] = useState<Record<string, string>>({});
+
+  // Diagnóstico de SKU (modal)
+  const [diagnoseSku, setDiagnoseSku] = useState<string | null>(null);
 
   // Gate de quebra — pedido dividido em N lojas exige o operador marcar
   // "ciente da divisão" antes do botão Confirmar habilitar. Zera sempre que
@@ -1550,14 +1553,26 @@ export default function PedidoDetailPage() {
               </div>
             )}
 
-            {/* Missing (ruptura) */}
+            {/* Missing (ruptura) — com botão Diagnosticar pra investigar
+                quando o SKU "tem estoque" mas o sistema fala ruptura (committed). */}
             {separation.missing.length > 0 && (
               <div className="bg-red-50 border border-red-200 rounded p-3 mb-4">
                 <div className="text-sm font-medium text-red-800 mb-2">Sem estoque em nenhuma loja:</div>
-                <ul className="text-sm text-red-700 space-y-1">
+                <ul className="text-sm text-red-700 space-y-1.5">
                   {separation.missing.map((m) => (
-                    <li key={m.sku}>
-                      • {m.quantity}× {m.productName} <span className="font-mono text-xs">(SKU {m.sku})</span>
+                    <li key={m.sku} className="flex items-center gap-2 flex-wrap">
+                      <span>
+                        • {m.quantity}× {m.productName} <span className="font-mono text-xs">(SKU {m.sku})</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDiagnoseSku(m.sku)}
+                        className="ml-auto px-2 py-1 bg-white border border-red-300 hover:bg-red-100 text-red-700 rounded text-[11px] font-bold flex items-center gap-1 transition"
+                        title="Ver onde está o estoque e quem reservou"
+                      >
+                        <Search className="w-3 h-3" />
+                        Diagnosticar
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -1962,6 +1977,271 @@ export default function PedidoDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Modal de diagnóstico de SKU — explica por que o sistema fala ruptura */}
+      {diagnoseSku && (
+        <SkuDiagnoseModal
+          sku={diagnoseSku}
+          onClose={() => setDiagnoseSku(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── SKU DIAGNOSE MODAL ────────────────────────────────────────────────
+// Mostra pra um SKU específico:
+//   - Total real no Giga
+//   - Total comprometido em pick-orders ativos
+//   - Total líquido (real − committed)
+//   - Detalhamento por loja
+//   - Lista de pick-orders ativos com pedido WC + cliente — pra retaguarda
+//     identificar quem reservou e decidir (cancelar/aguardar/conferir físico)
+function SkuDiagnoseModal({
+  sku,
+  onClose,
+}: {
+  sku: string;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<{
+    sku: string;
+    totals: { real: number; committed: number; liquid: number };
+    rows: Array<{ storeCode: string; storeName: string; tipo: string; real: number; committed: number; liquid: number }>;
+    commitments: Array<{
+      storeCode: string;
+      storeName: string;
+      qty: number;
+      pickOrderId: string;
+      pickOrderStatus: string;
+      wcOrderId: number | null;
+      wcOrderNumber: string | null;
+      customerName: string | null;
+      orderStatus: string | null;
+      orderCreatedAt: string | null;
+    }>;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const r = await api<any>(`/intelligence/sku-diagnose/${encodeURIComponent(sku)}`);
+        if (!cancelled) setData(r);
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || 'Erro ao carregar diagnóstico');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sku]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-3 bg-slate-100 border-b flex items-center justify-between">
+          <h2 className="font-black text-base text-slate-800 flex items-center gap-2">
+            <Search className="w-4 h-4 text-violet-600" />
+            Diagnóstico de estoque · SKU <span className="font-mono">{sku}</span>
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {loading && (
+            <div className="text-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin inline-block text-violet-600" />
+              <div className="text-xs text-slate-500 mt-2">Consultando Giga + pick-orders ativos…</div>
+            </div>
+          )}
+
+          {err && (
+            <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">
+              {err}
+            </div>
+          )}
+
+          {data && !loading && (
+            <>
+              {/* KPIs no topo: real vs committed vs liquid */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 text-center">
+                  <div className="text-[10px] text-blue-700 uppercase tracking-widest font-bold">Real (Giga)</div>
+                  <div className="text-3xl font-black text-blue-700 tabular-nums mt-1">{data.totals.real}</div>
+                  <div className="text-[10px] text-blue-600 mt-0.5">peças físicas</div>
+                </div>
+                <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-3 text-center">
+                  <div className="text-[10px] text-amber-700 uppercase tracking-widest font-bold">Comprometido</div>
+                  <div className="text-3xl font-black text-amber-700 tabular-nums mt-1">{data.totals.committed}</div>
+                  <div className="text-[10px] text-amber-600 mt-0.5">em pick-orders ativos</div>
+                </div>
+                <div className={`border-2 rounded-xl p-3 text-center ${
+                  data.totals.liquid > 0
+                    ? 'bg-emerald-50 border-emerald-200'
+                    : 'bg-rose-50 border-rose-200'
+                }`}>
+                  <div className={`text-[10px] uppercase tracking-widest font-bold ${
+                    data.totals.liquid > 0 ? 'text-emerald-700' : 'text-rose-700'
+                  }`}>Líquido</div>
+                  <div className={`text-3xl font-black tabular-nums mt-1 ${
+                    data.totals.liquid > 0 ? 'text-emerald-700' : 'text-rose-700'
+                  }`}>{data.totals.liquid}</div>
+                  <div className={`text-[10px] mt-0.5 ${
+                    data.totals.liquid > 0 ? 'text-emerald-600' : 'text-rose-600'
+                  }`}>
+                    {data.totals.liquid > 0 ? 'disponível pra alocar' : 'tudo comprometido'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Explicação pra retaguarda */}
+              {data.totals.real > 0 && data.totals.liquid === 0 && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
+                  <b>📌 Por que o sistema fala ruptura mesmo tendo {data.totals.real} un fisicamente:</b>
+                  <br />
+                  As {data.totals.committed} un que existem no Giga já estão {' '}
+                  <b>reservadas em outros pick-orders ativos</b> (lista abaixo). A engine não pode prometer
+                  a mesma peça pra 2 pedidos diferentes.
+                </div>
+              )}
+
+              {/* Detalhamento por loja */}
+              <div>
+                <div className="text-xs font-bold uppercase text-slate-500 tracking-wider mb-2">Por loja</div>
+                {data.rows.length === 0 ? (
+                  <div className="text-sm text-slate-500 italic px-3 py-4 bg-slate-50 rounded">
+                    Esse SKU não aparece em nenhuma loja (real e comprometido = 0).
+                  </div>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="grid grid-cols-[1fr_60px_80px_90px_80px] gap-2 px-3 py-2 bg-slate-100 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+                      <div>Loja</div>
+                      <div className="text-center">Tipo</div>
+                      <div className="text-right">Real</div>
+                      <div className="text-right">Compromet.</div>
+                      <div className="text-right">Líquido</div>
+                    </div>
+                    {data.rows.map((r) => (
+                      <div
+                        key={r.storeCode}
+                        className="grid grid-cols-[1fr_60px_80px_90px_80px] gap-2 px-3 py-2 text-sm border-t border-slate-100 items-center"
+                      >
+                        <div className="font-medium text-slate-800">
+                          {r.storeName}
+                          <span className="ml-2 text-xs font-mono text-slate-400">{r.storeCode}</span>
+                        </div>
+                        <div className="text-center text-[10px] font-bold">
+                          <span className={`px-1.5 py-0.5 rounded ${
+                            r.tipo === 'FILIAL' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {r.tipo === 'FILIAL' ? 'FRANQ' : 'REDE'}
+                          </span>
+                        </div>
+                        <div className="text-right tabular-nums text-blue-700 font-bold">{r.real}</div>
+                        <div className="text-right tabular-nums text-amber-700 font-bold">
+                          {r.committed > 0 ? r.committed : '—'}
+                        </div>
+                        <div className={`text-right tabular-nums font-black ${
+                          r.liquid > 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}>
+                          {r.liquid}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Lista de compromissos: quem reservou */}
+              {data.commitments.length > 0 && (
+                <div>
+                  <div className="text-xs font-bold uppercase text-slate-500 tracking-wider mb-2">
+                    Quem reservou ({data.commitments.length} pick-order{data.commitments.length > 1 ? 's' : ''} ativo{data.commitments.length > 1 ? 's' : ''})
+                  </div>
+                  <div className="space-y-2">
+                    {data.commitments.map((c, idx) => (
+                      <div
+                        key={c.pickOrderId + idx}
+                        className="border border-amber-200 bg-amber-50/40 rounded-lg p-3 text-sm"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+                          <div className="font-bold text-slate-900 flex items-center gap-2">
+                            <span className="text-amber-700">{c.qty}× reservadas em</span>
+                            <span className="text-violet-700">{c.storeName}</span>
+                            <span className="text-xs font-mono text-slate-500">{c.storeCode}</span>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                            c.pickOrderStatus === 'separated' ? 'bg-emerald-200 text-emerald-900' :
+                            c.pickOrderStatus === 'separating' ? 'bg-amber-200 text-amber-900' :
+                            'bg-slate-200 text-slate-800'
+                          }`}>
+                            {c.pickOrderStatus}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-600 flex items-center gap-3 flex-wrap">
+                          {c.wcOrderId && (
+                            <Link
+                              href={`/pedidos/wc/${c.wcOrderId}`}
+                              className="text-violet-700 hover:underline font-mono font-bold"
+                              target="_blank"
+                            >
+                              #{c.wcOrderNumber || c.wcOrderId}
+                              <ExternalLink className="w-3 h-3 inline-block ml-0.5" />
+                            </Link>
+                          )}
+                          {c.customerName && (
+                            <span className="text-slate-700">
+                              <b>Cliente:</b> {c.customerName}
+                            </span>
+                          )}
+                          {c.orderCreatedAt && (
+                            <span className="text-slate-500">
+                              criado em {new Date(c.orderCreatedAt).toLocaleString('pt-BR')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sugestões de ação */}
+              {data.totals.real > 0 && data.totals.liquid === 0 && (
+                <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-900 leading-relaxed">
+                  <b>Como resolver:</b>
+                  <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                    <li>Se um dos pick-orders acima é de pedido <b>cancelado</b> → cancelar o pick-order libera o estoque.</li>
+                    <li>Se o pedido conflitante <b>já foi enviado fisicamente</b> mas o status no sistema ainda é separated → atualizar o status (shipped) libera.</li>
+                    <li>Se o estoque ERP está <b>divergente do físico real</b> → ajustar no Giga (zerar a peça que sumiu).</li>
+                    <li>Senão, este pedido vai aguardar. Aceitar a ruptura ou comprar peça nova.</li>
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 py-3 bg-slate-50 border-t flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded font-bold text-sm"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
