@@ -201,6 +201,10 @@ function PdvPageInner() {
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  // Filtro de formas de pagamento — quando vendedora clica num botão direto
+  // (PIX/CARTÃO/CRED. da sidebar), o modal abre mostrando SÓ aquela categoria.
+  // Quando clica em "Finalizar", abre TUDO.
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'pix' | 'cartao' | 'crediario'>('all');
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
 
@@ -1133,28 +1137,28 @@ function PdvPageInner() {
           </div>
           <div className="grid grid-cols-3 gap-1.5">
             <button
-              onClick={() => setShowPayment(true)}
+              onClick={() => { setPaymentFilter('pix'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
               className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-teal-200 shadow-sm"
-              title="PIX"
+              title="Cobrar via PIX"
             >
               <QrCode className="w-5 h-5 text-teal-600" />
               <span className="text-[10px] font-bold text-teal-800">PIX</span>
             </button>
             <button
-              onClick={() => setShowPayment(true)}
+              onClick={() => { setPaymentFilter('cartao'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
               className="bg-white hover:bg-sky-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-sky-200 shadow-sm"
-              title="Cartão"
+              title="Cobrar com cartão (débito ou crédito)"
             >
               <CreditCard className="w-5 h-5 text-sky-600" />
               <span className="text-[10px] font-bold text-sky-800">CARTÃO</span>
             </button>
             <button
-              onClick={() => setShowPayment(true)}
+              onClick={() => { setPaymentFilter('crediario'); setShowPayment(true); }}
               disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
               className="bg-white hover:bg-rose-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-rose-200 shadow-sm"
-              title="Crediário"
+              title="Vender no crediário"
             >
               <Receipt className="w-5 h-5 text-rose-600" />
               <span className="text-[10px] font-bold text-rose-800">CRED.</span>
@@ -1322,7 +1326,7 @@ function PdvPageInner() {
 
               {/* FINALIZAR — botão verde gigante (CTA primário) */}
               <button
-                onClick={() => setShowPayment(true)}
+                onClick={() => { setPaymentFilter('all'); setShowPayment(true); }}
                 disabled={!sale.items?.length || sale.total <= 0}
                 className="px-4 sm:px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-md shadow-emerald-200 transition shrink-0"
                 title="Finalizar venda (F4)"
@@ -1370,7 +1374,8 @@ function PdvPageInner() {
           customerEmail={sale.customerEmail}
           finalizing={finalizing}
           initialPayments={sale.payments || []}
-          onClose={() => setShowPayment(false)}
+          methodFilter={paymentFilter}
+          onClose={() => { setShowPayment(false); setPaymentFilter('all'); }}
           onConfirm={finalizeSale}
           onLater={fecharDepois}
           onPaymentsChange={onPaymentsChanged}
@@ -1798,6 +1803,7 @@ function PaymentModal({
   customerEmail,
   finalizing,
   initialPayments,
+  methodFilter = 'all',
   onClose,
   onConfirm,
   onLater,
@@ -1812,6 +1818,9 @@ function PaymentModal({
   customerEmail?: string | null;
   finalizing: boolean;
   initialPayments?: Array<{ id: string; method: string; valor: number; details: string | null }>;
+  /** Filtra quais métodos aparecem na grid: 'all' = todos, 'pix' = só PIX,
+   *  'cartao' = débito + crédito, 'crediario' = só crediário. */
+  methodFilter?: 'all' | 'pix' | 'cartao' | 'crediario';
   onClose: () => void;
   onConfirm: (method: string, details?: any) => void;
   onLater: () => void;
@@ -1825,7 +1834,12 @@ function PaymentModal({
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
   const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
-  const [selected, setSelected] = useState<string | null>(null);
+  // Auto-seleciona quando filtro tem só 1 método (PIX, crediario)
+  // Pra cartão, deixa null pra vendedora escolher débito ou crédito.
+  const initialSelected = methodFilter === 'pix' ? 'pix'
+    : methodFilter === 'crediario' ? 'crediario'
+    : null;
+  const [selected, setSelected] = useState<string | null>(initialSelected);
   const [bandeira, setBandeira] = useState<string | null>(null);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
@@ -2433,14 +2447,27 @@ function PaymentModal({
           </div>
         )}
 
-        {/* Métodos só aparecem quando ainda há restante a pagar */}
+        {/* Métodos só aparecem quando ainda há restante a pagar.
+            FILTRO: quando vendedora abre o modal pelos botões da sidebar
+            (PIX/CARTÃO/CRED.), mostra só os métodos correspondentes. */}
         {!pago100 && (
           <>
             <div className="text-[10px] uppercase font-semibold text-slate-500">
-              Adicionar forma de pagamento
+              {methodFilter === 'pix' && 'Pagar com PIX'}
+              {methodFilter === 'cartao' && 'Pagar com cartão'}
+              {methodFilter === 'crediario' && 'Vender no crediário'}
+              {methodFilter === 'all' && 'Adicionar forma de pagamento'}
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {PAYMENT_METHODS.map((p) => {
+              {PAYMENT_METHODS
+                .filter((p) => {
+                  if (methodFilter === 'all') return true;
+                  if (methodFilter === 'pix') return p.id === 'pix';
+                  if (methodFilter === 'cartao') return p.id === 'debito' || p.id === 'credito';
+                  if (methodFilter === 'crediario') return p.id === 'crediario';
+                  return true;
+                })
+                .map((p) => {
                 const Icon = p.icon;
                 const isSelected = selected === p.id;
                 const disabled = p.id === 'crediario' && !customerCpf;
