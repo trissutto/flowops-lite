@@ -1207,7 +1207,7 @@ function PdvPageInner() {
               title="Vender no crediário"
             >
               <Receipt className="w-4 h-4 text-amber-500" />
-              <span className="text-[10px] font-bold text-slate-700">CRED.</span>
+              <span className="text-[10px] font-bold text-slate-700">CREDIÁRIO</span>
             </button>
           </div>
         </div>
@@ -1242,9 +1242,10 @@ function PdvPageInner() {
             <Link
               href="/minha-loja/pdv/recebimentos"
               className="bg-white hover:bg-rose-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-rose-300"
+              title="Receber/baixar parcelas de crediário"
             >
               <Receipt className="w-3.5 h-3.5 text-rose-600" />
-              <span className="text-[10px] font-bold text-slate-700">Crediário</span>
+              <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Baixa Crediário</span>
             </Link>
             <button
               onClick={() => setShowSimular(true)}
