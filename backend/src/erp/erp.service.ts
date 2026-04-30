@@ -758,8 +758,29 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return [];
     }
 
-    // PASSO 2 — Estoque SÓ dos CODIGOs reais resolvidos
-    const codigosGiga = Array.from(codigoGigaToOriginal.keys());
+    // PASSO 2 — Estoque dos CODIGOs reais resolvidos.
+    //
+    // BUG anterior: buscava só pelo CODIGO literal encontrado em `produtos`.
+    // Mas a tabela `estoque` pode armazenar o MESMO produto com padding de
+    // zeros DIFERENTE (ex: produtos="5383641", estoque="00005383641"). Como o
+    // IN da query é literal, perdia essas linhas → routing dizia ruptura
+    // mesmo com 1 un físico real (caso real do pedido WC #191547 da Lurd's).
+    //
+    // Solução: pra cada codigoGiga resolvido em produtos, expandir TODAS as
+    // variantes de padding e procurar em estoque pelo set inteiro. Mantém o
+    // mapeamento variant → originalSku pra agregar de volta corretamente.
+    const codigosVariants: string[] = [];
+    const codigoVariantToOriginal = new Map<string, string>();
+    for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
+      for (const v of this.skuVariants(codigoGiga)) {
+        codigosVariants.push(v);
+        if (!codigoVariantToOriginal.has(v)) {
+          codigoVariantToOriginal.set(v, originalSku);
+        }
+      }
+    }
+    if (codigosVariants.length === 0) return [];
+
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO AS sku,
@@ -769,15 +790,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           WHERE CODIGO IN (?)
             AND LOJA IN (?)
             AND ESTOQUE > 0`,
-        [codigosGiga, storeCodes],
+        [codigosVariants, storeCodes],
       );
-      // Agrega por (originalSku, storeCode) — embora não deva haver duplicação
-      // depois do passo 1 (1 codigoGiga por sku original), defensivo.
+      // Agrega por (originalSku, storeCode). Múltiplas variantes de padding
+      // podem casar — somamos tudo, mas logamos pra detectar caso patológico.
       const agg = new Map<string, number>();
       for (const r of rows as any[]) {
-        const codigoGiga = String(r.sku).trim();
+        const codigoEstoque = String(r.sku).trim();
         const storeCode = String(r.storeCode).trim();
-        const originalSku = codigoGigaToOriginal.get(codigoGiga);
+        const originalSku = codigoVariantToOriginal.get(codigoEstoque);
         if (!originalSku) continue;
         const key = `${storeCode}::${originalSku}`;
         agg.set(key, (agg.get(key) || 0) + (Number(r.availableQty) || 0));
