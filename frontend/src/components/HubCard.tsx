@@ -23,7 +23,11 @@ import { ArrowUpRight, type LucideIcon } from 'lucide-react';
 
 export type HubTone = 'teal' | 'green' | 'orange' | 'purple' | 'rose' | 'sky' | 'amber' | 'slate';
 
-const HUB_TONES: Record<HubTone, { from: string; to: string }> = {
+/**
+ * Paleta unificada do sistema. Reusada em qualquer lugar que precise dos
+ * mesmos tons (PDV, /site, /loja, /retaguarda, /config).
+ */
+export const HUB_TONES: Record<HubTone, { from: string; to: string }> = {
   teal:   { from: '#0e7e87', to: '#0a5a62' },
   green:  { from: '#5b9b3e', to: '#3f7029' },
   orange: { from: '#d68a3c', to: '#b66a1f' },

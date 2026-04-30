@@ -22,9 +22,11 @@ import {
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle,
+  type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
+import { HUB_TONES, type HubTone } from '@/components/HubCard';
 
 type Sale = {
   id: string;
@@ -638,32 +640,31 @@ function PdvPageInner() {
 
   return (
     <div className="min-h-screen bg-[#f4f1ec] flex flex-col">
-      {/* Header unificado com a retaguarda — fundo branco, borda sutil */}
-      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-sm">
-        {/* Linha 1 — logo grande + título + status */}
-        <div className="max-w-3xl mx-auto px-4 pt-3 pb-2 flex items-center gap-3">
+      {/* Header enxuto — só logo + venda + cliente. Fundo creme transparente
+          igual /site, com borda inferior sutil. NÃO contém os action cards. */}
+      <header className="sticky top-0 z-20 bg-[#f4f1ec]/95 backdrop-blur border-b border-slate-200/70">
+        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
-            className="text-rose-700 hover:text-rose-900 transition shrink-0 -ml-1"
+            className="text-slate-600 hover:text-slate-900 transition shrink-0"
             aria-label="Voltar"
           >
             <ArrowLeft className="w-5 h-5" />
           </Link>
 
-          {/* LOGO GRANDE — destaque visual */}
+          {/* LOGO compacta */}
           <Link
             href="/minha-loja"
-            className="flex items-center gap-3 shrink-0 group"
+            className="flex items-center gap-2 shrink-0 group"
             title="Início"
           >
-            <div className="relative w-16 h-16 transition-transform group-hover:scale-105">
-              <div className="absolute inset-0 rounded-full bg-gradient-to-br from-rose-200/50 to-pink-300/50 blur-md" />
+            <div className="relative w-11 h-11">
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
                 fill
-                sizes="64px"
-                className="object-contain relative drop-shadow-md"
+                sizes="44px"
+                className="object-contain"
                 priority
               />
             </div>
@@ -672,163 +673,50 @@ function PdvPageInner() {
           {/* Título + venda */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-black bg-gradient-to-r from-rose-700 via-pink-600 to-fuchsia-600 bg-clip-text text-transparent leading-tight tracking-tight">
+              <h1 className="text-xl sm:text-2xl font-black text-slate-900 leading-none tracking-tight">
                 PDV
               </h1>
               {sale?.storeCode && (
-                <span className="text-xs font-mono font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full">
+                <span className="text-[11px] font-mono font-bold text-white bg-slate-700 px-2 py-0.5 rounded-md">
                   {sale.storeCode}
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-rose-700/70 truncate font-semibold mt-0.5">
+            <p className="text-[11px] text-slate-500 truncate font-medium mt-0.5">
               {sale
-                ? `Venda #${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} item(ns) no carrinho`
+                ? `Venda #${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} ${sale.items?.length === 1 ? 'item' : 'itens'} no carrinho`
                 : 'Carregando…'}
             </p>
           </div>
 
-          {/* Botão Cliente — pill compacta */}
+          {/* Botão Cliente — pill sólida (não gradient) */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-full flex items-center gap-1.5 font-bold transition shadow-md disabled:opacity-50 ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 ${
               sale?.customerCpf
-                ? 'bg-gradient-to-br from-rose-500 to-pink-600 text-white shadow-rose-300/60'
-                : 'bg-white hover:bg-rose-50 text-rose-700 border-2 border-rose-200 shadow-rose-100'
+                ? 'text-white shadow-md'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200'
             }`}
+            style={
+              sale?.customerCpf
+                ? { background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }
+                : undefined
+            }
             title="Identificar cliente"
           >
             <User className="w-4 h-4" />
-            <span className="hidden sm:inline truncate max-w-[80px]">
-              {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Cliente'}
+            <span className="hidden sm:inline truncate max-w-[100px]">
+              {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
           </button>
         </div>
-
-        {/* Linha 2 — 4 ATALHOS GRANDES (mais usados) */}
-        <div className="max-w-4xl mx-auto px-4 pb-2 grid grid-cols-2 md:grid-cols-4 gap-2">
-          {/* Receber Crediário — destaque rosa */}
-          <Link
-            href="/minha-loja/pdv/recebimentos"
-            className="group relative bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
-            title="Receber parcela do crediário"
-          >
-            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Receipt className="w-6 h-6" />
-            </div>
-            <div className="leading-tight min-w-0">
-              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Crediário</div>
-              <div className="text-base font-black truncate">Receber</div>
-            </div>
-          </Link>
-
-          {/* Pag Rápido PIX — usa total do carrinho */}
-          <button
-            type="button"
-            onClick={() => setShowPixAvulso(true)}
-            className="group relative bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
-            title={sale?.total && sale.total > 0 ? `Cobrar ${brl(sale.total)} via PIX` : 'PIX rápido (qualquer valor)'}
-          >
-            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <DollarSign className="w-6 h-6" />
-            </div>
-            <div className="leading-tight min-w-0 text-left">
-              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">PIX</div>
-              <div className="text-base font-black truncate">Pag Rápido</div>
-            </div>
-          </button>
-
-          {/* Consultar — sky */}
-          <Link
-            href="/minha-loja/consultar"
-            className="group relative bg-gradient-to-br from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition"
-            title="Consultar estoque na rede"
-          >
-            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Search className="w-6 h-6" />
-            </div>
-            <div className="leading-tight min-w-0">
-              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">Estoque</div>
-              <div className="text-base font-black truncate">Consultar</div>
-            </div>
-          </Link>
-
-          {/* Pedido Site — indigo */}
-          <Link
-            href="/minha-loja"
-            className={`group relative bg-gradient-to-br from-indigo-500 to-blue-700 hover:from-indigo-600 hover:to-blue-800 text-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-md hover:shadow-lg transition ${
-              pedidosSitePending > 0 ? 'ring-2 ring-rose-300 animate-pulse' : ''
-            }`}
-            title={pedidosSitePending > 0 ? `${pedidosSitePending} pedido(s) do site aguardando` : 'Pedidos do site'}
-          >
-            <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-              <Globe className="w-6 h-6" />
-            </div>
-            <div className="leading-tight min-w-0">
-              <div className="text-[10px] uppercase tracking-wider opacity-90 font-bold">WooCommerce</div>
-              <div className="text-base font-black truncate">Pedido Site</div>
-            </div>
-            {pedidosSitePending > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-white text-rose-700 text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1 shadow-lg ring-2 ring-rose-400">
-                {pedidosSitePending}
-              </span>
-            )}
-          </Link>
-        </div>
-
-        {/* Linha 3 — 4 ATALHOS MENORES (uso esporádico) */}
-        <div className="max-w-4xl mx-auto px-4 pb-3 grid grid-cols-4 gap-2">
-          <Link
-            href="/minha-loja/pdv/caixa"
-            className="bg-white hover:bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm"
-            title="Sangria + Z de caixa"
-          >
-            <DollarSign className="w-3.5 h-3.5" />
-            Caixa
-          </Link>
-          <Link
-            href="/minha-loja/pdv/devolucao"
-            className="bg-white hover:bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm"
-            title="Trocas e devoluções"
-          >
-            <ArrowRightLeft className="w-3.5 h-3.5" />
-            Trocar
-          </Link>
-          <button
-            type="button"
-            onClick={() => setShowOpenList(true)}
-            disabled={openCount === 0}
-            className="relative bg-white hover:bg-violet-50 border border-violet-200 text-violet-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-            title={openCount > 0 ? `${openCount} venda(s) pausadas` : 'Nenhuma venda pausada'}
-          >
-            <Pause className="w-3.5 h-3.5" />
-            Pausadas
-            {openCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow ring-2 ring-white animate-pulse">
-                {openCount}
-              </span>
-            )}
-          </button>
-          <Link
-            href="/minha-loja/realinhamento"
-            className={`relative bg-white hover:bg-fuchsia-50 border border-fuchsia-200 text-fuchsia-800 rounded-lg px-2 py-2 flex items-center justify-center gap-1.5 text-xs font-bold transition shadow-sm ${
-              realignPending > 0 ? 'ring-2 ring-fuchsia-300 animate-pulse' : ''
-            }`}
-            title={realignPending > 0 ? `${realignPending} item(s) pra outras lojas` : 'Realinhar com outras lojas'}
-          >
-            <Shuffle className="w-3.5 h-3.5" />
-            Realinhar
-            {realignPending > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow ring-2 ring-white">
-                {realignPending}
-              </span>
-            )}
-          </Link>
-        </div>
       </header>
 
-      <main className="flex-1 max-w-4xl mx-auto w-full p-3 space-y-3 pb-44">
+      {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
+      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-4 px-4 pt-4 pb-44">
+
+      <main className="flex-1 min-w-0 space-y-3">
         {error && (
           <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
@@ -839,17 +727,17 @@ function PdvPageInner() {
           </div>
         )}
 
-        {/* Input bipagem HERO — área central de foco máximo */}
+        {/* Input bipagem — presença sem dramaticidade. Borda discreta, foca rosa */}
         {sale?.status === 'open' && (
           <form
             onSubmit={handleScan}
-            className="bg-white rounded-2xl border-4 border-rose-400 p-5 shadow-xl ring-8 ring-rose-100/40"
+            className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm"
           >
-            <label className="text-xs uppercase font-black text-rose-700 flex items-center gap-2 mb-3 tracking-widest">
-              <Barcode className="w-4 h-4" />
+            <label className="text-[11px] uppercase font-bold text-slate-500 flex items-center gap-2 mb-2.5 tracking-widest">
+              <Barcode className="w-3.5 h-3.5" />
               Bipe o produto · ou digite SKU/EAN
             </label>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <input
                 ref={inputRef}
                 type="text"
@@ -857,7 +745,7 @@ function PdvPageInner() {
                 onChange={(e) => setScanInput(e.target.value)}
                 placeholder="SKU OU EAN13"
                 disabled={scanLoading}
-                className="flex-1 px-5 py-5 text-3xl sm:text-4xl font-mono font-black border-2 border-rose-200 rounded-2xl focus:outline-none focus:ring-4 focus:ring-rose-300 focus:border-rose-500 disabled:bg-slate-50 placeholder:text-rose-200 placeholder:font-normal placeholder:text-2xl tracking-widest"
+                className="flex-1 px-4 py-4 text-2xl sm:text-3xl font-mono font-black border-2 border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 placeholder:text-slate-300 placeholder:font-normal placeholder:text-xl tracking-widest text-slate-900"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -866,9 +754,10 @@ function PdvPageInner() {
               <button
                 type="submit"
                 disabled={!scanInput || scanLoading}
-                className="px-7 py-5 bg-gradient-to-br from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-black rounded-2xl flex items-center disabled:opacity-40 shadow-lg shadow-rose-300 transition"
+                className="px-5 py-4 text-white font-black rounded-xl flex items-center disabled:opacity-40 shadow-sm transition"
+                style={{ background: `linear-gradient(135deg, ${HUB_TONES.rose.from}, ${HUB_TONES.rose.to})` }}
               >
-                {scanLoading ? <Loader2 className="w-7 h-7 animate-spin" /> : <ArrowRight className="w-7 h-7" />}
+                {scanLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <ArrowRight className="w-6 h-6" />}
               </button>
             </div>
             <div className="mt-2 text-[10px] text-slate-400 flex items-center gap-3">
@@ -1098,6 +987,95 @@ function PdvPageInner() {
           </div>
         ) : null}
       </main>
+
+      {/* SIDEBAR DIREITA — ações do PDV (rose/teal/sky/purple + green/amber/slate/orange).
+          Em mobile (<lg) vira uma faixa horizontal com scroll no topo. */}
+      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
+        <PdvSidebarCard
+          tone="rose"
+          href="/minha-loja/pdv/recebimentos"
+          icon={Receipt}
+          subtitle="Crediário"
+          label="Receber"
+        />
+        <PdvSidebarCard
+          tone="teal"
+          onClick={() => setShowPixAvulso(true)}
+          icon={DollarSign}
+          subtitle="PIX"
+          label="Pag Rápido"
+          description={sale?.total && sale.total > 0 ? brl(sale.total) : undefined}
+        />
+        <PdvSidebarCard
+          tone="sky"
+          href="/minha-loja/consultar"
+          icon={Search}
+          subtitle="Estoque"
+          label="Consultar"
+        />
+        <PdvSidebarCard
+          tone="purple"
+          href="/minha-loja"
+          icon={Globe}
+          subtitle="WooCommerce"
+          label="Pedido Site"
+          badge={pedidosSitePending > 0 ? pedidosSitePending : undefined}
+          pulse={pedidosSitePending > 0}
+        />
+        <div className="h-px bg-slate-300/70 my-1" />
+        <PdvSidebarCard
+          tone="green"
+          href="/minha-loja/pdv/caixa"
+          icon={DollarSign}
+          subtitle=""
+          label="Caixa"
+          compact
+        />
+        <PdvSidebarCard
+          tone="amber"
+          href="/minha-loja/pdv/devolucao"
+          icon={ArrowRightLeft}
+          subtitle=""
+          label="Trocar"
+          compact
+        />
+        <PdvSidebarCard
+          tone="slate"
+          onClick={() => setShowOpenList(true)}
+          disabled={openCount === 0}
+          icon={Pause}
+          subtitle=""
+          label="Pausadas"
+          badge={openCount > 0 ? openCount : undefined}
+          compact
+        />
+        <PdvSidebarCard
+          tone="orange"
+          href="/minha-loja/realinhamento"
+          icon={Shuffle}
+          subtitle=""
+          label="Realinhar"
+          badge={realignPending > 0 ? realignPending : undefined}
+          pulse={realignPending > 0}
+          compact
+        />
+      </aside>
+
+      </div>{/* fim do flex main+sidebar */}
+
+      {/* MOBILE BAR — em telas <lg, mostra ações em scroll horizontal acima do footer */}
+      <div className="lg:hidden fixed bottom-[88px] left-0 right-0 z-10 px-3">
+        <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
+          <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
+          <PdvMobilePill tone="teal"   onClick={() => setShowPixAvulso(true)} icon={DollarSign} label="PIX" />
+          <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
+          <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
+          <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
+          <PdvMobilePill tone="amber"  href="/minha-loja/pdv/devolucao"    icon={ArrowRightLeft} label="Trocar" />
+          <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
+          <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
+        </div>
+      </div>
 
       {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
@@ -3067,4 +3045,130 @@ function ShortcutPill({
       </div>
     </Link>
   );
+}
+
+// ── PDV SIDEBAR CARD ──────────────────────────────────────────────────
+// Card vertical da sidebar do PDV. Segue exatamente a paleta HUB_TONES
+// (mesmas cores do /site, /loja, /retaguarda, /config) pra manter o sistema
+// visualmente unificado. Suporta Link OU button (onClick), badge e pulse.
+function PdvSidebarCard({
+  tone,
+  href,
+  onClick,
+  disabled,
+  icon: Icon,
+  subtitle,
+  label,
+  description,
+  badge,
+  pulse,
+  compact,
+}: {
+  tone: HubTone;
+  href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  icon: LucideIcon;
+  subtitle?: string;
+  label: string;
+  description?: string;
+  badge?: number;
+  pulse?: boolean;
+  /** Compact: layout horizontal (icon esquerda, label direita) — pra ações secundárias */
+  compact?: boolean;
+}) {
+  const t = HUB_TONES[tone];
+  const baseClass = `relative overflow-hidden rounded-xl text-white shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 ${
+    pulse ? 'ring-2 ring-rose-300 animate-pulse' : ''
+  }`;
+  const style = { background: `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)` };
+
+  const inner = compact ? (
+    // Compact: horizontal — ícone esquerda, label direita
+    <div className="px-3 py-2.5 flex items-center gap-2.5">
+      <Icon className="w-4 h-4 opacity-90 shrink-0" strokeWidth={2} />
+      <span className="text-sm font-bold leading-none">{label}</span>
+      {badge && badge > 0 && (
+        <span className="ml-auto bg-white/95 text-slate-900 text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
+          {badge}
+        </span>
+      )}
+    </div>
+  ) : (
+    // Default: vertical estilo HubCard — icon top, subtitle, label, description
+    <div className="px-3.5 py-3 flex flex-col gap-1">
+      <div
+        className="absolute -top-6 -right-6 w-20 h-20 rounded-full opacity-15 pointer-events-none"
+        style={{ background: 'radial-gradient(circle, white 0%, transparent 70%)' }}
+      />
+      <Icon className="w-5 h-5 opacity-90 relative" strokeWidth={1.7} />
+      {subtitle && (
+        <div className="text-[10px] font-bold tracking-wider uppercase opacity-90 relative">
+          {subtitle}
+        </div>
+      )}
+      <div className="text-base font-black leading-tight relative">{label}</div>
+      {description && (
+        <div className="text-[10px] opacity-85 leading-snug relative tabular-nums">{description}</div>
+      )}
+      {badge && badge > 0 && (
+        <span className="absolute top-1.5 right-1.5 bg-white text-slate-900 text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
+          {badge}
+        </span>
+      )}
+    </div>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} className={baseClass} style={style}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={`${baseClass} text-left w-full`} style={style}>
+      {inner}
+    </button>
+  );
+}
+
+// ── PDV MOBILE PILL ───────────────────────────────────────────────────
+// Pílula compacta horizontal da bottom bar mobile. Usada no scroll
+// horizontal acima do footer em telas pequenas (<lg).
+function PdvMobilePill({
+  tone,
+  href,
+  onClick,
+  disabled,
+  icon: Icon,
+  label,
+  badge,
+}: {
+  tone: HubTone;
+  href?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  icon: LucideIcon;
+  label: string;
+  badge?: number;
+}) {
+  const t = HUB_TONES[tone];
+  const cls = 'relative shrink-0 px-3 py-2 rounded-xl text-white font-bold text-xs flex items-center gap-1.5 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed';
+  const style = { background: `linear-gradient(135deg, ${t.from} 0%, ${t.to} 100%)` };
+  const inner = (
+    <>
+      <Icon className="w-3.5 h-3.5" />
+      {label}
+      {badge && badge > 0 && (
+        <span className="bg-white text-slate-900 text-[9px] font-black rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">
+          {badge}
+        </span>
+      )}
+    </>
+  );
+  if (href) {
+    return <Link href={href} className={cls} style={style}>{inner}</Link>;
+  }
+  return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
 }
