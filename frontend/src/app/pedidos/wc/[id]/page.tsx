@@ -2007,7 +2007,7 @@ function SkuDiagnoseModal({
   const [data, setData] = useState<{
     sku: string;
     totals: { real: number; committed: number; liquid: number };
-    rows: Array<{ storeCode: string; storeName: string; tipo: string; real: number; committed: number; liquid: number }>;
+    rows: Array<{ storeCode: string; storeName: string; tipo: string; active: boolean; real: number; committed: number; liquid: number }>;
     commitments: Array<{
       storeCode: string;
       storeName: string;
@@ -2124,10 +2124,12 @@ function SkuDiagnoseModal({
                     Esse SKU não aparece em nenhuma loja (real e comprometido = 0).
                   </div>
                 ) : (
+                  <>
                   <div className="border rounded-lg overflow-hidden">
-                    <div className="grid grid-cols-[1fr_60px_80px_90px_80px] gap-2 px-3 py-2 bg-slate-100 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+                    <div className="grid grid-cols-[1fr_60px_70px_80px_90px_80px] gap-2 px-3 py-2 bg-slate-100 text-[10px] uppercase tracking-wider font-bold text-slate-600">
                       <div>Loja</div>
                       <div className="text-center">Tipo</div>
+                      <div className="text-center">Status</div>
                       <div className="text-right">Real</div>
                       <div className="text-right">Compromet.</div>
                       <div className="text-right">Líquido</div>
@@ -2135,7 +2137,9 @@ function SkuDiagnoseModal({
                     {data.rows.map((r) => (
                       <div
                         key={r.storeCode}
-                        className="grid grid-cols-[1fr_60px_80px_90px_80px] gap-2 px-3 py-2 text-sm border-t border-slate-100 items-center"
+                        className={`grid grid-cols-[1fr_60px_70px_80px_90px_80px] gap-2 px-3 py-2 text-sm border-t border-slate-100 items-center ${
+                          !r.active && r.real > 0 ? 'bg-rose-50/50' : ''
+                        }`}
                       >
                         <div className="font-medium text-slate-800">
                           {r.storeName}
@@ -2148,18 +2152,38 @@ function SkuDiagnoseModal({
                             {r.tipo === 'FILIAL' ? 'FRANQ' : 'REDE'}
                           </span>
                         </div>
+                        <div className="text-center text-[10px] font-bold">
+                          {r.active ? (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">ATIVA</span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-rose-200 text-rose-900" title="Loja desativada — routing ignora estoque desta loja!">
+                              INATIVA
+                            </span>
+                          )}
+                        </div>
                         <div className="text-right tabular-nums text-blue-700 font-bold">{r.real}</div>
                         <div className="text-right tabular-nums text-amber-700 font-bold">
                           {r.committed > 0 ? r.committed : '—'}
                         </div>
                         <div className={`text-right tabular-nums font-black ${
-                          r.liquid > 0 ? 'text-emerald-700' : 'text-rose-700'
+                          r.liquid > 0 && r.active ? 'text-emerald-700' : 'text-rose-700'
                         }`}>
-                          {r.liquid}
+                          {r.active ? r.liquid : '—'}
                         </div>
                       </div>
                     ))}
                   </div>
+
+                  {/* Aviso quando há estoque em loja inativa */}
+                  {data.rows.some((r) => !r.active && r.real > 0) && (
+                    <div className="mt-2 bg-rose-50 border-2 border-rose-300 rounded-lg p-3 text-sm text-rose-900">
+                      <b>⚠️ ESTOQUE EM LOJA INATIVA:</b> uma ou mais linhas acima estão marcadas como <b>INATIVA</b> e
+                      <b> têm estoque real &gt; 0</b>. O routing ignora lojas inativas. Pra usar essa peça, ative a loja em{' '}
+                      <Link href="/retaguarda/lojas" className="underline font-bold" target="_blank">/retaguarda/lojas</Link>{' '}
+                      e clique em <b>Recalcular separação</b> de novo.
+                    </div>
+                  )}
+                  </>
                 )}
               </div>
 

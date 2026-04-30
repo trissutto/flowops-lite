@@ -164,16 +164,17 @@ export class IntelligenceService {
       throw new BadRequestException('SKU obrigatório');
     }
 
-    // 1) Lojas ativas
+    // 1) Carrega TODAS as lojas (incluindo inativas) — se o estoque tá numa
+    // loja inativa, a UI precisa mostrar pra retaguarda diagnosticar o bug.
     const stores = await this.prisma.store.findMany({
-      where: { active: true },
-      select: { id: true, code: true, name: true, tipo: true } as any,
+      select: { id: true, code: true, name: true, tipo: true, active: true } as any,
       orderBy: { code: 'asc' },
     });
     const storeIds = stores.map((s: any) => s.id);
     const codeByStoreId = new Map(stores.map((s: any) => [s.id, s.code]));
     const nameByCode = new Map(stores.map((s: any) => [s.code, s.name]));
     const tipoByCode = new Map(stores.map((s: any) => [s.code, (s as any).tipo || 'REDE']));
+    const activeByCode = new Map(stores.map((s: any) => [s.code, !!s.active]));
 
     // 2) Estoque REAL no Giga por loja (1 query)
     const realStockMap = await this.erp.getStockRawBySku(cleanSku);
@@ -263,10 +264,12 @@ export class IntelligenceService {
       const real = realByStore.get(code) || 0;
       const committed = committedByStore.get(code) || 0;
       const liquid = Math.max(0, real - committed);
+      const active = activeByCode.get(code) ?? true;
       return {
         storeCode: code,
         storeName: nameByCode.get(code) || code,
         tipo: tipoByCode.get(code) || 'REDE',
+        active,
         real,
         committed,
         liquid,
