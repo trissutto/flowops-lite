@@ -49,25 +49,42 @@ export class CrediarioPrintService {
     // Y do TOPO de cada um dos 3 blocos
     blocoY: [25, 305, 585],
     blocoH: 280,
-    // Offset dos campos DENTRO de cada bloco (relativo ao topo do bloco)
+    // Offset dos campos DENTRO de cada bloco (relativo ao topo do bloco).
+    // CALIBRAÇÃO V2 — baseada na impressão real (todos os campos estavam
+    // deslocados ~30-50pt para baixo). Comprimi os dy pra caber em 280pt
+    // de bloco e bater com as linhas pré-impressas.
+    //
+    // Layout do form Lurd's (linhas pré-impressas):
+    //   linha 1  Nº ___                           R$ ___
+    //   linha 2  Vencimento em ___ de ___ de ___
+    //   linha 3  A ___                                            ← devedorAa (cliente nome)
+    //   linha 4  ___ pagar ___ por esta ___ única via Nota Promissória
+    //   linha 5  a ___                            C.P.F. N.º ___  ← beneficiarioA + cpfDevedor (T.O. + CNPJ)
+    //   linha 6  OU A SUA ORDEM
+    //   linha 7  A QUANTIA DE ___                                 ← quantiaExtenso
+    //   linha 9  Pagável em ___       ___ de ___ de ___           ← pagavelEm + emissão
+    //   linha 10 Emitente ___                                     ← emitente (cliente)
+    //   linha 11 C.P.F. C.N.P.J. ___                              ← cpfEmitente
+    //   linha 12 Endereço ___                                     ← endereco
+    //   linha 13 CEP ___                                          ← cep
     fields: {
-      numero:           { x: 245, dy: 30 },        // Nº (sequencial)
-      valor:            { x: 480, dy: 30 },        // R$ XX,XX
-      vencDia:          { x: 365, dy: 65 },        // dia do vencimento
-      vencMes:          { x: 410, dy: 65 },        // mês por extenso
-      vencAno:          { x: 510, dy: 65 },        // ano
-      beneficiarioA:    { x: 215, dy: 100 },       // "A ___" — quem recebe (Lurd's)
-      devedorAa:        { x: 165, dy: 130 },       // "a ___" — devedor (cliente)
-      cpfDevedor:       { x: 480, dy: 130 },       // C.P.F. C.N.P.J. do BENEFICIÁRIO (T.O. RISSUTTO) — não do cliente!
-      quantiaExtenso:   { x: 320, dy: 165, w: 220 }, // "QUANTIA DE ___"
-      pagavelEm:        { x: 130, dy: 220 },       // cidade — fica logo após "Pagável em" pré-impresso (lateral esquerda)
-      emissaoDia:       { x: 410, dy: 220 },
-      emissaoMes:       { x: 460, dy: 220 },
-      emissaoAno:       { x: 520, dy: 220 },
-      emitente:         { x: 215, dy: 250 },       // = nome do cliente
-      cpfEmitente:      { x: 175, dy: 280 },       // CPF na linha de baixo
-      endereco:         { x: 200, dy: 305 },       // Endereço
-      cep:              { x: 145, dy: 325 },       // CEP
+      numero:           { x: 200, dy: 22 },        // Nº (cod cliente + N/T)
+      valor:            { x: 470, dy: 22 },        // R$ XX,XX
+      vencDia:          { x: 350, dy: 48 },        // dia do vencimento
+      vencMes:          { x: 395, dy: 48 },        // mês por extenso
+      vencAno:          { x: 510, dy: 48 },        // ano
+      beneficiarioA:    { x: 195, dy: 100 },       // "a ___" — beneficiário (T.O. RISSUTTO)
+      devedorAa:        { x: 175, dy: 75 },        // "A ___" — devedor (cliente nome)
+      cpfDevedor:       { x: 470, dy: 100 },       // CNPJ do beneficiário (T.O. RISSUTTO)
+      quantiaExtenso:   { x: 200, dy: 135, w: 360 }, // "A QUANTIA DE ___"
+      pagavelEm:        { x: 130, dy: 175 },       // cidade — após "Pagável em" pré-impresso
+      emissaoDia:       { x: 395, dy: 175 },
+      emissaoMes:       { x: 435, dy: 175 },
+      emissaoAno:       { x: 510, dy: 175 },
+      emitente:         { x: 130, dy: 195 },       // nome do cliente (Emitente)
+      cpfEmitente:      { x: 130, dy: 220 },       // CPF do cliente
+      endereco:         { x: 130, dy: 240 },       // Endereço
+      cep:              { x: 130, dy: 260 },       // CEP
     },
   };
 
