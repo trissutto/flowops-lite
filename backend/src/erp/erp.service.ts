@@ -613,10 +613,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const sets: string[] = [];
     const params: any[] = [];
 
-    if (columns.pago) {
-      sets.push(`\`${columns.pago}\` = ?`);
-      params.push('S');
+    // CRÍTICO: PAGO é o campo que o WinCred consulta pra exibir no relatório
+    // de recebidos. Se ficar nulo, a baixa não aparece NA UI do WinCred mesmo
+    // com data preenchida. Sempre tentamos atualizar — usa nome detectado se
+    // existir, senão tenta literal "PAGO" como fallback (WinCred padrão).
+    const pagoCol = columns.pago || 'PAGO';
+    sets.push(`\`${pagoCol}\` = ?`);
+    params.push('S');
+    if (!columns.pago) {
+      this.logger.warn(
+        `[crediario] coluna PAGO não detectada — usando fallback hardcoded "PAGO". ` +
+        `Se a tabela tem outro nome, ajuste detectColumns() ou o UPDATE pode falhar.`,
+      );
     }
+
     if (columns.dataPagamento) {
       sets.push(`\`${columns.dataPagamento}\` = ?`);
       params.push(input.dataPagamento || new Date());
@@ -627,7 +637,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (sets.length === 0) {
-      return { success: false, error: 'Nenhuma coluna pra atualizar (PAGO/DATA_PAGAMENTO/VALOR_PAGO ausentes)' };
+      return { success: false, error: 'Nenhuma coluna pra atualizar' };
     }
 
     // WHERE chave composta

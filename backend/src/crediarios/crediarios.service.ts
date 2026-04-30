@@ -150,11 +150,18 @@ export class CrediariosService {
       pago:           pickColumn(cols,
         /^pago$/i, /^pg$/i, /^pago_?sn$/i, /^st_?pago$/i, /^stat_?pago$/i, /^status_?pago$/i,
         /^flag_?pago$/i, /^baixado$/i, /^baixa$/i, /^bx$/i, /^quitado$/i, /^liquidado$/i,
-        /^pgto$/i, /^pgo$/i, /^paga$/i,
+        /^pgto$/i, /^pgo$/i, /^paga$/i, /^pagto$/i, /^foi_?pago$/i, /^pago_?nao$/i,
+        /^pg_?sn$/i, /^bxd$/i, /^marc(?:ado)?_?pago$/i,
       ),
       status:         pickColumn(cols, /^status$/i, /^situacao$/i),
       tipo:           pickColumn(cols, /^tipo$/i, /^tipo_?pagamento$/i, /^forma_?pagamento$/i),
       telefone:       pickColumn(cols, /^telefone$/i, /^fone$/i, /^celular$/i),
+      // OBS — coluna de observação livre da promissória (recibo, lembrete, etc)
+      obs:            pickColumn(cols,
+        /^obs$/i, /^obs_?promiss?oria$/i, /^observacao$/i, /^observacoes$/i,
+        /^observa(?:[çc][ãa]o)?$/i, /^historico$/i, /^memo$/i, /^nota$/i, /^notas$/i,
+        /^complemento$/i, /^obs_?fin$/i, /^obs_?cred$/i, /^descricao$/i,
+      ),
     };
     this.columnMapCache = map;
     this.logger.log(`detectColumns mapeamento: ${JSON.stringify(map)}`);
@@ -828,6 +835,7 @@ export interface ColumnMap {
   status: string | null;
   tipo: string | null;
   telefone: string | null;
+  obs: string | null;
 }
 
 export interface ClientesMap {
@@ -843,6 +851,7 @@ const EMPTY_MAP: ColumnMap = {
   codCliente: null, nome: null, dataCompra: null, valorCompra: null,
   parcela: null, totalParcelas: null, vencimento: null, valorParcela: null,
   dataPagamento: null, valorPago: null, pago: null, status: null, tipo: null, telefone: null,
+  obs: null,
 };
 
 function pickColumn(cols: string[], ...patterns: RegExp[]): string | null {

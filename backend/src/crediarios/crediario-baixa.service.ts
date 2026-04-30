@@ -50,6 +50,8 @@ export interface OpenInstallment {
   codCliente: string;
   nome: string | null;
   telefone: string | null;
+  // Observação livre da promissória (movimento.OBS no Giga)
+  obs: string | null;
 }
 
 @Injectable()
@@ -286,6 +288,7 @@ export class CrediarioBaixaService {
         codCliente: codCli,
         nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
         telefone: phoneInfo?.telefone || null,
+        obs: row.obs ? String(row.obs).trim() : null,
       });
     }
 
@@ -548,6 +551,7 @@ export class CrediarioBaixaService {
     addCol('totalParcelas', 'totalParcelas');
     addCol('vencimento', 'vencimento');
     addCol('valorParcela', 'valorParcela');
+    addCol('obs', 'obs');
 
     const where: string[] = [`\`${map.codCliente}\` = '${safeCod}'`];
     if (map.pago) {
@@ -586,6 +590,7 @@ export class CrediarioBaixaService {
         codCliente: String(row.codCliente),
         nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
         telefone: phoneInfo?.telefone || null,
+        obs: row.obs ? String(row.obs).trim() : null,
       });
     }
     return out;
@@ -729,6 +734,7 @@ export class CrediarioBaixaService {
     addCol('totalParcelas', 'totalParcelas');
     addCol('vencimento', 'vencimento');
     addCol('valorParcela', 'valorParcela');
+    addCol('obs', 'obs');
 
     const inList = codClientes.map((c) => `'${c}'`).join(',');
     const where: string[] = [`\`${map.codCliente}\` IN (${inList})`];
@@ -772,6 +778,7 @@ export class CrediarioBaixaService {
         codCliente,
         nome: row.nome ? String(row.nome) : phoneInfo?.nome || null,
         telefone: phoneInfo?.telefone || null,
+        obs: row.obs ? String(row.obs).trim() : null,
       });
     }
     return out;
@@ -817,6 +824,7 @@ export class CrediarioBaixaService {
       addCol('vencimento', 'vencimento');
       addCol('valorParcela', 'valorParcela');
       addCol('pago', 'pago');
+      addCol('obs', 'obs');
 
       const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE \`${map.registro}\` = '${safeReg}' AND \`${map.controle}\` = '${safeCtl}' LIMIT 1`;
       const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
@@ -845,6 +853,7 @@ export class CrediarioBaixaService {
         codCliente: String(row.codCliente),
         nome: row.nome ? String(row.nome) : null,
         telefone: null,
+        obs: row.obs ? String(row.obs).trim() : null,
       });
     }
 
@@ -1063,6 +1072,10 @@ export class CrediarioBaixaService {
    * Executa UPDATE no Giga pra todos os items de uma baixa.
    * Idempotente — pula items que já tem gigaUpdateOk=true.
    * Marca cada item com sucesso/erro pra auditoria.
+   *
+   * IMPORTANTE: se a coluna PAGO não for detectada, força refresh do cache
+   * antes de prosseguir. WinCred usa essa coluna pra filtrar relatório de
+   * recebidos — se ficar nula, a baixa "não conta" mesmo com data preenchida.
    */
   private async executeGigaUpdates(baixaId: string): Promise<void> {
     const items = await (this.prisma as any).crediarioBaixaItem.findMany({
@@ -1070,7 +1083,18 @@ export class CrediarioBaixaService {
     });
     if (!items.length) return;
 
-    const map = await this.crediarios.detectColumns();
+    let map = await this.crediarios.detectColumns();
+    if (!map.pago) {
+      // Não detectou PAGO no cache → força redetecção (talvez schema novo)
+      this.logger.warn('[crediario-baixa] coluna PAGO não detectada no cache. Forçando refresh.');
+      map = await this.crediarios.detectColumns(true);
+    }
+    if (!map.pago) {
+      this.logger.error(
+        '[crediario-baixa] coluna PAGO ainda não detectada após refresh. ' +
+        'WinCred não vai exibir essa baixa como recebida! Verifique /crediarios/debug-columns.',
+      );
+    }
     const cols = {
       registro: map.registro,
       controle: map.controle,

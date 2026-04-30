@@ -40,6 +40,7 @@ type Installment = {
   codCliente: string;
   nome: string | null;
   telefone: string | null;
+  obs: string | null;
 };
 
 type PixCharge = {
@@ -524,36 +525,45 @@ export default function RecebimentosPage() {
                                       }`}>
                                         {isSel && <Check size={14} className="text-white" />}
                                       </div>
-                                      <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-                                        <div>
-                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Promissória</div>
-                                          <div className="font-mono font-bold text-xs">
-                                            {p.numeroCompra || '—'}/{p.parcela}
+                                      <div className="flex-1 space-y-1.5">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                                          <div>
+                                            <div className="text-[9px] uppercase text-gray-500 font-bold">Promissória</div>
+                                            <div className="font-mono font-bold text-xs">
+                                              {p.numeroCompra || '—'}/{p.parcela}
+                                            </div>
+                                            {p.totalParcelas && <div className="text-[9px] text-gray-500">de {p.totalParcelas}</div>}
                                           </div>
-                                          {p.totalParcelas && <div className="text-[9px] text-gray-500">de {p.totalParcelas}</div>}
-                                        </div>
-                                        <div>
-                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Vencto</div>
-                                          <div className={`font-mono text-xs ${isVencida ? 'text-rose-700 font-bold' : ''}`}>
-                                            {formatDate(p.vencimento)}
+                                          <div>
+                                            <div className="text-[9px] uppercase text-gray-500 font-bold">Vencto</div>
+                                            <div className={`font-mono text-xs ${isVencida ? 'text-rose-700 font-bold' : ''}`}>
+                                              {formatDate(p.vencimento)}
+                                            </div>
+                                            {isVencida && (
+                                              <div className="text-[9px] text-rose-700 font-bold">{p.diasAtraso}d atraso</div>
+                                            )}
                                           </div>
-                                          {isVencida && (
-                                            <div className="text-[9px] text-rose-700 font-bold">{p.diasAtraso}d atraso</div>
-                                          )}
-                                        </div>
-                                        <div className="text-right md:text-left">
-                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Valor</div>
-                                          <div className="font-mono text-xs">{brl(p.valorParcela)}</div>
-                                          {p.jurosCalculado > 0 && (
-                                            <div className="text-[9px] text-rose-700 font-bold">+ juros {brl(p.jurosCalculado)}</div>
-                                          )}
-                                        </div>
-                                        <div className="text-right">
-                                          <div className="text-[9px] uppercase text-gray-500 font-bold">Total</div>
-                                          <div className="font-bold text-emerald-700 tabular-nums text-sm">
-                                            {brl(p.valorComJuros)}
+                                          <div className="text-right md:text-left">
+                                            <div className="text-[9px] uppercase text-gray-500 font-bold">Valor</div>
+                                            <div className="font-mono text-xs">{brl(p.valorParcela)}</div>
+                                            {p.jurosCalculado > 0 && (
+                                              <div className="text-[9px] text-rose-700 font-bold">+ juros {brl(p.jurosCalculado)}</div>
+                                            )}
+                                          </div>
+                                          <div className="text-right">
+                                            <div className="text-[9px] uppercase text-gray-500 font-bold">Total</div>
+                                            <div className="font-bold text-emerald-700 tabular-nums text-sm">
+                                              {brl(p.valorComJuros)}
+                                            </div>
                                           </div>
                                         </div>
+                                        {/* OBS — observação da promissória vinda do Giga (movimento.OBS) */}
+                                        {p.obs && (
+                                          <div className="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-[11px] text-amber-900 leading-snug">
+                                            <span className="font-bold uppercase tracking-wider text-[9px] text-amber-700 mr-1.5">OBS:</span>
+                                            {p.obs}
+                                          </div>
+                                        )}
                                       </div>
                                     </li>
                                   );
