@@ -1870,8 +1870,25 @@ function PaymentModal({
     return true;
   }, [selected, bandeira, needsBandeira, recebidoNum, total, customerCpf]);
 
-  const confirm = () => {
+  const confirm = async () => {
     if (!selected) return;
+
+    // ── Validações específicas pra CREDIÁRIO ──
+    if (selected === 'crediario') {
+      if (!customerCpf) {
+        toast('warning', 'CPF obrigatório', 'Identifique o cliente antes');
+        return;
+      }
+      if (credCustomerInfo && !credCustomerInfo.found) {
+        toast('error', 'Cliente não cadastrado no Giga', 'Cadastre antes de fechar no crediário');
+        return;
+      }
+      if (!credVencto) {
+        toast('warning', 'Defina o primeiro vencimento');
+        return;
+      }
+    }
+
     const details: any = {};
     if (selected === 'credito' || selected === 'crediario') {
       details.parcelas = parcelas;
@@ -1879,6 +1896,12 @@ function PaymentModal({
       details.valorIguais = calc.iguais;
       details.qtdIguais = calc.qtdIguais;
       details.valorUltima = calc.ultima;
+      if (selected === 'crediario') {
+        // Salva nos details pra o gerador de PDF de promissórias usar depois
+        details.primeiroVencimento = credVencto;
+        details.entrada = Math.max(0, Math.round((Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100);
+        details.observacao = credObs;
+      }
     }
     if (selected === 'dinheiro') {
       details.recebido = recebidoNum;
@@ -1889,6 +1912,38 @@ function PaymentModal({
       details.pixChave = pixCharge.chave;
     }
     if (needsBandeira) details.bandeira = bandeira;
+
+    // ── CREDIÁRIO: gera parcelas no Giga ANTES de finalizar a venda ──
+    // Mantém comportamento idempotente: se Giga falhar, NÃO finaliza a venda
+    // (vendedora vê erro e pode tentar de novo). Diferente do split path que
+    // tolera falha — aqui é fluxo direto.
+    if (selected === 'crediario') {
+      const entradaNum = details.entrada || 0;
+      const valorFinanciado = Math.max(0, Math.round((total - entradaNum) * 100) / 100);
+      if (valorFinanciado > 0) {
+        try {
+          const r = await api<any>(`/pdv/sales/${saleId}/crediario`, {
+            method: 'POST',
+            body: JSON.stringify({
+              parcelas,
+              primeiroVencimento: credVencto,
+              entrada: entradaNum,
+              observacao: credObs || undefined,
+            }),
+          });
+          toast(
+            'success',
+            `${parcelas}× parcelas criadas no Giga`,
+            `Controle ${r.controle} · ${brl(valorFinanciado)} dividido`,
+          );
+        } catch (e: any) {
+          const h = humanizeError(e);
+          toast('error', `Erro ao criar parcelas no Giga: ${h.title}`, h.hint || 'Tente novamente');
+          return; // ABORTA finalização — vendedora pode tentar de novo
+        }
+      }
+    }
+
     onConfirm(selected, details);
   };
 
@@ -2448,8 +2503,12 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   const [printingCred, setPrintingCred] = useState(false);
   const { toast } = usePdvToast();
 
-  // Detecta se a venda tem pagamento de crediário (mostra botões de impressão)
-  const hasCrediario = (sale.payments || []).some((p) => p.method === 'crediario');
+  // Detecta se a venda tem pagamento de crediário (mostra botões de impressão).
+  // Cobre 2 caminhos: (1) split — payments[] tem method='crediario',
+  // (2) confirmação direta — paymentMethod='crediario' no header da venda.
+  const hasCrediario =
+    sale.paymentMethod?.toLowerCase() === 'crediario' ||
+    (sale.payments || []).some((p) => p.method === 'crediario');
 
   /**
    * Imprime promissórias + carnê (combinado) na impressora padrão.
