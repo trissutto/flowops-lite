@@ -446,31 +446,48 @@ export class PdvController {
     }
 
     // Procura por CPF (coluna detectada dinamicamente — pode chamar CPF, cpf, CPFCGC, etc).
-    // BUG FIX: CPF no Giga pode estar FORMATADO (108.458.788-24) ou só dígitos.
-    // Comparar via REPLACE pra extrair só os dígitos antes de igualar.
+    // BUG FIX: CPF no Giga pode estar FORMATADO (108.458.788-24), só dígitos,
+    // ter espaços invisíveis, ou outros caracteres. Normalizamos AMBOS os lados
+    // antes de comparar usando REPLACE recursivo + TRIM.
     const safeCpf = cleanCpf.replace(/[^0-9]/g, '').slice(0, 14);
+    const cpfCol = cm.cpf || 'CPF';
+    // Helper SQL que normaliza coluna CPF: tira pontos, traços, barras, espaços e TRIM
+    const normalizeSql = `TRIM(REPLACE(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`, '.', ''), '-', ''), '/', ''), ' ', ''))`;
     let cliente: any = null;
-    if (cm.cpf) {
-      try {
-        const sql = `
-          SELECT * FROM \`${cm.table}\`
-          WHERE REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') = '${safeCpf}'
-             OR \`${cm.cpf}\` = '${safeCpf}'
-          LIMIT 1`;
-        const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-        cliente = r.rows[0] || null;
-      } catch (e: any) {
-        console.warn('[customer-info] erro buscando CPF:', e?.message);
-      }
+
+    // Tentativa 1: CPF normalizado igual exato
+    try {
+      const sql = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} = '${safeCpf}' LIMIT 1`;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+      cliente = r.rows[0] || null;
+    } catch (e: any) {
+      console.warn('[customer-info] erro buscando CPF normalizado:', e?.message);
     }
-    // Fallback: se a "string" passada era na verdade um codCliente (não CPF),
-    // tenta por código direto (ex: 4 dígitos = código)
+
+    // Tentativa 2: codCliente direto (caso passou um código em vez de CPF)
     if (!cliente) {
       try {
         const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
         const r2 = await this.erp.runReadOnly(sql2, { maxRows: 1, timeoutMs: 10000 });
         cliente = r2.rows[0] || null;
       } catch {/* ignora */}
+    }
+
+    // Tentativa 3: CPF como LIKE — pega mesmo se tem outros chars escondidos
+    // (zero-width space, BOM, tabs, etc). Mais permissivo, último recurso.
+    if (!cliente && safeCpf.length >= 11) {
+      try {
+        const sql3 = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} LIKE '%${safeCpf}%' LIMIT 1`;
+        const r3 = await this.erp.runReadOnly(sql3, { maxRows: 1, timeoutMs: 10000 });
+        cliente = r3.rows[0] || null;
+        if (cliente) {
+          console.log(`[customer-info] cliente achado via LIKE fallback: cpf=${safeCpf}`);
+        }
+      } catch {/* ignora */}
+    }
+
+    if (!cliente) {
+      console.log(`[customer-info] NÃO ACHOU: tabela=${cm.table} cpfCol=${cpfCol} cpfBusca=${safeCpf}`);
     }
 
     if (!cliente) {

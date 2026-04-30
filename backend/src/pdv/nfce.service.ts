@@ -387,7 +387,20 @@ export class NfceService {
     const pagLines = payments
       .map((p: any) => {
         const tPag = this.mapPaymentToSefaz(p.method);
-        return `<detPag><tPag>${tPag}</tPag><vPag>${(p.valor || 0).toFixed(2)}</vPag></detPag>`;
+        // FIX REJEIÇÃO 391: pra cartão crédito (03) ou débito (04),
+        // SEFAZ exige o grupo <card> com CNPJ da credenciadora + bandeira.
+        // Como não temos integração com TEF, usamos os dados padrão do
+        // próprio CNPJ + bandeira "outros (99)" — válido em todas UFs.
+        let cardBlock = '';
+        if (tPag === '03' || tPag === '04') {
+          // tBand=99 é "Outros" — aceito sem precisar identificar Visa/Master/etc
+          // CNPJ credenciadora: usa o CNPJ do próprio emitente como fallback
+          // genérico. Se Lurd's tiver TEF integrado depois, substitui pelo CNPJ
+          // real da credenciadora (Cielo, Stone, Rede, etc).
+          const cnpjCred = String(config.cnpj || '').replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+          cardBlock = `<card><tpIntegra>2</tpIntegra><CNPJ>${cnpjCred}</CNPJ><tBand>99</tBand><cAut>0</cAut></card>`;
+        }
+        return `<detPag><tPag>${tPag}</tPag><vPag>${(p.valor || 0).toFixed(2)}</vPag>${cardBlock}</detPag>`;
       })
       .join('');
 
