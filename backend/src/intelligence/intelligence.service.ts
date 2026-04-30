@@ -264,12 +264,17 @@ export class IntelligenceService {
       const real = realByStore.get(code) || 0;
       const committed = committedByStore.get(code) || 0;
       const liquid = Math.max(0, real - committed);
-      const active = activeByCode.get(code) ?? true;
+      // Diferencia 3 estados: registered+ativa, registered+inativa, NÃO cadastrada.
+      // Loja não cadastrada (no Postgres) é o pior caso: routing ignora por
+      // completo, mesmo com estoque físico no Giga. Caso real do pedido #191547.
+      const isRegistered = activeByCode.has(code);
+      const active = isRegistered ? activeByCode.get(code)! : false;
       return {
         storeCode: code,
-        storeName: nameByCode.get(code) || code,
+        storeName: isRegistered ? nameByCode.get(code) || code : '⚠️ NÃO CADASTRADA',
         tipo: tipoByCode.get(code) || 'REDE',
         active,
+        registered: isRegistered,
         real,
         committed,
         liquid,

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RealignmentService } from './realignment.service';
 import { RealignmentShipmentService } from './shipment.service';
@@ -469,11 +469,24 @@ export class RealignmentController {
     // role=store: bloqueia se não for origem nem destino
     const requireStoreCode = role === 'store' ? req?.user?.storeCode : undefined;
 
-    const { buffer, filename } = await this.shipmentPdf.generateForShipment(id, requireStoreCode);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-    res.setHeader('Content-Length', String(buffer.length));
-    res.end(buffer);
+    try {
+      const { buffer, filename } = await this.shipmentPdf.generateForShipment(id, requireStoreCode);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      // Log detalhado pra debugar — Railway logs vão mostrar a stack completa
+      console.error('[realignment/pdf] FALHA ao gerar PDF da remessa', id, '\n', e?.stack || e);
+      // Se for um erro conhecido (404/403), repassa o status correto
+      if (e instanceof NotFoundException || e instanceof ForbiddenException) throw e;
+      // Senão, retorna 500 com mensagem mais útil que "Internal server error"
+      res.status(500).json({
+        statusCode: 500,
+        message: 'Erro ao gerar PDF',
+        detail: e?.message || String(e),
+      });
+    }
   }
 
   /**

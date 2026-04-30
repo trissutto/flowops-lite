@@ -1,6 +1,9 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import * as PDFDocument from 'pdfkit';
+// pdfkit é CommonJS — usa require() pra evitar problema de interop em runtime
+// (ESM import * pode resultar em namespace não-construtor em alguns ambientes).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const PDFDocument = require('pdfkit');
 
 /**
  * ShipmentPdfService — gera o PDF da nota de remessa de realinhamento.
