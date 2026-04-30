@@ -29,6 +29,46 @@ export class WooCommerceService {
     };
   }
 
+  /**
+   * Busca a URL da imagem principal do produto no WooCommerce por SKU.
+   * Retorna null se não encontrar. Cache em memória de 1h pra não martelar
+   * a API a cada bipe.
+   */
+  private imageCache = new Map<string, { url: string | null; expires: number }>();
+  async getProductImageBySku(sku: string): Promise<string | null> {
+    if (!sku) return null;
+    const key = String(sku).trim();
+    const cached = this.imageCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.url;
+
+    try {
+      // Tenta primeiro buscar produto com SKU exato
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products`, {
+          params: { sku: key, per_page: 1, _fields: 'id,sku,images,parent_id,variations' },
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      let url: string | null = null;
+      const list = Array.isArray(res.data) ? res.data : [];
+      if (list.length > 0) {
+        const p = list[0];
+        if (p.images && p.images.length > 0) {
+          url = p.images[0].src || null;
+        }
+      }
+      // Cache resultado (positivo OU negativo) por 1h
+      this.imageCache.set(key, { url, expires: Date.now() + 60 * 60 * 1000 });
+      return url;
+    } catch (e: any) {
+      this.logger.warn(`getProductImageBySku falhou sku=${key}: ${e?.message}`);
+      // Cache negativo curto (5min) pra não tentar de novo a cada render
+      this.imageCache.set(key, { url: null, expires: Date.now() + 5 * 60 * 1000 });
+      return null;
+    }
+  }
+
   async updateOrderStatus(wcOrderId: number, status: string) {
     try {
       const res = await firstValueFrom(

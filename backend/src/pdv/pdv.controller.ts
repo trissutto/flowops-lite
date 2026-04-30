@@ -24,6 +24,7 @@ import { PagarmeService } from '../pagarme/pagarme.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { CrediarioPrintService } from './crediario-print.service';
+import { WooCommerceService } from '../woocommerce/woocommerce.service';
 
 /**
  * /pdv — frente de caixa.
@@ -41,12 +42,26 @@ export class PdvController {
     private readonly crediarios: CrediariosService,
     private readonly crediarioBaixa: CrediarioBaixaService,
     private readonly crediarioPrint: CrediarioPrintService,
+    private readonly woo: WooCommerceService,
   ) {}
 
   private requireRole(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'store')
       throw new ForbiddenException('Apenas admin ou loja');
+  }
+
+  /**
+   * GET /pdv/product-image?sku=XXX
+   * Retorna URL da foto do produto no WooCommerce (cache 1h em memória).
+   * Usado pela tabela do carrinho do PDV pra mostrar miniatura ao lado do item.
+   */
+  @Get('product-image')
+  async getProductImage(@Req() req: any, @Query('sku') sku: string) {
+    this.requireRole(req);
+    if (!sku) return { url: null };
+    const url = await this.woo.getProductImageBySku(String(sku).trim());
+    return { url };
   }
 
   /**

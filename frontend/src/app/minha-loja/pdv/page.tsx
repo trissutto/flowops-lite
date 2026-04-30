@@ -978,8 +978,6 @@ function PdvPageInner() {
             <div className="divide-y">
               {sale.items.map((it) => {
                 const bruto = it.precoUnit * it.qty;
-                // Avatar de fallback — círculo roxo com inicial da REF (pra dar identidade visual sem foto real)
-                const avatarLetter = (it.ref || it.sku || '?').charAt(0).toUpperCase();
                 return (
                 <div
                   key={it.id}
@@ -990,10 +988,8 @@ function PdvPageInner() {
                     {it.ean || it.sku}
                   </div>
 
-                  {/* THUMBNAIL — avatar com primeira letra da REF (placeholder visual) */}
-                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0">
-                    {avatarLetter}
-                  </div>
+                  {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
+                  <ProductThumb sku={it.sku} refCode={it.ref} />
 
                   {/* DESCRIÇÃO — REF + COR/TAM + descrição em UMA LINHA, truncada */}
                   <div className="min-w-0 flex items-center gap-2">
@@ -4093,6 +4089,57 @@ function PdvMobilePill({
     return <Link href={href} className={cls} style={style}>{inner}</Link>;
   }
   return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
+}
+
+// ── PRODUCT THUMB ─────────────────────────────────────────────────────
+// Thumbnail do produto no carrinho do PDV. Busca a foto no WooCommerce
+// via /pdv/product-image?sku=X (cache 1h no backend). Enquanto carrega,
+// mostra avatar com inicial da REF. Se WC não tem foto, mantém o avatar.
+const PRODUCT_IMG_CACHE = new Map<string, string | null>();
+function ProductThumb({ sku, refCode }: { sku: string; refCode: string | null }) {
+  const [url, setUrl] = useState<string | null | undefined>(
+    PRODUCT_IMG_CACHE.has(sku) ? PRODUCT_IMG_CACHE.get(sku) : undefined,
+  );
+  useEffect(() => {
+    if (!sku) return;
+    if (PRODUCT_IMG_CACHE.has(sku)) {
+      setUrl(PRODUCT_IMG_CACHE.get(sku));
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api<{ url: string | null }>(`/pdv/product-image?sku=${encodeURIComponent(sku)}`);
+        if (!cancelled) {
+          PRODUCT_IMG_CACHE.set(sku, r.url);
+          setUrl(r.url);
+        }
+      } catch {
+        if (!cancelled) {
+          PRODUCT_IMG_CACHE.set(sku, null);
+          setUrl(null);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sku]);
+
+  const letter = (refCode || sku || '?').charAt(0).toUpperCase();
+
+  if (url) {
+    return (
+      <div className="w-12 h-12 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt={refCode || sku} className="w-full h-full object-cover" />
+      </div>
+    );
+  }
+  // Fallback: avatar gradiente com inicial
+  return (
+    <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0">
+      {letter}
+    </div>
+  );
 }
 
 // ── PDV OUTLINE PILL ──────────────────────────────────────────────────
