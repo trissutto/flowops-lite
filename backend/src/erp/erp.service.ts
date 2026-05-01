@@ -3115,12 +3115,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         params.push(...yf.params);
       }
 
+      // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
       const sql = needsJoin
         ? `SELECT c.LOJA AS storeCode,
                   SUM(c.QUANTIDADE) AS pecas,
                   SUM(c.VALORTOTAL) AS valor
              FROM caixa c
-             INNER JOIN produtos p ON p.CODIGO = c.CODIGO
+             INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(c.CODIGO AS UNSIGNED)
             WHERE ${conds.join(' AND ')}
             GROUP BY c.LOJA`
         : `SELECT c.LOJA AS storeCode,
@@ -3184,6 +3185,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
     }
 
+    // BUG FIX padding: caixa.CODIGO e produtos.CODIGO podem ter padding
+    // diferente (ex: "5358458" vs "0005358458"). Compara como UNSIGNED INT
+    // pra ignorar zeros à esquerda. Mesmo problema do getStock.
     const sql = `
       SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
@@ -3197,7 +3201,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
            WHERE ${caixaConds.join(' AND ')}
            GROUP BY c.CODIGO
         ) agg
-        INNER JOIN produtos p ON p.CODIGO = agg.codigo
+        INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(agg.codigo AS UNSIGNED)
        WHERE ${prodConds.join(' AND ')}
        GROUP BY p.REF
        ORDER BY ${orderBy} DESC
@@ -3475,6 +3479,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       caixaConds.push('c.LOJA = ?');
       params.push(input.storeCode);
     }
+    // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
     const sql = `
       SELECT UPPER(TRIM(p.\`${marcaCol}\`)) AS marca,
              SUM(agg.pecas) AS pecas,
@@ -3487,7 +3492,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
            WHERE ${caixaConds.join(' AND ')}
            GROUP BY c.CODIGO
         ) agg
-        INNER JOIN produtos p ON p.CODIGO = agg.CODIGO
+        INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(agg.CODIGO AS UNSIGNED)
        WHERE p.\`${marcaCol}\` IS NOT NULL AND TRIM(p.\`${marcaCol}\`) <> ''
        GROUP BY UPPER(TRIM(p.\`${marcaCol}\`))
        ORDER BY valor DESC
@@ -3558,6 +3563,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           ) est ON est.ref = p.REF`;
     const stockParams = input.storeCode ? [input.storeCode] : [];
 
+    // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
     const sql = `
       SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
@@ -3569,7 +3575,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
            WHERE ${caixaConds.join(' AND ')}
            GROUP BY c.CODIGO
         ) agg
-        INNER JOIN produtos p ON p.CODIGO = agg.codigo
+        INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(agg.codigo AS UNSIGNED)
         ${stockJoin}
        WHERE ${prodConds.join(' AND ')}
        GROUP BY p.REF
@@ -3623,18 +3629,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const salesJoinFilter = input.storeCode ? 'AND c2.LOJA = ?' : '';
     const salesParams = input.storeCode ? [input.storeCode] : [];
 
+    // BUG FIX padding: ignora zeros à esquerda nos JOINs caixa/estoque×produtos
     const sql = `
       SELECT p.REF AS refCode,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
              SUM(e.ESTOQUE) AS estoqueAtual,
              (SELECT MAX(c2.DATA) FROM caixa c2
-                INNER JOIN produtos p2 ON p2.CODIGO = c2.CODIGO
+                INNER JOIN produtos p2 ON CAST(p2.CODIGO AS UNSIGNED) = CAST(c2.CODIGO AS UNSIGNED)
                WHERE p2.REF = p.REF
                  AND (c2.MARCADO IS NULL OR c2.MARCADO <> 'SIM')
                  ${salesJoinFilter}
              ) AS ultimaVenda
         FROM estoque e
-        INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+        INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
        WHERE ${stockConds.join(' AND ')}
        GROUP BY p.REF
       HAVING estoqueAtual >= ?
