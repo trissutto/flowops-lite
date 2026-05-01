@@ -544,4 +544,98 @@ export class IntelligenceService {
       limitRefs: input.limit || 20,
     });
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // RELATÓRIO DE VENDAS — /retaguarda/inteligencia-vendas
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Relatório completo de vendas pra dashboard de inteligência:
+   *  - summary: total, peças, vendas, ticket médio
+   *  - byStore: lista por loja com ticket médio
+   *  - byDay: série temporal pra gráfico
+   *  - topVendedoras: ranking + comissão calculada
+   *  - topMarcas: marcas mais vendidas
+   *  - topProdutos: REFs mais vendidas (reusa getTopRefsBySales)
+   *
+   * Loja 13 (Site) — entra natural na agregação porque é uma loja como
+   * outra qualquer no Giga. Tanto Wincred (até 26/04) quanto nosso PDV
+   * gravam na mesma tabela `caixa`, então não precisa join especial.
+   */
+  async getSalesReport(input: {
+    from?: string;
+    to?: string;
+    storeCode?: string;
+    comissaoPct?: number; // % comissão padrão pra cálculo (ex: 2 = 2%)
+    plusSize?: boolean;
+  }) {
+    const { inicio, fim } = this.parseRange({ from: input.from, to: input.to });
+    const comissaoPct = input.comissaoPct ?? 2;
+
+    // Lista de lojas ativas pra montar tabela by-store
+    const stores = await (this.prisma as any).store.findMany({
+      where: { active: true } as any,
+      select: { code: true, name: true, tipo: true } as any,
+    });
+
+    // Em paralelo: summary, by-day, by-store, top-vendedoras, top-marcas, top-produtos
+    const [summary, byDay, salesByStore, topVendedoras, topMarcas, topProdutos] =
+      await Promise.all([
+        this.erp.getSalesSummary({ inicio, fim, storeCode: input.storeCode || null }),
+        this.erp.getSalesByDay({ inicio, fim, storeCode: input.storeCode || null }),
+        this.erp.getSalesByStoresInRange(inicio, fim, !!input.plusSize),
+        this.erp.getTopVendedoras({ inicio, fim, storeCode: input.storeCode || null, limit: 30 }),
+        this.erp.getTopMarcas({ inicio, fim, storeCode: input.storeCode || null, limit: 15 }),
+        this.erp.getTopRefsBySales({
+          inicio, fim,
+          storeCode: input.storeCode || null,
+          plusSize: !!input.plusSize,
+          orderBy: 'valor',
+          limit: 20,
+        }),
+      ]);
+
+    // Monta tabela by-store: cruza salesByStore (Map) com stores cadastradas
+    const byStore = stores.map((s: any) => {
+      const v = salesByStore.get(s.code) || { pecas: 0, valor: 0 };
+      // Conta vendas distintas no by-day pra ticket médio (menos preciso
+      // que numCupom mas cobre fallback). Se quiser preciso, fazer query
+      // dedicada com numCupom por loja — fica pra v2.
+      return {
+        code: s.code,
+        name: s.name,
+        tipo: s.tipo || null,
+        pecas: v.pecas,
+        valor: v.valor,
+        ticketMedio: v.pecas > 0 ? v.valor / v.pecas : 0, // ticket por peça (proxy)
+      };
+    }).filter((s: any) => s.valor > 0 || s.pecas > 0)
+      .sort((a: any, b: any) => b.valor - a.valor);
+
+    // Adiciona comissão a cada vendedora
+    const vendedorasComComissao = topVendedoras.map((v) => ({
+      ...v,
+      comissao: Math.round(v.valor * (comissaoPct / 100) * 100) / 100,
+      ticketMedio: v.vendas > 0 ? v.valor / v.vendas : 0,
+    }));
+
+    return {
+      periodo: {
+        from: inicio.toISOString().slice(0, 10),
+        to: new Date(fim.getTime() - 1).toISOString().slice(0, 10),
+        dias: Math.round((fim.getTime() - inicio.getTime()) / (24 * 3600 * 1000)),
+      },
+      filtros: {
+        storeCode: input.storeCode || null,
+        comissaoPct,
+        plusSize: !!input.plusSize,
+      },
+      summary,
+      byStore,
+      byDay,
+      topVendedoras: vendedorasComComissao,
+      topMarcas,
+      topProdutos,
+    };
+  }
 }

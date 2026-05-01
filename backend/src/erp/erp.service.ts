@@ -3217,6 +3217,295 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // RELATÓRIO DE VENDAS — usado pela /retaguarda/inteligencia-vendas
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /** Cache do mapeamento dinâmico de colunas das tabelas caixa/produtos */
+  private salesColMap: {
+    vendedor: string | null;
+    marca: string | null;
+    numCupom: string | null;
+  } | null = null;
+
+  /**
+   * Detecta colunas dinâmicas relevantes pra relatório de vendas:
+   *  - VENDEDOR na tabela `caixa` (ou `funcionario`, `vendedor_codigo`)
+   *  - MARCA na tabela `produtos` (ou `fabricante`, `griffe`)
+   *  - NUMCUPOM/CUPOM/NUMVENDA na tabela caixa pra contar quantas vendas
+   * Cache em memória — detecta 1× e reaproveita.
+   */
+  private async detectSalesColumns(): Promise<{
+    vendedor: string | null;
+    marca: string | null;
+    numCupom: string | null;
+  }> {
+    if (this.salesColMap) return this.salesColMap;
+    let vendedor: string | null = null;
+    let marca: string | null = null;
+    let numCupom: string | null = null;
+    try {
+      const caixaSchema = await this.getTableSchema('caixa', 1);
+      if (caixaSchema) {
+        const cols = caixaSchema.columns.map((c: any) => c.field);
+        vendedor = cols.find((c: string) =>
+          /^vendedor$/i.test(c) || /^vendedora$/i.test(c) ||
+          /^cod_?vendedor$/i.test(c) || /^funcionario$/i.test(c) ||
+          /^cod_?func/i.test(c)
+        ) || null;
+        numCupom = cols.find((c: string) =>
+          /^num_?cupom$/i.test(c) || /^cupom$/i.test(c) ||
+          /^num_?venda$/i.test(c) || /^numero?_?venda$/i.test(c) ||
+          /^numero?_?cupom$/i.test(c) || /^cupom_?fiscal$/i.test(c)
+        ) || null;
+      }
+      const prodSchema = await this.getTableSchema('produtos', 1);
+      if (prodSchema) {
+        const cols = prodSchema.columns.map((c: any) => c.field);
+        marca = cols.find((c: string) =>
+          /^marca$/i.test(c) || /^fabricante$/i.test(c) ||
+          /^griffe$/i.test(c) || /^grife$/i.test(c)
+        ) || null;
+      }
+    } catch (e: any) {
+      this.logger.warn(`detectSalesColumns falhou: ${e?.message}`);
+    }
+    this.salesColMap = { vendedor, marca, numCupom };
+    this.logger.log(`detectSalesColumns: ${JSON.stringify(this.salesColMap)}`);
+    return this.salesColMap;
+  }
+
+  /**
+   * SUMMARY — totais agregados do período. Retorna peças, valor, número
+   * de cupons distintos (vendas), ticket médio.
+   */
+  async getSalesSummary(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+  }): Promise<{ pecas: number; valor: number; vendas: number; ticketMedio: number }> {
+    if (!this.pool) return { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 };
+    const { numCupom } = await this.detectSalesColumns();
+    const conds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const cupomSelect = numCupom
+      ? `COUNT(DISTINCT CONCAT(c.LOJA, '-', c.\`${numCupom}\`)) AS vendas`
+      : `COUNT(DISTINCT CONCAT(c.LOJA, '-', DATE(c.DATA), '-', COALESCE(c.CODCLIENTE, 0))) AS vendas`;
+    const sql = `
+      SELECT SUM(c.QUANTIDADE) AS pecas,
+             SUM(c.VALORTOTAL) AS valor,
+             ${cupomSelect}
+        FROM caixa c
+       WHERE ${conds.join(' AND ')}
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      const r: any = (rows as any[])[0] || {};
+      const pecas = Number(r.pecas) || 0;
+      const valor = Number(r.valor) || 0;
+      const vendas = Number(r.vendas) || 0;
+      return {
+        pecas,
+        valor,
+        vendas,
+        ticketMedio: vendas > 0 ? valor / vendas : 0,
+      };
+    } catch (e) {
+      this.logger.error(`getSalesSummary falhou: ${(e as Error).message}`);
+      return { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 };
+    }
+  }
+
+  /** Vendas agrupadas POR DIA — pra gráfico de linha/barra. */
+  async getSalesByDay(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+  }): Promise<Array<{ date: string; pecas: number; valor: number }>> {
+    if (!this.pool) return [];
+    const conds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const sql = `
+      SELECT DATE(c.DATA) AS d,
+             SUM(c.QUANTIDADE) AS pecas,
+             SUM(c.VALORTOTAL) AS valor
+        FROM caixa c
+       WHERE ${conds.join(' AND ')}
+       GROUP BY DATE(c.DATA)
+       ORDER BY d ASC
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        date: r.d instanceof Date ? r.d.toISOString().slice(0, 10) : String(r.d).slice(0, 10),
+        pecas: Number(r.pecas) || 0,
+        valor: Number(r.valor) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getSalesByDay falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * TOP VENDEDORAS — agrupado por código (e nome se a tabela funcionarios
+   * existir e tiver coluna nome). Calcula valor + qtd peças + número de
+   * vendas distintas.
+   */
+  async getTopVendedoras(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+    limit?: number;
+  }): Promise<Array<{ codigo: string; nome: string; pecas: number; valor: number; vendas: number }>> {
+    if (!this.pool) return [];
+    const { vendedor: vendedorCol, numCupom } = await this.detectSalesColumns();
+    if (!vendedorCol) {
+      this.logger.warn('getTopVendedoras: coluna VENDEDOR não detectada na caixa');
+      return [];
+    }
+    const limit = Math.max(1, Math.min(100, input.limit || 20));
+    const conds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      `c.\`${vendedorCol}\` IS NOT NULL`,
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const cupomCount = numCupom
+      ? `COUNT(DISTINCT CONCAT(c.LOJA, '-', c.\`${numCupom}\`))`
+      : `COUNT(DISTINCT CONCAT(c.LOJA, '-', DATE(c.DATA), '-', COALESCE(c.CODCLIENTE, 0)))`;
+
+    // Tenta JOIN com `funcionarios` pra trazer nome — se a tabela não existir
+    // ou não tiver coluna nome, faz só agregação por código.
+    let sqlWithJoin: string | null = null;
+    try {
+      const funcSchema = await this.getTableSchema('funcionarios', 1);
+      if (funcSchema) {
+        const cols = funcSchema.columns.map((c: any) => c.field);
+        const codCol = cols.find((c: string) => /^codigo$/i.test(c) || /^cod/i.test(c) || /^id$/i.test(c));
+        const nomeCol = cols.find((c: string) => /^nome$/i.test(c));
+        if (codCol && nomeCol) {
+          sqlWithJoin = `
+            SELECT CONCAT('', c.\`${vendedorCol}\`) AS codigo,
+                   MAX(f.\`${nomeCol}\`) AS nome,
+                   SUM(c.QUANTIDADE) AS pecas,
+                   SUM(c.VALORTOTAL) AS valor,
+                   ${cupomCount} AS vendas
+              FROM caixa c
+              LEFT JOIN funcionarios f ON CONCAT('', f.\`${codCol}\`) = CONCAT('', c.\`${vendedorCol}\`)
+             WHERE ${conds.join(' AND ')}
+             GROUP BY CONCAT('', c.\`${vendedorCol}\`)
+             ORDER BY valor DESC
+             LIMIT ${limit}
+          `;
+        }
+      }
+    } catch {/* funcionarios não existe — sem JOIN */}
+
+    const sql = sqlWithJoin || `
+      SELECT CONCAT('', c.\`${vendedorCol}\`) AS codigo,
+             '' AS nome,
+             SUM(c.QUANTIDADE) AS pecas,
+             SUM(c.VALORTOTAL) AS valor,
+             ${cupomCount} AS vendas
+        FROM caixa c
+       WHERE ${conds.join(' AND ')}
+       GROUP BY CONCAT('', c.\`${vendedorCol}\`)
+       ORDER BY valor DESC
+       LIMIT ${limit}
+    `;
+
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        codigo: String(r.codigo || '').trim(),
+        nome: String(r.nome || '').trim(),
+        pecas: Number(r.pecas) || 0,
+        valor: Number(r.valor) || 0,
+        vendas: Number(r.vendas) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getTopVendedoras falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /** TOP MARCAS — agrupa por coluna MARCA da tabela produtos. */
+  async getTopMarcas(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+    limit?: number;
+  }): Promise<Array<{ marca: string; pecas: number; valor: number }>> {
+    if (!this.pool) return [];
+    const { marca: marcaCol } = await this.detectSalesColumns();
+    if (!marcaCol) {
+      this.logger.warn('getTopMarcas: coluna MARCA não detectada em produtos');
+      return [];
+    }
+    const limit = Math.max(1, Math.min(100, input.limit || 15));
+    const caixaConds: string[] = [
+      'c.DATA >= ?',
+      'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      caixaConds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const sql = `
+      SELECT UPPER(TRIM(p.\`${marcaCol}\`)) AS marca,
+             SUM(agg.pecas) AS pecas,
+             SUM(agg.valor) AS valor
+        FROM (
+          SELECT c.CODIGO,
+                 SUM(c.QUANTIDADE) AS pecas,
+                 SUM(c.VALORTOTAL) AS valor
+            FROM caixa c
+           WHERE ${caixaConds.join(' AND ')}
+           GROUP BY c.CODIGO
+        ) agg
+        INNER JOIN produtos p ON p.CODIGO = agg.CODIGO
+       WHERE p.\`${marcaCol}\` IS NOT NULL AND TRIM(p.\`${marcaCol}\`) <> ''
+       GROUP BY UPPER(TRIM(p.\`${marcaCol}\`))
+       ORDER BY valor DESC
+       LIMIT ${limit}
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        marca: String(r.marca || '').trim(),
+        pecas: Number(r.pecas) || 0,
+        valor: Number(r.valor) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getTopMarcas falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   /**
    * RUPTURAS — REFs que VENDERAM no período mas estão com estoque ZERO HOJE.
    * Sinaliza necessidade de reposição urgente.

@@ -166,4 +166,28 @@ export class IntelligenceController {
     this.requireAdmin(req);
     return this.svc.traceSkuStock(sku);
   }
+
+  /**
+   * GET /intelligence/sales-report?from=YYYY-MM-DD&to=YYYY-MM-DD&storeCode=01
+   * Relatório completo de vendas: KPIs, by-day (gráfico), top vendedoras,
+   * top marcas, top produtos. Inclui cálculo de comissão (default 2%).
+   */
+  @Get('sales-report')
+  async salesReport(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('comissaoPct') comissaoPct?: string,
+    @Query('plusSize') plusSize?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.getSalesReport({
+      from,
+      to,
+      storeCode: storeCode || undefined,
+      comissaoPct: Number(comissaoPct) || 2,
+      plusSize: this.parseBool(plusSize),
+    });
+  }
 }
