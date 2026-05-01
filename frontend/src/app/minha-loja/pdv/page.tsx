@@ -770,6 +770,21 @@ function PdvPageInner() {
             </p>
           </div>
 
+          {/* Botão Pausadas — vendas em aberto pra retomar (só aparece se tiver) */}
+          {openCount > 0 && (
+            <button
+              onClick={() => setShowOpenList(true)}
+              className="relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold bg-amber-400 hover:bg-amber-300 text-amber-950 ring-2 ring-amber-200/50 shrink-0 shadow-md transition"
+              title={`${openCount} venda(s) pausada(s)`}
+            >
+              <Pause className="w-4 h-4" />
+              <span className="hidden sm:inline">Pausadas</span>
+              <span className="bg-amber-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5">
+                {openCount}
+              </span>
+            </button>
+          )}
+
           {/* Botão Vendedora — quem está atendendo essa venda */}
           <button
             onClick={() => setShowVendedora(true)}
@@ -963,7 +978,7 @@ function PdvPageInner() {
             </div>
             )}
             {/* Cabeçalho de colunas — agora com coluna de THUMBNAIL antes da DESC */}
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[80px_56px_1fr_80px_90px_110px_72px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
+            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
               <div>SKU</div>
               <div></div>
               <div>Produto</div>
@@ -981,7 +996,7 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_72px] gap-2 items-center hover:bg-violet-50/40 transition"
+                  className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center hover:bg-violet-50/40 transition"
                 >
                   {/* SKU/EAN */}
                   <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
@@ -1048,16 +1063,16 @@ function PdvPageInner() {
                     )}
                   </div>
 
-                  {/* AÇÕES — % desconto destacado em âmbar + 🗑 remover */}
+                  {/* AÇÕES — % desconto + 🗑 remover. Compactos pra não roubar espaço. */}
                   {sale.status === 'open' ? (
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="flex items-center justify-center gap-0.5">
                       <button
                         onClick={() =>
                           setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
                         }
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-95 ${
+                        className={`w-6 h-6 rounded flex items-center justify-center transition active:scale-95 ${
                           it.desconto > 0 && it.promoTag === 'MANUAL'
-                            ? 'bg-amber-500 text-white shadow hover:bg-amber-600'
+                            ? 'bg-amber-500 text-white hover:bg-amber-600'
                             : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                         }`}
                         title={
@@ -1066,14 +1081,14 @@ function PdvPageInner() {
                             : 'Aplicar desconto neste item (% ou R$)'
                         }
                       >
-                        <Percent className="w-4 h-4" />
+                        <Percent className="w-3 h-3" />
                       </button>
                       <button
                         onClick={() => removeItem(it.id)}
-                        className="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
+                        className="w-6 h-6 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
                         title="Remover item"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
                   ) : <div />}
@@ -1139,42 +1154,7 @@ function PdvPageInner() {
           </div>
         )}
 
-        {/* ─── ALERTAS ─── (movido pra cima — mais visível) ───────────────── */}
-        {(openCount > 0 || realignPending > 0) && (
-          <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm p-3 space-y-1.5">
-            <div className="text-[10px] font-black uppercase tracking-wider text-amber-700 mb-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" /> Alertas
-            </div>
-            {openCount > 0 && (
-              <button
-                onClick={() => setShowOpenList(true)}
-                className="w-full bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between transition"
-              >
-                <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800">
-                  <Pause className="w-3.5 h-3.5 text-amber-600" />
-                  Pausadas
-                </span>
-                <span className="bg-amber-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5">
-                  {openCount}
-                </span>
-              </button>
-            )}
-            {realignPending > 0 && (
-              <Link
-                href="/minha-loja/realinhamento"
-                className="w-full bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg px-2.5 py-1.5 flex items-center justify-between transition"
-              >
-                <span className="flex items-center gap-1.5 text-xs font-bold text-rose-800">
-                  <Shuffle className="w-3.5 h-3.5 text-rose-600" />
-                  Realinhar
-                </span>
-                <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5">
-                  {realignPending}
-                </span>
-              </Link>
-            )}
-          </div>
-        )}
+        {/* ALERTAS — Pausadas migrou pro header, Realinhar foi pra Ações do PDV */}
 
         {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
@@ -1268,6 +1248,27 @@ function PdvPageInner() {
               )}
             </Link>
           </div>
+
+          {/* REALINHAR — botão wide abaixo do grid (linha separada, com badge) */}
+          <Link
+            href="/minha-loja/realinhamento"
+            className={`mt-2 relative w-full rounded-lg py-2.5 px-3 flex items-center justify-between gap-2 transition border ${
+              realignPending > 0
+                ? 'bg-rose-50 hover:bg-rose-100 border-rose-300 text-rose-800'
+                : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+            }`}
+            title="Realinhamento de estoque"
+          >
+            <span className="flex items-center gap-2 text-xs font-bold">
+              <Shuffle className={`w-3.5 h-3.5 ${realignPending > 0 ? 'text-rose-600' : 'text-slate-500'}`} />
+              Realinhar
+            </span>
+            {realignPending > 0 && (
+              <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[24px] h-[22px] flex items-center justify-center px-1.5">
+                {realignPending}
+              </span>
+            )}
+          </Link>
         </div>
 
       </aside>
