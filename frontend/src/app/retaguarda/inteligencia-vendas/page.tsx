@@ -33,13 +33,24 @@ type Produto = { refCode: string; descricao: string | null; pecas: number; valor
 
 type Report = {
   periodo: { from: string; to: string; dias: number };
-  filtros: { storeCode: string | null; comissaoPct: number; plusSize: boolean };
+  filtros: { storeCode: string | null; comissaoPct: number; plusSize: boolean; compareYoY?: boolean };
   summary: Summary;
   byStore: ByStore[];
   byDay: ByDay[];
   topVendedoras: Vendedora[];
   topMarcas: Marca[];
   topProdutos: Produto[];
+  yoy?: {
+    periodoAnterior: { from: string; to: string };
+    summary: Summary;
+    byDay: ByDay[];
+    variacao: {
+      valor: number | null;
+      pecas: number | null;
+      vendas: number | null;
+      ticketMedio: number | null;
+    };
+  } | null;
 };
 
 type Store = { code: string; name: string; active: boolean };
@@ -83,6 +94,7 @@ export default function InteligenciaVendasPage() {
   const [storeCode, setStoreCode] = useState('');
   const [comissaoPct, setComissaoPct] = useState(2);
   const [plusSize, setPlusSize] = useState(false);
+  const [compareYoY, setCompareYoY] = useState(true); // default ON — comparativo é a feature principal
   const [stores, setStores] = useState<Store[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(false);
@@ -108,6 +120,7 @@ export default function InteligenciaVendasPage() {
       });
       if (storeCode) params.set('storeCode', storeCode);
       if (plusSize) params.set('plusSize', 'true');
+      if (compareYoY) params.set('compareYoY', 'true');
       const r = await api<Report>(`/intelligence/sales-report?${params.toString()}`);
       setReport(r);
     } catch (e: any) {
@@ -126,11 +139,25 @@ export default function InteligenciaVendasPage() {
     setTimeout(() => fetchReport(), 50);
   }
 
-  // Calcula valor máximo do gráfico (pra escala das barras)
+  // Calcula valor máximo do gráfico (pra escala das barras) — considerando
+  // período atual E período anterior (se YoY ativo) pra alinhar escala.
   const maxByDay = useMemo(() => {
     if (!report?.byDay?.length) return 0;
-    return Math.max(...report.byDay.map((d) => d.valor));
-  }, [report?.byDay]);
+    const atual = Math.max(...report.byDay.map((d) => d.valor));
+    const prev = report.yoy?.byDay?.length
+      ? Math.max(...report.yoy.byDay.map((d) => d.valor))
+      : 0;
+    return Math.max(atual, prev);
+  }, [report?.byDay, report?.yoy?.byDay]);
+
+  // Cria mapa indexado por "MM-DD" do período anterior pra alinhar com atual
+  const prevByMMDD = useMemo(() => {
+    const m = new Map<string, ByDay>();
+    for (const d of report?.yoy?.byDay || []) {
+      m.set(d.date.slice(5), d); // "MM-DD"
+    }
+    return m;
+  }, [report?.yoy?.byDay]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -238,16 +265,27 @@ export default function InteligenciaVendasPage() {
             </div>
           </div>
 
-          {/* Plus Size flag */}
-          <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={plusSize}
-              onChange={(e) => setPlusSize(e.target.checked)}
-              className="w-4 h-4 rounded text-violet-600 border-slate-300"
-            />
-            <span>Filtrar somente PLUS SIZE</span>
-          </label>
+          {/* Toggles */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={compareYoY}
+                onChange={(e) => setCompareYoY(e.target.checked)}
+                className="w-4 h-4 rounded text-violet-600 border-slate-300"
+              />
+              <span className="font-bold">Comparar com mesmo período do ano anterior (YoY)</span>
+            </label>
+            <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={plusSize}
+                onChange={(e) => setPlusSize(e.target.checked)}
+                className="w-4 h-4 rounded text-violet-600 border-slate-300"
+              />
+              <span>Somente PLUS SIZE</span>
+            </label>
+          </div>
         </div>
 
         {/* ─── ERRO ────────────────────────────────────────────────────── */}
@@ -264,10 +302,48 @@ export default function InteligenciaVendasPage() {
         {/* ─── KPIs ────────────────────────────────────────────────────── */}
         {report && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Kpi label="Total vendido" value={`R$ ${brl(report.summary.valor)}`} icon={TrendingUp} color="emerald" />
-            <Kpi label="Peças" value={report.summary.pecas.toLocaleString('pt-BR')} icon={Package} color="violet" />
-            <Kpi label="Vendas" value={report.summary.vendas.toLocaleString('pt-BR')} icon={Receipt} color="sky" />
-            <Kpi label="Ticket médio" value={`R$ ${brl(report.summary.ticketMedio)}`} icon={ShoppingBag} color="amber" />
+            <Kpi
+              label="Total vendido"
+              value={`R$ ${brl(report.summary.valor)}`}
+              icon={TrendingUp}
+              color="emerald"
+              prevValue={report.yoy ? `R$ ${brl(report.yoy.summary.valor)}` : undefined}
+              variacao={report.yoy?.variacao.valor}
+            />
+            <Kpi
+              label="Peças"
+              value={report.summary.pecas.toLocaleString('pt-BR')}
+              icon={Package}
+              color="violet"
+              prevValue={report.yoy ? report.yoy.summary.pecas.toLocaleString('pt-BR') : undefined}
+              variacao={report.yoy?.variacao.pecas}
+            />
+            <Kpi
+              label="Vendas"
+              value={report.summary.vendas.toLocaleString('pt-BR')}
+              icon={Receipt}
+              color="sky"
+              prevValue={report.yoy ? report.yoy.summary.vendas.toLocaleString('pt-BR') : undefined}
+              variacao={report.yoy?.variacao.vendas}
+            />
+            <Kpi
+              label="Ticket médio"
+              value={`R$ ${brl(report.summary.ticketMedio)}`}
+              icon={ShoppingBag}
+              color="amber"
+              prevValue={report.yoy ? `R$ ${brl(report.yoy.summary.ticketMedio)}` : undefined}
+              variacao={report.yoy?.variacao.ticketMedio}
+            />
+          </div>
+        )}
+
+        {/* Banner período anterior */}
+        {report?.yoy && (
+          <div className="bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-xs text-violet-800 flex items-center gap-2">
+            <TrendingUp className="w-3.5 h-3.5" />
+            <span>
+              Comparando com período anterior: <strong>{new Date(report.yoy.periodoAnterior.from + 'T12:00:00').toLocaleDateString('pt-BR')}</strong> a <strong>{new Date(report.yoy.periodoAnterior.to + 'T12:00:00').toLocaleDateString('pt-BR')}</strong>
+            </span>
           </div>
         )}
 
@@ -278,25 +354,50 @@ export default function InteligenciaVendasPage() {
               <div className="text-xs font-black uppercase tracking-wider text-violet-700 flex items-center gap-1.5">
                 <Calendar className="w-4 h-4" /> Vendas por dia
               </div>
-              <span className="text-[10px] text-slate-500">
-                {report.periodo.dias} dia{report.periodo.dias > 1 ? 's' : ''} · max R$ {brl(maxByDay)}
-              </span>
+              <div className="flex items-center gap-3 text-[10px]">
+                {report.yoy && (
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1">
+                      <span className="w-3 h-3 rounded bg-gradient-to-t from-violet-600 to-fuchsia-500" /> Atual
+                    </span>
+                    <span className="flex items-center gap-1 text-slate-500">
+                      <span className="w-3 h-3 rounded bg-slate-300" /> Ano anterior
+                    </span>
+                  </div>
+                )}
+                <span className="text-slate-500">
+                  {report.periodo.dias} dia{report.periodo.dias > 1 ? 's' : ''}
+                </span>
+              </div>
             </div>
             <div className="overflow-x-auto pb-2">
-              <div className="flex items-end gap-1 min-h-[160px]" style={{ minWidth: `${report.byDay.length * 28}px` }}>
+              <div className="flex items-end gap-1 min-h-[180px]" style={{ minWidth: `${report.byDay.length * (report.yoy ? 36 : 28)}px` }}>
                 {report.byDay.map((d) => {
-                  const h = maxByDay > 0 ? Math.max(2, (d.valor / maxByDay) * 140) : 0;
+                  const h = maxByDay > 0 ? Math.max(2, (d.valor / maxByDay) * 150) : 0;
+                  // Busca o mesmo MM-DD no ano anterior
+                  const prev = report.yoy ? prevByMMDD.get(d.date.slice(5)) : null;
+                  const hPrev = prev && maxByDay > 0 ? Math.max(2, (prev.valor / maxByDay) * 150) : 0;
                   const dt = new Date(d.date + 'T12:00:00');
                   return (
-                    <div key={d.date} className="flex flex-col items-center gap-1 group" style={{ width: '24px' }}>
+                    <div key={d.date} className="flex flex-col items-center gap-1 group" style={{ width: report.yoy ? '32px' : '24px' }}>
                       <div className="text-[9px] font-bold text-slate-700 tabular-nums opacity-0 group-hover:opacity-100 transition whitespace-nowrap">
                         R$ {Math.round(d.valor).toLocaleString('pt-BR')}
                       </div>
-                      <div
-                        className="w-full bg-gradient-to-t from-violet-600 to-fuchsia-500 rounded-t hover:from-violet-700 hover:to-fuchsia-600 transition cursor-default"
-                        style={{ height: `${h}px` }}
-                        title={`${d.date}: R$ ${brl(d.valor)} · ${d.pecas} peças`}
-                      />
+                      {/* Barras lado a lado: atual + anterior */}
+                      <div className="flex items-end gap-0.5 w-full" style={{ height: '150px' }}>
+                        <div
+                          className="flex-1 bg-gradient-to-t from-violet-600 to-fuchsia-500 rounded-t hover:from-violet-700 transition cursor-default"
+                          style={{ height: `${h}px`, alignSelf: 'flex-end' }}
+                          title={`${d.date}: R$ ${brl(d.valor)} · ${d.pecas} peças`}
+                        />
+                        {report.yoy && (
+                          <div
+                            className="flex-1 bg-slate-300 hover:bg-slate-400 rounded-t transition cursor-default"
+                            style={{ height: `${hPrev}px`, alignSelf: 'flex-end' }}
+                            title={prev ? `Ano anterior (${prev.date}): R$ ${brl(prev.valor)} · ${prev.pecas} peças` : 'Sem dados ano anterior'}
+                          />
+                        )}
+                      </div>
                       <div className="text-[8px] text-slate-400 tabular-nums" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
                         {dt.getDate()}/{dt.getMonth() + 1}
                       </div>
@@ -477,11 +578,13 @@ export default function InteligenciaVendasPage() {
 
 // ─── KPI CARD ────────────────────────────────────────────────────────
 function Kpi({
-  label, value, icon: Icon, color,
+  label, value, icon: Icon, color, prevValue, variacao,
 }: {
   label: string; value: string;
   icon: any;
   color: 'emerald' | 'violet' | 'sky' | 'amber';
+  prevValue?: string;
+  variacao?: number | null;
 }) {
   const colorMap: Record<string, { bg: string; text: string; iconBg: string }> = {
     emerald: { bg: 'border-emerald-200', text: 'text-emerald-700', iconBg: 'bg-emerald-100 text-emerald-600' },
@@ -490,14 +593,35 @@ function Kpi({
     amber: { bg: 'border-amber-200', text: 'text-amber-700', iconBg: 'bg-amber-100 text-amber-600' },
   };
   const c = colorMap[color];
+  // Cor da variação: verde se positiva, rosa se negativa, cinza se zero/null
+  const isPositive = variacao !== undefined && variacao !== null && variacao > 0;
+  const isNegative = variacao !== undefined && variacao !== null && variacao < 0;
+  const variationCls = isPositive
+    ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+    : isNegative
+    ? 'text-rose-700 bg-rose-50 border-rose-200'
+    : 'text-slate-500 bg-slate-50 border-slate-200';
   return (
     <div className={`bg-white rounded-xl border ${c.bg} shadow-sm p-3 flex items-start gap-3`}>
-      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${c.iconBg}`}>
+      <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${c.iconBg}`}>
         <Icon className="w-5 h-5" />
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
         <div className={`text-lg sm:text-xl font-black tabular-nums ${c.text} truncate`}>{value}</div>
+        {prevValue !== undefined && (
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            {variacao !== undefined && variacao !== null && (
+              <span className={`text-[10px] font-bold tabular-nums px-1.5 py-0.5 rounded border ${variationCls}`}>
+                {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}%
+              </span>
+            )}
+            {variacao === null && (
+              <span className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded">novo</span>
+            )}
+            <span className="text-[10px] text-slate-400 truncate">vs {prevValue}</span>
+          </div>
+        )}
       </div>
     </div>
   );

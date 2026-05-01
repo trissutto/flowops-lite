@@ -180,6 +180,7 @@ export class IntelligenceController {
     @Query('storeCode') storeCode?: string,
     @Query('comissaoPct') comissaoPct?: string,
     @Query('plusSize') plusSize?: string,
+    @Query('compareYoY') compareYoY?: string,
   ) {
     this.requireAdmin(req);
     return this.svc.getSalesReport({
@@ -188,6 +189,7 @@ export class IntelligenceController {
       storeCode: storeCode || undefined,
       comissaoPct: Number(comissaoPct) || 2,
       plusSize: this.parseBool(plusSize),
+      compareYoY: this.parseBool(compareYoY),
     });
   }
 }

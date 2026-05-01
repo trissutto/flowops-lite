@@ -568,6 +568,7 @@ export class IntelligenceService {
     storeCode?: string;
     comissaoPct?: number; // % comissão padrão pra cálculo (ex: 2 = 2%)
     plusSize?: boolean;
+    compareYoY?: boolean; // se true, busca também o mesmo período do ano anterior
   }) {
     const { inicio, fim } = this.parseRange({ from: input.from, to: input.to });
     const comissaoPct = input.comissaoPct ?? 2;
@@ -619,6 +620,43 @@ export class IntelligenceService {
       ticketMedio: v.vendas > 0 ? v.valor / v.vendas : 0,
     }));
 
+    // ─── COMPARATIVO YoY ─────────────────────────────────────────────
+    // Calcula mesmo período exatamente -1 ano (mantendo o número de dias).
+    // Útil pra ver crescimento/queda real.
+    let yoy: any = null;
+    if (input.compareYoY) {
+      const inicioPrev = new Date(inicio);
+      inicioPrev.setFullYear(inicioPrev.getFullYear() - 1);
+      const fimPrev = new Date(fim);
+      fimPrev.setFullYear(fimPrev.getFullYear() - 1);
+
+      const [summaryPrev, byDayPrev] = await Promise.all([
+        this.erp.getSalesSummary({ inicio: inicioPrev, fim: fimPrev, storeCode: input.storeCode || null }),
+        this.erp.getSalesByDay({ inicio: inicioPrev, fim: fimPrev, storeCode: input.storeCode || null }),
+      ]);
+
+      // Calcula variação percentual de cada KPI
+      const pct = (atual: number, prev: number): number | null => {
+        if (prev === 0) return atual > 0 ? null : 0; // null = "novo" (sem base)
+        return Math.round(((atual - prev) / prev) * 1000) / 10; // 1 casa decimal
+      };
+
+      yoy = {
+        periodoAnterior: {
+          from: inicioPrev.toISOString().slice(0, 10),
+          to: new Date(fimPrev.getTime() - 1).toISOString().slice(0, 10),
+        },
+        summary: summaryPrev,
+        byDay: byDayPrev,
+        variacao: {
+          valor: pct(summary.valor, summaryPrev.valor),
+          pecas: pct(summary.pecas, summaryPrev.pecas),
+          vendas: pct(summary.vendas, summaryPrev.vendas),
+          ticketMedio: pct(summary.ticketMedio, summaryPrev.ticketMedio),
+        },
+      };
+    }
+
     return {
       periodo: {
         from: inicio.toISOString().slice(0, 10),
@@ -629,6 +667,7 @@ export class IntelligenceService {
         storeCode: input.storeCode || null,
         comissaoPct,
         plusSize: !!input.plusSize,
+        compareYoY: !!input.compareYoY,
       },
       summary,
       byStore,
@@ -636,6 +675,7 @@ export class IntelligenceService {
       topVendedoras: vendedorasComComissao,
       topMarcas,
       topProdutos,
+      yoy,
     };
   }
 }
