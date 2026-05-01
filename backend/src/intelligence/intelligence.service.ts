@@ -717,4 +717,215 @@ export class IntelligenceService {
       yoy,
     };
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DASHBOARD ESTRATÉGICO — visão executiva consolidada
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Dashboard estratégico — orquestra TODAS as queries em paralelo. Pensado
+   * pra abrir uma view rica de uma vez (1 fetch). Inclui:
+   *  - 5 KPIs com YoY (faturamento, pedidos, peças, ticket, clientes únicos)
+   *  - Faturamento últimos 5 anos no MÊS de referência
+   *  - Evolução últimos 12 meses
+   *  - Ranking de 15 lojas com variação YoY
+   *  - Top 5 vendedoras + Top 10 produtos + Top marcas
+   *  - Insights automáticos (loja com maior crescimento, etc)
+   */
+  async getStrategicDashboard(input: {
+    from?: string;
+    to?: string;
+    plusSize?: boolean;
+  }) {
+    const { inicio, fim } = this.parseRange({ from: input.from, to: input.to });
+    const plusSize = !!input.plusSize;
+
+    // Período YoY: shift -1 ano
+    const inicioYoY = new Date(inicio); inicioYoY.setFullYear(inicioYoY.getFullYear() - 1);
+    const fimYoY = new Date(fim); fimYoY.setFullYear(fimYoY.getFullYear() - 1);
+
+    // Mês de referência (usa o mês do `inicio` pra montar histórico de 5 anos)
+    const refYear = inicio.getFullYear();
+    const refMonth = inicio.getMonth() + 1;
+
+    const safe = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> =>
+      p.catch((e: any) => {
+        this.logger.error(`[strategic/${label}] ${e?.message || e}`);
+        return fallback;
+      });
+
+    const stores = await (this.prisma as any).store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, tipo: true } as any,
+      orderBy: { code: 'asc' },
+    });
+
+    const [
+      summary, summaryYoY,
+      salesByStore, salesByStoreYoY,
+      topVendedoras, topMarcas, topProdutos,
+      byMonth,
+      uniqueClientes, uniqueClientesYoY,
+      yearMinus4, yearMinus3, yearMinus2, yearMinus1, yearAtual,
+    ] = await Promise.all([
+      safe(this.erp.getSalesSummary({ inicio, fim }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summary'),
+      safe(this.erp.getSalesSummary({ inicio: inicioYoY, fim: fimYoY }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summaryYoY'),
+      safe(this.erp.getSalesByStoresInRange(inicio, fim, plusSize), new Map<string, { pecas: number; valor: number }>(), 'byStore'),
+      safe(this.erp.getSalesByStoresInRange(inicioYoY, fimYoY, plusSize), new Map<string, { pecas: number; valor: number }>(), 'byStoreYoY'),
+      safe(this.erp.getTopVendedoras({ inicio, fim, limit: 5 }), [] as any[], 'topVendedoras'),
+      safe(this.erp.getTopMarcas({ inicio, fim, limit: 10 }), [] as any[], 'topMarcas'),
+      safe(this.erp.getTopRefsBySales({ inicio, fim, plusSize, orderBy: 'valor', limit: 10 }), [] as any[], 'topProdutos'),
+      safe(this.erp.getSalesByMonth({ months: 12 }), [] as any[], 'byMonth'),
+      safe(this.erp.getUniqueClientesCount({ inicio, fim }), 0, 'clientes'),
+      safe(this.erp.getUniqueClientesCount({ inicio: inicioYoY, fim: fimYoY }), 0, 'clientesYoY'),
+      // Faturamento mesmo mês 5 anos atrás
+      safe(this.erp.getMonthSalesByYear({ year: refYear - 4, month: refMonth }), { pecas: 0, valor: 0 }, 'y-4'),
+      safe(this.erp.getMonthSalesByYear({ year: refYear - 3, month: refMonth }), { pecas: 0, valor: 0 }, 'y-3'),
+      safe(this.erp.getMonthSalesByYear({ year: refYear - 2, month: refMonth }), { pecas: 0, valor: 0 }, 'y-2'),
+      safe(this.erp.getMonthSalesByYear({ year: refYear - 1, month: refMonth }), { pecas: 0, valor: 0 }, 'y-1'),
+      safe(this.erp.getMonthSalesByYear({ year: refYear, month: refMonth }), { pecas: 0, valor: 0 }, 'y0'),
+    ]);
+
+    const pct = (atual: number, prev: number): number | null => {
+      if (prev === 0) return atual > 0 ? null : 0;
+      return Math.round(((atual - prev) / prev) * 1000) / 10;
+    };
+
+    // Ranking de lojas com variação
+    const ranking = stores.map((s: any) => {
+      const v = salesByStore.get(s.code) || { pecas: 0, valor: 0 };
+      const vPrev = salesByStoreYoY.get(s.code) || { pecas: 0, valor: 0 };
+      return {
+        code: s.code,
+        name: s.name,
+        tipo: s.tipo || 'REDE',
+        pecas: v.pecas,
+        valor: v.valor,
+        valorAnterior: vPrev.valor,
+        variacao: pct(v.valor, vPrev.valor),
+        ticketMedio: v.pecas > 0 ? v.valor / v.pecas : 0,
+      };
+    }).sort((a: any, b: any) => b.valor - a.valor);
+
+    // Adiciona posição
+    ranking.forEach((s: any, i: number) => { s.posicao = i + 1; });
+
+    // Média da rede (pra calcular acima/abaixo)
+    const lojasComVenda = ranking.filter((s: any) => s.valor > 0);
+    const mediaRede = lojasComVenda.length > 0
+      ? lojasComVenda.reduce((s: number, l: any) => s + l.valor, 0) / lojasComVenda.length
+      : 0;
+
+    // Comissão (2%) pras vendedoras
+    const COMISSAO_PCT = 2;
+    const topVendedorasComComissao = (topVendedoras as any[]).map((v) => ({
+      ...v,
+      comissao: Math.round(v.valor * (COMISSAO_PCT / 100) * 100) / 100,
+    }));
+
+    // ─── INSIGHTS AUTOMÁTICOS ─────────────────────────────────────────
+    const insights: Array<{ tone: 'success' | 'warning' | 'info' | 'danger'; text: string }> = [];
+
+    // 1. Loja com maior crescimento
+    const maiorCrescimento = [...ranking]
+      .filter((s: any) => s.variacao !== null && s.valor > 0)
+      .sort((a: any, b: any) => (b.variacao || 0) - (a.variacao || 0))[0];
+    if (maiorCrescimento && (maiorCrescimento.variacao || 0) > 0) {
+      insights.push({
+        tone: 'success',
+        text: `${maiorCrescimento.name} foi a loja com maior crescimento: +${maiorCrescimento.variacao!.toFixed(1)}% vs ano anterior.`,
+      });
+    }
+
+    // 2. Loja com pior queda
+    const piorQueda = [...ranking]
+      .filter((s: any) => s.variacao !== null && s.variacao < 0)
+      .sort((a: any, b: any) => (a.variacao || 0) - (b.variacao || 0))[0];
+    if (piorQueda && (piorQueda.variacao || 0) < -5) {
+      insights.push({
+        tone: 'danger',
+        text: `${piorQueda.name} caiu ${piorQueda.variacao!.toFixed(1)}% vs ano anterior — atenção.`,
+      });
+    }
+
+    // 3. Lojas abaixo da média
+    const abaixoMedia = ranking.filter((s: any) => s.valor > 0 && s.valor < mediaRede * 0.7);
+    if (abaixoMedia.length > 0) {
+      insights.push({
+        tone: 'warning',
+        text: `${abaixoMedia.length} loja(s) está(ão) com faturamento abaixo de 70% da média da rede.`,
+      });
+    }
+
+    // 4. Produto destaque
+    if (topProdutos.length > 0) {
+      const top = topProdutos[0];
+      insights.push({
+        tone: 'info',
+        text: `Produto destaque: REF ${top.refCode} — ${(top.descricao || '').slice(0, 50)} (R$ ${top.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}).`,
+      });
+    }
+
+    // 5. Vendedora destaque
+    if (topVendedorasComComissao.length > 0) {
+      const top = topVendedorasComComissao[0];
+      const nome = top.nome || `cód ${top.codigo}`;
+      insights.push({
+        tone: 'success',
+        text: `${nome} é a top vendedora — R$ ${top.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} em ${top.vendas} venda(s). Comissão: R$ ${top.comissao.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`,
+      });
+    }
+
+    // 6. Variação geral
+    if (summary.valor > 0 && summaryYoY.valor > 0) {
+      const v = pct(summary.valor, summaryYoY.valor);
+      if (v !== null) {
+        insights.push({
+          tone: v >= 0 ? 'success' : 'warning',
+          text: `Faturamento geral ${v >= 0 ? 'cresceu' : 'caiu'} ${Math.abs(v).toFixed(1)}% vs mesmo período do ano anterior.`,
+        });
+      }
+    }
+
+    // Total de lojas com vendas
+    const lojasAtivas = lojasComVenda.length;
+    const lojasAbaixo = ranking.filter((s: any) => s.valor > 0 && s.valor < mediaRede).length;
+    const lojasAcima = ranking.filter((s: any) => s.valor >= mediaRede && mediaRede > 0).length;
+
+    return {
+      periodo: {
+        from: inicio.toISOString().slice(0, 10),
+        to: new Date(fim.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        refMonth, refYear,
+      },
+      // KPIs principais com YoY
+      kpis: {
+        faturamento: { atual: summary.valor, anterior: summaryYoY.valor, variacao: pct(summary.valor, summaryYoY.valor) },
+        pedidos: { atual: summary.vendas, anterior: summaryYoY.vendas, variacao: pct(summary.vendas, summaryYoY.vendas) },
+        unidades: { atual: summary.pecas, anterior: summaryYoY.pecas, variacao: pct(summary.pecas, summaryYoY.pecas) },
+        ticketMedio: { atual: summary.ticketMedio, anterior: summaryYoY.ticketMedio, variacao: pct(summary.ticketMedio, summaryYoY.ticketMedio) },
+        clientes: { atual: uniqueClientes, anterior: uniqueClientesYoY, variacao: pct(uniqueClientes, uniqueClientesYoY) },
+      },
+      // Histórico do mês ref nos últimos 5 anos (pra gráfico de barras)
+      historicoAnos: [
+        { year: refYear - 4, valor: yearMinus4.valor, pecas: yearMinus4.pecas },
+        { year: refYear - 3, valor: yearMinus3.valor, pecas: yearMinus3.pecas },
+        { year: refYear - 2, valor: yearMinus2.valor, pecas: yearMinus2.pecas },
+        { year: refYear - 1, valor: yearMinus1.valor, pecas: yearMinus1.pecas },
+        { year: refYear,     valor: yearAtual.valor,  pecas: yearAtual.pecas  },
+      ],
+      // Evolução 12 meses (linha)
+      evolucao12m: byMonth,
+      // Ranking de lojas
+      ranking,
+      mediaRede,
+      lojasResumo: { ativas: lojasAtivas, acimaMedia: lojasAcima, abaixoMedia: lojasAbaixo },
+      // Tops
+      topVendedoras: topVendedorasComComissao,
+      topProdutos,
+      topMarcas,
+      // Insights
+      insights,
+    };
+  }
 }

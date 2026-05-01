@@ -3455,6 +3455,122 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Total faturado em UM MÊS específico de UM ANO específico.
+   * Usado pra montar gráfico "últimos N anos no mesmo mês".
+   */
+  async getMonthSalesByYear(input: {
+    year: number;
+    month: number; // 1-12
+    storeCode?: string | null;
+  }): Promise<{ pecas: number; valor: number }> {
+    if (!this.pool) return { pecas: 0, valor: 0 };
+    const inicio = new Date(input.year, input.month - 1, 1);
+    const fim = new Date(input.year, input.month, 1);
+    const conds: string[] = [
+      'c.DATA >= ?', 'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+    ];
+    const params: any[] = [inicio, fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const sql = `SELECT SUM(c.QUANTIDADE) AS pecas, SUM(c.VALORTOTAL) AS valor FROM caixa c WHERE ${conds.join(' AND ')}`;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      const r: any = (rows as any[])[0] || {};
+      return { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 };
+    } catch (e) {
+      this.logger.warn(`getMonthSalesByYear ${input.year}/${input.month} falhou`);
+      return { pecas: 0, valor: 0 };
+    }
+  }
+
+  /**
+   * Vendas por MÊS nos últimos N meses. Pra gráfico de linha
+   * "evolução mensal últimos 12 meses".
+   */
+  async getSalesByMonth(input: {
+    months: number;
+    storeCode?: string | null;
+  }): Promise<Array<{ year: number; month: number; pecas: number; valor: number }>> {
+    if (!this.pool) return [];
+    const months = Math.max(1, Math.min(36, input.months));
+    const out: Array<{ year: number; month: number; pecas: number; valor: number }> = [];
+    const now = new Date();
+
+    // Promise.all com N queries seria mais rápido mas pode estourar conexão.
+    // Uma só query com agregação por YEAR/MONTH é melhor.
+    const inicio = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+    const fim = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const conds: string[] = [
+      'c.DATA >= ?', 'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+    ];
+    const params: any[] = [inicio, fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const sql = `
+      SELECT YEAR(c.DATA) AS y, MONTH(c.DATA) AS m,
+             SUM(c.QUANTIDADE) AS pecas,
+             SUM(c.VALORTOTAL) AS valor
+        FROM caixa c
+       WHERE ${conds.join(' AND ')}
+       GROUP BY YEAR(c.DATA), MONTH(c.DATA)
+       ORDER BY y ASC, m ASC
+    `;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      // Preenche todos os meses (mesmo zero) pra gráfico ficar contínuo
+      const map = new Map<string, any>();
+      for (const r of rows as any[]) {
+        map.set(`${r.y}-${r.m}`, { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 });
+      }
+      for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const k = `${d.getFullYear()}-${d.getMonth() + 1}`;
+        const v = map.get(k) || { pecas: 0, valor: 0 };
+        out.push({ year: d.getFullYear(), month: d.getMonth() + 1, pecas: v.pecas, valor: v.valor });
+      }
+      return out;
+    } catch (e) {
+      this.logger.warn(`getSalesByMonth falhou: ${(e as Error).message}`);
+      return out;
+    }
+  }
+
+  /**
+   * Quantidade de clientes únicos no período (CODCLIENTE distinct).
+   */
+  async getUniqueClientesCount(input: {
+    inicio: Date;
+    fim: Date;
+    storeCode?: string | null;
+  }): Promise<number> {
+    if (!this.pool) return 0;
+    const conds: string[] = [
+      'c.DATA >= ?', 'c.DATA < ?',
+      "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
+      'c.CODCLIENTE IS NOT NULL',
+      'c.CODCLIENTE > 0',
+    ];
+    const params: any[] = [input.inicio, input.fim];
+    if (input.storeCode) {
+      conds.push('c.LOJA = ?');
+      params.push(input.storeCode);
+    }
+    const sql = `SELECT COUNT(DISTINCT c.CODCLIENTE) AS clientes FROM caixa c WHERE ${conds.join(' AND ')}`;
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return Number((rows as any[])[0]?.clientes) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
   /** TOP MARCAS — agrupa por coluna MARCA da tabela produtos. */
   async getTopMarcas(input: {
     inicio: Date;

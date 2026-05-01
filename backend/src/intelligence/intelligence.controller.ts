@@ -192,4 +192,22 @@ export class IntelligenceController {
       compareYoY: this.parseBool(compareYoY),
     });
   }
+
+  /**
+   * GET /intelligence/strategic-dashboard?from=&to=&plusSize=
+   * Visão executiva completa pra dashboard estratégico — 1 fetch, tudo pronto.
+   */
+  @Get('strategic-dashboard')
+  async strategicDashboard(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('plusSize') plusSize?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.getStrategicDashboard({
+      from, to,
+      plusSize: this.parseBool(plusSize),
+    });
+  }
 }
