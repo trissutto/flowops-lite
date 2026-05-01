@@ -458,45 +458,52 @@ export class IntelligenceService {
     const { inicio, fim } = this.parseRange(input);
     const plusSize = !!input.plusSize;
 
+    // Aceita loja inativa também — pode estar consultando histórico de loja desativada.
+    // O frontend lista todas, então o detalhe não pode bloquear.
     const store = await this.prisma.store.findFirst({
-      where: { code: input.storeCode, active: true },
+      where: { code: input.storeCode },
       select: { code: true, name: true, tipo: true } as any,
     });
-    if (!store) throw new BadRequestException(`Loja ${input.storeCode} não encontrada`);
+    if (!store) throw new BadRequestException(`Loja ${input.storeCode} não encontrada no Postgres`);
+
+    // Cada query é isolada com .catch — assim uma falha individual não quebra
+    // toda a resposta. O frontend ainda recebe os dados que conseguiram carregar.
+    const safe = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> =>
+      p.catch((e: any) => {
+        this.logger.error(`[getStoreDetail/${label}] ${e?.message || e}`);
+        return fallback;
+      });
 
     const [stockMap, salesMap, topPecas, topValor, rupturas, parados] = await Promise.all([
-      this.erp.getStockTotalByStores(plusSize),
-      this.erp.getSalesByStoresInRange(inicio, fim, plusSize),
-      this.erp.getTopRefsBySales({
-        inicio,
-        fim,
+      safe(this.erp.getStockTotalByStores(plusSize), new Map<string, number>(), 'stock'),
+      safe(this.erp.getSalesByStoresInRange(inicio, fim, plusSize), new Map<string, { pecas: number; valor: number }>(), 'sales'),
+      safe(this.erp.getTopRefsBySales({
+        inicio, fim,
         storeCode: input.storeCode,
         plusSize,
         orderBy: 'pecas',
         limit: 10,
-      }),
-      this.erp.getTopRefsBySales({
-        inicio,
-        fim,
+      }), [], 'topPecas'),
+      safe(this.erp.getTopRefsBySales({
+        inicio, fim,
         storeCode: input.storeCode,
         plusSize,
         orderBy: 'valor',
         limit: 10,
-      }),
-      this.erp.getRupturas({
-        inicio,
-        fim,
+      }), [], 'topValor'),
+      safe(this.erp.getRupturas({
+        inicio, fim,
         storeCode: input.storeCode,
         plusSize,
         limit: 10,
-      }),
-      this.erp.getParados({
+      }), [], 'rupturas'),
+      safe(this.erp.getParados({
         storeCode: input.storeCode,
         daysSemVenda: 30,
         minStock: 5,
         plusSize,
         limit: 10,
-      }),
+      }), [], 'parados'),
     ]);
 
     const estoque = stockMap.get(input.storeCode) || 0;

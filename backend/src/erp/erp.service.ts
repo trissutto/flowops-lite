@@ -3213,7 +3213,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getTopRefsBySales falhou: ${(e as Error).message}`);
-      throw new Error(`getTopRefsBySales: ${(e as Error).message}`);
+      return []; // não throw — não quebra o Promise.all do getStoreDetail
     }
   }
 
@@ -3587,7 +3587,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getRupturas falhou: ${(e as Error).message}`);
-      throw new Error(`getRupturas: ${(e as Error).message}`);
+      return []; // não throw — não quebra o Promise.all
     }
   }
 
