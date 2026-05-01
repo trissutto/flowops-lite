@@ -83,9 +83,22 @@ type StoreDetail = {
     vendidoPecas: number;
     vendidoValor: number;
     ticketMedio: number;
+    vendas?: number;
     vendaDiariaPecas: number;
     coberturaDias: number | null;
   };
+  comparativo?: {
+    periodoAnterior: { from: string; to: string };
+    vendidoPecas: number;
+    vendidoValor: number;
+    variacao: { pecas: number | null; valor: number | null };
+  };
+  byDay?: Array<{ date: string; pecas: number; valor: number }>;
+  topVendedoras?: Array<{
+    codigo: string; nome: string; pecas: number; valor: number; vendas: number;
+    comissao: number; ticketMedio: number;
+  }>;
+  topMarcas?: Array<{ marca: string; pecas: number; valor: number }>;
   topVendasPorPeca: TopRef[];
   topVendasPorValor: TopRef[];
   rupturas: Ruptura[];
@@ -598,7 +611,7 @@ function KpiCard({
 }: {
   label: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
   tone: 'blue' | 'amber' | 'emerald' | 'violet';
   icon: any;
 }) {
@@ -664,13 +677,61 @@ function TopList({ items, mode }: { items: TopRef[]; mode: 'pecas' | 'valor' }) 
 }
 
 function DrilldownContent({ detail }: { detail: StoreDetail }) {
+  // Variação % helper
+  const varColor = (v: number | null | undefined) => {
+    if (v === null || v === undefined) return 'text-slate-400';
+    if (v > 0) return 'text-emerald-600';
+    if (v < 0) return 'text-rose-600';
+    return 'text-slate-500';
+  };
+  const varText = (v: number | null | undefined) => {
+    if (v === null || v === undefined) return '—';
+    return `${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+  };
+
+  // Calcula max do gráfico
+  const maxByDay = (detail.byDay || []).reduce((m, d) => Math.max(m, d.valor), 0);
+
   return (
     <div className="space-y-4">
-      {/* KPIs da loja */}
+      {/* Botão pra dashboard completo de vendas (tela inteligencia-vendas) */}
+      <div className="flex justify-end">
+        <a
+          href={`/retaguarda/inteligencia-vendas?storeCode=${detail.store.code}`}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1.5 text-xs font-bold bg-violet-600 hover:bg-violet-700 text-white px-3 py-2 rounded-lg shadow-sm"
+        >
+          <BarChart3 className="w-3.5 h-3.5" />
+          Dashboard completo desta loja
+        </a>
+      </div>
+
+      {/* KPIs da loja com comparativo vs período anterior */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <KpiCard label="Estoque" value={num(detail.kpis.estoqueAtual)} sub="peças" tone="blue" icon={Boxes} />
-        <KpiCard label="Vendido" value={num(detail.kpis.vendidoPecas)} sub={`${detail.periodo.dias}d`} tone="emerald" icon={TrendingUp} />
-        <KpiCard label="Faturamento" value={brl(detail.kpis.vendidoValor)} sub={`Ticket ${brl(detail.kpis.ticketMedio)}`} tone="violet" icon={DollarSign} />
+        <KpiCard
+          label="Vendido"
+          value={num(detail.kpis.vendidoPecas)}
+          sub={detail.comparativo ? (
+            <span className={varColor(detail.comparativo.variacao.pecas)}>
+              {varText(detail.comparativo.variacao.pecas)} vs ant.
+            </span>
+          ) : `${detail.periodo.dias}d`}
+          tone="emerald"
+          icon={TrendingUp}
+        />
+        <KpiCard
+          label="Faturamento"
+          value={brl(detail.kpis.vendidoValor)}
+          sub={detail.comparativo ? (
+            <span className={varColor(detail.comparativo.variacao.valor)}>
+              {varText(detail.comparativo.variacao.valor)} · Tk {brl(detail.kpis.ticketMedio)}
+            </span>
+          ) : `Tk ${brl(detail.kpis.ticketMedio)}`}
+          tone="violet"
+          icon={DollarSign}
+        />
         <KpiCard
           label="Cobertura"
           value={detail.kpis.coberturaDias !== null ? `${Math.round(detail.kpis.coberturaDias)} dias` : '—'}
@@ -680,7 +741,85 @@ function DrilldownContent({ detail }: { detail: StoreDetail }) {
         />
       </div>
 
-      {/* 4 quadrantes */}
+      {/* Mini gráfico de vendas por dia */}
+      {detail.byDay && detail.byDay.length > 0 && (
+        <div className="bg-white border rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <BarChart3 className="w-3.5 h-3.5 text-violet-600" />
+              Vendas por dia
+            </div>
+            <span className="text-[10px] text-slate-400">
+              {detail.byDay.length} dias com venda · max R$ {brl(maxByDay)}
+            </span>
+          </div>
+          <div className="overflow-x-auto pb-1">
+            <div className="flex items-end gap-0.5 min-h-[80px]" style={{ minWidth: `${detail.byDay.length * 14}px` }}>
+              {detail.byDay.map((d) => {
+                const h = maxByDay > 0 ? Math.max(2, (d.valor / maxByDay) * 70) : 0;
+                const dt = new Date(d.date + 'T12:00:00');
+                return (
+                  <div key={d.date} className="flex flex-col items-center gap-0.5 group" style={{ width: '12px' }}>
+                    <div
+                      className="w-full bg-gradient-to-t from-violet-600 to-fuchsia-500 rounded-t hover:from-violet-700 transition cursor-default"
+                      style={{ height: `${h}px` }}
+                      title={`${dt.getDate()}/${dt.getMonth() + 1}: R$ ${brl(d.valor)} · ${d.pecas} pç`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top vendedoras + top marcas — 2 cards lado a lado */}
+      {(detail.topVendedoras?.length || detail.topMarcas?.length) ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Top vendedoras com comissão */}
+          <DrillCard title="Top Vendedoras (comissão 2%)" icon={TrendingUp} color="emerald">
+            {detail.topVendedoras && detail.topVendedoras.length > 0 ? (
+              <div className="space-y-1">
+                {detail.topVendedoras.slice(0, 8).map((v, i) => (
+                  <div key={v.codigo + i} className="flex items-center justify-between text-xs gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-slate-700 truncate">{v.nome || `Cód ${v.codigo}`}</div>
+                      <div className="text-[10px] text-slate-400">{v.vendas} venda(s) · {v.pecas} pç</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-bold text-slate-700 tabular-nums">R$ {brl(v.valor)}</div>
+                      <div className="text-[10px] font-bold text-emerald-600 tabular-nums">+R$ {brl(v.comissao)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400 text-center py-4">Sem dados de vendedora<br /><span className="text-[10px]">(coluna não detectada na caixa do Giga)</span></div>
+            )}
+          </DrillCard>
+
+          {/* Top marcas */}
+          <DrillCard title="Top Marcas" icon={DollarSign} color="violet">
+            {detail.topMarcas && detail.topMarcas.length > 0 ? (
+              <div className="space-y-1">
+                {detail.topMarcas.slice(0, 8).map((m, i) => (
+                  <div key={m.marca + i} className="flex items-center justify-between text-xs gap-2">
+                    <div className="font-semibold text-slate-700 truncate flex-1">{m.marca}</div>
+                    <div className="text-right shrink-0">
+                      <span className="font-bold text-slate-700 tabular-nums">R$ {brl(m.valor)}</span>
+                      <span className="text-[10px] text-slate-400 ml-1.5">{m.pecas} pç</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400 text-center py-4">Sem dados de marca</div>
+            )}
+          </DrillCard>
+        </div>
+      ) : null}
+
+      {/* 4 quadrantes — top produtos + rupturas + parados */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <DrillCard title="Top vendas — peças" icon={TrendingUp} color="emerald">
           <TopList items={detail.topVendasPorPeca} mode="pecas" />

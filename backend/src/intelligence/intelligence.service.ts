@@ -474,45 +474,60 @@ export class IntelligenceService {
         return fallback;
       });
 
-    const [stockMap, salesMap, topPecas, topValor, rupturas, parados] = await Promise.all([
+    // Comparativo: período anterior de mesmo tamanho (não YoY — pra comparar trend)
+    const dias = Math.max(1, Math.round((fim.getTime() - inicio.getTime()) / (24 * 60 * 60 * 1000)));
+    const inicioPrev = new Date(inicio);
+    inicioPrev.setDate(inicioPrev.getDate() - dias);
+    const fimPrev = new Date(inicio);
+
+    const [
+      stockMap, salesMap, salesPrevMap,
+      topPecas, topValor, rupturas, parados,
+      byDay, topVendedoras, topMarcas, summary,
+    ] = await Promise.all([
       safe(this.erp.getStockTotalByStores(plusSize), new Map<string, number>(), 'stock'),
       safe(this.erp.getSalesByStoresInRange(inicio, fim, plusSize), new Map<string, { pecas: number; valor: number }>(), 'sales'),
+      safe(this.erp.getSalesByStoresInRange(inicioPrev, fimPrev, plusSize), new Map<string, { pecas: number; valor: number }>(), 'salesPrev'),
       safe(this.erp.getTopRefsBySales({
-        inicio, fim,
-        storeCode: input.storeCode,
-        plusSize,
-        orderBy: 'pecas',
-        limit: 10,
+        inicio, fim, storeCode: input.storeCode, plusSize, orderBy: 'pecas', limit: 10,
       }), [], 'topPecas'),
       safe(this.erp.getTopRefsBySales({
-        inicio, fim,
-        storeCode: input.storeCode,
-        plusSize,
-        orderBy: 'valor',
-        limit: 10,
+        inicio, fim, storeCode: input.storeCode, plusSize, orderBy: 'valor', limit: 10,
       }), [], 'topValor'),
       safe(this.erp.getRupturas({
-        inicio, fim,
-        storeCode: input.storeCode,
-        plusSize,
-        limit: 10,
+        inicio, fim, storeCode: input.storeCode, plusSize, limit: 10,
       }), [], 'rupturas'),
       safe(this.erp.getParados({
-        storeCode: input.storeCode,
-        daysSemVenda: 30,
-        minStock: 5,
-        plusSize,
-        limit: 10,
+        storeCode: input.storeCode, daysSemVenda: 30, minStock: 5, plusSize, limit: 10,
       }), [], 'parados'),
+      // ─── NOVOS ENRIQUECIMENTOS ───
+      safe(this.erp.getSalesByDay({ inicio, fim, storeCode: input.storeCode }), [] as Array<{ date: string; pecas: number; valor: number }>, 'byDay'),
+      safe(this.erp.getTopVendedoras({ inicio, fim, storeCode: input.storeCode, limit: 10 }), [] as any[], 'topVendedoras'),
+      safe(this.erp.getTopMarcas({ inicio, fim, storeCode: input.storeCode, limit: 10 }), [] as any[], 'topMarcas'),
+      safe(this.erp.getSalesSummary({ inicio, fim, storeCode: input.storeCode }), { pecas: 0, valor: 0, vendas: 0, ticketMedio: 0 }, 'summary'),
     ]);
 
     const estoque = stockMap.get(input.storeCode) || 0;
     const vendas = salesMap.get(input.storeCode) || { pecas: 0, valor: 0 };
+    const vendasPrev = salesPrevMap.get(input.storeCode) || { pecas: 0, valor: 0 };
 
     // Cobertura: peças em estoque ÷ peças vendidas/dia (no período)
-    const dias = Math.max(1, Math.round((fim.getTime() - inicio.getTime()) / (24 * 60 * 60 * 1000)));
     const vendaDiaria = vendas.pecas / dias;
     const cobertura = vendaDiaria > 0 ? estoque / vendaDiaria : null;
+
+    // Calcula vendedoras com comissão (default 2%)
+    const COMISSAO_PCT = 2;
+    const topVendedorasComComissao = (topVendedoras as any[]).map((v) => ({
+      ...v,
+      comissao: Math.round(v.valor * (COMISSAO_PCT / 100) * 100) / 100,
+      ticketMedio: v.vendas > 0 ? v.valor / v.vendas : 0,
+    }));
+
+    // Variação % vs período anterior
+    const pct = (atual: number, prev: number): number | null => {
+      if (prev === 0) return atual > 0 ? null : 0;
+      return Math.round(((atual - prev) / prev) * 1000) / 10;
+    };
 
     return {
       store: {
@@ -530,10 +545,27 @@ export class IntelligenceService {
         estoqueAtual: estoque,
         vendidoPecas: vendas.pecas,
         vendidoValor: vendas.valor,
-        ticketMedio: vendas.pecas > 0 ? vendas.valor / vendas.pecas : 0,
+        ticketMedio: summary.ticketMedio || (vendas.pecas > 0 ? vendas.valor / vendas.pecas : 0),
+        vendas: summary.vendas, // número de cupons distintos
         vendaDiariaPecas: vendaDiaria,
         coberturaDias: cobertura, // null = sem venda no período
       },
+      // Comparativo período anterior (mesmo número de dias, anterior)
+      comparativo: {
+        periodoAnterior: {
+          from: inicioPrev.toISOString().slice(0, 10),
+          to: new Date(fimPrev.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+        },
+        vendidoPecas: vendasPrev.pecas,
+        vendidoValor: vendasPrev.valor,
+        variacao: {
+          pecas: pct(vendas.pecas, vendasPrev.pecas),
+          valor: pct(vendas.valor, vendasPrev.valor),
+        },
+      },
+      byDay,
+      topVendedoras: topVendedorasComComissao,
+      topMarcas,
       topVendasPorPeca: topPecas,
       topVendasPorValor: topValor,
       rupturas,
