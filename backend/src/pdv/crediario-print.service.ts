@@ -9,26 +9,80 @@ import * as fs from 'fs';
 const PDFDocument = require('pdfkit');
 
 /**
- * Resolve path da fonte Verdana (usada pra bater visualmente com o WinCred/Giga).
- * Procura em backend/assets/fonts/. Se não achar, retorna null e o caller cai
- * pra Helvetica (fonte built-in do pdfkit).
- *
- * Pra empacotar no Railway: garantir que assets/fonts/*.ttf vão pro deploy
- * (já vai porque está dentro de backend/). Se der falha em prod, conferir
- * NestJS dist build path — pode precisar copiar via "assets" no nest-cli.json.
+ * Conversão milímetros → points pdfkit. 1pt = 1/72 polegada, 1in = 25.4mm.
+ * Logo: 1mm = 72/25.4 ≈ 2.83465pt. Usado em TODA leitura do JSON de coords.
  */
-function resolveVerdanaPath(): string | null {
-  // __dirname em prod = backend/dist/pdv → sobe 2 níveis pra backend/, daí assets/fonts
+const MM_TO_PT = 72 / 25.4;
+const mm = (v: number) => v * MM_TO_PT;
+
+/**
+ * Resolve path de um asset dentro de backend/assets/. Procura em vários
+ * locais pra funcionar tanto em dev (ts-node) quanto em prod (dist/).
+ */
+function resolveAssetPath(...parts: string[]): string | null {
   const candidates = [
-    path.join(__dirname, '..', '..', 'assets', 'fonts', 'verdana.ttf'),
-    path.join(__dirname, '..', '..', '..', 'assets', 'fonts', 'verdana.ttf'),
-    path.join(process.cwd(), 'assets', 'fonts', 'verdana.ttf'),
-    path.join(process.cwd(), 'backend', 'assets', 'fonts', 'verdana.ttf'),
+    path.join(__dirname, '..', '..', 'assets', ...parts),
+    path.join(__dirname, '..', '..', '..', 'assets', ...parts),
+    path.join(process.cwd(), 'assets', ...parts),
+    path.join(process.cwd(), 'backend', 'assets', ...parts),
   ];
   for (const p of candidates) {
     try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
   }
   return null;
+}
+
+function resolveVerdanaPath(): string | null {
+  return resolveAssetPath('fonts', 'verdana.ttf');
+}
+
+/**
+ * Carrega o JSON de coordenadas em mm e converte pra pt. Cada campo do JSON
+ * (`fields_mm`) substitui o default hardcoded; campos faltantes ficam no default.
+ * Retorna `null` se o arquivo não existir / for inválido — caller usa hardcoded.
+ */
+function loadCoordsConfig(logger: Logger): {
+  blocoY?: number[];
+  blocoH?: number;
+  fields?: Record<string, { x: number; dy: number; w?: number }>;
+} | null {
+  const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+  if (!cfgPath) {
+    logger.warn('[crediario-print] JSON de coords NÃO encontrado em assets/config/. Usando defaults.');
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(cfgPath, 'utf8');
+    const json = JSON.parse(raw);
+    const out: any = {};
+
+    // Converte blocos de mm pra pt
+    if (Array.isArray(json.blocosY_mm)) {
+      out.blocoY = json.blocosY_mm.map((v: number) => mm(Number(v)));
+      // blocoH = distância média entre topos
+      if (out.blocoY.length >= 2) {
+        out.blocoH = out.blocoY[1] - out.blocoY[0];
+      }
+    }
+
+    // Converte fields de mm pra pt (x → x, y → dy, w → w)
+    if (json.fields_mm && typeof json.fields_mm === 'object') {
+      out.fields = {};
+      for (const [name, f] of Object.entries<any>(json.fields_mm)) {
+        out.fields[name] = {
+          x: mm(Number(f.x) || 0),
+          dy: mm(Number(f.y) || 0),
+          ...(f.w !== undefined ? { w: mm(Number(f.w)) } : {}),
+        };
+      }
+    }
+
+    logger.log(`[crediario-print] coords carregadas de ${cfgPath} (${Object.keys(out.fields || {}).length} campos)`);
+    return out;
+  } catch (e: any) {
+    logger.warn(`[crediario-print] falha ler JSON de coords (${cfgPath}): ${e?.message}. Usando defaults.`);
+    return null;
+  }
 }
 
 /**
@@ -56,7 +110,16 @@ export class CrediarioPrintService {
     private readonly erp: ErpService,
     @Inject(forwardRef(() => CrediariosService))
     private readonly crediarios: CrediariosService,
-  ) {}
+  ) {
+    // Carrega coords do JSON e mescla com defaults. Feito no constructor pra
+    // garantir ordem de inicialização correta.
+    const cfg = loadCoordsConfig(this.logger);
+    this.PROM = {
+      blocoY: cfg?.blocoY?.length === 3 ? cfg.blocoY : this.PROM_DEFAULT.blocoY,
+      blocoH: cfg?.blocoH ?? this.PROM_DEFAULT.blocoH,
+      fields: { ...this.PROM_DEFAULT.fields, ...(cfg?.fields ?? {}) },
+    };
+  }
 
   // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
   // Empresa juridicamente responsável pela cobrança.
@@ -69,52 +132,47 @@ export class CrediarioPrintService {
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's
   // ═══════════════════════════════════════════════════════════════════════
 
-  // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~258pt.
-  // CALIBRAÇÃO V5 (2026-05): ajuste fino baseado em medições FÍSICAS
-  // reportadas pelo usuário após sobrepor o PDF teste na pré-impressa.
-  // Conversão: 1mm = 2.835pt (1 in = 25.4mm = 72pt).
-  // BLOCO 1 topo = Y22, BLOCO 2 topo = Y280, BLOCO 3 topo = Y540 (passo 258).
-  // Todos os dy são RELATIVOS ao topo de cada bloco — ficam IDÊNTICOS pros 3.
+  // PROMISSÓRIA — 3 por folha A4.
   //
-  // HISTÓRICO de ajustes (V4 → V5):
-  //   numero       :  -10mm esq  / -4mm cima   (x 195→167, dy 40→29)
-  //   parcela      :  -10mm esq  / -4mm cima   (x 250→222, dy 40→29) [acompanha numero]
-  //   valor        :  -4mm cima                (dy 40→29)
-  //   razao social :  -25mm esq  / +2mm baixo  (x 215→144, dy 100→106)
-  //   CNPJ         :  -4mm esq                 (x 500→489)
-  //   valor extenso:  -4mm cima                (dy 140→129)
-  //   data emissão :  -18mm esq                (x dia 400→349, mes 470→419, ano 540→489)
-  //   emitente     :  -60mm esq                (x 225→55)
-  //   endereço     :  -30mm esq                (x 300→215)
-  private readonly PROM = {
+  // FONTE DE VERDADE: backend/assets/config/promissoria-coords.json (em mm).
+  // O usuário edita o JSON, restart do backend, sem recompile. Os defaults
+  // abaixo são FALLBACK — usados se o JSON faltar ou tiver campo ausente.
+  //
+  // Por que dois lugares: pra que mesmo sem o JSON o sistema gere PDF.
+  // Em produção o JSON manda; aqui é só rede de segurança.
+  private readonly PROM_DEFAULT = {
     blocoY: [22, 280, 540],
     blocoH: 258,
     fields: {
-      // ── linha Y+29 (-4mm) ──
-      numero:           { x: 167, dy: 29 },        // "2315" (codCliente) — V5: -10mm esq, -4mm cima
-      parcela:          { x: 222, dy: 29 },        // "1 / 4" — acompanha numero
-      valor:            { x: 480, dy: 29 },        // "8,90" — V5: -4mm cima
-      // ── linha Y+60 ── data vencimento (3 caixas)
-      vencDia:          { x: 345, dy: 60 },        // "10"
-      vencMes:          { x: 400, dy: 60 },        // "Maio"
-      vencAno:          { x: 525, dy: 60 },        // "2026"
-      // ── linha Y+80 ── vencimento por extenso (sentença)
-      vencExtenso:      { x: 215, dy: 80, w: 320 },// "os dez dias do mes de Maio de 2026"
-      // ── linha Y+106 (V5) ── beneficiário + CNPJ
-      beneficiarioA:    { x: 144, dy: 106 },       // "T.O RISSUTTO EIRELI" — V5: -25mm esq, +2mm baixo
-      cpfDevedor:       { x: 489, dy: 100 },       // CNPJ "20.104.813/0001-39" — V5: -4mm esq
-      // ── linha Y+129 (-4mm) ── quantia por extenso
-      quantiaExtenso:   { x: 325, dy: 129, w: 240 },// "oito reais e noventa centavos" — V5: -4mm cima
-      // ── linha Y+170 ── pagável em + emissão
-      pagavelEm:        { x: 275, dy: 170 },       // "ITANHAEM"
-      emissaoDia:       { x: 349, dy: 170 },       // "02" — V5: -18mm esq
-      emissaoMes:       { x: 419, dy: 170 },       // "Maio" — V5: -18mm esq
-      emissaoAno:       { x: 489, dy: 170 },       // "2026" — V5: -18mm esq
-      // ── dados do emitente (cliente) ──
-      emitente:         { x: 55,  dy: 200 },       // "THIAGO DE OLIVEIRA RISSUTTO" — V5: -60mm esq
-      cpfEmitente:      { x: 245, dy: 220 },       // "28665529896"
-      endereco:         { x: 215, dy: 240, w: 280 },// endereço — V5: -30mm esq
-    },
+      numero:           { x: 167, dy: 29 },
+      parcela:          { x: 222, dy: 29 },
+      valor:            { x: 480, dy: 29 },
+      vencDia:          { x: 345, dy: 60 },
+      vencMes:          { x: 400, dy: 60 },
+      vencAno:          { x: 525, dy: 60 },
+      vencExtenso:      { x: 215, dy: 80, w: 320 },
+      beneficiarioA:    { x: 144, dy: 106 },
+      cpfDevedor:       { x: 489, dy: 100 },
+      quantiaExtenso:   { x: 325, dy: 129, w: 240 },
+      pagavelEm:        { x: 275, dy: 170 },
+      emissaoDia:       { x: 349, dy: 170 },
+      emissaoMes:       { x: 419, dy: 170 },
+      emissaoAno:       { x: 489, dy: 170 },
+      emitente:         { x: 55,  dy: 200 },
+      cpfEmitente:      { x: 245, dy: 220 },
+      endereco:         { x: 215, dy: 240, w: 280 },
+      cep:              { x: 215, dy: 250 },
+    } as Record<string, { x: number; dy: number; w?: number }>,
+  };
+
+  /**
+   * Coordenadas EFETIVAS — mescla do JSON com os defaults. Atribuído no constructor.
+   * Tipo idêntico ao PROM_DEFAULT pra preservar shape.
+   */
+  private readonly PROM: {
+    blocoY: number[];
+    blocoH: number;
+    fields: Record<string, { x: number; dy: number; w?: number }>;
   };
 
   // CARNÊ — 2 por folha A4 (azul). Cada bloco ocupa ~410pt.
@@ -273,6 +331,52 @@ export class CrediarioPrintService {
   // ═══════════════════════════════════════════════════════════════════════
   // GERAÇÃO DOS PDFs
   // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * DIAGNÓSTICO — busca um cliente no Giga pelo CPF e retorna a linha CRUA
+   * (todas as colunas que existem na tabela). Usado pra entender por que
+   * endereço/CEP não estão sendo lidos: vê os nomes EXATOS das colunas e
+   * ajusta o `pick(...)` no loadSaleForPrint se necessário.
+   *
+   * Endpoint: GET /pdv/diag-cliente?cpf=XXXXXXXXXXX
+   */
+  async diagCliente(cpf: string): Promise<any> {
+    const cmTable = await this.crediarios.detectClientesTable();
+    if (!cmTable) {
+      return { error: 'Tabela de clientes não detectada no Giga', cpf };
+    }
+    const safeCpf = String(cpf || '').replace(/\D/g, '').slice(0, 14);
+    if (!safeCpf) return { error: 'CPF inválido', cpf };
+    const formattedCpf = safeCpf.length === 11
+      ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
+      : safeCpf;
+
+    const tries = [
+      { label: 'CPF dígitos', sql: `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1` },
+      { label: 'CPF formatado', sql: `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${formattedCpf}' LIMIT 1` },
+      { label: 'CPF REPLACE', sql: `SELECT * FROM \`${cmTable.table}\` WHERE REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}' LIMIT 1` },
+    ];
+
+    const log: any[] = [];
+    let row: any = null;
+    for (const t of tries) {
+      try {
+        const r = await this.erp.runReadOnly(t.sql, { maxRows: 1, timeoutMs: 10000 });
+        log.push({ tentativa: t.label, encontrou: !!r.rows[0] });
+        if (r.rows[0]) { row = r.rows[0]; break; }
+      } catch (e: any) {
+        log.push({ tentativa: t.label, erro: e?.message });
+      }
+    }
+
+    return {
+      tabela: cmTable.table,
+      cpf_buscado: safeCpf,
+      tentativas: log,
+      colunas: row ? Object.keys(row) : [],
+      cliente: row,
+    };
+  }
 
   /**
    * Carrega dados básicos da venda + parcelas geradas (a partir do payment crediario)
@@ -541,17 +645,42 @@ export class CrediarioPrintService {
 
     // ── dados do emitente (cliente) ──
     this.drawAt(doc, f.emitente, blocoTopY, data.cliente.nome);
-    this.drawAt(doc, f.cpfEmitente, blocoTopY, String(data.cliente.cpf || '').replace(/\D/g, ''));
+    this.drawAt(doc, f.cpfEmitente, blocoTopY, this.fmtCpfCnpj(data.cliente.cpf));
     // Monta endereço completo: "RUA X, 291, BAIRRO"
     const partes = [data.cliente.endereco, data.cliente.numero, data.cliente.bairro]
       .map((p: any) => String(p || '').trim()).filter(Boolean);
     const endFull = partes.join(', ');
-    doc.text(
-      endFull,
-      f.endereco.x,
-      blocoTopY + f.endereco.dy,
-      { width: (f.endereco as any).w ?? 280, lineBreak: false },
-    );
+    if (endFull && f.endereco) {
+      doc.text(
+        endFull,
+        f.endereco.x,
+        blocoTopY + f.endereco.dy,
+        { width: (f.endereco as any).w ?? 280, lineBreak: false },
+      );
+    }
+    // CEP — só desenha se tiver dado e config tiver o campo
+    if (data.cliente.cep && f.cep) {
+      this.drawAt(doc, f.cep, blocoTopY, this.fmtCep(data.cliente.cep));
+    }
+  }
+
+  /** Formata CPF (11 dígitos) ou CNPJ (14 dígitos). Devolve raw se não for nenhum. */
+  private fmtCpfCnpj(raw: string): string {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (d.length === 11) {
+      return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+    }
+    if (d.length === 14) {
+      return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+    }
+    return d || String(raw || '');
+  }
+
+  /** Formata CEP (8 dígitos) como XXXXX-XXX. */
+  private fmtCep(raw: string): string {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (d.length === 8) return `${d.slice(0,5)}-${d.slice(5)}`;
+    return d || String(raw || '');
   }
 
   /**
@@ -751,6 +880,8 @@ export class CrediarioPrintService {
         endereco: 'RUA NICOLA MANCUSO FILHO',
         numero: '291',
         bairro: 'CH TAMARAS',
+        cidade: 'ITANHAEM',
+        cep: '11740000',
       },
       cidadeLoja: 'ITANHAEM',
       parcelas: 4,
@@ -830,6 +961,8 @@ export class CrediarioPrintService {
         endereco: 'RUA NICOLA MANCUSO FILHO',
         numero: '291',
         bairro: 'CH TAMARAS',
+        cidade: 'ITANHAEM',
+        cep: '11740000',
       },
       cidadeLoja: 'ITANHAEM',
       parcelas: 4,

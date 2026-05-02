@@ -924,6 +924,23 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/diag-cliente?cpf=XXX — diagnóstico do cliente no Giga.
+   * Retorna a linha crua + lista de colunas pra identificar por que
+   * endereço/CEP/etc não estão vindo.
+   */
+  @Get('diag-cliente')
+  async getDiagCliente(@Req() req: any, @Query('cpf') cpf: string, @Res() res: Response) {
+    this.requireRole(req);
+    try {
+      const result = await this.crediarioPrint.diagCliente(cpf);
+      res.status(200).json(result);
+    } catch (e: any) {
+      console.error('[pdv/diag-cliente] FALHA', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro no diag', detail: e?.message });
+    }
+  }
+
+  /**
    * GET /pdv/promissorias-teste-debug-pdf — promissória de teste COM RÉGUA
    * de fundo. Pra calibração: imprime essa folha SOZINHA, sobrepõe na
    * pré-impressa do Giga e reporta deslocamentos lendo as coordenadas Y/X.
