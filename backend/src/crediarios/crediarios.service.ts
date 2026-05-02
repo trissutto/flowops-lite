@@ -424,7 +424,7 @@ export class CrediariosService {
     if (dataInicio) where.push(`\`${map.vencimento}\` >= '${dataInicio}'`);
     if (dataFim)    where.push(`\`${map.vencimento}\` <= '${dataFim}'`);
     if (map.pago) {
-      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
     } else if (map.dataPagamento) {
       where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00' OR \`${map.dataPagamento}\` = '0000-00-00 00:00:00')`);
     }

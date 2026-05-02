@@ -768,9 +768,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // de recebidos. Se ficar nulo, a baixa não aparece NA UI do WinCred mesmo
     // com data preenchida. Sempre tentamos atualizar — usa nome detectado se
     // existir, senão tenta literal "PAGO" como fallback (WinCred padrão).
+    //
+    // VALOR: Lurd's usa "SIM"/"NAO" (varchar(3)). Outras instalações Giga
+    // usam "S"/"N" (char(1)). Override por env var ERP_PAGO_VALOR_SIM.
     const pagoCol = columns.pago || 'PAGO';
+    const pagoValor = String(this.config.get('ERP_PAGO_VALOR_SIM') ?? 'SIM').trim();
     sets.push(`\`${pagoCol}\` = ?`);
-    params.push('S');
+    params.push(pagoValor);
     if (!columns.pago) {
       this.logger.warn(
         `[crediario] coluna PAGO não detectada — usando fallback hardcoded "PAGO". ` +

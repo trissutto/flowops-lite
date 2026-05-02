@@ -207,9 +207,13 @@ export class CrediarioBaixaService {
     addCol('valorParcela', 'valorParcela');
 
     const where: string[] = [];
-    // PAGO='N' (vencidas E a vencer)
+    // PAGO em aberto — aceita: N, n, NAO, nao, NÃO, vazio ou NULL.
+    // Lurd's usa SIM/NAO (varchar3). Outras instalações usam S/N (char1).
     if (map.pago) {
-      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+      where.push(
+        `(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' ` +
+        `OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`,
+      );
     } else if (map.dataPagamento) {
       where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
     }
@@ -555,7 +559,7 @@ export class CrediarioBaixaService {
 
     const where: string[] = [`\`${map.codCliente}\` = '${safeCod}'`];
     if (map.pago) {
-      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
     } else if (map.dataPagamento) {
       where.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
     }
@@ -739,7 +743,7 @@ export class CrediarioBaixaService {
     const inList = codClientes.map((c) => `'${c}'`).join(',');
     const where: string[] = [`\`${map.codCliente}\` IN (${inList})`];
     if (map.pago) {
-      where.push(`(\`${map.pago}\` = 'N' OR \`${map.pago}\` = 'n')`);
+      where.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
     } else if (map.dataPagamento) {
       where.push(
         `(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`,
