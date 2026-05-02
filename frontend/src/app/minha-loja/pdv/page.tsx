@@ -3193,7 +3193,7 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   .sep { border-top: 1px dashed #000; margin: 3px 0; }
   .chave { font-size: 8px; word-break: break-all; line-height: 1.3; }
 </style></head><body>
-  <div class="center bold lg">${sale.storeName || 'LURD\\'S PLUS SIZE'}</div>
+  <div class="center bold lg">${sale.storeName || "LURD'S PLUS SIZE"}</div>
   <div class="center sm">CUPOM FISCAL ELETRÔNICO - NFC-e</div>
   <div class="sep"></div>
   ${itensHtml}
