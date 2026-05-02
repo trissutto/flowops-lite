@@ -67,14 +67,9 @@ function loadCoordsConfig(logger: Logger): {
     const json = JSON.parse(raw);
     const out: any = {};
 
-    // Converte blocos de mm pra pt
-    if (Array.isArray(json.blocosY_mm)) {
-      out.blocoY = json.blocosY_mm.map((v: number) => mm(Number(v)));
-      // blocoH = distância média entre topos
-      if (out.blocoY.length >= 2) {
-        out.blocoH = out.blocoY[1] - out.blocoY[0];
-      }
-    }
+    // BLOCOS: IGNORADOS — fonte de verdade é PROM_DEFAULT no código.
+    // Notepad/linter podem reverter o JSON sem afetar os blocos.
+    // (campo blocosY_mm fica no JSON apenas pra documentação visual.)
 
     // Converte fields de mm pra pt (x → x, y → dy, w → w)
     if (json.fields_mm && typeof json.fields_mm === 'object') {
@@ -169,15 +164,21 @@ export class CrediarioPrintService {
 
   // PROMISSÓRIA — 3 por folha A4.
   //
-  // FONTE DE VERDADE: backend/assets/config/promissoria-coords.json (em mm).
-  // O usuário edita o JSON, restart do backend, sem recompile. Os defaults
-  // abaixo são FALLBACK — usados se o JSON faltar ou tiver campo ausente.
+  // BLOCOS (blocoY/blocoH): TRAVADOS NESTE CÓDIGO. JSON IGNORA blocosY_mm.
+  //   → mudar via conversa com o Claude (atualiza esses literais aqui).
+  //   → Notepad/linter NÃO conseguem reverter.
   //
-  // Por que dois lugares: pra que mesmo sem o JSON o sistema gere PDF.
-  // Em produção o JSON manda; aqui é só rede de segurança.
+  // CAMPOS (fields): vêm do JSON em assets/config/promissoria-coords.json.
+  //   → defaults abaixo são fallback se o JSON faltar.
+  //
+  // Conversão: 1mm × 2.835 = pt. Bloco em pt = mm × 2.835.
+  // Valores atuais (mm → pt):
+  //   Bloco 1: 7.76mm  → 22.00pt
+  //   Bloco 2: 100.5mm → 284.92pt
+  //   Bloco 3: 192.7mm → 546.30pt
   private readonly PROM_DEFAULT = {
-    blocoY: [22, 280, 540],
-    blocoH: 258,
+    blocoY: [22.00, 284.92, 546.30],
+    blocoH: 262.92,
     fields: {
       numero:           { x: 167, dy: 29 },
       parcela:          { x: 222, dy: 29 },
