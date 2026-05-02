@@ -167,9 +167,41 @@ export class CobrancaAutoService {
     const minDias = camp.minDiasAtraso ?? 3;
     const maxDias = camp.maxDiasAtraso ?? null;
 
+    // FIX: o `diasAtraso` calculado em listOverdueByCustomer usa o vencimento
+    // MAIS ANTIGO, então clientes com dívida acumulada (ex: 200 dias) são
+    // pulados em campanhas com maxDias=30 mesmo tendo parcela vencida ontem.
+    //
+    // Solução: cliente é elegível se TEM PELO MENOS UMA parcela vencida na
+    // janela [minDias, maxDias]. Recalcula diasAtraso por parcela e filtra.
+    const today = new Date();
+    const enrichedCustomers = data.customers.map((c: any) => {
+      const parcelasNaJanela = (c.parcelas || []).filter((p: any) => {
+        const venc = p.vencimento ? new Date(String(p.vencimento)) : null;
+        if (!venc || isNaN(venc.getTime())) return false;
+        const diasParc = Math.floor((today.getTime() - venc.getTime()) / 86400000);
+        if (diasParc < minDias) return false;
+        if (maxDias !== null && diasParc > maxDias) return false;
+        return true;
+      });
+      // Pra ordenar por urgência: usa a parcela MAIS atrasada DA JANELA
+      let diasAtrasoNaJanela = 0;
+      for (const p of parcelasNaJanela) {
+        const venc = new Date(String(p.vencimento));
+        const d = Math.floor((today.getTime() - venc.getTime()) / 86400000);
+        if (d > diasAtrasoNaJanela) diasAtrasoNaJanela = d;
+      }
+      return {
+        ...c,
+        parcelasNaJanela,
+        diasAtrasoNaJanela,
+        elegivel: parcelasNaJanela.length > 0,
+      };
+    }).filter((c: any) => c.elegivel);
+
     this.logger.log(
-      `[debug] Campanha "${camp.nome}": listOverdueByCustomer trouxe ${data.customers.length} cliente(s) ` +
-      `na loja ${camp.lojaCode}. Filtros: minDias=${minDias}, maxDias=${maxDias ?? 'sem limite'}`,
+      `[debug] Campanha "${camp.nome}": listOverdueByCustomer trouxe ${data.customers.length} cliente(s), ` +
+      `${enrichedCustomers.length} elegível(eis) após filtro de janela [${minDias}d, ${maxDias ?? '∞'}d] ` +
+      `na loja ${camp.lojaCode}.`,
     );
 
     // Verifica WhatsApp DEDICADO de cobrança (não o do site).
@@ -208,10 +240,8 @@ export class CobrancaAutoService {
     let failed = 0;
     let skipped = 0;
 
-    for (const c of data.customers) {
-      // Filtro de atraso
-      if (c.diasAtraso < minDias) { skipped++; continue; }
-      if (maxDias && c.diasAtraso > maxDias) { skipped++; continue; }
+    for (const c of enrichedCustomers as any[]) {
+      // Filtros já aplicados acima (parcelasNaJanela > 0). Aqui só telefone+optout+cooldown.
 
       const tel = c.telefone ? String(c.telefone).replace(/\D/g, '') : '';
       if (!tel && !testMode) { skipped++; continue; }
@@ -229,8 +259,9 @@ export class CobrancaAutoService {
       });
       if (ultimaTentativa) { skipped++; continue; }
 
-      // Renderiza
-      const parcelas: ParcelaCobranca[] = c.parcelas.map((p: any) => ({
+      // Renderiza usando SÓ as parcelas DA JANELA (não traz dívida velha de 200 dias
+      // numa campanha de "vencidos 30 dias"). Mensagem fica mais focada e não assusta.
+      const parcelas: ParcelaCobranca[] = (c.parcelasNaJanela || []).map((p: any) => ({
         vencimento: String(p.vencimento || '').slice(0, 10),
         valor: Math.max(0, Number(p.valorParcela ?? 0) - Number(p.valorPago ?? 0)),
         parcela: p.parcela ? Number(p.parcela) : undefined,
@@ -307,7 +338,7 @@ export class CobrancaAutoService {
 
       // Anti-ban: espera entre mensagens (delayMs da campanha)
       const delayMs = Math.max(60_000, Math.min(600_000, camp.delayMs ?? 120_000));
-      if (seq < data.customers.length) {
+      if (seq < enrichedCustomers.length) {
         await new Promise((r) => setTimeout(r, delayMs));
       }
     }
