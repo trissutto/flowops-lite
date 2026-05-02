@@ -159,10 +159,11 @@ const CALIBRAR_HTML = `<!DOCTYPE html>
 <div class="grid" id="campos"></div>
 
 <div class="actions">
-  <button class="btn-primary" onclick="salvarEAbrir()">💾 Salvar + Gerar PDF</button>
-  <button class="btn-secondary" onclick="apenasGerar()">🖨️ Só Gerar PDF</button>
-  <button class="btn-secondary" onclick="exportarJson()">📋 Exportar JSON</button>
-  <button class="btn-danger" onclick="resetar()">↩️ Resetar</button>
+  <button class="btn-primary" id="btnSalvar" type="button">💾 Salvar + Gerar PDF</button>
+  <a class="btn-secondary" id="lnkGerar" href="/api/pdv/promissorias-teste-pdf" target="_blank" style="text-decoration:none;display:inline-block;line-height:1.5">🖨️ Só Gerar PDF</a>
+  <button class="btn-secondary" id="btnExportar" type="button">📋 Exportar JSON</button>
+  <button class="btn-danger" id="btnResetar" type="button">↩️ Resetar</button>
+  <a class="btn-secondary" href="/api/pdv-diag/coords" target="_blank" style="text-decoration:none;display:inline-block;line-height:1.5">🔍 Ver coords ativas</a>
   <span class="status" id="status">Carregando…</span>
 </div>
 
@@ -312,6 +313,17 @@ async function resetar() {
   }
 }
 
+// Liga handlers via addEventListener (mais robusto que onclick inline)
+function ligarBotoes() {
+  var b1 = document.getElementById('btnSalvar');
+  if (b1) b1.addEventListener('click', salvarEAbrir);
+  var b2 = document.getElementById('btnExportar');
+  if (b2) b2.addEventListener('click', exportarJson);
+  var b3 = document.getElementById('btnResetar');
+  if (b3) b3.addEventListener('click', resetar);
+}
+
+ligarBotoes();
 carregar();
 </script>
 </body>
