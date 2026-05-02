@@ -201,6 +201,9 @@ function PdvPageInner() {
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
+  // Pré-seleção de método + bandeira (usado pelos atalhos MASTERCARD/VISANET/REDESHOP/VISA ELECTRON)
+  const [presetMethod, setPresetMethod] = useState<string | null>(null);
+  const [presetBandeira, setPresetBandeira] = useState<string | null>(null);
   // Filtro de formas de pagamento — quando vendedora clica num botão direto
   // (PIX/CARTÃO/CRED. da sidebar), o modal abre mostrando SÓ aquela categoria.
   // Quando clica em "Finalizar", abre TUDO.
@@ -1192,6 +1195,54 @@ function PdvPageInner() {
           </div>
         </div>
 
+        {/* ─── ATALHOS DE BANDEIRA ───────────────────────────────────────── */}
+        {/* 4 atalhos diretos: pula a escolha "débito/crédito" e bandeira no */}
+        {/* PaymentModal — vai direto pra parcelas (crédito) ou confirmação (débito). */}
+        {(() => {
+          const venderComBandeira = (method: 'credito' | 'debito', band: string) => {
+            setPresetMethod(method);
+            setPresetBandeira(band);
+            setPaymentFilter('cartao');
+            setShowPayment(true);
+          };
+          const disabled = !sale?.items?.length || (sale?.total || 0) <= 0;
+          const ATALHOS: Array<{ nome: string; tipo: 'CRÉDITO' | 'DÉBITO'; method: 'credito' | 'debito'; band: string; cor: string }> = [
+            { nome: 'MASTERCARD',    tipo: 'CRÉDITO', method: 'credito', band: 'MASTERCARD',    cor: 'orange' },
+            { nome: 'VISANET',       tipo: 'CRÉDITO', method: 'credito', band: 'VISANET',       cor: 'blue' },
+            { nome: 'REDESHOP',      tipo: 'DÉBITO',  method: 'debito',  band: 'REDESHOP',      cor: 'rose' },
+            { nome: 'VISA ELECTRON', tipo: 'DÉBITO',  method: 'debito',  band: 'VISA ELECTRON', cor: 'sky' },
+          ];
+          const colorMap: Record<string, string> = {
+            orange: 'hover:bg-orange-50 hover:border-orange-300',
+            blue:   'hover:bg-blue-50 hover:border-blue-300',
+            rose:   'hover:bg-rose-50 hover:border-rose-300',
+            sky:    'hover:bg-sky-50 hover:border-sky-300',
+          };
+          return (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
+              <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
+                Atalhos rápidos
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ATALHOS.map((a) => (
+                  <button
+                    key={a.nome}
+                    onClick={() => venderComBandeira(a.method, a.band)}
+                    disabled={disabled}
+                    className={`bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-2 py-1.5 flex flex-col items-center gap-0 transition border border-slate-200 ${colorMap[a.cor]}`}
+                    title={`Vender ${a.nome} (${a.tipo})`}
+                  >
+                    <span className="text-[11px] font-bold text-slate-800 leading-tight">{a.nome}</span>
+                    <span className="text-[8px] font-medium text-slate-400 uppercase tracking-wide leading-tight">
+                      ({a.tipo})
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
           <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
@@ -1414,7 +1465,9 @@ function PdvPageInner() {
           finalizing={finalizing}
           initialPayments={sale.payments || []}
           methodFilter={paymentFilter}
-          onClose={() => { setShowPayment(false); setPaymentFilter('all'); }}
+          presetMethod={presetMethod}
+          presetBandeira={presetBandeira}
+          onClose={() => { setShowPayment(false); setPaymentFilter('all'); setPresetMethod(null); setPresetBandeira(null); }}
           onConfirm={finalizeSale}
           onLater={fecharDepois}
           onPaymentsChange={onPaymentsChanged}
@@ -1871,6 +1924,8 @@ function PaymentModal({
   finalizing,
   initialPayments,
   methodFilter = 'all',
+  presetMethod = null,
+  presetBandeira = null,
   onClose,
   onConfirm,
   onLater,
@@ -1888,6 +1943,10 @@ function PaymentModal({
   /** Filtra quais métodos aparecem na grid: 'all' = todos, 'pix' = só PIX,
    *  'cartao' = débito + crédito, 'crediario' = só crediário. */
   methodFilter?: 'all' | 'pix' | 'cartao' | 'crediario';
+  /** Pré-seleção: pula a etapa de escolher método (atalhos MASTERCARD/VISANET/etc) */
+  presetMethod?: string | null;
+  /** Pré-seleção da bandeira (em conjunto com presetMethod) */
+  presetBandeira?: string | null;
   onClose: () => void;
   onConfirm: (method: string, details?: any) => void;
   onLater: () => void;
@@ -1901,13 +1960,15 @@ function PaymentModal({
   const jaPago = payments.reduce((s, p) => s + p.valor, 0);
   const restante = Math.max(0, Math.round((total - jaPago) * 100) / 100);
   const pago100 = restante < 0.01;
-  // Auto-seleciona quando filtro tem só 1 método (PIX, crediario)
-  // Pra cartão, deixa null pra vendedora escolher débito ou crédito.
-  const initialSelected = methodFilter === 'pix' ? 'pix'
+  // Auto-seleciona quando filtro tem só 1 método (PIX, crediario) OU quando
+  // veio um presetMethod dos atalhos rápidos (MASTERCARD/VISANET/REDESHOP/...).
+  const initialSelected = presetMethod
+    ? presetMethod
+    : methodFilter === 'pix' ? 'pix'
     : methodFilter === 'crediario' ? 'crediario'
     : null;
   const [selected, setSelected] = useState<string | null>(initialSelected);
-  const [bandeira, setBandeira] = useState<string | null>(null);
+  const [bandeira, setBandeira] = useState<string | null>(presetBandeira);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
   // Valor que vai cobrir essa forma de pagamento (default = restante)
