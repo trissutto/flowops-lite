@@ -30,8 +30,8 @@
 
     "vencExtenso":    { "x": 49.8,  "y": 24.2, "w": 112.9 },
 
-    "beneficiarioA":  { "x": 50.8,  "y": 35.4 },
-    "cpfDevedor":     { "x": 172.5, "y": 36.0 },
+    "beneficiarioA":  { "x": 50.8,  "y": 35.7 },
+    "cpfDevedor":     { "x": 169.0, "y": 35.7 },
 
     "quantiaExtenso": { "x": 73.0, "y": 45.5, "w": 84.7 },
 
