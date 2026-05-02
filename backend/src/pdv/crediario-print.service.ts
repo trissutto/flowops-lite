@@ -70,49 +70,50 @@ export class CrediarioPrintService {
   // ═══════════════════════════════════════════════════════════════════════
 
   // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~258pt.
-  // CALIBRAÇÃO V4 (2026-05): coordenadas RECALIBRADAS contra impressão REAL
-  // do WinCred/Giga (folha física sobreposta na nossa régua de calibração).
+  // CALIBRAÇÃO V5 (2026-05): ajuste fino baseado em medições FÍSICAS
+  // reportadas pelo usuário após sobrepor o PDF teste na pré-impressa.
+  // Conversão: 1mm = 2.835pt (1 in = 25.4mm = 72pt).
   // BLOCO 1 topo = Y22, BLOCO 2 topo = Y280, BLOCO 3 topo = Y540 (passo 258).
   // Todos os dy são RELATIVOS ao topo de cada bloco — ficam IDÊNTICOS pros 3.
   //
-  // Layout do form pré-impresso (Lurd's), conforme print do Giga:
-  //   Y+40   Nº ___   ___ / ___                        R$ ___
-  //   Y+60   Venc.: dia ___ de ___ de ___
-  //   Y+80   "os ___ dias do mes de ___ de ___"  (vencimento por extenso)
-  //   Y+100  T.O RISSUTTO EIRELI                  CNPJ 20.104.813/0001-39
-  //   Y+140  A QUANTIA DE: ___ reais e ___ centavos  (valor por extenso)
-  //   Y+170  Pagável em: ___ (cidade)        emissão: ___ de ___ de ___
-  //   Y+200  Emitente: ___ (nome cliente)
-  //   Y+220  CPF: ___
-  //   Y+240  Endereço: ___
+  // HISTÓRICO de ajustes (V4 → V5):
+  //   numero       :  -10mm esq  / -4mm cima   (x 195→167, dy 40→29)
+  //   parcela      :  -10mm esq  / -4mm cima   (x 250→222, dy 40→29) [acompanha numero]
+  //   valor        :  -4mm cima                (dy 40→29)
+  //   razao social :  -25mm esq  / +2mm baixo  (x 215→144, dy 100→106)
+  //   CNPJ         :  -4mm esq                 (x 500→489)
+  //   valor extenso:  -4mm cima                (dy 140→129)
+  //   data emissão :  -18mm esq                (x dia 400→349, mes 470→419, ano 540→489)
+  //   emitente     :  -60mm esq                (x 225→55)
+  //   endereço     :  -30mm esq                (x 300→215)
   private readonly PROM = {
     blocoY: [22, 280, 540],
     blocoH: 258,
     fields: {
-      // ── linha Y+40 ──
-      numero:           { x: 195, dy: 40 },        // "2315" (codCliente)
-      parcela:          { x: 250, dy: 40 },        // "1 / 4"
-      valor:            { x: 480, dy: 40 },        // "8,90"
+      // ── linha Y+29 (-4mm) ──
+      numero:           { x: 167, dy: 29 },        // "2315" (codCliente) — V5: -10mm esq, -4mm cima
+      parcela:          { x: 222, dy: 29 },        // "1 / 4" — acompanha numero
+      valor:            { x: 480, dy: 29 },        // "8,90" — V5: -4mm cima
       // ── linha Y+60 ── data vencimento (3 caixas)
       vencDia:          { x: 345, dy: 60 },        // "10"
       vencMes:          { x: 400, dy: 60 },        // "Maio"
       vencAno:          { x: 525, dy: 60 },        // "2026"
       // ── linha Y+80 ── vencimento por extenso (sentença)
       vencExtenso:      { x: 215, dy: 80, w: 320 },// "os dez dias do mes de Maio de 2026"
-      // ── linha Y+100 ── beneficiário + CNPJ
-      beneficiarioA:    { x: 215, dy: 100 },       // "T.O RISSUTTO EIRELI"
-      cpfDevedor:       { x: 500, dy: 100 },       // CNPJ "20.104.813/0001-39"
-      // ── linha Y+140 ── quantia por extenso
-      quantiaExtenso:   { x: 325, dy: 140, w: 240 }, // "oito reais e noventa centavos"
+      // ── linha Y+106 (V5) ── beneficiário + CNPJ
+      beneficiarioA:    { x: 144, dy: 106 },       // "T.O RISSUTTO EIRELI" — V5: -25mm esq, +2mm baixo
+      cpfDevedor:       { x: 489, dy: 100 },       // CNPJ "20.104.813/0001-39" — V5: -4mm esq
+      // ── linha Y+129 (-4mm) ── quantia por extenso
+      quantiaExtenso:   { x: 325, dy: 129, w: 240 },// "oito reais e noventa centavos" — V5: -4mm cima
       // ── linha Y+170 ── pagável em + emissão
       pagavelEm:        { x: 275, dy: 170 },       // "ITANHAEM"
-      emissaoDia:       { x: 400, dy: 170 },       // "02"
-      emissaoMes:       { x: 470, dy: 170 },       // "Maio"
-      emissaoAno:       { x: 540, dy: 170 },       // "2026"
+      emissaoDia:       { x: 349, dy: 170 },       // "02" — V5: -18mm esq
+      emissaoMes:       { x: 419, dy: 170 },       // "Maio" — V5: -18mm esq
+      emissaoAno:       { x: 489, dy: 170 },       // "2026" — V5: -18mm esq
       // ── dados do emitente (cliente) ──
-      emitente:         { x: 225, dy: 200 },       // "THIAGO DE OLIVEIRA RISSUTTO"
+      emitente:         { x: 55,  dy: 200 },       // "THIAGO DE OLIVEIRA RISSUTTO" — V5: -60mm esq
       cpfEmitente:      { x: 245, dy: 220 },       // "28665529896"
-      endereco:         { x: 300, dy: 240, w: 280 },// "RUA NICOLA MANCUSO FILHO, 291, CH TAMARAS"
+      endereco:         { x: 215, dy: 240, w: 280 },// endereço — V5: -30mm esq
     },
   };
 
@@ -346,6 +347,12 @@ export class CrediarioPrintService {
     // Busca dados completos do cliente no Giga via CrediariosService
     // (que tem o detectClientesTable correto). Pega: codCliente, NOME, ENDERECO,
     // BAIRRO, CIDADE, CEP, CPF, etc.
+    //
+    // Robustez de busca:
+    //  1) Tenta CPF só com dígitos
+    //  2) Se não achar, tenta CPF formatado (123.456.789-00) — algumas
+    //     instalações Giga gravam o campo CPF formatado.
+    //  3) Se ainda não achar, tenta REPLACE no MySQL (remove pontuação no DB).
     let clienteFull: any = null;
     let cmTable: any = null;
     if (sale.customerCpf) {
@@ -353,11 +360,39 @@ export class CrediarioPrintService {
         cmTable = await this.crediarios.detectClientesTable();
         if (cmTable) {
           const safeCpf = String(sale.customerCpf).replace(/\D/g, '').slice(0, 14);
-          // Tenta CPF primeiro, depois codCliente
-          const sql = `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1`;
-          const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+          const formattedCpf = safeCpf.length === 11
+            ? `${safeCpf.slice(0,3)}.${safeCpf.slice(3,6)}.${safeCpf.slice(6,9)}-${safeCpf.slice(9)}`
+            : safeCpf;
+
+          // Tentativa 1: CPF só dígitos
+          let r = await this.erp.runReadOnly(
+            `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${safeCpf}' LIMIT 1`,
+            { maxRows: 1, timeoutMs: 10000 },
+          );
           clienteFull = r.rows[0] || null;
-          this.logger.log(`[crediario-print] cliente Giga: cpf=${safeCpf} found=${!!clienteFull}`);
+
+          // Tentativa 2: CPF formatado
+          if (!clienteFull && formattedCpf !== safeCpf) {
+            r = await this.erp.runReadOnly(
+              `SELECT * FROM \`${cmTable.table}\` WHERE \`CPF\` = '${formattedCpf}' LIMIT 1`,
+              { maxRows: 1, timeoutMs: 10000 },
+            );
+            clienteFull = r.rows[0] || null;
+          }
+
+          // Tentativa 3: REPLACE no DB (remove pontuação na coluna)
+          if (!clienteFull) {
+            r = await this.erp.runReadOnly(
+              `SELECT * FROM \`${cmTable.table}\` WHERE REPLACE(REPLACE(REPLACE(\`CPF\`,'.',''),'-',''),'/','') = '${safeCpf}' LIMIT 1`,
+              { maxRows: 1, timeoutMs: 10000 },
+            );
+            clienteFull = r.rows[0] || null;
+          }
+
+          this.logger.log(
+            `[crediario-print] cliente Giga: cpf=${safeCpf} found=${!!clienteFull}` +
+            (clienteFull ? ` cols=[${Object.keys(clienteFull).join(',')}]` : ''),
+          );
         }
       } catch (e: any) {
         this.logger.warn(`[crediario-print] falha buscar cliente Giga: ${e?.message}`);
@@ -378,6 +413,26 @@ export class CrediarioPrintService {
       select: { city: true, name: true } as any,
     });
 
+    // Helper: busca primeiro valor não-vazio entre N variantes de coluna
+    // (Giga muda nome em diferentes instalações: ENDERECO/LOGRADOURO/RUA/END...)
+    const pick = (row: any, ...keys: string[]): string => {
+      if (!row) return '';
+      for (const k of keys) {
+        const v = row[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+      }
+      // Última cartada: case-insensitive — pra colunas com casing inesperado
+      const lowered: Record<string, string> = {};
+      for (const k of Object.keys(row)) lowered[k.toLowerCase()] = k;
+      for (const k of keys) {
+        const real = lowered[k.toLowerCase()];
+        if (real && row[real] !== undefined && row[real] !== null && String(row[real]).trim() !== '') {
+          return String(row[real]).trim();
+        }
+      }
+      return '';
+    };
+
     return {
       sale,
       credPayment,
@@ -386,12 +441,13 @@ export class CrediarioPrintService {
       entrada: entradaSalva,
       cliente: {
         codCliente,
-        nome: sale.customerName || (clienteFull?.NOME ?? clienteFull?.nome ?? '') || '',
+        nome: sale.customerName || pick(clienteFull, 'NOME', 'nome', 'CLIENTE', 'cliente', 'RAZAO_SOCIAL') || '',
         cpf: sale.customerCpf || '',
-        endereco: clienteFull?.ENDERECO || clienteFull?.endereco || '',
-        bairro: clienteFull?.BAIRRO || clienteFull?.bairro || '',
-        cidade: clienteFull?.CIDADE || clienteFull?.cidade || '',
-        cep: clienteFull?.CEP || clienteFull?.cep || '',
+        endereco: pick(clienteFull, 'ENDERECO', 'ENDERE', 'END', 'LOGRADOURO', 'RUA', 'endereco'),
+        numero:   pick(clienteFull, 'NUMERO', 'NUM', 'numero'),
+        bairro:   pick(clienteFull, 'BAIRRO', 'BAI', 'bairro'),
+        cidade:   pick(clienteFull, 'CIDADE', 'MUNICIPIO', 'cidade'),
+        cep:      pick(clienteFull, 'CEP', 'cep'),
       },
       cidadeLoja: (store as any)?.city || sale.storeName || 'Itanhaém',
     };
@@ -486,7 +542,10 @@ export class CrediarioPrintService {
     // ── dados do emitente (cliente) ──
     this.drawAt(doc, f.emitente, blocoTopY, data.cliente.nome);
     this.drawAt(doc, f.cpfEmitente, blocoTopY, String(data.cliente.cpf || '').replace(/\D/g, ''));
-    const endFull = `${data.cliente.endereco} ${data.cliente.bairro}`.trim();
+    // Monta endereço completo: "RUA X, 291, BAIRRO"
+    const partes = [data.cliente.endereco, data.cliente.numero, data.cliente.bairro]
+      .map((p: any) => String(p || '').trim()).filter(Boolean);
+    const endFull = partes.join(', ');
     doc.text(
       endFull,
       f.endereco.x,
@@ -674,6 +733,83 @@ export class CrediarioPrintService {
   }
 
   /**
+   * PROMISSÓRIA DE TESTE COM RÉGUA DE FUNDO — modo DEBUG.
+   * Imprime numa folha A4 SÓ: a régua + a promissória de teste por cima.
+   * O usuário sobrepõe na pré-impressa do Giga e consegue dizer com
+   * precisão "campo X cai no Y=180 mas devia estar no Y=200" — daí
+   * eu ajusto numericamente sem chute.
+   *
+   * Use: GET /pdv/promissorias-teste-debug-pdf
+   */
+  async generatePromissoriasTesteDebug(): Promise<{ buffer: Buffer; filename: string }> {
+    const dataMock = {
+      sale: { customerCpf: '28665529896' },
+      cliente: {
+        codCliente: '2315',
+        nome: 'THIAGO DE OLIVEIRA RISSUTTO',
+        cpf: '28665529896',
+        endereco: 'RUA NICOLA MANCUSO FILHO',
+        numero: '291',
+        bairro: 'CH TAMARAS',
+      },
+      cidadeLoja: 'ITANHAEM',
+      parcelas: 4,
+    };
+    const parcelasMock = [
+      { num: 1, valor: 8.90, vencimento: new Date(2026, 4, 10) },
+      { num: 2, valor: 5.00, vencimento: new Date(2026, 5, 10) },
+      { num: 3, valor: 5.00, vencimento: new Date(2026, 6, 10) },
+    ];
+
+    const buffer = await new Promise<Buffer>((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ size: 'A4', margin: 0 });
+        const chunks: Buffer[] = [];
+        doc.on('data', (c: Buffer) => chunks.push(c));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        // ===== RÉGUA DE FUNDO (cinza claro pra não atrapalhar leitura) =====
+        doc.fontSize(6).font('Helvetica').fillColor('#CCCCCC');
+        for (let y = 0; y <= 842; y += 10) {
+          const isMajor = y % 50 === 0;
+          doc.lineWidth(isMajor ? 0.4 : 0.15)
+            .strokeColor(isMajor ? '#FF6666' : '#DDDDDD')
+            .moveTo(0, y).lineTo(595, y).stroke();
+          if (isMajor) {
+            doc.fillColor('#FF6666').text(`Y=${y}`, 4, y + 1, { lineBreak: false });
+            doc.fillColor('#FF6666').text(`Y=${y}`, 560, y + 1, { lineBreak: false });
+          }
+        }
+        for (let x = 0; x <= 595; x += 50) {
+          doc.lineWidth(0.2).strokeColor('#AACCFF')
+            .moveTo(x, 0).lineTo(x, 842).stroke();
+          doc.fillColor('#6699FF').text(`X=${x}`, x + 1, 4, { lineBreak: false });
+        }
+        // Linha verde marcando topo de cada bloco
+        for (let i = 0; i < this.PROM.blocoY.length; i++) {
+          const y = this.PROM.blocoY[i];
+          doc.lineWidth(1).strokeColor('#00AA00')
+            .moveTo(0, y).lineTo(595, y).stroke();
+          doc.fillColor('#00AA00').fontSize(8)
+            .text(`BLOCO ${i + 1} TOPO Y=${y}`, 200, y - 9, { lineBreak: false });
+        }
+
+        // ===== PROMISSÓRIAS POR CIMA (preto, fonte de verdade) =====
+        this.registerFonts(doc);
+        doc.font('Verdana').fontSize(10).fillColor('#000000');
+        for (let i = 0; i < parcelasMock.length; i++) {
+          const blocoTopY = this.PROM.blocoY[i];
+          this.drawPromissoriaBloco(doc, blocoTopY, dataMock, parcelasMock[i]);
+        }
+
+        doc.end();
+      } catch (e) { reject(e); }
+    });
+    return { buffer, filename: 'promissorias-TESTE-DEBUG.pdf' };
+  }
+
+  /**
    * PROMISSÓRIA DE TESTE — gera 3 promissórias com os MESMOS dados do print
    * de referência do WinCred (Thiago de Oliveira Rissutto, código 2315,
    * 4 parcelas de R$ 8,90/5,00/5,00/5,00). NÃO depende do banco — pra
@@ -691,7 +827,8 @@ export class CrediarioPrintService {
         codCliente: '2315',
         nome: 'THIAGO DE OLIVEIRA RISSUTTO',
         cpf: '28665529896',
-        endereco: 'RUA NICOLA MANCUSO FILHO, 291',
+        endereco: 'RUA NICOLA MANCUSO FILHO',
+        numero: '291',
         bairro: 'CH TAMARAS',
       },
       cidadeLoja: 'ITANHAEM',
