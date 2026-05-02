@@ -3159,6 +3159,89 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   const podeCancelar = isAuthorized && !isCancelled && minutosDesdeEmissao <= 30;
   const minutosRestantes = Math.max(0, Math.floor(30 - minutosDesdeEmissao));
 
+  /**
+   * Imprime o cupom NFC-e (DANFE 80mm) na impressora ELGIN.
+   * Abre window.print() automático — ELGIN configurada como impressora
+   * padrão do Windows recebe o cupom direto. Se não for padrão, vendedora
+   * escolhe ELGIN no diálogo de impressão.
+   */
+  function imprimirDanfeNfce() {
+    // Monta HTML do cupom 80mm — layout simples, monoespaçado, todo dentro
+    // de uma janela popup pra não interferir no resto da tela.
+    const itensHtml = sale.items.map((it) => {
+      const nome = `${it.qty}x ${(it.ref || it.sku).padEnd(8)} ${(it.cor || '').slice(0,8)}/${(it.tamanho || '').slice(0,4)}`;
+      return `<div class="row"><span>${nome}</span><span>${brl(it.total)}</span></div>`;
+    }).join('');
+
+    const dataAut = sale.nfceAutorizadaEm
+      ? new Date(sale.nfceAutorizadaEm).toLocaleString('pt-BR')
+      : new Date().toLocaleString('pt-BR');
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NFC-e ${sale.nfceNumber || ''}</title>
+<style>
+  @page { size: 80mm auto; margin: 0; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Courier New', monospace; font-size: 11px; width: 78mm; margin: 0; padding: 2mm; color: #000; }
+  .center { text-align: center; }
+  .bold { font-weight: bold; }
+  .lg { font-size: 13px; }
+  .sm { font-size: 9px; }
+  .row { display: flex; justify-content: space-between; gap: 4px; }
+  .sep { border-top: 1px dashed #000; margin: 3px 0; }
+  .chave { font-size: 8px; word-break: break-all; line-height: 1.3; }
+</style></head><body>
+  <div class="center bold lg">${sale.storeName || 'LURD\\'S PLUS SIZE'}</div>
+  <div class="center sm">CUPOM FISCAL ELETRÔNICO - NFC-e</div>
+  <div class="sep"></div>
+  ${itensHtml}
+  <div class="sep"></div>
+  <div class="row bold"><span>TOTAL</span><span>${brl(sale.total)}</span></div>
+  <div class="row"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(sale.total)}</span></div>
+  <div class="sep"></div>
+  ${sale.customerCpf ? `<div class="sm">CPF: ${sale.customerCpf}</div>` : '<div class="sm">CONSUMIDOR NÃO IDENTIFICADO</div>'}
+  ${sale.customerName ? `<div class="sm">${sale.customerName}</div>` : ''}
+  <div class="sep"></div>
+  <div class="center sm bold">NFC-e nº ${sale.nfceNumber || '—'}</div>
+  <div class="center sm">Série ${(sale as any).nfceSerie || '1'} · ${dataAut}</div>
+  <div class="center sm">Protocolo: ${sale.nfceProtocolo || '—'}</div>
+  <div class="sep"></div>
+  <div class="center sm">Consulte pela chave em:</div>
+  <div class="center sm">www.fazenda.sp.gov.br/nfce</div>
+  <div class="chave center">${sale.nfceChave || ''}</div>
+  <div class="sep"></div>
+  <div class="center sm">Obrigado pela preferência!</div>
+  <script>window.onload = function() { setTimeout(function() { window.print(); }, 200); };</script>
+</body></html>`;
+
+    // Tenta Electron silent print primeiro (PC desktop)
+    const electron = (window as any).electronAPI;
+    if (electron?.silentPrintHtml) {
+      electron.silentPrintHtml(html).catch((e: any) => console.warn('Electron print falhou:', e));
+      return;
+    }
+    // Fallback browser: abre popup, imprime, fecha automático
+    const w = window.open('', 'nfce_print_' + sale.id, 'width=400,height=600');
+    if (!w) {
+      toast('warning', 'Popup bloqueado', 'Habilite popups pra impressão automática da NFC-e');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+  }
+
+  // Quando NFC-e fica autorizada (de não-autorizada → autorizada), imprime auto
+  const lastPrintedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isAuthorized) return;
+    if (!sale.nfceChave) return;
+    // Só imprime UMA vez por chave (evita reimprimir se modal re-renderiza)
+    if (lastPrintedRef.current === sale.nfceChave) return;
+    lastPrintedRef.current = sale.nfceChave;
+    // Pequeno delay pra garantir que o sale.nfceProtocolo já está populado
+    setTimeout(() => imprimirDanfeNfce(), 300);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthorized, sale.nfceChave]);
+
   async function emitirNfce() {
     setEmitting(true);
     setEmitError(null);
@@ -3243,6 +3326,14 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
                   ⏱ Pode cancelar por mais {minutosRestantes} min
                 </div>
               )}
+              {/* Botão pra reimprimir manualmente — se impressão automática
+                  falhou (popup bloqueado, ELGIN não setada como padrão, etc) */}
+              <button
+                onClick={imprimirDanfeNfce}
+                className="mt-2 w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded flex items-center justify-center gap-2"
+              >
+                🖨️ Reimprimir cupom (ELGIN)
+              </button>
             </div>
           )}
 
