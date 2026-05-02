@@ -190,10 +190,11 @@ export class CrediarioPrintService {
   };
 
   /**
-   * Coordenadas EFETIVAS — mescla do JSON com os defaults. Atribuído no constructor.
-   * Tipo idêntico ao PROM_DEFAULT pra preservar shape.
+   * Coordenadas EFETIVAS — mescla do JSON com os defaults. Reatribuído a cada
+   * geração de PDF via reloadCoords() (hot-reload do JSON sem restart).
+   * NÃO pode ser readonly por causa do hot-reload.
    */
-  private readonly PROM: {
+  private PROM: {
     blocoY: number[];
     blocoH: number;
     fields: Record<string, { x: number; dy: number; w?: number }>;
