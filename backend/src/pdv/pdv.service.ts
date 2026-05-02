@@ -831,20 +831,35 @@ export class PdvService {
   }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, nfceStatus: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
-    if (sale.status !== 'open')
-      throw new BadRequestException('Venda já finalizada');
+    // Permite atualizar customer se:
+    //  - Venda em aberto (fluxo normal — antes de finalizar) OU
+    //  - Venda finalizada MAS NFC-e ainda não emitida (caso "CPF na nota"
+    //    pedido pelo cliente depois do pagamento mas antes da emissão)
+    const canUpdate =
+      sale.status === 'open' ||
+      (sale.status === 'finalized' && !sale.nfceStatus);
+    if (!canUpdate) {
+      throw new BadRequestException(
+        sale.nfceStatus
+          ? 'NFC-e já foi emitida — não dá pra alterar dados do cliente'
+          : 'Venda já finalizada',
+      );
+    }
+
+    // Constrói update dinamicamente — só sobrescreve campos enviados.
+    // Importante: se vendedora quer só ADICIONAR CPF, não pode zerar nome/email/etc.
+    const data: any = {};
+    if (input.cpf !== undefined) data.customerCpf = input.cpf?.replace(/\D/g, '') || null;
+    if (input.name !== undefined) data.customerName = input.name?.trim() || null;
+    if (input.email !== undefined) data.customerEmail = input.email?.trim() || null;
+    if (input.phone !== undefined) data.customerPhone = input.phone?.replace(/\D/g, '') || null;
 
     return (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
-      data: {
-        customerCpf: input.cpf?.replace(/\D/g, '') || null,
-        customerName: input.name?.trim() || null,
-        customerEmail: input.email?.trim() || null,
-        customerPhone: input.phone?.replace(/\D/g, '') || null,
-      },
+      data,
     });
   }
 

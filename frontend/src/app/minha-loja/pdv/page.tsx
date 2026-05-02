@@ -2391,19 +2391,59 @@ function PaymentModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pixPaid, selected, pixCharge]);
 
-  // Auto-finaliza quando o auto-add do PIX zerou o restante.
+  // ATALHOS DE TECLADO no PaymentModal:
+  //   Enter        → "Adicionar pagamento" (se tem método+valor) OU "Finalizar venda" (se pago100)
+  //   1-9          → Seleciona parcelas (1× a 9×) — só se crédito + bandeira
+  //   0            → 10×
+  //   Esc          → Fecha modal (já tem padrão do navegador)
+  // Foco: ignora se vendedora está digitando em <input> (deixa Enter no input)
   useEffect(() => {
-    if (!autoAddRef.current) return;
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isTyping = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
+
+      // Enter finaliza ou adiciona pagamento
+      if (e.key === 'Enter' && !isTyping) {
+        e.preventDefault();
+        if (pago100 && !finalizing) {
+          onConfirm('', undefined);
+        } else if (selected && !addingPayment && valorParcial && (!needsBandeira || bandeira)) {
+          adicionarPagamento();
+        }
+        return;
+      }
+
+      // 1-9, 0 → parcelas (só se crédito + bandeira selecionados, sem foco em input)
+      if (selected === 'credito' && bandeira && !isTyping && /^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        const n = e.key === '0' ? 10 : Number(e.key);
+        if (n >= 1 && n <= 12) setParcelas(n);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pago100, finalizing, selected, addingPayment, valorParcial, needsBandeira, bandeira]);
+
+  // Auto-finaliza quando ficou 100% pago + forma única + não-crediário.
+  // (Crediário tem fluxo extra de impressão de promissória/carnê — vendedora
+  // precisa da tela "Venda Finalizada" pra disparar a impressão.)
+  // Caso PIX: autoAddRef era setado pelo polling. Generalizado pra TODOS
+  // os métodos único — agiliza checkout em ~3 cliques (era 5-7).
+  useEffect(() => {
     if (autoFinalizeRef.current) return;
     if (!pago100) return;
     if (finalizing || addingPayment) return;
+    if (payments.length !== 1) return; // só auto-finaliza forma única
+    const m = String(payments[0].method || '').toLowerCase();
+    if (m === 'crediario') return; // crediário precisa imprimir promissória/carnê
     autoFinalizeRef.current = true;
     const t = setTimeout(() => {
       onConfirm('', undefined);
-    }, 300);
+    }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pago100, finalizing, addingPayment]);
+  }, [pago100, finalizing, addingPayment, payments.length]);
 
   const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
   const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
