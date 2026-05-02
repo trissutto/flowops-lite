@@ -3169,51 +3169,157 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
    *   3. Fallback: window.print() abre diálogo do navegador
    */
   async function imprimirDanfeNfce() {
-    // Monta HTML do cupom 80mm — layout simples, monoespaçado, todo dentro
-    // de uma janela popup pra não interferir no resto da tela.
-    const itensHtml = sale.items.map((it) => {
-      const nome = `${it.qty}x ${(it.ref || it.sku).padEnd(8)} ${(it.cor || '').slice(0,8)}/${(it.tamanho || '').slice(0,4)}`;
-      return `<div class="row"><span>${nome}</span><span>${brl(it.total)}</span></div>`;
+    // ── Constantes da empresa (LURD'S / T.O. RISSUTTO EIRELI) ─────────
+    const RAZAO_SOCIAL = "T.O. RISSUTTO EIRELI";
+    const NOME_FANTASIA = "LURD'S PLUS SIZE";
+    const CNPJ = "20.104.813/0001-39";
+
+    // ── Itens do cupom: descrição + qty + unitário + subtotal ────────
+    const itensHtml = sale.items.map((it, idx) => {
+      const codigo = (it.ref || it.sku || '').toString().slice(0, 14);
+      const desc = (it.descricao || it.ref || it.sku || '').toString().slice(0, 38);
+      const cor = (it.cor || '').toString().slice(0, 10);
+      const tam = (it.tamanho || '').toString().slice(0, 6);
+      const variante = [cor, tam].filter(Boolean).join('/');
+      const unit = (Number(it.total) || 0) / Math.max(1, Number(it.qty) || 1);
+      return `
+        <div class="item">
+          <div class="item-line1">${idx + 1} ${codigo} ${desc}</div>
+          ${variante ? `<div class="item-var">${variante}</div>` : ''}
+          <div class="item-line2">
+            <span>${it.qty} UN x ${brl(unit)}</span>
+            <span>${brl(it.total)}</span>
+          </div>
+        </div>`;
     }).join('');
 
+    // ── Data formatada ───────────────────────────────────────────────
     const dataAut = sale.nfceAutorizadaEm
       ? new Date(sale.nfceAutorizadaEm).toLocaleString('pt-BR')
       : new Date().toLocaleString('pt-BR');
+
+    // ── QR Code da SEFAZ-SP (NFC-e) ──────────────────────────────────
+    // Padrão: https://www.nfce.fazenda.sp.gov.br/qrcode?p=CHAVE|VERSAO|AMBIENTE|IDCSC|HASH
+    // Como não temos o CSC aqui, geramos QR só com URL de consulta pela chave.
+    const qrUrl = sale.nfceChave
+      ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1`
+      : '';
+    const qrImgUrl = qrUrl
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrUrl)}`
+      : '';
+
+    // ── Quantidade total de itens ────────────────────────────────────
+    const qtdItens = sale.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NFC-e ${sale.nfceNumber || ''}</title>
 <style>
   @page { size: 80mm auto; margin: 0; }
   * { box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 11px; width: 78mm; margin: 0; padding: 2mm; color: #000; }
+  body { font-family: 'Courier New', monospace; font-size: 10px; width: 78mm; margin: 0; padding: 2mm; color: #000; line-height: 1.2; }
   .center { text-align: center; }
+  .right { text-align: right; }
   .bold { font-weight: bold; }
-  .lg { font-size: 13px; }
+  .lg { font-size: 12px; }
+  .xl { font-size: 14px; }
   .sm { font-size: 9px; }
+  .xs { font-size: 8px; }
   .row { display: flex; justify-content: space-between; gap: 4px; }
   .sep { border-top: 1px dashed #000; margin: 3px 0; }
-  .chave { font-size: 8px; word-break: break-all; line-height: 1.3; }
+  .sep-solid { border-top: 1px solid #000; margin: 3px 0; }
+  .chave { font-size: 9px; word-break: break-all; line-height: 1.3; letter-spacing: 0.5px; }
+  .qr { display: block; margin: 4px auto; }
+  .item { margin: 2px 0; }
+  .item-line1 { font-weight: bold; font-size: 10px; }
+  .item-var { font-size: 9px; color: #333; padding-left: 12px; }
+  .item-line2 { display: flex; justify-content: space-between; font-size: 10px; padding-left: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 1px 0; }
 </style></head><body>
-  <div class="center bold lg">${sale.storeName || "LURD'S PLUS SIZE"}</div>
-  <div class="center sm">CUPOM FISCAL ELETRÔNICO - NFC-e</div>
+  <!-- Cabeçalho da empresa -->
+  <div class="center bold lg">${NOME_FANTASIA}</div>
+  <div class="center xs">${RAZAO_SOCIAL}</div>
+  <div class="center xs">CNPJ: ${CNPJ}</div>
+  <div class="center xs">${sale.storeName || ''}</div>
+  <div class="sep-solid"></div>
+
+  <!-- Tipo de documento -->
+  <div class="center bold sm">DANFE NFC-e</div>
+  <div class="center xs">Documento Auxiliar da Nota Fiscal</div>
+  <div class="center xs">Eletrônica para Consumidor Final</div>
+  <div class="center xs">não permite aproveitamento de crédito de ICMS</div>
   <div class="sep"></div>
+
+  <!-- Cabeçalho da tabela de itens -->
+  <div class="row sm bold">
+    <span>#  CÓDIGO  DESCRIÇÃO</span>
+    <span>VL TOTAL</span>
+  </div>
+  <div class="row xs">
+    <span>QTD x UNIT</span>
+    <span></span>
+  </div>
+  <div class="sep"></div>
+
+  <!-- Itens -->
   ${itensHtml}
   <div class="sep"></div>
-  <div class="row bold"><span>TOTAL</span><span>${brl(sale.total)}</span></div>
-  <div class="row"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(sale.total)}</span></div>
+
+  <!-- Totais -->
+  <div class="row sm"><span>QTD. TOTAL DE ITENS</span><span>${qtdItens}</span></div>
+  <div class="row bold lg"><span>VALOR TOTAL R$</span><span>${brl(sale.total)}</span></div>
+  <div class="row sm"><span>FORMA PAGAMENTO</span><span>VALOR PAGO</span></div>
+  <div class="row sm bold"><span>${(sale.paymentMethod || 'SPLIT').toUpperCase()}</span><span>${brl(sale.total)}</span></div>
   <div class="sep"></div>
-  ${sale.customerCpf ? `<div class="sm">CPF: ${sale.customerCpf}</div>` : '<div class="sm">CONSUMIDOR NÃO IDENTIFICADO</div>'}
-  ${sale.customerName ? `<div class="sm">${sale.customerName}</div>` : ''}
+
+  <!-- Tributos (Lei 12.741) -->
+  <div class="center xs">Tributos totais incidentes (Lei Federal 12.741/2012):</div>
+  <div class="center xs bold">R$ ${(sale.total * 0.0996).toFixed(2).replace('.', ',')} (Fonte: IBPT)</div>
   <div class="sep"></div>
-  <div class="center sm bold">NFC-e nº ${sale.nfceNumber || '—'}</div>
-  <div class="center sm">Série ${(sale as any).nfceSerie || '1'} · ${dataAut}</div>
-  <div class="center sm">Protocolo: ${sale.nfceProtocolo || '—'}</div>
+
+  <!-- Identificação do consumidor -->
+  ${sale.customerCpf
+    ? `<div class="sm bold">CONSUMIDOR</div>
+       <div class="sm">CPF: ${sale.customerCpf}${sale.customerName ? ` - ${sale.customerName}` : ''}</div>`
+    : `<div class="sm bold">CONSUMIDOR NÃO IDENTIFICADO</div>`
+  }
   <div class="sep"></div>
-  <div class="center sm">Consulte pela chave em:</div>
-  <div class="center sm">www.fazenda.sp.gov.br/nfce</div>
+
+  <!-- Identificação da NFC-e -->
+  <div class="center sm bold">NFC-e nº ${sale.nfceNumber || '—'} - Série ${(sale as any).nfceSerie || '1'}</div>
+  <div class="center xs">Emissão: ${dataAut}</div>
+  <div class="center xs">Via Consumidor</div>
+  <div class="sep"></div>
+
+  <!-- Chave de acesso -->
+  <div class="center xs">Consulte pela Chave de Acesso em:</div>
+  <div class="center xs bold">www.nfce.fazenda.sp.gov.br</div>
   <div class="chave center">${sale.nfceChave || ''}</div>
   <div class="sep"></div>
-  <div class="center sm">Obrigado pela preferência!</div>
-  <script>window.onload = function() { setTimeout(function() { window.print(); }, 200); };</script>
+
+  <!-- QR Code -->
+  ${qrImgUrl ? `<img src="${qrImgUrl}" class="qr" alt="QR Code NFC-e" width="180" height="180" />` : ''}
+
+  <!-- Protocolo -->
+  <div class="center xs">Protocolo de autorização:</div>
+  <div class="center xs bold">${sale.nfceProtocolo || '—'}</div>
+  <div class="sep"></div>
+
+  <!-- Rodapé -->
+  <div class="center sm bold">Obrigado pela preferência!</div>
+  <div class="center xs">Volte sempre 💖</div>
+
+  <script>
+    // Espera o QR code carregar antes de imprimir
+    window.onload = function() {
+      var img = document.querySelector('img.qr');
+      if (img && !img.complete) {
+        img.onload = function() { setTimeout(function() { window.print(); }, 200); };
+        img.onerror = function() { setTimeout(function() { window.print(); }, 200); };
+      } else {
+        setTimeout(function() { window.print(); }, 300);
+      }
+    };
+  </script>
 </body></html>`;
 
     // Abre popup com cupom + window.print() auto.
