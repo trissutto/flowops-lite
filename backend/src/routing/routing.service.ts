@@ -515,7 +515,7 @@ export class RoutingService {
    */
   async swapSinglePickOrder(
     pickOrderId: string,
-    opts?: { excludeStoreCodes?: string[]; forceAdvanced?: boolean },
+    opts?: { excludeStoreCodes?: string[]; forceAdvanced?: boolean; forceStoreCode?: string },
   ) {
     const pickOrder = await this.prisma.pickOrder.findUnique({
       where: { id: pickOrderId },
@@ -653,11 +653,54 @@ export class RoutingService {
       this.logger.warn(`Falha ao emitir remoção de pick-order: ${err?.message ?? err}`);
     }
 
-    // 3) Roda routing SOMENTE pros items órfãos (passando filtro de items)
-    // Como o previewRoute não suporta filtrar items, vamos rodar o routing
-    // sobre o pedido inteiro e considerar que outros items já têm assignedStoreId
-    // (não vão ser re-roteados — o engine só atribui items sem store).
-    // O routing engine atual atribui só items SEM assignedStoreId, então OK.
+    // 3) Roteamento: se forceStoreCode foi passado (escolha manual livre da
+    // retaguarda), bypassa o routing e cria pick-order direto pra essa loja
+    // com os items órfãos. Senão, usa previewRoute normal.
+    if (opts?.forceStoreCode) {
+      const forcedStore = await this.prisma.store.findFirst({
+        where: { code: opts.forceStoreCode },
+        select: { id: true, code: true, name: true },
+      });
+      if (!forcedStore) {
+        return {
+          ok: false as const,
+          reason: 'force-store-not-found',
+          message: `Loja ${opts.forceStoreCode} não encontrada/ativa.`,
+        };
+      }
+      const fakeResult: any = {
+        success: true,
+        strategy: 'swap-force-manual',
+        assignments: [
+          {
+            storeId: forcedStore.id,
+            isTransfer: false,
+            items: itemsAssigned.map((it: any) => ({ sku: it.sku, qty: it.quantity })),
+          },
+        ],
+      };
+      await this.confirmRoute(orderId, fakeResult);
+      const newPickOrders = await this.prisma.pickOrder.findMany({
+        where: { orderId, storeId: forcedStore.id },
+        include: { store: { select: { code: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+      });
+      return {
+        ok: true as const,
+        oldStoreCode,
+        forcedStoreCode: forcedStore.code,
+        itemsReassigned: itemsAssigned.length,
+        pickOrders: newPickOrders.map((p) => ({
+          id: p.id,
+          status: p.status,
+          storeCode: p.store.code,
+          storeName: p.store.name,
+        })),
+      };
+    }
+
+    // Senão: routing automático (busca loja com estoque, exclui as problemáticas)
     const preview = await this.previewRoute(orderId, { excludeStoreCodes });
 
     if (!preview.success) {

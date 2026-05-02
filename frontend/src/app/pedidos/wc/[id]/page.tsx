@@ -166,6 +166,15 @@ export default function PedidoDetailPage() {
   // principalmente quando uma loja reportou problema e retaguarda quer forçar
   // uma outra loja específica em vez de deixar o engine decidir.
   const [pickStoreOpen, setPickStoreOpen] = useState(false);
+  // Modo SWAP — quando o modal foi aberto pelo botão "Trocar loja" de UM
+  // pick-order específico (em vez do "Escolher loja manualmente" geral).
+  // Quando setado, applyPickStore faz swap cirúrgico (não recalcula tudo).
+  const [swapTarget, setSwapTarget] = useState<{
+    pickOrderId: string;
+    fromStoreCode: string;
+    fromStoreName: string | null;
+    fromStatus: string;
+  } | null>(null);
   const [pickStoreLoading, setPickStoreLoading] = useState(false);
   const [pickStoreError, setPickStoreError] = useState<string | null>(null);
   const [pickStoreApplying, setPickStoreApplying] = useState<string | null>(null);
@@ -442,96 +451,26 @@ export default function PedidoDetailPage() {
    * Só habilita se o pick-order ainda está em new/separating (não pode trocar
    * depois que a loja já bipou — isso seria perda de trabalho).
    */
-  async function swapStore(storeCode: string, storeName: string | null) {
-    const displayName = storeName || storeCode;
-
-    // Pega o pick-order ESPECÍFICO da loja sendo trocada
+  /**
+   * Click no botão "↔ Trocar loja" de um card específico.
+   * Em vez do confirm() simples (que tentava re-rotear automático), agora
+   * abre o modal "Escolher loja manualmente" — vendedora vê TODAS as lojas
+   * (mesmo sem estoque) e escolhe livremente. Faz swap cirúrgico via
+   * pickOrderId, deixa as outras lojas intocadas.
+   */
+  function swapStore(storeCode: string, storeName: string | null) {
     const targetPickOrder = liveStatus.find((p) => p.storeCode === storeCode);
     if (!targetPickOrder) {
       alert(`Não encontrei pick-order pra loja ${storeCode}.`);
       return;
     }
-
-    // Avisa se outras lojas do mesmo pedido já enviaram (pra contexto)
-    const outrasJaEnviaram = liveStatus.filter(
-      (p) => p.storeCode !== storeCode && !['new', 'separating'].includes(p.status),
-    );
-    const avisoOutras = outrasJaEnviaram.length
-      ? `\n⚠️ Outras lojas (${outrasJaEnviaram.map((p) => p.storeCode).join(', ')}) já avançaram — elas NÃO vão ser tocadas, só esta troca aqui.\n`
-      : '';
-
-    // Aviso reforçado quando a LOJA ALVO já avançou (separado/enviado)
-    const ADVANCED_REVERSIBLE = ['shipped', 'delivered'];
-    const REQUIRES_REVERSE = ADVANCED_REVERSIBLE.includes(targetPickOrder.status);
-    const ADVANCED_PAST_NEW = !['new', 'separating'].includes(targetPickOrder.status);
-
-    let confirmMsg = '';
-    if (REQUIRES_REVERSE) {
-      confirmMsg =
-        `🚨 ATENÇÃO: a loja ${displayName} (${storeCode}) JÁ ESTÁ COMO "${targetPickOrder.status}".\n\n` +
-        `Se trocar, o sistema vai:\n` +
-        `1. ESTORNAR o estoque Giga da ${storeCode} (devolver as peças pro estoque dela)\n` +
-        `2. Cancelar o pick-order atual\n` +
-        `3. Roteamento pra outra loja\n` +
-        `4. ⚠️ Tracking/etiqueta correios já gerada NÃO é cancelada automaticamente — cancele manualmente nos Correios se necessário\n\n` +
-        avisoOutras +
-        `Confirma a troca?`;
-    } else if (ADVANCED_PAST_NEW) {
-      confirmMsg =
-        `⚠️ A loja ${displayName} (${storeCode}) já está em "${targetPickOrder.status}" (separada mas não enviada).\n\n` +
-        `Trocar vai cancelar o pick-order desta loja e re-rotear pra outra. ` +
-        `O estoque Giga ainda NÃO foi baixado, então sem efeito ERP.\n` +
-        avisoOutras +
-        `Confirma?`;
-    } else {
-      confirmMsg =
-        `Trocar SOMENTE a loja ${displayName} (${storeCode})?\n\n` +
-        avisoOutras +
-        `O sistema vai cancelar o pick-order desta loja e re-rotear OS ITEMS DELA pra outra loja com estoque.\n\n` +
-        `Se nenhuma outra loja tiver estoque, os items ficam órfãos (você decide manualmente).`;
-    }
-
-    if (!confirm(confirmMsg)) return;
-
-    setSepLoading(true);
-    setSepError(null);
-    try {
-      const res = await api<{
-        ok: boolean;
-        reason?: string;
-        message?: string;
-        cancelledCount?: number;
-        itemsReassigned?: number;
-        oldStoreCode?: string;
-        excludedStoreCodes?: string[];
-        pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
-      }>(`/orders/wc/${wcId}/recalculate-separation`, {
-        method: 'POST',
-        body: JSON.stringify({
-          excludeStoreCodes: [storeCode],
-          pickOrderId: targetPickOrder.id,  // ← swap cirúrgico
-        }),
-      });
-
-      if (!res.ok) {
-        setSepError(res.message ?? 'Não foi possível trocar a loja.');
-        setSepLoading(false);
-        return;
-      }
-      const novaLoja = res.pickOrders?.map((p) => `${p.storeName} (${p.storeCode})`).join(', ');
-      setFlash(
-        `✓ Loja trocada. ${storeCode} saiu, nova(s) loja(s): ${novaLoja}.`,
-      );
-      setTimeout(() => setFlash(null), 6000);
-      // Recarrega painel ao vivo
-      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
-        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
-        .catch(() => {});
-    } catch (e: any) {
-      setSepError(e.message);
-    } finally {
-      setSepLoading(false);
-    }
+    setSwapTarget({
+      pickOrderId: targetPickOrder.id,
+      fromStoreCode: storeCode,
+      fromStoreName: storeName,
+      fromStatus: targetPickOrder.status,
+    });
+    openPickStoreModal();
   }
 
   /**
@@ -676,6 +615,16 @@ export default function PedidoDetailPage() {
     setPickStoreError(null);
     try {
       const excludeCodes = allStoreCodes.filter((c) => c !== pickedCode);
+      // Modo SWAP cirúrgico: passa pickOrderId — backend só mexe nesse pick-order
+      // específico, deixa os outros (incluindo MOEMA enviado) intactos.
+      // Modo RECALCULATE total: sem pickOrderId — recalcula tudo do pedido.
+      const body: any = {
+        excludeStoreCodes: excludeCodes,
+        forceStoreCode: pickedCode,
+      };
+      if (swapTarget?.pickOrderId) {
+        body.pickOrderId = swapTarget.pickOrderId;
+      }
       const res = await api<{
         ok: boolean;
         reason?: string;
@@ -683,9 +632,7 @@ export default function PedidoDetailPage() {
         pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
       }>(`/orders/wc/${wcId}/recalculate-separation`, {
         method: 'POST',
-        // forceStoreCode = bypass do routing automático: cria pick-order na loja
-        // escolhida MESMO sem estoque (escolha manual livre da retaguarda).
-        body: JSON.stringify({ excludeStoreCodes: excludeCodes, forceStoreCode: pickedCode }),
+        body: JSON.stringify(body),
       });
 
       if (!res.ok) {
@@ -696,7 +643,11 @@ export default function PedidoDetailPage() {
       }
 
       setPickStoreOpen(false);
-      setFlash(`✓ Pedido reatribuído pra ${pickedName} (${pickedCode}).`);
+      setSwapTarget(null);
+      const acao = swapTarget
+        ? `${swapTarget.fromStoreCode} trocada por ${pickedCode}`
+        : `Pedido reatribuído pra ${pickedName} (${pickedCode})`;
+      setFlash(`✓ ${acao}.`);
       setTimeout(() => setFlash(null), 5000);
 
       api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
@@ -1826,7 +1777,7 @@ export default function PedidoDetailPage() {
       {pickStoreOpen && (
         <div
           className="fixed inset-0 z-[80] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+          onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
         >
           <div
             className="bg-white rounded-lg shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
@@ -1834,14 +1785,30 @@ export default function PedidoDetailPage() {
           >
             <div className="p-4 border-b flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-lg text-slate-800">Escolher loja manualmente</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Força o pedido pra uma loja específica. Usado quando o routing automático
-                  não atende (ex: loja reportou problema, você quer concentrar numa loja só).
-                </p>
+                {swapTarget ? (
+                  <>
+                    <h3 className="font-bold text-lg text-slate-800">
+                      Trocar loja: {swapTarget.fromStoreName || swapTarget.fromStoreCode}
+                    </h3>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Os items dessa loja serão movidos pra a loja que você escolher abaixo.
+                      Outras lojas do pedido NÃO são afetadas. Status atual: <b>{swapTarget.fromStatus}</b>.
+                      {['shipped', 'delivered'].includes(swapTarget.fromStatus) &&
+                        ' ⚠️ Loja já enviou — estoque Giga será estornado automaticamente.'}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="font-bold text-lg text-slate-800">Escolher loja manualmente</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Força o pedido pra uma loja específica. Usado quando o routing automático
+                      não atende (ex: loja reportou problema, você quer concentrar numa loja só).
+                    </p>
+                  </>
+                )}
               </div>
               <button
-                onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
                 className="text-slate-400 hover:text-slate-700 text-2xl leading-none p-1"
                 disabled={!!pickStoreApplying}
               >
@@ -1983,7 +1950,7 @@ export default function PedidoDetailPage() {
             <div className="p-3 border-t bg-slate-50 text-xs text-slate-500 flex items-center justify-between">
               <span>Dica: se nenhuma loja cobre tudo, volte e use <b>Recalcular</b> pra dividir automático.</span>
               <button
-                onClick={() => !pickStoreApplying && setPickStoreOpen(false)}
+                onClick={() => !pickStoreApplying && (setPickStoreOpen(false), setSwapTarget(null))}
                 disabled={!!pickStoreApplying}
                 className="px-3 py-1.5 border rounded hover:bg-white text-slate-700 disabled:opacity-60"
               >

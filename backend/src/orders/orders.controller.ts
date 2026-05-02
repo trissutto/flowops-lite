@@ -837,6 +837,7 @@ export class OrdersController {
         excludeStoreCodes: Array.isArray(body?.excludeStoreCodes)
           ? body.excludeStoreCodes
           : undefined,
+        forceStoreCode: body?.forceStoreCode,
       });
     }
 
