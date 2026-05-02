@@ -3216,32 +3216,12 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <script>window.onload = function() { setTimeout(function() { window.print(); }, 200); };</script>
 </body></html>`;
 
-    // Camada 1: QZ Tray (se configurado) — impressão direta sem diálogo
-    try {
-      const { qzPrintHtml, qzGetPrinter } = await import('@/lib/qz-print');
-      if (qzGetPrinter()) {
-        const ok = await qzPrintHtml(html);
-        if (ok) {
-          toast('success', 'Cupom impresso', 'Enviado direto pra ELGIN via QZ Tray');
-          return;
-        }
-        toast('warning', 'QZ Tray falhou', 'Caindo pro diálogo de impressão padrão');
-      }
-    } catch (e) {
-      console.warn('[nfce-print] QZ Tray indisponível:', e);
-    }
-
-    // Camada 2: Electron silent print (PC desktop)
-    const electron = (window as any).electronAPI;
-    if (electron?.silentPrintHtml) {
-      electron.silentPrintHtml(html).catch((e: any) => console.warn('Electron print falhou:', e));
-      return;
-    }
-
-    // Camada 3: fallback browser — abre popup com window.print() automático
+    // Abre popup com cupom + window.print() auto.
+    // Vendedora escolhe ELGIN UMA VEZ no diálogo do Chrome → próximas vendas
+    // o Chrome lembra a impressora e basta apertar Enter.
     const w = window.open('', 'nfce_print_' + sale.id, 'width=400,height=600');
     if (!w) {
-      toast('warning', 'Popup bloqueado', 'Habilite popups OU configura QZ Tray em /minha-loja/pdv/config-impressora');
+      toast('warning', 'Popup bloqueado', 'Habilite popups pra esse site (ícone na barra de endereço do Chrome)');
       return;
     }
     w.document.write(html);
@@ -3345,21 +3325,17 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
                   ⏱ Pode cancelar por mais {minutosRestantes} min
                 </div>
               )}
-              {/* Botão pra reimprimir manualmente — se impressão automática
-                  falhou (popup bloqueado, ELGIN não setada como padrão, etc) */}
+              {/* Botão pra reimprimir cupom (caso popup tenha sido bloqueado
+                  na primeira tentativa OU vendedora queira nova via) */}
               <button
                 onClick={imprimirDanfeNfce}
                 className="mt-2 w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded flex items-center justify-center gap-2"
               >
-                🖨️ Reimprimir cupom (ELGIN)
+                🖨️ Reimprimir cupom
               </button>
-              <a
-                href="/minha-loja/pdv/config-impressora"
-                target="_blank"
-                className="block text-center text-[10px] text-emerald-700 hover:underline mt-1"
-              >
-                ⚙️ Configurar impressora ELGIN (QZ Tray)
-              </a>
+              <p className="text-[10px] text-emerald-700 text-center mt-1 leading-snug">
+                Na 1ª venda do dia: escolhe <b>ELGIN</b> no diálogo. Chrome lembra → próximas vendas é só <b>Enter</b>.
+              </p>
             </div>
           )}
 
