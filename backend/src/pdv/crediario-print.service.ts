@@ -258,16 +258,19 @@ export class CrediarioPrintService {
   }
 
   /**
-   * Vencimento por extenso no formato Giga: "os dez dias do mes de Maio de 2026".
-   * Usa o dia escrito por extenso (dois, dez, vinte, etc) e mês capitalizado.
+   * Vencimento por extenso no formato Giga.
+   * Dia 1  → "o primeiro dia do mes de Junho de 2026"
+   * Dia >1 → "os dez dias do mes de Maio de 2026"
    */
   private vencimentoExtenso(d: Date): string {
     const dia = d.getDate();
-    const diaTxt = this.numPorExtenso(dia);
     const mes = this.mesPorExtensoCap(d);
     const ano = d.getFullYear();
-    const sufixo = dia === 1 ? 'dia' : 'dias';
-    return `os ${diaTxt} ${sufixo} do mes de ${mes} de ${ano}`;
+    if (dia === 1) {
+      return `o primeiro dia do mes de ${mes} de ${ano}`;
+    }
+    const diaTxt = this.numPorExtenso(dia);
+    return `os ${diaTxt} dias do mes de ${mes} de ${ano}`;
   }
 
   /**
