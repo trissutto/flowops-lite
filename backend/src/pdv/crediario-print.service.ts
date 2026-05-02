@@ -333,6 +333,41 @@ export class CrediarioPrintService {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
+   * DIAGNÓSTICO — retorna as coordenadas ATIVAS (em pt e mm), o path do JSON
+   * que foi lido (ou null se caiu no default), e os blocos. Pra o usuário
+   * confirmar se a edição do JSON está sendo carregada.
+   *
+   * Endpoint: GET /pdv/diag-coords
+   */
+  diagCoords(): any {
+    const PT_TO_MM = 25.4 / 72;
+    const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+    const verdanaPath = resolveVerdanaPath();
+    const fields_pt: any = {};
+    const fields_mm: any = {};
+    for (const [name, f] of Object.entries(this.PROM.fields)) {
+      fields_pt[name] = { x: Math.round(f.x * 10) / 10, dy: Math.round(f.dy * 10) / 10, ...(f.w !== undefined ? { w: Math.round(f.w * 10) / 10 } : {}) };
+      fields_mm[name] = {
+        x: Math.round(f.x * PT_TO_MM * 100) / 100,
+        y: Math.round(f.dy * PT_TO_MM * 100) / 100,
+        ...(f.w !== undefined ? { w: Math.round(f.w * PT_TO_MM * 100) / 100 } : {}),
+      };
+    }
+    return {
+      json_path_lido: cfgPath,
+      json_existe: !!cfgPath,
+      verdana_path_lido: verdanaPath,
+      verdana_existe: !!verdanaPath,
+      blocoY_pt: this.PROM.blocoY,
+      blocoY_mm: this.PROM.blocoY.map((y) => Math.round(y * PT_TO_MM * 100) / 100),
+      blocoH_pt: this.PROM.blocoH,
+      campos_ativos_pt: fields_pt,
+      campos_ativos_mm: fields_mm,
+      _help: 'Se json_existe=false, o sistema está usando defaults hardcoded. Editar o JSON NÃO terá efeito até o arquivo ser deployado e o backend reiniciado.',
+    };
+  }
+
+  /**
    * DIAGNÓSTICO — busca um cliente no Giga pelo CPF e retorna a linha CRUA
    * (todas as colunas que existem na tabela). Usado pra entender por que
    * endereço/CEP não estão sendo lidos: vê os nomes EXATOS das colunas e

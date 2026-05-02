@@ -40,8 +40,8 @@
     "emissaoMes":     { "x": 147.8, "y": 60.0 },
     "emissaoAno":     { "x": 172.5, "y": 60.0 },
 
-    "emitente":       { "x": 19.4,  "y": 70.5 },
-    "cpfEmitente":    { "x": 86.4,  "y": 77.6 },
+    "emitente":       { "x": 39.4,  "y": 70.5 },
+    "cpfEmitente":    { "x": 56.4,  "y": 67.6 },
     "endereco":       { "x": 75.8,  "y": 84.7, "w": 98.8 },
     "cep":            { "x": 75.8,  "y": 88.0 }
   }

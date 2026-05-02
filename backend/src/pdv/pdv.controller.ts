@@ -924,6 +924,23 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/diag-coords — mostra as coordenadas ATIVAS da promissória,
+   * o path do JSON lido (ou null se não achou) e da fonte Verdana.
+   * Use pra confirmar que sua edição do JSON foi carregada pelo backend.
+   */
+  @Get('diag-coords')
+  async getDiagCoords(@Req() req: any, @Res() res: Response) {
+    this.requireRole(req);
+    try {
+      const result = this.crediarioPrint.diagCoords();
+      res.status(200).json(result);
+    } catch (e: any) {
+      console.error('[pdv/diag-coords] FALHA', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro no diag', detail: e?.message });
+    }
+  }
+
+  /**
    * GET /pdv/diag-cliente?cpf=XXX — diagnóstico do cliente no Giga.
    * Retorna a linha crua + lista de colunas pra identificar por que
    * endereço/CEP/etc não estão vindo.
