@@ -2,8 +2,11 @@ import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { CrediarioPrintService } from './crediario-print.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
+import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { ErpService } from '../erp/erp.service';
 import * as fs from 'fs';
+
+const MULTA_PERCENT_DEFAULT = 2.0; // 2% sobre o valor da parcela (Lurd's padrão)
 
 const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
 
@@ -19,6 +22,7 @@ export class PdvDiagController {
   constructor(
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly crediarios: CrediariosService,
+    private readonly crediarioBaixa: CrediarioBaixaService,
     private readonly erp: ErpService,
   ) {}
 
@@ -114,17 +118,33 @@ export class PdvDiagController {
 
       const valorParcela = map.valorParcela ? Number(row[map.valorParcela]) || 0 : 0;
 
+      // Calcula JUROS + MULTA proporcional ao atraso (vencimento → data pagamento)
+      const vencimentoStr = map.vencimento ? row[map.vencimento] : null;
+      const vencimento = vencimentoStr ? new Date(vencimentoStr) : null;
+      const dataPgto = new Date(data + 'T12:00:00');
+      const cfg = await this.crediarioBaixa.getConfig();
+      const calc = vencimento
+        ? this.crediarioBaixa.calcJuros(vencimento, valorParcela, cfg, dataPgto)
+        : { diasAtraso: 0, juros: 0 };
+      const multa = (vencimento && calc.diasAtraso > 0)
+        ? Math.round(valorParcela * (MULTA_PERCENT_DEFAULT / 100) * 100) / 100
+        : 0;
+
       const result = await this.erp.markCrediarioParcelaPaid({
         registro: registroVal,
         controle: controleVal,
         valorPago: valorParcela,
-        dataPagamento: new Date(data + 'T12:00:00'),
+        dataPagamento: dataPgto,
+        juros: calc.juros,
+        multa: multa,
         columns: {
           registro: map.registro,
           controle: map.controle,
           pago: map.pago,
           dataPagamento: map.dataPagamento,
           valorPago: map.valorPago,
+          juros: map.juros,
+          multa: map.multa,
         },
       });
 
@@ -134,6 +154,11 @@ export class PdvDiagController {
         parcela,
         data_aplicada: data,
         valor_parcela: valorParcela,
+        dias_atraso: calc.diasAtraso,
+        juros_calculado: calc.juros,
+        multa_calculada: multa,
+        config_juros: cfg,
+        multa_percent_usado: MULTA_PERCENT_DEFAULT,
         registro_giga: registroVal,
         controle_giga: controleVal,
         valores_antes: valorAntes,

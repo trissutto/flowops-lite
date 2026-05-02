@@ -159,6 +159,8 @@ export class CrediariosService {
       status:         pickColumn(cols, /^status$/i, /^situacao$/i),
       tipo:           pickColumn(cols, /^tipo$/i, /^tipo_?pagamento$/i, /^forma_?pagamento$/i),
       telefone:       pickColumn(cols, /^telefone$/i, /^fone$/i, /^celular$/i),
+      juros:          pickColumn(cols, /^juros$/i, /^vlr_?juros$/i, /^valor_?juros$/i),
+      multa:          pickColumn(cols, /^multa$/i, /^vlr_?multa$/i, /^valor_?multa$/i),
       // OBS — coluna de observação livre da promissória (recibo, lembrete, etc)
       obs:            pickColumn(cols,
         /^obs$/i, /^obs_?promiss?oria$/i, /^observacao$/i, /^observacoes$/i,
@@ -852,6 +854,8 @@ export interface ColumnMap {
   tipo: string | null;
   telefone: string | null;
   obs: string | null;
+  juros: string | null;
+  multa: string | null;
 }
 
 export interface ClientesMap {
@@ -872,7 +876,7 @@ const EMPTY_MAP: ColumnMap = {
   codCliente: null, nome: null, dataCompra: null, valorCompra: null,
   parcela: null, totalParcelas: null, vencimento: null, valorParcela: null,
   dataPagamento: null, valorPago: null, pago: null, status: null, tipo: null, telefone: null,
-  obs: null,
+  obs: null, juros: null, multa: null,
 };
 
 function pickColumn(cols: string[], ...patterns: RegExp[]): string | null {

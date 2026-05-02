@@ -1105,14 +1105,25 @@ export class CrediarioBaixaService {
       pago: map.pago,
       dataPagamento: map.dataPagamento,
       valorPago: map.valorPago,
+      juros: map.juros,
+      multa: map.multa,
     };
 
+    // Multa fixa 2% sobre o valor (Lurd's padrão). Configurável via env var
+    // ERP_MULTA_PERCENT se outra loja precisar de percentual diferente.
+    const multaPct = Number(process.env.ERP_MULTA_PERCENT ?? '2.0') || 2.0;
+
     for (const it of items) {
+      const multa = (Number(it.diasAtraso) > 0)
+        ? Math.round(Number(it.valorParcela) * (multaPct / 100) * 100) / 100
+        : 0;
       const result = await this.erp.markCrediarioParcelaPaid({
         registro: it.registro,
         controle: it.controle,
         valorPago: it.valorPago,
         dataPagamento: new Date(),
+        juros: Number(it.jurosCalculado) || 0,
+        multa: multa,
         columns: cols,
       });
       await (this.prisma as any).crediarioBaixaItem.update({

@@ -741,12 +741,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     controle: string | number;
     valorPago: number;
     dataPagamento?: Date;
+    /** Opcional: valor de juros calculado (vai pra coluna JUROS se detectada) */
+    juros?: number;
+    /** Opcional: valor de multa calculado (vai pra coluna MULTA se detectada) */
+    multa?: number;
     columns: {
       registro: string | null;
       controle: string | null;
       pago: string | null;
       dataPagamento: string | null;
       valorPago: string | null;
+      juros?: string | null;
+      multa?: string | null;
     };
   }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
     if (!this.isWriteEnabled) {
@@ -791,6 +797,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (columns.valorPago) {
       sets.push(`\`${columns.valorPago}\` = ?`);
       params.push(input.valorPago);
+    }
+    // Juros e multa: só atualiza se a coluna foi detectada E o valor foi passado.
+    // Sem isso, na baixa retroativa o WinCred mostra "Juros: vazio".
+    if (columns.juros && input.juros !== undefined) {
+      sets.push(`\`${columns.juros}\` = ?`);
+      params.push(Math.round(input.juros * 100) / 100);
+    }
+    if (columns.multa && input.multa !== undefined) {
+      sets.push(`\`${columns.multa}\` = ?`);
+      params.push(Math.round(input.multa * 100) / 100);
     }
 
     if (sets.length === 0) {
