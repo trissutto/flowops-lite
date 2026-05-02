@@ -24,24 +24,24 @@
     "parcela":        { "x": 78.3,  "y": 10.2 },
     "valor":          { "x": 169.3, "y": 10.2 },
 
-    "vencDia":        { "x": 121.7, "y": 21.2 },
-    "vencMes":        { "x": 141.1, "y": 21.2 },
-    "vencAno":        { "x": 185.2, "y": 21.2 },
+    "vencDia":        { "x": 121.7, "y": 17.2 },
+    "vencMes":        { "x": 141.1, "y": 17.2 },
+    "vencAno":        { "x": 185.2, "y": 17.2 },
 
-    "vencExtenso":    { "x": 75.8,  "y": 28.2, "w": 112.9 },
+    "vencExtenso":    { "x": 35.8,  "y": 26.2, "w": 112.9 },
 
-    "beneficiarioA":  { "x": 50.8,  "y": 37.4 },
-    "cpfDevedor":     { "x": 172.5, "y": 35.3 },
+    "beneficiarioA":  { "x": 50.8,  "y": 36.4 },
+    "cpfDevedor":     { "x": 172.5, "y": 36.4 },
 
-    "quantiaExtenso": { "x": 114.6, "y": 45.5, "w": 84.7 },
+    "quantiaExtenso": { "x": 74.6, "y": 45.5, "w": 84.7 },
 
-    "pagavelEm":      { "x": 97.0,  "y": 60.0 },
-    "emissaoDia":     { "x": 123.1, "y": 60.0 },
-    "emissaoMes":     { "x": 147.8, "y": 60.0 },
-    "emissaoAno":     { "x": 172.5, "y": 60.0 },
+    "pagavelEm":      { "x": 67.0,  "y": 58.0 },
+    "emissaoDia":     { "x": 123.1, "y": 62.0 },
+    "emissaoMes":     { "x": 147.8, "y": 62.0 },
+    "emissaoAno":     { "x": 182.5, "y": 62.0 },
 
-    "emitente":       { "x": 41.4,  "y": 65.5 },
-    "cpfEmitente":    { "x": 56.4,  "y": 75.6 },
+    "emitente":       { "x": 43.4,  "y": 65.5 },
+    "cpfEmitente":    { "x": 56.4,  "y": 72.6 },
     "endereco":       { "x": 75.8,  "y": 84.7, "w": 98.8 },
     "cep":            { "x": 75.8,  "y": 88.0 }
   }

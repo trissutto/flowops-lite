@@ -927,10 +927,12 @@ export class PdvController {
    * GET /pdv/diag-coords — mostra as coordenadas ATIVAS da promissória,
    * o path do JSON lido (ou null se não achou) e da fonte Verdana.
    * Use pra confirmar que sua edição do JSON foi carregada pelo backend.
+   *
+   * SEM auth: só retorna coordenadas geométricas, zero dado sensível.
+   * Pode ser acessado direto pelo navegador.
    */
   @Get('diag-coords')
-  async getDiagCoords(@Req() req: any, @Res() res: Response) {
-    this.requireRole(req);
+  async getDiagCoords(@Res() res: Response) {
     try {
       const result = this.crediarioPrint.diagCoords();
       res.status(200).json(result);
