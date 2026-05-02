@@ -825,14 +825,6 @@ function PdvPageInner() {
       <div className="flex-1 max-w-7xl mx-auto w-full flex gap-4 px-4 pt-4 pb-44">
 
       <main className="flex-1 min-w-0 space-y-3">
-        {/* BOTÃO TESTE — REMOVER DEPOIS */}
-        <button
-          onClick={() => alert('Botão TESTE funcionando! Edição chegou no PDV.')}
-          className="w-full bg-red-600 hover:bg-red-700 text-white font-black text-lg py-4 rounded-xl shadow-lg ring-4 ring-red-300 transition"
-        >
-          🔴 BOTÃO TESTE — CLIQUE AQUI
-        </button>
-
         {error && (
           <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
