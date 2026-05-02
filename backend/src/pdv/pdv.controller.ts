@@ -208,6 +208,35 @@ export class PdvController {
   }
 
   /**
+   * GET /pdv/nfces — lista NFC-es com filtros + agregados.
+   * Query: storeCode (opcional, vazio = todas as lojas / visão geral),
+   *        startDate, endDate (YYYY-MM-DD, default: hoje),
+   *        status (authorized|cancelled|rejected|all),
+   *        q (busca: número, CPF, nome),
+   *        limit (default 100, max 500)
+   */
+  @Get('nfces')
+  listNfces(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('status') status?: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    this.requireRole(req);
+    return this.svc.listNfces({
+      storeCode,
+      startDate,
+      endDate,
+      status,
+      q,
+      limit: limit ? Number(limit) : 100,
+    });
+  }
+
+  /**
    * GET /pdv/sales/:id
    */
   @Get('sales/:id')

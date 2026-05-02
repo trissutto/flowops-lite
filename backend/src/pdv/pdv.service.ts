@@ -226,6 +226,116 @@ export class PdvService {
   }
 
   /**
+   * Lista NFC-es emitidas com filtros + agregados.
+   * Usado pela tela /minha-loja/pdv/notas.
+   */
+  async listNfces(input: {
+    storeCode?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+    q?: string;
+    limit?: number;
+  }): Promise<any> {
+    const limit = Math.min(500, Math.max(10, input.limit || 100));
+
+    // Default: hoje
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    let dateStart: Date = today;
+    let dateEnd: Date = tomorrow;
+    if (input.startDate) {
+      const [y, m, d] = input.startDate.split('-').map(Number);
+      dateStart = new Date(y, m - 1, d, 0, 0, 0, 0);
+    }
+    if (input.endDate) {
+      const [y, m, d] = input.endDate.split('-').map(Number);
+      dateEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+    }
+
+    const where: any = {
+      nfceStatus: { not: null },
+      finalizedAt: { gte: dateStart, lte: dateEnd },
+    };
+    if (input.storeCode) where.storeCode = input.storeCode;
+    if (input.status && input.status !== 'all') {
+      where.nfceStatus = input.status;
+    }
+    if (input.q) {
+      const q = String(input.q).trim();
+      where.OR = [
+        { nfceNumber: { contains: q } },
+        { customerCpf: { contains: q } },
+        { customerName: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    const rows = await (this.prisma as any).pdvSale.findMany({
+      where,
+      orderBy: { nfceAutorizadaEm: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        storeCode: true,
+        storeName: true,
+        total: true,
+        paymentMethod: true,
+        customerName: true,
+        customerCpf: true,
+        nfceStatus: true,
+        nfceNumber: true,
+        nfceSerie: true,
+        nfceChave: true,
+        nfceProtocolo: true,
+        nfceAutorizadaEm: true,
+        nfceCanceladaEm: true,
+        nfceCancelamentoMotivo: true,
+        finalizedAt: true,
+        createdAt: true,
+      },
+    });
+
+    // Calcula podeCancelar (autorizada + dentro de 30min)
+    const now = Date.now();
+    const enriched = rows.map((r: any) => {
+      const autEm = r.nfceAutorizadaEm ? new Date(r.nfceAutorizadaEm).getTime() : 0;
+      const minutosDesde = autEm ? (now - autEm) / 60000 : 999;
+      const podeCancelar =
+        r.nfceStatus === 'authorized' && !r.nfceCanceladaEm && minutosDesde <= 30;
+      return {
+        ...r,
+        podeCancelar,
+        minutosRestantes: podeCancelar ? Math.max(0, Math.floor(30 - minutosDesde)) : 0,
+      };
+    });
+
+    const summary = {
+      totalNotas: enriched.length,
+      totalValor: enriched.reduce((s: number, r: any) =>
+        s + (r.nfceStatus === 'authorized' ? Number(r.total) : 0), 0),
+      autorizadas: enriched.filter((r: any) => r.nfceStatus === 'authorized').length,
+      canceladas: enriched.filter((r: any) => r.nfceStatus === 'cancelled' || r.nfceCanceladaEm).length,
+      rejeitadas: enriched.filter((r: any) => r.nfceStatus === 'rejected' || r.nfceStatus === 'error').length,
+      porLoja: [] as Array<{ storeCode: string; storeName: string | null; count: number; total: number }>,
+    };
+
+    const lojaMap = new Map<string, { storeCode: string; storeName: string | null; count: number; total: number }>();
+    for (const r of enriched) {
+      const key = r.storeCode || '?';
+      const cur = lojaMap.get(key) || { storeCode: key, storeName: r.storeName, count: 0, total: 0 };
+      cur.count += 1;
+      if (r.nfceStatus === 'authorized') cur.total += Number(r.total) || 0;
+      lojaMap.set(key, cur);
+    }
+    summary.porLoja = Array.from(lojaMap.values()).sort((a, b) => b.total - a.total);
+
+    return { rows: enriched, summary };
+  }
+
+  /**
    * Estatísticas do dia da loja: vendas finalizadas hoje, total vendido,
    * ticket médio. Usa data local (Brasília).
    */

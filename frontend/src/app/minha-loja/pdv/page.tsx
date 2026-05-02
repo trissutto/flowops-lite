@@ -1298,6 +1298,14 @@ function PdvPageInner() {
                 </span>
               )}
             </Link>
+            <Link
+              href="/minha-loja/pdv/notas"
+              className="bg-white hover:bg-blue-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-blue-300"
+              title="NFC-es emitidas (cancelar/reimprimir)"
+            >
+              <FileText className="w-3.5 h-3.5 text-blue-600" />
+              <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">NFC-es</span>
+            </Link>
           </div>
 
           {/* REALINHAR — botão wide abaixo do grid (linha separada, com badge) */}
