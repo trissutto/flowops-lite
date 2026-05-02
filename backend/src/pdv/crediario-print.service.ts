@@ -41,14 +41,30 @@ function resolveVerdanaPath(): string | null {
  * (`fields_mm`) substitui o default hardcoded; campos faltantes ficam no default.
  * Retorna `null` se o arquivo não existir / for inválido — caller usa hardcoded.
  */
+/**
+ * Path do override TEMPORÁRIO de coords (/tmp/promissoria-coords.json).
+ * Preenchido via POST /pdv-diag/coords pra calibração ao vivo SEM commit.
+ * Some quando o servidor reinicia/redeploy — protege contra "esqueci de commitar
+ * e perdi tudo". Quando estiver certo, copiar pro assets/config/ e commitar.
+ */
+const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
+
 function loadCoordsConfig(logger: Logger): {
   blocoY?: number[];
   blocoH?: number;
   fields?: Record<string, { x: number; dy: number; w?: number }>;
 } | null {
-  const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+  // PRIMEIRO tenta o override em /tmp/ (calibração ao vivo sem deploy)
+  let cfgPath: string | null = null;
+  try {
+    if (fs.existsSync(OVERRIDE_PATH)) cfgPath = OVERRIDE_PATH;
+  } catch { /* ignore */ }
+  // Se não tem override, lê do assets/config/ deployado
   if (!cfgPath) {
-    logger.warn('[crediario-print] JSON de coords NÃO encontrado em assets/config/. Usando defaults.');
+    cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+  }
+  if (!cfgPath) {
+    logger.warn('[crediario-print] JSON de coords NÃO encontrado. Usando defaults.');
     return null;
   }
   try {
