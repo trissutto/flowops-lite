@@ -59,9 +59,28 @@ export class CobrancaAutoService {
     }
   }
 
-  /** Disparo manual via endpoint (pra QA / "rodar agora"). */
+  /** Disparo manual via endpoint (pra QA / "rodar agora").
+   *  IMPORTANTE: dispara em BACKGROUND e retorna imediatamente — porque o
+   *  delay anti-ban entre mensagens (3min default) faz o processo demorar
+   *  HORAS pra muitos clientes. Frontend não pode ficar esperando.
+   *  Acompanhar progresso pelo histórico. */
   async runManual(campanhaId?: string) {
-    return this.runInner(campanhaId);
+    // Verifica se já está rodando essa campanha (pra dar feedback claro)
+    if (campanhaId && this.runningCampanhas.has(campanhaId)) {
+      return {
+        started: false,
+        already_running: true,
+        message: 'Campanha já está executando. Aguarde o ciclo atual terminar ou use Pausar.',
+      };
+    }
+    // Dispara em background — NÃO await
+    this.runInner(campanhaId).catch((e) => {
+      this.logger.error(`[runManual BG] cobrança auto falhou: ${e?.message ?? e}`);
+    });
+    return {
+      started: true,
+      message: 'Campanha iniciada em background. Acompanhe pelo Histórico — pode demorar minutos/horas dependendo da quantidade de clientes (delay anti-ban entre mensagens).',
+    };
   }
 
   private async runInner(onlyCampanhaId?: string) {

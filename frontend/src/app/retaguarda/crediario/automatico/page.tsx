@@ -138,17 +138,28 @@ export default function CrediarioAutomaticoPage() {
   }
 
   async function runNow(c: Campanha) {
+    const delayMin = (c.delayMs / 60000).toFixed(0);
     if (!confirm(
-      `Rodar "${c.nome}" AGORA?\n\nVai disparar cobranças pros clientes elegíveis ` +
-      `(atraso ≥ ${c.minDiasAtraso}d), com espaçamento de ${(c.delayMs / 60000).toFixed(0)}min entre cada.\n\n` +
+      `Rodar "${c.nome}" AGORA?\n\n` +
+      `🟢 Backend dispara em background — botão libera imediatamente\n` +
+      `⏱️ Espaçamento entre mensagens: ${delayMin} minuto(s) (anti-ban WhatsApp)\n` +
+      `📊 Pra muitos clientes pode demorar HORAS — acompanhe pelo Histórico\n\n` +
       `WhatsApp precisa estar conectado. Confirma?`,
     )) return;
     setRunning(c.id);
     try {
-      const r = await api<{ ran: number; skipped: number }>(`/crediarios/campanhas/${c.id}/run-now`, {
+      const r = await api<{
+        started: boolean;
+        already_running?: boolean;
+        message: string;
+      }>(`/crediarios/campanhas/${c.id}/run-now`, {
         method: 'POST',
       });
-      alert(`Disparo iniciado.\nCampanhas executadas: ${r.ran}\nPuladas: ${r.skipped}`);
+      if (r.already_running) {
+        alert(`⚠️ ${r.message}`);
+      } else {
+        alert(`✅ ${r.message}\n\nClique em "Histórico" pra acompanhar os envios em tempo real.`);
+      }
       load();
     } catch (e: any) {
       alert('Erro ao disparar: ' + (e.message || 'falha'));
