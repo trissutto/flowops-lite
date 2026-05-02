@@ -59,6 +59,17 @@ export class CobrancaAutoService {
     }
   }
 
+  /** Retorna se uma campanha (ou todas) está executando agora em background. */
+  isRunning(campanhaId?: string): boolean {
+    if (campanhaId) return this.runningCampanhas.has(campanhaId);
+    return this.runningCampanhas.size > 0;
+  }
+
+  /** Lista IDs de campanhas em execução (pro frontend mostrar badge). */
+  getRunningCampanhas(): string[] {
+    return Array.from(this.runningCampanhas);
+  }
+
   /** Disparo manual via endpoint (pra QA / "rodar agora").
    *  IMPORTANTE: dispara em BACKGROUND e retorna imediatamente — porque o
    *  delay anti-ban entre mensagens (3min default) faz o processo demorar
@@ -262,7 +273,19 @@ export class CobrancaAutoService {
             erro: ok ? null : (r.error || 'falha desconhecida'),
           },
         });
-        if (ok) sent++; else failed++;
+        if (ok) {
+          sent++;
+          // FIX: atualiza totalEnviadas EM TEMPO REAL (era só no fim → card ficava em 0
+          // por horas durante a campanha). Agora cada envio OK reflete no card na hora.
+          try {
+            await (this.prisma as any).cobrancaCampanha.update({
+              where: { id: camp.id },
+              data: { totalEnviadas: { increment: 1 }, ultimoEnvio: new Date() },
+            });
+          } catch (e: any) {
+            this.logger.warn(`[cobranca-auto] falha update totalEnviadas: ${e?.message}`);
+          }
+        } else failed++;
       } catch (e: any) {
         failed++;
         await (this.prisma as any).cobrancaTentativa.create({
@@ -292,12 +315,13 @@ export class CobrancaAutoService {
     // Próximo envio = agora + cooldown
     const nextRun = new Date(Date.now() + cooldownForFrequencia(camp.frequencia));
 
+    // NOTA: totalEnviadas já foi incrementado IN-LOOP (a cada msg OK).
+    // Aqui só finaliza ultimoEnvio + proximoEnvio.
     await (this.prisma as any).cobrancaCampanha.update({
       where: { id: camp.id },
       data: {
         ultimoEnvio: new Date(),
         proximoEnvio: nextRun,
-        totalEnviadas: { increment: sent },
       },
     });
 

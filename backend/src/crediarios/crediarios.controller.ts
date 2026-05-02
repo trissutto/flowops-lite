@@ -352,4 +352,19 @@ export class CrediariosController {
     this.ensureMatriz(req);
     return this.auto.runManual(id);
   }
+
+  /** Retorna se a campanha está rodando AGORA em background (pra UI mostrar
+   *  badge "EXECUTANDO" entre o "Rodar agora" e o término real do loop). */
+  @Get('campanhas/:id/status')
+  async campanhaStatus(@Req() req: any, @Param('id') id: string) {
+    this.ensureMatriz(req);
+    return { running: this.auto.isRunning(id) };
+  }
+
+  /** Retorna IDs de TODAS as campanhas rodando — pro dashboard listar todas. */
+  @Get('campanhas-running')
+  async campanhasRunning(@Req() req: any) {
+    this.ensureMatriz(req);
+    return { ids: this.auto.getRunningCampanhas() };
+  }
 }

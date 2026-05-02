@@ -99,6 +99,8 @@ export default function CrediarioAutomaticoPage() {
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<DetailResp | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  // IDs de campanhas executando AGORA em background no servidor (poll a cada 10s)
+  const [runningServerIds, setRunningServerIds] = useState<Set<string>>(new Set());
 
   async function load() {
     setLoading(true);
@@ -114,6 +116,39 @@ export default function CrediarioAutomaticoPage() {
   }
 
   useEffect(() => { if (authed) load(); /* eslint-disable-next-line */ }, [authed]);
+
+  // Poll status de execução em BG a cada 10s (mostra badge "EXECUTANDO" no card
+  // enquanto o loop server-side está mandando mensagens com delay anti-ban).
+  // Também recarrega o `data` se houver mudança no totalEnviadas em tempo real.
+  useEffect(() => {
+    if (!authed) return;
+    let stop = false;
+    async function tick() {
+      try {
+        const r = await api<{ ids: string[] }>('/crediarios/campanhas-running');
+        if (stop) return;
+        const newSet = new Set(r.ids);
+        setRunningServerIds((prev) => {
+          // Se alguma campanha PAROU desde o último check, recarrega `data`
+          // pra trazer totalEnviadas atualizado e proximoEnvio.
+          for (const id of prev) {
+            if (!newSet.has(id)) {
+              load();
+              break;
+            }
+          }
+          return newSet;
+        });
+        // Se TEM campanha rodando, recarrega data periodicamente (totalEnviadas
+        // incrementa a cada envio OK em tempo real)
+        if (r.ids.length > 0) load();
+      } catch { /* ignora */ }
+    }
+    tick();
+    const id = setInterval(tick, 10_000);
+    return () => { stop = true; clearInterval(id); };
+    // eslint-disable-next-line
+  }, [authed]);
 
   async function toggleAtiva(c: Campanha) {
     try {
@@ -255,6 +290,12 @@ export default function CrediarioAutomaticoPage() {
                         <span className="px-1.5 py-0.5 text-[10px] rounded bg-emerald-100 text-emerald-800 font-bold">ATIVA</span>
                       ) : (
                         <span className="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 text-slate-600 font-bold">PAUSADA</span>
+                      )}
+                      {runningServerIds.has(c.id) && (
+                        <span className="px-1.5 py-0.5 text-[10px] rounded bg-amber-100 text-amber-800 font-bold flex items-center gap-1 animate-pulse">
+                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          EXECUTANDO
+                        </span>
                       )}
                     </div>
                     <div className="text-[11px] text-slate-500 flex items-center flex-wrap gap-x-3 gap-y-0.5">
