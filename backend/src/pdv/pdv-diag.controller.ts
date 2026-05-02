@@ -65,12 +65,14 @@ export class PdvDiagController {
   private async executarBaixaRetroativa(input: any, res: Response) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     try {
-      const controle = String(input.controle || '').replace(/\D/g, '');
+      // O "Controle" da tela WinCred = coluna NUMEROCOMPRA do banco.
+      // Aceita tanto ?controle= quanto ?numeroCompra=
+      const numCompra = String(input.controle || input.numeroCompra || '').replace(/\D/g, '');
       const parcela = String(input.parcela || '').replace(/\D/g, '');
       const data = String(input.data || '').trim(); // YYYY-MM-DD
-      if (!controle || !parcela || !data) {
+      if (!numCompra || !parcela || !data) {
         return res.status(400).json({
-          error: 'Parâmetros obrigatórios: controle, parcela, data (YYYY-MM-DD)',
+          error: 'Parâmetros obrigatórios: controle (= NUMEROCOMPRA da tela), parcela, data (YYYY-MM-DD)',
           exemplo: '/api/pdv-diag/baixa-retroativa?controle=946758&parcela=4&data=2026-05-02',
         });
       }
@@ -78,19 +80,19 @@ export class PdvDiagController {
         return res.status(400).json({ error: 'Data deve ser YYYY-MM-DD (ex: 2026-05-02)' });
       }
 
-      const map = await this.crediarios.detectColumns();
-      if (!map.controle || !map.parcela || !map.dataPagamento || !map.pago) {
+      const map = await this.crediarios.detectColumns(true); // FORCE refresh
+      if (!map.numeroCompra || !map.parcela || !map.dataPagamento || !map.pago) {
         return res.status(500).json({
-          error: 'Colunas críticas não detectadas',
+          error: 'Colunas críticas não detectadas (precisa: numeroCompra, parcela, dataPagamento, pago)',
           map,
         });
       }
 
-      // Busca a linha primeiro pra confirmar que existe + pegar REGISTRO real
-      const sqlSelect = `SELECT * FROM \`movimento\` WHERE \`${map.controle}\` = ${controle} AND \`${map.parcela}\` = ${parcela} LIMIT 1`;
+      // Busca a linha pra pegar REGISTRO/CONTROLE real (chave composta da tabela)
+      const sqlSelect = `SELECT * FROM \`movimento\` WHERE \`${map.numeroCompra}\` = ${numCompra} AND \`${map.parcela}\` = ${parcela} LIMIT 1`;
       const r = await this.erp.runReadOnly(sqlSelect, { maxRows: 1, timeoutMs: 10000 });
       if (!r.rows.length) {
-        return res.status(404).json({ error: `Parcela não encontrada: CONTROLE=${controle} PARCELA=${parcela}` });
+        return res.status(404).json({ error: `Parcela não encontrada: NUMEROCOMPRA=${numCompra} PARCELA=${parcela}` });
       }
       const row = r.rows[0] as any;
       const valorAntes = {
@@ -99,28 +101,22 @@ export class PdvDiagController {
         valor_pago: map.valorPago ? row[map.valorPago] : null,
       };
 
-      // Faz o UPDATE
-      const valorParcela = map.valorParcela ? Number(row[map.valorParcela]) || 0 : 0;
-      const sets: string[] = [
-        `\`${map.pago}\` = 'SIM'`,
-        `\`${map.dataPagamento}\` = '${data}'`,
-      ];
-      if (map.valorPago) {
-        sets.push(`\`${map.valorPago}\` = ${valorParcela}`);
-      }
-      const sqlUpdate = `UPDATE \`movimento\` SET ${sets.join(', ')} WHERE \`${map.controle}\` = ${controle} AND \`${map.parcela}\` = ${parcela}`;
-
-      // Usa connection do erp.pool diretamente via runReadOnly NÃO funciona pra UPDATE.
-      // Vou chamar markCrediarioParcelaPaid que já tem a estrutura ACID.
-      // Mas precisamos do REGISTRO + CONTROLE como chave composta — pega da row.
+      // Pega REGISTRO e CONTROLE reais da linha (chave composta da tabela)
       const registroVal = map.registro ? row[map.registro] : null;
-      if (!registroVal) {
-        return res.status(500).json({ error: `Coluna REGISTRO não detectada/preenchida na linha`, map, row });
+      const controleVal = map.controle ? row[map.controle] : null;
+      if (!registroVal || !controleVal) {
+        return res.status(500).json({
+          error: `REGISTRO ou CONTROLE não preenchido na linha`,
+          map,
+          row,
+        });
       }
+
+      const valorParcela = map.valorParcela ? Number(row[map.valorParcela]) || 0 : 0;
 
       const result = await this.erp.markCrediarioParcelaPaid({
         registro: registroVal,
-        controle: controle,
+        controle: controleVal,
         valorPago: valorParcela,
         dataPagamento: new Date(data + 'T12:00:00'),
         columns: {
@@ -134,14 +130,14 @@ export class PdvDiagController {
 
       return res.status(200).json({
         ok: result.success,
-        controle,
+        numeroCompra: numCompra,
         parcela,
         data_aplicada: data,
         valor_parcela: valorParcela,
         registro_giga: registroVal,
+        controle_giga: controleVal,
         valores_antes: valorAntes,
         update_result: result,
-        sql_executado: sqlUpdate,
       });
     } catch (e: any) {
       res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message, stack: e?.stack });
