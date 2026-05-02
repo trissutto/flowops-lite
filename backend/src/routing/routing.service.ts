@@ -284,17 +284,24 @@ export class RoutingService {
     });
 
     // Bloqueio: tem pick-order que já passou de "ativo"
+    //
+    // EXCEÇÃO: se veio forceStoreCode (escolha manual livre da retaguarda),
+    // NÃO bloqueia — vamos mexer só nos pick-orders new/separating, deixando
+    // os avançados (shipped/delivered/etc) intactos. Caso típico: pedido com
+    // 4 lojas, 1 já enviou (MOEMA), 3 reportaram sem estoque — retaguarda
+    // quer consolidar essas 3 numa loja só sem afetar quem já enviou.
     const advanced = order.pickOrders.filter(
       (p) => !['new', 'separating'].includes(p.status),
     );
-    if (advanced.length > 0) {
+    if (advanced.length > 0 && !opts?.forceStoreCode) {
       return {
         ok: false as const,
         reason: 'advanced-status',
         message:
           `Não dá pra recalcular: ${advanced.length} pick-order(s) já passaram de "separando" ` +
           `(status: ${[...new Set(advanced.map((a) => a.status))].join(', ')}). ` +
-          `Cancele/rejeite manualmente antes de reatribuir.`,
+          `Cancele/rejeite manualmente antes de reatribuir. ` +
+          `(Pra forçar uma loja específica nos pick-orders ainda em "new/separating", use Escolher loja manualmente.)`,
       };
     }
 
@@ -318,19 +325,42 @@ export class RoutingService {
     const cancellableIds = order.pickOrders
       .filter((p) => ['new', 'separating'].includes(p.status))
       .map((p) => p.id);
+    const advancedStoreIds = advanced.map((p) => p.storeId);
 
     // Notifica lojas afetadas pra retirar o card do app /minha-loja
-    const oldStoreIds = [...new Set(order.pickOrders.map((p) => p.storeId))];
+    // (só as canceladas — as avançadas continuam com o card delas)
+    const cancelledStoreIds = [...new Set(
+      order.pickOrders
+        .filter((p) => ['new', 'separating'].includes(p.status))
+        .map((p) => p.storeId),
+    )];
 
-    // 1) Cancela pick-orders + limpa assignedStoreId + volta order pra pending
+    // 1) Cancela pick-orders cancelaveis + limpa assignedStoreId APENAS dos
+    //    items que estavam neles. Items dos pick-orders avançados (já enviados)
+    //    ficam intocados. Order volta pra pending pra reatribuir.
     await this.prisma.$transaction(async (tx) => {
       if (cancellableIds.length > 0) {
         await tx.pickOrder.deleteMany({ where: { id: { in: cancellableIds } } });
       }
-      await tx.orderItem.updateMany({
-        where: { orderId },
-        data: { assignedStoreId: null },
-      });
+      // Limpa assignedStoreId só dos items NÃO atribuídos a lojas avançadas
+      // (que precisam preservar o vínculo).
+      if (advancedStoreIds.length > 0) {
+        await tx.orderItem.updateMany({
+          where: {
+            orderId,
+            OR: [
+              { assignedStoreId: null },
+              { assignedStoreId: { notIn: advancedStoreIds } },
+            ],
+          },
+          data: { assignedStoreId: null },
+        });
+      } else {
+        await tx.orderItem.updateMany({
+          where: { orderId },
+          data: { assignedStoreId: null },
+        });
+      }
       await tx.order.update({
         where: { id: orderId },
         data: { status: OrderStatus.pending, routingResult: null },
@@ -340,13 +370,14 @@ export class RoutingService {
           orderId,
           fromStatus: OrderStatus.separating,
           toStatus: OrderStatus.pending,
-          note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir.`,
+          note: `Recalcular separação: ${cancellableIds.length} pick-order(s) cancelado(s) pra reatribuir` +
+                (advanced.length > 0 ? ` (${advanced.length} já avançado(s) preservado(s))` : '') + '.',
         },
       });
     });
 
     // 2) Emite socket pras lojas antigas pra remover o card
-    for (const storeId of oldStoreIds) {
+    for (const storeId of cancelledStoreIds) {
       try {
         this.gateway.emitPickOrderRemoved?.(storeId, { orderId });
       } catch (err: any) {
@@ -355,9 +386,10 @@ export class RoutingService {
     }
 
     // 3a) FORÇA loja específica (escolha manual livre, mesmo SEM estoque).
-    // Bypassa o routing — cria 1 pick-order pra loja escolhida com TODOS os items.
-    // Caso de uso: retaguarda quer concentrar o pedido numa loja que vai
-    // pegar transferência de outra, ou que vai ter estoque amanhã, etc.
+    // Bypassa o routing — cria 1 pick-order pra loja escolhida.
+    //
+    // Items que vão pra loja forçada: APENAS os ÓRFÃOS (assignedStoreId = null).
+    // Items dos pick-orders avançados (ex: MOEMA já enviou) ficam preservados.
     if (opts?.forceStoreCode) {
       const forcedStore = await this.prisma.store.findFirst({
         where: { code: opts.forceStoreCode },
@@ -370,11 +402,19 @@ export class RoutingService {
           message: `Loja ${opts.forceStoreCode} não encontrada/ativa.`,
         };
       }
-      // Carrega todos os items do order pra criar 1 assignment monolítico
-      const allItems = await this.prisma.orderItem.findMany({
-        where: { orderId },
+      // Pega apenas items SEM atribuição (órfãos pós-cancelamento dos new/separating).
+      // Items das lojas avançadas continuam com assignedStoreId preservado.
+      const orphanItems = await this.prisma.orderItem.findMany({
+        where: { orderId, assignedStoreId: null },
         select: { sku: true, quantity: true },
       });
+      if (orphanItems.length === 0) {
+        return {
+          ok: false as const,
+          reason: 'no-orphan-items',
+          message: 'Não há items disponíveis pra reatribuir — todos já estão em pick-orders avançados.',
+        };
+      }
       const fakeResult: any = {
         success: true,
         strategy: 'force-manual',
@@ -382,7 +422,7 @@ export class RoutingService {
           {
             storeId: forcedStore.id,
             isTransfer: false,
-            items: allItems.map((it) => ({ sku: it.sku, qty: it.quantity })),
+            items: orphanItems.map((it) => ({ sku: it.sku, qty: it.quantity })),
           },
         ],
       };
