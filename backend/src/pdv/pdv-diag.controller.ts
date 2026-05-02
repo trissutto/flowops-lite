@@ -172,23 +172,27 @@ const CAMPOS = [
 ];
 
 const grid = document.getElementById('campos');
-for (const c of CAMPOS) {
-  const card = document.createElement('div');
+for (var i = 0; i < CAMPOS.length; i++) {
+  var c = CAMPOS[i];
+  var card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = \`
-    <div class="row">
-      <label>\${c.label}</label>
-      <input type="number" step="0.1" id="\${c.key}_x" placeholder="x" />
-      <input type="number" step="0.1" id="\${c.key}_y" placeholder="y" />
-      \${c.hasW ? \`<input type="number" step="0.1" id="\${c.key}_w" placeholder="w" />\` : '<span></span>'}
-    </div>
-    <div class="row">
-      <span class="suffix"></span>
-      <span class="suffix">x mm</span>
-      <span class="suffix">y mm</span>
-      \${c.hasW ? '<span class="suffix">w mm</span>' : '<span></span>'}
-    </div>
-  \`;
+  var wInput = c.hasW
+    ? '<input type="number" step="0.1" id="' + c.key + '_w" placeholder="w" />'
+    : '<span></span>';
+  var wLabel = c.hasW ? '<span class="suffix">w mm</span>' : '<span></span>';
+  card.innerHTML =
+    '<div class="row">' +
+      '<label>' + c.label + '</label>' +
+      '<input type="number" step="0.1" id="' + c.key + '_x" placeholder="x" />' +
+      '<input type="number" step="0.1" id="' + c.key + '_y" placeholder="y" />' +
+      wInput +
+    '</div>' +
+    '<div class="row">' +
+      '<span class="suffix"></span>' +
+      '<span class="suffix">x mm</span>' +
+      '<span class="suffix">y mm</span>' +
+      wLabel +
+    '</div>';
   grid.appendChild(card);
 }
 
