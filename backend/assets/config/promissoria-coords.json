@@ -24,13 +24,13 @@
     "parcela":        { "x": 78.3,  "y": 10.2 },
     "valor":          { "x": 169.3, "y": 10.2 },
 
-    "vencDia":        { "x": 121.7, "y": 17.2 },
-    "vencMes":        { "x": 141.1, "y": 17.2 },
-    "vencAno":        { "x": 185.2, "y": 17.2 },
+    "vencDia":        { "x": 124.7, "y": 17.2 },
+    "vencMes":        { "x": 144.1, "y": 17.2 },
+    "vencAno":        { "x": 187.2, "y": 17.2 },
 
-    "vencExtenso":    { "x": 49.8,  "y": 24.2, "w": 112.9 },
+    "vencExtenso":    { "x": 49.8,  "y": 23.2, "w": 112.9 },
 
-    "beneficiarioA":  { "x": 50.8,  "y": 35.7 },
+    "beneficiarioA":  { "x": 50.8,  "y": 35.3 },
     "cpfDevedor":     { "x": 169.0, "y": 35.7 },
 
     "quantiaExtenso": { "x": 73.0, "y": 45.5, "w": 84.7 },
