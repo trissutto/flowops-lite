@@ -2,9 +2,34 @@ import { forwardRef, Inject, Injectable, Logger, NotFoundException } from '@nest
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
+import * as path from 'path';
+import * as fs from 'fs';
 // pdfkit é CommonJS — usa require() pra evitar problema de interop runtime
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const PDFDocument = require('pdfkit');
+
+/**
+ * Resolve path da fonte Verdana (usada pra bater visualmente com o WinCred/Giga).
+ * Procura em backend/assets/fonts/. Se não achar, retorna null e o caller cai
+ * pra Helvetica (fonte built-in do pdfkit).
+ *
+ * Pra empacotar no Railway: garantir que assets/fonts/*.ttf vão pro deploy
+ * (já vai porque está dentro de backend/). Se der falha em prod, conferir
+ * NestJS dist build path — pode precisar copiar via "assets" no nest-cli.json.
+ */
+function resolveVerdanaPath(): string | null {
+  // __dirname em prod = backend/dist/pdv → sobe 2 níveis pra backend/, daí assets/fonts
+  const candidates = [
+    path.join(__dirname, '..', '..', 'assets', 'fonts', 'verdana.ttf'),
+    path.join(__dirname, '..', '..', '..', 'assets', 'fonts', 'verdana.ttf'),
+    path.join(process.cwd(), 'assets', 'fonts', 'verdana.ttf'),
+    path.join(process.cwd(), 'backend', 'assets', 'fonts', 'verdana.ttf'),
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
+  }
+  return null;
+}
 
 /**
  * CrediarioPrintService — gera PDF preenchendo as FOLHAS PRÉ-IMPRESSAS
@@ -44,49 +69,50 @@ export class CrediarioPrintService {
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's
   // ═══════════════════════════════════════════════════════════════════════
 
-  // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~265pt.
-  // CALIBRAÇÃO V3: blocos não são uniformes 280pt. Form pré-impresso
-  // tem blocos mais juntos (~258pt entre topos). Bloco 0 começa em 22.
+  // PROMISSÓRIA — 3 por folha A4. Cada bloco ocupa ~258pt.
+  // CALIBRAÇÃO V4 (2026-05): coordenadas RECALIBRADAS contra impressão REAL
+  // do WinCred/Giga (folha física sobreposta na nossa régua de calibração).
+  // BLOCO 1 topo = Y22, BLOCO 2 topo = Y280, BLOCO 3 topo = Y540 (passo 258).
+  // Todos os dy são RELATIVOS ao topo de cada bloco — ficam IDÊNTICOS pros 3.
+  //
+  // Layout do form pré-impresso (Lurd's), conforme print do Giga:
+  //   Y+40   Nº ___   ___ / ___                        R$ ___
+  //   Y+60   Venc.: dia ___ de ___ de ___
+  //   Y+80   "os ___ dias do mes de ___ de ___"  (vencimento por extenso)
+  //   Y+100  T.O RISSUTTO EIRELI                  CNPJ 20.104.813/0001-39
+  //   Y+140  A QUANTIA DE: ___ reais e ___ centavos  (valor por extenso)
+  //   Y+170  Pagável em: ___ (cidade)        emissão: ___ de ___ de ___
+  //   Y+200  Emitente: ___ (nome cliente)
+  //   Y+220  CPF: ___
+  //   Y+240  Endereço: ___
   private readonly PROM = {
-    // Y do TOPO de cada um dos 3 blocos
     blocoY: [22, 280, 540],
     blocoH: 258,
-    // Offset dos campos DENTRO de cada bloco (relativo ao topo do bloco).
-    // CALIBRAÇÃO V2 — baseada na impressão real (todos os campos estavam
-    // deslocados ~30-50pt para baixo). Comprimi os dy pra caber em 280pt
-    // de bloco e bater com as linhas pré-impressas.
-    //
-    // Layout do form Lurd's (linhas pré-impressas):
-    //   linha 1  Nº ___                           R$ ___
-    //   linha 2  Vencimento em ___ de ___ de ___
-    //   linha 3  A ___                                            ← devedorAa (cliente nome)
-    //   linha 4  ___ pagar ___ por esta ___ única via Nota Promissória
-    //   linha 5  a ___                            C.P.F. N.º ___  ← beneficiarioA + cpfDevedor (T.O. + CNPJ)
-    //   linha 6  OU A SUA ORDEM
-    //   linha 7  A QUANTIA DE ___                                 ← quantiaExtenso
-    //   linha 9  Pagável em ___       ___ de ___ de ___           ← pagavelEm + emissão
-    //   linha 10 Emitente ___                                     ← emitente (cliente)
-    //   linha 11 C.P.F. C.N.P.J. ___                              ← cpfEmitente
-    //   linha 12 Endereço ___                                     ← endereco
-    //   linha 13 CEP ___                                          ← cep
     fields: {
-      numero:           { x: 200, dy: 22 },        // Nº (cod cliente + N/T)
-      valor:            { x: 470, dy: 22 },        // R$ XX,XX
-      vencDia:          { x: 350, dy: 48 },        // dia do vencimento
-      vencMes:          { x: 395, dy: 48 },        // mês por extenso
-      vencAno:          { x: 510, dy: 48 },        // ano
-      beneficiarioA:    { x: 195, dy: 100 },       // "a ___" — beneficiário (T.O. RISSUTTO)
-      devedorAa:        { x: 175, dy: 75 },        // "A ___" — devedor (cliente nome)
-      cpfDevedor:       { x: 470, dy: 100 },       // CNPJ do beneficiário (T.O. RISSUTTO)
-      quantiaExtenso:   { x: 200, dy: 135, w: 360 }, // "A QUANTIA DE ___"
-      pagavelEm:        { x: 130, dy: 175 },       // cidade — após "Pagável em" pré-impresso
-      emissaoDia:       { x: 395, dy: 175 },
-      emissaoMes:       { x: 435, dy: 175 },
-      emissaoAno:       { x: 510, dy: 175 },
-      emitente:         { x: 130, dy: 195 },       // nome do cliente (Emitente)
-      cpfEmitente:      { x: 130, dy: 220 },       // CPF do cliente
-      endereco:         { x: 130, dy: 240 },       // Endereço
-      cep:              { x: 130, dy: 260 },       // CEP
+      // ── linha Y+40 ──
+      numero:           { x: 195, dy: 40 },        // "2315" (codCliente)
+      parcela:          { x: 250, dy: 40 },        // "1 / 4"
+      valor:            { x: 480, dy: 40 },        // "8,90"
+      // ── linha Y+60 ── data vencimento (3 caixas)
+      vencDia:          { x: 345, dy: 60 },        // "10"
+      vencMes:          { x: 400, dy: 60 },        // "Maio"
+      vencAno:          { x: 525, dy: 60 },        // "2026"
+      // ── linha Y+80 ── vencimento por extenso (sentença)
+      vencExtenso:      { x: 215, dy: 80, w: 320 },// "os dez dias do mes de Maio de 2026"
+      // ── linha Y+100 ── beneficiário + CNPJ
+      beneficiarioA:    { x: 215, dy: 100 },       // "T.O RISSUTTO EIRELI"
+      cpfDevedor:       { x: 500, dy: 100 },       // CNPJ "20.104.813/0001-39"
+      // ── linha Y+140 ── quantia por extenso
+      quantiaExtenso:   { x: 325, dy: 140, w: 240 }, // "oito reais e noventa centavos"
+      // ── linha Y+170 ── pagável em + emissão
+      pagavelEm:        { x: 275, dy: 170 },       // "ITANHAEM"
+      emissaoDia:       { x: 400, dy: 170 },       // "02"
+      emissaoMes:       { x: 470, dy: 170 },       // "Maio"
+      emissaoAno:       { x: 540, dy: 170 },       // "2026"
+      // ── dados do emitente (cliente) ──
+      emitente:         { x: 225, dy: 200 },       // "THIAGO DE OLIVEIRA RISSUTTO"
+      cpfEmitente:      { x: 245, dy: 220 },       // "28665529896"
+      endereco:         { x: 300, dy: 240, w: 280 },// "RUA NICOLA MANCUSO FILHO, 291, CH TAMARAS"
     },
   };
 
@@ -136,6 +162,51 @@ export class CrediarioPrintService {
       'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
     ];
     return meses[d.getMonth()];
+  }
+
+  /**
+   * Mês por extenso com a primeira letra MAIÚSCULA — formato usado pelo Giga
+   * nos campos isolados (Maio, Junho, Julho).
+   */
+  private mesPorExtensoCap(d: Date): string {
+    const m = this.mesPorExtenso(d);
+    return m.charAt(0).toUpperCase() + m.slice(1);
+  }
+
+  /**
+   * Vencimento por extenso no formato Giga: "os dez dias do mes de Maio de 2026".
+   * Usa o dia escrito por extenso (dois, dez, vinte, etc) e mês capitalizado.
+   */
+  private vencimentoExtenso(d: Date): string {
+    const dia = d.getDate();
+    const diaTxt = this.numPorExtenso(dia);
+    const mes = this.mesPorExtensoCap(d);
+    const ano = d.getFullYear();
+    const sufixo = dia === 1 ? 'dia' : 'dias';
+    return `os ${diaTxt} ${sufixo} do mes de ${mes} de ${ano}`;
+  }
+
+  /**
+   * Registra a fonte Verdana no doc pdfkit (com fallback Helvetica).
+   * Centralizado pra os 3 generators usarem o mesmo nome 'Verdana' sempre —
+   * se a TTF não estiver disponível em prod, faz alias 'Verdana' → Helvetica
+   * e nada quebra.
+   */
+  private registerFonts(doc: any) {
+    const verdanaPath = resolveVerdanaPath();
+    if (verdanaPath) {
+      try {
+        doc.registerFont('Verdana', verdanaPath);
+        return;
+      } catch (e: any) {
+        this.logger.warn(`[crediario-print] falha registrar Verdana (${verdanaPath}): ${e?.message}`);
+      }
+    } else {
+      this.logger.warn(`[crediario-print] verdana.ttf NÃO encontrada em assets/fonts/. Caindo pra Helvetica.`);
+    }
+    // Fallback: registra 'Verdana' apontando pra Helvetica built-in.
+    // Assim os generators podem chamar doc.font('Verdana') sem branch.
+    doc.registerFont('Verdana', 'Helvetica');
   }
 
   /**
@@ -340,8 +411,9 @@ export class CrediarioPrintService {
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
 
+        this.registerFonts(doc);
         const fontSize = 10;
-        doc.font('Helvetica').fontSize(fontSize);
+        doc.font('Verdana').fontSize(fontSize);
 
         // Cada parcela = 1 promissória. 3 promissórias por página.
         for (let i = 0; i < data.parcelas; i++) {
@@ -350,37 +422,7 @@ export class CrediarioPrintService {
 
           const parc = data.parcelasArr[i];
           const blocoTopY = this.PROM.blocoY[slotNaPagina];
-
-          // Numeração: codCliente + " " + parcela + "/" + totalParcelas
-          // Ex: "2315 1/3"
-          const numeroPromiss = `${data.cliente.codCliente || data.sale.customerCpf} ${parc.num}/${data.parcelas}`;
-
-          this.drawAt(doc, this.PROM.fields.numero, blocoTopY, numeroPromiss);
-          this.drawAt(doc, this.PROM.fields.valor, blocoTopY, this.fmtBRL(parc.valor));
-          this.drawAt(doc, this.PROM.fields.vencDia, blocoTopY, String(parc.vencimento.getDate()).padStart(2, '0'));
-          this.drawAt(doc, this.PROM.fields.vencMes, blocoTopY, this.mesPorExtenso(parc.vencimento));
-          this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
-          this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
-          // Campo "C.P.F. C.N.P.J." na linha do beneficiário (Lurd's) — vai o CNPJ
-          // da empresa que recebe (T.O. RISSUTTO), NÃO o CPF do cliente.
-          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, this.CNPJ_BENEFICIARIO);
-          // Quantia por extenso pode quebrar 2 linhas — usa width
-          doc.text(
-            this.valorPorExtenso(parc.valor),
-            this.PROM.fields.quantiaExtenso.x,
-            blocoTopY + this.PROM.fields.quantiaExtenso.dy,
-            { width: this.PROM.fields.quantiaExtenso.w, lineBreak: true },
-          );
-          this.drawAt(doc, this.PROM.fields.pagavelEm, blocoTopY, data.cidadeLoja);
-          const hoje = new Date();
-          this.drawAt(doc, this.PROM.fields.emissaoDia, blocoTopY, String(hoje.getDate()).padStart(2, '0'));
-          this.drawAt(doc, this.PROM.fields.emissaoMes, blocoTopY, this.mesPorExtenso(hoje));
-          this.drawAt(doc, this.PROM.fields.emissaoAno, blocoTopY, String(hoje.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.emitente, blocoTopY, data.cliente.nome);
-          this.drawAt(doc, this.PROM.fields.cpfEmitente, blocoTopY, data.cliente.cpf);
-          this.drawAt(doc, this.PROM.fields.endereco, blocoTopY, `${data.cliente.endereco} ${data.cliente.bairro}`.trim());
-          this.drawAt(doc, this.PROM.fields.cep, blocoTopY, data.cliente.cep);
+          this.drawPromissoriaBloco(doc, blocoTopY, data, parc);
         }
 
         doc.end();
@@ -389,6 +431,68 @@ export class CrediarioPrintService {
       }
     });
     return { buffer, filename: `promissorias-${saleId.slice(-6)}.pdf` };
+  }
+
+  /**
+   * Desenha um bloco de promissória (1 parcela) na coordenada blocoTopY.
+   * Centralizado pra reutilizar entre generatePromissorias e generateImpressaoCompleta.
+   */
+  private drawPromissoriaBloco(
+    doc: any,
+    blocoTopY: number,
+    data: any,
+    parc: { num: number; valor: number; vencimento: Date },
+  ) {
+    const f = this.PROM.fields;
+    const codCli = data.cliente.codCliente || data.sale.customerCpf || '';
+
+    // ── linha Y+40 ── número, parcela, valor
+    this.drawAt(doc, f.numero, blocoTopY, String(codCli));
+    this.drawAt(doc, f.parcela, blocoTopY, `${parc.num} / ${data.parcelas}`);
+    this.drawAt(doc, f.valor, blocoTopY, this.fmtBRL(parc.valor));
+
+    // ── linha Y+60 ── data vencimento
+    this.drawAt(doc, f.vencDia, blocoTopY, String(parc.vencimento.getDate()).padStart(2, '0'));
+    this.drawAt(doc, f.vencMes, blocoTopY, this.mesPorExtensoCap(parc.vencimento));
+    this.drawAt(doc, f.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
+
+    // ── linha Y+80 ── vencimento por extenso (Giga: "os dez dias do mes de Maio de 2026")
+    doc.text(
+      this.vencimentoExtenso(parc.vencimento),
+      f.vencExtenso.x,
+      blocoTopY + f.vencExtenso.dy,
+      { width: (f.vencExtenso as any).w ?? 320, lineBreak: false },
+    );
+
+    // ── linha Y+100 ── beneficiário (T.O. RISSUTTO) + CNPJ
+    this.drawAt(doc, f.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
+    this.drawAt(doc, f.cpfDevedor, blocoTopY, this.CNPJ_BENEFICIARIO);
+
+    // ── linha Y+140 ── quantia por extenso (pode quebrar)
+    doc.text(
+      this.valorPorExtenso(parc.valor),
+      f.quantiaExtenso.x,
+      blocoTopY + f.quantiaExtenso.dy,
+      { width: f.quantiaExtenso.w, lineBreak: true },
+    );
+
+    // ── linha Y+170 ── pagável em + emissão
+    this.drawAt(doc, f.pagavelEm, blocoTopY, data.cidadeLoja);
+    const hoje = new Date();
+    this.drawAt(doc, f.emissaoDia, blocoTopY, String(hoje.getDate()).padStart(2, '0'));
+    this.drawAt(doc, f.emissaoMes, blocoTopY, this.mesPorExtensoCap(hoje));
+    this.drawAt(doc, f.emissaoAno, blocoTopY, String(hoje.getFullYear()));
+
+    // ── dados do emitente (cliente) ──
+    this.drawAt(doc, f.emitente, blocoTopY, data.cliente.nome);
+    this.drawAt(doc, f.cpfEmitente, blocoTopY, String(data.cliente.cpf || '').replace(/\D/g, ''));
+    const endFull = `${data.cliente.endereco} ${data.cliente.bairro}`.trim();
+    doc.text(
+      endFull,
+      f.endereco.x,
+      blocoTopY + f.endereco.dy,
+      { width: (f.endereco as any).w ?? 280, lineBreak: false },
+    );
   }
 
   /**
@@ -405,7 +509,8 @@ export class CrediarioPrintService {
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
 
-        doc.font('Helvetica').fontSize(10);
+        this.registerFonts(doc);
+        doc.font('Verdana').fontSize(10);
 
         // Imprime os 2 blocos do carnê (idênticos)
         for (let bloco = 0; bloco < 2; bloco++) {
@@ -469,7 +574,8 @@ export class CrediarioPrintService {
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
 
-        doc.font('Helvetica').fontSize(10);
+        this.registerFonts(doc);
+        doc.font('Verdana').fontSize(10);
 
         // === PROMISSÓRIAS ===
         for (let i = 0; i < data.parcelas; i++) {
@@ -477,32 +583,7 @@ export class CrediarioPrintService {
           if (i > 0 && slotNaPagina === 0) doc.addPage();
           const parc = data.parcelasArr[i];
           const blocoTopY = this.PROM.blocoY[slotNaPagina];
-          const numeroPromiss = `${data.cliente.codCliente || data.sale.customerCpf} ${parc.num}/${data.parcelas}`;
-          this.drawAt(doc, this.PROM.fields.numero, blocoTopY, numeroPromiss);
-          this.drawAt(doc, this.PROM.fields.valor, blocoTopY, this.fmtBRL(parc.valor));
-          this.drawAt(doc, this.PROM.fields.vencDia, blocoTopY, String(parc.vencimento.getDate()).padStart(2, '0'));
-          this.drawAt(doc, this.PROM.fields.vencMes, blocoTopY, this.mesPorExtenso(parc.vencimento));
-          this.drawAt(doc, this.PROM.fields.vencAno, blocoTopY, String(parc.vencimento.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.beneficiarioA, blocoTopY, this.RAZAO_SOCIAL);
-          this.drawAt(doc, this.PROM.fields.devedorAa, blocoTopY, data.cliente.nome);
-          // Campo "C.P.F. C.N.P.J." na linha do beneficiário (Lurd's) — vai o CNPJ
-          // da empresa que recebe (T.O. RISSUTTO), NÃO o CPF do cliente.
-          this.drawAt(doc, this.PROM.fields.cpfDevedor, blocoTopY, this.CNPJ_BENEFICIARIO);
-          doc.text(
-            this.valorPorExtenso(parc.valor),
-            this.PROM.fields.quantiaExtenso.x,
-            blocoTopY + this.PROM.fields.quantiaExtenso.dy,
-            { width: this.PROM.fields.quantiaExtenso.w, lineBreak: true },
-          );
-          this.drawAt(doc, this.PROM.fields.pagavelEm, blocoTopY, data.cidadeLoja);
-          const hoje = new Date();
-          this.drawAt(doc, this.PROM.fields.emissaoDia, blocoTopY, String(hoje.getDate()).padStart(2, '0'));
-          this.drawAt(doc, this.PROM.fields.emissaoMes, blocoTopY, this.mesPorExtenso(hoje));
-          this.drawAt(doc, this.PROM.fields.emissaoAno, blocoTopY, String(hoje.getFullYear()));
-          this.drawAt(doc, this.PROM.fields.emitente, blocoTopY, data.cliente.nome);
-          this.drawAt(doc, this.PROM.fields.cpfEmitente, blocoTopY, data.cliente.cpf);
-          this.drawAt(doc, this.PROM.fields.endereco, blocoTopY, `${data.cliente.endereco} ${data.cliente.bairro}`.trim());
-          this.drawAt(doc, this.PROM.fields.cep, blocoTopY, data.cliente.cep);
+          this.drawPromissoriaBloco(doc, blocoTopY, data, parc);
         }
 
         // === CARNÊ === (sempre uma página nova)
@@ -590,6 +671,59 @@ export class CrediarioPrintService {
       } catch (e) { reject(e); }
     });
     return { buffer, filename: 'regua-calibracao.pdf' };
+  }
+
+  /**
+   * PROMISSÓRIA DE TESTE — gera 3 promissórias com os MESMOS dados do print
+   * de referência do WinCred (Thiago de Oliveira Rissutto, código 2315,
+   * 4 parcelas de R$ 8,90/5,00/5,00/5,00). NÃO depende do banco — pra
+   * calibrar coordenadas sobre a folha pré-impressa sem precisar criar venda.
+   *
+   * Use: GET /pdv/promissorias-teste-pdf
+   * Imprime, sobrepõe na pré-impressa do WinCred, confere se cada campo cai
+   * EXATAMENTE em cima do impresso original.
+   */
+  async generatePromissoriasTeste(): Promise<{ buffer: Buffer; filename: string }> {
+    // Mock data idêntico ao print de calibração que o usuário enviou.
+    const dataMock = {
+      sale: { customerCpf: '28665529896' },
+      cliente: {
+        codCliente: '2315',
+        nome: 'THIAGO DE OLIVEIRA RISSUTTO',
+        cpf: '28665529896',
+        endereco: 'RUA NICOLA MANCUSO FILHO, 291',
+        bairro: 'CH TAMARAS',
+      },
+      cidadeLoja: 'ITANHAEM',
+      parcelas: 4,
+    };
+    const parcelasMock = [
+      { num: 1, valor: 8.90, vencimento: new Date(2026, 4, 10) },  // Maio
+      { num: 2, valor: 5.00, vencimento: new Date(2026, 5, 10) },  // Junho
+      { num: 3, valor: 5.00, vencimento: new Date(2026, 6, 10) },  // Julho
+    ];
+
+    const buffer = await new Promise<Buffer>((resolve, reject) => {
+      try {
+        const doc = new PDFDocument({ size: 'A4', margin: 0 });
+        const chunks: Buffer[] = [];
+        doc.on('data', (c: Buffer) => chunks.push(c));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        this.registerFonts(doc);
+        doc.font('Verdana').fontSize(10);
+
+        // 3 parcelas em 1 folha (3 blocos)
+        for (let i = 0; i < parcelasMock.length; i++) {
+          const blocoTopY = this.PROM.blocoY[i];
+          this.drawPromissoriaBloco(doc, blocoTopY, dataMock, parcelasMock[i]);
+        }
+
+        doc.end();
+      } catch (e) { reject(e); }
+    });
+    return { buffer, filename: 'promissorias-TESTE.pdf' };
   }
 
   /** Helper pra desenhar texto em coordenada absoluta (x, y_relativo + bloco_top) */

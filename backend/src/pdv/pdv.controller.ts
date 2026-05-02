@@ -902,4 +902,24 @@ export class PdvController {
       res.status(500).json({ statusCode: 500, message: 'Erro ao gerar régua' });
     }
   }
+
+  /**
+   * GET /pdv/promissorias-teste-pdf — gera 3 promissórias com os MESMOS dados
+   * do print de referência do WinCred (Thiago/2315/8.90/5.00...). Não depende
+   * de venda — só pra calibrar coordenadas e fonte sobre a folha pré-impressa.
+   */
+  @Get('promissorias-teste-pdf')
+  async getPromissoriasTeste(@Req() req: any, @Res() res: Response) {
+    this.requireRole(req);
+    try {
+      const { buffer, filename } = await this.crediarioPrint.generatePromissoriasTeste();
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.end(buffer);
+    } catch (e: any) {
+      console.error('[pdv/promissorias-teste-pdf] FALHA', e?.stack || e);
+      res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF de teste', detail: e?.message });
+    }
+  }
 }
