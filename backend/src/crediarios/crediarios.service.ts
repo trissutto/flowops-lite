@@ -145,7 +145,10 @@ export class CrediariosService {
       totalParcelas:  pickColumn(cols, /^qtd_?parcelas?$/i, /^total_?parcelas?$/i, /^numparcelas$/i, /^np$/i),
       vencimento:     pickColumn(cols, /^vencimento$/i, /^data_?vencimento$/i, /^dt_?venc$/i, /^vencto$/i, /^venc$/i),
       valorParcela:   pickColumn(cols, /^valor_?parcela$/i, /^valor_?parc$/i, /^vlrparc$/i, /^valor$/i),
-      dataPagamento:  pickColumn(cols, /^data_?pagamento$/i, /^dt_?pagto$/i, /^data_?pagto$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i),
+      // Lurd's usa simplesmente "PAGAMENTO" (sem prefixo data_). MUITO CRÍTICO:
+      // colocar /^pagamento$/i ANTES de /^pago$/i conflict — não, são regex
+      // diferentes em campos diferentes (pago vs dataPagamento), sem conflito.
+      dataPagamento:  pickColumn(cols, /^pagamento$/i, /^data_?pagamento$/i, /^dt_?pagto$/i, /^data_?pagto$/i, /^datapagto$/i, /^data_?baixa$/i, /^datapag$/i),
       valorPago:      pickColumn(cols, /^valor_?pago$/i, /^valorpago$/i, /^vlrpago$/i),
       pago:           pickColumn(cols,
         /^pago$/i, /^pg$/i, /^pago_?sn$/i, /^st_?pago$/i, /^stat_?pago$/i, /^status_?pago$/i,

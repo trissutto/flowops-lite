@@ -1969,6 +1969,10 @@ function PaymentModal({
     : null;
   const [selected, setSelected] = useState<string | null>(initialSelected);
   const [bandeira, setBandeira] = useState<string | null>(presetBandeira);
+  // Filtro EFETIVO de métodos exibidos. Começa com o prop methodFilter, mas
+  // após o 1º pagamento parcial muda pra 'all' automaticamente — assim a
+  // vendedora pode misturar formas (ex: PIX + dinheiro, CARTÃO + dinheiro).
+  const [effectiveFilter, setEffectiveFilter] = useState<typeof methodFilter>(methodFilter);
   const [parcelas, setParcelas] = useState(1);
   const [recebido, setRecebido] = useState('');
   // Valor que vai cobrir essa forma de pagamento (default = restante)
@@ -2171,6 +2175,11 @@ function PaymentModal({
       setCredEntrada('');
       setCredObs('');
       setCredCustomerInfo(null);
+      // Após 1º pagamento parcial: libera TODOS os métodos pra completar
+      // a venda em outras formas (multi-pagamento). Assim a vendedora não
+      // fica presa no filtro original (ex: clicou em PIX, pagou parte, e
+      // agora precisa receber o resto em dinheiro/cartão).
+      setEffectiveFilter('all');
       onPaymentsChange?.();
     } catch (e: any) {
       const h = humanizeError(e);
@@ -2582,19 +2591,31 @@ function PaymentModal({
             (PIX/CARTÃO/CRED.), mostra só os métodos correspondentes. */}
         {!pago100 && (
           <>
-            <div className="text-[10px] uppercase font-semibold text-slate-500">
-              {methodFilter === 'pix' && 'Pagar com PIX'}
-              {methodFilter === 'cartao' && 'Pagar com cartão'}
-              {methodFilter === 'crediario' && 'Vender no crediário'}
-              {methodFilter === 'all' && 'Adicionar forma de pagamento'}
+            <div className="text-[10px] uppercase font-semibold text-slate-500 flex items-center justify-between">
+              <span>
+                {effectiveFilter === 'pix' && 'Pagar com PIX'}
+                {effectiveFilter === 'cartao' && 'Pagar com cartão'}
+                {effectiveFilter === 'crediario' && 'Vender no crediário'}
+                {effectiveFilter === 'all' && (payments.length > 0 ? 'Completar com outra forma' : 'Adicionar forma de pagamento')}
+              </span>
+              {/* Toggle: se filtrou por algo específico, permite expandir pra todas */}
+              {effectiveFilter !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => setEffectiveFilter('all')}
+                  className="text-[10px] font-bold text-violet-600 hover:underline normal-case"
+                >
+                  + outras formas
+                </button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               {PAYMENT_METHODS
                 .filter((p) => {
-                  if (methodFilter === 'all') return true;
-                  if (methodFilter === 'pix') return p.id === 'pix';
-                  if (methodFilter === 'cartao') return p.id === 'debito' || p.id === 'credito';
-                  if (methodFilter === 'crediario') return p.id === 'crediario';
+                  if (effectiveFilter === 'all') return true;
+                  if (effectiveFilter === 'pix') return p.id === 'pix';
+                  if (effectiveFilter === 'cartao') return p.id === 'debito' || p.id === 'credito';
+                  if (effectiveFilter === 'crediario') return p.id === 'crediario';
                   return true;
                 })
                 .map((p) => {

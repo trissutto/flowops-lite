@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { CrediarioPrintService } from './crediario-print.service';
+import { CrediariosService } from '../crediarios/crediarios.service';
+import { ErpService } from '../erp/erp.service';
 import * as fs from 'fs';
 
 const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
@@ -14,7 +16,184 @@ const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
  */
 @Controller('pdv-diag')
 export class PdvDiagController {
-  constructor(private readonly crediarioPrint: CrediarioPrintService) {}
+  constructor(
+    private readonly crediarioPrint: CrediarioPrintService,
+    private readonly crediarios: CrediariosService,
+    private readonly erp: ErpService,
+  ) {}
+
+  /**
+   * GET /pdv-diag/columns — mostra QUAIS colunas o detectColumns() identificou
+   * na tabela `movimento` do Giga (registro, controle, pago, dataPagamento,
+   * valorPago). Pra confirmar que estamos atualizando a coluna CORRETA que o
+   * WinCred lê na tela "Histórico do Cliente".
+   */
+  @Get('columns')
+  async getColumns(@Res() res: Response) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      const map = await this.crediarios.detectColumns(true);
+      res.status(200).json({
+        colunas_detectadas: map,
+        _help: 'Se "pago" ou "dataPagamento" estiverem null, o UPDATE da baixa NÃO atualiza esses campos. WinCred mostra como pendente.',
+      });
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
+    }
+  }
+
+  /**
+   * POST /pdv-diag/baixa-retroativa — força UPDATE em uma parcela específica
+   * pra preencher PAGO=SIM + PAGAMENTO=data. Uso pra corrigir parcelas que
+   * já foram pagas no físico mas o sistema não atualizou os campos certos.
+   *
+   * Body: { controle: number, parcela: number, data: 'YYYY-MM-DD' }
+   * Ou via query string pro browser: ?controle=X&parcela=Y&data=YYYY-MM-DD
+   *
+   * IMPORTANTE: requer ERP_WRITE_ENABLED=true no Railway (já deve estar).
+   */
+  @Post('baixa-retroativa')
+  async postBaixaRetroativa(@Body() body: any, @Res() res: Response) {
+    return this.executarBaixaRetroativa(body || {}, res);
+  }
+  // GET pra facilitar pelo navegador (sem precisar de tool de POST)
+  @Get('baixa-retroativa')
+  async getBaixaRetroativa(@Query() q: any, @Res() res: Response) {
+    return this.executarBaixaRetroativa(q, res);
+  }
+
+  private async executarBaixaRetroativa(input: any, res: Response) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      const controle = String(input.controle || '').replace(/\D/g, '');
+      const parcela = String(input.parcela || '').replace(/\D/g, '');
+      const data = String(input.data || '').trim(); // YYYY-MM-DD
+      if (!controle || !parcela || !data) {
+        return res.status(400).json({
+          error: 'Parâmetros obrigatórios: controle, parcela, data (YYYY-MM-DD)',
+          exemplo: '/api/pdv-diag/baixa-retroativa?controle=946758&parcela=4&data=2026-05-02',
+        });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+        return res.status(400).json({ error: 'Data deve ser YYYY-MM-DD (ex: 2026-05-02)' });
+      }
+
+      const map = await this.crediarios.detectColumns();
+      if (!map.controle || !map.parcela || !map.dataPagamento || !map.pago) {
+        return res.status(500).json({
+          error: 'Colunas críticas não detectadas',
+          map,
+        });
+      }
+
+      // Busca a linha primeiro pra confirmar que existe + pegar REGISTRO real
+      const sqlSelect = `SELECT * FROM \`movimento\` WHERE \`${map.controle}\` = ${controle} AND \`${map.parcela}\` = ${parcela} LIMIT 1`;
+      const r = await this.erp.runReadOnly(sqlSelect, { maxRows: 1, timeoutMs: 10000 });
+      if (!r.rows.length) {
+        return res.status(404).json({ error: `Parcela não encontrada: CONTROLE=${controle} PARCELA=${parcela}` });
+      }
+      const row = r.rows[0] as any;
+      const valorAntes = {
+        pago: row[map.pago],
+        pagamento: row[map.dataPagamento],
+        valor_pago: map.valorPago ? row[map.valorPago] : null,
+      };
+
+      // Faz o UPDATE
+      const valorParcela = map.valorParcela ? Number(row[map.valorParcela]) || 0 : 0;
+      const sets: string[] = [
+        `\`${map.pago}\` = 'SIM'`,
+        `\`${map.dataPagamento}\` = '${data}'`,
+      ];
+      if (map.valorPago) {
+        sets.push(`\`${map.valorPago}\` = ${valorParcela}`);
+      }
+      const sqlUpdate = `UPDATE \`movimento\` SET ${sets.join(', ')} WHERE \`${map.controle}\` = ${controle} AND \`${map.parcela}\` = ${parcela}`;
+
+      // Usa connection do erp.pool diretamente via runReadOnly NÃO funciona pra UPDATE.
+      // Vou chamar markCrediarioParcelaPaid que já tem a estrutura ACID.
+      // Mas precisamos do REGISTRO + CONTROLE como chave composta — pega da row.
+      const registroVal = map.registro ? row[map.registro] : null;
+      if (!registroVal) {
+        return res.status(500).json({ error: `Coluna REGISTRO não detectada/preenchida na linha`, map, row });
+      }
+
+      const result = await this.erp.markCrediarioParcelaPaid({
+        registro: registroVal,
+        controle: controle,
+        valorPago: valorParcela,
+        dataPagamento: new Date(data + 'T12:00:00'),
+        columns: {
+          registro: map.registro,
+          controle: map.controle,
+          pago: map.pago,
+          dataPagamento: map.dataPagamento,
+          valorPago: map.valorPago,
+        },
+      });
+
+      return res.status(200).json({
+        ok: result.success,
+        controle,
+        parcela,
+        data_aplicada: data,
+        valor_parcela: valorParcela,
+        registro_giga: registroVal,
+        valores_antes: valorAntes,
+        update_result: result,
+        sql_executado: sqlUpdate,
+      });
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message, stack: e?.stack });
+    }
+  }
+
+  /**
+   * GET /pdv-diag/parcela?registro=X&controle=Y — retorna a linha COMPLETA
+   * de movimento do Giga pra essa parcela. Pra ver o que tem realmente
+   * gravado nas colunas: PAGO, DATA_PAGAMENTO, VALOR_PAGO, etc.
+   *
+   * Use pra investigar parcelas que aparecem como "pendentes" no WinCred
+   * mesmo após baixa pelo nosso sistema.
+   */
+  @Get('parcela')
+  async getParcela(@Query('registro') registro: string, @Query('controle') controle: string, @Res() res: Response) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      const map = await this.crediarios.detectColumns();
+      if (!map.registro || !map.controle) {
+        return res.status(500).json({ error: 'Colunas REGISTRO/CONTROLE não detectadas' });
+      }
+      const safeReg = String(registro || '').replace(/[^0-9]/g, '');
+      const safeCtl = String(controle || '').replace(/[^0-9]/g, '');
+      if (!safeReg || !safeCtl) {
+        return res.status(400).json({ error: 'registro e controle são obrigatórios e numéricos' });
+      }
+      const sql = `SELECT * FROM \`movimento\` WHERE \`${map.registro}\` = ${safeReg} AND \`${map.controle}\` = ${safeCtl} LIMIT 1`;
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+      const row = r.rows[0];
+      if (!row) return res.status(404).json({ error: `Parcela não encontrada: REGISTRO=${safeReg} CONTROLE=${safeCtl}` });
+
+      // Destaque dos campos críticos pra debug
+      const pagoCol = map.pago || 'PAGO';
+      const dataCol = map.dataPagamento || '?';
+      const valorCol = map.valorPago || '?';
+      res.status(200).json({
+        registro: safeReg,
+        controle: safeCtl,
+        colunas_detectadas: map,
+        valores_criticos: {
+          [`PAGO (${pagoCol})`]: (row as any)[pagoCol] ?? null,
+          [`DATA_PAGAMENTO (${dataCol})`]: (row as any)[dataCol] ?? null,
+          [`VALOR_PAGO (${valorCol})`]: (row as any)[valorCol] ?? null,
+        },
+        linha_completa: row,
+        _help: 'Se PAGO=SIM mas o WinCred mostra como pendente, é provável que a coluna que ele consulta na tela é OUTRA. Compara os campos da linha_completa com a tela do WinCred.',
+      });
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
+    }
+  }
 
   /** GET /pdv-diag/coords — retorna coordenadas ATIVAS no servidor agora. */
   @Get('coords')
