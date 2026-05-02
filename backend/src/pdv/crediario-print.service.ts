@@ -175,9 +175,9 @@ export class CrediarioPrintService {
   // Valores atuais (mm → pt):
   //   Bloco 1: 7.76mm  → 22.00pt
   //   Bloco 2: 100.5mm → 284.92pt
-  //   Bloco 3: 192.7mm → 546.30pt
+  //   Bloco 3: 193.7mm → 549.14pt
   private readonly PROM_DEFAULT = {
-    blocoY: [22.00, 284.92, 546.30],
+    blocoY: [22.00, 284.92, 549.14],
     blocoH: 262.92,
     fields: {
       numero:           { x: 167, dy: 29 },
