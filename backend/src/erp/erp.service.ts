@@ -736,6 +736,94 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * pra simplicidade. A baixa local (Postgres) é a fonte da verdade pro
    * recibo; este UPDATE é "espelho" pro Giga.
    */
+  /**
+   * INSERT múltiplas linhas em `caixa` com MARCADO='SIM'.
+   * Usado pelo sistema MARCADOS quando vendedora cria marcado pelo PDV.
+   *
+   * Cada item vira 1 linha em `caixa`. Todas compartilham o mesmo CONTROLE
+   * (gerado pegando MAX(CONTROLE)+1) — assim agrupa o marcado pra o cliente
+   * conseguir ver junto na consulta.
+   *
+   * Retorna { success, controle, error? } — caller pode logar o controle
+   * e mostrar pra vendedora como comprovante.
+   */
+  async insertCaixaMarcado(input: {
+    items: Array<{
+      codigo: string;
+      descricao: string;
+      quantidade: number;
+      valor: number;
+      valorTotal: number;
+      vendedor?: number;
+      operador?: number;
+    }>;
+    cliente: number;
+    loja: string;
+  }): Promise<{ success: boolean; controle?: number; error?: string }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, error: 'Pool ERP não inicializado' };
+    }
+    if (!input.items?.length) {
+      return { success: false, error: 'Sem items pra marcar' };
+    }
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Próximo CONTROLE — agrupa todos os items desse marcado
+      const [maxRows] = await conn.query<mysql.RowDataPacket[]>(
+        `SELECT COALESCE(MAX(NUMERO), 0) + 1 AS proxNumero FROM caixa`,
+      );
+      const proxNumero = Number((maxRows[0] as any).proxNumero) || 1;
+
+      const lojaCode = String(input.loja || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
+      const today = new Date();
+      const dataStr = today.toISOString().slice(0, 10); // YYYY-MM-DD
+      const horaStr = today.toTimeString().slice(0, 8); // HH:MM:SS
+
+      // INSERT cada item
+      for (const it of input.items) {
+        await conn.query(
+          `INSERT INTO caixa
+            (NUMERO, CODIGO, DATA, CLIENTE, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL,
+             OPERADOR, VENDEDOR, MARCADO, LOJA, HORA)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SIM', ?, ?)`,
+          [
+            proxNumero,
+            it.codigo,
+            dataStr,
+            input.cliente,
+            it.descricao,
+            it.quantidade,
+            it.valor,
+            it.valorTotal,
+            it.operador || 0,
+            it.vendedor || 0,
+            lojaCode,
+            horaStr,
+          ],
+        );
+      }
+
+      await conn.commit();
+      this.logger.log(
+        `[caixa-marcado] INSERT OK: cliente=${input.cliente} ` +
+        `controle=${proxNumero} items=${input.items.length} loja=${lojaCode}`,
+      );
+      return { success: true, controle: proxNumero };
+    } catch (e: any) {
+      try { await conn.rollback(); } catch { /* ignore */ }
+      const msg = String(e?.message || e);
+      this.logger.error(`[caixa-marcado] INSERT FALHOU: ${msg}`);
+      return { success: false, error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
   async markCrediarioParcelaPaid(input: {
     registro: string | number;
     controle: string | number;

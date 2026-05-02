@@ -22,7 +22,7 @@ import {
   AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt, Globe, Shuffle,
+  Receipt, Globe, Shuffle, Tag,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -1284,6 +1284,14 @@ function PdvPageInner() {
             >
               <FileText className="w-3.5 h-3.5 text-blue-600" />
               <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">NFC-es</span>
+            </Link>
+            <Link
+              href="/minha-loja/pdv/marcados"
+              className="bg-white hover:bg-purple-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-purple-300"
+              title="Marcados (provar em casa) — clientes classe A"
+            >
+              <Tag className="w-3.5 h-3.5 text-purple-600" />
+              <span className="text-[10px] font-bold text-slate-700 leading-tight text-center">Marcados</span>
             </Link>
           </div>
 
@@ -2570,6 +2578,21 @@ function PaymentModal({
           </div>
         </div>
 
+        {/* Botão MARCAR — sistema de "leva pra provar em casa".
+            Só aparece se: cliente identificado + sem pagamentos adicionados ainda. */}
+        {customerCpf && payments.length === 0 && !pago100 && (
+          <MarcarComponent
+            saleId={saleId}
+            customerCpf={customerCpf}
+            total={total}
+            onMarked={() => {
+              toast('success', 'Peças marcadas!', 'Cliente vai provar em casa');
+              onClose();
+              onPaymentsChange?.();
+            }}
+          />
+        )}
+
         {/* Lista de pagamentos parciais já adicionados */}
         {payments.length > 0 && (
           <div className="space-y-1">
@@ -3218,6 +3241,134 @@ function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) 
       </div>
       <div className="text-[10px] text-blue-700">
         Aperta Enter pra salvar. CPF aparece na NFC-e impressa.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Componente "Marcar peças" — sistema de "leva pra provar em casa".
+ * Aparece dentro do PaymentModal quando o cliente está identificado E
+ * ainda não tem pagamentos adicionados. Valida no backend se o cliente
+ * é classe A com limite, mostra info, e oferece o botão MARCAR.
+ */
+function MarcarComponent({
+  saleId,
+  customerCpf,
+  total,
+  onMarked,
+}: {
+  saleId: string;
+  customerCpf: string;
+  total: number;
+  onMarked: () => void;
+}) {
+  const { toast } = usePdvToast();
+  const [info, setInfo] = useState<{
+    permitido: boolean;
+    motivo?: string;
+    cliente: { nome: string; classificacao: string; limiteTotal: number } | null;
+    totalMarcadosAtivos: number;
+    limiteDisponivel: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [marking, setMarking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api<typeof info>(`/pdv/marcados/cliente?cpf=${customerCpf}`)
+      .then((r) => { if (!cancelled) setInfo(r as any); })
+      .catch(() => { if (!cancelled) setInfo(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [customerCpf]);
+
+  if (loading) {
+    return (
+      <div className="bg-purple-50 border border-purple-200 rounded p-3 text-xs text-purple-700 flex items-center gap-2">
+        <Loader2 className="w-3 h-3 animate-spin" /> Verificando se cliente pode marcar…
+      </div>
+    );
+  }
+
+  // Não tem permissão ou erro — esconde a opção
+  if (!info || !info.permitido || total > info.limiteDisponivel) {
+    if (info && !info.permitido) {
+      // Mostra um aviso discreto pra vendedora saber por que não tem opção
+      return (
+        <details className="bg-slate-50 border rounded p-2 text-xs text-slate-600">
+          <summary className="cursor-pointer font-bold">
+            ℹ️ Cliente não pode marcar
+          </summary>
+          <div className="mt-1">{info.motivo}</div>
+        </details>
+      );
+    }
+    if (info && total > info.limiteDisponivel) {
+      return (
+        <details className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-800">
+          <summary className="cursor-pointer font-bold">
+            ⚠️ Valor excede limite de marcado
+          </summary>
+          <div className="mt-1">
+            Limite: {brl(info.cliente?.limiteTotal || 0)} ·
+            Em aberto: {brl(info.totalMarcadosAtivos)} ·
+            Disponível: <b>{brl(info.limiteDisponivel)}</b>
+            <div className="mt-1">Venda atual: <b>{brl(total)}</b> — passa do disponível.</div>
+          </div>
+        </details>
+      );
+    }
+    return null;
+  }
+
+  async function marcar() {
+    if (!confirm(
+      `MARCAR ${brl(total)} pra ${info?.cliente?.nome}?\n\n` +
+      `As peças vão ser registradas como "marcado" no Giga.\n` +
+      `Estoque é baixado igual venda.\n` +
+      `Cliente leva pra provar em casa.\n\n` +
+      `Confirma?`,
+    )) return;
+    setMarking(true);
+    try {
+      const r = await api<{ ok: boolean; controle: number; totalItems: number }>(
+        '/pdv/marcados/criar',
+        { method: 'POST', body: JSON.stringify({ saleId }) },
+      );
+      if (r.ok) {
+        onMarked();
+      } else {
+        toast('error', 'Falha ao marcar', 'Tente de novo');
+      }
+    } catch (e: any) {
+      toast('error', 'Falha ao marcar', e?.message || String(e));
+    } finally {
+      setMarking(false);
+    }
+  }
+
+  return (
+    <div className="bg-purple-50 border-2 border-purple-300 rounded p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div className="text-xs font-bold uppercase text-purple-900">📋 Marcar (Provar em casa)</div>
+          <div className="text-[11px] text-purple-700 mt-0.5">
+            Cliente <b>{info.cliente?.nome}</b> · classe <b>{info.cliente?.classificacao}</b>
+          </div>
+          <div className="text-[10px] text-purple-600 mt-0.5">
+            Limite disponível: <b>{brl(info.limiteDisponivel)}</b> (em aberto {brl(info.totalMarcadosAtivos)})
+          </div>
+        </div>
+        <button
+          onClick={marcar}
+          disabled={marking}
+          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-40 text-white font-bold rounded text-sm flex items-center gap-1.5"
+        >
+          {marking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
+          MARCAR {brl(total)}
+        </button>
       </div>
     </div>
   );
