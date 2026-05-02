@@ -95,6 +95,14 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
    * Performance: 1 query SQL pra uma lista de REFs. Se a lista ultrapassar 50,
    * fatia em lotes pra não estourar o tamanho do statement.
    */
+  // Cache em memória de imagens por REF — TTL 10 min.
+  // Imagens não mudam toda hora, então é seguro cachear. Reduz drasticamente
+  // o tempo de resposta da tela de Realinhamento (era 5-10s, vai pra <500ms).
+  // Compartilhado entre todas as chamadas (singleton do service).
+  private imageCache = new Map<string, { url: string; expiresAt: number }>();
+  private siteUrlCache: { value: string; expiresAt: number } | null = null;
+  private readonly CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
+
   async getImagesByRefs(refs: string[]): Promise<Record<string, string>> {
     if (!this.pool || !refs.length) return {};
 
@@ -102,16 +110,38 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     if (!uniqRefs.length) return {};
 
     const result: Record<string, string> = {};
+    const now = Date.now();
+
+    // Separa: refs JÁ NO CACHE (válido) vs refs NOVAS (precisam consulta SQL)
+    const refsToFetch: string[] = [];
+    for (const ref of uniqRefs) {
+      const cached = this.imageCache.get(ref.toUpperCase());
+      if (cached && cached.expiresAt > now) {
+        if (cached.url) result[ref] = cached.url;
+        // url vazia significa "consultou e não achou" — válido cachear
+      } else {
+        refsToFetch.push(ref);
+      }
+    }
+
+    if (refsToFetch.length === 0) return result; // tudo veio do cache
+
     const BATCH = 50;
 
-    // Detecta o host do WP pra montar URLs absolutas. Fallback razoável.
-    const siteUrlRows = await this.query<{ option_value: string }>(
-      "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
-    );
-    const siteUrl = (siteUrlRows[0]?.option_value || '').replace(/\/+$/, '');
+    // siteUrl também cacheado (não muda quase nunca)
+    let siteUrl: string;
+    if (this.siteUrlCache && this.siteUrlCache.expiresAt > now) {
+      siteUrl = this.siteUrlCache.value;
+    } else {
+      const siteUrlRows = await this.query<{ option_value: string }>(
+        "SELECT option_value FROM wp_options WHERE option_name = 'siteurl' LIMIT 1",
+      );
+      siteUrl = (siteUrlRows[0]?.option_value || '').replace(/\/+$/, '');
+      this.siteUrlCache = { value: siteUrl, expiresAt: now + this.CACHE_TTL_MS };
+    }
 
-    for (let i = 0; i < uniqRefs.length; i += BATCH) {
-      const slice = uniqRefs.slice(i, i + BATCH);
+    for (let i = 0; i < refsToFetch.length; i += BATCH) {
+      const slice = refsToFetch.slice(i, i + BATCH);
 
       // Constrói LIKE OR pra cada REF — precisa no where MySQL
       const likeClauses = slice.map(() => 'pm_sku.meta_value LIKE ?').join(' OR ');
@@ -159,6 +189,17 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
             : `/wp-content/uploads/${file}`;
           result[matched] = url;
         }
+
+        // Salva no cache: ACHADOS com URL + NÃO ACHADOS com url vazia
+        // (assim na próxima consulta NÃO vamos refazer SQL pra refs que já
+        // sabemos que não tem foto). Cache válido por 10 min.
+        const expiresAt = now + this.CACHE_TTL_MS;
+        for (const ref of slice) {
+          this.imageCache.set(ref.toUpperCase(), {
+            url: result[ref] || '',
+            expiresAt,
+          });
+        }
       } catch (e: any) {
         this.logger.warn(`getImagesByRefs falhou: ${e.message}`);
         // Não quebra o caller — só devolve vazio pro lote que falhou
@@ -166,5 +207,16 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     }
 
     return result;
+  }
+
+  /**
+   * Limpa o cache de imagens. Útil pra forçar refresh quando vendedora
+   * mudou foto de produto e quer ver o novo. Chamar via endpoint admin.
+   */
+  clearImageCache(): { cleared: number } {
+    const n = this.imageCache.size;
+    this.imageCache.clear();
+    this.siteUrlCache = null;
+    return { cleared: n };
   }
 }

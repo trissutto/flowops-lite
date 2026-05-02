@@ -452,6 +452,48 @@ export default function PedidoDetailPage() {
    * depois que a loja já bipou — isso seria perda de trabalho).
    */
   /**
+   * Remove um pick-order específico (loja resolvida manualmente).
+   * Tira o card da loja problemática + os items dela ficam órfãos
+   * (a retaguarda já resolveu fora do sistema). Não mexe nas outras lojas.
+   */
+  async function removerPickOrder(pickOrderId: string, storeCode: string, storeName: string | null) {
+    const displayName = storeName || storeCode;
+    if (!confirm(
+      `Remover ${displayName} (${storeCode}) deste pedido?\n\n` +
+      `Use isso quando você JÁ resolveu o problema manualmente em outra loja ` +
+      `(ex: cliente pegou na outra) e só quer limpar o card aqui.\n\n` +
+      `As outras lojas do pedido NÃO são afetadas.`,
+    )) return;
+
+    setSepLoading(true);
+    setSepError(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        pickOrderId: string;
+        storeCode: string;
+        storeName: string;
+        itemsLiberados: number;
+      }>(`/pick-orders/${pickOrderId}`, { method: 'DELETE' });
+
+      if (!res.ok) {
+        setSepError('Não foi possível remover o pick-order.');
+        return;
+      }
+      setFlash(`✓ ${storeCode} removida do pedido. ${res.itemsLiberados} item(ns) liberado(s).`);
+      setTimeout(() => setFlash(null), 5000);
+      // Recarrega painel ao vivo
+      api<typeof liveStatus>(`/pick-orders/by-wc/${wcId}`)
+        .then((data) => setLiveStatus(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao remover pick-order');
+    } finally {
+      setSepLoading(false);
+    }
+  }
+
+  /**
    * Click no botão "↔ Trocar loja" de um card específico.
    * Em vez do confirm() simples (que tentava re-rotear automático), agora
    * abre o modal "Escolher loja manualmente" — vendedora vê TODAS as lojas
@@ -1235,6 +1277,21 @@ export default function PedidoDetailPage() {
                         {st === 'error' && '⚠ Reimprimir'}
                         {st === 'idle' && '🖨️ Imprimir'}
                       </button>
+                      {/* Remover pick-order — pra casos onde a retaguarda
+                          resolveu MANUALMENTE em outra loja (ex: cliente pegou
+                          em outra) e quer só limpar o card problemático.
+                          Aparece se status NÃO é shipped/delivered. */}
+                      {r.storeCode && !['shipped', 'delivered'].includes(r.status) && (
+                        <button
+                          type="button"
+                          onClick={() => removerPickOrder(r.id, r.storeCode!, r.storeName)}
+                          disabled={sepLoading}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                          title={`Remover ${r.storeCode} do pedido (resolvido manualmente)`}
+                        >
+                          🗑️ Remover
+                        </button>
+                      )}
                       {/* Trocar loja — SEMPRE visível pra retaguarda ter essa opção
                           na cara, mas desabilita (com tooltip) se já avançou de
                           "separating" pra "ready/shipped". Nesses estágios trocar

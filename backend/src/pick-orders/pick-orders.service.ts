@@ -1215,6 +1215,79 @@ export class PickOrdersService {
    * Se orderId não for passado, cria um Order sintético (TESTE-<timestamp>) com 2 itens.
    * Emite socket pra loja receber em tempo real na /minha-loja.
    */
+  /**
+   * Remove um pick-order específico (cancelamento manual da retaguarda).
+   * Items dele ficam SEM atribuição (assignedStoreId=null) — retaguarda
+   * resolveu fora do sistema. Outros pick-orders do mesmo Order ficam intactos.
+   *
+   * Bloqueia se status=shipped/delivered (envio já feito, não cancelar).
+   */
+  async removePickOrder(pickOrderId: string): Promise<{
+    ok: boolean;
+    pickOrderId: string;
+    storeCode: string;
+    storeName: string;
+    itemsLiberados: number;
+  }> {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      include: {
+        store: { select: { id: true, code: true, name: true } },
+        order: { select: { id: true } },
+      },
+    });
+    if (!po) throw new NotFoundException('Pick-order não encontrado');
+
+    // Não permite remover quem já enviou (preservar tracking/baixa Giga)
+    const blocked = ['shipped', 'delivered'];
+    if (blocked.includes(po.status)) {
+      throw new BadRequestException(
+        `Não dá pra remover pick-order com status "${po.status}". Use Trocar Loja se precisar reverter.`,
+      );
+    }
+
+    const orderId = po.order.id;
+    const storeId = po.store.id;
+    const storeCode = po.store.code;
+    const storeName = po.store.name;
+
+    // Conta items que estavam atribuídos a essa loja (pra retornar count)
+    const itemsLiberados = await this.prisma.orderItem.count({
+      where: { orderId, assignedStoreId: storeId },
+    });
+
+    await this.prisma.$transaction(async (tx) => {
+      // Libera items
+      await tx.orderItem.updateMany({
+        where: { orderId, assignedStoreId: storeId },
+        data: { assignedStoreId: null },
+      });
+      // Deleta pick-order
+      await tx.pickOrder.delete({ where: { id: pickOrderId } });
+      // Histórico
+      await tx.orderHistory.create({
+        data: {
+          orderId,
+          fromStatus: po.status,
+          toStatus: po.status,
+          note:
+            `Pick-order da loja ${storeCode} REMOVIDO manualmente pela retaguarda. ` +
+            `${itemsLiberados} item(ns) liberado(s) (sem reatribuição). ` +
+            (po.issueReason ? `Motivo do problema reportado: ${po.issueReason}.` : ''),
+        },
+      });
+    });
+
+    // Notifica loja por socket pra remover o card do app /minha-loja
+    try {
+      this.gateway?.emitPickOrderRemoved?.(storeId, { orderId });
+    } catch (e: any) {
+      this.logger.warn(`Falha ao emitir socket: ${e?.message}`);
+    }
+
+    return { ok: true, pickOrderId, storeCode, storeName, itemsLiberados };
+  }
+
   async forceCreateForStore(storeCode: string, orderId?: string) {
     if (!storeCode?.trim()) throw new BadRequestException('storeCode obrigatório');
     const store = await this.prisma.store.findUnique({ where: { code: storeCode.trim() } });

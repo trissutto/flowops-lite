@@ -1,5 +1,5 @@
 import {
-  Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query, Req, UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PickOrdersService, PickStatus } from './pick-orders.service';
@@ -51,6 +51,31 @@ export class PickOrdersController {
       throw new ForbiddenException('Apenas admin pode criar pick-order de teste');
     }
     return this.svc.forceCreateForStore(body.storeCode, body.orderId);
+  }
+
+  /**
+   * DELETE /pick-orders/:id — remove um pick-order específico do pedido.
+   *
+   * Caso de uso: retaguarda resolveu o problema MANUALMENTE (ex: cliente
+   * pegou na outra loja), e quer "limpar" o card da loja problemática que
+   * ficou no pedido. Os items dela ficam SEM atribuição (órfãos), mas isso
+   * é OK porque o pedido foi resolvido fora do sistema.
+   *
+   * Comportamento:
+   *  - Só permite se status = new/separating/issue (não shipped/delivered)
+   *  - Limpa assignedStoreId dos items que estavam atribuídos a essa loja
+   *  - Notifica a loja por socket pra remover o card
+   *  - Loga no histórico
+   *
+   * Permite admin/operator. Não permite vendedora (role 'store').
+   */
+  @Delete(':id')
+  async removePickOrder(@Req() req: any, @Param('id') id: string) {
+    const user = req.user as AuthUser;
+    if (user.role !== 'admin' && user.role !== 'operator') {
+      throw new ForbiddenException('Apenas matriz pode remover pick-order');
+    }
+    return this.svc.removePickOrder(id);
   }
 
   /**
