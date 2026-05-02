@@ -28,16 +28,37 @@ export function normalizeBrPhone(raw: string | null | undefined, opts: { default
   if (!n) return null;
   if (n.startsWith('0')) n = n.slice(1);
 
+  // Helper: dado um número 55+DDD+número, garante que celular tem o 9.
+  // Celular brasileiro: 1º dígito após DDD é 6, 7, 8 ou 9 → adiciona 9
+  // Fixo: começa com 2-5 → não adiciona.
+  const ensureNonoDigito = (full: string): string => {
+    if (!full.startsWith('55') || full.length < 12) return full;
+    const dddPart = full.slice(2, 4);
+    const numPart = full.slice(4);
+    // Já tem 9 dígitos (celular novo) ou é fixo (8 dígitos começando 2-5)
+    if (numPart.length === 9) return full;
+    if (numPart.length === 8) {
+      const firstDigit = numPart[0];
+      // Celular sem o 9 — números começando 6,7,8,9 são celulares
+      if (['6', '7', '8', '9'].includes(firstDigit)) {
+        return `55${dddPart}9${numPart}`;
+      }
+      // Fixo — mantém como está
+      return full;
+    }
+    return full;
+  };
+
   // Já tem 55 + DDD + número (12 ou 13 dígitos)
   if (n.length === 12 || n.length === 13) {
-    if (n.startsWith('55')) return n;
+    if (n.startsWith('55')) return ensureNonoDigito(n);
     // Mais raro: 12-13 dígitos sem 55 (não bate). Tenta com 55 prefix.
-    return '55' + n;
+    return ensureNonoDigito('55' + n);
   }
   // 10 (fixo) ou 11 (celular) com DDD, sem 55
-  if (n.length === 10 || n.length === 11) return '55' + n;
+  if (n.length === 10 || n.length === 11) return ensureNonoDigito('55' + n);
   // 8 (fixo) ou 9 (celular novo) SEM DDD — adiciona padrão
-  if (n.length === 8 || n.length === 9) return '55' + ddd + n;
+  if (n.length === 8 || n.length === 9) return ensureNonoDigito('55' + ddd + n);
   // Outros tamanhos: inviável
   return null;
 }
