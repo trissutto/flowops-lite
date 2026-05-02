@@ -54,15 +54,10 @@ function loadCoordsConfig(logger: Logger): {
   blocoH?: number;
   fields?: Record<string, { x: number; dy: number; w?: number }>;
 } | null {
-  // PRIMEIRO tenta o override em /tmp/ (calibração ao vivo sem deploy)
-  let cfgPath: string | null = null;
-  try {
-    if (fs.existsSync(OVERRIDE_PATH)) cfgPath = OVERRIDE_PATH;
-  } catch { /* ignore */ }
-  // Se não tem override, lê do assets/config/ deployado
-  if (!cfgPath) {
-    cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
-  }
+  // OVERRIDE EM /tmp DESATIVADO — fonte de verdade é o JSON deployado.
+  // Tela /pdv-diag/calibrar não influencia mais. Pra mudar, edita o
+  // arquivo em assets/config/promissoria-coords.json + commit + push.
+  const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
   if (!cfgPath) {
     logger.warn('[crediario-print] JSON de coords NÃO encontrado. Usando defaults.');
     return null;

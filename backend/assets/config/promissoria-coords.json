@@ -17,7 +17,7 @@
     "Folha A4 = 210mm x 297mm. Bloco padrão = 91mm de altura (3 blocos por folha)."
   ],
 
-  "blocosY_mm": [7.76, 98.78, 190.49],
+  "blocosY_mm": [7.76, 100.5, 192.7],
 
   "fields_mm": {
     "numero":         { "x": 58.9,  "y": 10.2 },
