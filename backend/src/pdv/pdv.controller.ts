@@ -909,12 +909,15 @@ export class PdvController {
    * de venda — só pra calibrar coordenadas e fonte sobre a folha pré-impressa.
    */
   @Get('promissorias-teste-pdf')
-  async getPromissoriasTeste(@Req() req: any, @Res() res: Response) {
-    this.requireRole(req);
+  async getPromissoriasTeste(@Res() res: Response) {
+    // Sem auth + sem cache: tem que recarregar TODA vez pra refletir o JSON
     try {
       const { buffer, filename } = await this.crediarioPrint.generatePromissoriasTeste();
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.setHeader('Content-Length', String(buffer.length));
       res.end(buffer);
     } catch (e: any) {

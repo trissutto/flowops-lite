@@ -1114,6 +1114,23 @@ export class CrediarioPrintService {
         doc.on('error', reject);
 
         this.registerFonts(doc);
+
+        // ===== CARIMBO DE DEBUG no canto superior =====
+        // Mostra timestamp + valores das coords ATIVAS — assim vê NA HORA se
+        // o PDF foi atualizado com as coords novas ou se está vindo cache.
+        const PT_TO_MM = 25.4 / 72;
+        const ts = new Date().toLocaleString('pt-BR');
+        const e = this.PROM.fields.emitente;
+        const cpfE = this.PROM.fields.cpfEmitente;
+        const end = this.PROM.fields.endereco;
+        const carimbo = `[DEBUG ${ts}] blocos=${this.PROM.blocoY.map(y => (y * PT_TO_MM).toFixed(1)).join('/')}mm | ` +
+          `emitente=(${(e.x * PT_TO_MM).toFixed(1)},${(e.dy * PT_TO_MM).toFixed(1)}) ` +
+          `cpf=(${(cpfE.x * PT_TO_MM).toFixed(1)},${(cpfE.dy * PT_TO_MM).toFixed(1)}) ` +
+          `end=(${(end.x * PT_TO_MM).toFixed(1)},${(end.dy * PT_TO_MM).toFixed(1)})`;
+        doc.font('Helvetica').fontSize(7).fillColor('#FF0000')
+          .text(carimbo, 5, 2, { lineBreak: false, width: 585 });
+        doc.fillColor('#000000');
+
         doc.font('Verdana').fontSize(10);
 
         // 3 parcelas em 1 folha (3 blocos)

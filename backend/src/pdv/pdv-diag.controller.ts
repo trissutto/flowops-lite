@@ -20,8 +20,8 @@ export class PdvDiagController {
   @Get('coords')
   async getCoords(@Res() res: Response) {
     try {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
       const result = this.crediarioPrint.diagCoords();
-      // Acrescenta info do override
       const hasOverride = fs.existsSync(OVERRIDE_PATH);
       res.status(200).json({ ...result, override_ativo: hasOverride, override_path: OVERRIDE_PATH });
     } catch (e: any) {
