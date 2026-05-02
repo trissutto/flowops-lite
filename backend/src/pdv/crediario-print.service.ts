@@ -672,11 +672,14 @@ export class CrediarioPrintService {
         codCliente,
         nome: sale.customerName || pick(clienteFull, 'NOME', 'nome', 'CLIENTE', 'cliente', 'RAZAO_SOCIAL') || '',
         cpf: sale.customerCpf || '',
-        endereco: pick(clienteFull, 'ENDERECO', 'ENDERE', 'END', 'LOGRADOURO', 'RUA', 'endereco'),
-        numero:   pick(clienteFull, 'NUMERO', 'NUM', 'numero'),
-        bairro:   pick(clienteFull, 'BAIRRO', 'BAI', 'bairro'),
-        cidade:   pick(clienteFull, 'CIDADE', 'MUNICIPIO', 'cidade'),
-        cep:      pick(clienteFull, 'CEP', 'cep'),
+        // Giga Lurd's usa sufixo RES (residencial). Mantive as antigas como fallback.
+        endereco:    pick(clienteFull, 'ENDERECORES', 'ENDERECO', 'ENDERE', 'END', 'LOGRADOURO', 'RUA', 'endereco'),
+        numero:      pick(clienteFull, 'NUMERORES', 'NUMERO', 'NUM', 'numero'),
+        complemento: pick(clienteFull, 'COMPRES', 'COMPLEMENTO', 'COMP'),
+        bairro:      pick(clienteFull, 'BAIRRORES', 'BAIRRO', 'BAI', 'bairro'),
+        cidade:      pick(clienteFull, 'CIDADERES', 'CIDADE', 'MUNICIPIO', 'cidade'),
+        uf:          pick(clienteFull, 'UFRES', 'UF', 'ESTADO'),
+        cep:         pick(clienteFull, 'CEPRES', 'CEP', 'cep'),
       },
       cidadeLoja: (store as any)?.city || sale.storeName || 'Itanhaém',
     };
@@ -772,8 +775,8 @@ export class CrediarioPrintService {
     // ── dados do emitente (cliente) ──
     this.drawAt(doc, f.emitente, blocoTopY, data.cliente.nome);
     this.drawAt(doc, f.cpfEmitente, blocoTopY, this.fmtCpfCnpj(data.cliente.cpf));
-    // Monta endereço completo: "RUA X, 291, BAIRRO"
-    const partes = [data.cliente.endereco, data.cliente.numero, data.cliente.bairro]
+    // Monta endereço completo: "RUA X, 291, COMPLEMENTO, BAIRRO"
+    const partes = [data.cliente.endereco, data.cliente.numero, data.cliente.complemento, data.cliente.bairro]
       .map((p: any) => String(p || '').trim()).filter(Boolean);
     const endFull = partes.join(', ');
     if (endFull && f.endereco) {
