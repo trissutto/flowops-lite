@@ -156,11 +156,26 @@ export class CobrancaAutoService {
     const minDias = camp.minDiasAtraso ?? 3;
     const maxDias = camp.maxDiasAtraso ?? null;
 
-    // Verifica WhatsApp
-    const status = this.wa.getStatus();
-    if (!status.connected) {
-      this.logger.warn(`Campanha "${camp.nome}" — WhatsApp desconectado, abortando.`);
-      // Reagenda pra rodar de novo daqui a 30min
+    this.logger.log(
+      `[debug] Campanha "${camp.nome}": listOverdueByCustomer trouxe ${data.customers.length} cliente(s) ` +
+      `na loja ${camp.lojaCode}. Filtros: minDias=${minDias}, maxDias=${maxDias ?? 'sem limite'}`,
+    );
+
+    // Verifica WhatsApp DEDICADO de cobrança (não o do site).
+    // O envio acontece via this.waCobranca.sendText, então a checagem
+    // tem que ser no MESMO serviço que vai disparar.
+    let cobrancaConnected = true;
+    try {
+      const cobrancaStatus = (this.waCobranca as any).getStatus?.();
+      if (cobrancaStatus && cobrancaStatus.connected === false) {
+        cobrancaConnected = false;
+      }
+    } catch { /* ignora — alguns adapters não expõem getStatus */ }
+
+    if (!cobrancaConnected) {
+      this.logger.warn(
+        `Campanha "${camp.nome}" — WhatsApp DE COBRANÇA desconectado. Reagendando 30min.`,
+      );
       await (this.prisma as any).cobrancaCampanha.update({
         where: { id: camp.id },
         data: { proximoEnvio: new Date(Date.now() + 30 * 60_000) },
