@@ -4305,6 +4305,68 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Soma estoque de TODOS os SKUs cadastrados como mesma REF+COR+TAM em UMA loja.
+   *
+   * Por que isso existe: o Giga frequentemente tem múltiplos cadastros pra
+   * exatamente a mesma peça (mesma REF+COR+TAM) com CODIGOs diferentes — porque
+   * cada peça física entrou com etiqueta única (legado de cadastros manuais).
+   *
+   * `findCodigoByRefCorTam` retorna só UM SKU (LIMIT 1). Se esse SKU está zerado
+   * em estoque mas OUTRO SKU da mesma peça tem estoque, a peça FÍSICA existe na
+   * loja mas o sistema acha que não tem. Esse método resolve isso somando todos.
+   *
+   * Caso real (Lurd's): "13015 MARINHO 50" tem CODIGOs 5383672 e 5383665 cadastrados;
+   * o precheck pegava o zerado e bloqueava a remessa mesmo tendo a peça física.
+   */
+  async getStockByRefCorTamInStore(
+    refCode: string,
+    cor: string | null,
+    tamanho: string | null,
+    storeCode: string,
+  ): Promise<{ totalQty: number; codigos: string[] }> {
+    if (!this.pool || !refCode || !storeCode) return { totalQty: 0, codigos: [] };
+    const ref = String(refCode).trim();
+    const corClean = (cor || '').trim();
+    const tamClean = (tamanho || '').trim();
+
+    try {
+      // 1) Pega TODOS os CODIGOs cadastrados com essa REF+COR+TAM em produtos
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO FROM produtos
+          WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(COR, ''))) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))`,
+        [ref, corClean, tamClean],
+      );
+      const codigosGiga = Array.from(
+        new Set((prodRows as any[]).map((r) => String(r.CODIGO).trim()).filter(Boolean)),
+      );
+      if (!codigosGiga.length) return { totalQty: 0, codigos: [] };
+
+      // 2) Expande padding (estoque pode ter outras formas: 5383672 e 0005383672)
+      const allVariants = new Set<string>();
+      for (const c of codigosGiga) {
+        for (const v of this.skuVariants(c)) allVariants.add(v);
+      }
+      const variantsArr = Array.from(allVariants);
+
+      // 3) SUM(ESTOQUE) com filtro >0 — mesmo padrão de getStockBySkusDetailed
+      const [stockRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT SUM(ESTOQUE) AS qty FROM estoque
+          WHERE CODIGO IN (?)
+            AND LOJA = ?
+            AND ESTOQUE > 0`,
+        [variantsArr, storeCode],
+      );
+      const totalQty = Math.max(0, Number((stockRows as any[])[0]?.qty ?? 0) || 0);
+      return { totalQty, codigos: codigosGiga };
+    } catch (e) {
+      this.logger.warn(`getStockByRefCorTamInStore falhou: ${(e as Error).message}`);
+      return { totalQty: 0, codigos: [] };
+    }
+  }
+
+  /**
    * Estoque atual de UM SKU específico em N lojas. Retorna Map<storeCode, qty>.
    * Lojas sem o SKU (ou com 0) NÃO aparecem no map.
    */

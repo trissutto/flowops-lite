@@ -257,34 +257,58 @@ export class RealignmentShipmentService {
       itemByKey.set(key, it);
     }
 
-    // FIX: usa MESMA fonte da tela "Consultar Produto" (getStockBySkusDetailed)
-    // — bug anterior usava MAX(ESTOQUE) sem filtro >0 e divergia da consulta,
-    // bloqueando peças que tinham estoque real (caso REF 12321 MARINHO 52).
-    // Faz UMA chamada batch pra todos os SKUs distintos pra ser eficiente.
-    const uniqueSkus = Array.from(new Set(stockItems.map((si) => si.sku).filter(Boolean)));
-    let detailed: Record<string, Array<{ storeCode: string; qty: number }>> = {};
-    try {
-      detailed = await this.erp.getStockBySkusDetailed(uniqueSkus);
-    } catch (e) {
-      this.logger.warn(`[precheck] falha consultar estoque batch: ${(e as Error).message}`);
-    }
+    // FIX 2 (root cause): o Giga tem MÚLTIPLOS CODIGOs cadastrados pra MESMA
+    // peça (REF+COR+TAM). `findCodigoByRefCorTam` retorna só UM (LIMIT 1) — se
+    // esse SKU está zerado mas OUTRO SKU da mesma peça tem estoque, o precheck
+    // bloqueava tudo mesmo com peça física disponível.
+    //
+    // Solução: agrupa stockItems por (refCode, cor, tamanho) e soma a qty pedida
+    // de cada grupo, depois pra cada grupo busca SOMA de TODOS os SKUs daquela
+    // peça via getStockByRefCorTamInStore.
 
+    // Agrupa stockItems por (refCode, cor, tamanho) usando o item original pra
+    // pegar cor/tamanho (stockItems não tem essas infos diretamente).
+    const stockByItem = new Map<string, { item: typeof items[0]; qtyTotal: number; sku: string; storeCode: string }>();
     for (const si of stockItems) {
-      const stockList = detailed[si.sku] ?? [];
-      const lojaEntry = stockList.find((x) => x.storeCode === si.storeCode);
-      const estoqueGiga = Number(lojaEntry?.qty ?? 0) || 0;
-      if (estoqueGiga < si.qty) {
-        // Acha o transferOrderId via stockItem.refCode (não tem cor/tamanho aqui,
-        // então pega o primeiro match — caso patológico de duplicatas perde aqui).
-        const itemMatch = items.find((it) => it.refCode === si.refCode);
-        problemas.push({
-          transferOrderId: itemMatch?.id || '',
-          refCode: si.refCode,
-          cor: itemMatch?.cor || null,
-          tamanho: itemMatch?.tamanho || null,
-          qtyRequerida: si.qty,
+      const itemMatch = items.find((it) => it.refCode === si.refCode);
+      if (!itemMatch) continue;
+      const key = `${si.refCode}::${itemMatch.cor || ''}::${itemMatch.tamanho || ''}::${si.storeCode}`;
+      const prev = stockByItem.get(key);
+      if (prev) {
+        prev.qtyTotal += si.qty;
+      } else {
+        stockByItem.set(key, {
+          item: itemMatch,
+          qtyTotal: si.qty,
           sku: si.sku,
           storeCode: si.storeCode,
+        });
+      }
+    }
+
+    // Pra cada grupo, busca SOMA de todos os SKUs da peça e compara com qty pedida
+    for (const grp of stockByItem.values()) {
+      let estoqueGiga = 0;
+      try {
+        const r = await this.erp.getStockByRefCorTamInStore(
+          grp.item.refCode,
+          grp.item.cor,
+          grp.item.tamanho,
+          grp.storeCode,
+        );
+        estoqueGiga = r.totalQty;
+      } catch (e) {
+        this.logger.warn(`[precheck] falha consultar estoque ${grp.item.refCode}/${grp.item.cor}/${grp.item.tamanho}: ${(e as Error).message}`);
+      }
+      if (estoqueGiga < grp.qtyTotal) {
+        problemas.push({
+          transferOrderId: grp.item.id,
+          refCode: grp.item.refCode,
+          cor: grp.item.cor || null,
+          tamanho: grp.item.tamanho || null,
+          qtyRequerida: grp.qtyTotal,
+          sku: grp.sku,
+          storeCode: grp.storeCode,
           estoqueGiga,
         });
       }
