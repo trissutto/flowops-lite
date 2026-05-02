@@ -1937,13 +1937,15 @@ function PaymentModal({
   } | null>(null);
   const [credLoading, setCredLoading] = useState(false);
 
-  // Busca info do cliente quando seleciona crediário (1x por venda)
+  // Busca info do cliente quando seleciona crediário OU quando troca o cliente.
+  // BUG FIX: antes tinha "if (credCustomerInfo) return" que impedia re-busca
+  // ao trocar de cliente — ficava preso no resultado anterior.
   useEffect(() => {
     if (selected !== 'crediario' || !customerCpf) return;
-    if (credCustomerInfo) return; // já carregou
     let cancelled = false;
+    setCredCustomerInfo(null); // limpa resultado antigo enquanto busca o novo
+    setCredLoading(true);
     (async () => {
-      setCredLoading(true);
       try {
         const r = await api<any>(`/pdv/customer-info?cpf=${encodeURIComponent(customerCpf)}`);
         if (!cancelled) setCredCustomerInfo(r);
