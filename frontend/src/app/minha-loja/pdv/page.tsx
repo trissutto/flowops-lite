@@ -869,23 +869,6 @@ function PdvPageInner() {
             </button>
           </form>
 
-          {/* ATALHOS — barra horizontal abaixo do input (estilo mockup) */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 bg-white rounded-xl border border-slate-200 px-4 py-2.5 shadow-sm">
-            {[
-              { key: 'F2', label: 'Buscar produto' },
-              { key: 'F4', label: 'Finalizar venda' },
-              { key: 'F3', label: 'Desconto' },
-              { key: 'DEL', label: 'Remover item' },
-              { key: 'ENTER', label: 'Adicionar' },
-            ].map((sc) => (
-              <div key={sc.key} className="flex items-center gap-2 text-xs text-slate-700 font-semibold">
-                <kbd className="px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-md font-mono font-bold text-[10px]">
-                  {sc.key}
-                </kbd>
-                <span>{sc.label}</span>
-              </div>
-            ))}
-          </div>
           </>
         )}
 
@@ -1108,10 +1091,6 @@ function PdvPageInner() {
             <div className="text-lg font-bold text-slate-700 mb-1">Carrinho vazio</div>
             <div className="text-sm text-slate-500">
               Bipe o primeiro produto pra começar a venda
-            </div>
-            <div className="mt-4 inline-flex items-center gap-2 text-xs text-slate-400">
-              <kbd className="px-2 py-1 bg-slate-100 border border-slate-200 rounded font-mono">F2</kbd>
-              foca o leitor de código
             </div>
           </div>
         ) : null}
@@ -1426,11 +1405,10 @@ function PdvPageInner() {
                 onClick={() => { setPaymentFilter('all'); setShowPayment(true); }}
                 disabled={!sale.items?.length || sale.total <= 0}
                 className="px-4 sm:px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-md shadow-emerald-200 transition shrink-0"
-                title="Finalizar venda (F4)"
+                title="Finalizar venda"
               >
                 <Check className="w-5 h-5" />
                 <span className="hidden sm:inline">Finalizar</span>
-                <kbd className="hidden lg:inline-block ml-0.5 px-1.5 py-0.5 bg-white/20 text-white/90 text-[10px] font-mono rounded">F4</kbd>
               </button>
             </div>
           </div>

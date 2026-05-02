@@ -71,18 +71,80 @@ export default function DevolucaoPage() {
     inputRef.current?.focus();
   }, []);
 
+  // Lista de vendas encontradas pela busca por SKU (peça que voltou)
+  const [salesBySku, setSalesBySku] = useState<Array<{
+    saleId: string;
+    nfceNumber?: string;
+    storeName?: string;
+    customerName?: string;
+    customerCpf?: string;
+    finalizedAt: string;
+    totalVenda: number;
+    sellerName?: string;
+    matchedItems: Item[];
+    totalmenteDevolvido: boolean;
+  }> | null>(null);
+
   async function lookup() {
     setErr('');
     setData(null);
     setSelected({});
     setSuccess(null);
-    if (!query.trim()) return;
+    setSalesBySku(null);
+    const q = query.trim();
+    if (!q) return;
     setBusy(true);
     try {
-      const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(query.trim())}`);
-      setData(r);
+      // HEURÍSTICA pra decidir o tipo de busca:
+      //  - UUID (36 chars com hífens)  → busca por ID da venda
+      //  - Número >= 10 dígitos puros  → busca por número de NFC-e
+      //  - Resto (SKU/REF, números curtos, alfanuméricos) → busca por SKU
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
+      const isLongNumber = /^\d{6,}$/.test(q);
+      const buscaPorVenda = isUuid || isLongNumber;
+
+      if (buscaPorVenda) {
+        // Busca direta — comportamento antigo
+        const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(q)}`);
+        setData(r);
+      } else {
+        // Busca por SKU/REF — lista vendas que têm essa peça
+        const r = await api<{
+          sku: string;
+          sales: Array<any>;
+        }>(`/pdv/devolucao/lookup-by-sku?sku=${encodeURIComponent(q)}`);
+        if (!r.sales.length) {
+          setErr(`Nenhuma venda encontrada nos últimos 60 dias com SKU/REF "${q}"`);
+        } else {
+          setSalesBySku(r.sales);
+        }
+      }
     } catch (e: any) {
       setErr(e?.message || 'Venda não encontrada');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Vendedora escolheu UMA das vendas listadas — carrega ela com lookup
+   * tradicional (que traz TODOS os itens da venda + saldo) e marca o
+   * item bipado pra devolução automaticamente.
+   */
+  async function escolherVendaDoSku(saleId: string, autoSelectSku: string) {
+    setBusy(true);
+    setErr('');
+    try {
+      const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(saleId)}`);
+      setData(r);
+      setSalesBySku(null);
+      // Auto-marca o item correspondente pro SKU bipado (qty máxima disponível)
+      const item = r.items.find((it) => it.sku === autoSelectSku || it.ref === autoSelectSku);
+      if (item && item.disponivel > 0) {
+        setSelected({ [item.id]: item.disponivel });
+      }
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao carregar venda');
     } finally {
       setBusy(false);
     }
@@ -169,7 +231,7 @@ export default function DevolucaoPage() {
         {!success && (
           <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Bipe ou digite o cupom da venda
+              Bipe a peça que voltou (SKU/REF) ou digite cupom da venda
             </label>
             <div className="flex gap-2">
               <input
@@ -179,7 +241,7 @@ export default function DevolucaoPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') lookup();
                 }}
-                placeholder="ID da venda ou número da NFC-e"
+                placeholder="Ex: SKU 12345 (peça) ou número da NFC-e"
                 className="flex-1 p-3 border rounded-lg text-lg focus:ring-2 focus:ring-rose-400"
               />
               <button
@@ -190,7 +252,84 @@ export default function DevolucaoPage() {
                 <Search size={18} /> Buscar
               </button>
             </div>
+            <div className="mt-2 text-xs text-slate-500">
+              💡 <b>Bipa o SKU/REF da peça</b> — sistema acha as últimas vendas dela.
+              Não precisa do cupom.
+            </div>
             {err && <div className="mt-3 text-sm text-red-600">{err}</div>}
+          </div>
+        )}
+
+        {/* Lista de vendas encontradas pela busca por SKU */}
+        {salesBySku && salesBySku.length > 0 && !data && !success && (
+          <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-bold text-rose-900">
+                {salesBySku.length} venda(s) encontrada(s) com essa peça
+              </h2>
+              <span className="text-xs text-slate-500">Ordenado da mais recente</span>
+            </div>
+            <div className="text-xs text-slate-600 mb-3">
+              Click na venda do cliente que está devolvendo (geralmente é a mais recente).
+            </div>
+            <div className="space-y-2">
+              {salesBySku.map((s) => {
+                const item = s.matchedItems[0]; // primeiro match
+                const dataFmt = new Date(s.finalizedAt).toLocaleString('pt-BR');
+                const disabled = s.totalmenteDevolvido;
+                return (
+                  <button
+                    key={s.saleId}
+                    onClick={() => !disabled && escolherVendaDoSku(s.saleId, item.sku)}
+                    disabled={disabled || busy}
+                    className={`w-full text-left p-3 rounded-lg border-2 transition ${
+                      disabled
+                        ? 'bg-slate-50 border-slate-200 cursor-not-allowed opacity-60'
+                        : 'bg-white border-rose-200 hover:border-rose-500 hover:bg-rose-50 cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-slate-800">
+                          {s.customerName || <span className="text-slate-400 italic">Sem identificação</span>}
+                          {s.customerCpf && <span className="ml-2 text-xs text-slate-500 font-mono">{s.customerCpf}</span>}
+                        </div>
+                        <div className="text-xs text-slate-600 mt-0.5">
+                          {dataFmt} · {s.storeName || '—'}
+                          {s.nfceNumber && <> · NFC-e {s.nfceNumber}</>}
+                          {s.sellerName && <> · {s.sellerName}</>}
+                        </div>
+                        <div className="text-xs text-slate-700 mt-1">
+                          <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{item.sku}</span>
+                          {' '}{item.descricao || item.ref}
+                          {item.cor && <> · {item.cor}</>}
+                          {item.tamanho && <> · {item.tamanho}</>}
+                          {' · '}<b>{item.qty}× R$ {fmt(item.precoUnit)}</b>
+                          {item.jaDevolvido > 0 && (
+                            <span className="ml-2 text-amber-700">
+                              ({item.jaDevolvido} já devolvida{item.jaDevolvido > 1 ? 's' : ''})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-slate-500">Venda total</div>
+                        <div className="font-bold text-emerald-700 tabular-nums">R$ {fmt(s.totalVenda)}</div>
+                        {disabled && (
+                          <div className="text-[10px] text-rose-700 mt-1 font-bold">JÁ DEVOLVIDA</div>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => { setSalesBySku(null); setQuery(''); inputRef.current?.focus(); }}
+              className="mt-4 text-sm text-slate-600 hover:underline"
+            >
+              ← Buscar outra peça
+            </button>
           </div>
         )}
 

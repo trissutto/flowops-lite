@@ -48,6 +48,18 @@ export class ReturnsController {
   }
 
   /**
+   * GET /pdv/devolucao/lookup-by-sku?sku=XXX
+   * Lista as vendas finalizadas que contêm esse SKU, ordenadas da mais
+   * recente pra mais antiga. Permite vendedora bipar a peça que voltou
+   * (em vez de pedir o cupom da venda original).
+   */
+  @Get('lookup-by-sku')
+  async lookupBySku(@Req() req: any, @Query('sku') sku: string) {
+    this.requireRole(req);
+    return this.svc.lookupSalesBySku(sku);
+  }
+
+  /**
    * POST /pdv/devolucao
    * Body: {
    *   originalSaleId, modo: 'dinheiro'|'troca'|'credito',

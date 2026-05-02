@@ -116,6 +116,115 @@ export class ReturnsService {
     };
   }
 
+  /**
+   * Busca vendas FINALIZADAS que contém o SKU informado, ordenadas
+   * da mais recente pra mais antiga. Permite vendedora bipar a peça
+   * de volta sem precisar do cupom da venda original.
+   *
+   * Retorna até 20 vendas. Se houver MUITAS, vendedora pode digitar
+   * o nome do cliente ou o cupom específico no campo busca tradicional.
+   *
+   * Cada venda já vem com info se o item específico foi totalmente
+   * devolvido em devoluções anteriores (pra desabilitar essa venda
+   * na UI se já foi devolvida).
+   */
+  async lookupSalesBySku(sku: string) {
+    const cleanSku = String(sku || '').trim();
+    if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
+
+    // Busca vendas finalizadas que tem item com esse SKU (case insensitive)
+    // Pega últimas 60 dias por padrão pra não pesar demais.
+    const dataLimite = new Date();
+    dataLimite.setDate(dataLimite.getDate() - 60);
+
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        finalizedAt: { gte: dataLimite },
+        items: {
+          some: {
+            OR: [
+              { sku: cleanSku },
+              { ref: cleanSku },
+              { sku: { contains: cleanSku, mode: 'insensitive' } },
+              { ref: { contains: cleanSku, mode: 'insensitive' } },
+            ],
+          },
+        },
+      },
+      orderBy: { finalizedAt: 'desc' },
+      take: 20,
+      include: {
+        items: {
+          where: {
+            OR: [
+              { sku: cleanSku },
+              { ref: cleanSku },
+              { sku: { contains: cleanSku, mode: 'insensitive' } },
+              { ref: { contains: cleanSku, mode: 'insensitive' } },
+            ],
+          },
+        },
+      },
+    });
+
+    if (sales.length === 0) {
+      return { sku: cleanSku, sales: [] };
+    }
+
+    // Pra cada venda, calcula quanto desse SKU ainda pode ser devolvido
+    // (qty original - qty já devolvida em devoluções anteriores)
+    const saleIds = sales.map((s: any) => s.id);
+    const previousReturns = await (this.prisma as any).pdvReturn.findMany({
+      where: { originalSaleId: { in: saleIds } },
+      include: { items: true },
+    });
+    const devolvidoPorItem = new Map<string, number>();
+    for (const ret of previousReturns as any[]) {
+      for (const it of ret.items) {
+        const id = it.originalItemId || it.sku;
+        devolvidoPorItem.set(id, (devolvidoPorItem.get(id) || 0) + (it.qty || 0));
+      }
+    }
+
+    const result = sales.map((s: any) => {
+      // Pode ter mais de 1 item matching (ex: vendeu 2 cores diferentes da mesma ref)
+      const matchedItems = s.items.map((it: any) => {
+        const jaDev = devolvidoPorItem.get(it.id) || 0;
+        const disponivel = Math.max(0, (it.qty || 0) - jaDev);
+        return {
+          id: it.id,
+          sku: it.sku,
+          ref: it.ref,
+          cor: it.cor,
+          tamanho: it.tamanho,
+          descricao: it.descricao,
+          qty: it.qty,
+          precoUnit: it.precoUnit,
+          total: it.total,
+          jaDevolvido: jaDev,
+          disponivel,
+        };
+      });
+      return {
+        saleId: s.id,
+        nfceNumber: s.nfceNumber,
+        storeCode: s.storeCode,
+        storeName: s.storeName,
+        customerName: s.customerName,
+        customerCpf: s.customerCpf,
+        finalizedAt: s.finalizedAt,
+        totalVenda: s.total,
+        sellerName: s.sellerName,
+        matchedItems,
+        // Se TODOS os items matching já foram devolvidos, marca como indisponível
+        totalmenteDevolvido: matchedItems.every((it: any) => it.disponivel === 0),
+      };
+    });
+
+    return { sku: cleanSku, sales: result };
+  }
+
   // ── Criar devolução ─────────────────────────────────────────────────
 
   /**
