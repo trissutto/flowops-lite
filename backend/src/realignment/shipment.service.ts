@@ -256,19 +256,23 @@ export class RealignmentShipmentService {
       const key = `${it.refCode}::${it.cor || ''}::${it.tamanho || ''}`;
       itemByKey.set(key, it);
     }
+
+    // FIX: usa MESMA fonte da tela "Consultar Produto" (getStockBySkusDetailed)
+    // — bug anterior usava MAX(ESTOQUE) sem filtro >0 e divergia da consulta,
+    // bloqueando peças que tinham estoque real (caso REF 12321 MARINHO 52).
+    // Faz UMA chamada batch pra todos os SKUs distintos pra ser eficiente.
+    const uniqueSkus = Array.from(new Set(stockItems.map((si) => si.sku).filter(Boolean)));
+    let detailed: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+    try {
+      detailed = await this.erp.getStockBySkusDetailed(uniqueSkus);
+    } catch (e) {
+      this.logger.warn(`[precheck] falha consultar estoque batch: ${(e as Error).message}`);
+    }
+
     for (const si of stockItems) {
-      // Busca a row de estoque (SELECT, sem UPDATE)
-      const variants = (this.erp as any).skuVariants?.(si.sku) ?? [si.sku];
-      let estoqueGiga = 0;
-      try {
-        const r = await this.erp.runReadOnly(
-          `SELECT MAX(ESTOQUE) AS qty FROM estoque WHERE CODIGO IN (${variants.map((v: string) => `'${v}'`).join(',')}) AND LOJA = '${si.storeCode}'`,
-          { maxRows: 1, timeoutMs: 10000 },
-        );
-        estoqueGiga = Number(r.rows[0]?.qty ?? 0) || 0;
-      } catch (e) {
-        this.logger.warn(`[precheck] falha consultar estoque ${si.sku}/${si.storeCode}: ${(e as Error).message}`);
-      }
+      const stockList = detailed[si.sku] ?? [];
+      const lojaEntry = stockList.find((x) => x.storeCode === si.storeCode);
+      const estoqueGiga = Number(lojaEntry?.qty ?? 0) || 0;
       if (estoqueGiga < si.qty) {
         // Acha o transferOrderId via stockItem.refCode (não tem cor/tamanho aqui,
         // então pega o primeiro match — caso patológico de duplicatas perde aqui).
