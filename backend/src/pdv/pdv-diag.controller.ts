@@ -149,6 +149,56 @@ export class PdvDiagController {
   }
 
   /**
+   * GET /pdv-diag/find?valor=946758 — procura um valor numérico em TODAS as
+   * colunas numéricas da tabela `movimento` e retorna as linhas + nome da
+   * coluna onde achou. Pra identificar qual coluna do banco corresponde ao
+   * "Controle" mostrado na tela do WinCred.
+   */
+  @Get('find')
+  async getFind(@Query('valor') valor: string, @Res() res: Response) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    try {
+      const v = String(valor || '').replace(/\D/g, '');
+      if (!v) return res.status(400).json({ error: 'Query param "valor" obrigatório (numérico)' });
+
+      // Pega lista de colunas da tabela movimento
+      const colsR = await this.erp.runReadOnly(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'movimento' AND TABLE_SCHEMA = DATABASE() ORDER BY ORDINAL_POSITION`,
+        { maxRows: 200, timeoutMs: 10000 },
+      );
+      const cols = colsR.rows.map((r: any) => r.COLUMN_NAME);
+
+      // Pra cada coluna, tenta um SELECT COUNT(*) WHERE col = v. Se achou >0, registra.
+      const achados: Array<{ coluna: string; quantas: number; amostra: any[] }> = [];
+      for (const col of cols) {
+        try {
+          const c = await this.erp.runReadOnly(
+            `SELECT COUNT(*) AS qtd FROM \`movimento\` WHERE \`${col}\` = ${v}`,
+            { maxRows: 1, timeoutMs: 5000 },
+          );
+          const qtd = Number((c.rows[0] as any)?.qtd) || 0;
+          if (qtd > 0) {
+            const amostra = await this.erp.runReadOnly(
+              `SELECT * FROM \`movimento\` WHERE \`${col}\` = ${v} LIMIT 3`,
+              { maxRows: 3, timeoutMs: 5000 },
+            );
+            achados.push({ coluna: col, quantas: qtd, amostra: amostra.rows });
+          }
+        } catch { /* coluna não-numérica, ignora */ }
+      }
+
+      res.status(200).json({
+        valor_buscado: v,
+        total_colunas_testadas: cols.length,
+        achados,
+        _help: 'A coluna "Controle" da tela do WinCred provavelmente é a que retornou MAIS resultados (uma linha por parcela do mesmo crediário).',
+      });
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro', detail: e?.message });
+    }
+  }
+
+  /**
    * GET /pdv-diag/parcela?registro=X&controle=Y — retorna a linha COMPLETA
    * de movimento do Giga pra essa parcela. Pra ver o que tem realmente
    * gravado nas colunas: PAGO, DATA_PAGAMENTO, VALOR_PAGO, etc.
