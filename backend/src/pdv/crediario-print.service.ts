@@ -111,14 +111,38 @@ export class CrediarioPrintService {
     @Inject(forwardRef(() => CrediariosService))
     private readonly crediarios: CrediariosService,
   ) {
-    // Carrega coords do JSON e mescla com defaults. Feito no constructor pra
-    // garantir ordem de inicialização correta.
+    // Inicializa com defaults. Os geradores de PDF chamam reloadCoords() a
+    // cada request — assim editar o JSON tem efeito IMEDIATO sem precisar
+    // reiniciar o backend.
+    this.PROM = {
+      blocoY: this.PROM_DEFAULT.blocoY,
+      blocoH: this.PROM_DEFAULT.blocoH,
+      fields: { ...this.PROM_DEFAULT.fields },
+    };
+    this.reloadCoords();
+  }
+
+  /**
+   * Recarrega o JSON de coordenadas e atualiza this.PROM. Chamado pelo
+   * constructor e a cada geração de PDF. Custo: ~1ms (arquivo pequeno).
+   * Benefício: edita JSON, salva, gera PDF — vê o efeito imediato.
+   */
+  private reloadCoords(): void {
     const cfg = loadCoordsConfig(this.logger);
     this.PROM = {
       blocoY: cfg?.blocoY?.length === 3 ? cfg.blocoY : this.PROM_DEFAULT.blocoY,
       blocoH: cfg?.blocoH ?? this.PROM_DEFAULT.blocoH,
       fields: { ...this.PROM_DEFAULT.fields, ...(cfg?.fields ?? {}) },
     };
+    // Log curto pra ele confirmar nos logs do Railway/console qual valor foi usado
+    const PT_TO_MM = 25.4 / 72;
+    const e = this.PROM.fields.emitente;
+    const c = this.PROM.fields.cpfEmitente;
+    this.logger.log(
+      `[coords] emitente=(${(e.x * PT_TO_MM).toFixed(1)}mm, ${(e.dy * PT_TO_MM).toFixed(1)}mm)  ` +
+      `cpfEmitente=(${(c.x * PT_TO_MM).toFixed(1)}mm, ${(c.dy * PT_TO_MM).toFixed(1)}mm)  ` +
+      `(json=${cfg ? 'CARREGADO' : 'AUSENTE → defaults'})`,
+    );
   }
 
   // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
@@ -340,6 +364,7 @@ export class CrediarioPrintService {
    * Endpoint: GET /pdv/diag-coords
    */
   diagCoords(): any {
+    this.reloadCoords(); // garantir que retorna o estado FRESH do JSON
     const PT_TO_MM = 25.4 / 72;
     const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
     const verdanaPath = resolveVerdanaPath();
@@ -597,6 +622,7 @@ export class CrediarioPrintService {
    * Cada promissória corresponde a UMA parcela. Ordem: 1ª, 2ª, 3ª, ...
    */
   async generatePromissorias(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCoords(); // hot-reload do JSON a cada request
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
       try {
@@ -787,6 +813,7 @@ export class CrediarioPrintService {
    * carrega na impressora (2 folhas brancas + 1 azul).
    */
   async generateImpressaoCompleta(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCoords(); // hot-reload do JSON a cada request
     // pdfkit não tem merge nativo; geramos um único Document concatenando páginas
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
@@ -906,6 +933,7 @@ export class CrediarioPrintService {
    * Use: GET /pdv/promissorias-teste-debug-pdf
    */
   async generatePromissoriasTesteDebug(): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCoords(); // hot-reload do JSON a cada request
     const dataMock = {
       sale: { customerCpf: '28665529896' },
       cliente: {
@@ -986,6 +1014,7 @@ export class CrediarioPrintService {
    * EXATAMENTE em cima do impresso original.
    */
   async generatePromissoriasTeste(): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCoords(); // hot-reload do JSON a cada request
     // Mock data idêntico ao print de calibração que o usuário enviou.
     const dataMock = {
       sale: { customerCpf: '28665529896' },
