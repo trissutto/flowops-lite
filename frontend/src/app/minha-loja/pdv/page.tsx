@@ -3083,6 +3083,128 @@ function PaymentModal({
   );
 }
 
+/**
+ * Input rápido pra ADICIONAR CPF na nota antes de emitir NFC-e.
+ * Aparece só quando: NFC-e ainda NÃO foi emitida.
+ *
+ * Comportamento:
+ *  - Se a venda já tem CPF: mostra "✓ CPF: XXX.XXX.XXX-XX [trocar]"
+ *  - Se não tem: input "Digite o CPF do cliente (opcional)" + botão "Adicionar"
+ *  - Aceita CPF com pontos/traço ou só números (limpa antes de salvar)
+ *  - Após adicionar, atualiza a venda no parent via onUpdated
+ */
+function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) => void }) {
+  const { toast } = usePdvToast();
+  const [editing, setEditing] = useState(false);
+  const [cpfInput, setCpfInput] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Formata CPF pra exibição: 28665529896 → 286.655.298-96
+  const fmtCpf = (raw: string | null) => {
+    if (!raw) return '';
+    const d = String(raw).replace(/\D/g, '');
+    if (d.length === 11) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+    return d;
+  };
+
+  async function salvarCpf() {
+    const cpfLimpo = cpfInput.replace(/\D/g, '');
+    if (cpfLimpo.length !== 11) {
+      toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
+      return;
+    }
+    setSaving(true);
+    try {
+      // Chama backend pra atualizar customerCpf da venda
+      await api(`/pdv/sales/${sale.id}/customer`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cpf: cpfLimpo }),
+      });
+      // Recarrega venda completa
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      onUpdated(fresh);
+      setEditing(false);
+      setCpfInput('');
+      toast('success', 'CPF adicionado', 'Vai aparecer na NFC-e quando emitir');
+    } catch (e: any) {
+      toast('error', 'Falha ao salvar CPF', e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Já tem CPF + não está editando: mostra resumido
+  if (sale.customerCpf && !editing) {
+    return (
+      <div className="bg-blue-50 border-2 border-blue-200 rounded p-2.5 flex items-center gap-2">
+        <Check className="w-4 h-4 text-blue-700 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-blue-700 font-bold uppercase">CPF na nota</div>
+          <div className="text-sm font-mono font-bold text-blue-900">{fmtCpf(sale.customerCpf)}</div>
+          {sale.customerName && (
+            <div className="text-[11px] text-blue-700 truncate">{sale.customerName}</div>
+          )}
+        </div>
+        <button
+          onClick={() => { setEditing(true); setCpfInput(sale.customerCpf || ''); }}
+          className="text-xs text-blue-700 hover:underline px-2 py-1"
+        >
+          trocar
+        </button>
+      </div>
+    );
+  }
+
+  // Não tem CPF e não está editando: botão pra adicionar
+  if (!sale.customerCpf && !editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        className="w-full px-3 py-2 border-2 border-dashed border-blue-300 hover:border-blue-500 hover:bg-blue-50 text-blue-700 font-bold rounded flex items-center justify-center gap-2 text-sm"
+      >
+        + CPF na nota (opcional)
+      </button>
+    );
+  }
+
+  // Modo edição: input + botões
+  return (
+    <div className="bg-blue-50 border-2 border-blue-300 rounded p-3 space-y-2">
+      <label className="text-xs font-bold text-blue-900 uppercase">CPF do cliente</label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={cpfInput}
+          onChange={(e) => setCpfInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && salvarCpf()}
+          placeholder="Só números ou com . e -"
+          className="flex-1 border rounded px-3 py-2 text-base font-mono"
+          autoFocus
+          maxLength={14}
+        />
+        <button
+          onClick={salvarCpf}
+          disabled={saving || cpfInput.replace(/\D/g, '').length !== 11}
+          className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded text-sm"
+        >
+          {saving ? '…' : 'Salvar'}
+        </button>
+        <button
+          onClick={() => { setEditing(false); setCpfInput(''); }}
+          disabled={saving}
+          className="px-2 py-2 text-slate-600 hover:bg-slate-100 rounded text-sm"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="text-[10px] text-blue-700">
+        Aperta Enter pra salvar. CPF aparece na NFC-e impressa.
+      </div>
+    </div>
+  );
+}
+
 function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () => void }) {
   const [sale, setSale] = useState<Sale>(initialSale);
   const [emitting, setEmitting] = useState(false);
@@ -3223,25 +3345,37 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
 <style>
   @page { size: 80mm auto; margin: 0; }
   * { box-sizing: border-box; }
-  body { font-family: 'Courier New', monospace; font-size: 10px; width: 78mm; margin: 0; padding: 2mm; color: #000; line-height: 1.2; }
+  /* Preto puro em TUDO + fonte mais grossa pra impressora térmica */
+  body {
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    font-weight: 600;  /* mais grosso que normal */
+    width: 78mm;
+    margin: 0;
+    padding: 2mm;
+    color: #000;
+    line-height: 1.25;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   .center { text-align: center; }
   .right { text-align: right; }
-  .bold { font-weight: bold; }
-  .lg { font-size: 12px; }
-  .xl { font-size: 14px; }
-  .sm { font-size: 9px; }
-  .xs { font-size: 8px; }
-  .row { display: flex; justify-content: space-between; gap: 4px; }
-  .sep { border-top: 1px dashed #000; margin: 3px 0; }
-  .sep-solid { border-top: 1px solid #000; margin: 3px 0; }
-  .chave { font-size: 9px; word-break: break-all; line-height: 1.3; letter-spacing: 0.5px; }
-  .qr { display: block; margin: 4px auto; }
-  .item { margin: 2px 0; }
-  .item-line1 { font-weight: bold; font-size: 10px; }
-  .item-var { font-size: 9px; color: #333; padding-left: 12px; }
-  .item-line2 { display: flex; justify-content: space-between; font-size: 10px; padding-left: 12px; }
+  .bold { font-weight: 900; }  /* extra-bold */
+  .lg { font-size: 13px; font-weight: 900; }
+  .xl { font-size: 15px; font-weight: 900; }
+  .sm { font-size: 10px; }
+  .xs { font-size: 9px; }
+  .row { display: flex; justify-content: space-between; gap: 4px; color: #000; }
+  .sep { border-top: 2px dashed #000; margin: 4px 0; }  /* 2px em vez de 1 */
+  .sep-solid { border-top: 2px solid #000; margin: 4px 0; }
+  .chave { font-size: 10px; font-weight: 900; word-break: break-all; line-height: 1.4; letter-spacing: 0.3px; color: #000; }
+  .qr { display: block; margin: 6px auto; }
+  .item { margin: 3px 0; }
+  .item-line1 { font-weight: 900; font-size: 11px; color: #000; }
+  .item-var { font-size: 10px; color: #000; padding-left: 12px; font-weight: 600; }
+  .item-line2 { display: flex; justify-content: space-between; font-size: 11px; padding-left: 12px; font-weight: 700; color: #000; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 1px 0; }
+  td { padding: 1px 0; color: #000; }
 </style></head><body>
   <!-- Cabeçalho da empresa -->
   <div class="center bold lg">${NOME_FANTASIA}</div>
@@ -3475,6 +3609,11 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
                 <div className="text-xs text-red-800">{sale.nfceMotivo}</div>
               )}
             </div>
+          )}
+
+          {/* ─── Adicionar CPF na nota (só se ainda NÃO emitiu NFC-e) ─── */}
+          {!isAuthorized && !isCancelled && (
+            <CpfNaNotaInput sale={sale} onUpdated={(s) => setSale(s)} />
           )}
 
           {/* ─── Ações NFC-e ─── */}
