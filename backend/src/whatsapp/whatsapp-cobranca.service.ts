@@ -203,16 +203,31 @@ export class WhatsappCobrancaService implements OnModuleInit {
     if (input.pausaSeg !== undefined)     await upsert('cobranca_pausa_seg', String(Math.max(60, Math.min(1800, input.pausaSeg))));
   }
 
-  /** Verifica se o horário ATUAL está dentro da janela configurada. */
+  /** Verifica se o horário ATUAL está dentro da janela configurada.
+   *
+   * IMPORTANTE: força timezone America/Sao_Paulo. Sem isso, em servidor
+   * Railway (UTC), `date.getHours()` retorna 21 quando aqui são 18 BRT —
+   * o que abortava todas as campanhas após 17h horário Brasil.
+   */
   async isWithinSchedule(date = new Date()): Promise<{ ok: boolean; reason?: string; cfg?: any }> {
     const cfg = await this.readConfig();
     const [hi, mi] = cfg.horaInicio.split(':').map(Number);
     const [hf, mf] = cfg.horaFim.split(':').map(Number);
-    const nowMin = date.getHours() * 60 + date.getMinutes();
+
+    // Pega hora/minuto NO FUSO DE BRASÍLIA (não no UTC do servidor)
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    const parts = fmt.formatToParts(date);
+    const hourBrt = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+    const minBrt = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+    const nowMin = hourBrt * 60 + minBrt;
+
     const startMin = hi * 60 + (mi || 0);
     const endMin = hf * 60 + (mf || 0);
-    if (nowMin < startMin) return { ok: false, reason: `antes de ${cfg.horaInicio}`, cfg };
-    if (nowMin > endMin)   return { ok: false, reason: `depois de ${cfg.horaFim}`, cfg };
+    if (nowMin < startMin) return { ok: false, reason: `antes de ${cfg.horaInicio} (BRT ${hourBrt}:${String(minBrt).padStart(2,'0')})`, cfg };
+    if (nowMin > endMin)   return { ok: false, reason: `depois de ${cfg.horaFim} (BRT ${hourBrt}:${String(minBrt).padStart(2,'0')})`, cfg };
     return { ok: true, cfg };
   }
 

@@ -317,7 +317,18 @@ export class CobrancaAutoService {
 function isWithinWindow(now: Date, horaInicio: string, horaFim: string): boolean {
   const [hi, mi] = horaInicio.split(':').map(Number);
   const [hf, mf] = horaFim.split(':').map(Number);
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  // CRÍTICO: força timezone America/Sao_Paulo (Railway server roda em UTC).
+  // Sem isso, getHours() retorna UTC e abortava campanhas após 17h BRT.
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const hourBrt = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+  const minBrt = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+  const nowMin = hourBrt * 60 + minBrt;
+
   const startMin = (hi || 0) * 60 + (mi || 0);
   const endMin = (hf || 0) * 60 + (mf || 0);
 
