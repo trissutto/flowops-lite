@@ -3161,11 +3161,14 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
 
   /**
    * Imprime o cupom NFC-e (DANFE 80mm) na impressora ELGIN.
-   * Abre window.print() automático — ELGIN configurada como impressora
-   * padrão do Windows recebe o cupom direto. Se não for padrão, vendedora
-   * escolhe ELGIN no diálogo de impressão.
+   *
+   * Estratégia em camadas:
+   *   1. QZ Tray (se configurado em /minha-loja/pdv/config-impressora)
+   *      → imprime DIRETO na ELGIN, sem diálogo, zero clicks.
+   *   2. Electron silentPrintHtml (se rodando no app desktop)
+   *   3. Fallback: window.print() abre diálogo do navegador
    */
-  function imprimirDanfeNfce() {
+  async function imprimirDanfeNfce() {
     // Monta HTML do cupom 80mm — layout simples, monoespaçado, todo dentro
     // de uma janela popup pra não interferir no resto da tela.
     const itensHtml = sale.items.map((it) => {
@@ -3213,16 +3216,32 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <script>window.onload = function() { setTimeout(function() { window.print(); }, 200); };</script>
 </body></html>`;
 
-    // Tenta Electron silent print primeiro (PC desktop)
+    // Camada 1: QZ Tray (se configurado) — impressão direta sem diálogo
+    try {
+      const { qzPrintHtml, qzGetPrinter } = await import('@/lib/qz-print');
+      if (qzGetPrinter()) {
+        const ok = await qzPrintHtml(html);
+        if (ok) {
+          toast('success', 'Cupom impresso', 'Enviado direto pra ELGIN via QZ Tray');
+          return;
+        }
+        toast('warning', 'QZ Tray falhou', 'Caindo pro diálogo de impressão padrão');
+      }
+    } catch (e) {
+      console.warn('[nfce-print] QZ Tray indisponível:', e);
+    }
+
+    // Camada 2: Electron silent print (PC desktop)
     const electron = (window as any).electronAPI;
     if (electron?.silentPrintHtml) {
       electron.silentPrintHtml(html).catch((e: any) => console.warn('Electron print falhou:', e));
       return;
     }
-    // Fallback browser: abre popup, imprime, fecha automático
+
+    // Camada 3: fallback browser — abre popup com window.print() automático
     const w = window.open('', 'nfce_print_' + sale.id, 'width=400,height=600');
     if (!w) {
-      toast('warning', 'Popup bloqueado', 'Habilite popups pra impressão automática da NFC-e');
+      toast('warning', 'Popup bloqueado', 'Habilite popups OU configura QZ Tray em /minha-loja/pdv/config-impressora');
       return;
     }
     w.document.write(html);
@@ -3334,6 +3353,13 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
               >
                 🖨️ Reimprimir cupom (ELGIN)
               </button>
+              <a
+                href="/minha-loja/pdv/config-impressora"
+                target="_blank"
+                className="block text-center text-[10px] text-emerald-700 hover:underline mt-1"
+              >
+                ⚙️ Configurar impressora ELGIN (QZ Tray)
+              </a>
             </div>
           )}
 
