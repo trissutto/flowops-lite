@@ -33,7 +33,7 @@
     "beneficiarioA":  { "x": 50.8,  "y": 35.2 },
     "cpfDevedor":     { "x": 169.5, "y": 35.2 },
 
-    "quantiaExtenso": { "x": 73.0, "y": 45.5, "w": 84.7 },
+    "quantiaExtenso": { "x": 73.0, "y": 45.0, "w": 84.7 },
 
     "pagavelEm":      { "x": 67.0,  "y": 57.0 },
     "emissaoDia":     { "x": 123.1, "y": 59.0 },
