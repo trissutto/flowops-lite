@@ -253,7 +253,7 @@ export class RoutingService {
    */
   async recalculateForWc(
     orderId: string,
-    opts?: { excludeStoreIds?: string[]; excludeStoreCodes?: string[] },
+    opts?: { excludeStoreIds?: string[]; excludeStoreCodes?: string[]; forceStoreCode?: string },
   ) {
     // Se o caller passou codes (ex: ["MOEMA"]), converte pra IDs antes de seguir.
     // Mantemos o parâmetro original excludeStoreIds pra compat com chamadas internas.
@@ -354,7 +354,60 @@ export class RoutingService {
       }
     }
 
-    // 3) Roda routing fresco (já considera commited de OUTROS pedidos) + exclui
+    // 3a) FORÇA loja específica (escolha manual livre, mesmo SEM estoque).
+    // Bypassa o routing — cria 1 pick-order pra loja escolhida com TODOS os items.
+    // Caso de uso: retaguarda quer concentrar o pedido numa loja que vai
+    // pegar transferência de outra, ou que vai ter estoque amanhã, etc.
+    if (opts?.forceStoreCode) {
+      const forcedStore = await this.prisma.store.findFirst({
+        where: { code: opts.forceStoreCode },
+        select: { id: true, code: true, name: true },
+      });
+      if (!forcedStore) {
+        return {
+          ok: false as const,
+          reason: 'force-store-not-found',
+          message: `Loja ${opts.forceStoreCode} não encontrada/ativa.`,
+        };
+      }
+      // Carrega todos os items do order pra criar 1 assignment monolítico
+      const allItems = await this.prisma.orderItem.findMany({
+        where: { orderId },
+        select: { sku: true, quantity: true },
+      });
+      const fakeResult: any = {
+        success: true,
+        strategy: 'force-manual',
+        assignments: [
+          {
+            storeId: forcedStore.id,
+            isTransfer: false,
+            items: allItems.map((it) => ({ sku: it.sku, qty: it.quantity })),
+          },
+        ],
+      };
+      await this.confirmRoute(orderId, fakeResult);
+      const newPickOrders = await this.prisma.pickOrder.findMany({
+        where: { orderId },
+        include: { store: { select: { code: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      return {
+        ok: true as const,
+        cancelledCount: cancellableIds.length,
+        strategy: 'force-manual',
+        forcedStoreCode: forcedStore.code,
+        excludedStoreCodes: [],
+        pickOrders: newPickOrders.map((p) => ({
+          id: p.id,
+          status: p.status,
+          storeCode: p.store.code,
+          storeName: p.store.name,
+        })),
+      };
+    }
+
+    // 3b) Roda routing fresco (já considera commited de OUTROS pedidos) + exclui
     // lojas que reportaram problema nesse pedido
     const preview = await this.previewRoute(orderId, { excludeStoreCodes });
 

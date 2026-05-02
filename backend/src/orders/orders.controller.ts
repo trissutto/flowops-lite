@@ -828,7 +828,7 @@ export class OrdersController {
   @Post('wc/:wcId/recalculate-separation')
   async recalculateSeparation(
     @Param('wcId') wcId: string,
-    @Body() body?: { excludeStoreCodes?: string[]; pickOrderId?: string },
+    @Body() body?: { excludeStoreCodes?: string[]; pickOrderId?: string; forceStoreCode?: string },
   ) {
     // SWAP CIRÚRGICO: se vier pickOrderId, troca SÓ aquele pick-order específico,
     // sem mexer nos outros (caso onde uma loja já enviou e outra precisa ser trocada).
@@ -853,6 +853,7 @@ export class OrdersController {
       excludeStoreCodes: Array.isArray(body?.excludeStoreCodes)
         ? body!.excludeStoreCodes
         : undefined,
+      forceStoreCode: body?.forceStoreCode,
     });
   }
 

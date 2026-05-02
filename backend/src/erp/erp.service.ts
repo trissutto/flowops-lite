@@ -769,10 +769,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // com data preenchida. Sempre tentamos atualizar — usa nome detectado se
     // existir, senão tenta literal "PAGO" como fallback (WinCred padrão).
     //
-    // VALOR: Lurd's usa "SIM"/"NAO" (varchar(3)). Outras instalações Giga
-    // usam "S"/"N" (char(1)). Override por env var ERP_PAGO_VALOR_SIM.
+    // VALOR: Lurd's confirmou que WinCred grava "S" (não "SIM" como pensei).
+    // O REAL problema era a coluna PAGAMENTO ficar em branco — corrigido em
+    // detectColumns. Override por env var ERP_PAGO_VALOR_SIM se outra loja
+    // precisar de outro valor.
     const pagoCol = columns.pago || 'PAGO';
-    const pagoValor = String(this.config.get('ERP_PAGO_VALOR_SIM') ?? 'SIM').trim();
+    const pagoValor = String(this.config.get('ERP_PAGO_VALOR_SIM') ?? 'S').trim();
     sets.push(`\`${pagoCol}\` = ?`);
     params.push(pagoValor);
     if (!columns.pago) {

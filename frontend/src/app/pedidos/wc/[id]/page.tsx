@@ -683,7 +683,9 @@ export default function PedidoDetailPage() {
         pickOrders?: Array<{ id: string; storeCode: string; storeName: string }>;
       }>(`/orders/wc/${wcId}/recalculate-separation`, {
         method: 'POST',
-        body: JSON.stringify({ excludeStoreCodes: excludeCodes }),
+        // forceStoreCode = bypass do routing automático: cria pick-order na loja
+        // escolhida MESMO sem estoque (escolha manual livre da retaguarda).
+        body: JSON.stringify({ excludeStoreCodes: excludeCodes, forceStoreCode: pickedCode }),
       });
 
       if (!res.ok) {
@@ -1934,18 +1936,32 @@ export default function PedidoDetailPage() {
                           )}
                         </div>
                         <button
-                          onClick={() => applyPickStore(c.code, c.name)}
-                          disabled={!!pickStoreApplying || none || isCurrentAssigned}
+                          onClick={() => {
+                            // Loja SEM estoque: confirmação extra pra evitar erro acidental.
+                            // Loja COM estoque: aplica direto.
+                            if (none) {
+                              const ok = window.confirm(
+                                `${c.name} (${c.code}) NÃO TEM estoque de nenhuma peça desse pedido.\n\n` +
+                                `Forçando essa loja, ela vai precisar buscar transferência das outras lojas pra atender.\n\n` +
+                                `Confirma forçar mesmo assim?`,
+                              );
+                              if (!ok) return;
+                            }
+                            applyPickStore(c.code, c.name);
+                          }}
+                          disabled={!!pickStoreApplying || isCurrentAssigned}
                           className={`px-3 py-2 rounded text-xs font-semibold flex-shrink-0 flex items-center gap-1 ${
-                            none || isCurrentAssigned
+                            isCurrentAssigned
                               ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                              : none
+                              ? 'bg-slate-500 text-white hover:bg-slate-600 disabled:opacity-60'
                               : 'bg-brand text-white hover:bg-brand-dark disabled:opacity-60'
                           }`}
                           title={
                             isCurrentAssigned
                               ? 'Essa loja já é a responsável atual'
                               : none
-                              ? 'Essa loja não tem estoque de nenhuma peça'
+                              ? 'Forçar mesmo SEM estoque (confirmação extra)'
                               : `Forçar pedido pra ${c.name}`
                           }
                         >
@@ -1954,7 +1970,7 @@ export default function PedidoDetailPage() {
                               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Aplicando...
                             </>
                           ) : (
-                            <>Escolher</>
+                            <>{none ? 'Forçar mesmo assim' : 'Escolher'}</>
                           )}
                         </button>
                       </div>
