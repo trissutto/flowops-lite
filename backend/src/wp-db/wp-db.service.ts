@@ -210,6 +210,28 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Versão SÍNCRONA — só lê do cache, NÃO consulta o WP DB.
+   * Pra refs em cache, retorna URL (ou string vazia se confirmou que não tem foto).
+   * Pra refs SEM cache, retorna `undefined` no map (caller pode disparar fetch BG).
+   * Latência: ~0ms (lookup em Map).
+   */
+  getCachedImages(refs: string[]): Record<string, string | undefined> {
+    const out: Record<string, string | undefined> = {};
+    const now = Date.now();
+    for (const ref of refs) {
+      const r = String(ref || '').trim();
+      if (!r) continue;
+      const cached = this.imageCache.get(r.toUpperCase());
+      if (cached && cached.expiresAt > now) {
+        out[r] = cached.url || ''; // string vazia = consultou e não achou
+      } else {
+        out[r] = undefined; // sem cache → caller dispara fetch BG
+      }
+    }
+    return out;
+  }
+
+  /**
    * Limpa o cache de imagens. Útil pra forçar refresh quando vendedora
    * mudou foto de produto e quer ver o novo. Chamar via endpoint admin.
    */

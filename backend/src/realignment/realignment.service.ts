@@ -625,15 +625,18 @@ export class RealignmentService {
         createdAt: true,
       },
     });
-    // Busca miniaturas de imagens em batch (1 query SQL no WP DB) pra enriquecer
-    // cada ordem com a foto do produto. Se o WP DB não tiver configurado, o map
-    // volta vazio e os itens ficam sem imageUrl — UI cai no fallback do ícone.
+    // ESTRATÉGIA NÃO-BLOQUEANTE pra latência sempre baixa (<500ms):
+    //  - Imagens já em cache → vão no payload
+    //  - Refs sem cache → dispara fetch BG (sem await), próxima chamada já tem
+    //  - 1ª vez vê sem foto (fallback ícone), 2ª vez já vem completo
     const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
-    let imagesByRef: Record<string, string> = {};
-    try {
-      imagesByRef = await this.wpDb.getImagesByRefs(uniqueRefs);
-    } catch (e: any) {
-      this.logger.warn(`[realignment] falha buscando imagens: ${e.message}`);
+    const imagesByRef = this.wpDb.getCachedImages(uniqueRefs);
+    const semCache = uniqueRefs.filter((r) => imagesByRef[r] === undefined);
+    if (semCache.length > 0) {
+      // fire-and-forget — popula cache pra próxima chamada
+      this.wpDb.getImagesByRefs(semCache).catch((e: any) => {
+        this.logger.warn(`[realignment] pre-fetch BG imagens: ${e.message}`);
+      });
     }
 
     return orders.map((o) => ({
@@ -687,12 +690,14 @@ export class RealignmentService {
       },
     });
 
+    // Mesma estratégia não-bloqueante (ver comentário no listPendingForStore)
     const uniqueRefs = Array.from(new Set(orders.map((o) => o.refCode).filter(Boolean)));
-    let imagesByRef: Record<string, string> = {};
-    try {
-      imagesByRef = await this.wpDb.getImagesByRefs(uniqueRefs);
-    } catch (e: any) {
-      this.logger.warn(`[realignment] falha buscando imagens (sent): ${e.message}`);
+    const imagesByRef = this.wpDb.getCachedImages(uniqueRefs);
+    const semCache = uniqueRefs.filter((r) => imagesByRef[r] === undefined);
+    if (semCache.length > 0) {
+      this.wpDb.getImagesByRefs(semCache).catch((e: any) => {
+        this.logger.warn(`[realignment] pre-fetch BG imagens (sent): ${e.message}`);
+      });
     }
 
     return orders.map((o) => ({
