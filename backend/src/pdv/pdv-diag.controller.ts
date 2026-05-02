@@ -85,6 +85,23 @@ export class PdvDiagController {
       res.status(500).json({ statusCode: 500, message: 'Erro no diag-cliente', detail: e?.message });
     }
   }
+
+  /**
+   * GET /pdv-diag/sale?id=SALE_ID — diagnóstico COMPLETO de uma venda específica.
+   * Mostra: dados do banco local + cliente cru do Giga + cliente montado pro PDF
+   * + diagnóstico do POR QUE endereço/CEP estão vazios (se estiverem).
+   * USE ESSE pra entender por que o PDF de uma venda real não puxa o endereço.
+   */
+  @Get('sale')
+  async getSale(@Query('id') id: string, @Res() res: Response) {
+    try {
+      if (!id) return res.status(400).json({ message: 'Query param "id" obrigatório' });
+      const result = await this.crediarioPrint.diagSale(id);
+      res.status(200).json(result);
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro no diag-sale', detail: e?.message });
+    }
+  }
 }
 
 const CALIBRAR_HTML = `<!DOCTYPE html>

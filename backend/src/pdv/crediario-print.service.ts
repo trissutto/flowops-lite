@@ -413,6 +413,51 @@ export class CrediarioPrintService {
   }
 
   /**
+   * DIAGNÓSTICO — pega UMA venda existente e retorna EXATAMENTE o que
+   * loadSaleForPrint montou: cliente (com endereço/CEP/etc), parcelas, e
+   * o que veio cru do Giga. Pra debug "por que endereço não aparece no PDF".
+   */
+  async diagSale(saleId: string): Promise<any> {
+    try {
+      const data = await this.loadSaleForPrint(saleId);
+      // Re-busca cliente no Giga pra incluir a linha CRUA também
+      let clienteRaw: any = null;
+      let colunas: string[] = [];
+      if (data.sale.customerCpf) {
+        const r = await this.diagCliente(data.sale.customerCpf);
+        clienteRaw = r.cliente;
+        colunas = r.colunas;
+      }
+      return {
+        saleId,
+        sale_db: {
+          id: data.sale.id,
+          customerCpf: data.sale.customerCpf,
+          customerName: data.sale.customerName,
+          storeCode: data.sale.storeCode,
+          total: data.sale.total,
+        },
+        cliente_montado_pra_pdf: data.cliente,
+        cliente_cru_do_giga: clienteRaw,
+        colunas_disponiveis_no_giga: colunas,
+        cidadeLoja: data.cidadeLoja,
+        diagnostico: {
+          tem_cliente_no_giga: !!clienteRaw,
+          endereco_pdf: data.cliente.endereco || '(VAZIO)',
+          cep_pdf: data.cliente.cep || '(VAZIO)',
+          motivo: !clienteRaw
+            ? 'Cliente NÃO encontrado no Giga (CPF não cadastrado lá ou não bate). Endereço fica vazio.'
+            : !data.cliente.endereco
+            ? `Cliente encontrado mas nenhuma das colunas [ENDERECO,ENDERE,END,LOGRADOURO,RUA] tem valor. Colunas disponíveis: ${colunas.join(', ')}`
+            : 'OK',
+        },
+      };
+    } catch (e: any) {
+      return { error: e?.message, stack: e?.stack };
+    }
+  }
+
+  /**
    * DIAGNÓSTICO — busca um cliente no Giga pelo CPF e retorna a linha CRUA
    * (todas as colunas que existem na tabela). Usado pra entender por que
    * endereço/CEP não estão sendo lidos: vê os nomes EXATOS das colunas e

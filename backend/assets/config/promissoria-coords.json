@@ -30,8 +30,8 @@
 
     "vencExtenso":    { "x": 49.8,  "y": 23.2, "w": 112.9 },
 
-    "beneficiarioA":  { "x": 50.8,  "y": 35.3 },
-    "cpfDevedor":     { "x": 169.0, "y": 35.7 },
+    "beneficiarioA":  { "x": 50.8,  "y": 35.2 },
+    "cpfDevedor":     { "x": 169.5, "y": 35.2 },
 
     "quantiaExtenso": { "x": 73.0, "y": 45.5, "w": 84.7 },
 
@@ -40,7 +40,7 @@
     "emissaoMes":     { "x": 147.8, "y": 59.0 },
     "emissaoAno":     { "x": 182.5, "y": 59.0 },
 
-    "emitente":       { "x": 41.4,  "y": 63.9 },
+    "emitente":       { "x": 43.4,  "y": 63.9 },
     "cpfEmitente":    { "x": 56.4,  "y": 69.6 },
     "endereco":       { "x": 75.8,  "y": 84.7, "w": 98.8 },
     "cep":            { "x": 75.8,  "y": 88.0 }
