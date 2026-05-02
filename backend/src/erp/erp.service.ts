@@ -2913,7 +2913,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (/;[\s\S]+\S/.test(cleaned)) {
       throw new Error('Múltiplos statements separados por ";" não são permitidos');
     }
-    const blacklist = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|RENAME|GRANT|REVOKE|REPLACE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE|HANDLER|LOCK\s+TABLES|UNLOCK|CALL|DO\s+SLEEP|BENCHMARK\s*\()\b/i;
+    // BUG FIX: REPLACE foi removido da blacklist porque colidia com a função
+    // de string REPLACE() usada pra normalizar CPF na busca de cliente do Giga.
+    // O comando perigoso "REPLACE INTO" (escrita) já é bloqueado pela WHITELIST
+    // acima — que só aceita SELECT/SHOW/DESCRIBE/DESC/EXPLAIN/WITH como 1ª palavra.
+    const blacklist = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|RENAME|GRANT|REVOKE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE|HANDLER|LOCK\s+TABLES|UNLOCK|CALL|DO\s+SLEEP|BENCHMARK\s*\()\b/i;
     const m = blacklist.exec(cleaned);
     if (m) {
       throw new Error(`Comando bloqueado: "${m[0].toUpperCase()}". Apenas leitura é permitida.`);
