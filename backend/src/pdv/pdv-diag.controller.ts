@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { CrediarioPrintService } from './crediario-print.service';
 import * as fs from 'fs';
@@ -69,6 +69,21 @@ export class PdvDiagController {
   async getCalibrar(@Res() res: Response) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(CALIBRAR_HTML);
+  }
+
+  /**
+   * GET /pdv-diag/cliente?cpf=XXX — busca cliente no Giga, retorna a linha
+   * CRUA + lista de colunas. Pra entender por que endereço/CEP não estão vindo.
+   * Sem auth pra acesso direto pelo navegador (debug).
+   */
+  @Get('cliente')
+  async getCliente(@Query('cpf') cpf: string, @Res() res: Response) {
+    try {
+      const result = await this.crediarioPrint.diagCliente(cpf);
+      res.status(200).json(result);
+    } catch (e: any) {
+      res.status(500).json({ statusCode: 500, message: 'Erro no diag-cliente', detail: e?.message });
+    }
   }
 }
 
