@@ -387,6 +387,52 @@ export default function MinhaLojaRealinhamentoPage() {
     }
   }, [pushToast, loadOpenShipments, loadItems]);
 
+  // Estado: remoção em lote em progresso (mostra barra de progresso)
+  const [batchRemoving, setBatchRemoving] = useState<{ done: number; total: number } | null>(null);
+
+  /**
+   * Remove TODOS os itens problemáticos da remessa de uma vez.
+   * Não mexe no estoque Giga — apenas volta os transferOrders pra "pending".
+   * Os outros itens da remessa continuam intactos.
+   */
+  const handleRemoveAllProblematic = useCallback(async () => {
+    if (!problemasShipment) return;
+    const total = problemasShipment.problemas.length;
+    if (!total) return;
+    if (!confirm(
+      `Remover TODOS os ${total} item(s) com estoque insuficiente da remessa?\n\n` +
+      `✓ Os outros itens da remessa ficam intactos\n` +
+      `✓ NÃO mexe no estoque Giga\n` +
+      `✓ Os itens removidos voltam pra fila "pendente" e somem dessa remessa\n\n` +
+      `Confirma?`,
+    )) return;
+
+    setBatchRemoving({ done: 0, total });
+    let removidos = 0;
+    let falhas: string[] = [];
+
+    // Faz em série pra não estourar conexão e mostrar progresso preciso
+    for (const p of problemasShipment.problemas) {
+      try {
+        await api(`/realignment/shipments/items/${p.transferOrderId}`, { method: 'DELETE' });
+        removidos++;
+      } catch (e: any) {
+        falhas.push(`${p.refCode} ${p.cor || ''} ${p.tamanho || ''}`.trim());
+      }
+      setBatchRemoving({ done: removidos + falhas.length, total });
+    }
+
+    setBatchRemoving(null);
+    setProblemasShipment(null); // fecha modal
+    await Promise.all([loadOpenShipments(), loadItems()]);
+
+    if (falhas.length === 0) {
+      pushToast(`✅ ${removidos} item(s) removido(s) da remessa. Os outros ficaram intactos.`);
+    } else {
+      pushToast(`⚠️ ${removidos} removido(s), ${falhas.length} falharam: ${falhas.slice(0,3).join(', ')}${falhas.length > 3 ? '…' : ''}`);
+    }
+  }, [problemasShipment, pushToast, loadOpenShipments, loadItems]);
+
   // Auth + initial load
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -1112,8 +1158,24 @@ export default function MinhaLojaRealinhamentoPage() {
               {/* Items sem estoque */}
               {problemasShipment.problemas.length > 0 && (
                 <div>
-                  <div className="text-xs font-bold uppercase text-rose-700 tracking-wider mb-2">
-                    {problemasShipment.problemas.length} item(s) com estoque insuficiente
+                  <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                    <div className="text-xs font-bold uppercase text-rose-700 tracking-wider">
+                      {problemasShipment.problemas.length} item(s) com estoque insuficiente
+                    </div>
+                    {/* Batch remove — remove TODOS de uma vez (sem mexer no Giga) */}
+                    <button
+                      type="button"
+                      onClick={handleRemoveAllProblematic}
+                      disabled={!!batchRemoving}
+                      className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold flex items-center gap-1.5"
+                      title="Remove os 12 problemáticos de uma vez. Não mexe no Giga."
+                    >
+                      {batchRemoving ? (
+                        <>⏳ Removendo {batchRemoving.done}/{batchRemoving.total}…</>
+                      ) : (
+                        <>🗑️ Remover TODOS ({problemasShipment.problemas.length})</>
+                      )}
+                    </button>
                   </div>
                   <div className="space-y-2">
                     {problemasShipment.problemas.map((p) => {
