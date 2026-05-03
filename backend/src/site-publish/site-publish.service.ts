@@ -90,6 +90,21 @@ export class SitePublishService {
     const gigaCodes = snapshot.tamanhos.map((t) => t.codigo).filter(Boolean);
     const estoqueTotal = snapshot.tamanhos.reduce((sum, t) => sum + (t.estoque || 0), 0);
 
+    // FIX preço: prioriza precoPromo > preco (a prazo) > precoVista. Antes
+    // pegava só `preco` que mapeava VENDAUN (à vista, BAIXO). O CEO quer o
+    // praticado no PDV (a prazo) — esse veio agora em snapshot.preco via VPRAZO.
+    const precoFinal =
+      snapshot.precoPromo ??
+      snapshot.preco ??
+      snapshot.precoVista ??
+      null;
+
+    // FIX descrição: se Wincred tem campo OBSERVACAO/DETALHES preenchido, usa
+    // como descrição inicial pra UI (não fica em branco esperando IA). Se for
+    // criação NOVA, popular wcDescricao. Se for UPDATE, preservar o que já tem
+    // (vendedora pode ter editado).
+    const descLongaInicial = (snapshot.descLonga || '').trim() || null;
+
     // Upsert idempotente. UpdateData só atualiza o snapshot (campos Giga),
     // nunca toca nos campos de enriquecimento (Fase 2) ou publicação (Fase 3).
     const result = await (this.prisma as any).sitePublishQueue.upsert({
@@ -102,7 +117,7 @@ export class SitePublishService {
         ncm: snapshot.ncm,
         cfop: snapshot.cfop,
         custoMedio: snapshot.custo != null ? snapshot.custo : null,
-        precoSugerido: snapshot.preco != null ? snapshot.preco : null,
+        precoSugerido: precoFinal,
         estoqueTotal,
         tamanhos: tamanhosPayload,
       },
@@ -116,9 +131,14 @@ export class SitePublishService {
         ncm: snapshot.ncm,
         cfop: snapshot.cfop,
         custoMedio: snapshot.custo != null ? snapshot.custo : null,
-        precoSugerido: snapshot.preco != null ? snapshot.preco : null,
+        precoSugerido: precoFinal,
         estoqueTotal,
         tamanhos: tamanhosPayload,
+        // Pré-popula campos de enriquecimento na CRIAÇÃO (só na criação, pra
+        // não sobrescrever edição manual em update):
+        wcDescricao: descLongaInicial,
+        wcPrecoVenda: precoFinal != null ? String(precoFinal) : null,
+        wcPrecoPromo: snapshot.precoPromo != null ? String(snapshot.precoPromo) : null,
         status: 'queued',
         createdByUserId: params.userId ?? null,
       },

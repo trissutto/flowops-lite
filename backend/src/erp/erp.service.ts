@@ -2514,13 +2514,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     refs: Array<{
       refCode: string;
       descricao: string;
+      descLonga: string | null;
       grupo: string | null;
       subgrupo: string | null;
       fornecedor: string | null;
       ncm: string | null;
       cfop: string | null;
       custo: number | null;
-      preco: number | null;
+      preco: number | null;          // preço PRINCIPAL (a prazo, geralmente)
+      precoVista: number | null;     // preço à vista (se diferente)
+      precoPromo: number | null;     // preço promo (se houver)
       cores: Array<{
         cor: string;
         tamanhos: Array<{
@@ -2557,7 +2560,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const ncmCol = (await this.pickCol(['NCM', 'CODNCM', 'CODIGONCM', 'COD_NCM'])) as string | null;
     const cfopCol = (await this.pickCol(['CFOP', 'CODCFOP'])) as string | null;
     const custoCol = (await this.pickCol(['CUSTOUN', 'CUSTO', 'CUSTO_UN', 'CUSTOMEDIO', 'CUSTO_MEDIO'])) as string | null;
-    const precoCol = (await this.pickCol(['VENDAUN', 'PRECO', 'PRECOVENDA', 'PRECO_VENDA'])) as string | null;
+    // FIX: Wincred tem MÚLTIPLAS colunas de preço (à vista, a prazo, promo, etc).
+    // VENDAUN normalmente é PREÇO À VISTA (mais BAIXO). Pra publicação no site, o
+    // CEO geralmente quer o PREÇO A PRAZO (VPRAZO/PRECOPRAZO), que é o praticado
+    // no PDV. Buscamos todos e expomos no payload pra UI escolher.
+    const precoCol      = (await this.pickCol(['VPRAZO', 'PRECOPRAZO', 'PRECO_PRAZO', 'VENDAPRAZO', 'PRECOVENDA', 'PRECO_VENDA', 'PRECO', 'VENDAUN'])) as string | null;
+    const precoVistaCol = (await this.pickCol(['VAVISTA', 'PRECOVISTA', 'PRECO_VISTA', 'VENDAVISTA', 'VENDAUN'])) as string | null;
+    const precoPromoCol = (await this.pickCol(['PRECOPROMO', 'PRECO_PROMO', 'VPROMO', 'VENDAPROMO'])) as string | null;
+    // Descrição estendida — Wincred às vezes tem campos extras (OBSERVACAO, DETALHES,
+    // INFORMACOES). Pegamos pra usar como base de descrição se houver.
+    const descLongaCol  = (await this.pickCol(['OBSERVACAO', 'OBSERVACOES', 'DETALHES', 'INFORMACOES', 'DESCRICAOPROD', 'DESCRICAO_PROD', 'DESCRICAO'])) as string | null;
     const dataCol = (await this.pickCol(['DATAALT', 'DATA_ALT', 'DT_ALT', 'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO', 'DATACRIACAO', 'DT_CRIACAO', 'CREATED_AT'])) as string | null;
     const eanCol = (await this.pickCol(['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'])) as string | null;
 
@@ -2577,6 +2589,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (cfopCol) selects.push(`p.\`${cfopCol}\` AS cfop`);
     if (custoCol) selects.push(`p.\`${custoCol}\` AS custo`);
     if (precoCol) selects.push(`p.\`${precoCol}\` AS preco`);
+    if (precoVistaCol && precoVistaCol !== precoCol) selects.push(`p.\`${precoVistaCol}\` AS precoVista`);
+    if (precoPromoCol) selects.push(`p.\`${precoPromoCol}\` AS precoPromo`);
+    if (descLongaCol)  selects.push(`p.\`${descLongaCol}\` AS descLonga`);
     if (eanCol) selects.push(`p.\`${eanCol}\` AS ean`);
     if (dataCol) selects.push(`p.\`${dataCol}\` AS dataCadastro`);
 
@@ -2712,6 +2727,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         refEntry = {
           refCode,
           descricao: String(r.descricao ?? '').trim(),
+          descLonga: r.descLonga != null ? String(r.descLonga).trim() : null,
           grupo: r.grupo != null ? String(r.grupo).trim() : null,
           subgrupo: r.subgrupo != null ? String(r.subgrupo).trim() : null,
           fornecedor: r.fornecedor != null ? String(r.fornecedor).trim() : null,
@@ -2719,6 +2735,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           cfop: r.cfop != null ? String(r.cfop).trim() : null,
           custo: r.custo != null ? Number(r.custo) : null,
           preco: r.preco != null ? Number(r.preco) : null,
+          precoVista: r.precoVista != null ? Number(r.precoVista) : null,
+          precoPromo: r.precoPromo != null ? Number(r.precoPromo) : null,
           coresMap: new Map<string, any>(),
           totalVariations: 0,
           estoqueTotal: 0,
@@ -2751,6 +2769,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const refs = Array.from(byRef.values()).map((r: any) => ({
       refCode: r.refCode as string,
       descricao: r.descricao as string,
+      descLonga: (r.descLonga ?? null) as string | null,
       grupo: (r.grupo ?? null) as string | null,
       subgrupo: (r.subgrupo ?? null) as string | null,
       fornecedor: (r.fornecedor ?? null) as string | null,
@@ -2758,6 +2777,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       cfop: (r.cfop ?? null) as string | null,
       custo: (r.custo ?? null) as number | null,
       preco: (r.preco ?? null) as number | null,
+      precoVista: (r.precoVista ?? null) as number | null,
+      precoPromo: (r.precoPromo ?? null) as number | null,
       cores: (Array.from(r.coresMap.values()) as any[]).map((c: any) => ({
         cor: c.cor as string,
         tamanhos: c.tamanhos as Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>,
@@ -2785,6 +2806,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getRefColorForQueue(refCode: string, cor: string): Promise<{
     descricao: string;
+    descLonga: string | null;
     grupo: string | null;
     subgrupo: string | null;
     fornecedor: string | null;
@@ -2792,6 +2814,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     cfop: string | null;
     custo: number | null;
     preco: number | null;
+    precoVista: number | null;
+    precoPromo: number | null;
     tamanhos: Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>;
   } | null> {
     // Normaliza caso o caller mande sub-REF ("VMS-223 P") — a busca expande
@@ -2807,6 +2831,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!corEntry) return null;
     return {
       descricao: ref.descricao,
+      descLonga: ref.descLonga,
       grupo: ref.grupo,
       subgrupo: ref.subgrupo,
       fornecedor: ref.fornecedor,
@@ -2814,6 +2839,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       cfop: ref.cfop,
       custo: ref.custo,
       preco: ref.preco,
+      precoVista: ref.precoVista,
+      precoPromo: ref.precoPromo,
       tamanhos: corEntry.tamanhos,
     };
   }

@@ -542,15 +542,57 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
                 <FileText className="w-4 h-4" />
                 Snapshot Wincred
               </h3>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
                 <dt className="text-slate-500">REF:</dt><dd className="font-mono">{item.refCode}</dd>
                 <dt className="text-slate-500">Cor:</dt><dd>{item.cor}</dd>
                 <dt className="text-slate-500">Estoque total:</dt><dd>{item.estoqueTotal}</dd>
-                <dt className="text-slate-500">Tamanhos:</dt>
-                <dd>{item.tamanhos.map((t) => t.tamanho || '?').join(', ')}</dd>
                 {item.custoMedio && <><dt className="text-slate-500">Custo médio:</dt><dd>R$ {item.custoMedio}</dd></>}
                 {item.precoSugerido && <><dt className="text-slate-500">Preço Wincred:</dt><dd>R$ {item.precoSugerido}</dd></>}
               </dl>
+
+              {/* Tabela de variações (Tamanho × SKU × EAN × Estoque) — usado pelo
+                  WC pra cadastrar cada variação com código de barras correto. */}
+              {item.tamanhos && item.tamanhos.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-600 mb-1.5">
+                    Variações ({item.tamanhos.length} tamanhos)
+                  </div>
+                  <div className="overflow-x-auto border border-slate-200 rounded bg-white">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-600 text-[10px] uppercase tracking-wide">
+                          <th className="text-left px-2 py-1.5">Tamanho</th>
+                          <th className="text-left px-2 py-1.5">SKU (Giga)</th>
+                          <th className="text-left px-2 py-1.5">EAN / Cód. barras</th>
+                          <th className="text-right px-2 py-1.5">Estoque</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {item.tamanhos.map((t, i) => (
+                          <tr key={i} className="border-t border-slate-100">
+                            <td className="px-2 py-1.5 font-bold text-slate-800">{t.tamanho || '—'}</td>
+                            <td className="px-2 py-1.5 font-mono text-slate-700">{t.codigo || '—'}</td>
+                            <td className="px-2 py-1.5 font-mono text-slate-700">
+                              {t.ean
+                                ? <span>{t.ean}</span>
+                                : <span className="text-rose-500 italic">sem EAN</span>}
+                            </td>
+                            <td className={`px-2 py-1.5 text-right tabular-nums ${t.estoque > 0 ? 'text-emerald-700 font-semibold' : 'text-slate-400'}`}>
+                              {t.estoque}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {item.tamanhos.some((t) => !t.ean) && (
+                    <div className="text-[10px] text-amber-700 mt-1">
+                      ⚠️ Tamanhos sem EAN não vão sincronizar GTIN no WooCommerce.
+                      Cadastre o EAN no Wincred (campo CODBARRAS) e rebusque a REF.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Título */}
