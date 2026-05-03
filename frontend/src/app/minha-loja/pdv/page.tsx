@@ -2901,87 +2901,89 @@ function PaymentModal({
           </div>
         )}
 
-        {/* Parcelas (crédito ou crediário) — 1 a 12x sem juros */}
-        {(selected === 'credito' || selected === 'crediario') && (
-          <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600 uppercase font-semibold">
-              Parcelas (sem juros)
-              {selected === 'crediario' && (() => {
-                const ent = Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0;
-                const fin = total - ent;
-                if (ent > 0) {
+        {/* Parcelas (crédito ou crediário) — 1 a 12x sem juros.
+           Layout: cada botão mostra Nx + VALOR DA PARCELA já calculado, pra
+           vendedora cantar pro cliente sem pegar calculadora ("10x de R$ 23,90").
+           Selecionado vira card GIGANTE embaixo. */}
+        {(selected === 'credito' || selected === 'crediario') && (() => {
+          // Base de cálculo: crediário desconta entrada antes de parcelar.
+          const ent = selected === 'crediario'
+            ? (Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0)
+            : 0;
+          const baseTotal = Math.max(0, total - ent);
+          return (
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-xs text-slate-600 uppercase font-semibold flex items-center justify-between">
+                <span>Parcelas (sem juros)</span>
+                {selected === 'crediario' && ent > 0 && (
+                  <span className="normal-case text-slate-500 text-[10px]">
+                    Financiando {brl(baseTotal)} (entrada {brl(ent)})
+                  </span>
+                )}
+              </label>
+              {/* Grid 4 cols × 3 rows — cada botão mostra Nx + valor por parcela */}
+              <div className="grid grid-cols-4 gap-1.5">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
+                  const calc = calcularParcelas(baseTotal, p);
+                  const valorMostrar = calc.iguais; // valor da parcela "principal"
+                  const ativo = parcelas === p;
                   return (
-                    <span className="ml-2 normal-case text-slate-500 text-[10px]">
-                      Financiando {brl(fin)} (total {brl(total)} − entrada {brl(ent)})
-                    </span>
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setParcelas(p)}
+                      className={`py-2 px-1 rounded-lg text-center transition-all border-2 ${
+                        ativo
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-md scale-[1.03]'
+                          : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                      }`}
+                    >
+                      <div className={`text-sm font-black leading-tight ${ativo ? 'text-white' : 'text-slate-800'}`}>
+                        {p}×
+                      </div>
+                      <div className={`text-[10px] tabular-nums leading-tight ${ativo ? 'text-emerald-50' : 'text-emerald-700 font-bold'}`}>
+                        {p === 1 ? 'à vista' : brl(valorMostrar)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Card destaque GIGANTE da seleção atual — pra vendedora bater o olho */}
+              {(() => {
+                const calc = calcularParcelas(baseTotal, parcelas);
+                if (parcelas === 1) {
+                  return (
+                    <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl p-4 text-center shadow-md">
+                      <div className="text-emerald-50 text-xs uppercase tracking-wider font-bold">À vista</div>
+                      <div className="text-white text-3xl font-black tabular-nums leading-none mt-1">
+                        {brl(baseTotal)}
+                      </div>
+                    </div>
                   );
                 }
-                return null;
-              })()}
-            </label>
-            <div className="grid grid-cols-6 gap-1">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setParcelas(p)}
-                  className={`py-2 rounded text-sm font-bold transition-colors ${
-                    parcelas === p ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 hover:bg-slate-200'
-                  }`}
-                >
-                  {p}×
-                </button>
-              ))}
-            </div>
-            {/* Simulador: parcelas iguais, com ajuste só na ÚLTIMA pra fechar o total */}
-            {(() => {
-              const calc = calcularParcelas(total, parcelas);
-              if (parcelas === 1) {
+                const todasIguais = calc.iguais === calc.ultima;
                 return (
-                  <div className="text-center bg-emerald-50 rounded py-2">
-                    <span className="text-slate-600 text-sm">À vista </span>
-                    <span className="font-bold text-emerald-700 text-lg">{brl(total)}</span>
+                  <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl p-4 text-center shadow-md">
+                    <div className="text-emerald-50 text-xs uppercase tracking-wider font-bold">Parcelado em</div>
+                    <div className="text-white text-3xl font-black tabular-nums leading-none mt-1 mb-0.5">
+                      {parcelas}× de {brl(calc.iguais)}
+                    </div>
+                    {!todasIguais && (
+                      <div className="text-emerald-50 text-[11px] mt-1">
+                        ({calc.qtdIguais}× de {brl(calc.iguais)} + última de {brl(calc.ultima)})
+                      </div>
+                    )}
+                    <div className="text-emerald-50 text-[10px] mt-1.5 border-t border-emerald-400/40 pt-1">
+                      Total: {brl(baseTotal)} · sem juros
+                      {ent > 0 && ` · após entrada de ${brl(ent)}`}
+                    </div>
                   </div>
                 );
-              }
-              // Caso ideal — divisão exata, todas as N parcelas iguais
-              const todasIguais = calc.iguais === calc.ultima;
-              return (
-                <div className="bg-emerald-50 rounded p-3 space-y-1.5">
-                  {todasIguais ? (
-                    <div className="text-center">
-                      <span className="text-slate-600 text-sm">{parcelas}× de </span>
-                      <span className="font-bold text-emerald-700 text-lg tabular-nums">{brl(calc.iguais)}</span>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-slate-700">
-                          <b>{calc.qtdIguais}×</b> parcelas iguais
-                        </span>
-                        <span className="font-bold text-emerald-700 tabular-nums">
-                          {brl(calc.iguais)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm border-t pt-1.5 border-emerald-200">
-                        <span className="text-slate-700">
-                          <b>1×</b> última parcela
-                          <span className="text-[10px] text-slate-500 ml-1">(ajuste de centavos)</span>
-                        </span>
-                        <span className="font-bold text-emerald-700 tabular-nums">
-                          {brl(calc.ultima)}
-                        </span>
-                      </div>
-                    </>
-                  )}
-                  <div className="text-center text-[10px] text-slate-500 border-t pt-1 border-emerald-200">
-                    Total: {brl(total)} · sem juros
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        )}
+              })()}
+            </div>
+          );
+        })()}
 
         {/* Painel PIX — QR Code com valor */}
         {selected === 'pix' && (
