@@ -93,7 +93,7 @@ const PAYMENT_METHODS = [
 ] as const;
 
 const BANDEIRAS_DEBITO = ['REDESHOP', 'VISA ELECTRON', 'ELO'] as const;
-const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'HIPERCARD', 'AMEX'] as const;
+const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'HIPERCARD', 'AMEX'] as const;
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -1138,85 +1138,118 @@ function PdvPageInner() {
 
         {/* ALERTAS — Pausadas migrou pro header, Realinhar foi pra Ações do PDV */}
 
-        {/* ─── FORMAS DE PAGAMENTO ───────────────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-          <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
-            Formas de pagamento
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            <button
-              onClick={() => { setPaymentFilter('pix'); setShowPayment(true); }}
-              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-teal-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-teal-300"
-              title="Cobrar via PIX"
-            >
-              <QrCode className="w-4 h-4 text-teal-500" />
-              <span className="text-[10px] font-bold text-slate-700">PIX</span>
-            </button>
-            <button
-              onClick={() => { setPaymentFilter('cartao'); setShowPayment(true); }}
-              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-violet-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
-              title="Cobrar com cartão"
-            >
-              <CreditCard className="w-4 h-4 text-violet-500" />
-              <span className="text-[10px] font-bold text-slate-700">CARTÃO</span>
-            </button>
-            <button
-              onClick={() => { setPaymentFilter('crediario'); setShowPayment(true); }}
-              disabled={!sale?.items?.length || (sale?.total || 0) <= 0}
-              className="bg-white hover:bg-amber-50 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg p-2 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-amber-300"
-              title="Vender no crediário"
-            >
-              <Receipt className="w-4 h-4 text-amber-500" />
-              <span className="text-[10px] font-bold text-slate-700">CREDIÁRIO</span>
-            </button>
-          </div>
-        </div>
-
-        {/* ─── ATALHOS DE BANDEIRA ───────────────────────────────────────── */}
-        {/* 4 atalhos diretos: pula a escolha "débito/crédito" e bandeira no */}
-        {/* PaymentModal — vai direto pra parcelas (crédito) ou confirmação (débito). */}
+        {/* ─── PAGAMENTO — 3 GRUPOS COM LOGOS ───────────────────────────── */}
+        {/* CRÉDITO (5 bandeiras), DÉBITO (3 bandeiras), OUTROS (PIX/DIN/CRED). */}
+        {/* Cada botão dispara o PaymentModal já preset com método+bandeira    */}
+        {/* — vendedora vai direto pras parcelas (crédito) ou confirmação.     */}
         {(() => {
-          const venderComBandeira = (method: 'credito' | 'debito', band: string) => {
-            setPresetMethod(method);
+          const disabled = !sale?.items?.length || (sale?.total || 0) <= 0;
+
+          const venderCredito = (band: string) => {
+            setPresetMethod('credito');
             setPresetBandeira(band);
             setPaymentFilter('cartao');
             setShowPayment(true);
           };
-          const disabled = !sale?.items?.length || (sale?.total || 0) <= 0;
-          const ATALHOS: Array<{ nome: string; tipo: 'CRÉDITO' | 'DÉBITO'; method: 'credito' | 'debito'; band: string; cor: string }> = [
-            { nome: 'MASTERCARD',    tipo: 'CRÉDITO', method: 'credito', band: 'MASTERCARD',    cor: 'orange' },
-            { nome: 'VISANET',       tipo: 'CRÉDITO', method: 'credito', band: 'VISANET',       cor: 'blue' },
-            { nome: 'REDESHOP',      tipo: 'DÉBITO',  method: 'debito',  band: 'REDESHOP',      cor: 'rose' },
-            { nome: 'VISA ELECTRON', tipo: 'DÉBITO',  method: 'debito',  band: 'VISA ELECTRON', cor: 'sky' },
-          ];
-          const colorMap: Record<string, string> = {
-            orange: 'hover:bg-orange-50 hover:border-orange-300',
-            blue:   'hover:bg-blue-50 hover:border-blue-300',
-            rose:   'hover:bg-rose-50 hover:border-rose-300',
-            sky:    'hover:bg-sky-50 hover:border-sky-300',
+          const venderDebito = (band: string) => {
+            setPresetMethod('debito');
+            setPresetBandeira(band);
+            setPaymentFilter('cartao');
+            setShowPayment(true);
           };
+          const venderOutro = (method: string) => {
+            // PIX/CREDIARIO usam filter, DINHEIRO usa preset
+            if (method === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
+            if (method === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
+            if (method === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
+          };
+
+          const PayBtn = ({
+            onClick, brand, label, hoverColor,
+          }: {
+            onClick: () => void;
+            brand?: string;
+            label?: React.ReactNode;
+            hoverColor: string;
+          }) => (
+            <button
+              onClick={onClick}
+              disabled={disabled}
+              className={`bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-1 py-2 flex items-center justify-center transition border border-slate-200 hover:shadow-sm h-12 ${hoverColor}`}
+              title={brand || (typeof label === 'string' ? label : '')}
+            >
+              {brand ? <BandeiraLogo brand={brand} /> : label}
+            </button>
+          );
+
           return (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-              <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
-                Atalhos rápidos
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 space-y-2.5">
+              {/* CRÉDITO */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-violet-700">Crédito</span>
+                  <div className="flex-1 h-px bg-violet-100" />
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-orange-50 hover:border-orange-300" />
+                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-blue-50 hover:border-blue-300" />
+                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-cyan-50 hover:border-cyan-300" />
+                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-rose-50 hover:border-rose-300" />
+                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-blue-50 hover:border-blue-400" />
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {ATALHOS.map((a) => (
-                  <button
-                    key={a.nome}
-                    onClick={() => venderComBandeira(a.method, a.band)}
-                    disabled={disabled}
-                    className={`bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-2 py-1.5 flex flex-col items-center gap-0 transition border border-slate-200 ${colorMap[a.cor]}`}
-                    title={`Vender ${a.nome} (${a.tipo})`}
-                  >
-                    <span className="text-[11px] font-bold text-slate-800 leading-tight">{a.nome}</span>
-                    <span className="text-[8px] font-medium text-slate-400 uppercase tracking-wide leading-tight">
-                      ({a.tipo})
-                    </span>
-                  </button>
-                ))}
+
+              {/* DÉBITO */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Débito</span>
+                  <div className="flex-1 h-px bg-emerald-100" />
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-rose-50 hover:border-rose-300" />
+                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-blue-50 hover:border-blue-300" />
+                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-yellow-50 hover:border-yellow-400" />
+                </div>
+              </div>
+
+              {/* OUTROS */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-600">Outros</span>
+                  <div className="flex-1 h-px bg-slate-100" />
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <PayBtn
+                    onClick={() => venderOutro('pix')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <QrCode className="w-4 h-4 text-teal-600" />
+                        <span className="text-xs font-black text-teal-700 tracking-wide">PIX</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-teal-50 hover:border-teal-300"
+                  />
+                  <PayBtn
+                    onClick={() => venderOutro('dinheiro')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Banknote className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs font-black text-emerald-700 tracking-wide">DINHEIRO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-emerald-50 hover:border-emerald-300"
+                  />
+                  <PayBtn
+                    onClick={() => venderOutro('crediario')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Receipt className="w-4 h-4 text-amber-600" />
+                        <span className="text-xs font-black text-amber-700 tracking-wide">CREDIÁRIO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-amber-50 hover:border-amber-300"
+                  />
+                </div>
               </div>
             </div>
           );
@@ -4099,6 +4132,23 @@ function BandeiraLogo({ brand }: { brand: string }) {
             fill="#B3131B"
           >
             Hipercard
+          </text>
+        </svg>
+      );
+
+    case 'CIELO':
+      return (
+        <svg viewBox="0 0 80 26" className="h-6" aria-label="Cielo">
+          <text
+            x="40"
+            y="20"
+            textAnchor="middle"
+            fontFamily="Arial Black, sans-serif"
+            fontSize="18"
+            fontWeight="900"
+            fill="#0099D9"
+          >
+            cielo
           </text>
         </svg>
       );
