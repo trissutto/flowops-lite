@@ -1996,6 +1996,15 @@ function PaymentModal({
     : null;
   const [selected, setSelected] = useState<string | null>(initialSelected);
   const [bandeira, setBandeira] = useState<string | null>(presetBandeira);
+  // Declarado AQUI (não mais embaixo) porque é usado em hooks/handlers acima
+  // — TS reclama de TDZ se ficar declarado depois do primeiro uso.
+  const needsBandeira = selected === 'debito' || selected === 'credito';
+  const bandeiras =
+    selected === 'debito'
+      ? BANDEIRAS_DEBITO
+      : selected === 'credito'
+      ? BANDEIRAS_CREDITO
+      : [];
   // Filtro EFETIVO de métodos exibidos. Começa com o prop methodFilter, mas
   // após o 1º pagamento parcial muda pra 'all' automaticamente — assim a
   // vendedora pode misturar formas (ex: PIX + dinheiro, CARTÃO + dinheiro).
@@ -2478,14 +2487,6 @@ function PaymentModal({
       generatePix();
     }
   };
-
-  const needsBandeira = selected === 'debito' || selected === 'credito';
-  const bandeiras =
-    selected === 'debito'
-      ? BANDEIRAS_DEBITO
-      : selected === 'credito'
-      ? BANDEIRAS_CREDITO
-      : [];
 
   const canConfirm = useMemo(() => {
     if (!selected) return false;
