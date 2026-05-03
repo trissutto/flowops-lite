@@ -1138,122 +1138,9 @@ function PdvPageInner() {
 
         {/* ALERTAS — Pausadas migrou pro header, Realinhar foi pra Ações do PDV */}
 
-        {/* ─── PAGAMENTO — 3 GRUPOS COM LOGOS ───────────────────────────── */}
-        {/* CRÉDITO (5 bandeiras), DÉBITO (3 bandeiras), OUTROS (PIX/DIN/CRED). */}
-        {/* Cada botão dispara o PaymentModal já preset com método+bandeira    */}
-        {/* — vendedora vai direto pras parcelas (crédito) ou confirmação.     */}
-        {(() => {
-          const disabled = !sale?.items?.length || (sale?.total || 0) <= 0;
-
-          const venderCredito = (band: string) => {
-            setPresetMethod('credito');
-            setPresetBandeira(band);
-            setPaymentFilter('cartao');
-            setShowPayment(true);
-          };
-          const venderDebito = (band: string) => {
-            setPresetMethod('debito');
-            setPresetBandeira(band);
-            setPaymentFilter('cartao');
-            setShowPayment(true);
-          };
-          const venderOutro = (method: string) => {
-            // PIX/CREDIARIO usam filter, DINHEIRO usa preset
-            if (method === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
-            if (method === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
-            if (method === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
-          };
-
-          const PayBtn = ({
-            onClick, brand, label, hoverColor,
-          }: {
-            onClick: () => void;
-            brand?: string;
-            label?: React.ReactNode;
-            hoverColor: string;
-          }) => (
-            <button
-              onClick={onClick}
-              disabled={disabled}
-              className={`bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-1 py-2 flex items-center justify-center transition border border-slate-200 hover:shadow-sm h-12 ${hoverColor}`}
-              title={brand || (typeof label === 'string' ? label : '')}
-            >
-              {brand ? <BandeiraLogo brand={brand} /> : label}
-            </button>
-          );
-
-          return (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 space-y-2.5">
-              {/* CRÉDITO */}
-              <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-violet-700">Crédito</span>
-                  <div className="flex-1 h-px bg-violet-100" />
-                </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-orange-50 hover:border-orange-300" />
-                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-cyan-50 hover:border-cyan-300" />
-                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-blue-50 hover:border-blue-400" />
-                </div>
-              </div>
-
-              {/* DÉBITO */}
-              <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">Débito</span>
-                  <div className="flex-1 h-px bg-emerald-100" />
-                </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-yellow-50 hover:border-yellow-400" />
-                </div>
-              </div>
-
-              {/* OUTROS */}
-              <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-600">Outros</span>
-                  <div className="flex-1 h-px bg-slate-100" />
-                </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <PayBtn
-                    onClick={() => venderOutro('pix')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <QrCode className="w-4 h-4 text-teal-600" />
-                        <span className="text-xs font-black text-teal-700 tracking-wide">PIX</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-teal-50 hover:border-teal-300"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('dinheiro')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Banknote className="w-4 h-4 text-emerald-600" />
-                        <span className="text-xs font-black text-emerald-700 tracking-wide">DINHEIRO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-emerald-50 hover:border-emerald-300"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('crediario')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Receipt className="w-4 h-4 text-amber-600" />
-                        <span className="text-xs font-black text-amber-700 tracking-wide">CREDIÁRIO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-amber-50 hover:border-amber-300"
-                  />
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {/* PAGAMENTOS migraram pra BARRA HORIZONTAL fixa acima do footer
+           (procurar "PaymentBar — barra inferior" abaixo). Mantido aqui só
+           o comentário pra não confundir quem busca por "Formas de pagamento". */}
 
         {/* ─── AÇÕES DO PDV ──────────────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
@@ -1367,6 +1254,116 @@ function PdvPageInner() {
           <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
         </div>
       </div>
+
+      {/* ─── PaymentBar — barra inferior com 3 grupos de pagamento ─────────
+         Posicionada fixed acima do footer principal. Aparece só quando a
+         venda tem itens (>0) — evita poluir tela vazia. Cada botão dispara
+         o PaymentModal já com método+bandeira preset (vai direto pra parcelas
+         em crédito ou confirmação em débito; PIX/CREDIÁRIO/DINHEIRO abrem
+         no modo certo). */}
+      {sale?.status === 'open' && (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0 && (() => {
+        const venderCredito = (band: string) => {
+          setPresetMethod('credito');
+          setPresetBandeira(band);
+          setPaymentFilter('cartao');
+          setShowPayment(true);
+        };
+        const venderDebito = (band: string) => {
+          setPresetMethod('debito');
+          setPresetBandeira(band);
+          setPaymentFilter('cartao');
+          setShowPayment(true);
+        };
+        const venderOutro = (m: string) => {
+          if (m === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
+          if (m === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
+          if (m === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
+        };
+        const PayBtn = ({
+          onClick, brand, label, hoverColor,
+        }: {
+          onClick: () => void;
+          brand?: string;
+          label?: React.ReactNode;
+          hoverColor: string;
+        }) => (
+          <button
+            onClick={onClick}
+            className={`bg-white rounded-lg px-2 py-1.5 flex items-center justify-center transition border border-slate-200 hover:shadow-md h-11 min-w-[60px] ${hoverColor}`}
+            title={brand || (typeof label === 'string' ? label : '')}
+          >
+            {brand ? <BandeiraLogo brand={brand} /> : label}
+          </button>
+        );
+        return (
+          <div className="fixed bottom-[100px] sm:bottom-[88px] left-0 right-0 z-10 px-3 pointer-events-none">
+            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
+              {/* GRUPO CRÉDITO */}
+              <div className="flex flex-col gap-1 shrink-0">
+                <span className="text-[9px] font-black uppercase tracking-wider text-violet-700 px-1">Crédito</span>
+                <div className="flex gap-1.5">
+                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-orange-50 hover:border-orange-300" />
+                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-blue-50 hover:border-blue-300" />
+                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-cyan-50 hover:border-cyan-300" />
+                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-rose-50 hover:border-rose-300" />
+                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-blue-50 hover:border-blue-400" />
+                </div>
+              </div>
+
+              <div className="w-px bg-slate-200 mx-0.5" />
+
+              {/* GRUPO DÉBITO */}
+              <div className="flex flex-col gap-1 shrink-0">
+                <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 px-1">Débito</span>
+                <div className="flex gap-1.5">
+                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-rose-50 hover:border-rose-300" />
+                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-blue-50 hover:border-blue-300" />
+                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-yellow-50 hover:border-yellow-400" />
+                </div>
+              </div>
+
+              <div className="w-px bg-slate-200 mx-0.5" />
+
+              {/* GRUPO OUTROS */}
+              <div className="flex flex-col gap-1 shrink-0">
+                <span className="text-[9px] font-black uppercase tracking-wider text-slate-600 px-1">Outros</span>
+                <div className="flex gap-1.5">
+                  <PayBtn
+                    onClick={() => venderOutro('pix')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <QrCode className="w-4 h-4 text-teal-600" />
+                        <span className="text-xs font-black text-teal-700 tracking-wide">PIX</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-teal-50 hover:border-teal-300"
+                  />
+                  <PayBtn
+                    onClick={() => venderOutro('dinheiro')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Banknote className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs font-black text-emerald-700 tracking-wide">DINHEIRO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-emerald-50 hover:border-emerald-300"
+                  />
+                  <PayBtn
+                    onClick={() => venderOutro('crediario')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Receipt className="w-4 h-4 text-amber-600" />
+                        <span className="text-xs font-black text-amber-700 tracking-wide">CREDIÁRIO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-amber-50 hover:border-amber-300"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
@@ -4077,133 +4074,50 @@ function OpenSalesModal({
   );
 }
 
-// ─── Logos das bandeiras (SVG inline) ──────────────────────────────────
+// ─── Logos das bandeiras (imagens oficiais em /public/bandeiras) ─────────
+//
+// Arquivos colocados pelo cliente em /frontend/public/bandeiras/:
+//   MASTERCARD.png · CIELO.png · REDESHOP.png · VISA.webp
+//   HIPERCARD.webp · AMERICAN.webp · ELO.webp
+// VISANET e VISA ELECTRON reusam VISA.webp (mesma marca, label adicional).
+
+const BANDEIRA_SRC: Record<string, string> = {
+  MASTERCARD:       '/bandeiras/MASTERCARD.png',
+  VISANET:          '/bandeiras/VISA.webp',
+  'VISA ELECTRON':  '/bandeiras/VISA.webp',
+  CIELO:            '/bandeiras/CIELO.png',
+  HIPERCARD:        '/bandeiras/HIPERCARD.webp',
+  AMEX:             '/bandeiras/AMERICAN.webp',
+  REDESHOP:         '/bandeiras/REDESHOP.png',
+  ELO:              '/bandeiras/ELO.webp',
+};
 
 function BandeiraLogo({ brand }: { brand: string }) {
-  switch (brand) {
-    case 'MASTERCARD':
-      return (
-        <svg viewBox="0 0 60 36" className="h-7" aria-label="Mastercard">
-          <circle cx="22" cy="18" r="14" fill="#EB001B" />
-          <circle cx="38" cy="18" r="14" fill="#F79E1B" />
-          <path
-            d="M30 8a14 14 0 0 0 0 20 14 14 0 0 0 0-20z"
-            fill="#FF5F00"
-          />
-        </svg>
-      );
-
-    case 'VISANET':
-    case 'VISA ELECTRON':
-      return (
-        <div className="flex flex-col items-center">
-          <svg viewBox="0 0 80 26" className="h-6">
-            <text
-              x="40"
-              y="22"
-              textAnchor="middle"
-              fontFamily="Arial Black, sans-serif"
-              fontSize="22"
-              fontWeight="900"
-              fontStyle="italic"
-              fill="#1A1F71"
-            >
-              VISA
-            </text>
-          </svg>
-          {brand === 'VISA ELECTRON' && (
-            <span className="text-[8px] font-bold tracking-wider text-[#1A1F71]">
-              ELECTRON
-            </span>
-          )}
-        </div>
-      );
-
-    case 'HIPERCARD':
-      return (
-        <svg viewBox="0 0 110 24" className="h-6" aria-label="Hipercard">
-          <text
-            x="55"
-            y="20"
-            textAnchor="middle"
-            fontFamily="Arial Black, sans-serif"
-            fontSize="18"
-            fontWeight="900"
-            fontStyle="italic"
-            fill="#B3131B"
-          >
-            Hipercard
-          </text>
-        </svg>
-      );
-
-    case 'CIELO':
-      return (
-        <svg viewBox="0 0 80 26" className="h-6" aria-label="Cielo">
-          <text
-            x="40"
-            y="20"
-            textAnchor="middle"
-            fontFamily="Arial Black, sans-serif"
-            fontSize="18"
-            fontWeight="900"
-            fill="#0099D9"
-          >
-            cielo
-          </text>
-        </svg>
-      );
-
-    case 'AMEX':
-      return (
-        <div className="bg-[#006FCF] rounded px-2 py-1 flex items-center justify-center min-w-[64px]">
-          <span className="text-white font-black text-sm tracking-wide italic">
-            AMEX
-          </span>
-        </div>
-      );
-
-    case 'ELO':
-      return (
-        <div className="flex items-center gap-0.5">
-          <span
-            className="inline-block w-3 h-3 rounded-full"
-            style={{ background: '#FFCB05' }}
-          />
-          <span
-            className="inline-block w-3 h-3 rounded-full -ml-1.5"
-            style={{ background: '#00A4E0' }}
-          />
-          <span
-            className="inline-block w-3 h-3 rounded-full -ml-1.5"
-            style={{ background: '#EE3124' }}
-          />
-          <span className="font-black text-sm text-slate-800 ml-1 italic">
-            elo
-          </span>
-        </div>
-      );
-
-    case 'REDESHOP':
-      return (
-        <svg viewBox="0 0 110 24" className="h-6" aria-label="Redeshop">
-          <text
-            x="55"
-            y="20"
-            textAnchor="middle"
-            fontFamily="Arial Black, sans-serif"
-            fontSize="16"
-            fontWeight="900"
-            fill="#CC092F"
-          >
-            REDESHOP
-          </text>
-        </svg>
-      );
-
-    default:
-      return <span className="text-xs font-bold text-slate-700">{brand}</span>;
+  const src = BANDEIRA_SRC[brand];
+  if (!src) {
+    return <span className="text-xs font-bold text-slate-700">{brand}</span>;
   }
+  // VISA ELECTRON usa logo VISA + sublabel ELECTRON pra distinguir do VISANET (crédito)
+  if (brand === 'VISA ELECTRON') {
+    return (
+      <div className="flex flex-col items-center justify-center leading-none">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={src} alt="Visa Electron" className="h-5 object-contain" />
+        <span className="text-[8px] font-bold tracking-wider text-[#1A1F71] mt-0.5">
+          ELECTRON
+        </span>
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={brand}
+      className="h-7 max-h-7 object-contain"
+      loading="lazy"
+    />
+  );
 }
 
 
