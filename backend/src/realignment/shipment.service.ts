@@ -497,7 +497,7 @@ export class RealignmentShipmentService {
     // o Giga ficar negativo se houver divergência. Loga warning pra rastro.
     const result = await this.erp.decreaseStock(
       stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
-      { allowNegative: true },
+      { allowNegative: true, skipNotFound: true },
     );
     if (!result.success) {
       throw new BadRequestException(

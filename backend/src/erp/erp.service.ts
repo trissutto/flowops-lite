@@ -147,7 +147,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async decreaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
-    opts?: { allowNegative?: boolean },
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
   ): Promise<{
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
@@ -205,7 +205,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   private async decreaseStockOnce(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
-    opts?: { allowNegative?: boolean },
+    opts?: { allowNegative?: boolean; skipNotFound?: boolean },
   ): Promise<{
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
@@ -251,6 +251,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
 
         if (!beforeRows.length) {
+          if (opts?.skipNotFound) {
+            this.logger.warn(
+              `Item sem registro em estoque — PULADO (skipNotFound): SKU=${skuOriginal} LOJA=${storeCode} qty=${qty}`,
+            );
+            continue; // Pula esse item, segue pro próximo
+          }
           throw new Error(`Registro não encontrado em estoque: SKU=${skuOriginal} LOJA=${storeCode}`);
         }
 
