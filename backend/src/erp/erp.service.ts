@@ -4660,4 +4660,277 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return out;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CADASTRO DINÂMICO DE PRODUTOS (Cadastro Dinâmico → Wincred)
+  //
+  // Usado por /retaguarda/cadastro-produtos. Permite listar grupos,
+  // subgrupos, cores, tamanhos, fornecedores existentes e inserir novos
+  // produtos na tabela `produtos` (uma linha por combinação cor×tamanho).
+  // INSERT controlado por ERP_WRITE_ENABLED — mesma flag do decreaseStock.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Lista todos os grupos cadastrados no Wincred.
+   * Tira de SELECT DISTINCT em produtos (não tem tabela própria de grupos
+   * com nome — fica em produtos.GRUPO + produtos.NOMEGRUPO).
+   */
+  async listarGrupos(): Promise<Array<{ codigo: number; nome: string }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT DISTINCT GRUPO AS codigo, NOMEGRUPO AS nome
+           FROM produtos
+          WHERE GRUPO IS NOT NULL AND NOMEGRUPO IS NOT NULL AND NOMEGRUPO <> ''
+          ORDER BY NOMEGRUPO`,
+      );
+      return (rows as any[]).map((r) => ({
+        codigo: Number(r.codigo),
+        nome: String(r.nome || '').trim(),
+      })).filter((g) => g.codigo && g.nome);
+    } catch (e) {
+      this.logger.error(`listarGrupos falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista subgrupos. No Wincred, SUBGRUPO é só um inteiro em produtos
+   * (não tem tabela com nome do subgrupo). Devolve códigos distintos pro
+   * grupo informado, com a "descrição" sendo apenas o número.
+   */
+  async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT DISTINCT SUBGRUPO AS codigo
+           FROM produtos
+          WHERE GRUPO = ? AND SUBGRUPO IS NOT NULL
+          ORDER BY SUBGRUPO`,
+        [grupoCodigo],
+      );
+      return (rows as any[]).map((r) => ({
+        codigo: Number(r.codigo),
+        nome: `SG-${r.codigo}`, // Wincred não armazena nome de subgrupo
+      })).filter((s) => s.codigo);
+    } catch (e) {
+      this.logger.error(`listarSubgrupos falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista cores distintas usadas nos produtos. Útil pra preencher o modal
+   * de cores com sugestões + permitir digitar nova.
+   */
+  async listarCoresDistintas(limit = 200): Promise<string[]> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT COR, COUNT(*) AS qtd
+           FROM produtos
+          WHERE COR IS NOT NULL AND COR <> ''
+          GROUP BY COR
+          ORDER BY qtd DESC
+          LIMIT ?`,
+        [limit],
+      );
+      return (rows as any[]).map((r) => String(r.COR || '').trim()).filter(Boolean);
+    } catch (e) {
+      this.logger.error(`listarCoresDistintas falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista tamanhos distintos usados nos produtos. Útil pra preencher o modal
+   * de tamanhos com sugestões.
+   */
+  async listarTamanhosDistintos(limit = 200): Promise<string[]> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT TAMANHO, COUNT(*) AS qtd
+           FROM produtos
+          WHERE TAMANHO IS NOT NULL AND TAMANHO <> ''
+          GROUP BY TAMANHO
+          ORDER BY qtd DESC
+          LIMIT ?`,
+        [limit],
+      );
+      return (rows as any[]).map((r) => String(r.TAMANHO || '').trim()).filter(Boolean);
+    } catch (e) {
+      this.logger.error(`listarTamanhosDistintos falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponível).
+   */
+  async listarFornecedores(limit = 500): Promise<Array<{ cnpj: string; nome: string }>> {
+    if (!this.pool) return [];
+    try {
+      // Tenta tabela fornecedores primeiro; se falhar, vai pra produtos
+      try {
+        const [rows] = await this.pool.query(
+          `SELECT CGC AS cnpj, NOME AS nome
+             FROM fornecedores
+            WHERE NOME IS NOT NULL AND NOME <> ''
+            ORDER BY NOME
+            LIMIT ?`,
+          [limit],
+        );
+        const result = (rows as any[]).map((r) => ({
+          cnpj: String(r.cnpj || '').trim(),
+          nome: String(r.nome || '').trim(),
+        })).filter((f) => f.nome);
+        if (result.length) return result;
+      } catch {
+        // ignora — vai pro fallback
+      }
+      const [rows] = await this.pool.query(
+        `SELECT DISTINCT FORNECEDOR AS cnpj
+           FROM produtos
+          WHERE FORNECEDOR IS NOT NULL AND FORNECEDOR <> ''
+          ORDER BY FORNECEDOR
+          LIMIT ?`,
+        [limit],
+      );
+      return (rows as any[]).map((r) => ({
+        cnpj: String(r.cnpj || '').trim(),
+        nome: String(r.cnpj || '').trim(),
+      })).filter((f) => f.cnpj);
+    } catch (e) {
+      this.logger.error(`listarFornecedores falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Pega o próximo GRUPO numérico livre. Wincred usa inteiro sequencial
+   * pra GRUPO sem auto-increment, então buscamos MAX+1.
+   */
+  async proximoGrupoCodigo(): Promise<number> {
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    const [rows] = await this.pool.query(
+      `SELECT COALESCE(MAX(GRUPO), 0) + 1 AS proximo FROM produtos WHERE GRUPO IS NOT NULL`,
+    );
+    return Number((rows as any[])[0]?.proximo) || 1;
+  }
+
+  /**
+   * Insere um novo grupo. Como o Wincred não tem tabela de grupos, o
+   * "cadastro" do grupo é refletido na primeira inserção em produtos com
+   * esse GRUPO+NOMEGRUPO. Retornamos o código atribuído.
+   *
+   * NÃO efetua INSERT direto — o nome só vai pro produtos quando o
+   * processamento criar os SKUs daquele grupo. Isso evita lixo.
+   */
+  async reservarCodigoGrupo(): Promise<number> {
+    return this.proximoGrupoCodigo();
+  }
+
+  /**
+   * Verifica se um CODIGO já existe na tabela produtos.
+   */
+  async produtoExiste(codigo: string): Promise<boolean> {
+    if (!this.pool) return false;
+    const [rows] = await this.pool.query(
+      `SELECT 1 FROM produtos WHERE CODIGO = ? LIMIT 1`,
+      [codigo],
+    );
+    return (rows as any[]).length > 0;
+  }
+
+  /**
+   * Insere N produtos na tabela `produtos` do Wincred em uma única
+   * transação (ACID). Todos caem ou nada cai. Idempotência: se o CODIGO
+   * já existir, ignora (insert ignore).
+   *
+   * Requer ERP_WRITE_ENABLED='true'. Senão lança erro sem tocar no banco.
+   */
+  async inserirProdutosBatch(produtos: Array<{
+    codigo: string;
+    grupo: number;
+    nomeGrupo: string;
+    subgrupo?: number;
+    descricaoCompleta: string;
+    descricaoPdv?: string;
+    custo: number;
+    precoVenda: number;
+    margem: number;
+    fornecedor: string;
+    cor: string;
+    tamanho: string;
+    ref: string;
+    plusSize: boolean;
+    ncm?: string;
+    cfop?: number;
+    tributo?: string;
+    marca?: string;
+    estoqueInicial?: number;
+  }>): Promise<{ inseridos: number; ignorados: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar inserção em produtos.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    if (!produtos.length) return { inseridos: 0, ignorados: 0 };
+
+    const conn = await this.pool.getConnection();
+    let inseridos = 0;
+    let ignorados = 0;
+    try {
+      await conn.beginTransaction();
+      for (const p of produtos) {
+        // INSERT IGNORE: se CODIGO já existe (PK collision), ignora a linha
+        // sem dar rollback do batch inteiro.
+        const [result]: any = await conn.query(
+          `INSERT IGNORE INTO produtos (
+             CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
+             CUSTO, VENDAUN, MARGEM, FORNECEDOR, UNIDADE, ESTOQUE,
+             SUBGRUPO, COR, TAMANHO, MARCA, REF,
+             TRIBUTO, NCM, PLUS_SIZE, CFOP, DATAALT, OPERADOR
+           ) VALUES (
+             ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, 'UN', ?,
+             ?, ?, ?, ?, ?,
+             ?, ?, ?, ?, CURDATE(), 'FLOWOPS'
+           )`,
+          [
+            p.codigo,
+            p.grupo,
+            (p.nomeGrupo || '').slice(0, 30),
+            (p.descricaoPdv || p.descricaoCompleta).slice(0, 50),
+            p.descricaoCompleta.slice(0, 100),
+            p.custo,
+            p.precoVenda,
+            p.margem,
+            (p.fornecedor || '').slice(0, 18),
+            p.estoqueInicial ?? 0,
+            p.subgrupo ?? null,
+            (p.cor || '').slice(0, 15),
+            (p.tamanho || '').slice(0, 20),
+            (p.marca || '').slice(0, 30),
+            (p.ref || '').slice(0, 10),
+            (p.tributo || '').slice(0, 4),
+            (p.ncm || '').slice(0, 8),
+            p.plusSize ? 1 : 0,
+            p.cfop ?? null,
+          ],
+        );
+        if (result.affectedRows && result.affectedRows > 0) inseridos++;
+        else ignorados++;
+      }
+      await conn.commit();
+      this.logger.log(`inserirProdutosBatch: ${inseridos} inseridos, ${ignorados} ignorados (já existiam)`);
+      return { inseridos, ignorados };
+    } catch (e) {
+      await conn.rollback();
+      this.logger.error(`inserirProdutosBatch falhou — rollback: ${(e as Error).message}`);
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
 }

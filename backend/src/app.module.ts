@@ -37,6 +37,7 @@ import { PdvModule } from './pdv/pdv.module';
 import { WcReturnsModule } from './wc-returns/wc-returns.module';
 import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
+import { ProductRegistrationModule } from './product-registration/product-registration.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { PagarmeModule } from './pagarme/pagarme.module';
     WcReturnsModule,
     PagbankModule,
     PagarmeModule,
+    ProductRegistrationModule,
   ],
 })
 export class AppModule {}

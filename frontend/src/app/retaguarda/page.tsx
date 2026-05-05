@@ -18,6 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
+  Package,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -50,6 +51,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/crediario',            label: 'Crediário',         subtitle: 'Manual',        description: 'Lista + WhatsApp bulk',         tone: 'orange', icon: CreditCard      },
   { href: '/clientes',                        label: 'Clientes',          subtitle: 'CRM',           description: 'Histórico + segmentos',         tone: 'sky',    icon: Users           },
   { href: '/marketing',                       label: 'Marketing',         subtitle: 'Campanhas',     description: 'Recuperação + WhatsApp',        tone: 'rose',   icon: Megaphone       },
+  { href: '/retaguarda/cadastro-produtos',    label: 'Cadastro Produtos', subtitle: 'Novo SKU',      description: 'Gerar SKUs no Wincred',         tone: 'purple', icon: Package         },
   { href: '/retaguarda/remessas',             label: 'Remessas',          subtitle: 'Em trânsito',   description: 'Caixas + comprovantes PDF',     tone: 'sky',    icon: Truck           },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',     subtitle: 'Criar',         description: 'Rebalancear estoque',           tone: 'amber',  icon: Shuffle         },
   { href: '/retaguarda/realinhamento/nao-encontrados', label: 'Não Encontradas', subtitle: 'Revisar', description: 'Filiais reportaram',           tone: 'rose',   icon: AlertTriangle  },

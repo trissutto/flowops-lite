@@ -1325,3 +1325,19 @@ model PdvSaleItem {
   @@index([sku])
   @@map("pdv_sale_items")
 }
+
+// ════════════════════════════════════════════════════════════════
+// Product Registration — sequência de EAN-13 (prefixo 8) usada pelo
+// Cadastro Dinâmico de Produtos (/retaguarda/cadastro-produtos).
+// Cada novo produto pega o próximo seq, monta EAN-13 com check digit
+// e grava na tabela `produtos` do Wincred (gigasistemas21).
+// Single row (id=1). Atualizada em transação a cada batch.
+// ════════════════════════════════════════════════════════════════
+model EanSequence {
+  id        Int      @id @default(autoincrement())
+  prefix    String   @default("8")
+  lastSeq   BigInt   @default(0) @map("last_seq")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("ean_sequence")
+}
