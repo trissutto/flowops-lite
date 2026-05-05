@@ -803,6 +803,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/pdv',           icon: ShoppingCart, label: 'PDV',            subtitle: 'Venda',       description: 'Frente de caixa',          tone: 'teal'   },
     { href: '/minha-loja/consultar',     icon: Search,       label: 'Consultar',      subtitle: 'Estoque',     description: 'Buscar na rede',           tone: 'rose'   },
     { href: '/minha-loja/historico',     icon: History,      label: 'Transferências', subtitle: 'Histórico',   description: 'Eu pedi · me pediram',     tone: 'orange' },
+    { href: '/minha-loja/triagem',       icon: Package,      label: 'Triagem',        subtitle: 'Bipar',       description: 'Distribuir mercadoria',    tone: 'purple' },
     { href: '/minha-loja/materiais',     icon: Package2,     label: 'Materiais',      subtitle: 'Suprimentos', description: 'Sacolas, etiquetas…',      tone: 'amber'  },
     { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
