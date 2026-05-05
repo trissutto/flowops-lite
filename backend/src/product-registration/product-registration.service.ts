@@ -40,13 +40,14 @@ export class ProductRegistrationService {
     return this.erp.listarSubgrupos(grupoCodigo);
   }
 
-  /**
-   * Reserva um próximo código de grupo (não persiste no Wincred — o grupo
-   * só "nasce" quando entra um produto com aquele GRUPO+NOMEGRUPO).
-   */
-  async reservarGrupo() {
-    const codigo = await this.erp.reservarCodigoGrupo();
-    return { codigo };
+  /** Cria um grupo novo no Wincred (tabela grupos). */
+  async criarGrupo(nome: string) {
+    return this.erp.inserirGrupo(nome);
+  }
+
+  /** Cria um subgrupo novo no Wincred (tabela subgrupos), associado a um grupo. */
+  async criarSubgrupo(grupoCodigo: number, nome: string) {
+    return this.erp.inserirSubgrupo(grupoCodigo, nome);
   }
 
   /**

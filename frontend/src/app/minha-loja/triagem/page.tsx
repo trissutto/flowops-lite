@@ -93,6 +93,7 @@ export default function TriagemPage() {
 
   // ── Finalizar ──
   const [finalizing, setFinalizing] = useState(false);
+  const [finalizingOne, setFinalizingOne] = useState<string | null>(null);
   const [finalizeResult, setFinalizeResult] = useState<{ fechadas: number; falhas: number; results: any[] } | null>(null);
 
   // ── Modal detalhe da caixa ──
@@ -437,7 +438,7 @@ export default function TriagemPage() {
     }
   };
 
-  // ── Finalizar ──
+  // ── Finalizar (todas) ──
   const finalizar = async () => {
     if (!fromStoreCode) return;
     if (openShipments.length === 0) {
@@ -463,6 +464,37 @@ export default function TriagemPage() {
       setError(e?.message || 'Erro ao finalizar');
     } finally {
       setFinalizing(false);
+    }
+  };
+
+  // ── Finalizar UMA remessa específica ──
+  const finalizarUma = async (shipmentId: string, code: string, toStoreName: string) => {
+    if (!fromStoreCode) return;
+    if (!confirm(`Fechar e enviar a caixa ${code} (${toStoreName})?\nVai baixar o estoque do Giga origem.`)) return;
+    setFinalizingOne(shipmentId);
+    setError(null);
+    try {
+      const result = await api<{ ok: boolean; code: string; toStoreCode: string; error?: string }>(
+        '/realignment/triage/finalize-one',
+        {
+          method: 'POST',
+          body: JSON.stringify({ shipmentId, fromStoreCode }),
+        },
+      );
+      if (!result.ok) {
+        setError(result.error || `Erro ao fechar caixa ${code}`);
+      } else {
+        setFinalizeResult({
+          fechadas: 1,
+          falhas: 0,
+          results: [{ ok: true, code: result.code, toStoreCode: result.toStoreCode }],
+        });
+      }
+      loadOpenShipments();
+    } catch (e: any) {
+      setError(e?.message || `Erro ao fechar caixa ${code}`);
+    } finally {
+      setFinalizingOne(null);
     }
   };
 
@@ -802,26 +834,48 @@ export default function TriagemPage() {
                       .slice()
                       .sort((a, b) => b.totalQty - a.totalQty)
                       .map((sh) => (
-                        <button
+                        <div
                           key={sh.id}
-                          type="button"
-                          onClick={() => openBox(sh.id)}
-                          className="w-full flex items-center justify-between p-2 rounded bg-violet-50 border border-violet-200 hover:bg-violet-100 hover:border-violet-400 transition-colors text-left"
-                          title="Clique pra ver as peças"
+                          className="flex items-stretch gap-1 rounded bg-violet-50 border border-violet-200 hover:border-violet-400 transition-colors overflow-hidden"
                         >
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold text-sm text-slate-800 truncate">
-                              {sh.toStoreName}
+                          {/* Clique pra ver peças (área principal) */}
+                          <button
+                            type="button"
+                            onClick={() => openBox(sh.id)}
+                            className="flex-1 flex items-center justify-between p-2 hover:bg-violet-100 text-left min-w-0"
+                            title="Clique pra ver as peças"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="font-semibold text-sm text-slate-800 truncate">
+                                {sh.toStoreName}
+                              </div>
+                              <div className="text-[10px] font-mono text-slate-400">{sh.code}</div>
                             </div>
-                            <div className="text-[10px] font-mono text-slate-400">{sh.code}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-xl font-bold text-violet-700 tabular-nums leading-none">
-                              {sh.totalQty}
+                            <div className="text-right pr-1">
+                              <div className="text-xl font-bold text-violet-700 tabular-nums leading-none">
+                                {sh.totalQty}
+                              </div>
+                              <div className="text-[10px] text-slate-500">peças</div>
                             </div>
-                            <div className="text-[10px] text-slate-500">peças</div>
-                          </div>
-                        </button>
+                          </button>
+                          {/* Botão Fechar SÓ essa remessa */}
+                          <button
+                            type="button"
+                            onClick={() => finalizarUma(sh.id, sh.code, sh.toStoreName)}
+                            disabled={finalizingOne === sh.id || finalizing}
+                            className="px-2 bg-emerald-600 hover:bg-emerald-700 text-white flex flex-col items-center justify-center gap-0.5 disabled:opacity-50 transition-colors"
+                            title={`Fechar e enviar só a caixa ${sh.code}`}
+                          >
+                            {finalizingOne === sh.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5" />
+                                <span className="text-[9px] font-bold leading-none">FECHAR</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       ))}
                   </div>
                   <div className="border-t pt-2 mt-2">

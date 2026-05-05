@@ -691,6 +691,29 @@ export class RealignmentController {
     return this.triage.finalizarTriagem({ fromStoreCode: body.fromStoreCode, userId });
   }
 
+  /**
+   * POST /realignment/triage/finalize-one
+   * Body: { shipmentId, fromStoreCode }
+   * Fecha apenas UMA remessa OPEN específica (escolhida pela vendedora).
+   * Permite finalizar caixa por caixa em vez de tudo de uma vez.
+   */
+  @Post('triage/finalize-one')
+  triageFinalizeOne(
+    @Req() req: any,
+    @Body() body: { shipmentId: string; fromStoreCode: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') throw new ForbiddenException('Apenas admin ou loja');
+    if (!body?.shipmentId) throw new BadRequestException('shipmentId obrigatório');
+    if (!body?.fromStoreCode) throw new BadRequestException('fromStoreCode obrigatório');
+    const userId = req?.user?.id || req?.user?.sub || undefined;
+    return this.triage.finalizarRemessa({
+      shipmentId: body.shipmentId,
+      fromStoreCode: body.fromStoreCode,
+      userId,
+    });
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // ADMIN — Visão geral de remessas em trânsito
   // ════════════════════════════════════════════════════════════════════

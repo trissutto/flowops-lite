@@ -538,6 +538,54 @@ export class TriagemService {
   }
 
   /**
+   * Fecha UMA remessa OPEN específica. Permite à vendedora escolher qual
+   * caixa fechar (em vez de fechar todas de uma vez).
+   *
+   * Valida que a remessa pertence à loja origem informada antes de fechar.
+   */
+  async finalizarRemessa(input: { shipmentId: string; fromStoreCode: string; userId?: string }) {
+    const from = await this.prisma.store.findUnique({
+      where: { code: input.fromStoreCode },
+      select: { id: true, code: true } as any,
+    });
+    if (!from) throw new NotFoundException(`Loja origem ${input.fromStoreCode} não encontrada`);
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+      select: { id: true, code: true, fromStoreCode: true, toStoreCode: true, status: true },
+    });
+    if (!shipment) throw new NotFoundException(`Remessa ${input.shipmentId} não encontrada`);
+    if (shipment.fromStoreCode !== (from as any).code) {
+      throw new NotFoundException(`Remessa ${shipment.code} não pertence à loja ${input.fromStoreCode}`);
+    }
+    if (shipment.status !== 'open') {
+      throw new NotFoundException(`Remessa ${shipment.code} não está aberta (status=${shipment.status})`);
+    }
+
+    try {
+      await this.shipment.closeAndSend({
+        shipmentId: shipment.id,
+        storeId: (from as any).id,
+        userId: input.userId,
+      });
+      return {
+        ok: true,
+        shipmentId: shipment.id,
+        code: shipment.code,
+        toStoreCode: shipment.toStoreCode,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        shipmentId: shipment.id,
+        code: shipment.code,
+        toStoreCode: shipment.toStoreCode,
+        error: (e as Error).message,
+      };
+    }
+  }
+
+  /**
    * Fecha TODAS as remessas OPEN do par fromStoreCode em batch.
    * Pra cada uma chama closeAndSend (decreaseStock + obrigações + emit socket).
    *

@@ -315,26 +315,75 @@ export default function CadastroProdutosPage() {
                       <option key={g.codigo} value={g.codigo}>{g.nome}</option>
                     ))}
                   </select>
+                  <button
+                    onClick={async () => {
+                      const nome = prompt('Nome do novo grupo:');
+                      if (!nome?.trim()) return;
+                      try {
+                        const novo = await api<{ codigo: number; nome: string }>('/product-registration/grupo', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ nome: nome.trim() }),
+                        });
+                        const novoCatalogo = { ...(catalogo as CatalogoResp), grupos: [...((catalogo?.grupos) || []), novo].sort((a, b) => a.nome.localeCompare(b.nome)) };
+                        setCatalogo(novoCatalogo);
+                        setGrupoCodigo(novo.codigo);
+                        setGrupoNome(novo.nome);
+                      } catch (e: any) {
+                        setErro(`Erro ao criar grupo: ${e?.message || e}`);
+                      }
+                    }}
+                    title="Criar novo grupo"
+                    className="px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-sm border border-purple-200"
+                  >
+                    <Plus size={16} />
+                  </button>
                 </div>
               </FormRow>
 
               <FormRow label="Sub Grupo">
-                <select
-                  value={subgrupoCodigo ?? ''}
-                  onChange={(e) => {
-                    const cod = Number(e.target.value);
-                    const sg = subgrupos.find((x) => x.codigo === cod);
-                    setSubgrupoCodigo(cod || null);
-                    setSubgrupoNome(sg?.nome || '');
-                  }}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
-                  disabled={!grupoCodigo}
-                >
-                  <option value="">— escolha —</option>
-                  {subgrupos.map((sg) => (
-                    <option key={sg.codigo} value={sg.codigo}>{sg.nome}</option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    value={subgrupoCodigo ?? ''}
+                    onChange={(e) => {
+                      const cod = Number(e.target.value);
+                      const sg = subgrupos.find((x) => x.codigo === cod);
+                      setSubgrupoCodigo(cod || null);
+                      setSubgrupoNome(sg?.nome || '');
+                    }}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
+                    disabled={!grupoCodigo}
+                  >
+                    <option value="">— escolha —</option>
+                    {subgrupos.map((sg) => (
+                      <option key={sg.codigo} value={sg.codigo}>{sg.nome}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={async () => {
+                      if (!grupoCodigo) { setErro('Escolha um Grupo antes.'); return; }
+                      const nome = prompt('Nome do novo subgrupo:');
+                      if (!nome?.trim()) return;
+                      try {
+                        const novo = await api<{ codigo: number; nome: string; grupo: number }>('/product-registration/subgrupo', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ grupoCodigo, nome: nome.trim() }),
+                        });
+                        setSubgrupos((prev) => [...prev, { codigo: novo.codigo, nome: novo.nome }].sort((a, b) => a.nome.localeCompare(b.nome)));
+                        setSubgrupoCodigo(novo.codigo);
+                        setSubgrupoNome(novo.nome);
+                      } catch (e: any) {
+                        setErro(`Erro ao criar subgrupo: ${e?.message || e}`);
+                      }
+                    }}
+                    disabled={!grupoCodigo}
+                    title="Criar novo subgrupo"
+                    className="px-3 py-2 bg-purple-50 hover:bg-purple-100 disabled:bg-slate-100 disabled:text-slate-400 text-purple-700 rounded-lg text-sm border border-purple-200"
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
               </FormRow>
 
               <FormRow label="Referência">

@@ -4672,22 +4672,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Lista todos os grupos cadastrados no Wincred.
-   * Tira de SELECT DISTINCT em produtos (não tem tabela própria de grupos
-   * com nome — fica em produtos.GRUPO + produtos.NOMEGRUPO).
+   * Tabela `grupos` (CODIGO PK + GRUPO nome).
    */
   async listarGrupos(): Promise<Array<{ codigo: number; nome: string }>> {
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
-        `SELECT DISTINCT GRUPO AS codigo, NOMEGRUPO AS nome
-           FROM produtos
-          WHERE GRUPO IS NOT NULL AND NOMEGRUPO IS NOT NULL AND NOMEGRUPO <> ''
-          ORDER BY NOMEGRUPO`,
+        `SELECT CODIGO AS codigo, GRUPO AS nome
+           FROM grupos
+          WHERE CODIGO IS NOT NULL
+          ORDER BY GRUPO`,
       );
       return (rows as any[]).map((r) => ({
         codigo: Number(r.codigo),
-        nome: String(r.nome || '').trim(),
-      })).filter((g) => g.codigo && g.nome);
+        nome: String(r.nome || '').trim() || `GRUPO-${r.codigo}`,
+      })).filter((g) => g.codigo);
     } catch (e) {
       this.logger.error(`listarGrupos falhou: ${(e as Error).message}`);
       return [];
@@ -4695,27 +4694,92 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista subgrupos. No Wincred, SUBGRUPO é só um inteiro em produtos
-   * (não tem tabela com nome do subgrupo). Devolve códigos distintos pro
-   * grupo informado, com a "descrição" sendo apenas o número.
+   * Lista subgrupos de um grupo específico.
+   * Tabela `subgrupos` (CODIGO PK + SUBGRUPO nome + GRUPO FK).
    */
   async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
     if (!this.pool) return [];
     try {
       const [rows] = await this.pool.query(
-        `SELECT DISTINCT SUBGRUPO AS codigo
-           FROM produtos
-          WHERE GRUPO = ? AND SUBGRUPO IS NOT NULL
+        `SELECT CODIGO AS codigo, SUBGRUPO AS nome
+           FROM subgrupos
+          WHERE GRUPO = ?
           ORDER BY SUBGRUPO`,
         [grupoCodigo],
       );
       return (rows as any[]).map((r) => ({
         codigo: Number(r.codigo),
-        nome: `SG-${r.codigo}`, // Wincred não armazena nome de subgrupo
+        nome: String(r.nome || '').trim() || `SUBGRUPO-${r.codigo}`,
       })).filter((s) => s.codigo);
     } catch (e) {
       this.logger.error(`listarSubgrupos falhou: ${(e as Error).message}`);
       return [];
+    }
+  }
+
+  /**
+   * Cria um novo grupo no Wincred (tabela grupos).
+   * Reserva próximo CODIGO via MAX+1 dentro de uma transação.
+   */
+  async inserirGrupo(nome: string): Promise<{ codigo: number; nome: string }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar grupo no Wincred.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
+    if (!nomeNormalizado) throw new Error('Nome do grupo vazio');
+
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [maxRows]: any = await conn.query(
+        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM grupos FOR UPDATE`,
+      );
+      const codigo = Number(maxRows[0]?.prox) || 1;
+      await conn.query(
+        `INSERT INTO grupos (CODIGO, GRUPO) VALUES (?, ?)`,
+        [codigo, nomeNormalizado],
+      );
+      await conn.commit();
+      return { codigo, nome: nomeNormalizado };
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
+   * Cria um novo subgrupo dentro de um grupo existente (tabela subgrupos).
+   */
+  async inserirSubgrupo(grupoCodigo: number, nome: string): Promise<{ codigo: number; nome: string; grupo: number }> {
+    if (!this.isWriteEnabled) {
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar subgrupo no Wincred.');
+    }
+    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    if (!grupoCodigo) throw new Error('grupoCodigo é obrigatório');
+    const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
+    if (!nomeNormalizado) throw new Error('Nome do subgrupo vazio');
+
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [maxRows]: any = await conn.query(
+        `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS prox FROM subgrupos FOR UPDATE`,
+      );
+      const codigo = Number(maxRows[0]?.prox) || 1;
+      await conn.query(
+        `INSERT INTO subgrupos (CODIGO, SUBGRUPO, GRUPO) VALUES (?, ?, ?)`,
+        [codigo, nomeNormalizado, grupoCodigo],
+      );
+      await conn.commit();
+      return { codigo, nome: nomeNormalizado, grupo: grupoCodigo };
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
     }
   }
 
@@ -4808,27 +4872,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Pega o próximo GRUPO numérico livre. Wincred usa inteiro sequencial
-   * pra GRUPO sem auto-increment, então buscamos MAX+1.
+   * Pega o próximo CODIGO de grupo livre na tabela `grupos` (MAX+1).
    */
   async proximoGrupoCodigo(): Promise<number> {
     if (!this.pool) throw new Error('ERP MySQL não está conectado');
     const [rows] = await this.pool.query(
-      `SELECT COALESCE(MAX(GRUPO), 0) + 1 AS proximo FROM produtos WHERE GRUPO IS NOT NULL`,
+      `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS proximo FROM grupos`,
     );
     return Number((rows as any[])[0]?.proximo) || 1;
-  }
-
-  /**
-   * Insere um novo grupo. Como o Wincred não tem tabela de grupos, o
-   * "cadastro" do grupo é refletido na primeira inserção em produtos com
-   * esse GRUPO+NOMEGRUPO. Retornamos o código atribuído.
-   *
-   * NÃO efetua INSERT direto — o nome só vai pro produtos quando o
-   * processamento criar os SKUs daquele grupo. Isso evita lixo.
-   */
-  async reservarCodigoGrupo(): Promise<number> {
-    return this.proximoGrupoCodigo();
   }
 
   /**

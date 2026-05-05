@@ -25,10 +25,16 @@ export class ProductRegistrationController {
     return this.svc.subgruposDoGrupo(grupoCodigo);
   }
 
-  /** Reserva próximo código de grupo (usado quando user clica "criar grupo novo"). */
-  @Post('reservar-grupo')
-  reservarGrupo() {
-    return this.svc.reservarGrupo();
+  /** Cria um grupo novo no Wincred (tabela grupos). */
+  @Post('grupo')
+  criarGrupo(@Body() body: { nome: string }) {
+    return this.svc.criarGrupo(body.nome);
+  }
+
+  /** Cria um subgrupo novo no Wincred (tabela subgrupos), associado a um grupo. */
+  @Post('subgrupo')
+  criarSubgrupo(@Body() body: { grupoCodigo: number; nome: string }) {
+    return this.svc.criarSubgrupo(body.grupoCodigo, body.nome);
   }
 
   /** Gera preview da matriz cor×tamanho com EANs (não grava). */
