@@ -472,16 +472,15 @@ export class RealignmentShipmentService {
       );
     }
 
-    // Pré-verifica estoque antes de iniciar transação — se algum SKU tem
-    // estoque insuficiente, falha rápido com lista detalhada (sem precisar
-    // fazer rollback de transação). Útil pra UI mostrar quais items remover.
+    // Pré-verifica estoque antes de iniciar transação. Antes bloqueava o
+    // fechamento. Agora, como permitimos estoque negativo em realinhamento
+    // (a peça já está em mãos fisicamente), apenas loga warning com a lista
+    // de divergências pra auditoria. NÃO bloqueia mais.
     const precheck = await this.precheckStockForShipment(items as any[], stockItems);
     if (precheck.problemas.length > 0) {
-      throw new BadRequestException({
-        message: 'Estoque insuficiente em items da remessa',
-        problemas: precheck.problemas,
-        statusCode: 400,
-      });
+      this.logger.warn(
+        `closeAndSend ${shipment.code}: ${precheck.problemas.length} item(ns) com estoque insuficiente no Giga — fechando mesmo assim (allowNegative). Detalhes: ${JSON.stringify(precheck.problemas).slice(0, 500)}`,
+      );
     }
 
     // BAIXA estoque Giga origem em transação (todos ou nada).
