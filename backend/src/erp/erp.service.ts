@@ -147,6 +147,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async decreaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean },
   ): Promise<{
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
@@ -180,7 +181,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     let lastError: any = null;
     for (let attempt = 1; attempt <= BACKOFF_MS.length; attempt++) {
       if (BACKOFF_MS[attempt - 1] > 0) await sleep(BACKOFF_MS[attempt - 1]);
-      const result = await this.decreaseStockOnce(items);
+      const result = await this.decreaseStockOnce(items, opts);
       if (result.success) {
         return { ...result, attempts: attempt };
       }
@@ -197,9 +198,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Execução ÚNICA da baixa (sem retry) — extraída pra poder ser chamada N vezes
    * pelo wrapper de retry acima. Toda a lógica ACID fica aqui.
+   *
+   * opts.allowNegative: se true, deixa o estoque ficar negativo em vez de
+   * abortar a transação. Usado em realinhamento/triagem onde a peça já
+   * está fisicamente em mãos (ignoramos divergência com Giga).
    */
   private async decreaseStockOnce(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
+    opts?: { allowNegative?: boolean },
   ): Promise<{
     success: boolean;
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
@@ -255,10 +261,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         // BLOQUEIO DURO: não deixar estoque negativo. Se acontecer, abortar a
         // transação inteira — operadora vê o erro e investiga (provavelmente
         // divergência com o físico).
+        //
+        // EXCEÇÃO: opts.allowNegative=true (usado em realinhamento/triagem),
+        // a peça já está em mãos fisicamente, então deixamos o Giga ficar
+        // negativo. Logamos warning pra ficar rastro.
         if (newStock < 0) {
-          throw new Error(
-            `Estoque insuficiente: SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
-          );
+          if (opts?.allowNegative) {
+            this.logger.warn(
+              `Estoque negativo aceito (allowNegative): SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty} → newStock=${newStock}`,
+            );
+          } else {
+            throw new Error(
+              `Estoque insuficiente: SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
+            );
+          }
         }
 
         const [result]: any = await conn.query(

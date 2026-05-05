@@ -484,9 +484,12 @@ export class RealignmentShipmentService {
       });
     }
 
-    // BAIXA estoque Giga origem em transação (todos ou nada)
+    // BAIXA estoque Giga origem em transação (todos ou nada).
+    // allowNegative=true: a peça já está em mãos fisicamente, então deixamos
+    // o Giga ficar negativo se houver divergência. Loga warning pra rastro.
     const result = await this.erp.decreaseStock(
       stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
+      { allowNegative: true },
     );
     if (!result.success) {
       throw new BadRequestException(
