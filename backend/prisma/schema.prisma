@@ -496,6 +496,7 @@ model TransferOrder {
   id                String   @id @default(uuid())
   tipo              String   // REPOSICAO | VENDA_CERTA | REALINHAMENTO
   refCode           String   @map("ref_code")           // ex: VMS-223
+  codigoBipado      String?  @map("codigo_bipado")        // CODIGO real do Giga resolvido no bipe (ex: 11132233). Usado pra baixar estoque sem ambiguidade. NULL em items antigos (pré-feature).
   descricao         String?                                // ex: "VESTIDO MIDI ESTAMPA PRETO" (descrição completa do Giga)
   cor               String?                                // ex: PRETO (null = cor não especificada no pedido)
   tamanho           String?                                // ex: 46    (null = tamanho não especificado)

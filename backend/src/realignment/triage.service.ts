@@ -364,7 +364,10 @@ export class TriagemService {
 
     const qty = Math.max(1, Math.min(99, input.qty || 1));
 
-    // Cria TransferOrder pending
+    // Cria TransferOrder pending. CRÍTICO: salvamos info.codigo no
+    // codigoBipado pra evitar ambiguidade no fechamento — peças com mesma
+    // REF+COR+TAMANHO mas códigos diferentes (ex: linha CHIC vs linha 3/4
+    // com mesmo REF 2088) são resolvidas pelo CODIGO real do Giga.
     const order = await this.prisma.transferOrder.create({
       data: {
         tipo: 'REALINHAMENTO',
@@ -373,6 +376,7 @@ export class TriagemService {
         lojaDestinoCode: (to as any).code,
         lojaDestinoName: (to as any).name,
         refCode: info.ref || sku,
+        codigoBipado: info.codigo, // CODIGO real do Giga (sem ambiguidade)
         cor: info.cor,
         tamanho: info.tamanho,
         descricao: info.descricao,

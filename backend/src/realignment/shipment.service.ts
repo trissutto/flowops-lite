@@ -435,6 +435,7 @@ export class RealignmentShipmentService {
       select: {
         id: true,
         refCode: true,
+        codigoBipado: true,
         cor: true,
         tamanho: true,
         qtyOrigem: true,
@@ -442,14 +443,22 @@ export class RealignmentShipmentService {
     });
     if (!items.length) throw new BadRequestException('Remessa vazia — adicione itens antes de fechar');
 
-    // Resolve SKU de cada item (REF + cor + tamanho → CODIGO Giga).
-    // Usa findCodigoByRefCorTam (busca direta tolerante a variações de espaço/case).
+    // Resolve SKU de cada item.
+    // PRIORIDADE: usa o codigoBipado (CODIGO real do Giga, salvo na hora do
+    // bipe). Sem ambiguidade quando há peças com mesma REF+COR+TAMANHO mas
+    // códigos diferentes (ex: linha CHIC vs 3/4 ambas REF 2088).
+    // FALLBACK: items antigos (pré-feature) tem codigoBipado=null. Usa o
+    // findCodigoByRefCorTam clássico — pode dar ambiguidade.
     const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
     const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
 
     for (const it of items as any[]) {
       try {
-        const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+        let sku: string | null = it.codigoBipado || null;
+        if (!sku) {
+          // Fallback pra items antigos sem codigoBipado
+          sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+        }
         if (!sku) {
           unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
           continue;
