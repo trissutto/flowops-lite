@@ -465,14 +465,31 @@ export class SitePublishService {
     // do pai é o agrupador do produto variável; a cor aparece como
     // atributo + no título, não no SKU. A variação carrega o código EAN
     // como SKU próprio (bipagem encontra direto).
-    const sku = String(item.refCode).replace(/\s+/g, '-').toUpperCase();
+    const skuBase = String(item.refCode).replace(/\s+/g, '-').toUpperCase();
+    let sku = skuBase;
 
-    // Checa duplicidade
+    // Checa duplicidade. Se SKU já existe no WC, tenta sufixos -1, -2, ...
+    // até encontrar um livre (ex.: produto duplicado por cor, mesma REF).
+    // Mantém compat com opts.force: se force=true, NÃO incrementa e segue
+    // com o SKU original (sobrescrita explícita controlada pelo chamador).
     if (!opts.force) {
-      const existing = await this.wc.findProductIdBySku(sku);
-      if (existing) {
-        throw new BadRequestException(
-          `Já existe produto no WC com SKU ${sku} (id ${existing}). Revise no WC admin ou use force=true pra sobrescrever (não implementado — MVP recusa).`,
+      const MAX_TENTATIVAS = 20;
+      let tentativa = 0;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const existing = await this.wc.findProductIdBySku(sku);
+        if (!existing) break;
+        tentativa += 1;
+        if (tentativa > MAX_TENTATIVAS) {
+          throw new BadRequestException(
+            `Não foi possível gerar SKU livre para ${skuBase} após ${MAX_TENTATIVAS} tentativas (último testado: ${sku}). Verifique o WC admin.`,
+          );
+        }
+        sku = `${skuBase}-${tentativa}`;
+      }
+      if (sku !== skuBase) {
+        this.logger.warn(
+          `Publish ${item.refCode}/${item.cor}: SKU ${skuBase} já existia no WC. Publicando como ${sku}.`,
         );
       }
     }
