@@ -215,12 +215,120 @@ export class PickOrdersService {
       status: 'separated',
     });
 
+    // BAIXA AUTOMÁTICA NO GIGA — após bipar tudo, dispara decreaseStock
+    // sem precisar de aprovação manual da matriz. Usa allowNegative +
+    // skipNotFound pra não travar a separação por divergências de estoque
+    // (peça já está separada fisicamente). Erro NÃO bloqueia a resposta —
+    // só loga e segue: a separação aconteceu, baixa pode ser retentada
+    // depois pelo retry de baixas falhadas.
+    try {
+      await this.runAutoDebit(pickOrderId, userId);
+    } catch (e: any) {
+      this.logger.warn(
+        `Baixa automática falhou pro pick-order ${pickOrderId}: ${e?.message || e}. Pode ser retentada manualmente.`,
+      );
+    }
+
     return {
       id: updated.id,
       status: updated.status,
       wcOrderId: updated.order?.wcOrderId ?? null,
       itemsScanned: scans.length,
     };
+  }
+
+  /**
+   * Baixa automática chamada após finishSeparation. Espelha o fluxo do
+   * approveDebit mas com allowNegative + skipNotFound (a peça já está em
+   * mãos, não bloqueamos por divergência do Giga). Marca debitApprovedAt
+   * pra não duplicar caso a matriz tente aprovar manualmente depois.
+   */
+  private async runAutoDebit(pickOrderId: string, userId: string): Promise<void> {
+    const po = await this.prisma.pickOrder.findUnique({
+      where: { id: pickOrderId },
+      select: {
+        id: true,
+        storeId: true,
+        orderId: true,
+        debitApprovedAt: true,
+        store: { select: { code: true } },
+      } as any,
+    });
+    if (!po) return;
+    if ((po as any).debitApprovedAt) return; // já baixou
+
+    const writeEnabled = this.erp.isWriteEnabled;
+    if (!writeEnabled) {
+      // shadow mode — só log
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'debit.approved.shadow.auto',
+          payload: JSON.stringify({ pickOrderId, userId, mode: 'auto' }),
+          status: 200,
+        },
+      });
+      return;
+    }
+
+    const storeCode = String(((po as any).store?.code) ?? '').trim();
+    if (!storeCode) {
+      this.logger.warn(`runAutoDebit ${pickOrderId}: loja sem code, pulando`);
+      return;
+    }
+
+    const items = await this.prisma.orderItem.findMany({
+      where: { orderId: po.orderId, assignedStoreId: po.storeId },
+      select: { sku: true, quantity: true, productName: true },
+    });
+
+    const result = await this.erp.decreaseStock(
+      items.map((i) => ({ sku: i.sku, qty: i.quantity, storeCode })),
+      { allowNegative: true, skipNotFound: true },
+    );
+
+    if (!result.success) {
+      await this.prisma.integrationLog.create({
+        data: {
+          source: 'erp',
+          direction: 'out',
+          event: 'debit.real.auto.failed',
+          payload: JSON.stringify({
+            pickOrderId,
+            userId,
+            storeCode,
+            items: items.map((i) => ({ sku: i.sku, qty: i.quantity, name: i.productName })),
+            error: result.error,
+          }),
+          status: 500,
+          error: (result.error || '').slice(0, 500),
+        },
+      });
+      throw new Error(`decreaseStock falhou: ${result.error}`);
+    }
+
+    // Sucesso — marca debitApprovedAt pra não duplicar
+    await this.prisma.pickOrder.update({
+      where: { id: pickOrderId },
+      data: { debitApprovedAt: new Date() } as any,
+    });
+
+    await this.prisma.integrationLog.create({
+      data: {
+        source: 'erp',
+        direction: 'out',
+        event: 'debit.real.auto.applied',
+        payload: JSON.stringify({
+          pickOrderId,
+          userId,
+          storeCode,
+          mode: 'auto',
+          applied: result.applied,
+        }),
+        status: 200,
+      },
+    });
   }
 
   /**
