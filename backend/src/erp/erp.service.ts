@@ -5034,10 +5034,46 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
+   * Mapeia método de pagamento do flowops pro par (FORMA, coluna_específica)
+   * da tabela `fechamento` do Wincred. PIX não tem coluna específica.
+   *
+   * Retorna {forma: string, coluna: string|null}. Coluna null = só FORMA+VALOR.
+   */
+  private mapPagamentoFechamento(metodo: string): { forma: string; coluna: string | null } {
+    const m = String(metodo || '').toUpperCase().trim();
+    const map: Record<string, { forma: string; coluna: string | null }> = {
+      'DINHEIRO': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
+      'CASH': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
+      'PIX': { forma: 'PIX', coluna: null }, // PIX não tem coluna específica
+      'CIELO': { forma: 'CIELO', coluna: 'CIELO' },
+      'CIELO_CREDITO': { forma: 'CIELO', coluna: 'CIELO' },
+      'CIELO_DEBITO': { forma: 'CIELO', coluna: 'CIELO' },
+      'MASTERCARD': { forma: 'MASTERCARD', coluna: 'MASTERCARD' },
+      'VISANET': { forma: 'VISANET', coluna: 'VISANET' },
+      'VISA': { forma: 'VISANET', coluna: 'VISANET' },
+      'VISA_ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      'VISAELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      'VISA_DEBITO': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      'ELO': { forma: 'ELO', coluna: 'ELO' },
+      'AMEX': { forma: 'AMEX', coluna: 'AMEX' },
+      'HIPERCARD': { forma: 'HIPERCARD', coluna: 'HIPERCARD' },
+      'CREDIARIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
+      'CHEQUE': { forma: 'CHEQUE_VISTA', coluna: 'CHEQUE_VISTA' },
+      'CHEQUE_VISTA': { forma: 'CHEQUE_VISTA', coluna: 'CHEQUE_VISTA' },
+      'CHEQUE_PRE': { forma: 'CHEQUE_PRE', coluna: 'CHEQUE_PRE' },
+      'REDESHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
+      'REDE_SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
+      'SOROCRED': { forma: 'SOROCRED', coluna: 'SOROCRED' },
+      'CREDSYSTEM': { forma: 'CREDSYSTEM', coluna: 'CREDSYSTEM' },
+      'MARCADO': { forma: 'MARCADO', coluna: 'MARCADO' },
+    };
+    return map[m] || { forma: m || 'OUTROS', coluna: null };
+  }
+
+  /**
    * Grava uma venda do PDV flowops na tabela `caixa` do Wincred.
-   * Idempotente por venda? NÃO — cada chamada gera novo NUMERO. O caller
-   * deve garantir que só chama 1x por venda (PDV.finalize já faz isso via
-   * status='finalized').
+   * Também grava 1 linha em `fechamento` por pagamento (com FORMA+VALOR).
+   * Idempotente por venda? NÃO — cada chamada gera novo NUMERO.
    */
   async gravarVendaPdv(input: {
     storeCode: string;          // ex: '01' (ITANHAEM, char(2))
@@ -5051,6 +5087,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       subgrupo?: number;
       fornecedor?: string;      // CNPJ
       tributo?: string;
+    }>;
+    pagamentos?: Array<{        // pagamentos da venda — 1 linha por método
+      metodo: string;           // 'PIX', 'DINHEIRO', 'MASTERCARD', etc.
+      valor: number;
     }>;
     operadorCode?: number;      // 0 se sem mapeamento
     vendedorCode?: number;      // codigo do funcionário vendedor
@@ -5101,13 +5141,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           `'${(input.obsPedido || '').replace(/'/g, "''").slice(0, 50)}', '${lojaCode}')`
         );
       }
+      // Adiciona SQLs de fechamento (1 por pagamento) também em SHADOW
+      const pagamentos = input.pagamentos || [];
+      for (const p of pagamentos) {
+        const map = this.mapPagamentoFechamento(p.metodo);
+        const valor = Number(p.valor) || 0;
+        if (valor <= 0) continue;
+        const colExtra = map.coluna ? `, ${map.coluna}` : '';
+        const valExtra = map.coluna ? `, ${valor}` : '';
+        sqlExecuted.push(
+          `INSERT INTO fechamento (VENDA, DATA, FORMA, VALOR${colExtra}, LOJA) ` +
+          `VALUES (@numero, CURDATE(), '${map.forma}', ${valor}${valExtra}, '${lojaCode}')`
+        );
+      }
       this.logger.warn(
-        `[gravarVendaPdv SHADOW] LOJA=${lojaCode} items=${input.items.length} ` +
+        `[gravarVendaPdv SHADOW] LOJA=${lojaCode} items=${input.items.length} pagamentos=${pagamentos.length} | ` +
         `total=R$${input.items.reduce((s, i) => s + (i.valorUnit * i.qty - (i.desconto || 0)), 0).toFixed(2)} | ` +
         `SQLs gerados: ${sqlExecuted.length}`,
       );
-      // Loga 1 SQL representativo (o primeiro INSERT) pra inspeção visual
-      this.logger.warn(`[gravarVendaPdv SHADOW] sample SQL: ${sqlExecuted[1] || sqlExecuted[0]}`);
+      // Loga SQL de fechamento (mais útil pra debug que o INSERT em caixa)
+      const sqlFechamento = sqlExecuted.find((s) => s.includes('INTO fechamento'));
+      this.logger.warn(`[gravarVendaPdv SHADOW] sample fechamento: ${sqlFechamento || sqlExecuted[1] || sqlExecuted[0]}`);
       return { ok: true, mode, sqlExecuted };
     }
 
@@ -5164,10 +5218,35 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         sqlExecuted.push(`INSERT caixa NUMERO=${numero} CODIGO=${it.sku} → REGISTRO=${result.insertId}`);
       }
 
+      // INSERT em `fechamento` (1 linha por pagamento) — registra forma de pgto
+      // por venda. Sem isso, "Movimento Diário de Caixa" do Wincred mostra 0
+      // em DINHEIRO/PIX/etc.
+      const pagamentos = input.pagamentos || [];
+      for (const p of pagamentos) {
+        const map = this.mapPagamentoFechamento(p.metodo);
+        const valor = Number(p.valor) || 0;
+        if (valor <= 0) continue;
+        // Monta INSERT dinamicamente: sempre seta FORMA e VALOR, e se houver
+        // coluna específica (DINHEIRO, MASTERCARD, etc.) seta ela tambem.
+        const cols = ['VENDA', 'DATA', 'FORMA', 'VALOR', 'LOJA'];
+        const vals: any[] = [numero, new Date(), map.forma, valor, lojaCode];
+        const placeholders = ['?', '?', '?', '?', '?'];
+        if (map.coluna) {
+          cols.splice(4, 0, map.coluna); // antes de LOJA
+          vals.splice(4, 0, valor);
+          placeholders.splice(4, 0, '?');
+        }
+        await conn.query(
+          `INSERT INTO fechamento (${cols.join(', ')}) VALUES (${placeholders.join(', ')})`,
+          vals,
+        );
+        sqlExecuted.push(`INSERT fechamento VENDA=${numero} FORMA=${map.forma} VALOR=${valor}`);
+      }
+
       await conn.commit();
       this.logger.log(
         `[gravarVendaPdv REAL OK] LOJA=${lojaCode} NUMERO=${numero} ` +
-        `items=${input.items.length} registros=${registros.length}`,
+        `items=${input.items.length} registros=${registros.length} pagamentos=${pagamentos.length}`,
       );
       return { ok: true, mode, numero, registros, sqlExecuted };
     } catch (e: any) {

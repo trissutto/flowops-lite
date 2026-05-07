@@ -1022,6 +1022,13 @@ export class PdvService {
           descricao: String(it.descricao || ''),
           tributo: it.cfop ? String(it.cfop).slice(0, 4) : undefined,
         })),
+        // Pagamentos: usa array payments (após split) ou fallback pro paymentMethod legado
+        pagamentos: (payments as any[]).length > 0
+          ? (payments as any[]).map((p: any) => ({
+              metodo: String(p.method || ''),
+              valor: Number(p.valor) || 0,
+            }))
+          : [{ metodo: finalMethod, valor: sale.total }],
         clienteCode: 0,
         nomeCliente: sale.customerName || undefined,
         obsPedido: `flowops-${sale.id.slice(0, 8)}`,
