@@ -1041,6 +1041,7 @@ export class PdvService {
             })
           : [{ metodo: finalMethod, valor: sale.total }],
         clienteCode: 0,
+        clienteCpf: sale.customerCpf || undefined,
         nomeCliente: sale.customerName || undefined,
         // Vendedora pra comissão (Seller) tem prioridade. Senão, usa operador
         // (vendedorName = quem digitou). lookup é automático no erp.service.

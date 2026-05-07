@@ -5095,6 +5095,62 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Busca o CODIGO de um cliente no Wincred por CPF (prioridade) ou NOME.
+   * Usado pra preencher CLIENTE na tabela `caixa` quando flowops PDV
+   * finaliza venda com cliente identificado.
+   *
+   * Estratégia (em ordem):
+   * 1. CPF exato (limpo de pontuação)
+   * 2. NOME completo exato (case-insensitive)
+   * 3. NOME LIKE (primeiras 3 palavras)
+   *
+   * Retorna 0 se não achou.
+   */
+  async lookupClienteCode(input: { cpf?: string; nome?: string }): Promise<number> {
+    if (!this.pool) return 0;
+    const cpf = String(input.cpf || '').replace(/\D/g, '').trim();
+    const nome = String(input.nome || '').trim().toUpperCase();
+    if (!cpf && !nome) return 0;
+
+    try {
+      // 1. Tenta CPF exato (limpo)
+      if (cpf && cpf.length >= 11) {
+        const [r1] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM clientes
+            WHERE REPLACE(REPLACE(REPLACE(CPF, '.', ''), '-', ''), '/', '') = ?
+            LIMIT 1`,
+          [cpf],
+        );
+        if (r1.length) return Number(r1[0].CODIGO) || 0;
+      }
+      // 2. Tenta NOME exato
+      if (nome) {
+        const [r2] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM clientes WHERE UPPER(NOME) = ? LIMIT 1`,
+          [nome],
+        );
+        if (r2.length) return Number(r2[0].CODIGO) || 0;
+      }
+      // 3. NOME LIKE (3 primeiras palavras pra evitar falsos positivos)
+      if (nome) {
+        const palavras = nome.split(/\s+/).filter((w) => w.length > 1);
+        if (palavras.length >= 2) {
+          const prefix = palavras.slice(0, Math.min(3, palavras.length)).join(' ');
+          const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT CODIGO FROM clientes WHERE UPPER(NOME) LIKE ? LIMIT 2`,
+            [prefix + '%'],
+          );
+          if (r3.length === 1) return Number(r3[0].CODIGO) || 0;
+        }
+      }
+      return 0;
+    } catch (e) {
+      this.logger.warn(`lookupClienteCode falhou: ${(e as Error).message}`);
+      return 0;
+    }
+  }
+
+  /**
    * Mapeia método de pagamento do flowops pro par (FORMA, coluna_específica)
    * da tabela `fechamento` do Wincred. PIX não tem coluna específica.
    *
@@ -5171,7 +5227,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     vendedorCode?: number;      // codigo do funcionário vendedor
     vendedorName?: string;      // nome da vendedora — faz lookup automático se code não vier
     clienteCode?: number;       // 0 se sem cadastro
-    nomeCliente?: string;       // vai pra coluna NOMECLIENTE em caixa
+    clienteCpf?: string;        // CPF — faz lookup em clientes pra resolver clienteCode
+    nomeCliente?: string;       // vai pra coluna NOMECLIENTE em caixa (e usado no fallback do lookup)
     obsPedido?: string;
   }): Promise<{
     ok: boolean;
@@ -5242,9 +5299,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ─── MODO REAL: executa em transação ACID ───
-    // Lookup automático de VENDEDOR/OPERADOR se só veio o nome
+    // Lookup automático de VENDEDOR/OPERADOR/CLIENTE se só veio o nome/cpf
     let vendedorCodeFinal = input.vendedorCode || 0;
     let operadorCodeFinal = input.operadorCode || 0;
+    let clienteCodeFinal = input.clienteCode || 0;
     if (!vendedorCodeFinal && input.vendedorName) {
       vendedorCodeFinal = await this.lookupFuncionarioCode(input.vendedorName, lojaCode);
       if (vendedorCodeFinal) {
@@ -5255,6 +5313,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     if (!operadorCodeFinal && input.operadorName) {
       operadorCodeFinal = await this.lookupFuncionarioCode(input.operadorName, lojaCode);
+    }
+    if (!clienteCodeFinal && (input.clienteCpf || input.nomeCliente)) {
+      clienteCodeFinal = await this.lookupClienteCode({
+        cpf: input.clienteCpf,
+        nome: input.nomeCliente,
+      });
+      if (clienteCodeFinal) {
+        this.logger.log(`[gravarVendaPdv] cliente "${input.nomeCliente || input.clienteCpf}" → CODIGO=${clienteCodeFinal}`);
+      }
     }
 
     const conn = await this.pool.getConnection();
@@ -5287,7 +5354,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           [
             numero,
             String(it.sku || '').slice(0, 13),
-            input.clienteCode || 0,
+            clienteCodeFinal,
             String(it.descricao || '').slice(0, 100),
             it.grupo || 0,
             it.qty,
