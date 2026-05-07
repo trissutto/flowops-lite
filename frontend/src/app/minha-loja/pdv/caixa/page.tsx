@@ -50,6 +50,44 @@ type Session = {
   closedAt?: string;
 };
 
+// Slot de cada forma — tem total + qtd + lista de vendas detalhadas
+type Slot = {
+  valor: number;
+  qtd: number;
+  vendas: Array<{
+    saleId: string;
+    saleTotal: number;
+    valor: number;
+    customerName: string | null;
+    customerCpf: string | null;
+    sellerName: string | null;
+    finalizedAt: string | null;
+    parcelas?: number;
+  }>;
+};
+
+type RelatorioDetalhado = {
+  totais: {
+    DINHEIRO: Slot; PIX: Slot; CREDIARIO: Slot;
+    MASTERCARD: Slot; VISANET: Slot; CIELO: Slot; ELO: Slot; AMEX: Slot; HIPERCARD: Slot;
+    VISA_ELECTRON: Slot; REDE_SHOP: Slot;
+    CREDITO_GENERICO: Slot; DEBITO_GENERICO: Slot; OUTROS: Slot;
+  };
+  recebimentosCrediario: {
+    dinheiro: Slot;
+    pix: Slot;
+    total: number;
+    qtdTotal: number;
+  };
+  resumo: Totals & {
+    totalRecebimentosDinheiro: number;
+    totalRecebimentosPix: number;
+    qtdRecebimentosDinheiro: number;
+    qtdRecebimentosPix: number;
+    dinheiroEsperadoSoVendas: number;
+  };
+};
+
 const fmt = (n: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -59,6 +97,7 @@ export default function CaixaPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [totals, setTotals] = useState<Totals | null>(null);
   const [movements, setMovements] = useState<Movement[]>([]);
+  const [detalhado, setDetalhado] = useState<RelatorioDetalhado | null>(null);
 
   // Loja contexto — admin pode trocar; vendedora vem travada do JWT
   const [stores, setStores] = useState<StoreOpt[]>([]);
@@ -129,8 +168,16 @@ export default function CaixaPage() {
       if (data.open) {
         const movs = await api<Movement[]>(`/pdv/caixa/movimentos${qs}`);
         setMovements(movs);
+        try {
+          const det = await api<RelatorioDetalhado>(`/pdv/caixa/relatorio-detalhado${qs}`);
+          setDetalhado(det);
+        } catch (err) {
+          console.error('Falha ao buscar relatorio-detalhado', err);
+          setDetalhado(null);
+        }
       } else {
         setMovements([]);
+        setDetalhado(null);
       }
     } catch (e) {
       console.error('Falha ao ler caixa', e);
@@ -198,6 +245,7 @@ export default function CaixaPage() {
           <OpenCashPanel
             session={session!}
             totals={totals}
+            detalhado={detalhado}
             movements={movements}
             onSangria={() => setShowSangria(true)}
             onSuprimento={() => setShowSuprimento(true)}
@@ -281,6 +329,7 @@ function NoCashOpenCard({ onOpen, storeName }: { onOpen: () => void; storeName?:
 function OpenCashPanel({
   session,
   totals,
+  detalhado,
   movements,
   onSangria,
   onSuprimento,
@@ -288,6 +337,7 @@ function OpenCashPanel({
 }: {
   session: Session;
   totals: Totals | null;
+  detalhado: RelatorioDetalhado | null;
   movements: Movement[];
   onSangria: () => void;
   onSuprimento: () => void;
@@ -310,16 +360,29 @@ function OpenCashPanel({
       </div>
 
       {totals && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <KpiCard label="Vendas" value={totals.totalVendas} sub={`${totals.qtdVendas} cupons`} />
-          <KpiCard label="Dinheiro" value={totals.totalDinheiro} highlight />
-          <KpiCard label="Pix" value={totals.totalPix} />
-          <KpiCard label="Cartão Crédito" value={totals.totalCartaoCredito} />
-          <KpiCard label="Cartão Débito" value={totals.totalCartaoDebito} />
-          <KpiCard label="Crediário" value={totals.totalCrediario} />
-          <KpiCard label="Sangrias" value={totals.totalSangrias} negative />
-          <KpiCard label="Suprimentos" value={totals.totalSuprimentos} />
-        </div>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <KpiCard label="Vendas" value={totals.totalVendas} sub={`${totals.qtdVendas} cupons`} />
+            <KpiCard label="Sangrias" value={totals.totalSangrias} negative />
+            <KpiCard label="Suprimentos" value={totals.totalSuprimentos} />
+            <KpiCard
+              label="Recebimentos crediário"
+              value={(detalhado?.recebimentosCrediario.total) || 0}
+              sub={`${detalhado?.recebimentosCrediario.qtdTotal || 0} baixa(s)`}
+            />
+          </div>
+          {detalhado ? (
+            <DetalhesCaixa detalhado={detalhado} />
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <KpiCard label="Dinheiro" value={totals.totalDinheiro} highlight />
+              <KpiCard label="Pix" value={totals.totalPix} />
+              <KpiCard label="Cartão Crédito" value={totals.totalCartaoCredito} />
+              <KpiCard label="Cartão Débito" value={totals.totalCartaoDebito} />
+              <KpiCard label="Crediário" value={totals.totalCrediario} />
+            </div>
+          )}
+        </>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -413,6 +476,250 @@ function OpenCashPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// DetalhesCaixa — exibição com cascata por modalidade + recebimentos
+// ════════════════════════════════════════════════════════════════════════
+
+function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggle = (key: string) =>
+    setExpanded((e) => ({ ...e, [key]: !e[key] }));
+
+  const t = detalhado.totais;
+  const rec = detalhado.recebimentosCrediario;
+  const r = detalhado.resumo;
+
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-bold text-rose-900 mt-4">Detalhamento por modalidade</h3>
+
+      {/* DINHEIRO */}
+      <ModalidadeCard
+        titulo="Dinheiro"
+        valor={t.DINHEIRO.valor}
+        qtd={t.DINHEIRO.qtd}
+        cor="emerald"
+        expanded={!!expanded.dinheiro}
+        onToggle={() => toggle('dinheiro')}
+        vendas={t.DINHEIRO.vendas}
+      />
+
+      {/* PIX */}
+      <ModalidadeCard
+        titulo="Pix"
+        valor={t.PIX.valor}
+        qtd={t.PIX.qtd}
+        cor="cyan"
+        expanded={!!expanded.pix}
+        onToggle={() => toggle('pix')}
+        vendas={t.PIX.vendas}
+      />
+
+      {/* CREDIÁRIO (vendas novas) */}
+      <ModalidadeCard
+        titulo="Crediário"
+        valor={t.CREDIARIO.valor}
+        qtd={t.CREDIARIO.qtd}
+        cor="rose"
+        expanded={!!expanded.crediario}
+        onToggle={() => toggle('crediario')}
+        vendas={t.CREDIARIO.vendas}
+      />
+
+      {/* CARTÃO CRÉDITO — com cascata por bandeira */}
+      <ModalidadeCard
+        titulo="Cartão Crédito"
+        valor={r.totalCartaoCredito}
+        qtd={r.qtdCartaoCredito}
+        cor="blue"
+        expanded={!!expanded.credito}
+        onToggle={() => toggle('credito')}
+        bandeiras={[
+          { nome: 'Mastercard', slot: t.MASTERCARD },
+          { nome: 'Visa (Visanet)', slot: t.VISANET },
+          { nome: 'Cielo', slot: t.CIELO },
+          { nome: 'Elo', slot: t.ELO },
+          { nome: 'American Express', slot: t.AMEX },
+          { nome: 'Hipercard', slot: t.HIPERCARD },
+          { nome: 'Sem bandeira', slot: t.CREDITO_GENERICO },
+        ].filter((b) => b.slot.qtd > 0)}
+      />
+
+      {/* CARTÃO DÉBITO */}
+      <ModalidadeCard
+        titulo="Cartão Débito"
+        valor={r.totalCartaoDebito}
+        qtd={r.qtdCartaoDebito}
+        cor="indigo"
+        expanded={!!expanded.debito}
+        onToggle={() => toggle('debito')}
+        bandeiras={[
+          { nome: 'Visa Electron', slot: t.VISA_ELECTRON },
+          { nome: 'Rede Shop', slot: t.REDE_SHOP },
+          { nome: 'Sem bandeira', slot: t.DEBITO_GENERICO },
+        ].filter((b) => b.slot.qtd > 0)}
+      />
+
+      {/* RECEBIMENTOS DE CREDIÁRIO — separado das vendas! */}
+      {rec.qtdTotal > 0 && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 mt-2">
+          <div className="text-[11px] uppercase font-bold tracking-widest text-amber-800 mb-1">
+            ⚠ Recebimentos de Crediário (não são venda do dia)
+          </div>
+          <div className="text-xs text-amber-700 mb-2">
+            Pagamentos de parcelas antigas. Entram no caixa físico mas NÃO contam como venda.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <ModalidadeCard
+              titulo="Em Dinheiro"
+              valor={rec.dinheiro.valor}
+              qtd={rec.dinheiro.qtd}
+              cor="emerald"
+              expanded={!!expanded.recDinheiro}
+              onToggle={() => toggle('recDinheiro')}
+              vendas={rec.dinheiro.vendas}
+              compact
+            />
+            <ModalidadeCard
+              titulo="Em PIX"
+              valor={rec.pix.valor}
+              qtd={rec.pix.qtd}
+              cor="cyan"
+              expanded={!!expanded.recPix}
+              onToggle={() => toggle('recPix')}
+              vendas={rec.pix.vendas}
+              compact
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModalidadeCard({
+  titulo,
+  valor,
+  qtd,
+  cor,
+  expanded,
+  onToggle,
+  vendas,
+  bandeiras,
+  compact,
+}: {
+  titulo: string;
+  valor: number;
+  qtd: number;
+  cor: 'emerald' | 'cyan' | 'rose' | 'blue' | 'indigo';
+  expanded: boolean;
+  onToggle: () => void;
+  vendas?: Slot['vendas'];
+  bandeiras?: Array<{ nome: string; slot: Slot }>;
+  compact?: boolean;
+}) {
+  const tones = {
+    emerald: 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100',
+    cyan: 'bg-cyan-50 border-cyan-200 hover:bg-cyan-100',
+    rose: 'bg-rose-50 border-rose-200 hover:bg-rose-100',
+    blue: 'bg-blue-50 border-blue-200 hover:bg-blue-100',
+    indigo: 'bg-indigo-50 border-indigo-200 hover:bg-indigo-100',
+  };
+  const hasContent = qtd > 0;
+  return (
+    <div className={`rounded-xl border-2 transition ${tones[cor]} ${!hasContent ? 'opacity-50' : ''}`}>
+      <button
+        onClick={onToggle}
+        disabled={!hasContent}
+        className="w-full flex items-center justify-between p-3 disabled:cursor-not-allowed"
+      >
+        <div className="text-left">
+          <div className={`text-xs font-semibold uppercase tracking-wider opacity-70 ${compact ? 'text-[10px]' : ''}`}>
+            {titulo}
+          </div>
+          <div className={`font-bold tabular-nums ${compact ? 'text-base' : 'text-xl'}`}>
+            R$ {fmt(valor)}
+          </div>
+          <div className="text-[10px] opacity-70 mt-0.5">
+            {qtd} {qtd === 1 ? 'ticket' : 'tickets'}
+          </div>
+        </div>
+        {hasContent && (
+          <span className="text-xs opacity-60">{expanded ? '▲' : '▼'}</span>
+        )}
+      </button>
+      {hasContent && expanded && (
+        <div className="border-t border-current border-opacity-20 px-3 py-2 bg-white/40">
+          {/* Cascata de bandeiras */}
+          {bandeiras && bandeiras.length > 0 && (
+            <div className="space-y-1.5 mb-2">
+              {bandeiras.map((b) => (
+                <BandeiraRow key={b.nome} nome={b.nome} slot={b.slot} />
+              ))}
+            </div>
+          )}
+          {/* Lista de vendas (quando não tem bandeiras OU complemento) */}
+          {vendas && vendas.length > 0 && (
+            <div className="space-y-1 mt-1">
+              {vendas.map((v, i) => (
+                <VendaRow key={i} v={v} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BandeiraRow({ nome, slot }: { nome: string; slot: Slot }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-white rounded-md border border-slate-200">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between p-2 text-sm hover:bg-slate-50"
+      >
+        <span className="font-semibold">{nome}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500">{slot.qtd}</span>
+          <span className="font-mono font-bold tabular-nums">R$ {fmt(slot.valor)}</span>
+          <span className="text-[10px] text-slate-400">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+      {open && slot.vendas.length > 0 && (
+        <div className="border-t px-2 py-1.5 space-y-1 bg-slate-50">
+          {slot.vendas.map((v, i) => (
+            <VendaRow key={i} v={v} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendaRow({ v }: { v: Slot['vendas'][0] }) {
+  const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+  const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
+  return (
+    <div className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded">
+      <div className="flex items-center gap-2 min-w-0">
+        {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
+        <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>
+          {cliente}
+        </span>
+        {v.sellerName && (
+          <span className="text-slate-500 text-[10px] shrink-0">· {v.sellerName.split(' ')[0]}</span>
+        )}
+        {v.parcelas && v.parcelas > 1 && (
+          <span className="text-violet-600 text-[10px] shrink-0">· {v.parcelas}x</span>
+        )}
+      </div>
+      <span className="font-mono font-bold tabular-nums shrink-0 ml-2">R$ {fmt(v.valor)}</span>
     </div>
   );
 }

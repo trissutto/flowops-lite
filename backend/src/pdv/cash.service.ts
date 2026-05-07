@@ -121,81 +121,126 @@ export class CashService {
       include: { payments: true },
     });
 
-    // Breakdown por forma + bandeira
-    const totais: Record<string, number> = {
-      DINHEIRO: 0,
-      PIX: 0,
-      CREDIARIO: 0,
-      // Cartões crédito (com bandeira)
-      MASTERCARD: 0,
-      VISANET: 0,
-      CIELO: 0,
-      ELO: 0,
-      AMEX: 0,
-      HIPERCARD: 0,
-      // Cartões débito (com bandeira)
-      VISA_ELECTRON: 0,
-      REDE_SHOP: 0,
-      // Genéricos (quando não conseguiu resolver bandeira)
-      CREDITO_GENERICO: 0,
-      DEBITO_GENERICO: 0,
-      OUTROS: 0,
+    // Breakdown por forma + bandeira (agora também com QTD e LISTA de vendas)
+    type Slot = {
+      valor: number;
+      qtd: number;
+      vendas: Array<{
+        saleId: string;
+        saleTotal: number;
+        valor: number;          // valor do pagamento (pode ser parcial em split)
+        customerName: string | null;
+        customerCpf: string | null;
+        sellerName: string | null;
+        finalizedAt: string | null;
+        parcelas?: number;
+      }>;
+    };
+    const mkSlot = (): Slot => ({ valor: 0, qtd: 0, vendas: [] });
+    const totais: Record<string, Slot> = {
+      DINHEIRO: mkSlot(),
+      PIX: mkSlot(),
+      CREDIARIO: mkSlot(),
+      MASTERCARD: mkSlot(),
+      VISANET: mkSlot(),
+      CIELO: mkSlot(),
+      ELO: mkSlot(),
+      AMEX: mkSlot(),
+      HIPERCARD: mkSlot(),
+      VISA_ELECTRON: mkSlot(),
+      REDE_SHOP: mkSlot(),
+      CREDITO_GENERICO: mkSlot(),
+      DEBITO_GENERICO: mkSlot(),
+      OUTROS: mkSlot(),
     };
     let totalVendas = 0;
-    let qtdVendas = sales.length;
+    const qtdVendas = sales.length;
+
+    const bandeiraMap: Record<string, string> = {
+      'MASTERCARD': 'MASTERCARD', 'VISA': 'VISANET', 'VISANET': 'VISANET',
+      'CIELO': 'CIELO', 'ELO': 'ELO', 'AMEX': 'AMEX',
+      'AMERICAN EXPRESS': 'AMEX', 'HIPERCARD': 'HIPERCARD',
+      'VISA ELECTRON': 'VISA_ELECTRON', 'VISA_ELECTRON': 'VISA_ELECTRON',
+      'VISAELECTRON': 'VISA_ELECTRON', 'REDESHOP': 'REDE_SHOP',
+      'REDE SHOP': 'REDE_SHOP', 'REDE_SHOP': 'REDE_SHOP',
+    };
+
+    const pushVenda = (key: string, sale: any, paymentValor: number, parcelas?: number) => {
+      totais[key].valor += paymentValor;
+      totais[key].qtd += 1;
+      totais[key].vendas.push({
+        saleId: String(sale.id),
+        saleTotal: Number(sale.total) || 0,
+        valor: paymentValor,
+        customerName: sale.customerName || null,
+        customerCpf: sale.customerCpf || null,
+        sellerName: sale.sellerName || sale.vendedorName || null,
+        finalizedAt: sale.finalizedAt || sale.createdAt || null,
+        parcelas,
+      });
+    };
 
     for (const s of sales as any[]) {
       totalVendas += Number(s.total) || 0;
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
         const valor = Number(p.valor) || 0;
-
-        // Tenta extrair bandeira do details (JSON)
         let bandeira: string | null = null;
+        let parcelas: number | undefined = undefined;
         if (p.details) {
           try {
             const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
             if (det?.bandeira) bandeira = String(det.bandeira).toUpperCase().trim();
+            if (det?.parcelas) parcelas = Number(det.parcelas);
           } catch { /* ignora */ }
         }
 
-        if (method === 'dinheiro') totais.DINHEIRO += valor;
-        else if (method === 'pix') totais.PIX += valor;
-        else if (method === 'crediario') totais.CREDIARIO += valor;
+        if (method === 'dinheiro') pushVenda('DINHEIRO', s, valor);
+        else if (method === 'pix') pushVenda('PIX', s, valor);
+        else if (method === 'crediario') pushVenda('CREDIARIO', s, valor, parcelas);
         else if (method === 'credito' || method === 'debito') {
-          // Tenta mapear pra bandeira específica
-          if (bandeira) {
-            const map: Record<string, string> = {
-              'MASTERCARD': 'MASTERCARD',
-              'VISA': 'VISANET',
-              'VISANET': 'VISANET',
-              'CIELO': 'CIELO',
-              'ELO': 'ELO',
-              'AMEX': 'AMEX',
-              'AMERICAN EXPRESS': 'AMEX',
-              'HIPERCARD': 'HIPERCARD',
-              'VISA ELECTRON': 'VISA_ELECTRON',
-              'VISA_ELECTRON': 'VISA_ELECTRON',
-              'VISAELECTRON': 'VISA_ELECTRON',
-              'REDESHOP': 'REDE_SHOP',
-              'REDE SHOP': 'REDE_SHOP',
-              'REDE_SHOP': 'REDE_SHOP',
-            };
-            const key = map[bandeira];
-            if (key && key in totais) {
-              totais[key] += valor;
-            } else {
-              if (method === 'credito') totais.CREDITO_GENERICO += valor;
-              else totais.DEBITO_GENERICO += valor;
-            }
+          const key = bandeira ? bandeiraMap[bandeira] : null;
+          if (key && key in totais) {
+            pushVenda(key, s, valor, parcelas);
           } else {
-            if (method === 'credito') totais.CREDITO_GENERICO += valor;
-            else totais.DEBITO_GENERICO += valor;
+            pushVenda(method === 'credito' ? 'CREDITO_GENERICO' : 'DEBITO_GENERICO', s, valor, parcelas);
           }
         } else {
-          totais.OUTROS += valor;
+          pushVenda('OUTROS', s, valor);
         }
       }
+    }
+
+    // Recebimentos de crediário (baixas) feitos NESTA sessão.
+    // IMPORTANTE: parcelas pagas hoje em DINHEIRO/PIX entram no caixa mas
+    // NÃO são "venda do dia" — são pagamento de venda antiga. Precisam
+    // aparecer separados nos somatórios pra reconciliação correta.
+    const baixasCrediario = await (this.prisma as any).crediarioBaixa.findMany({
+      where: {
+        lojaCode: session.storeCode,
+        status: 'paid',
+        createdAt: { gte: session.openedAt },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const recebimentosDinheiro = mkSlot();
+    const recebimentosPix = mkSlot();
+    for (const b of baixasCrediario as any[]) {
+      const valor = Number(b.totalPago) || 0;
+      const forma = String(b.formaPagamento || '').toLowerCase();
+      const slot = forma === 'pix' ? recebimentosPix : recebimentosDinheiro;
+      slot.valor += valor;
+      slot.qtd += 1;
+      slot.vendas.push({
+        saleId: String(b.id),
+        saleTotal: valor,
+        valor,
+        customerName: b.customerName || null,
+        customerCpf: b.customerCpf || null,
+        sellerName: b.userName || null,
+        finalizedAt: b.paidAt || b.createdAt || null,
+      });
     }
 
     // Movimentações de caixa
@@ -217,13 +262,22 @@ export class CashService {
       totalSangrias +
       totalSuprimentos;
 
-    // Total cartão crédito
-    const totalCartaoCredito =
-      totais.MASTERCARD + totais.VISANET + totais.CIELO + totais.ELO +
-      totais.AMEX + totais.HIPERCARD + totais.CREDITO_GENERICO;
-    // Total cartão débito
-    const totalCartaoDebito =
-      totais.VISA_ELECTRON + totais.REDE_SHOP + totais.DEBITO_GENERICO;
+    // Helper pra somar slot (valor + qtd)
+    const sumSlots = (...slots: Slot[]) => {
+      return slots.reduce(
+        (acc, s) => ({ valor: acc.valor + s.valor, qtd: acc.qtd + s.qtd }),
+        { valor: 0, qtd: 0 },
+      );
+    };
+
+    const credito = sumSlots(
+      totais.MASTERCARD, totais.VISANET, totais.CIELO, totais.ELO,
+      totais.AMEX, totais.HIPERCARD, totais.CREDITO_GENERICO,
+    );
+    const debito = sumSlots(totais.VISA_ELECTRON, totais.REDE_SHOP, totais.DEBITO_GENERICO);
+
+    // Inclui recebimentos no dinheiroEsperado (entram no caixa físico)
+    const dinheiroEsperadoComRecebimentos = dinheiroEsperado + recebimentosDinheiro.valor;
 
     return {
       session: {
@@ -234,17 +288,33 @@ export class CashService {
         openedByName: session.openedByName,
         fundoTroco: Number(session.fundoTroco) || 0,
       },
-      totais,
+      totais,           // Slots por forma+bandeira (com vendas detalhadas)
+      recebimentosCrediario: {
+        dinheiro: recebimentosDinheiro,
+        pix: recebimentosPix,
+        total: recebimentosDinheiro.valor + recebimentosPix.valor,
+        qtdTotal: recebimentosDinheiro.qtd + recebimentosPix.qtd,
+      },
       resumo: {
         totalVendas,
-        totalDinheiro: totais.DINHEIRO,
-        totalPix: totais.PIX,
-        totalCrediario: totais.CREDIARIO,
-        totalCartaoCredito,
-        totalCartaoDebito,
+        totalDinheiro: totais.DINHEIRO.valor,
+        totalPix: totais.PIX.valor,
+        totalCrediario: totais.CREDIARIO.valor,
+        totalCartaoCredito: credito.valor,
+        totalCartaoDebito: debito.valor,
+        qtdDinheiro: totais.DINHEIRO.qtd,
+        qtdPix: totais.PIX.qtd,
+        qtdCrediario: totais.CREDIARIO.qtd,
+        qtdCartaoCredito: credito.qtd,
+        qtdCartaoDebito: debito.qtd,
+        totalRecebimentosDinheiro: recebimentosDinheiro.valor,
+        totalRecebimentosPix: recebimentosPix.valor,
+        qtdRecebimentosDinheiro: recebimentosDinheiro.qtd,
+        qtdRecebimentosPix: recebimentosPix.qtd,
         totalSangrias,
         totalSuprimentos,
-        dinheiroEsperado,
+        dinheiroEsperado: dinheiroEsperadoComRecebimentos,
+        dinheiroEsperadoSoVendas: dinheiroEsperado,
         qtdVendas,
       },
       movimentos: movements.map((m: any) => ({
