@@ -451,6 +451,74 @@ export class CashService {
     return { ...closed, ...totals, diferenca };
   }
 
+  // ── Pendências do caixa ─────────────────────────────────────────────
+
+  /**
+   * Lista vendas em aberto da sessão atual da loja.
+   * Útil pra mostrar pendências antes de fechar o caixa.
+   */
+  async listOpenSalesInCurrentSession(storeCode: string) {
+    const session = await this.getCurrentSession(storeCode);
+    if (!session) {
+      throw new BadRequestException('Não há caixa aberto nesta loja.');
+    }
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: { cashSessionId: session.id, status: 'open' },
+      select: {
+        id: true,
+        storeCode: true,
+        total: true,
+        customerName: true,
+        sellerName: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return { sessionId: session.id, vendas: sales };
+  }
+
+  /**
+   * Cancela TODAS as vendas em aberto da sessão atual e fecha o caixa.
+   * Útil quando há vendas zumbis que não aparecem no PDV mas bloqueiam fechamento.
+   *
+   * Body: mesmo do closeCash + reason opcional pro cancelamento.
+   */
+  async forceCloseCash(input: {
+    storeCode: string;
+    dinheiroFisico: number;
+    closedByName?: string;
+    observacao?: string;
+    reason?: string;
+  }) {
+    const session = await this.getCurrentSession(input.storeCode);
+    if (!session) {
+      throw new BadRequestException('Não há caixa aberto nesta loja.');
+    }
+    // Cancela todas vendas em aberto da sessão
+    const cancelResult = await (this.prisma as any).pdvSale.updateMany({
+      where: { cashSessionId: session.id, status: 'open' },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: input.reason || 'Cancelamento automático ao forçar fechamento de caixa',
+      },
+    });
+    this.logger.warn(
+      `[caixa] forceCloseCash: ${cancelResult.count} venda(s) em aberto canceladas na sessão ${session.id}`,
+    );
+    // Agora fecha normal
+    const closed = await this.closeCash({
+      storeCode: input.storeCode,
+      dinheiroFisico: input.dinheiroFisico,
+      closedByName: input.closedByName,
+      observacao: input.observacao
+        ? `${input.observacao}
+[forceCloseCash: ${cancelResult.count} venda(s) canceladas]`
+        : `[forceCloseCash: ${cancelResult.count} venda(s) canceladas]`,
+    });
+    return { ...closed, vendasCanceladas: cancelResult.count };
+  }
+
   // ── Histórico ───────────────────────────────────────────────────────
 
   /**

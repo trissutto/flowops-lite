@@ -179,6 +179,38 @@ export class CashController {
   }
 
   /**
+   * GET /pdv/caixa/pendencias — lista vendas em aberto da sessão atual.
+   * Útil pra debugar quando o fechamento bloqueia.
+   */
+  @Get('pendencias')
+  async listPendencias(@Req() req: any, @Query('storeCode') storeCodeOverride?: string) {
+    this.requireRole(req);
+    const { storeCode } = this.resolveStore(req, { storeCode: storeCodeOverride });
+    return this.svc.listOpenSalesInCurrentSession(storeCode);
+  }
+
+  /**
+   * POST /pdv/caixa/forcar-fechar — cancela vendas em aberto e fecha o caixa.
+   * Use quando o fechamento normal bloqueia por venda zumbi.
+   * Body: { dinheiroFisico, observacao?, reason? }
+   */
+  @Post('forcar-fechar')
+  async forceClose(
+    @Req() req: any,
+    @Body() body: { dinheiroFisico: number; observacao?: string; reason?: string; storeCode?: string },
+  ) {
+    this.requireRole(req);
+    const { storeCode } = this.resolveStore(req, { storeCode: body.storeCode });
+    return this.svc.forceCloseCash({
+      storeCode,
+      dinheiroFisico: Number(body.dinheiroFisico),
+      closedByName: req?.user?.name || req?.user?.email || null,
+      observacao: body.observacao,
+      reason: body.reason,
+    });
+  }
+
+  /**
    * GET /pdv/caixa/sessoes — histórico de sessões fechadas.
    */
   @Get('sessoes')

@@ -661,7 +661,11 @@ function FecharModal({
   const fisicoNum = parseFloat(fisico.replace(',', '.')) || 0;
   const diff = fisicoNum - esperado;
 
-  async function submit() {
+  // Detecta erro específico de venda em aberto pra mostrar botão "forçar"
+  const [showForceClose, setShowForceClose] = useState(false);
+  const [pendenciasCount, setPendenciasCount] = useState(0);
+
+  async function submit(force = false) {
     setErr('');
     if (!fisico.trim()) {
       setErr('Conte o dinheiro físico em caixa');
@@ -671,13 +675,25 @@ function FecharModal({
     try {
       const body: any = { dinheiroFisico: fisicoNum, observacao: obs || undefined };
       if (storeCode) body.storeCode = storeCode;
-      await api('/pdv/caixa/fechar', {
+      if (force) body.reason = 'Limpeza de pendências antes do fechamento';
+      const endpoint = force ? '/pdv/caixa/forcar-fechar' : '/pdv/caixa/fechar';
+      await api(endpoint, {
         method: 'POST',
         body: JSON.stringify(body),
       });
       onSuccess();
     } catch (e: any) {
-      setErr(e?.message || 'Falha ao fechar caixa');
+      const msg = String(e?.message || 'Falha ao fechar caixa');
+      // Detecta erro de venda em aberto e oferece botão pra cancelar pendências
+      const match = msg.match(/Existem (\d+) venda\(s\) em aberto/);
+      if (match) {
+        setPendenciasCount(parseInt(match[1], 10) || 0);
+        setShowForceClose(true);
+        setErr(msg);
+      } else {
+        setErr(msg);
+        setShowForceClose(false);
+      }
     } finally {
       setBusy(false);
     }
@@ -741,6 +757,33 @@ function FecharModal({
       />
 
       {err && <div className="mt-3 text-sm text-red-600">{err}</div>}
+
+      {showForceClose && (
+        <div className="mt-3 bg-amber-50 border-2 border-amber-300 rounded-lg p-3">
+          <div className="text-sm text-amber-900 font-semibold mb-2">
+            ⚠ {pendenciasCount} venda(s) em aberto bloqueando o fechamento
+          </div>
+          <div className="text-xs text-amber-800 mb-3">
+            Provavelmente são vendas zumbis (não aparecem no botão Pausadas mas
+            estão no banco). Clique abaixo pra cancelar todas e fechar o caixa.
+          </div>
+          <button
+            disabled={busy}
+            onClick={() => {
+              if (window.confirm(
+                `Cancelar ${pendenciasCount} venda(s) em aberto e fechar o caixa?\n\n` +
+                'Essa operação NÃO pode ser desfeita.'
+              )) {
+                submit(true);
+              }
+            }}
+            className="w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold disabled:opacity-50"
+          >
+            {busy ? '...' : '🧹 Cancelar pendências e fechar caixa'}
+          </button>
+        </div>
+      )}
+
       <div className="mt-5 flex gap-2">
         <button
           onClick={onClose}
@@ -750,7 +793,7 @@ function FecharModal({
         </button>
         <button
           disabled={busy}
-          onClick={submit}
+          onClick={() => submit(false)}
           className="flex-1 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold disabled:opacity-50"
         >
           {busy ? '...' : 'Fechar Caixa'}
