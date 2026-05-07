@@ -248,7 +248,7 @@ export class CashService {
 
     // Movimentações de caixa
     const movements = await (this.prisma as any).pdvCashMovement.findMany({
-      where: { sessionId: session.id },
+      where: { cashSessionId: session.id },
       orderBy: { createdAt: 'asc' },
     });
     let totalSangrias = 0;
