@@ -1696,8 +1696,16 @@ function VendedoraModal({
         </div>
 
         {atual && (
-          <div className="text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded">
-            <strong>Atual:</strong> {atual}
+          <div className="flex items-center gap-2 text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded">
+            <span className="flex-1"><strong>Atual:</strong> {atual}</span>
+            <button
+              type="button"
+              onClick={() => onSave({ codigo: '', nome: '' })}
+              className="px-2 py-0.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded text-[10px] font-bold border border-rose-200"
+              title="Remover vendedora atual"
+            >
+              ✕ Trocar
+            </button>
           </div>
         )}
 
@@ -1734,28 +1742,45 @@ function VendedoraModal({
           </div>
         )}
 
-        <div className="max-h-72 overflow-y-auto border border-slate-200 rounded">
+        <div className="max-h-80 overflow-y-auto p-1">
           {results.length === 0 && !searching && (
             <div className="text-center text-xs text-slate-400 py-6">
-              {searchTerm ? 'Nenhuma vendedora encontrada' : 'Digite pra buscar…'}
+              {searchTerm ? 'Nenhuma vendedora encontrada' : 'Carregando…'}
             </div>
           )}
-          {results.map((f) => (
-            <button
-              key={f.codigo + f.nome}
-              type="button"
-              onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
-              className="w-full text-left px-3 py-2.5 hover:bg-emerald-50 border-b border-slate-100 last:border-b-0 transition flex items-center gap-2"
-            >
-              <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold shrink-0">
-                {f.nome.charAt(0).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-sm text-slate-800 truncate">{f.nome}</div>
-                {f.codigo && <div className="text-[10px] text-slate-400">cód {f.codigo}</div>}
-              </div>
-            </button>
-          ))}
+          {results.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {results.map((f) => {
+                const isAtual = atual && atual.toUpperCase().includes(f.nome.toUpperCase());
+                const primeiroNome = f.nome.split(/\s+/)[0];
+                return (
+                  <button
+                    key={f.codigo + f.nome}
+                    type="button"
+                    onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
+                    title={`${f.nome}${f.codigo ? ' · cód ' + f.codigo : ''}`}
+                    className={`text-center px-2 py-2.5 rounded-lg transition border-2 active:scale-95 ${
+                      isAtual
+                        ? 'bg-emerald-500 border-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
+                        : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-400 text-slate-800'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 mx-auto mb-1 rounded-full flex items-center justify-center text-sm font-bold ${
+                      isAtual ? 'bg-white/20' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      {primeiroNome.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="text-[11px] font-bold truncate leading-tight">{primeiroNome}</div>
+                    {f.codigo && (
+                      <div className={`text-[9px] ${isAtual ? 'text-white/80' : 'text-slate-400'}`}>
+                        cód {f.codigo}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Fallback manual — útil se a vendedora ainda não foi cadastrada no Giga */}
