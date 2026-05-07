@@ -330,7 +330,12 @@ export class CashService {
       generatedAt: new Date(),
     };
     } catch (err: any) {
-      this.logger.error(`[getRelatorioDetalhado] FAILED: ${err?.message || err}`, err?.stack);
+      const msg = err?.message || String(err);
+      const code = err?.code || 'NO_CODE';
+      const meta = err?.meta ? JSON.stringify(err.meta) : 'NO_META';
+      const stack = err?.stack || 'NO_STACK';
+      this.logger.error(`[getRelatorioDetalhado] FAILED message=${msg} code=${code} meta=${meta}`);
+      this.logger.error(`[getRelatorioDetalhado] STACK=${stack}`);
       throw err;
     }
   }
