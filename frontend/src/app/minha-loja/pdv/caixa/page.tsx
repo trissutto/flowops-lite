@@ -85,6 +85,11 @@ type RelatorioDetalhado = {
     qtdRecebimentosDinheiro: number;
     qtdRecebimentosPix: number;
     dinheiroEsperadoSoVendas: number;
+    qtdDinheiro: number;
+    qtdPix: number;
+    qtdCrediario: number;
+    qtdCartaoCredito: number;
+    qtdCartaoDebito: number;
   };
 };
 
