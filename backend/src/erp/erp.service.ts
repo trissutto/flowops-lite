@@ -2725,15 +2725,38 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const truncated = uniqBaseRefs.size > limitRefs;
 
     // Agora busca TODAS as linhas dessas REFs pra montar cor/tamanho.
+    // FIX: re-aplicar OS MESMOS filtros (term/grupo/subgrupo/fornecedor/dias)
+    // pra evitar trazer variações que NÃO batem. Antes, se REF=13050 tinha
+    // alguma variação com "vestido longo" mas outras eram SOUTIEN, a Fase 2
+    // trazia TODAS — incluindo o SOUTIEN. Agora só vem o que combina.
+    // Usa subset dos wheres SEM o filtro de REF (substituido pelo IN).
+    const detailWheres = wheres.filter(
+      (w) => !w.includes('p.REF = ?') && !w.includes('p.REF LIKE ?'),
+    );
+    // Reconstroi params correspondentes — remove os params do filtro REF original
+    const detailParams: any[] = [];
+    let pIdx = 0;
+    for (const w of wheres) {
+      // Conta quantos ? cada where consome
+      const qmarks = (w.match(/\?/g) || []).length;
+      if (w.includes('p.REF = ?') || w.includes('p.REF LIKE ?')) {
+        pIdx += qmarks; // pula
+      } else {
+        for (let i = 0; i < qmarks; i++) detailParams.push(params[pIdx++]);
+      }
+    }
+    detailWheres.push('p.REF IN (?)');
+    detailParams.push(refList);
+
     const sqlDetails = `
       SELECT ${selects.join(', ')}
         FROM produtos p
-       WHERE p.REF IN (?)
+       WHERE ${detailWheres.join(' AND ')}
        ORDER BY p.REF, p.COR, p.TAMANHO
     `;
     let detailRows: any[] = [];
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlDetails, [refList]);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlDetails, detailParams);
       detailRows = rows as any[];
     } catch (e) {
       this.logger.error(`searchRefsForPublish (details) falhou: ${(e as Error).message}`);
