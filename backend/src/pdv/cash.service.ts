@@ -110,7 +110,10 @@ export class CashService {
    * "Movimento Diário de Caixa" do Wincred dentro do flowops.
    */
   async getRelatorioDetalhado(storeCode: string) {
+    try {
+    this.logger.log(`[getRelatorioDetalhado] storeCode=${storeCode}`);
     const session = await this.getCurrentSession(storeCode);
+    this.logger.log(`[getRelatorioDetalhado] session=${session?.id ?? 'null'}`);
     if (!session) {
       throw new BadRequestException('Não há caixa aberto nesta loja.');
     }
@@ -326,6 +329,10 @@ export class CashService {
       })),
       generatedAt: new Date(),
     };
+    } catch (err: any) {
+      this.logger.error(`[getRelatorioDetalhado] FAILED: ${err?.message || err}`, err?.stack);
+      throw err;
+    }
   }
 
   // ── Abertura ────────────────────────────────────────────────────────
