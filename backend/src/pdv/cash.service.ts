@@ -101,6 +101,163 @@ export class CashService {
     };
   }
 
+  /**
+   * Relatório detalhado com breakdown por BANDEIRA dos cartões.
+   * Quebra credito/debito em MASTERCARD, VISANET, CIELO, ELO, AMEX, etc
+   * lendo details.bandeira de cada pagamento.
+   *
+   * Usado pela tela /minha-loja/pdv/fechamento — replica o layout
+   * "Movimento Diário de Caixa" do Wincred dentro do flowops.
+   */
+  async getRelatorioDetalhado(storeCode: string) {
+    const session = await this.getCurrentSession(storeCode);
+    if (!session) {
+      throw new BadRequestException('Não há caixa aberto nesta loja.');
+    }
+
+    // Vendas finalizadas dessa sessão
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: { cashSessionId: session.id, status: 'finalized' },
+      include: { payments: true },
+    });
+
+    // Breakdown por forma + bandeira
+    const totais: Record<string, number> = {
+      DINHEIRO: 0,
+      PIX: 0,
+      CREDIARIO: 0,
+      // Cartões crédito (com bandeira)
+      MASTERCARD: 0,
+      VISANET: 0,
+      CIELO: 0,
+      ELO: 0,
+      AMEX: 0,
+      HIPERCARD: 0,
+      // Cartões débito (com bandeira)
+      VISA_ELECTRON: 0,
+      REDE_SHOP: 0,
+      // Genéricos (quando não conseguiu resolver bandeira)
+      CREDITO_GENERICO: 0,
+      DEBITO_GENERICO: 0,
+      OUTROS: 0,
+    };
+    let totalVendas = 0;
+    let qtdVendas = sales.length;
+
+    for (const s of sales as any[]) {
+      totalVendas += Number(s.total) || 0;
+      for (const p of s.payments || []) {
+        const method = String(p.method || '').toLowerCase();
+        const valor = Number(p.valor) || 0;
+
+        // Tenta extrair bandeira do details (JSON)
+        let bandeira: string | null = null;
+        if (p.details) {
+          try {
+            const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+            if (det?.bandeira) bandeira = String(det.bandeira).toUpperCase().trim();
+          } catch { /* ignora */ }
+        }
+
+        if (method === 'dinheiro') totais.DINHEIRO += valor;
+        else if (method === 'pix') totais.PIX += valor;
+        else if (method === 'crediario') totais.CREDIARIO += valor;
+        else if (method === 'credito' || method === 'debito') {
+          // Tenta mapear pra bandeira específica
+          if (bandeira) {
+            const map: Record<string, string> = {
+              'MASTERCARD': 'MASTERCARD',
+              'VISA': 'VISANET',
+              'VISANET': 'VISANET',
+              'CIELO': 'CIELO',
+              'ELO': 'ELO',
+              'AMEX': 'AMEX',
+              'AMERICAN EXPRESS': 'AMEX',
+              'HIPERCARD': 'HIPERCARD',
+              'VISA ELECTRON': 'VISA_ELECTRON',
+              'VISA_ELECTRON': 'VISA_ELECTRON',
+              'VISAELECTRON': 'VISA_ELECTRON',
+              'REDESHOP': 'REDE_SHOP',
+              'REDE SHOP': 'REDE_SHOP',
+              'REDE_SHOP': 'REDE_SHOP',
+            };
+            const key = map[bandeira];
+            if (key && key in totais) {
+              totais[key] += valor;
+            } else {
+              if (method === 'credito') totais.CREDITO_GENERICO += valor;
+              else totais.DEBITO_GENERICO += valor;
+            }
+          } else {
+            if (method === 'credito') totais.CREDITO_GENERICO += valor;
+            else totais.DEBITO_GENERICO += valor;
+          }
+        } else {
+          totais.OUTROS += valor;
+        }
+      }
+    }
+
+    // Movimentações de caixa
+    const movements = await (this.prisma as any).pdvCashMovement.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    let totalSangrias = 0;
+    let totalSuprimentos = 0;
+    for (const m of movements as any[]) {
+      const v = Number(m.valor) || 0;
+      if (m.tipo === 'sangria') totalSangrias += v;
+      else if (m.tipo === 'suprimento') totalSuprimentos += v;
+    }
+
+    const dinheiroEsperado =
+      Number(session.fundoTroco || 0) +
+      totais.DINHEIRO -
+      totalSangrias +
+      totalSuprimentos;
+
+    // Total cartão crédito
+    const totalCartaoCredito =
+      totais.MASTERCARD + totais.VISANET + totais.CIELO + totais.ELO +
+      totais.AMEX + totais.HIPERCARD + totais.CREDITO_GENERICO;
+    // Total cartão débito
+    const totalCartaoDebito =
+      totais.VISA_ELECTRON + totais.REDE_SHOP + totais.DEBITO_GENERICO;
+
+    return {
+      session: {
+        id: session.id,
+        storeCode: session.storeCode,
+        storeName: session.storeName,
+        openedAt: session.openedAt,
+        openedByName: session.openedByName,
+        fundoTroco: Number(session.fundoTroco) || 0,
+      },
+      totais,
+      resumo: {
+        totalVendas,
+        totalDinheiro: totais.DINHEIRO,
+        totalPix: totais.PIX,
+        totalCrediario: totais.CREDIARIO,
+        totalCartaoCredito,
+        totalCartaoDebito,
+        totalSangrias,
+        totalSuprimentos,
+        dinheiroEsperado,
+        qtdVendas,
+      },
+      movimentos: movements.map((m: any) => ({
+        id: m.id,
+        tipo: m.tipo,
+        valor: Number(m.valor) || 0,
+        observacao: m.observacao,
+        createdAt: m.createdAt,
+      })),
+      generatedAt: new Date(),
+    };
+  }
+
   // ── Abertura ────────────────────────────────────────────────────────
 
   /**

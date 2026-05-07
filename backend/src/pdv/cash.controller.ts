@@ -149,6 +149,17 @@ export class CashController {
   }
 
   /**
+   * GET /pdv/caixa/relatorio-detalhado — snapshot detalhado com breakdown
+   * por bandeira de cartão. Usado pela tela /minha-loja/pdv/fechamento.
+   */
+  @Get('relatorio-detalhado')
+  async detailedReport(@Req() req: any, @Query('storeCode') storeCodeOverride?: string) {
+    this.requireRole(req);
+    const { storeCode } = this.resolveStore(req, { storeCode: storeCodeOverride });
+    return this.svc.getRelatorioDetalhado(storeCode);
+  }
+
+  /**
    * POST /pdv/caixa/fechar
    * Body: { dinheiroFisico, observacao? }
    */

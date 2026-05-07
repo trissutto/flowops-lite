@@ -22,7 +22,7 @@ import {
   AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt, Globe, Shuffle, Tag,
+  Receipt, Globe, Shuffle, Tag, Wallet,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -1168,6 +1168,14 @@ function PdvPageInner() {
             >
               <DollarSign className="w-3.5 h-3.5 text-slate-600" />
               <span className="text-[10px] font-bold text-slate-700">Caixa</span>
+            </Link>
+            <Link
+              href="/minha-loja/pdv/fechamento"
+              className="bg-white hover:bg-violet-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 hover:border-violet-300"
+              title="Fechamento diário com totais por forma de pgto"
+            >
+              <Wallet className="w-3.5 h-3.5 text-violet-600" />
+              <span className="text-[10px] font-bold text-slate-700">Fechamento</span>
             </Link>
             <Link
               href="/minha-loja/pdv/recebimentos"
