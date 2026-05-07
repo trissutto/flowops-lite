@@ -258,7 +258,7 @@ export class CashService {
 
     const dinheiroEsperado =
       Number(session.fundoTroco || 0) +
-      totais.DINHEIRO -
+      totais.DINHEIRO.valor -
       totalSangrias +
       totalSuprimentos;
 
