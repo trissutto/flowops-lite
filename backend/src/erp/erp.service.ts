@@ -5034,57 +5034,53 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
-   * Mapeia método de pagamento do flowops pro par (FORMA, coluna_fechamento, coluna_caixa_diario).
-   * - coluna_fechamento: pra INSERT em fechamento (NULL = só FORMA+VALOR, ex: PIX)
-   * - colunaCaixaDiario: pra UPDATE incremental em caixa_diario (nomes podem
-   *   diferir, ex: REDE_SHOP em fechamento → REDESHOP em caixa_diario)
+   * Mapeia método de pagamento do flowops pro par (FORMA, coluna_específica)
+   * da tabela `fechamento` do Wincred. PIX não tem coluna específica.
    *
-   * Retorna {forma, coluna, colunaCaixaDiario}.
+   * Retorna {forma: string, coluna: string|null}. Coluna null = só FORMA+VALOR.
    */
-  private mapPagamentoFechamento(metodo: string): { forma: string; coluna: string | null; colunaCaixaDiario: string | null } {
+  private mapPagamentoFechamento(metodo: string): { forma: string; coluna: string | null } {
     const m = String(metodo || '').toUpperCase().trim();
     // Mapeamento real do flowops (cliente confirmou em 07/05/2026):
     // - Aceitas todas as variações comuns do nome (lowercase, com/sem acento, com/sem espaço)
     // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (não existem mais no PDV)
-    // ATENÇÃO: a coluna em `caixa_diario` tem nome ligeiramente diferente da
-    // em `fechamento` pra algumas formas:
-    //   fechamento.REDE_SHOP    → caixa_diario.REDESHOP
-    //   fechamento.VISA_ELECTRON → caixa_diario.VISAELECTRON
-    //   (sem underscore no caixa_diario)
-    const map: Record<string, { forma: string; coluna: string | null; colunaCaixaDiario: string | null }> = {
+    // Mapeamento real do flowops (cliente confirmou em 07/05/2026):
+    // - Aceitas todas as variações comuns do nome (lowercase, com/sem acento, com/sem espaço)
+    // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (não existem mais no PDV)
+    const map: Record<string, { forma: string; coluna: string | null }> = {
       // DINHEIRO
-      'DINHEIRO': { forma: 'DINHEIRO', coluna: 'DINHEIRO', colunaCaixaDiario: 'DINHEIRO' },
-      'CASH': { forma: 'DINHEIRO', coluna: 'DINHEIRO', colunaCaixaDiario: 'DINHEIRO' },
+      'DINHEIRO': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
+      'CASH': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
       // PIX (sem coluna específica em fechamento — só FORMA + VALOR)
-      'PIX': { forma: 'PIX', coluna: null, colunaCaixaDiario: 'PIX' },
+      'PIX': { forma: 'PIX', coluna: null },
       // CIELO (cartão crédito Cielo)
-      'CIELO': { forma: 'CIELO', coluna: 'CIELO', colunaCaixaDiario: 'CIELO' },
-      'CIELO_CREDITO': { forma: 'CIELO', coluna: 'CIELO', colunaCaixaDiario: 'CIELO' },
+      'CIELO': { forma: 'CIELO', coluna: 'CIELO' },
+      'CIELO_CREDITO': { forma: 'CIELO', coluna: 'CIELO' },
       // MASTERCARD
-      'MASTERCARD': { forma: 'MASTERCARD', coluna: 'MASTERCARD', colunaCaixaDiario: 'MASTERCARD' },
+      'MASTERCARD': { forma: 'MASTERCARD', coluna: 'MASTERCARD' },
       // VISA → VISANET (Visa crédito)
-      'VISA': { forma: 'VISANET', coluna: 'VISANET', colunaCaixaDiario: 'VISANET' },
-      'VISANET': { forma: 'VISANET', coluna: 'VISANET', colunaCaixaDiario: 'VISANET' },
-      // VISA ELECTRON (Visa débito) — note: caixa_diario usa VISAELECTRON (sem _)
-      'VISA ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON', colunaCaixaDiario: 'VISAELECTRON' },
-      'VISA_ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON', colunaCaixaDiario: 'VISAELECTRON' },
-      'VISAELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON', colunaCaixaDiario: 'VISAELECTRON' },
-      // ELO — caixa_diario tem coluna específica? Sim (vimos no schema)
-      'ELO': { forma: 'ELO', coluna: 'ELO', colunaCaixaDiario: null }, // Verificar se caixa_diario tem coluna ELO
-      // AMERICAN EXPRESS → AMEX (caixa_diario pode não ter coluna AMEX)
-      'AMERICAN EXPRESS': { forma: 'AMEX', coluna: 'AMEX', colunaCaixaDiario: null },
-      'AMEX': { forma: 'AMEX', coluna: 'AMEX', colunaCaixaDiario: null },
-      // HIPERCARD (caixa_diario pode não ter coluna)
-      'HIPERCARD': { forma: 'HIPERCARD', coluna: 'HIPERCARD', colunaCaixaDiario: null },
-      // CREDIÁRIO
-      'CREDIARIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO', colunaCaixaDiario: 'CREDIARIO' },
-      'CREDIÁRIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO', colunaCaixaDiario: 'CREDIARIO' },
-      // REDE SHOP — note: caixa_diario usa REDESHOP (sem _)
-      'REDE SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP', colunaCaixaDiario: 'REDESHOP' },
-      'REDESHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP', colunaCaixaDiario: 'REDESHOP' },
-      'REDE_SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP', colunaCaixaDiario: 'REDESHOP' },
+      'VISA': { forma: 'VISANET', coluna: 'VISANET' },
+      'VISANET': { forma: 'VISANET', coluna: 'VISANET' },
+      // VISA ELECTRON (Visa débito)
+      'VISA ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      'VISA_ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      'VISAELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
+      // ELO
+      'ELO': { forma: 'ELO', coluna: 'ELO' },
+      // AMERICAN EXPRESS → AMEX
+      'AMERICAN EXPRESS': { forma: 'AMEX', coluna: 'AMEX' },
+      'AMEX': { forma: 'AMEX', coluna: 'AMEX' },
+      // HIPERCARD
+      'HIPERCARD': { forma: 'HIPERCARD', coluna: 'HIPERCARD' },
+      // CREDIÁRIO (também gera parcelas em movimento)
+      'CREDIARIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
+      'CREDIÁRIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
+      // REDE SHOP
+      'REDE SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
+      'REDESHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
+      'REDE_SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
     };
-    return map[m] || { forma: m || 'OUTROS', coluna: null, colunaCaixaDiario: null };
+    return map[m] || { forma: m || 'OUTROS', coluna: null };
   }
 
   /**
@@ -5258,26 +5254,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           vals,
         );
         sqlExecuted.push(`INSERT fechamento VENDA=${numero} FORMA=${map.forma} VALOR=${valor}`);
-
-        // UPDATE incremental em caixa_diario pra que a tela "Movimento Diário"
-        // já reflita o valor sem depender do "Processa Movimento" do Wincred
-        // (que pra cartões não soma de fechamento — eles nunca vão lá pelo PDV
-        // antigo). Pra DINHEIRO/PIX/CREDIARIO o "Processa" sobreescreve com
-        // soma de fechamento, então não tem conflito.
-        if (map.colunaCaixaDiario) {
-          // Garante que existe linha pra DATA+LOJA hoje
-          await conn.query(
-            `INSERT IGNORE INTO caixa_diario (DATA, LOJA) VALUES (CURDATE(), ?)`,
-            [lojaCode],
-          );
-          // UPDATE incremental
-          await conn.query(
-            `UPDATE caixa_diario SET ${map.colunaCaixaDiario} = COALESCE(${map.colunaCaixaDiario}, 0) + ? ` +
-            `WHERE DATA = CURDATE() AND LOJA = ?`,
-            [valor, lojaCode],
-          );
-          sqlExecuted.push(`UPDATE caixa_diario.${map.colunaCaixaDiario} += ${valor} LOJA=${lojaCode}`);
-        }
+        // Nota: NÃO fazemos UPDATE em caixa_diario — o "Processa Movimento" do
+        // Wincred lê de fechamento (DINHEIRO/PIX/CREDIARIO funcionam) e de outra
+        // fonte interna (cartões — ainda não rastreada). Qualquer UPDATE direto
+        // em caixa_diario é sobrescrito pelo Processa.
       }
 
       await conn.commit();
