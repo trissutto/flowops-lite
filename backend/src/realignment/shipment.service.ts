@@ -727,16 +727,11 @@ export class RealignmentShipmentService {
     const skuBipado = String(input.sku || '').trim();
     if (!skuBipado) throw new BadRequestException('SKU vazio');
 
-    // Normaliza o SKU bipado pelo Giga (resolve zeros à esquerda, EAN, etc).
-    // Se o usuário bipou "5358441" mas no Giga é "0005358441", aqui resolve.
+    // Normaliza o SKU bipado pelo Giga (1 query MySQL).
     const info = await this.erp.resolveSkuInfo(skuBipado);
     const skuNormalizado = info?.codigo || skuBipado;
 
-    // Helper: compara 2 SKUs ignorando zeros à esquerda + trim
-    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
-    const skuBipadoStripped = stripZeros(skuNormalizado);
-
-    // Pega itens da remessa
+    // Pega itens da remessa (1 query Postgres)
     const items = await this.prisma.transferOrder.findMany({
       where: { shipmentId: shipment.id } as any,
       select: {
@@ -745,41 +740,76 @@ export class RealignmentShipmentService {
         cor: true,
         tamanho: true,
         realignmentStatus: true,
+        codigoBipado: true,
       } as any,
     });
 
-    // Pra cada item da remessa, pega o SKU oficial via REF+cor+tam e compara.
-    // Comparação ignora zeros à esquerda em ambos os lados.
+    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const skuBipadoStripped = stripZeros(skuNormalizado);
+
+    // === MATCH EM MEMORIA — zero queries MySQL no loop ===
     let matchedItemId: string | null = null;
     let matchedRefCode: string | null = null;
-    for (const it of items as any[]) {
-      if (it.realignmentStatus === 'received' || it.realignmentStatus === 'missing') continue;
-      try {
-        const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
-        if (!itemSku) continue;
-        if (stripZeros(itemSku) === skuBipadoStripped) {
+    const pendingItems = (items as any[]).filter(
+      (it) => it.realignmentStatus !== 'received' && it.realignmentStatus !== 'missing',
+    );
+
+    // E1: match direto via codigoBipado salvo (re-bipe / idempotencia)
+    for (const it of pendingItems) {
+      if (it.codigoBipado && stripZeros(it.codigoBipado) === skuBipadoStripped) {
+        matchedItemId = it.id;
+        matchedRefCode = it.refCode;
+        break;
+      }
+    }
+
+    // E2: match por REF+COR+TAM em memoria (caso 99% dos bipes)
+    if (!matchedItemId && info?.ref) {
+      const infoRef = norm(info.ref);
+      const infoCor = norm(info.cor);
+      const infoTam = norm(info.tamanho);
+      for (const it of pendingItems) {
+        if (norm(it.refCode) !== infoRef) continue;
+        const corMatch = !infoCor || !it.cor || norm(it.cor) === infoCor;
+        const tamMatch = !infoTam || !it.tamanho || norm(it.tamanho) === infoTam;
+        if (corMatch && tamMatch) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;
           break;
         }
-      } catch {
-        /* continua tentando próximos */
+      }
+    }
+
+    // E3: fallback raro — info null (SKU sumido do Wincred). So aqui usa loop com query.
+    if (!matchedItemId && !info?.ref) {
+      for (const it of pendingItems) {
+        try {
+          const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
+            matchedItemId = it.id;
+            matchedRefCode = it.refCode;
+            break;
+          }
+        } catch { /* segue */ }
       }
     }
 
     if (!matchedItemId) {
       throw new BadRequestException(
-        `SKU ${skuBipado} não pertence a essa remessa (ou já foi bipado). ` +
+        `SKU ${skuBipado} nao pertence a essa remessa (ou ja foi bipado). ` +
           (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : ''),
       );
     }
 
+    // Salva codigoBipado junto com status — economiza re-resolucao na finalizacao
     await this.prisma.transferOrder.update({
       where: { id: matchedItemId },
       data: {
         realignmentStatus: 'received',
         realignmentReceivedAt: new Date(),
         realignmentReceivedByUserId: input.userId ?? null,
+        codigoBipado: skuNormalizado,
       } as any,
     });
 
