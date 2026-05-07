@@ -764,16 +764,18 @@ export class RealignmentShipmentService {
       }
     }
 
-    // E2: match por REF+COR+TAM em memoria (caso 99% dos bipes)
-    if (!matchedItemId && info?.ref) {
-      const infoRef = norm(info.ref);
-      const infoCor = norm(info.cor);
-      const infoTam = norm(info.tamanho);
+    // E2: BATCH lookup Wincred — 1 query pra TODOS items pendentes.
+    // Pega o SKU oficial de cada (REF+COR+TAM) e compara com o bipado.
+    // CADA PEÇA É ÚNICA — match por SKU específico (não REF), respeitando
+    // diferenças de normalização entre Postgres (REF "12852") e Wincred (REF "12852V").
+    if (!matchedItemId && pendingItems.length > 0) {
+      const codigoMap = await this.erp.batchFindCodigosByRefCorTam(
+        pendingItems.map((it) => ({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho })),
+      );
       for (const it of pendingItems) {
-        if (norm(it.refCode) !== infoRef) continue;
-        const corMatch = !infoCor || !it.cor || norm(it.cor) === infoCor;
-        const tamMatch = !infoTam || !it.tamanho || norm(it.tamanho) === infoTam;
-        if (corMatch && tamMatch) {
+        const key = `${norm(it.refCode)}|${norm(it.cor)}|${norm(it.tamanho)}`;
+        const itemSku = codigoMap.get(key);
+        if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;
           break;
@@ -781,8 +783,9 @@ export class RealignmentShipmentService {
       }
     }
 
-    // E3: fallback raro — info null (SKU sumido do Wincred). So aqui usa loop com query.
-    if (!matchedItemId && !info?.ref) {
+    // E3: fallback LIKE/REF+TAM (cobre REF "12852" vs "12852V", cor "BEGE" vs "XADREZ BEGE").
+    // Só roda pros items que sobraram (raro).
+    if (!matchedItemId) {
       for (const it of pendingItems) {
         try {
           const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);

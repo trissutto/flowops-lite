@@ -4365,6 +4365,63 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Batch lookup: pra um conjunto de items (refCode/cor/tamanho), retorna mapa
+   * `${ref}|${cor}|${tam}` (normalizado upper+trim) -> CODIGO em UMA query SQL.
+   *
+   * Usado pelo bipe de entrada de remessa pra evitar N queries MySQL por bipe
+   * (antes: 1 query por item da remessa = 100+ queries; agora: 1 query total).
+   */
+  async batchFindCodigosByRefCorTam(
+    items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!this.pool || !items.length) return out;
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const keyOf = (ref: string, cor: any, tam: any) => `${norm(ref)}|${norm(cor)}|${norm(tam)}`;
+
+    const seen = new Set<string>();
+    const uniq: Array<{ ref: string; cor: string; tam: string }> = [];
+    for (const it of items) {
+      const ref = norm(it.refCode);
+      if (!ref) continue;
+      const cor = norm(it.cor);
+      const tam = norm(it.tamanho);
+      const k = `${ref}|${cor}|${tam}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push({ ref, cor, tam });
+    }
+    if (!uniq.length) return out;
+
+    const chunks: typeof uniq[] = [];
+    for (let i = 0; i < uniq.length; i += 500) chunks.push(uniq.slice(i, i + 500));
+
+    for (const chunk of chunks) {
+      const conds = chunk
+        .map(() => `(TRIM(UPPER(REF)) = ? AND TRIM(UPPER(COALESCE(COR,''))) = ? AND TRIM(UPPER(COALESCE(TAMANHO,''))) = ?)`)
+        .join(' OR ');
+      const params: string[] = [];
+      for (const u of chunk) {
+        params.push(u.ref, u.cor, u.tam);
+      }
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO FROM produtos WHERE ${conds}`,
+          params,
+        );
+        for (const r of rows as any[]) {
+          const k = keyOf(r.REF, r.COR, r.TAMANHO);
+          if (!out.has(k)) out.set(k, String(r.CODIGO).trim());
+        }
+      } catch (e: any) {
+        this.logger.warn(`batchFindCodigosByRefCorTam falhou em chunk: ${e?.message || e}`);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Soma estoque de TODOS os SKUs cadastrados como mesma REF+COR+TAM em UMA loja.
    *
    * Por que isso existe: o Giga frequentemente tem múltiplos cadastros pra
