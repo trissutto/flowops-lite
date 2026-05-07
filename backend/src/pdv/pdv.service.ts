@@ -1042,6 +1042,10 @@ export class PdvService {
           : [{ metodo: finalMethod, valor: sale.total }],
         clienteCode: 0,
         nomeCliente: sale.customerName || undefined,
+        // Vendedora pra comissão (Seller) tem prioridade. Senão, usa operador
+        // (vendedorName = quem digitou). lookup é automático no erp.service.
+        vendedorName: sale.sellerName || sale.vendedorName || undefined,
+        operadorName: sale.vendedorName || undefined,
         obsPedido: `flowops-${sale.id.slice(0, 8)}`,
       });
       if (!result.ok) {

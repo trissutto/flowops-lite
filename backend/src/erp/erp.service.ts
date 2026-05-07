@@ -5034,6 +5034,67 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
+   * Busca o CODIGO de um funcionário no Wincred pelo nome (ou apelido)
+   * filtrando pela loja. Usado pra preencher VENDEDOR/OPERADOR na tabela
+   * `caixa` quando flowops PDV finaliza venda.
+   *
+   * Estratégia (em ordem de prioridade):
+   * 1. APELIDO exato (case-insensitive) + LOJA
+   * 2. NOME exato (case-insensitive) + LOJA
+   * 3. Primeiro nome (até primeiro espaço) + LOJA
+   * 4. APELIDO sem filtro de loja (fallback)
+   *
+   * Retorna 0 se não achou (caller deve aceitar 0 como "sem mapeamento").
+   */
+  async lookupFuncionarioCode(nome: string, lojaCode?: string): Promise<number> {
+    if (!this.pool || !nome) return 0;
+    const nomeNormalizado = String(nome).trim().toUpperCase();
+    if (!nomeNormalizado) return 0;
+    const loja = lojaCode ? String(lojaCode).padStart(2, '0').slice(-2) : null;
+    const primeiroNome = nomeNormalizado.split(/\s+/)[0];
+
+    try {
+      // 1. Tenta APELIDO exato + LOJA
+      if (loja) {
+        const [r1] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM funcionarios WHERE UPPER(APELIDO) = ? AND LOJA = ? LIMIT 1`,
+          [nomeNormalizado, loja],
+        );
+        if (r1.length) return Number(r1[0].CODIGO) || 0;
+      }
+      // 2. Tenta NOME exato + LOJA
+      if (loja) {
+        const [r2] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM funcionarios WHERE UPPER(NOME) = ? AND LOJA = ? LIMIT 1`,
+          [nomeNormalizado, loja],
+        );
+        if (r2.length) return Number(r2[0].CODIGO) || 0;
+      }
+      // 3. Primeiro nome + LOJA (NOME ou APELIDO começa com)
+      if (loja && primeiroNome.length >= 3) {
+        const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM funcionarios
+            WHERE LOJA = ?
+              AND (UPPER(APELIDO) = ? OR UPPER(NOME) LIKE ?)
+            LIMIT 1`,
+          [loja, primeiroNome, primeiroNome + '%'],
+        );
+        if (r3.length) return Number(r3[0].CODIGO) || 0;
+      }
+      // 4. Fallback: APELIDO sem filtro de loja
+      const [r4] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO FROM funcionarios WHERE UPPER(APELIDO) = ? LIMIT 1`,
+        [nomeNormalizado],
+      );
+      if (r4.length) return Number(r4[0].CODIGO) || 0;
+      return 0;
+    } catch (e) {
+      this.logger.warn(`lookupFuncionarioCode("${nome}", "${loja}") falhou: ${(e as Error).message}`);
+      return 0;
+    }
+  }
+
+  /**
    * Mapeia método de pagamento do flowops pro par (FORMA, coluna_específica)
    * da tabela `fechamento` do Wincred. PIX não tem coluna específica.
    *
@@ -5106,9 +5167,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       valor: number;
     }>;
     operadorCode?: number;      // 0 se sem mapeamento
+    operadorName?: string;      // nome do operador — faz lookup automático se code não vier
     vendedorCode?: number;      // codigo do funcionário vendedor
+    vendedorName?: string;      // nome da vendedora — faz lookup automático se code não vier
     clienteCode?: number;       // 0 se sem cadastro
-    nomeCliente?: string;
+    nomeCliente?: string;       // vai pra coluna NOMECLIENTE em caixa
     obsPedido?: string;
   }): Promise<{
     ok: boolean;
@@ -5179,6 +5242,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ─── MODO REAL: executa em transação ACID ───
+    // Lookup automático de VENDEDOR/OPERADOR se só veio o nome
+    let vendedorCodeFinal = input.vendedorCode || 0;
+    let operadorCodeFinal = input.operadorCode || 0;
+    if (!vendedorCodeFinal && input.vendedorName) {
+      vendedorCodeFinal = await this.lookupFuncionarioCode(input.vendedorName, lojaCode);
+      if (vendedorCodeFinal) {
+        this.logger.log(`[gravarVendaPdv] vendedor "${input.vendedorName}" → CODIGO=${vendedorCodeFinal} (loja ${lojaCode})`);
+      } else {
+        this.logger.warn(`[gravarVendaPdv] vendedor "${input.vendedorName}" não encontrado em funcionarios`);
+      }
+    }
+    if (!operadorCodeFinal && input.operadorName) {
+      operadorCodeFinal = await this.lookupFuncionarioCode(input.operadorName, lojaCode);
+    }
+
     const conn = await this.pool.getConnection();
     const registros: number[] = [];
     let numero: number = 0;
@@ -5217,8 +5295,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             it.desconto || 0,
             valorTotal,
             valorTotal,
-            input.operadorCode || 0,
-            input.vendedorCode || 0,
+            operadorCodeFinal,
+            vendedorCodeFinal,
             String(it.fornecedor || '').slice(0, 18),
             it.subgrupo || 0,
             String(it.tributo || '').slice(0, 4),
