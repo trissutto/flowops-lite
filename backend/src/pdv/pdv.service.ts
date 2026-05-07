@@ -1007,6 +1007,44 @@ export class PdvService {
       `[pdv] Venda ${sale.id} finalizada: R$${sale.total.toFixed(2)} via ${finalMethod} (${(payments as any[]).length} pagamento(s))`,
     );
 
+    // GRAVAÇÃO NO WINCRED — replica venda na tabela `caixa` do gigasistemas21
+    // pra contabilidade/relatórios. Em modo SHADOW por padrão (PDV_ERP_WRITE_ENABLED=false)
+    // só LOGA os SQLs sem executar — permite validar antes de ligar real.
+    // Erro NÃO bloqueia a venda no flowops (que é a fonte da verdade) — só loga warning.
+    try {
+      const result = await this.erp.gravarVendaPdv({
+        storeCode: sale.storeCode,
+        items: (sale.items || []).map((it: any) => ({
+          sku: String(it.sku || it.ean || ''),
+          qty: Number(it.qty) || 1,
+          valorUnit: Number(it.precoUnit) || 0,
+          desconto: Number(it.desconto) || 0,
+          descricao: String(it.descricao || ''),
+          tributo: it.cfop ? String(it.cfop).slice(0, 4) : undefined,
+        })),
+        clienteCode: 0,
+        nomeCliente: sale.customerName || undefined,
+        obsPedido: `flowops-${sale.id.slice(0, 8)}`,
+      });
+      if (!result.ok) {
+        this.logger.warn(
+          `[pdv→wincred] Venda ${sale.id} NÃO gravada no Wincred (${result.mode}): ${result.error}`,
+        );
+      } else if (result.mode === 'shadow') {
+        this.logger.warn(
+          `[pdv→wincred SHADOW] Venda ${sale.id}: ${result.sqlExecuted.length} SQLs gerados (não executados). Set PDV_ERP_WRITE_ENABLED=true pra ativar.`,
+        );
+      } else {
+        this.logger.log(
+          `[pdv→wincred REAL] Venda ${sale.id} → caixa NUMERO=${result.numero} (${result.registros?.length} registros)`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[pdv→wincred] Erro ao gravar venda ${sale.id} no Wincred: ${e?.message || e}. Venda no flowops segue OK.`,
+      );
+    }
+
     return { ok: true, sale: updated, nfcePreview: nfceStub };
   }
 

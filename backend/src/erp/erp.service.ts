@@ -131,6 +131,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Retorna true se o env var PDV_ERP_WRITE_ENABLED='true'. Controla a
+   * gravação de vendas do PDV flowops na tabela `caixa` do Wincred.
+   * Independente de ERP_WRITE_ENABLED (decreaseStock) — pode-se baixar
+   * estoque sem gravar venda, ou vice-versa.
+   */
+  get isPdvWriteEnabled(): boolean {
+    const v = String(this.config.get('PDV_ERP_WRITE_ENABLED') ?? '').trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes';
+  }
+
+  /**
    * Baixa estoque no Gigasistemas — executa UPDATE em `estoque` dentro de
    * uma transação MySQL. Todos os itens caem ou nada cai (ACID).
    *
@@ -5006,4 +5017,167 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       conn.release();
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PDV — Gravação de venda na tabela `caixa` do Wincred (gigasistemas21)
+  //
+  // Replica o que o PDV antigo do Wincred faz: 1 linha por ITEM da venda.
+  // O número da venda (NUMERO) é compartilhado com o PDV antigo — usamos
+  // MAX(NUMERO)+1 com FOR UPDATE pra evitar colisão.
+  //
+  // Modo SHADOW (PDV_ERP_WRITE_ENABLED=false, default): só LOGA os SQLs
+  // que SERIAM executados, sem tocar no banco. Permite validar geração
+  // de SQL antes de ligar real.
+  //
+  // Modo REAL (PDV_ERP_WRITE_ENABLED=true): executa em transação ACID.
+  // Se qualquer item falhar → rollback total → retorna erro.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Grava uma venda do PDV flowops na tabela `caixa` do Wincred.
+   * Idempotente por venda? NÃO — cada chamada gera novo NUMERO. O caller
+   * deve garantir que só chama 1x por venda (PDV.finalize já faz isso via
+   * status='finalized').
+   */
+  async gravarVendaPdv(input: {
+    storeCode: string;          // ex: '01' (ITANHAEM, char(2))
+    items: Array<{
+      sku: string;              // CODIGO Giga (ou EAN — resolveSkuInfo na ponta)
+      qty: number;
+      valorUnit: number;        // valor unitário sem desconto
+      desconto: number;         // valor R$ do desconto (não percentual)
+      descricao: string;
+      grupo?: number;
+      subgrupo?: number;
+      fornecedor?: string;      // CNPJ
+      tributo?: string;
+    }>;
+    operadorCode?: number;      // 0 se sem mapeamento
+    vendedorCode?: number;      // codigo do funcionário vendedor
+    clienteCode?: number;       // 0 se sem cadastro
+    nomeCliente?: string;
+    obsPedido?: string;
+  }): Promise<{
+    ok: boolean;
+    mode: 'shadow' | 'real';
+    numero?: number;
+    registros?: number[];
+    sqlExecuted: string[];
+    error?: string;
+  }> {
+    const sqlExecuted: string[] = [];
+    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
+
+    if (!this.pool) {
+      return { ok: false, mode, sqlExecuted, error: 'Pool ERP não inicializado' };
+    }
+    if (!input.items?.length) {
+      return { ok: false, mode, sqlExecuted, error: 'Sem itens pra gravar' };
+    }
+    if (!input.storeCode) {
+      return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatório' };
+    }
+
+    // Normaliza storeCode pra char(2)
+    const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
+
+    // ─── MODO SHADOW: só monta SQL e loga, sem executar ───
+    if (mode === 'shadow') {
+      sqlExecuted.push(`SELECT @numero := COALESCE(MAX(NUMERO), 0) + 1 FROM caixa FOR UPDATE`);
+      for (const it of input.items) {
+        const valorTotal = (it.valorUnit * it.qty) - (it.desconto || 0);
+        sqlExecuted.push(
+          `INSERT INTO caixa (NUMERO, CODIGO, DATA, DATAFEC, CLIENTE, DESCRICAO, ` +
+          `GRUPO, QUANTIDADE, VALOR, DESCONTO, VALORTOTAL, VALORDESCONTO, ` +
+          `OPERADOR, VENDEDOR, FORNECEDOR, SUBGRUPO, HORA, TRIBUTO, ` +
+          `NOMECLIENTE, OBS_PEDIDO, LOJA) VALUES (` +
+          `@numero, '${it.sku}', CURDATE(), CURDATE(), ${input.clienteCode || 0}, ` +
+          `'${(it.descricao || '').replace(/'/g, "''").slice(0, 100)}', ` +
+          `${it.grupo || 0}, ${it.qty}, ${it.valorUnit}, ${it.desconto || 0}, ` +
+          `${valorTotal}, ${valorTotal}, ${input.operadorCode || 0}, ` +
+          `${input.vendedorCode || 0}, '${(it.fornecedor || '').slice(0, 18)}', ` +
+          `${it.subgrupo || 0}, CURTIME(), '${(it.tributo || '').slice(0, 4)}', ` +
+          `'${(input.nomeCliente || '').replace(/'/g, "''").slice(0, 50)}', ` +
+          `'${(input.obsPedido || '').replace(/'/g, "''").slice(0, 50)}', '${lojaCode}')`
+        );
+      }
+      this.logger.warn(
+        `[gravarVendaPdv SHADOW] LOJA=${lojaCode} items=${input.items.length} ` +
+        `total=R$${input.items.reduce((s, i) => s + (i.valorUnit * i.qty - (i.desconto || 0)), 0).toFixed(2)} | ` +
+        `SQLs gerados: ${sqlExecuted.length}`,
+      );
+      // Loga 1 SQL representativo (o primeiro INSERT) pra inspeção visual
+      this.logger.warn(`[gravarVendaPdv SHADOW] sample SQL: ${sqlExecuted[1] || sqlExecuted[0]}`);
+      return { ok: true, mode, sqlExecuted };
+    }
+
+    // ─── MODO REAL: executa em transação ACID ───
+    const conn = await this.pool.getConnection();
+    const registros: number[] = [];
+    let numero: number = 0;
+    try {
+      await conn.beginTransaction();
+
+      // 1. Pega próximo NUMERO global com FOR UPDATE pra evitar race
+      const [maxRows]: any = await conn.query(
+        `SELECT COALESCE(MAX(NUMERO), 0) + 1 AS prox FROM caixa FOR UPDATE`,
+      );
+      numero = Number(maxRows[0]?.prox) || 1;
+
+      // 2. INSERT cada item
+      for (const it of input.items) {
+        const valorTotal = (it.valorUnit * it.qty) - (it.desconto || 0);
+        const [result]: any = await conn.query(
+          `INSERT INTO caixa (
+            NUMERO, CODIGO, DATA, DATAFEC, CLIENTE, DESCRICAO,
+            GRUPO, QUANTIDADE, VALOR, DESCONTO, VALORTOTAL, VALORDESCONTO,
+            OPERADOR, VENDEDOR, FORNECEDOR, SUBGRUPO, HORA, TRIBUTO,
+            NOMECLIENTE, OBS_PEDIDO, LOJA
+          ) VALUES (
+            ?, ?, CURDATE(), CURDATE(), ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, CURTIME(), ?,
+            ?, ?, ?
+          )`,
+          [
+            numero,
+            String(it.sku || '').slice(0, 13),
+            input.clienteCode || 0,
+            String(it.descricao || '').slice(0, 100),
+            it.grupo || 0,
+            it.qty,
+            it.valorUnit,
+            it.desconto || 0,
+            valorTotal,
+            valorTotal,
+            input.operadorCode || 0,
+            input.vendedorCode || 0,
+            String(it.fornecedor || '').slice(0, 18),
+            it.subgrupo || 0,
+            String(it.tributo || '').slice(0, 4),
+            String(input.nomeCliente || '').slice(0, 50),
+            String(input.obsPedido || '').slice(0, 50),
+            lojaCode,
+          ],
+        );
+        registros.push(Number(result.insertId));
+        sqlExecuted.push(`INSERT caixa NUMERO=${numero} CODIGO=${it.sku} → REGISTRO=${result.insertId}`);
+      }
+
+      await conn.commit();
+      this.logger.log(
+        `[gravarVendaPdv REAL OK] LOJA=${lojaCode} NUMERO=${numero} ` +
+        `items=${input.items.length} registros=${registros.length}`,
+      );
+      return { ok: true, mode, numero, registros, sqlExecuted };
+    } catch (e: any) {
+      try { await conn.rollback(); } catch { /* ignore */ }
+      const msg = String(e?.message || e);
+      this.logger.error(`[gravarVendaPdv REAL FALHOU rollback] ${msg}`);
+      return { ok: false, mode, sqlExecuted, error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
 }
