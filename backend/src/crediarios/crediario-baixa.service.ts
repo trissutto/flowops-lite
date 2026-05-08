@@ -426,24 +426,28 @@ export class CrediarioBaixaService {
 
     const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
 
-    // DEDUP: tabela `clientes` do Giga pode ter linhas duplicadas pelo
-    // mesmo codCliente (cadastro repetido por compra antiga, etc).
-    // Mantemos só a 1ª ocorrência de cada codCliente.
+    // DEDUP por COD+NOME — antes era só por cod, mas se a tabela tem múltiplos
+    // registros com mesmo CODCLIENTE (legado de cadastros antigos, troca de nome,
+    // etc), eliminar pelo cod sozinho fazia clientes válidos sumirem da busca.
+    // Usar cod+nome preserva todos os registros legítimos.
     const seen = new Set<string>();
     const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+    let descartadosCod = 0, descartadosCodInvalido = 0, descartadosNome = 0, descartadosCartao = 0, descartadosDup = 0;
     for (const row of result.rows as any[]) {
       const cod = String(row.cod || '').trim();
-      if (!cod || seen.has(cod)) continue;
+      if (!cod) { descartadosCod++; continue; }
       const codNum = parseInt(cod.replace(/\D/g, ''), 10);
-      if (isNaN(codNum) || codNum <= 3) continue; // exclui cartões 0-3
+      if (isNaN(codNum) || codNum <= 3) { descartadosCodInvalido++; continue; }
       const nome = String(row.nome || '').trim();
-      if (!nome) continue;
-      if (cardRegex.test(nome)) continue; // exclui cartões pelo nome
+      if (!nome) { descartadosNome++; continue; }
+      if (cardRegex.test(nome)) { descartadosCartao++; continue; }
+      const dedupKey = `${cod}|${nome.toUpperCase()}`;
+      if (seen.has(dedupKey)) { descartadosDup++; continue; }
       const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
-      seen.add(cod);
+      seen.add(dedupKey);
       out.push({ codCliente: cod, nome, telefone: tel });
     }
-    this.logger.log(`[crediario-baixa] após dedup: ${out.length} clientes únicos (de ${result.rows.length} linhas)`);
+    this.logger.log(`[crediario-baixa] após filtros: ${out.length} clientes únicos (de ${result.rows.length} linhas) | descartados: cod=${descartadosCod} codInvalido=${descartadosCodInvalido} nome=${descartadosNome} cartao=${descartadosCartao} dup=${descartadosDup}`);
 
     this.clientesCache = {
       data: out,
