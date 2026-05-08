@@ -2103,7 +2103,10 @@ function PaymentModal({
   const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
   const [copyMsg, setCopyMsg] = useState(false);
 
-  // ── Adicionar pagamento parcial ──
+  // ── Adicionar pagamento (com auto-finalize quando completa) ──
+  // Se o valor digitado fecha o total da venda (95% dos casos: 1 forma só),
+  // automaticamente finaliza a venda na mesma ação — economiza 1 clique.
+  // Se for split (valor < restante), volta pra escolher próxima forma.
   const adicionarPagamento = async () => {
     if (!selected) return;
     const valor = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.'));
@@ -2111,6 +2114,8 @@ function PaymentModal({
       toast('error', 'Valor inválido', 'Use só números (ex: 50,00)');
       return;
     }
+    // Detecta se esse pagamento vai zerar o total → finaliza automaticamente
+    const willComplete = Math.abs(valor - restante) < 0.01;
     if (valor > restante + 0.01) {
       toast('warning', 'Valor maior que o restante', `Falta apenas ${brl(restante)} pra fechar a venda`);
       return;
@@ -2237,6 +2242,15 @@ function PaymentModal({
       // agora precisa receber o resto em dinheiro/cartão).
       setEffectiveFilter('all');
       onPaymentsChange?.();
+      // ── AUTO-FINALIZE ──
+      // Se o pagamento atual zerou o restante (caso comum: pagamento em forma única),
+      // finaliza a venda automaticamente sem exigir 2º clique. Pequeno delay deixa
+      // o estado de payments propagar antes do finalize.
+      if (willComplete) {
+        setTimeout(() => {
+          onConfirm('', undefined);
+        }, 80);
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -3145,27 +3159,41 @@ function PaymentModal({
 
         {/* FOOTER fixo — botões SEMPRE visíveis */}
         <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 space-y-2 rounded-b-lg">
-          {/* Botão "Adicionar essa forma" — quando tem método selecionado E ainda falta pagar */}
-          {selected && !pago100 && (
-            <button
-              onClick={adicionarPagamento}
-              disabled={
-                addingPayment ||
-                !valorParcial ||
-                (needsBandeira && !bandeira) ||
-                (selected === 'pix' && !pixCharge) ||
-                (selected === 'crediario' && !customerCpf)
-              }
-              className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2"
-            >
-              {addingPayment ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Check className="w-4 h-4" />
-              )}
-              {selected === 'pix' ? 'Recebi o PIX — adicionar' : 'Adicionar essa forma'}
-            </button>
-          )}
+          {/* Botão CONTEXTUAL — "FINALIZAR" quando vai zerar o total (95% dos casos)
+              ou "ADICIONAR PARCIAL" quando é split (valor < restante). 1 clique a menos. */}
+          {selected && !pago100 && (() => {
+            const valorAtualNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
+            const vaiFinalizar = valorAtualNum > 0 && Math.abs(valorAtualNum - restante) < 0.01;
+            const labelMain = selected === 'pix' && !vaiFinalizar
+              ? 'Recebi o PIX — adicionar parcial'
+              : vaiFinalizar
+                ? `FINALIZAR · ${brl(valorAtualNum)}`
+                : `Adicionar parcial · ${brl(valorAtualNum)}`;
+            return (
+              <button
+                onClick={adicionarPagamento}
+                disabled={
+                  addingPayment ||
+                  !valorParcial ||
+                  (needsBandeira && !bandeira) ||
+                  (selected === 'pix' && !pixCharge) ||
+                  (selected === 'crediario' && !customerCpf)
+                }
+                className={`w-full px-3 py-3 font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-colors ${
+                  vaiFinalizar
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md ring-2 ring-emerald-300/60'
+                    : 'bg-amber-500 hover:bg-amber-600 text-white'
+                }`}
+              >
+                {addingPayment ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-5 h-5" />
+                )}
+                {labelMain}
+              </button>
+            );
+          })()}
 
           {/* Botão "Finalizar venda" — quando pago = total */}
           {pago100 && (
