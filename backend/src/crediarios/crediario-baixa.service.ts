@@ -1198,6 +1198,39 @@ export class CrediarioBaixaService {
     }
   }
 
+  /**
+   * Baixas confirmadas RECENTEMENTE — usado pela tela de Recebimentos pra
+   * detectar pagamentos via webhook (PIX-link) e disparar alerta + impressão
+   * automática quando cliente pagou em casa.
+   *
+   * Filtra por:
+   *  - status='paid'
+   *  - paidAt > since (timestamp ISO da última verificação)
+   *  - lojaCode opcional
+   */
+  async listRecentlyPaid(input: {
+    sinceIso?: string;
+    lojaCode?: string;
+  }): Promise<Array<any>> {
+    const since = input.sinceIso
+      ? new Date(input.sinceIso)
+      : new Date(Date.now() - 10 * 60 * 1000); // default últimos 10 min
+    const where: any = {
+      status: 'paid',
+      paidAt: { gt: since },
+    };
+    if (input.lojaCode) where.lojaCode = input.lojaCode;
+    const baixas = await (this.prisma as any).crediarioBaixa.findMany({
+      where,
+      orderBy: { paidAt: 'desc' },
+      take: 50,
+      include: {
+        items: { orderBy: { vencimento: 'asc' } },
+      },
+    });
+    return baixas;
+  }
+
   // ── Histórico de baixas ──────────────────────────────────────────────
   // Lista as baixas feitas (paid + canceled) com filtros por loja e período.
   // Usado pela tela /minha-loja/pdv/recebimentos/historico pra ver e estornar.

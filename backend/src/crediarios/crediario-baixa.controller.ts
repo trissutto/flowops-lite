@@ -285,6 +285,21 @@ export class CrediarioBaixaController {
   // GET /crediarios/baixa/historico?storeCode=X&dias=30&status=all
   // Lista baixas pagas/estornadas pra tela de auditoria.
 
+  /**
+   * GET /crediarios/baixa/recentes-pagas?since=ISO&storeCode=X
+   * Polling pela tela de Recebimentos pra detectar pagamentos via webhook.
+   */
+  @Get('recentes-pagas')
+  async getRecentesPagas(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('since') since?: string,
+  ) {
+    this.requireRole(req);
+    const lojaCode = (storeCode || req?.user?.storeCode || req?.user?.lojaCode || '').toString().trim() || undefined;
+    return this.svc.listRecentlyPaid({ sinceIso: since, lojaCode });
+  }
+
   @Get('historico')
   async getHistorico(
     @Req() req: any,
