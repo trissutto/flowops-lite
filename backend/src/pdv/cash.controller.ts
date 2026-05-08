@@ -232,4 +232,17 @@ export class CashController {
     this.requireRole(req);
     return this.svc.getSessionDetail(id);
   }
+
+  /**
+   * GET /pdv/caixa/super-painel — Retaguarda: agregado de TODAS as lojas
+   * Restrito a admin/supervisor.
+   */
+  @Get('super-painel')
+  async getSuperPainel(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    return this.svc.getSuperPainelCaixas();
+  }
 }

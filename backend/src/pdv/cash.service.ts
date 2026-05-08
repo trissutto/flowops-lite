@@ -340,6 +340,147 @@ export class CashService {
     }
   }
 
+  // ── Super Painel da Retaguarda ──────────────────────────────────────
+  // Retorna agregado de TODAS as lojas ativas com totais do caixa do dia.
+  // Usado pela tela /retaguarda/super-painel-caixas com polling 60s.
+
+  async getSuperPainelCaixas(): Promise<{
+    lojas: Array<{
+      storeCode: string;
+      storeName: string;
+      sessionId: string | null;
+      aberta: boolean;
+      openedAt: string | null;
+      openedByName: string | null;
+      fundoTroco: number;
+      totais: {
+        totalVendas: number;
+        totalDinheiro: number;
+        totalPix: number;
+        totalCartaoCredito: number;
+        totalCartaoDebito: number;
+        totalCrediario: number;
+        totalSangrias: number;
+        totalSuprimentos: number;
+        dinheiroEsperado: number;
+        qtdVendas: number;
+      };
+      vendedoras: Array<{ nome: string; qtd: number; total: number }>;
+    }>;
+    consolidado: {
+      totalVendas: number;
+      totalDinheiro: number;
+      totalPix: number;
+      totalCartaoCredito: number;
+      totalCartaoDebito: number;
+      totalCrediario: number;
+      totalSangrias: number;
+      totalSuprimentos: number;
+      qtdVendas: number;
+      qtdLojasAbertas: number;
+      qtdLojasFechadas: number;
+    };
+    generatedAt: string;
+  }> {
+    // Lista todas lojas ativas (Postgres)
+    const stores = await this.prisma.store.findMany({
+      where: { active: true } as any,
+      orderBy: { code: 'asc' },
+      select: { code: true, name: true } as any,
+    });
+
+    const emptyTotais = {
+      totalVendas: 0, totalDinheiro: 0, totalPix: 0,
+      totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalSangrias: 0, totalSuprimentos: 0, dinheiroEsperado: 0, qtdVendas: 0,
+    };
+
+    // Pra cada loja, busca sessão aberta e calcula totais (em paralelo)
+    const lojas = await Promise.all(
+      (stores as any[]).map(async (s) => {
+        const session = await this.getCurrentSession(s.code);
+        if (!session) {
+          return {
+            storeCode: s.code,
+            storeName: s.name,
+            sessionId: null,
+            aberta: false,
+            openedAt: null,
+            openedByName: null,
+            fundoTroco: 0,
+            totais: emptyTotais,
+            vendedoras: [],
+          };
+        }
+        // Calcula totais da sessão
+        const t = await this.computeSessionTotals(session.id);
+
+        // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas
+        const sales = await (this.prisma as any).pdvSale.findMany({
+          where: { cashSessionId: session.id, status: 'finalized' },
+          select: { sellerName: true, vendedorName: true, total: true },
+        });
+        const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
+        for (const sale of sales as any[]) {
+          const nome = (sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
+          if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
+          ranking[nome].qtd += 1;
+          ranking[nome].total += Number(sale.total) || 0;
+        }
+        const vendedoras = Object.values(ranking).sort((a, b) => b.total - a.total);
+
+        return {
+          storeCode: s.code,
+          storeName: s.name,
+          sessionId: session.id,
+          aberta: true,
+          openedAt: session.openedAt,
+          openedByName: (session as any).openedByName || null,
+          fundoTroco: Number(session.fundoTroco) || 0,
+          totais: {
+            totalVendas: t.totalVendas,
+            totalDinheiro: t.totalDinheiro,
+            totalPix: t.totalPix,
+            totalCartaoCredito: t.totalCartaoCredito,
+            totalCartaoDebito: t.totalCartaoDebito,
+            totalCrediario: t.totalCrediario,
+            totalSangrias: t.totalSangrias,
+            totalSuprimentos: t.totalSuprimentos,
+            dinheiroEsperado: t.dinheiroEsperado,
+            qtdVendas: t.qtdVendas,
+          },
+          vendedoras,
+        };
+      }),
+    );
+
+    // Consolidado
+    const consolidado = {
+      totalVendas: 0, totalDinheiro: 0, totalPix: 0,
+      totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
+      qtdLojasAbertas: 0, qtdLojasFechadas: 0,
+    };
+    for (const l of lojas) {
+      if (l.aberta) consolidado.qtdLojasAbertas++; else consolidado.qtdLojasFechadas++;
+      consolidado.totalVendas += l.totais.totalVendas;
+      consolidado.totalDinheiro += l.totais.totalDinheiro;
+      consolidado.totalPix += l.totais.totalPix;
+      consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
+      consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
+      consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalSangrias += l.totais.totalSangrias;
+      consolidado.totalSuprimentos += l.totais.totalSuprimentos;
+      consolidado.qtdVendas += l.totais.qtdVendas;
+    }
+
+    return {
+      lojas,
+      consolidado,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   // ── Abertura ────────────────────────────────────────────────────────
 
   /**
