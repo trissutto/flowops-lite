@@ -110,7 +110,6 @@ type EditPaymentTarget = {
 
 export default function CaixaPage() {
   const [loading, setLoading] = useState(true);
-  const [editTarget, setEditTarget] = useState<EditPaymentTarget>(null);
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [totals, setTotals] = useState<Totals | null>(null);
@@ -361,6 +360,7 @@ function OpenCashPanel({
   onSuprimento: () => void;
   onFechar: () => void;
 }) {
+  const [editTarget, setEditTarget] = useState<EditPaymentTarget>(null);
   return (
     <div className="space-y-6">
       <div className="bg-gradient-to-br from-rose-100 to-pink-50 rounded-2xl p-6 shadow-md">
