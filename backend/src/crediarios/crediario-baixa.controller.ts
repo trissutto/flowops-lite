@@ -281,6 +281,44 @@ export class CrediarioBaixaController {
     return this.svc.getBaixaStatus(id);
   }
 
+  // ── Histórico de baixas ──────────────────────────────────────────
+  // GET /crediarios/baixa/historico?storeCode=X&dias=30&status=all
+  // Lista baixas pagas/estornadas pra tela de auditoria.
+
+  @Get('historico')
+  async getHistorico(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('dias') dias?: string,
+    @Query('status') statusQ?: string,
+  ) {
+    this.requireRole(req);
+    // Resolve loja: prioriza query param, senão usa do JWT
+    const lojaCode = (storeCode || req?.user?.storeCode || req?.user?.lojaCode || '').toString().trim() || undefined;
+    const statusOk: 'paid' | 'canceled' | 'all' =
+      statusQ === 'paid' || statusQ === 'canceled' ? statusQ : 'all';
+    return this.svc.listHistorico({
+      lojaCode,
+      dias: dias ? Number(dias) : 30,
+      status: statusOk,
+    });
+  }
+
+  @Post(':id/estornar')
+  async estornar(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { reason?: string },
+  ) {
+    this.requireRole(req);
+    return this.svc.estornarBaixa({
+      baixaId: id,
+      userId: req?.user?.sub,
+      userName: req?.user?.name,
+      reason: body?.reason || undefined,
+    });
+  }
+
   // ── Detalhe (recibo) ─────────────────────────────────────────────
 
   @Get(':id')

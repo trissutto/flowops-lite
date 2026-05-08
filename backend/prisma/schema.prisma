@@ -800,6 +800,11 @@ model CrediarioBaixa {
   // Status: pending (PIX não pago ainda) | paid (confirmado) | canceled
   status            String   @default("paid")
   paidAt            DateTime? @map("paid_at")
+  // Estorno — quando uma baixa precisa ser desfeita (cliente pediu, pagamento por engano, etc)
+  canceledAt        DateTime? @map("canceled_at")
+  canceledByUserId  String?   @map("canceled_by_user_id")
+  canceledByUserName String?  @map("canceled_by_user_name")
+  canceledReason    String?   @map("canceled_reason")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 

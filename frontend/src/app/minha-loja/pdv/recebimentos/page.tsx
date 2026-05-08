@@ -387,6 +387,13 @@ export default function RecebimentosPage() {
           <span className="text-xs text-gray-500 hidden md:inline flex-1">
             crediário · baixa de parcelas
           </span>
+          <Link
+            href="/minha-loja/pdv/recebimentos/historico"
+            className="px-3 py-1.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-700 text-xs font-bold flex items-center gap-1"
+            title="Histórico de baixas e estorno"
+          >
+            Histórico
+          </Link>
           <button
             onClick={loadClientes}
             disabled={loadingClientes}

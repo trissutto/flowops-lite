@@ -1157,4 +1157,115 @@ export class CrediarioBaixaService {
     if (!baixa) throw new NotFoundException('Baixa não encontrada');
     return baixa;
   }
+
+  // ── Histórico de baixas ──────────────────────────────────────────────
+  // Lista as baixas feitas (paid + canceled) com filtros por loja e período.
+  // Usado pela tela /minha-loja/pdv/recebimentos/historico pra ver e estornar.
+
+  async listHistorico(input: {
+    lojaCode?: string;
+    dias?: number; // últimos N dias (default 30)
+    status?: 'paid' | 'canceled' | 'all';
+  }): Promise<Array<any>> {
+    const dias = Math.max(1, Math.min(365, Number(input.dias) || 30));
+    const desde = new Date();
+    desde.setDate(desde.getDate() - dias);
+
+    const where: any = { createdAt: { gte: desde } };
+    if (input.lojaCode) where.lojaCode = input.lojaCode;
+    if (input.status && input.status !== 'all') {
+      where.status = input.status;
+    }
+
+    const baixas = await (this.prisma as any).crediarioBaixa.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+      include: {
+        items: { orderBy: { vencimento: 'asc' } },
+      },
+    });
+    return baixas;
+  }
+
+  // ── Estorno ──────────────────────────────────────────────────────────
+  // Reverte uma baixa: marca CrediarioBaixa.status='canceled' + UPDATE no Wincred
+  // pra cada parcela voltando PAGO='N', DATA_PAGAMENTO=NULL, VALOR_PAGO=0.
+
+  async estornarBaixa(input: {
+    baixaId: string;
+    userId?: string;
+    userName?: string;
+    reason?: string;
+  }): Promise<{ ok: boolean; revertidos: number; falhas: number; details: any[] }> {
+    const baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+      where: { id: input.baixaId },
+      include: { items: true },
+    });
+    if (!baixa) throw new NotFoundException('Baixa não encontrada');
+    if (baixa.status === 'canceled') {
+      throw new BadRequestException('Baixa já está estornada');
+    }
+    if (baixa.status !== 'paid') {
+      throw new BadRequestException(`Baixa em status "${baixa.status}" — só estorna baixas pagas`);
+    }
+
+    // Reverte cada parcela no Wincred
+    const map = await this.crediarios.detectColumns();
+    const cols = {
+      registro: map.registro,
+      controle: map.controle,
+      pago: map.pago,
+      dataPagamento: map.dataPagamento,
+      valorPago: map.valorPago,
+      juros: map.juros,
+      multa: map.multa,
+    };
+
+    const details: any[] = [];
+    let revertidos = 0, falhas = 0;
+    for (const it of baixa.items as any[]) {
+      const r = await this.erp.markCrediarioParcelaUnpaid({
+        registro: it.registro,
+        controle: it.controle,
+        columns: cols,
+      });
+      details.push({
+        registro: it.registro,
+        controle: it.controle,
+        success: r.success,
+        error: r.error,
+      });
+      if (r.success) revertidos++; else falhas++;
+      // Marca o item como gigaUpdateOk=false (estornado)
+      await (this.prisma as any).crediarioBaixaItem.update({
+        where: { id: it.id },
+        data: {
+          gigaUpdateOk: false,
+          gigaError: r.success ? 'ESTORNADA' : `ESTORNO FALHOU: ${r.error || 'erro'}`,
+        },
+      });
+    }
+
+    // Marca a baixa como cancelada
+    await (this.prisma as any).crediarioBaixa.update({
+      where: { id: input.baixaId },
+      data: {
+        status: 'canceled',
+        canceledAt: new Date(),
+        canceledByUserId: input.userId ?? null,
+        canceledByUserName: input.userName ?? null,
+        canceledReason: input.reason ?? null,
+      },
+    });
+
+    // Limpa cache de clientes pra refletir mudanças
+    this.clearClientesCache();
+
+    this.logger.log(
+      `[crediario-baixa] estorno baixa=${input.baixaId} cliente=${baixa.codCliente} revertidos=${revertidos}/${baixa.items.length} falhas=${falhas}`,
+    );
+
+    return { ok: falhas === 0, revertidos, falhas, details };
+  }
 }

@@ -963,6 +963,83 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * REVERTE a baixa de uma parcela no Giga (estorno).
+   * Coloca PAGO='N', limpa DATA_PAGAMENTO, VALOR_PAGO, JUROS, MULTA.
+   * Usado quando o usuário precisa desfazer uma baixa feita por engano.
+   */
+  async markCrediarioParcelaUnpaid(input: {
+    registro: string | number;
+    controle: string | number;
+    columns: {
+      registro: string | null;
+      controle: string | null;
+      pago: string | null;
+      dataPagamento: string | null;
+      valorPago: string | null;
+      juros?: string | null;
+      multa?: string | null;
+    };
+  }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, error: 'ERP_WRITE_ENABLED nao habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, error: 'Pool ERP nao inicializado' };
+    }
+    const { columns } = input;
+    if (!columns.registro || !columns.controle) {
+      return { success: false, error: 'Colunas REGISTRO/CONTROLE nao detectadas' };
+    }
+
+    const sets: string[] = [];
+    const params: any[] = [];
+
+    const pagoCol = columns.pago || 'PAGO';
+    const pagoValor = String(this.config.get('ERP_PAGO_VALOR_NAO') ?? 'N').trim();
+    sets.push(`\`${pagoCol}\` = ?`);
+    params.push(pagoValor);
+
+    if (columns.dataPagamento) {
+      sets.push(`\`${columns.dataPagamento}\` = NULL`);
+    }
+    if (columns.valorPago) {
+      sets.push(`\`${columns.valorPago}\` = 0`);
+    }
+    if (columns.juros) {
+      sets.push(`\`${columns.juros}\` = 0`);
+    }
+    if (columns.multa) {
+      sets.push(`\`${columns.multa}\` = 0`);
+    }
+
+    const sql = `UPDATE \`movimento\` SET ${sets.join(', ')} WHERE \`${columns.registro}\` = ? AND \`${columns.controle}\` = ? LIMIT 1`;
+    params.push(input.registro, input.controle);
+
+    const conn = await this.pool.getConnection();
+    try {
+      const [result]: any = await conn.execute(sql, params);
+      const affected = result?.affectedRows ?? 0;
+      if (affected === 0) {
+        return {
+          success: false,
+          error: `UPDATE de estorno nao afetou linha (REGISTRO=${input.registro} CONTROLE=${input.controle}).`,
+          affectedRows: 0,
+        };
+      }
+      this.logger.log(
+        `[crediario] estorno Giga OK: REGISTRO=${input.registro} CONTROLE=${input.controle}`,
+      );
+      return { success: true, affectedRows: affected };
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      this.logger.error(`[crediario] UPDATE estorno FALHOU: ${msg}`);
+      return { success: false, error: msg };
+    } finally {
+      conn.release();
+    }
+  }
+
+  /**
    * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
    * Retorna só registros com ESTOQUE > 0.
    *
