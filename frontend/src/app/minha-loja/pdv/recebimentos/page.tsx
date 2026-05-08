@@ -124,6 +124,8 @@ export default function RecebimentosPage() {
   const [showPagamento, setShowPagamento] = useState(false);
   const [forma, setForma] = useState<'pix' | 'dinheiro' | 'pix-link' | null>(null);
   const [aplicando, setAplicando] = useState(false);
+  // Dinheiro: confirmação com cálculo de troco (igual Wincred)
+  const [dinheiroRecebido, setDinheiroRecebido] = useState('');
   const [pixCharge, setPixCharge] = useState<PixCharge | null>(null);
   const [pixPaid, setPixPaid] = useState(false);
   const [copyMsg, setCopyMsg] = useState(false);
@@ -650,7 +652,7 @@ export default function RecebimentosPage() {
                 <>
                   <div className="grid grid-cols-2 gap-3">
                     <button
-                      onClick={() => { setForma('dinheiro'); aplicarDinheiro(); }}
+                      onClick={() => { setForma('dinheiro'); setDinheiroRecebido(''); }}
                       disabled={aplicando}
                       className="p-4 bg-amber-100 hover:bg-amber-200 border-2 border-amber-300 rounded-xl flex flex-col items-center gap-2 disabled:opacity-50"
                     >
@@ -719,12 +721,72 @@ export default function RecebimentosPage() {
                 </div>
               )}
 
-              {forma === 'dinheiro' && aplicando && (
-                <div className="text-center p-6">
-                  <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-600" />
-                  <div className="text-sm text-gray-600 mt-2">Registrando baixa…</div>
-                </div>
-              )}
+              {forma === 'dinheiro' && (() => {
+                const recebidoNum = Number((dinheiroRecebido || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                const trocoCalc = recebidoNum > totalPago ? Math.round((recebidoNum - totalPago) * 100) / 100 : 0;
+                const insuficiente = recebidoNum > 0 && recebidoNum < totalPago;
+                return (
+                  <div className="space-y-3">
+                    {aplicando ? (
+                      <div className="text-center p-6">
+                        <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-600" />
+                        <div className="text-sm text-gray-600 mt-2">Registrando baixa…</div>
+                      </div>
+                    ) : (
+                      <>
+                        {/* Painel estilo Wincred — total grande, valor pago, troco */}
+                        <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold text-amber-900 uppercase tracking-wide">Valor total</span>
+                            <span className="text-2xl font-black text-amber-900 tabular-nums">{brl(totalPago)}</span>
+                          </div>
+                          <div>
+                            <label className="text-xs uppercase font-bold text-amber-900 mb-1 block">
+                              Valor recebido (opcional — pra calcular troco)
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={dinheiroRecebido}
+                              onChange={(e) => setDinheiroRecebido(e.target.value)}
+                              placeholder={totalPago.toFixed(2).replace('.', ',')}
+                              autoFocus
+                              className="w-full px-3 py-3 text-2xl font-bold text-emerald-700 tabular-nums bg-white border-2 border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500"
+                            />
+                          </div>
+                          {/* Troco — destaque MASSIVO quando há troco */}
+                          {trocoCalc > 0 && (
+                            <div className="bg-emerald-600 text-white rounded-lg p-3 flex items-center justify-between shadow-md">
+                              <span className="text-sm font-bold uppercase tracking-wide">Troco</span>
+                              <span className="text-3xl font-black tabular-nums">{brl(trocoCalc)}</span>
+                            </div>
+                          )}
+                          {insuficiente && (
+                            <div className="bg-rose-100 border border-rose-300 text-rose-800 rounded-lg p-2 text-xs font-bold flex items-center gap-2">
+                              <AlertCircle size={16} /> Recebido menor que o total — falta {brl(totalPago - recebidoNum)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setForma(null); setDinheiroRecebido(''); }}
+                            className="flex-1 px-3 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg"
+                          >
+                            Voltar
+                          </button>
+                          <button
+                            onClick={aplicarDinheiro}
+                            disabled={insuficiente}
+                            className="flex-[2] px-3 py-3 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
+                          >
+                            <Check size={18} /> Confirmar baixa{trocoCalc > 0 ? ` · troco ${brl(trocoCalc)}` : ''}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {forma === 'pix-link' && (
                 <div className="space-y-3">

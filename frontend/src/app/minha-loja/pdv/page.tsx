@@ -2823,27 +2823,51 @@ function PaymentModal({
           </div>
         )}
 
-        {/* Detalhes dinheiro */}
-        {selected === 'dinheiro' && (
-          <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600 uppercase font-semibold">Valor recebido</label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={recebido}
-              onChange={(e) => setRecebido(e.target.value)}
-              placeholder={total.toFixed(2).replace('.', ',')}
-              className="w-full border rounded px-3 py-2 text-lg font-mono"
-              autoFocus
-            />
-            {troco > 0 && (
-              <div className="flex justify-between text-sm bg-amber-50 p-2 rounded">
-                <span>Troco</span>
-                <span className="font-bold text-amber-700">{brl(troco)}</span>
+        {/* Detalhes dinheiro — painel destaque estilo Wincred */}
+        {selected === 'dinheiro' && (() => {
+          // Calcula com base no valorParcial (não o total) — caso seja split,
+          // o troco deve refletir o valor da forma, não da venda inteira.
+          const valorFormaNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
+          const recebidoLocal = Number((recebido || '0').replace(/\./g, '').replace(',', '.')) || 0;
+          const trocoLocal = recebidoLocal > valorFormaNum ? Math.round((recebidoLocal - valorFormaNum) * 100) / 100 : 0;
+          const insuficiente = recebidoLocal > 0 && recebidoLocal < valorFormaNum;
+          return (
+            <div className="pt-2 border-t">
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs uppercase font-bold text-amber-900 tracking-wide">Valor a receber</span>
+                  <span className="text-xl font-black text-amber-900 tabular-nums">{brl(valorFormaNum)}</span>
+                </div>
+                <div>
+                  <label className="text-xs uppercase font-bold text-amber-900 mb-1 block">
+                    Valor recebido (opcional — pra calcular troco)
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={recebido}
+                    onChange={(e) => setRecebido(e.target.value)}
+                    placeholder={valorFormaNum.toFixed(2).replace('.', ',')}
+                    className="w-full px-3 py-3 text-2xl font-bold text-emerald-700 tabular-nums bg-white border-2 border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500"
+                    autoFocus
+                  />
+                </div>
+                {/* Troco — destaque MASSIVO em verde quando há troco */}
+                {trocoLocal > 0 && (
+                  <div className="bg-emerald-600 text-white rounded-lg p-3 flex items-center justify-between shadow-md">
+                    <span className="text-sm font-bold uppercase tracking-wide">Troco</span>
+                    <span className="text-3xl font-black tabular-nums">{brl(trocoLocal)}</span>
+                  </div>
+                )}
+                {insuficiente && (
+                  <div className="bg-rose-100 border border-rose-300 text-rose-800 rounded-lg p-2 text-xs font-bold flex items-center gap-2">
+                    Faltam {brl(valorFormaNum - recebidoLocal)}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          );
+        })()}
 
         {/* CREDIÁRIO — banner pendências + entrada + primeiro vencimento */}
         {selected === 'crediario' && customerCpf && (
@@ -2927,10 +2951,73 @@ function PaymentModal({
                   className="w-full px-3 py-2 text-sm font-bold border-2 border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
                 />
                 <div className="text-[10px] text-slate-500 mt-0.5">
-                  Demais a cada 30 dias
+                  Próximas mantém o mesmo dia
                 </div>
               </div>
             </div>
+
+            {/* Atalhos rápidos: cliente quer pagar todo dia X */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">
+                Atalho — pagar todo dia
+              </div>
+              <div className="grid grid-cols-5 gap-1.5">
+                {[5, 10, 15, 20, 25].map((dia) => {
+                  const corrent = credVencto ? new Date(credVencto + 'T00:00:00') : null;
+                  const ativo = corrent && corrent.getDate() === dia;
+                  return (
+                    <button
+                      key={dia}
+                      type="button"
+                      onClick={() => {
+                        // Próxima ocorrência do dia X (se já passou no mês atual, vai pro próximo)
+                        const hoje = new Date();
+                        hoje.setHours(0, 0, 0, 0);
+                        const alvo = new Date(hoje.getFullYear(), hoje.getMonth(), dia);
+                        if (alvo <= hoje) alvo.setMonth(alvo.getMonth() + 1);
+                        const yyyy = alvo.getFullYear();
+                        const mm = String(alvo.getMonth() + 1).padStart(2, '0');
+                        const dd = String(alvo.getDate()).padStart(2, '0');
+                        setCredVencto(`${yyyy}-${mm}-${dd}`);
+                      }}
+                      className={`py-1.5 rounded-md text-xs font-bold border-2 transition ${
+                        ativo
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
+                          : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                      }`}
+                    >
+                      Dia {String(dia).padStart(2, '0')}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Preview dos vencimentos das parcelas */}
+            {credVencto && parcelas > 0 && (() => {
+              const base = new Date(credVencto + 'T00:00:00');
+              if (isNaN(base.getTime())) return null;
+              const datas: string[] = [];
+              for (let i = 0; i < Math.min(parcelas, 12); i++) {
+                const d = new Date(base);
+                d.setMonth(d.getMonth() + i);
+                datas.push(d.toLocaleDateString('pt-BR'));
+              }
+              return (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-emerald-700 tracking-wide">
+                    Vencimentos das {parcelas} parcela{parcelas > 1 ? 's' : ''}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {datas.map((d, i) => (
+                      <span key={i} className="text-[11px] font-bold tabular-nums bg-white border border-emerald-300 text-emerald-800 px-2 py-0.5 rounded">
+                        {i + 1}× {d}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Observação livre na promissória */}
             <div>
