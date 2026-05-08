@@ -942,18 +942,17 @@ export class PdvService {
       });
     }
 
-    // MODO LEGADO: cria 1 pagamento único cobrindo o total
+    // MODO LEGADO REMOVIDO: antes, se finalize recebesse "paymentMethod" no body,
+    // o sistema DELETAVA todos os payments criados via /payments e gravava UM ÚNICO
+    // com o método+total da venda. Isso quebrava SPLIT: vendedora fazia R$ 300 dinheiro
+    // + R$ 800 cartão crédito, mas se algum trigger enviasse paymentMethod="credito",
+    // o sistema deletava o "dinheiro 300" e criava um "credito 1100" — perdia o split.
+    // O split agora é a UNICA fonte da verdade (sempre via POST /payments).
     if (input.paymentMethod) {
-      // Limpa pagamentos anteriores (por segurança)
-      await (this.prisma as any).pdvSalePayment.deleteMany({
-        where: { saleId: sale.id },
-      });
-      await this.addPayment({
-        saleId: sale.id,
-        method: input.paymentMethod,
-        valor: sale.total,
-        details: input.paymentDetails,
-      });
+      this.logger.warn(
+        `[pdv] finalize chamado com paymentMethod="${input.paymentMethod}" — IGNORADO. ` +
+        `Use POST /payments antes pra registrar formas de pagamento.`,
+      );
     }
 
     // Verifica que pago = total
