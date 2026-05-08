@@ -453,12 +453,16 @@ export default function RecebimentosPage() {
               </div>
             ) : (
               <ul className="divide-y divide-gray-100 max-h-[70vh] overflow-y-auto">
-                {clientesFiltrados.map((c) => {
+                {clientesFiltrados.map((c, idx) => {
                   const isExpanded = expandedCod === c.codCliente;
                   const parcelas = parcelasCache[c.codCliente] || [];
                   const isLoadingThis = parcelasLoading === c.codCliente;
+                  // Key UNICA: codCliente sozinho não basta (Wincred tem múltiplos
+                  // registros com mesmo cod). Combinar cod+nome+idx evita o bug
+                  // do React reusar elementos antigos do DOM com keys duplicadas.
+                  const uniqueKey = `${c.codCliente}|${c.nome}|${idx}`;
                   return (
-                    <li key={c.codCliente}>
+                    <li key={uniqueKey}>
                       <div
                         onClick={() => toggleExpand(c.codCliente)}
                         className={`p-3 cursor-pointer transition flex items-center gap-3 ${
