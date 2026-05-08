@@ -295,23 +295,10 @@ function PdvPageInner() {
     }
   }, [sale, showCustomer, showVendedora, showPayment, showFinalized]);
 
-  // ── Auto-abrir modal de vendedora ao iniciar venda nova SEM vendedora ──
-  // Política: comissão é obrigatória. Se a venda OPEN ainda não tem sellerName,
-  // mostra o modal automaticamente (1x — só se não tem itens ainda, pra não
-  // atrapalhar quem já tá no meio da venda quando deploy passa).
-  const askedVendedoraRef = useRef(false);
-  useEffect(() => {
-    if (!sale || sale.status !== 'open') return;
-    if (sale.sellerName) return;
-    if (askedVendedoraRef.current) return;
-    if ((sale.items?.length || 0) > 0) return; // já bipou — não interrompe
-    askedVendedoraRef.current = true;
-    setShowVendedora(true);
-  }, [sale]);
-  // Reset do gate quando troca de venda
-  useEffect(() => {
-    askedVendedoraRef.current = false;
-  }, [sale?.id]);
+  // Auto-abrir modal de vendedora REMOVIDO — agora vendedora é escolhida
+  // a qualquer momento clicando no botão do header (cascata inline).
+  // Política antiga forçava modal ao iniciar venda; comportamento novo dá
+  // liberdade pra vendedora atender e atribuir comissão depois.
 
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
@@ -1683,11 +1670,14 @@ function VendedoraModal({
   }, [searchTerm, lojaParam]);
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+    <>
+      {/* Backdrop transparente — fecha ao clicar fora */}
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      {/* Cascata ancorada no canto superior direito (perto do botão Vendedora do header) */}
+      <div
+        className="fixed top-16 right-2 sm:right-4 z-50 bg-white border-2 border-emerald-300 rounded-xl shadow-2xl w-[min(92vw,420px)] p-4 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between">
           <h2 className="font-semibold flex items-center gap-2 text-emerald-900">
             <Sparkles className="w-4 h-4" /> Quem está atendendo?
@@ -1798,7 +1788,7 @@ function VendedoraModal({
           </button>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -2964,29 +2954,38 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* Grid 4 cols × 3 rows — cada botão mostra Nx + valor por parcela */}
-              <div className="grid grid-cols-4 gap-1.5">
+              {/* CASCATA VERTICAL — 12 linhas compactas, sem rolagem lateral.
+                  Cada linha: [Nx pílula] [parcela] [→]. Cabe inteira na tela.
+                  Linha selecionada destaca com fundo verde. */}
+              <div className="flex flex-col gap-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
-                  const valorMostrar = calc.iguais; // valor da parcela "principal"
+                  const valorMostrar = calc.iguais;
                   const ativo = parcelas === p;
                   return (
                     <button
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`py-2 px-1 rounded-lg text-center transition-all border-2 ${
+                      className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md transition-all border ${
                         ativo
-                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-md scale-[1.03]'
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
                           : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
                       }`}
                     >
-                      <div className={`text-sm font-black leading-tight ${ativo ? 'text-white' : 'text-slate-800'}`}>
-                        {p}×
-                      </div>
-                      <div className={`text-[10px] tabular-nums leading-tight ${ativo ? 'text-emerald-50' : 'text-emerald-700 font-bold'}`}>
-                        {p === 1 ? 'à vista' : brl(valorMostrar)}
-                      </div>
+                      <span className={`inline-flex items-center justify-center min-w-[36px] h-6 px-1.5 rounded font-black text-xs tabular-nums ${
+                        ativo ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-800'
+                      }`}>{p}×</span>
+                      <span className={`flex-1 text-left text-[11px] font-bold ${
+                        ativo ? 'text-white/90' : 'text-slate-500'
+                      }`}>
+                        {p === 1 ? 'à vista' : 'sem juros'}
+                      </span>
+                      <span className={`text-sm font-black tabular-nums ${
+                        ativo ? 'text-white' : 'text-emerald-700'
+                      }`}>
+                        {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
+                      </span>
                     </button>
                   );
                 })}
@@ -4856,9 +4855,9 @@ function SimularParcelasModal({
           <span className="text-3xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
         </div>
 
-        {/* Grade de TODAS as 12 parcelas — 2 colunas, todas visíveis sem scroll.
-            Clica no card → copia pro clipboard texto pronto pra WhatsApp da cliente. */}
-        <div className="grid grid-cols-2 gap-2">
+        {/* CASCATA VERTICAL — todas as 12 parcelas em coluna única, compactas.
+            Cabe na tela sem scroll lateral nem vertical. Clique copia texto pro WhatsApp. */}
+        <div className="flex flex-col gap-1.5">
           {parcelas.map((n) => {
             const valor = valorParcela(n);
             return (
@@ -4872,21 +4871,22 @@ function SimularParcelasModal({
                   navigator.clipboard.writeText(txt).catch(() => {});
                 }}
                 title="Clique pra copiar texto pra WhatsApp"
-                className="group relative bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 rounded-xl px-3 py-3 flex items-center gap-3 transition active:scale-[0.98]"
+                className="group flex items-center gap-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 rounded-lg px-3 py-2.5 transition active:scale-[0.99]"
               >
-                {/* Número da parcela em pílula amber */}
-                <div className="w-12 h-12 rounded-xl bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center shrink-0 transition">
-                  <span className="font-black text-lg text-amber-800 tabular-nums">{n}×</span>
+                <div className="w-10 h-10 rounded-lg bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center shrink-0 transition">
+                  <span className="font-black text-base text-amber-800 tabular-nums">{n}×</span>
                 </div>
-                {/* Valor da parcela em verde gigante */}
                 <div className="flex-1 text-left min-w-0">
-                  <div className="font-black text-2xl text-emerald-700 tabular-nums leading-none truncate">
-                    {brl(valor)}
-                  </div>
-                  <div className="text-[10px] text-emerald-600 font-bold mt-1 tracking-wide">
+                  <div className="text-[10px] text-emerald-600 font-bold tracking-wide">
                     {n === 1 ? 'À VISTA' : 'SEM JUROS'}
                   </div>
+                  <div className="font-black text-xl text-emerald-700 tabular-nums leading-tight truncate">
+                    {brl(valor)}
+                  </div>
                 </div>
+                <span className="text-amber-500 opacity-0 group-hover:opacity-100 transition text-xs font-bold shrink-0">
+                  copiar
+                </span>
               </button>
             );
           })}
