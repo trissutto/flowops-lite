@@ -13,10 +13,16 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagarmeService } from './pagarme.service';
+import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
+import { Inject, forwardRef } from '@nestjs/common';
 
 @Controller('pagarme')
 export class PagarmeController {
-  constructor(private readonly svc: PagarmeService) {}
+  constructor(
+    private readonly svc: PagarmeService,
+    @Inject(forwardRef(() => CrediarioBaixaService))
+    private readonly crediarioBaixa: CrediarioBaixaService,
+  ) {}
 
   @UseGuards(JwtAuthGuard)
   @Get('config')
@@ -128,6 +134,19 @@ export class PagarmeController {
     const rawBody = JSON.stringify(body);
     const sig = signature || signature256;
     const result = await this.svc.handleWebhook(body, rawBody, sig);
+    // FIX PIX-LINK: se webhook reportou paid, dispara baixa Giga automaticamente.
+    // Antes desse fix, baixas via PIX-LINK ficavam pending — webhook só marcava
+    // PagarmePayment=paid mas nunca chamava confirmBaixaPix → Wincred não atualizava.
+    if (result.ok && result.saleId) {
+      const eventType = String(body?.type || '');
+      if (eventType === 'order.paid' || eventType === 'charge.paid') {
+        try {
+          await this.crediarioBaixa.confirmBaixaPixIfExists(result.saleId);
+        } catch (e: any) {
+          // Não bloqueia ack do webhook — só loga
+        }
+      }
+    }
     return { received: true, ...result };
   }
 

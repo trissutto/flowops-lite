@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ErpModule } from '../erp/erp.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
@@ -11,7 +11,7 @@ import { CrediarioBaixaController } from './crediario-baixa.controller';
 import { CrediarioBaixaPublicController } from './crediario-baixa-public.controller';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), ErpModule, WhatsappModule, PagarmeModule],
+  imports: [ScheduleModule.forRoot(), ErpModule, WhatsappModule, forwardRef(() => PagarmeModule)],
   controllers: [CrediariosController, CrediarioBaixaController, CrediarioBaixaPublicController],
   providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
   exports: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],

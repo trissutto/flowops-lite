@@ -1158,6 +1158,46 @@ export class CrediarioBaixaService {
     return baixa;
   }
 
+  /**
+   * WRAPPER pra ser chamado pelo webhook do Pagar.me. Faz lookup pela id
+   * (ou orderId) e dispara confirmBaixaPix se for uma baixa ainda pending.
+   * Retorna silenciosamente se a baixa não existe (saleId era venda PDV).
+   *
+   * Chamado pelo PagarmeController após o webhook marcar PagarmePayment=paid.
+   * Sem isso, baixas via PIX-LINK ficavam pending eternamente — Wincred
+   * nunca era atualizado.
+   */
+  async confirmBaixaPixIfExists(baixaIdOrOrderId: string): Promise<{ confirmed: boolean; reason?: string }> {
+    try {
+      // Busca por id direto (saleId no PagarmePayment é a baixaId quando é crediário)
+      let baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+        where: { id: baixaIdOrOrderId },
+      });
+      // Fallback: tenta por pagarmeOrderId
+      if (!baixa) {
+        baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+          where: { pagarmeOrderId: baixaIdOrOrderId },
+        });
+      }
+      if (!baixa) {
+        return { confirmed: false, reason: 'baixa_nao_encontrada' };
+      }
+      if (baixa.status === 'paid') {
+        return { confirmed: false, reason: 'ja_paga' };
+      }
+      if (baixa.status === 'canceled') {
+        return { confirmed: false, reason: 'baixa_cancelada' };
+      }
+      // Confirma a baixa (vai disparar executeGigaUpdates internamente)
+      await this.confirmBaixaPix(baixa.id);
+      this.logger.log(`[crediario-baixa] webhook auto-confirmou baixa ${baixa.id}`);
+      return { confirmed: true };
+    } catch (e: any) {
+      this.logger.error(`[crediario-baixa] confirmBaixaPixIfExists falhou: ${e?.message || e}`);
+      return { confirmed: false, reason: e?.message || 'erro' };
+    }
+  }
+
   // ── Histórico de baixas ──────────────────────────────────────────────
   // Lista as baixas feitas (paid + canceled) com filtros por loja e período.
   // Usado pela tela /minha-loja/pdv/recebimentos/historico pra ver e estornar.
