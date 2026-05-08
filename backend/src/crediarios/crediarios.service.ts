@@ -184,6 +184,7 @@ export class CrediariosService {
     if (this.clientesMapCache && !force) return this.clientesMapCache;
 
     const candidates = ['clientes', 'cliente', 'cadcli', 'cadcliente', 'cadclientes'];
+    let connectionError: any = null;
     for (const tbl of candidates) {
       try {
         const schema = await this.erp.getTableSchema(tbl, 1);
@@ -222,10 +223,36 @@ export class CrediariosService {
         this.logger.log(`detectClientesTable: ${JSON.stringify(result)}`);
         return result;
       } catch (e: any) {
-        // tabela não existe — segue
+        // Captura erro de CONEXAO (não de tabela inexistente). Códigos típicos
+        // de problema de rede: EHOSTUNREACH, ETIMEDOUT, ECONNREFUSED, PROTOCOL_*.
+        // Esses não significam que a tabela não existe — o MySQL tá fora do ar.
+        const code = e?.code || e?.errno;
+        const msg = String(e?.message || '');
+        if (
+          code === 'EHOSTUNREACH' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED' ||
+          code === 'ECONNRESET' || code === 'ENOTFOUND' ||
+          msg.includes('Connection lost') || msg.includes('connect ETIMEDOUT')
+        ) {
+          connectionError = e;
+          break; // não adianta tentar outras tabelas — é problema de rede
+        }
+        // tabela não existe — segue tentando próxima
       }
     }
-    this.logger.warn('detectClientesTable: nenhuma tabela de clientes encontrada');
+    // Se foi erro de CONEXAO e já temos cache válido, usa o cache pra não quebrar UX.
+    if (connectionError && this.clientesMapCache) {
+      this.logger.warn(
+        `detectClientesTable: Wincred indisponível (${connectionError.code || connectionError.message}) — usando cache em fallback`,
+      );
+      return this.clientesMapCache;
+    }
+    if (connectionError) {
+      this.logger.error(
+        `detectClientesTable: erro de conexão Wincred (${connectionError.code || connectionError.message}) e SEM cache — vai retornar null`,
+      );
+    } else {
+      this.logger.warn('detectClientesTable: nenhuma tabela de clientes encontrada');
+    }
     return null;
   }
 
