@@ -4836,28 +4836,28 @@ function SimularParcelasModal({
   const valorParcela = (n: number) => total / n;
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl w-full max-w-2xl p-5 space-y-4 max-h-[95vh] overflow-y-auto"
+        className="bg-white rounded-xl w-full max-w-md p-3 space-y-2 max-h-[95vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header compacto */}
         <div className="flex items-center justify-between">
-          <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
-            <CreditCard className="w-5 h-5" /> Simular parcelamento
+          <h2 className="font-black text-base text-amber-700 flex items-center gap-1.5">
+            <CreditCard className="w-4 h-4" /> Simular parcelamento
           </h2>
-          <button onClick={onClose}><X className="w-5 h-5" /></button>
+          <button onClick={onClose}><X className="w-4 h-4" /></button>
         </div>
 
-        {/* Total da venda — referência pra cliente */}
-        <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-3 flex items-center justify-between">
-          <span className="text-xs text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
-          <span className="text-3xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
+        {/* Total da venda — referência compacta pra cliente */}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center justify-between">
+          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
+          <span className="text-xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
         </div>
 
-        {/* CASCATA VERTICAL — todas as 12 parcelas em coluna única, compactas.
-            Cabe na tela sem scroll lateral nem vertical. Clique copia texto pro WhatsApp. */}
-        <div className="flex flex-col gap-1.5">
+        {/* CASCATA SUPER COMPACTA — 12 linhas finas, cabem todas na tela sem scroll.
+            Cada linha: [Nx pílula] [SEM JUROS / À VISTA] [valor]. Click copia pro WhatsApp. */}
+        <div className="flex flex-col gap-1">
           {parcelas.map((n) => {
             const valor = valorParcela(n);
             return (
@@ -4871,20 +4871,18 @@ function SimularParcelasModal({
                   navigator.clipboard.writeText(txt).catch(() => {});
                 }}
                 title="Clique pra copiar texto pra WhatsApp"
-                className="group flex items-center gap-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 rounded-lg px-3 py-2.5 transition active:scale-[0.99]"
+                className="group flex items-center gap-2.5 bg-white hover:bg-amber-50 border border-slate-200 hover:border-amber-400 rounded-md px-2.5 py-1.5 transition"
               >
-                <div className="w-10 h-10 rounded-lg bg-amber-100 group-hover:bg-amber-200 flex items-center justify-center shrink-0 transition">
-                  <span className="font-black text-base text-amber-800 tabular-nums">{n}×</span>
-                </div>
-                <div className="flex-1 text-left min-w-0">
-                  <div className="text-[10px] text-emerald-600 font-bold tracking-wide">
-                    {n === 1 ? 'À VISTA' : 'SEM JUROS'}
-                  </div>
-                  <div className="font-black text-xl text-emerald-700 tabular-nums leading-tight truncate">
-                    {brl(valor)}
-                  </div>
-                </div>
-                <span className="text-amber-500 opacity-0 group-hover:opacity-100 transition text-xs font-bold shrink-0">
+                <span className="inline-flex items-center justify-center min-w-[40px] h-7 px-1 rounded-md bg-amber-100 group-hover:bg-amber-200 font-black text-sm text-amber-800 tabular-nums shrink-0 transition">
+                  {n}×
+                </span>
+                <span className="text-[10px] font-bold text-emerald-600 tracking-wide shrink-0 w-[60px] text-left">
+                  {n === 1 ? 'À VISTA' : 'SEM JUROS'}
+                </span>
+                <span className="flex-1 text-right font-black text-base text-emerald-700 tabular-nums truncate">
+                  {brl(valor)}
+                </span>
+                <span className="text-amber-500 opacity-0 group-hover:opacity-100 transition text-[10px] font-bold shrink-0 w-10 text-right">
                   copiar
                 </span>
               </button>
@@ -4892,17 +4890,10 @@ function SimularParcelasModal({
           })}
         </div>
 
-        {/* Dica pra vendedora */}
-        <div className="text-center text-[11px] text-slate-400 italic">
-          💡 Clique numa parcela pra copiar o texto e colar no WhatsApp da cliente
+        {/* Dica compacta */}
+        <div className="text-center text-[10px] text-slate-400 italic">
+          💡 Clique numa parcela pra copiar texto pro WhatsApp
         </div>
-
-        <button
-          onClick={onClose}
-          className="w-full px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50"
-        >
-          Fechar
-        </button>
       </div>
     </div>
   );
