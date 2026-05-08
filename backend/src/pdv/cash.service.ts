@@ -131,7 +131,10 @@ export class CashService {
       vendas: Array<{
         saleId: string;
         saleTotal: number;
-        valor: number;          // valor do pagamento (pode ser parcial em split)
+        paymentId: string;      // ID do PdvSalePayment (pra ajuste)
+        method: string;         // forma original (dinheiro/pix/credito/debito/crediario)
+        bandeira?: string | null;
+        valor: number;
         customerName: string | null;
         customerCpf: string | null;
         sellerName: string | null;
@@ -168,12 +171,15 @@ export class CashService {
       'REDE SHOP': 'REDE_SHOP', 'REDE_SHOP': 'REDE_SHOP',
     };
 
-    const pushVenda = (key: string, sale: any, paymentValor: number, parcelas?: number) => {
+    const pushVenda = (key: string, sale: any, payment: any, paymentValor: number, parcelas?: number, bandeira?: string | null) => {
       totais[key].valor += paymentValor;
       totais[key].qtd += 1;
       totais[key].vendas.push({
         saleId: String(sale.id),
         saleTotal: Number(sale.total) || 0,
+        paymentId: String(payment.id),
+        method: String(payment.method || ''),
+        bandeira: bandeira || null,
         valor: paymentValor,
         customerName: sale.customerName || null,
         customerCpf: sale.customerCpf || null,
@@ -198,18 +204,18 @@ export class CashService {
           } catch { /* ignora */ }
         }
 
-        if (method === 'dinheiro') pushVenda('DINHEIRO', s, valor);
-        else if (method === 'pix') pushVenda('PIX', s, valor);
-        else if (method === 'crediario') pushVenda('CREDIARIO', s, valor, parcelas);
+        if (method === 'dinheiro') pushVenda('DINHEIRO', s, p, valor);
+        else if (method === 'pix') pushVenda('PIX', s, p, valor);
+        else if (method === 'crediario') pushVenda('CREDIARIO', s, p, valor, parcelas);
         else if (method === 'credito' || method === 'debito') {
           const key = bandeira ? bandeiraMap[bandeira] : null;
           if (key && key in totais) {
-            pushVenda(key, s, valor, parcelas);
+            pushVenda(key, s, p, valor, parcelas, bandeira);
           } else {
-            pushVenda(method === 'credito' ? 'CREDITO_GENERICO' : 'DEBITO_GENERICO', s, valor, parcelas);
+            pushVenda(method === 'credito' ? 'CREDITO_GENERICO' : 'DEBITO_GENERICO', s, p, valor, parcelas, bandeira);
           }
         } else {
-          pushVenda('OUTROS', s, valor);
+          pushVenda('OUTROS', s, p, valor);
         }
       }
     }
@@ -238,6 +244,9 @@ export class CashService {
       slot.vendas.push({
         saleId: String(b.id),
         saleTotal: valor,
+        paymentId: String(b.id),
+        method: forma,
+        bandeira: null,
         valor,
         customerName: b.customerName || null,
         customerCpf: b.customerCpf || null,

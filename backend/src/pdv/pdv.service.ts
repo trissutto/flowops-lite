@@ -183,6 +183,106 @@ export class PdvService {
     return payment;
   }
 
+  /**
+   * AJUSTE DE PAGAMENTO — só admin/supervisor.
+   * Permite trocar forma, valor, bandeira de um pagamento (incluindo de venda
+   * já FINALIZADA). Toda alteração é auditada em PdvPaymentAudit.
+   */
+  async updatePayment(input: {
+    saleId: string;
+    paymentId: string;
+    method?: string;
+    valor?: number;
+    details?: any;
+    reason: string;
+    changedByUserId?: string;
+    changedByUserName?: string;
+    changedByRole?: string;
+  }) {
+    if (!input.reason || input.reason.trim().length < 3) {
+      throw new BadRequestException('Razão obrigatória (mínimo 3 caracteres)');
+    }
+    const payment = await (this.prisma as any).pdvSalePayment.findUnique({
+      where: { id: input.paymentId },
+    });
+    if (!payment || payment.saleId !== input.saleId) {
+      throw new NotFoundException('Pagamento não encontrado nessa venda');
+    }
+    // NÃO bloqueia por status — supervisor pode ajustar venda finalizada.
+
+    const newMethod = input.method ?? payment.method;
+    const newValor = input.valor !== undefined
+      ? Math.round(input.valor * 100) / 100
+      : payment.valor;
+    const newDetailsJson = input.details !== undefined
+      ? JSON.stringify(input.details)
+      : payment.details;
+
+    if (newValor <= 0) {
+      throw new BadRequestException('Valor deve ser > 0');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: { total: true },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    const allPayments = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId: input.saleId },
+    });
+    const somaOutros = (allPayments as any[])
+      .filter((p) => p.id !== input.paymentId)
+      .reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    if (somaOutros + newValor > sale.total + 0.01) {
+      throw new BadRequestException(
+        `Soma dos pagamentos R$${(somaOutros + newValor).toFixed(2)} ultrapassa total R$${sale.total.toFixed(2)}`,
+      );
+    }
+
+    await (this.prisma as any).pdvPaymentAudit.create({
+      data: {
+        paymentId: input.paymentId,
+        saleId: input.saleId,
+        oldMethod: payment.method,
+        oldValor: payment.valor,
+        oldDetails: payment.details,
+        newMethod,
+        newValor,
+        newDetails: newDetailsJson,
+        changedByUserId: input.changedByUserId ?? null,
+        changedByUserName: input.changedByUserName ?? null,
+        changedByRole: input.changedByRole ?? null,
+        reason: input.reason.trim().slice(0, 500),
+      },
+    });
+
+    const updated = await (this.prisma as any).pdvSalePayment.update({
+      where: { id: input.paymentId },
+      data: {
+        method: newMethod,
+        valor: newValor,
+        details: newDetailsJson,
+      },
+    });
+
+    this.logger.warn(
+      `[pdv] PAGAMENTO AJUSTADO sale=${input.saleId} payment=${input.paymentId} ` +
+      `${payment.method}/${payment.valor} → ${newMethod}/${newValor} ` +
+      `por ${input.changedByUserName || input.changedByRole || '?'} · razão: ${input.reason}`,
+    );
+
+    return updated;
+  }
+
+  async getPaymentAudits(input: { saleId: string; paymentId?: string }) {
+    const where: any = { saleId: input.saleId };
+    if (input.paymentId) where.paymentId = input.paymentId;
+    return (this.prisma as any).pdvPaymentAudit.findMany({
+      where,
+      orderBy: { changedAt: 'desc' },
+    });
+  }
+
   async removePayment(input: { saleId: string; paymentId: string }) {
     const payment = await (this.prisma as any).pdvSalePayment.findUnique({
       where: { id: input.paymentId },

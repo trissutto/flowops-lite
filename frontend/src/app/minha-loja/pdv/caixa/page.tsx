@@ -57,6 +57,9 @@ type Slot = {
   vendas: Array<{
     saleId: string;
     saleTotal: number;
+    paymentId: string;
+    method: string;
+    bandeira?: string | null;
     valor: number;
     customerName: string | null;
     customerCpf: string | null;
@@ -96,8 +99,18 @@ type RelatorioDetalhado = {
 const fmt = (n: number) =>
   n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+type EditPaymentTarget = {
+  paymentId: string;
+  saleId: string;
+  method: string;
+  bandeira?: string | null;
+  valor: number;
+  customerName: string | null;
+} | null;
+
 export default function CaixaPage() {
   const [loading, setLoading] = useState(true);
+  const [editTarget, setEditTarget] = useState<EditPaymentTarget>(null);
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [totals, setTotals] = useState<Totals | null>(null);
@@ -377,7 +390,17 @@ function OpenCashPanel({
             />
           </div>
           {detalhado ? (
-            <DetalhesCaixa detalhado={detalhado} />
+            <DetalhesCaixa
+              detalhado={detalhado}
+              onEditPayment={(v) => setEditTarget({
+                paymentId: v.paymentId,
+                saleId: v.saleId,
+                method: v.method,
+                bandeira: v.bandeira,
+                valor: v.valor,
+                customerName: v.customerName,
+              })}
+            />
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <KpiCard label="Dinheiro" value={totals.totalDinheiro} highlight />
@@ -481,7 +504,14 @@ function OpenCashPanel({
           </div>
         </div>
       )}
-    </div>
+    {editTarget && (
+      <AjustePagamentoModal
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => { setEditTarget(null); window.location.reload(); }}
+      />
+    )}
+        </div>
   );
 }
 
@@ -489,7 +519,7 @@ function OpenCashPanel({
 // DetalhesCaixa — exibição com cascata por modalidade + recebimentos
 // ════════════════════════════════════════════════════════════════════════
 
-function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
+function DetalhesCaixa({ detalhado, onEditPayment }: { detalhado: RelatorioDetalhado; onEditPayment?: (v: Slot['vendas'][0]) => void }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const toggle = (key: string) =>
     setExpanded((e) => ({ ...e, [key]: !e[key] }));
@@ -511,6 +541,8 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
         expanded={!!expanded.dinheiro}
         onToggle={() => toggle('dinheiro')}
         vendas={t.DINHEIRO.vendas}
+      
+        onEditPayment={onEditPayment}
       />
 
       {/* PIX */}
@@ -522,6 +554,8 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
         expanded={!!expanded.pix}
         onToggle={() => toggle('pix')}
         vendas={t.PIX.vendas}
+      
+        onEditPayment={onEditPayment}
       />
 
       {/* CREDIÁRIO (vendas novas) */}
@@ -533,6 +567,8 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
         expanded={!!expanded.crediario}
         onToggle={() => toggle('crediario')}
         vendas={t.CREDIARIO.vendas}
+      
+        onEditPayment={onEditPayment}
       />
 
       {/* CARTÃO CRÉDITO — com cascata por bandeira */}
@@ -552,6 +588,8 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
           { nome: 'Hipercard', slot: t.HIPERCARD },
           { nome: 'Sem bandeira', slot: t.CREDITO_GENERICO },
         ].filter((b) => b.slot.qtd > 0)}
+      
+        onEditPayment={onEditPayment}
       />
 
       {/* CARTÃO DÉBITO */}
@@ -567,6 +605,8 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
           { nome: 'Rede Shop', slot: t.REDE_SHOP },
           { nome: 'Sem bandeira', slot: t.DEBITO_GENERICO },
         ].filter((b) => b.slot.qtd > 0)}
+      
+        onEditPayment={onEditPayment}
       />
 
       {/* RECEBIMENTOS DE CREDIÁRIO — separado das vendas! */}
@@ -588,7 +628,9 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
               onToggle={() => toggle('recDinheiro')}
               vendas={rec.dinheiro.vendas}
               compact
-            />
+            
+        onEditPayment={onEditPayment}
+      />
             <ModalidadeCard
               titulo="Em PIX"
               valor={rec.pix.valor}
@@ -598,7 +640,9 @@ function DetalhesCaixa({ detalhado }: { detalhado: RelatorioDetalhado }) {
               onToggle={() => toggle('recPix')}
               vendas={rec.pix.vendas}
               compact
-            />
+            
+        onEditPayment={onEditPayment}
+      />
           </div>
         </div>
       )}
@@ -616,6 +660,7 @@ function ModalidadeCard({
   vendas,
   bandeiras,
   compact,
+  onEditPayment,
 }: {
   titulo: string;
   valor: number;
@@ -626,6 +671,7 @@ function ModalidadeCard({
   vendas?: Slot['vendas'];
   bandeiras?: Array<{ nome: string; slot: Slot }>;
   compact?: boolean;
+  onEditPayment?: (v: Slot['vendas'][0]) => void;
 }) {
   const tonesActive = {
     emerald: 'bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-300 hover:border-emerald-400 hover:shadow-md',
@@ -710,7 +756,7 @@ function ModalidadeCard({
   );
 }
 
-function BandeiraRow({ nome, slot }: { nome: string; slot: Slot }) {
+function BandeiraRow({ nome, slot, onEditPayment }: { nome: string; slot: Slot; onEditPayment?: (v: Slot['vendas'][0]) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="bg-white rounded-md border border-slate-200 hover:border-slate-300 transition-colors overflow-hidden">
@@ -739,7 +785,7 @@ function BandeiraRow({ nome, slot }: { nome: string; slot: Slot }) {
         <div className="overflow-hidden">
           <div className="border-t px-2 py-1.5 space-y-1 bg-slate-50">
             {slot.vendas.map((v, i) => (
-              <VendaRow key={i} v={v} />
+              <VendaRow key={i} v={v} onEdit={onEditPayment} />
             ))}
           </div>
         </div>
@@ -748,11 +794,11 @@ function BandeiraRow({ nome, slot }: { nome: string; slot: Slot }) {
   );
 }
 
-function VendaRow({ v }: { v: Slot['vendas'][0] }) {
+function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vendas'][0]) => void }) {
   const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
   const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
   return (
-    <div className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded">
+    <div className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded group">
       <div className="flex items-center gap-2 min-w-0">
         {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
         <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>
@@ -765,7 +811,97 @@ function VendaRow({ v }: { v: Slot['vendas'][0] }) {
           <span className="text-violet-600 text-[10px] shrink-0">· {v.parcelas}x</span>
         )}
       </div>
-      <span className="font-mono font-bold tabular-nums shrink-0 ml-2">R$ {fmt(v.valor)}</span>
+      <div className="flex items-center gap-1 shrink-0 ml-2">
+        <span className="font-mono font-bold tabular-nums">R$ {fmt(v.valor)}</span>
+        {onEdit && (
+          <button onClick={(e) => { e.stopPropagation(); onEdit(v); }} className="opacity-0 group-hover:opacity-100 transition text-slate-400 hover:text-blue-600 px-1" title="Ajustar pagamento (admin/supervisor)">✏️</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Modal de ajuste de pagamento
+const FORMAS_AJUSTE = [
+  { method: 'dinheiro', label: 'Dinheiro', bandeiras: [] as string[] },
+  { method: 'pix', label: 'PIX', bandeiras: [] as string[] },
+  { method: 'credito', label: 'Cartão Crédito', bandeiras: ['MASTERCARD', 'VISA', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD'] },
+  { method: 'debito', label: 'Cartão Débito', bandeiras: ['VISA ELECTRON', 'REDESHOP', 'MASTERCARD', 'ELO'] },
+  { method: 'crediario', label: 'Crediário', bandeiras: [] as string[] },
+];
+
+function AjustePagamentoModal({ target, onClose, onSaved }: { target: NonNullable<EditPaymentTarget>; onClose: () => void; onSaved: () => void }) {
+  const [method, setMethod] = useState<string>(target.method.toLowerCase());
+  const [bandeira, setBandeira] = useState<string>(target.bandeira || '');
+  const [valor, setValor] = useState<string>(String(target.valor.toFixed(2)).replace('.', ','));
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const formaInfo = FORMAS_AJUSTE.find((f) => f.method === method) || FORMAS_AJUSTE[0];
+  const needsBandeira = formaInfo.bandeiras.length > 0;
+  const submit = async () => {
+    setError(null);
+    if (!reason.trim() || reason.trim().length < 3) { setError('Razão obrigatória (mínimo 3 caracteres)'); return; }
+    if (needsBandeira && !bandeira) { setError('Selecione a bandeira'); return; }
+    const valorNum = Number(valor.replace(/\./g, '').replace(',', '.'));
+    if (isNaN(valorNum) || valorNum <= 0) { setError('Valor inválido'); return; }
+    setSaving(true);
+    try {
+      const body: any = { method, valor: valorNum, reason: reason.trim() };
+      if (needsBandeira) body.details = { bandeira };
+      await api(`/pdv/sales/${target.saleId}/payments/${target.paymentId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      onSaved();
+    } catch (e: any) { setError(e?.message || String(e)); } finally { setSaving(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-black text-blue-700 flex items-center gap-2">✏️ Ajustar pagamento</h2>
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1">
+          <div><strong>Cliente:</strong> {target.customerName || '—'}</div>
+          <div><strong>Original:</strong> R$ {fmt(target.valor)} · <strong>{target.method.toUpperCase()}</strong>{target.bandeira && ` · ${target.bandeira}`}</div>
+        </div>
+        <div>
+          <label className="text-xs uppercase font-bold text-slate-700 block mb-1">Forma</label>
+          <div className="grid grid-cols-2 gap-1">
+            {FORMAS_AJUSTE.map((f) => (
+              <button key={f.method} type="button" onClick={() => { setMethod(f.method); setBandeira(''); }}
+                className={`px-3 py-2 rounded border-2 text-xs font-bold ${method === f.method ? 'bg-blue-600 border-blue-700 text-white' : 'bg-white border-slate-200 text-slate-700 hover:border-blue-300'}`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {needsBandeira && (
+          <div>
+            <label className="text-xs uppercase font-bold text-slate-700 block mb-1">Bandeira</label>
+            <div className="grid grid-cols-3 gap-1">
+              {formaInfo.bandeiras.map((b) => (
+                <button key={b} type="button" onClick={() => setBandeira(b)}
+                  className={`px-2 py-1.5 rounded border-2 text-[11px] font-bold ${bandeira === b ? 'bg-blue-600 border-blue-700 text-white' : 'bg-white border-slate-200 text-slate-700 hover:border-blue-300'}`}>
+                  {b}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div>
+          <label className="text-xs uppercase font-bold text-slate-700 block mb-1">Valor R$</label>
+          <input type="text" inputMode="decimal" value={valor} onChange={(e) => setValor(e.target.value)}
+            className="w-full px-3 py-2 text-lg font-bold tabular-nums border-2 border-slate-200 rounded-lg focus:outline-none focus:border-blue-400" />
+        </div>
+        <div>
+          <label className="text-xs uppercase font-bold text-slate-700 block mb-1">Razão (obrigatória)</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value.slice(0, 200))} placeholder="Ex: vendedora marcou crédito mas era débito" rows={2}
+            className="w-full px-3 py-2 text-sm border-2 border-slate-200 rounded-lg focus:outline-none focus:border-blue-400" autoFocus />
+          <div className="text-[10px] text-slate-400 text-right">{reason.length}/200</div>
+        </div>
+        {error && <div className="bg-rose-50 border border-rose-300 text-rose-800 rounded p-2 text-xs">{error}</div>}
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} disabled={saving} className="flex-1 px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg disabled:opacity-50">Cancelar</button>
+          <button onClick={submit} disabled={saving || !reason.trim()} className="flex-[2] px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg disabled:opacity-40">{saving ? 'Salvando…' : 'Salvar ajuste'}</button>
+        </div>
+      </div>
     </div>
   );
 }

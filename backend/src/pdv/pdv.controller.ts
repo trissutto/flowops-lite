@@ -397,6 +397,54 @@ export class PdvController {
   }
 
   /**
+   * PATCH /pdv/sales/:id/payments/:paymentId
+   * Ajuste de pagamento (admin/supervisor).
+   * Body: { method?, valor?, details?, reason }
+   */
+  @Patch('sales/:id/payments/:paymentId')
+  async updatePayment(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Param('paymentId') paymentId: string,
+    @Body() body: { method?: string; valor?: number; details?: any; reason?: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor pode ajustar pagamento');
+    }
+    if (!body?.reason) {
+      throw new BadRequestException('Razão obrigatória');
+    }
+    return this.svc.updatePayment({
+      saleId: id,
+      paymentId,
+      method: body.method,
+      valor: body.valor,
+      details: body.details,
+      reason: body.reason,
+      changedByUserId: req?.user?.sub,
+      changedByUserName: req?.user?.name,
+      changedByRole: role,
+    });
+  }
+
+  /**
+   * GET /pdv/sales/:id/payments/audits — histórico de ajustes
+   */
+  @Get('sales/:id/payments/audits')
+  async getPaymentAudits(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Query('paymentId') paymentId?: string,
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    return this.svc.getPaymentAudits({ saleId: id, paymentId });
+  }
+
+  /**
    * DELETE /pdv/sales/:id/payments/:paymentId
    */
   @Delete('sales/:id/payments/:paymentId')

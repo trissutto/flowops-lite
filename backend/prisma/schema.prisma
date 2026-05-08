@@ -1304,6 +1304,30 @@ model PdvSalePayment {
   @@map("pdv_sale_payments")
 }
 
+// Auditoria de ajustes em pagamentos.
+// Toda alteração feita por supervisor/admin via PATCH em pagamento gera 1 row aqui.
+// Imutável (insert-only) — registro de quem mudou, quando, valores antes/depois e razão.
+model PdvPaymentAudit {
+  id                String   @id @default(uuid())
+  paymentId         String   @map("payment_id")
+  saleId            String   @map("sale_id")
+  oldMethod         String   @map("old_method")
+  oldValor          Float    @map("old_valor")
+  oldDetails        String?  @map("old_details") @db.Text
+  newMethod         String   @map("new_method")
+  newValor          Float    @map("new_valor")
+  newDetails        String?  @map("new_details") @db.Text
+  changedByUserId   String?  @map("changed_by_user_id")
+  changedByUserName String?  @map("changed_by_user_name")
+  changedByRole     String?  @map("changed_by_role")
+  reason            String   @db.Text
+  changedAt         DateTime @default(now()) @map("changed_at")
+
+  @@index([paymentId, changedAt(sort: Desc)])
+  @@index([saleId, changedAt(sort: Desc)])
+  @@map("pdv_payment_audits")
+}
+
 model PdvSaleItem {
   id          String   @id @default(uuid())
   saleId      String   @map("sale_id")
