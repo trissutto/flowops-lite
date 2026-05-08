@@ -404,7 +404,7 @@ export class CashService {
       totalSangrias: 0, totalSuprimentos: 0, dinheiroEsperado: 0, qtdVendas: 0,
     };
 
-    // Pra cada loja, busca sessão aberta e calcula totais (em paralelo)
+    // Pra cada loja, busca sessão aberta + RELATORIO DETALHADO (paralelo)
     const lojas = await Promise.all(
       (stores as any[]).map(async (s) => {
         const session = await this.getCurrentSession(s.code);
@@ -419,10 +419,16 @@ export class CashService {
             fundoTroco: 0,
             totais: emptyTotais,
             vendedoras: [],
+            detalhado: null as any,
           };
         }
         // Calcula totais da sessão
         const t = await this.computeSessionTotals(session.id);
+        // Detalhamento por modalidade + bandeira + vendas (mesmo que /relatorio-detalhado)
+        let detalhado: any = null;
+        try {
+          detalhado = await this.getRelatorioDetalhado(s.code);
+        } catch { /* loja sem caixa aberto — segue */ }
 
         // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas
         const sales = await (this.prisma as any).pdvSale.findMany({
@@ -459,6 +465,7 @@ export class CashService {
             qtdVendas: t.qtdVendas,
           },
           vendedoras,
+          detalhado, // slots por modalidade+bandeira+vendas (igual /relatorio-detalhado)
         };
       }),
     );

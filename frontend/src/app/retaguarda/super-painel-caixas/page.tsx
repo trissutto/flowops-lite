@@ -15,6 +15,31 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
+type Slot = {
+  valor: number;
+  qtd: number;
+  vendas: Array<{
+    saleId: string;
+    saleTotal: number;
+    paymentId: string;
+    method: string;
+    bandeira?: string | null;
+    valor: number;
+    customerName: string | null;
+    customerCpf: string | null;
+    sellerName: string | null;
+    finalizedAt: string | null;
+    parcelas?: number;
+  }>;
+};
+type Detalhado = {
+  totais: {
+    DINHEIRO: Slot; PIX: Slot; CREDIARIO: Slot;
+    MASTERCARD: Slot; VISANET: Slot; CIELO: Slot; ELO: Slot; AMEX: Slot; HIPERCARD: Slot;
+    VISA_ELECTRON: Slot; REDE_SHOP: Slot;
+    CREDITO_GENERICO: Slot; DEBITO_GENERICO: Slot; OUTROS: Slot;
+  };
+};
 type Vendedora = { nome: string; qtd: number; total: number };
 type Loja = {
   storeCode: string;
@@ -37,6 +62,7 @@ type Loja = {
     qtdVendas: number;
   };
   vendedoras: Vendedora[];
+  detalhado: Detalhado | null;
 };
 type Painel = {
   lojas: Loja[];
@@ -213,6 +239,7 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
 
 function LojaCard({ loja }: { loja: Loja }) {
   const t = loja.totais;
+  const [expanded, setExpanded] = useState<string | null>(null);
   return (
     <div className={`rounded-xl shadow-lg overflow-hidden border-2 ${
       loja.aberta ? 'bg-white border-emerald-300' : 'bg-slate-100 border-slate-300 opacity-75'
@@ -250,14 +277,31 @@ function LojaCard({ loja }: { loja: Loja }) {
           </div>
         </div>
 
-        {/* Breakdown por modalidade */}
+        {/* Breakdown por modalidade — clicável pra expandir cascade */}
         <div className="grid grid-cols-5 gap-1 pt-2 border-t border-slate-200">
-          <ModItem label="Dinheiro" valor={t.totalDinheiro} cor="emerald" />
-          <ModItem label="PIX" valor={t.totalPix} cor="cyan" />
-          <ModItem label="Crédito" valor={t.totalCartaoCredito} cor="blue" />
-          <ModItem label="Débito" valor={t.totalCartaoDebito} cor="indigo" />
-          <ModItem label="Crediário" valor={t.totalCrediario} cor="rose" />
+          <ModItem label="Dinheiro" valor={t.totalDinheiro} cor="emerald"
+            active={expanded === 'dinheiro'}
+            onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
+          <ModItem label="PIX" valor={t.totalPix} cor="cyan"
+            active={expanded === 'pix'}
+            onClick={loja.detalhado && t.totalPix > 0 ? () => setExpanded(expanded === 'pix' ? null : 'pix') : undefined} />
+          <ModItem label="Crédito" valor={t.totalCartaoCredito} cor="blue"
+            active={expanded === 'credito'}
+            onClick={loja.detalhado && t.totalCartaoCredito > 0 ? () => setExpanded(expanded === 'credito' ? null : 'credito') : undefined} />
+          <ModItem label="Débito" valor={t.totalCartaoDebito} cor="indigo"
+            active={expanded === 'debito'}
+            onClick={loja.detalhado && t.totalCartaoDebito > 0 ? () => setExpanded(expanded === 'debito' ? null : 'debito') : undefined} />
+          <ModItem label="Crediário" valor={t.totalCrediario} cor="rose"
+            active={expanded === 'crediario'}
+            onClick={loja.detalhado && t.totalCrediario > 0 ? () => setExpanded(expanded === 'crediario' ? null : 'crediario') : undefined} />
         </div>
+
+        {/* Cascade — vendas/bandeiras quando expandido */}
+        {expanded && loja.detalhado && (
+          <div className="pt-2 border-t border-slate-100">
+            <CascadeModalidade detalhado={loja.detalhado} modalidade={expanded} />
+          </div>
+        )}
 
         {/* Sangria/Suprimento (só se houver) */}
         {(t.totalSangrias > 0 || t.totalSuprimentos > 0) && (
@@ -297,19 +341,109 @@ function LojaCard({ loja }: { loja: Loja }) {
   );
 }
 
-function ModItem({ label, valor, cor }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose' }) {
+function ModItem({ label, valor, cor, onClick, active }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose'; onClick?: () => void; active?: boolean }) {
   const tones = {
-    emerald: 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    cyan: 'bg-cyan-50 text-cyan-800 border-cyan-200',
-    blue: 'bg-blue-50 text-blue-800 border-blue-200',
-    indigo: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-    rose: 'bg-rose-50 text-rose-800 border-rose-200',
+    emerald: 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300',
+    cyan: 'bg-cyan-50 text-cyan-800 border-cyan-200 hover:bg-cyan-100 hover:border-cyan-300',
+    blue: 'bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100 hover:border-blue-300',
+    indigo: 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300',
+    rose: 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100 hover:border-rose-300',
+  };
+  const tonesActive = {
+    emerald: 'bg-emerald-600 text-white border-emerald-700 shadow-md',
+    cyan: 'bg-cyan-600 text-white border-cyan-700 shadow-md',
+    blue: 'bg-blue-600 text-white border-blue-700 shadow-md',
+    indigo: 'bg-indigo-600 text-white border-indigo-700 shadow-md',
+    rose: 'bg-rose-600 text-white border-rose-700 shadow-md',
   };
   const ativo = valor > 0;
+  const cls = active ? tonesActive[cor] : (ativo ? tones[cor] : 'bg-slate-50 border-slate-200 text-slate-400');
   return (
-    <div className={`rounded-md border px-1.5 py-1 text-center ${ativo ? tones[cor] : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      className={`rounded-md border px-1.5 py-1 text-center transition-all disabled:cursor-default ${onClick ? 'cursor-pointer' : ''} ${cls}`}
+    >
       <div className="text-[8px] uppercase font-bold tracking-tight">{label}</div>
       <div className="text-[11px] font-black tabular-nums leading-tight">{brl(valor)}</div>
+    </button>
+  );
+}
+
+// ── Cascade detalhada por modalidade ──
+const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD', 'CREDITO_GENERICO'] as const;
+const BANDEIRAS_DEBITO = ['VISA_ELECTRON', 'REDE_SHOP', 'DEBITO_GENERICO'] as const;
+
+function CascadeModalidade({ detalhado, modalidade }: { detalhado: Detalhado; modalidade: string }) {
+  const [bandeiraOpen, setBandeiraOpen] = useState<string | null>(null);
+
+  if (modalidade === 'dinheiro') {
+    return <ListaVendas vendas={detalhado.totais.DINHEIRO.vendas} />;
+  }
+  if (modalidade === 'pix') {
+    return <ListaVendas vendas={detalhado.totais.PIX.vendas} />;
+  }
+  if (modalidade === 'crediario') {
+    return <ListaVendas vendas={detalhado.totais.CREDIARIO.vendas} />;
+  }
+
+  // Cartão crédito ou débito — agrupa por bandeira
+  const bandeiras = (modalidade === 'credito' ? BANDEIRAS_CREDITO : BANDEIRAS_DEBITO)
+    .map((b) => ({ nome: b, slot: (detalhado.totais as any)[b] as Slot }))
+    .filter((b) => b.slot && b.slot.qtd > 0);
+
+  if (bandeiras.length === 0) {
+    return <div className="text-[11px] text-slate-400 italic text-center py-2">Sem vendas registradas</div>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {bandeiras.map((b) => (
+        <div key={b.nome} className="bg-slate-50 rounded-md border border-slate-200 overflow-hidden">
+          <button
+            onClick={() => setBandeiraOpen(bandeiraOpen === b.nome ? null : b.nome)}
+            className="w-full flex items-center justify-between px-2 py-1.5 text-xs hover:bg-slate-100"
+          >
+            <span className="font-bold text-slate-700">{b.nome.replace('_', ' ')}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">{b.slot.qtd} {b.slot.qtd === 1 ? 'tk' : 'tks'}</span>
+              <span className="font-mono font-bold tabular-nums text-slate-800">{brl(b.slot.valor)}</span>
+              <span className={`text-[10px] transition-transform ${bandeiraOpen === b.nome ? 'rotate-180' : ''}`}>â¼</span>
+            </div>
+          </button>
+          {bandeiraOpen === b.nome && (
+            <div className="border-t border-slate-200 bg-white px-2 py-1.5">
+              <ListaVendas vendas={b.slot.vendas} />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ListaVendas({ vendas }: { vendas: Slot['vendas'] }) {
+  if (!vendas || vendas.length === 0) {
+    return <div className="text-[11px] text-slate-400 italic text-center py-2">Sem vendas</div>;
+  }
+  return (
+    <div className="space-y-0.5 max-h-60 overflow-y-auto">
+      {vendas.map((v, i) => {
+        const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+        const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
+        return (
+          <div key={i} className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-slate-50 rounded">
+            <div className="flex items-center gap-2 min-w-0">
+              {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
+              <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>{cliente}</span>
+              {v.sellerName && <span className="text-slate-500 text-[10px] shrink-0">Â· {v.sellerName.split(' ')[0]}</span>}
+              {v.parcelas && v.parcelas > 1 && <span className="text-violet-600 text-[10px] shrink-0">Â· {v.parcelas}x</span>}
+            </div>
+            <span className="font-mono font-bold tabular-nums shrink-0 ml-2">{brl(v.valor)}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
