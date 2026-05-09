@@ -755,7 +755,10 @@ function PdvPageInner() {
             </div>
             <p className="text-[11px] text-white/85 truncate font-medium mt-0.5">
               {sale
-                ? `Venda #${sale.id.slice(-6).toUpperCase()} · ${sale.items?.length || 0} ${sale.items?.length === 1 ? 'item' : 'itens'} no carrinho`
+                ? (() => {
+                    const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
+                    return `Venda #${sale.id.slice(-6).toUpperCase()} · ${totalQty} ${totalQty === 1 ? 'peça' : 'peças'} no carrinho`;
+                  })()
                 : 'Carregando…'}
             </p>
           </div>
@@ -961,7 +964,7 @@ function PdvPageInner() {
               <div className="text-center">Ações</div>
             </div>
             <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-[11px] text-violet-700 font-bold flex items-center gap-1.5">
-              <ShoppingCart className="w-3 h-3" /> Itens da venda · {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
+              <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
             </div>
             <div className="divide-y">
               {sale.items.map((it) => {
@@ -1385,7 +1388,7 @@ function PdvPageInner() {
                     )}
                   </div>
                   <span className="text-[10px] text-slate-400">
-                    {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
+                    {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
                   </span>
                 </div>
               );
