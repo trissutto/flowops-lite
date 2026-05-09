@@ -3104,10 +3104,10 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* CASCATA VERTICAL — 12 linhas compactas, sem rolagem lateral.
-                  Cada linha: [Nx pílula] [parcela] [→]. Cabe inteira na tela.
-                  Linha selecionada destaca com fundo verde. */}
-              <div className="flex flex-col gap-1">
+              {/* GRID 3 COLUNAS × 4 LINHAS — todas as 12 parcelas visíveis
+                  ao mesmo tempo, sem precisar rolar. Cada botão mostra Nx +
+                  valor da parcela. Selecionado vira verde. */}
+              <div className="grid grid-cols-3 gap-1.5">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
@@ -3117,24 +3117,24 @@ function PaymentModal({
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md transition-all border ${
+                      className={`flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 rounded-md transition-all border ${
                         ativo
                           ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
                           : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
                       }`}
                     >
-                      <span className={`inline-flex items-center justify-center min-w-[36px] h-6 px-1.5 rounded font-black text-xs tabular-nums ${
-                        ativo ? 'bg-white/25 text-white' : 'bg-emerald-100 text-emerald-800'
+                      <span className={`text-[11px] font-black tabular-nums leading-none ${
+                        ativo ? 'text-white/90' : 'text-emerald-700'
                       }`}>{p}×</span>
-                      <span className={`flex-1 text-left text-[11px] font-bold ${
-                        ativo ? 'text-white/90' : 'text-slate-500'
-                      }`}>
-                        {p === 1 ? 'à vista' : 'sem juros'}
-                      </span>
-                      <span className={`text-sm font-black tabular-nums ${
-                        ativo ? 'text-white' : 'text-emerald-700'
+                      <span className={`text-[13px] font-black tabular-nums leading-tight ${
+                        ativo ? 'text-white' : 'text-slate-800'
                       }`}>
                         {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
+                      </span>
+                      <span className={`text-[9px] uppercase tracking-wider leading-none ${
+                        ativo ? 'text-white/70' : 'text-slate-400'
+                      }`}>
+                        {p === 1 ? 'à vista' : 's/ juros'}
                       </span>
                     </button>
                   );
