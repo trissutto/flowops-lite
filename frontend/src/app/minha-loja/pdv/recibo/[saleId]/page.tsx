@@ -94,6 +94,37 @@ function ReciboPdvInner() {
       .catch((e) => setError(e?.message || String(e)));
   }, [saleId]);
 
+  // Duplica em 2 vias quando pagamento é PIX (1ª VIA LOJA + 2ª VIA CLIENTE)
+  useEffect(() => {
+    if (!sale) return;
+    if (typeof document === 'undefined') return;
+    // Detecta se a venda tem PIX (em payments[] ou paymentMethod legado)
+    const isPix = (sale.payments || []).some((p: any) => String(p.method || '').toLowerCase() === 'pix')
+      || String(sale.paymentMethod || '').toLowerCase() === 'pix';
+    if (!isPix) return;
+    const t = setTimeout(() => {
+      const cupom = document.querySelector('.cupom') as HTMLElement | null;
+      if (!cupom) return;
+      if (document.querySelector('.cupom-via-2')) return;
+
+      // Label da 1ª via
+      const labelOriginal = document.createElement('div');
+      labelOriginal.className = 'center bold';
+      labelOriginal.style.cssText = 'border: 1px dashed #000; padding: 2px 4px; margin-bottom: 6px; font-size: 10px;';
+      labelOriginal.textContent = '— 1ª VIA · LOJA —';
+      cupom.insertBefore(labelOriginal, cupom.firstChild);
+
+      // Clona pra 2ª via
+      const clone = cupom.cloneNode(true) as HTMLElement;
+      clone.classList.add('cupom-via-2');
+      const labelClone = clone.querySelector('div.center.bold') as HTMLElement | null;
+      if (labelClone) labelClone.textContent = '— 2ª VIA · CLIENTE —';
+      clone.style.cssText = (clone.style.cssText || '') + ';page-break-before: always; break-before: page; margin-top: 4mm;';
+      cupom.parentNode?.appendChild(clone);
+    }, 100);
+    return () => clearTimeout(t);
+  }, [sale]);
+
   // Auto-print quando dados carregam
   useEffect(() => {
     if (!sale) return;
@@ -109,7 +140,7 @@ function ReciboPdvInner() {
       } else {
         window.print();
       }
-    }, 250);
+    }, 350);
     return () => clearTimeout(t);
   }, [sale, autoprint]);
 
