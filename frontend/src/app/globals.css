@@ -27,6 +27,13 @@
 
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }
 
+  /* BLOQUEIO de gesture "back" do Chrome — vendedora arrastando o mouse
+     ou usando trackpad/touch nao volta acidentalmente pra outra tela. */
+  html, body {
+    overscroll-behavior-x: none;
+    overscroll-behavior-y: auto;
+  }
+
   .font-display { font-family: var(--font-display), ui-serif, Georgia, serif; font-feature-settings: 'liga', 'dlig'; }
   .font-sans    { font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif; }
 
