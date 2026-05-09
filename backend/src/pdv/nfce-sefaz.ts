@@ -171,6 +171,100 @@ export function buildUrlConsultaNfce(ambiente: '1' | '2'): string {
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
+ * Códigos de erro de rede TRANSIENTE — vale a pena dar retry.
+ * SEFAZ-SP cai com frequência: ECONNRESET (TCP drop), ETIMEDOUT (lento),
+ * ECONNREFUSED/EHOSTUNREACH (servidor fora), EAI_AGAIN/ENOTFOUND (DNS).
+ */
+const SEFAZ_TRANSIENT_ERRORS = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'EPIPE',
+  'ERR_SOCKET_TIMEOUT',
+]);
+
+function isTransientNetworkError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err?.code || '').toUpperCase();
+  if (SEFAZ_TRANSIENT_ERRORS.has(code)) return true;
+  const msg = String(err?.message || '').toLowerCase();
+  if (msg.includes('socket hang up')) return true;
+  if (msg.includes('econnreset')) return true;
+  if (msg.includes('timeout') && !msg.includes('timeout of')) return true;
+  // axios marca erro de rede como sem response e com isAxiosError=true
+  if (err?.isAxiosError && !err?.response) return true;
+  return false;
+}
+
+/**
+ * POST SOAP pra SEFAZ com retry automático em erros transientes de rede.
+ * Backoff: 1s → 3s → 7s. Max 3 tentativas.
+ */
+async function postSefazWithRetry(
+  endpoint: string,
+  soap: string,
+  config: any,
+  maxAttempts = 3,
+): Promise<{ data: string; status: number; statusText?: string; headers?: any; lastError?: any }> {
+  let lastError: any = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const resp = await axios.post(endpoint, soap, config);
+      // Se HTTP 5xx, também é transiente — retry
+      if (resp.status >= 500 && resp.status < 600 && attempt < maxAttempts) {
+        lastError = new Error(`HTTP ${resp.status}`);
+        const delay = attempt === 1 ? 1000 : attempt === 2 ? 3000 : 7000;
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      return {
+        data: String(resp.data || ''),
+        status: resp.status,
+        statusText: resp.statusText,
+        headers: resp.headers,
+      };
+    } catch (e: any) {
+      lastError = e;
+      const transient = isTransientNetworkError(e);
+      if (!transient || attempt >= maxAttempts) {
+        // Erro definitivo (ou estouramos retries) — propaga
+        throw e;
+      }
+      // Backoff progressivo: 1s, 3s, 7s
+      const delay = attempt === 1 ? 1000 : attempt === 2 ? 3000 : 7000;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  // Não deveria chegar aqui, mas por segurança
+  throw lastError || new Error('Falha após retries');
+}
+
+/**
+ * Traduz erro de rede em mensagem amigável pro usuário.
+ */
+function friendlySefazError(err: any): string {
+  const code = String(err?.code || '').toUpperCase();
+  const raw = err?.message || '';
+  if (code === 'ECONNRESET' || raw.toLowerCase().includes('econnreset') || raw.toLowerCase().includes('socket hang up')) {
+    return 'SEFAZ instável (conexão reiniciada). Tente novamente em 30s.';
+  }
+  if (code === 'ETIMEDOUT' || raw.toLowerCase().includes('timeout')) {
+    return 'SEFAZ não respondeu no tempo (lentidão). Tente novamente em 1min.';
+  }
+  if (code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
+    return 'SEFAZ fora do ar. Tente novamente em alguns minutos.';
+  }
+  if (code === 'EAI_AGAIN' || code === 'ENOTFOUND') {
+    return 'Falha de DNS pra SEFAZ. Verifique conexão de internet.';
+  }
+  return raw || 'Erro de comunicação com SEFAZ';
+}
+
+/**
  * Endpoints SEFAZ-SP NFC-e (Layout 4.00).
  *
  * NFC-e usa endpoints específicos (diferente de NF-e modelo 55).
@@ -266,7 +360,7 @@ export async function transmitNfeSefazSp(input: {
 
   let xmlResposta = '';
   try {
-    const resp = await axios.post(endpoint, soap, {
+    const resp = await postSefazWithRetry(endpoint, soap, {
       headers: {
         // SOAP 1.2 — SEM SOAPAction header separado (action vai no Content-Type)
         'Content-Type': `application/soap+xml; charset=utf-8; action="${SOAP_ACTION}"`,
@@ -275,13 +369,13 @@ export async function transmitNfeSefazSp(input: {
         'User-Agent': 'LurdsOrderOne-NFCe/1.0',
       },
       httpsAgent: agent,
-      timeout: 60000,
+      timeout: 90000, // SEFAZ-SP às vezes leva 30-60s — 90s dá margem
       maxBodyLength: 10 * 1024 * 1024,
       // Não rejeitar erros 4xx — capturamos pra mostrar resposta da SEFAZ
       validateStatus: () => true,
     });
 
-    xmlResposta = String(resp.data || '');
+    xmlResposta = resp.data;
 
     // Se HTTP não-2xx, tratamos como erro de comunicação mas com body capturado
     if (resp.status < 200 || resp.status >= 300) {
@@ -305,7 +399,7 @@ export async function transmitNfeSefazSp(input: {
     return {
       success: false,
       cStat: '999',
-      xMotivo: e?.message || 'Erro de comunicação com SEFAZ',
+      xMotivo: friendlySefazError(e),
       xmlEnviado: enviNFe,
       xmlResposta: respData || `${respStatus}${respHeaders}`,
       error: e?.message,
@@ -524,7 +618,7 @@ export async function cancelNfceSefazSp(input: {
       pfxPassword: input.pfxPassword,
     });
     eventoAssinado = eventoAssinado
-      .replace(/^﻿/, '')
+      .replace(/^\u{FEFF}/u, '')
       .replace(/<\?xml[^?]*\?>\s*/g, '')
       .trim();
   } catch (e: any) {
@@ -563,17 +657,17 @@ export async function cancelNfceSefazSp(input: {
 
   let xmlResposta = '';
   try {
-    const resp = await axios.post(endpoint, soap, {
+    const resp = await postSefazWithRetry(endpoint, soap, {
       headers: {
         'Content-Type': `application/soap+xml; charset=utf-8; action="${SOAP_ACTION}"`,
         Accept: 'application/soap+xml, text/xml, */*',
         'User-Agent': 'LurdsOrderOne-NFCe/1.0',
       },
       httpsAgent: agent,
-      timeout: 60000,
+      timeout: 90000,
       validateStatus: () => true,
     });
-    xmlResposta = String(resp.data || '');
+    xmlResposta = resp.data;
     if (resp.status < 200 || resp.status >= 300) {
       return {
         success: false,
@@ -588,7 +682,7 @@ export async function cancelNfceSefazSp(input: {
     return {
       success: false,
       cStat: '999',
-      xMotivo: e?.message || 'Erro de comunicação com SEFAZ',
+      xMotivo: friendlySefazError(e),
       xmlEnviado: envEvento,
       xmlResposta: e?.response?.data ? String(e.response.data) : '',
       error: e?.message,
@@ -596,7 +690,7 @@ export async function cancelNfceSefazSp(input: {
   }
 
   // Parse retorno: cStat 135 = evento registrado e vinculado a NF-e (sucesso)
-  // cStat 136 = evento registrado mas NÃO vinculado (alguma divergência, mas válido)
+  // cStat 136 = evento registrado mas NAO vinculado (alguma divergencia, mas valido)
   // Outros = erro
   const retEvtMatch = xmlResposta.match(/<retEvento[\s\S]*?<\/retEvento>/);
   const retEvt = retEvtMatch?.[0] || xmlResposta;
