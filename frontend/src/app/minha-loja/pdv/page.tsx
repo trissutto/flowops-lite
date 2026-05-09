@@ -297,12 +297,8 @@ function PdvPageInner() {
 
   // Auto-abrir modal de vendedora REMOVIDO — agora vendedora é escolhida
   // a qualquer momento clicando no botão do header (cascata inline).
-  // Política antiga forçava modal ao iniciar venda; comportamento novo dá
-  // liberdade pra vendedora atender e atribuir comissão depois.
 
   // ── LEMBRETE: vendedora não escolhida ao tentar fechar venda ──
-  // Quando usuária abre o PaymentModal sem ter atribuído vendedora,
-  // mostra confirm. Se cancelar, fecha pagamento e abre modal vendedora.
   const sellerCheckRef = useRef(false);
   useEffect(() => {
     if (!showPayment) {
@@ -312,7 +308,6 @@ function PdvPageInner() {
     if (sellerCheckRef.current) return;
     if (!sale || sale.sellerName) return;
     sellerCheckRef.current = true;
-    // Pequeno delay pro modal de payment renderizar primeiro
     const t = setTimeout(() => {
       const ok = window.confirm(
         '⚠ ATENÇÃO\n\nVocê ainda não escolheu a vendedora!\n\nA comissão NÃO será atribuída a ninguém.\n\nDeseja continuar mesmo assim?\n\n• OK = continuar sem comissão\n• Cancelar = escolher vendedora agora',
@@ -1444,14 +1439,15 @@ function PdvPageInner() {
                 <span className="hidden sm:inline">Cancelar venda</span>
               </button>
 
-              {/* Desconto geral — botão branco com LABEL */}
+              {/* Desconto geral — botão branco com LABEL + atalho F2 */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
                 className="px-4 py-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 text-slate-700 hover:text-amber-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
-                title="Aplicar desconto na venda toda"
+                title="Aplicar desconto na venda toda (atalho F2)"
               >
                 <Percent className="w-4 h-4" />
                 <span className="hidden sm:inline">Desconto geral</span>
+                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 ml-1">F2</kbd>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
