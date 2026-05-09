@@ -843,7 +843,7 @@ function PdvPageInner() {
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-4 px-4 pt-4 pb-44">
+      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-4 px-4 pt-4 pb-[240px] lg:pb-[230px]">
 
       <main className="flex-1 min-w-0 space-y-3">
         {error && (
@@ -993,14 +993,23 @@ function PdvPageInner() {
             </div>
             <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-[11px] text-violet-700 font-bold flex items-center gap-1.5">
               <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
+              <span className="ml-2 text-[9px] font-bold text-violet-500 uppercase tracking-wider">↓ último bipado no topo</span>
             </div>
             <div className="divide-y">
-              {sale.items.map((it) => {
+              {/* ORDEM INVERTIDA — último item bipado fica no topo pra vendedora
+                  conferir o que acabou de passar. Slice + reverse não muta o array
+                  original (sale.items continua na ordem original no estado). */}
+              {[...sale.items].slice().reverse().map((it, idx) => {
+                const isLast = idx === 0; // primeiro renderizado = último bipado
                 const bruto = it.precoUnit * it.qty;
                 return (
                 <div
                   key={it.id}
-                  className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center hover:bg-violet-50/40 transition"
+                  className={`px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center transition ${
+                    isLast
+                      ? 'bg-violet-100/70 ring-2 ring-inset ring-violet-400'
+                      : 'hover:bg-violet-50/40'
+                  }`}
                 >
                   {/* SKU/EAN */}
                   <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
@@ -1273,7 +1282,7 @@ function PdvPageInner() {
       </div>{/* fim do flex main+sidebar */}
 
       {/* MOBILE BAR — em telas <lg, mostra ações em scroll horizontal acima do footer */}
-      <div className="lg:hidden fixed bottom-[88px] left-0 right-0 z-10 px-3">
+      <div className="lg:hidden fixed bottom-[220px] left-0 right-0 z-10 px-3">
         <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
           <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
           <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
@@ -1327,7 +1336,7 @@ function PdvPageInner() {
           </button>
         );
         return (
-          <div className="fixed bottom-[100px] sm:bottom-[88px] left-0 right-0 z-10 px-3 pointer-events-none">
+          <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
             <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
               {/* GRUPO CRÉDITO */}
               <div className="flex flex-col gap-1 shrink-0">
@@ -1450,10 +1459,13 @@ function PdvPageInner() {
                 <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 ml-1">F2</kbd>
               </button>
 
-              {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central */}
-              <div className="flex-1 px-2 min-w-0 text-center">
+              {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
+                  whitespace-nowrap (sem truncate) — valor grande NAO pode cortar.
+                  Escala progressiva: vai diminuindo a fonte em telas estreitas
+                  pra caber sempre, mesmo com R$ 9.999,99+ */}
+              <div className="flex-1 px-2 min-w-[140px] text-center overflow-visible">
                 <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
-                <div className="text-3xl sm:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 truncate">
+                <div className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 whitespace-nowrap">
                   {brl(sale.total)}
                 </div>
               </div>
