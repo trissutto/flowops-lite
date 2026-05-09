@@ -571,10 +571,26 @@ export class PagarmeService {
       }
     } catch {}
 
-    // Pagar.me envia: { type: "order.paid", data: { id: "or_...", charges: [...] } }
+    // Pagar.me envia 2 formatos:
+    //   - order.paid:  { type, data: { id: "or_...", charges: [...] } }
+    //   - charge.paid: { type, data: { id: "ch_...", order_id: "or_...", order: { id: "or_..." } } }
+    // Precisa extrair sempre o ID da ORDER (or_xxx), nunca o da charge (ch_xxx),
+    // porque PagarmePayment foi salvo com pagarmeOrderId = order.id.
     const eventType = payload?.type || '';
     const data = payload?.data || {};
-    const orderId = data?.id || data?.order_id;
+
+    let orderId: string | undefined;
+    if (eventType.startsWith('charge.')) {
+      // Charge events: prioridade pra order_id ou data.order.id
+      orderId = data?.order_id || data?.order?.id || data?.id;
+    } else {
+      // Order events (order.paid, order.canceled): data.id já é a order
+      orderId = data?.id || data?.order_id;
+    }
+    // Failsafe: se ainda começa com 'ch_', tenta achar order_id em qualquer lugar
+    if (orderId && String(orderId).startsWith('ch_')) {
+      orderId = data?.order_id || data?.order?.id || orderId;
+    }
 
     if (!orderId) {
       this.logger.warn(`[pagarme] webhook sem orderId: ${JSON.stringify(payload).slice(0, 300)}`);
