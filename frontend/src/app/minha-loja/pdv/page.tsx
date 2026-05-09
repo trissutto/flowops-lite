@@ -1099,10 +1099,15 @@ function PdvPageInner() {
               Resumo da venda
             </div>
             <div className="space-y-1 text-xs">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-600 uppercase text-[10px] tracking-wide">Itens</span>
-                <span className="font-bold text-slate-800 tabular-nums">{sale.items?.length || 0}</span>
-              </div>
+              {(() => {
+                const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
+                return (
+                  <div className="flex justify-between items-center bg-violet-50 border-2 border-violet-300 rounded-lg px-3 py-2.5">
+                    <span className="text-violet-700 uppercase text-xs font-black tracking-wide">Peças</span>
+                    <span className="text-3xl font-black text-violet-700 tabular-nums">{totalQty}</span>
+                  </div>
+                );
+              })()}
               <div className="flex justify-between items-center">
                 <span className="text-slate-600 uppercase text-[10px] tracking-wide">Subtotal</span>
                 <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
