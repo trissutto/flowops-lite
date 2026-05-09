@@ -48,6 +48,13 @@ export default function PixPaidListener() {
     baixaId: string;
     nomeCliente: string;
     valor: number;
+    items: Array<{
+      parcelaNum: number | null;
+      totalParcelas: number | null;
+      vencimento: string;
+      valorPago: number;
+      jurosCalculado: number;
+    }>;
   } | null>(null);
 
   // Inicia 5min atrás — pega baixas que rolaram pouco antes da tela abrir
@@ -90,11 +97,18 @@ export default function PixPaidListener() {
               o2.start(); o2.stop(ctx.currentTime + 0.4);
             }, 250);
           } catch {/* sem Web Audio — segue */}
-          // Mostra alerta
+          // Mostra alerta com discriminação das parcelas
           setPagoAlerta({
             baixaId: b.id,
             nomeCliente: b.customerName || 'Cliente',
             valor: Number(b.totalPago) || 0,
+            items: (b.items || []).map((it: any) => ({
+              parcelaNum: it.parcelaNum ?? null,
+              totalParcelas: it.totalParcelas ?? null,
+              vencimento: it.vencimento || '',
+              valorPago: Number(it.valorPago) || 0,
+              jurosCalculado: Number(it.jurosCalculado) || 0,
+            })),
           });
           // Imprime recibo
           try { printReceipt(b.id); } catch {/* segue */}
@@ -126,6 +140,33 @@ export default function PixPaidListener() {
           <div><strong>{pagoAlerta.nomeCliente}</strong></div>
           <div className="text-3xl font-black text-emerald-600 tabular-nums mt-2">{brl(pagoAlerta.valor)}</div>
         </div>
+
+        {/* Discriminação das parcelas pagas */}
+        {pagoAlerta.items && pagoAlerta.items.length > 0 && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-left">
+            <div className="text-[10px] uppercase font-bold text-emerald-700 tracking-wide mb-1.5">
+              Parcelas baixadas
+            </div>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {pagoAlerta.items.map((it, i) => {
+                const venc = it.vencimento ? (() => {
+                  try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+                })() : '—';
+                const parcLabel = it.parcelaNum && it.totalParcelas
+                  ? `${it.parcelaNum}/${it.totalParcelas}`
+                  : `parc ${i + 1}`;
+                return (
+                  <div key={i} className="flex items-center justify-between text-xs gap-2">
+                    <span className="font-bold text-emerald-800 shrink-0">{parcLabel}</span>
+                    <span className="text-slate-600 font-mono shrink-0">venc {venc}</span>
+                    <span className="font-mono font-black text-emerald-700 tabular-nums ml-auto">{brl(it.valorPago)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="text-xs text-slate-500">
           Recibo enviado pra impressão automaticamente
         </div>

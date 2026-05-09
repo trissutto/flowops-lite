@@ -298,22 +298,43 @@ export default function HistoricoBaixasPage() {
                     </div>
                   </div>
 
-                  {/* Itens da baixa (parcelas) — sempre visível em fonte pequena */}
+                  {/* Itens da baixa (parcelas) — discriminação completa */}
                   <div className="bg-gray-50 px-3 py-2 border-t border-gray-200">
-                    <div className="text-[10px] uppercase font-bold text-gray-500 mb-1">parcelas baixadas</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {b.items.map((it) => (
-                        <span
-                          key={it.id}
-                          className="inline-flex items-center gap-1 text-[10px] font-mono bg-white border border-gray-200 px-1.5 py-0.5 rounded"
-                          title={`Reg ${it.registro} · Ctrl ${it.controle} · Venc ${it.vencimento}`}
-                        >
-                          {it.parcelaNum && it.totalParcelas ? `${it.parcelaNum}/${it.totalParcelas}` : 'parc'}
-                          {' · '}
-                          {brl(it.valorPago)}
-                          {it.jurosCalculado > 0 && ` (+${brl(it.jurosCalculado)})`}
-                        </span>
-                      ))}
+                    <div className="text-[10px] uppercase font-bold text-gray-500 mb-1.5">
+                      parcelas baixadas ({b.items.length})
+                    </div>
+                    {/* Header da tabela */}
+                    <div className="grid grid-cols-12 gap-2 px-1 py-0.5 text-[9px] uppercase font-bold text-gray-400 tracking-wider border-b border-gray-200">
+                      <div className="col-span-2">Nº</div>
+                      <div className="col-span-3">Cliente</div>
+                      <div className="col-span-3">Vencimento</div>
+                      <div className="col-span-2 text-right">Valor</div>
+                      <div className="col-span-2 text-right">Juros</div>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                      {b.items.map((it) => {
+                        const venc = it.vencimento ? (() => {
+                          try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+                        })() : '—';
+                        const numParc = it.parcelaNum && it.totalParcelas
+                          ? `${it.parcelaNum}/${it.totalParcelas}`
+                          : (it.parcelaNum ? String(it.parcelaNum) : '—');
+                        return (
+                          <div
+                            key={it.id}
+                            className="grid grid-cols-12 gap-2 px-1 py-1 text-[11px] hover:bg-white"
+                            title={`Reg ${it.registro} · Ctrl ${it.controle}`}
+                          >
+                            <div className="col-span-2 font-bold text-rose-700">{numParc}</div>
+                            <div className="col-span-3 truncate text-slate-700">{b.customerName || '—'}</div>
+                            <div className="col-span-3 font-mono text-slate-600">{venc}</div>
+                            <div className="col-span-2 text-right font-mono font-bold text-emerald-700 tabular-nums">{brl(it.valorPago)}</div>
+                            <div className="col-span-2 text-right font-mono text-amber-700 tabular-nums">
+                              {it.jurosCalculado > 0 ? brl(it.jurosCalculado) : '—'}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                     {cancelada && b.canceledReason && (
                       <div className="mt-1 text-[10px] text-rose-700 italic">
