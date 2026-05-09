@@ -314,7 +314,7 @@ export default function HistoricoBaixasPage() {
                     <div className="divide-y divide-gray-100">
                       {b.items.map((it) => {
                         const venc = it.vencimento ? (() => {
-                          try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+                          try { const s = String(it.vencimento); const d = s.includes('T') ? new Date(s) : new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR'); } catch { return '—'; }
                         })() : '—';
                         const numParc = it.parcelaNum && it.totalParcelas
                           ? `${it.parcelaNum}/${it.totalParcelas}`

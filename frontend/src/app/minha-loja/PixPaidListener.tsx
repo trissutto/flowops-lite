@@ -150,7 +150,7 @@ export default function PixPaidListener() {
             <div className="space-y-1 max-h-48 overflow-y-auto">
               {pagoAlerta.items.map((it, i) => {
                 const venc = it.vencimento ? (() => {
-                  try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+                  try { const s = String(it.vencimento); const d = s.includes('T') ? new Date(s) : new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR'); } catch { return '—'; }
                 })() : '—';
                 const parcLabel = it.parcelaNum && it.totalParcelas
                   ? `${it.parcelaNum}/${it.totalParcelas}`

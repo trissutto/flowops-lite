@@ -845,7 +845,7 @@ function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vend
         <div className="border-t border-slate-200 bg-white px-2 py-1 space-y-0.5">
           {v.items!.map((it, i) => {
             const venc = it.vencimento ? (() => {
-              try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+              try { const s = String(it.vencimento); const d = s.includes('T') ? new Date(s) : new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR'); } catch { return '—'; }
             })() : '—';
             const numLabel = it.parcelaNum && it.totalParcelas
               ? `${it.parcelaNum}/${it.totalParcelas}`
