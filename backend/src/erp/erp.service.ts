@@ -5263,14 +5263,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Retorna 0 se não achou.
    */
-  async lookupClienteCode(input: { cpf?: string; nome?: string }): Promise<number> {
+  async lookupClienteCode(input: { cpf?: string; nome?: string; telefone?: string }): Promise<number> {
     if (!this.pool) return 0;
     const cpf = String(input.cpf || '').replace(/\D/g, '').trim();
     const nome = String(input.nome || '').trim().toUpperCase();
-    if (!cpf && !nome) return 0;
+    const tel = String(input.telefone || '').replace(/\D/g, '').trim();
+    if (!cpf && !nome && !tel) return 0;
 
     try {
-      // 1. Tenta CPF exato (limpo)
+      // 1. CPF exato (limpo)
       if (cpf && cpf.length >= 11) {
         const [r1] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO FROM clientes
@@ -5280,7 +5281,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if (r1.length) return Number(r1[0].CODIGO) || 0;
       }
-      // 2. Tenta NOME exato
+      // 2. NOME exato
       if (nome) {
         const [r2] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO FROM clientes WHERE UPPER(NOME) = ? LIMIT 1`,
@@ -5288,18 +5289,52 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if (r2.length) return Number(r2[0].CODIGO) || 0;
       }
-      // 3. NOME LIKE (3 primeiras palavras pra evitar falsos positivos)
+      // 3. TELEFONE (FONECEL ou FONERES) — útil quando nome diferente mas mesma cliente
+      if (tel && tel.length >= 8) {
+        const last9 = tel.slice(-9); // últimos 9 dígitos cobrem celular sem DDD
+        const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO FROM clientes
+            WHERE REPLACE(REPLACE(REPLACE(REPLACE(FONECEL, '(', ''), ')', ''), '-', ''), ' ', '') LIKE CONCAT('%', ?, '%')
+               OR REPLACE(REPLACE(REPLACE(REPLACE(FONERES, '(', ''), ')', ''), '-', ''), ' ', '') LIKE CONCAT('%', ?, '%')
+            LIMIT 2`,
+          [last9, last9],
+        );
+        if (r3.length === 1) return Number(r3[0].CODIGO) || 0;
+      }
+      // 4. NOME LIKE — primeira+última palavra (cobre "MARIA DA SILVA" vs "MARIA SILVA")
+      if (nome) {
+        const palavras = nome.split(/\s+/).filter((w) => w.length > 1);
+        if (palavras.length >= 2) {
+          const primeiro = palavras[0];
+          const ultimo = palavras[palavras.length - 1];
+          const [r4] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT CODIGO, NOME FROM clientes
+              WHERE UPPER(NOME) LIKE ? AND UPPER(NOME) LIKE ?
+              LIMIT 3`,
+            [`${primeiro}%`, `%${ultimo}%`],
+          );
+          if (r4.length === 1) return Number(r4[0].CODIGO) || 0;
+          if (r4.length > 1) {
+            this.logger.warn(`[lookupClienteCode] NOME "${nome}" ambíguo (${r4.length} matches): ${r4.map((r: any) => r.NOME).join(' | ')}`);
+          }
+        }
+      }
+      // 5. NOME LIKE prefix (3 primeiras palavras) — fallback antigo
       if (nome) {
         const palavras = nome.split(/\s+/).filter((w) => w.length > 1);
         if (palavras.length >= 2) {
           const prefix = palavras.slice(0, Math.min(3, palavras.length)).join(' ');
-          const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
+          const [r5] = await this.pool.query<mysql.RowDataPacket[]>(
             `SELECT CODIGO FROM clientes WHERE UPPER(NOME) LIKE ? LIMIT 2`,
             [prefix + '%'],
           );
-          if (r3.length === 1) return Number(r3[0].CODIGO) || 0;
+          if (r5.length === 1) return Number(r5[0].CODIGO) || 0;
         }
       }
+      // Não achou — loga pra debug
+      this.logger.warn(
+        `[lookupClienteCode] NÃO ACHOU cliente: cpf="${cpf}" nome="${nome}" tel="${tel}"`,
+      );
       return 0;
     } catch (e) {
       this.logger.warn(`lookupClienteCode falhou: ${(e as Error).message}`);
@@ -5475,6 +5510,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       clienteCodeFinal = await this.lookupClienteCode({
         cpf: input.clienteCpf,
         nome: input.nomeCliente,
+        telefone: (input as any).clientePhone,
       });
       if (clienteCodeFinal) {
         this.logger.log(`[gravarVendaPdv] cliente "${input.nomeCliente || input.clienteCpf}" → CODIGO=${clienteCodeFinal}`);
