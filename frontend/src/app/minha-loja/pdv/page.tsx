@@ -300,6 +300,31 @@ function PdvPageInner() {
   // Política antiga forçava modal ao iniciar venda; comportamento novo dá
   // liberdade pra vendedora atender e atribuir comissão depois.
 
+  // ── LEMBRETE: vendedora não escolhida ao tentar fechar venda ──
+  // Quando usuária abre o PaymentModal sem ter atribuído vendedora,
+  // mostra confirm. Se cancelar, fecha pagamento e abre modal vendedora.
+  const sellerCheckRef = useRef(false);
+  useEffect(() => {
+    if (!showPayment) {
+      sellerCheckRef.current = false;
+      return;
+    }
+    if (sellerCheckRef.current) return;
+    if (!sale || sale.sellerName) return;
+    sellerCheckRef.current = true;
+    // Pequeno delay pro modal de payment renderizar primeiro
+    const t = setTimeout(() => {
+      const ok = window.confirm(
+        '⚠ ATENÇÃO\n\nVocê ainda não escolheu a vendedora!\n\nA comissão NÃO será atribuída a ninguém.\n\nDeseja continuar mesmo assim?\n\n• OK = continuar sem comissão\n• Cancelar = escolher vendedora agora',
+      );
+      if (!ok) {
+        setShowPayment(false);
+        setShowVendedora(true);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [showPayment, sale]);
+
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
