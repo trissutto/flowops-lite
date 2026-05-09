@@ -141,15 +141,37 @@ function ReciboBaixaInner() {
       <style jsx global>{`
         @page {
           size: 80mm auto;
-          margin: 3mm 2mm;
+          margin: 0;
         }
         @media print {
           html, body {
-            width: 76mm;
+            width: 80mm;
+            min-width: 80mm;
+            max-width: 80mm;
             background: #fff;
             color: #000;
+            margin: 0 !important;
+            padding: 0 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
-          .no-print { display: none !important; }
+          .no-print, .toolbar { display: none !important; }
+          * {
+            box-sizing: border-box !important;
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
+          .cupom {
+            width: 100% !important;
+            max-width: 80mm !important;
+            margin: 0 !important;
+            padding: 2mm !important;
+            box-shadow: none !important;
+          }
+          html, body, .cupom {
+            height: auto !important;
+            min-height: 0 !important;
+          }
         }
         body {
           font-family: 'Courier New', Courier, monospace;
