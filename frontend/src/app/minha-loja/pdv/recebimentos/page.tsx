@@ -133,7 +133,8 @@ export default function RecebimentosPage() {
   const [copyLinkMsg, setCopyLinkMsg] = useState(false);
   // Polling pra detectar PAGAMENTOS via webhook (PIX-link confirmado em background)
   const [pagoAlerta, setPagoAlerta] = useState<{ baixaId: string; nomeCliente: string; valor: number } | null>(null);
-  const sinceRef = useRef<string>(new Date().toISOString());
+  // Inicia 5min atrás — pega baixas que rolaram pouco antes da tela abrir
+  const sinceRef = useRef<string>(new Date(Date.now() - 5 * 60 * 1000).toISOString());
   const seenBaixasRef = useRef<Set<string>>(new Set());
 
   // ── Load clientes ───────────────────────────────────────────
