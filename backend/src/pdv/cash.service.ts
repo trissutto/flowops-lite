@@ -131,8 +131,8 @@ export class CashService {
       vendas: Array<{
         saleId: string;
         saleTotal: number;
-        paymentId: string;      // ID do PdvSalePayment (pra ajuste)
-        method: string;         // forma original (dinheiro/pix/credito/debito/crediario)
+        paymentId: string;
+        method: string;
         bandeira?: string | null;
         valor: number;
         customerName: string | null;
@@ -140,6 +140,14 @@ export class CashService {
         sellerName: string | null;
         finalizedAt: string | null;
         parcelas?: number;
+        // Itens pra recebimentos crediário — lista de parcelas individuais pagas
+        items?: Array<{
+          parcelaNum: number | null;
+          totalParcelas: number | null;
+          vencimento: string;
+          valorPago: number;
+          jurosCalculado: number;
+        }>;
       }>;
     };
     const mkSlot = (): Slot => ({ valor: 0, qtd: 0, vendas: [] });
@@ -231,6 +239,7 @@ export class CashService {
         createdAt: { gte: session.openedAt },
       },
       orderBy: { createdAt: 'asc' },
+      include: { items: { orderBy: { vencimento: 'asc' } } },
     });
 
     const recebimentosDinheiro = mkSlot();
@@ -252,6 +261,13 @@ export class CashService {
         customerCpf: b.customerCpf || null,
         sellerName: b.userName || null,
         finalizedAt: b.paidAt || b.createdAt || null,
+        items: (b.items || []).map((it: any) => ({
+          parcelaNum: it.parcelaNum ?? null,
+          totalParcelas: it.totalParcelas ?? null,
+          vencimento: it.vencimento || '',
+          valorPago: Number(it.valorPago) || 0,
+          jurosCalculado: Number(it.jurosCalculado) || 0,
+        })),
       });
     }
 

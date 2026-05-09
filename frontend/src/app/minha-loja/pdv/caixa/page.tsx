@@ -66,6 +66,13 @@ type Slot = {
     sellerName: string | null;
     finalizedAt: string | null;
     parcelas?: number;
+    items?: Array<{
+      parcelaNum: number | null;
+      totalParcelas: number | null;
+      vencimento: string;
+      valorPago: number;
+      jurosCalculado: number;
+    }>;
   }>;
 };
 
@@ -795,28 +802,67 @@ function BandeiraRow({ nome, slot, onEditPayment }: { nome: string; slot: Slot; 
 }
 
 function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vendas'][0]) => void }) {
+  const [expanded, setExpanded] = useState(false);
   const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
   const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
+  // Tem múltiplas parcelas detalhadas? (caso de recebimento crediário com 3 parcelas juntas)
+  const hasItems = v.items && v.items.length > 1;
   return (
-    <div className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded group">
-      <div className="flex items-center gap-2 min-w-0">
-        {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
-        <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>
-          {cliente}
-        </span>
-        {v.sellerName && (
-          <span className="text-slate-500 text-[10px] shrink-0">· {v.sellerName.split(' ')[0]}</span>
-        )}
-        {v.parcelas && v.parcelas > 1 && (
-          <span className="text-violet-600 text-[10px] shrink-0">· {v.parcelas}x</span>
-        )}
+    <div className={hasItems ? 'border border-slate-200 rounded bg-slate-50' : ''}>
+      <div
+        className={`flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded group ${hasItems ? 'cursor-pointer' : ''}`}
+        onClick={() => hasItems && setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {hasItems && (
+            <span className={`text-slate-400 text-[10px] transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`}>▶</span>
+          )}
+          {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
+          <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>
+            {cliente}
+          </span>
+          {v.sellerName && (
+            <span className="text-slate-500 text-[10px] shrink-0">· {v.sellerName.split(' ')[0]}</span>
+          )}
+          {v.parcelas && v.parcelas > 1 && (
+            <span className="text-violet-600 text-[10px] shrink-0">· {v.parcelas}x</span>
+          )}
+          {hasItems && (
+            <span className="text-amber-700 text-[10px] font-bold shrink-0 bg-amber-100 px-1 rounded">
+              {v.items!.length} parc
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0 ml-2">
+          <span className="font-mono font-bold tabular-nums">R$ {fmt(v.valor)}</span>
+          {onEdit && (
+            <button onClick={(e) => { e.stopPropagation(); onEdit(v); }} className="opacity-0 group-hover:opacity-100 transition text-slate-400 hover:text-blue-600 px-1" title="Ajustar pagamento (admin/supervisor)">✏️</button>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1 shrink-0 ml-2">
-        <span className="font-mono font-bold tabular-nums">R$ {fmt(v.valor)}</span>
-        {onEdit && (
-          <button onClick={(e) => { e.stopPropagation(); onEdit(v); }} className="opacity-0 group-hover:opacity-100 transition text-slate-400 hover:text-blue-600 px-1" title="Ajustar pagamento (admin/supervisor)">✏️</button>
-        )}
-      </div>
+      {/* Cascade das parcelas individuais */}
+      {hasItems && expanded && (
+        <div className="border-t border-slate-200 bg-white px-2 py-1 space-y-0.5">
+          {v.items!.map((it, i) => {
+            const venc = it.vencimento ? (() => {
+              try { return new Date(it.vencimento + 'T00:00:00').toLocaleDateString('pt-BR'); } catch { return it.vencimento; }
+            })() : '—';
+            const numLabel = it.parcelaNum && it.totalParcelas
+              ? `${it.parcelaNum}/${it.totalParcelas}`
+              : `parc ${i + 1}`;
+            return (
+              <div key={i} className="flex items-center justify-between text-[10px] gap-2">
+                <span className="font-bold text-rose-700 shrink-0 min-w-[40px]">{numLabel}</span>
+                <span className="text-slate-500 font-mono shrink-0">venc {venc}</span>
+                <span className="text-slate-400 italic flex-1 text-right shrink-0">
+                  {it.jurosCalculado > 0 ? `juros R$ ${fmt(it.jurosCalculado)}` : ''}
+                </span>
+                <span className="font-mono font-bold tabular-nums text-emerald-700 shrink-0">R$ {fmt(it.valorPago)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
