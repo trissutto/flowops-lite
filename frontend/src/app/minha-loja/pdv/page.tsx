@@ -306,11 +306,19 @@ function PdvPageInner() {
     if (showCustomer || showPayment || showFinalized) return;
     const handler = (e: KeyboardEvent) => {
       // ── ATALHOS GLOBAIS (funcionam mesmo com input em foco) ──
-      // F2 → foca o input de bipagem
-      if (e.key === 'F2') {
+      // F1 → foca o input de bipagem
+      if (e.key === 'F1') {
         e.preventDefault();
         inputRef.current?.focus();
         inputRef.current?.select();
+        return;
+      }
+      // F2 → abre tela de desconto da venda inteira
+      if (e.key === 'F2') {
+        e.preventDefault();
+        if (sale.items?.length > 0) {
+          setShowDiscount({ kind: 'sale' });
+        }
         return;
       }
       // F4 → finalizar venda (se carrinho tem itens)

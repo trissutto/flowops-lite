@@ -90,6 +90,39 @@ function ReciboBaixaInner() {
       .catch((e) => setError(e?.message || String(e)));
   }, [baixaId]);
 
+  // Duplica o cupom em 2 vias (1ª VIA LOJA + 2ª VIA CLIENTE)
+  useEffect(() => {
+    if (!baixa) return;
+    if (typeof document === 'undefined') return;
+    // Aguarda render do cupom original
+    const t = setTimeout(() => {
+      const cupom = document.querySelector('.cupom') as HTMLElement | null;
+      if (!cupom) return;
+      // Evita duplicar 2x se useEffect rodar de novo
+      if (document.querySelector('.cupom-via-2')) return;
+
+      // Adiciona label da 1ª via no original
+      const labelOriginal = document.createElement('div');
+      labelOriginal.className = 'center bold';
+      labelOriginal.style.cssText = 'border: 1px dashed #000; padding: 2px 4px; margin-bottom: 6px; font-size: 10px;';
+      labelOriginal.textContent = '— 1ª VIA · LOJA —';
+      cupom.insertBefore(labelOriginal, cupom.firstChild);
+
+      // Clona pra 2ª via
+      const clone = cupom.cloneNode(true) as HTMLElement;
+      clone.classList.add('cupom-via-2');
+      // Substitui o label da 1ª pela da 2ª
+      const labelClone = clone.querySelector('div.center.bold') as HTMLElement | null;
+      if (labelClone) {
+        labelClone.textContent = '— 2ª VIA · CLIENTE —';
+      }
+      // Forca page-break entre as vias
+      clone.style.cssText = (clone.style.cssText || '') + ';page-break-before: always; break-before: page; margin-top: 4mm;';
+      cupom.parentNode?.appendChild(clone);
+    }, 100);
+    return () => clearTimeout(t);
+  }, [baixa]);
+
   // Auto-print
   useEffect(() => {
     if (!baixa) return;
@@ -104,7 +137,7 @@ function ReciboBaixaInner() {
       } else {
         window.print();
       }
-    }, 250);
+    }, 350);
     return () => clearTimeout(t);
   }, [baixa, autoprint]);
 
