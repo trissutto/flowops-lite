@@ -131,12 +131,6 @@ export default function RecebimentosPage() {
   const [copyMsg, setCopyMsg] = useState(false);
   const [pixLinkUrl, setPixLinkUrl] = useState<string | null>(null);
   const [copyLinkMsg, setCopyLinkMsg] = useState(false);
-  // Polling pra detectar PAGAMENTOS via webhook (PIX-link confirmado em background)
-  const [pagoAlerta, setPagoAlerta] = useState<{ baixaId: string; nomeCliente: string; valor: number } | null>(null);
-  // Inicia 5min atrás — pega baixas que rolaram pouco antes da tela abrir
-  const sinceRef = useRef<string>(new Date(Date.now() - 5 * 60 * 1000).toISOString());
-  const seenBaixasRef = useRef<Set<string>>(new Set());
-
   // ── Load clientes ───────────────────────────────────────────
 
   async function loadClientes() {
@@ -155,60 +149,6 @@ export default function RecebimentosPage() {
   useEffect(() => {
     loadClientes();
     inputRef.current?.focus();
-  }, []);
-
-  // ── Polling pra detectar webhook PIX-link ──
-  // Cliente paga em casa → Pagar.me dispara webhook → backend marca baixa=paid.
-  // Esse polling roda a cada 5s e detecta novas baixas pagas pra:
-  //  1. Tocar beep alto
-  //  2. Mostrar alerta verde gigante na tela
-  //  3. Imprimir recibo automaticamente
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const since = sinceRef.current;
-        const baixas = await api<any[]>(`/crediarios/baixa/recentes-pagas?since=${encodeURIComponent(since)}`);
-        if (cancelled || !baixas?.length) return;
-        // Atualiza marca pra próximo poll
-        sinceRef.current = new Date().toISOString();
-        for (const b of baixas) {
-          if (seenBaixasRef.current.has(b.id)) continue;
-          seenBaixasRef.current.add(b.id);
-          // Toca beep alto (Web Audio)
-          try {
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.frequency.value = 880; osc.type = 'sine';
-            gain.gain.setValueAtTime(0.3, ctx.currentTime);
-            osc.connect(gain); gain.connect(ctx.destination);
-            osc.start(); osc.stop(ctx.currentTime + 0.5);
-            // Segundo beep
-            setTimeout(() => {
-              const o2 = ctx.createOscillator();
-              const g2 = ctx.createGain();
-              o2.frequency.value = 1320; o2.type = 'sine';
-              g2.gain.setValueAtTime(0.3, ctx.currentTime);
-              o2.connect(g2); g2.connect(ctx.destination);
-              o2.start(); o2.stop(ctx.currentTime + 0.4);
-            }, 250);
-          } catch {/* navegador antigo, sem Web Audio */}
-          // Mostra alerta gigante
-          setPagoAlerta({
-            baixaId: b.id,
-            nomeCliente: b.customerName || 'Cliente',
-            valor: Number(b.totalPago) || 0,
-          });
-          // Imprime recibo automaticamente
-          try { printReceipt(b.id); } catch {/* segue */}
-          // Atualiza lista de clientes pra refletir baixa (parcelas atualizadas)
-          loadClientes();
-        }
-      } catch {/* erro de rede momentâneo — segue */}
-    };
-    const interval = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   // ── Filtro local ────────────────────────────────────────────
@@ -436,34 +376,6 @@ export default function RecebimentosPage() {
 
   return (
     <div className="min-h-screen bg-[#f4f1ec] flex flex-col">
-      {/* ALERTA GIGANTE — pagamento confirmado via webhook */}
-      {pagoAlerta && (
-        <div
-          className="fixed inset-0 bg-emerald-600/95 z-[100] flex items-center justify-center p-6 cursor-pointer"
-          onClick={() => setPagoAlerta(null)}
-        >
-          <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full text-center space-y-4 animate-pulse">
-            <div className="w-24 h-24 mx-auto bg-emerald-100 rounded-full flex items-center justify-center">
-              <CheckCircle2 size={56} className="text-emerald-600" />
-            </div>
-            <h2 className="text-3xl font-black text-emerald-700 uppercase tracking-wide">PAGO!</h2>
-            <div className="text-lg text-slate-700">
-              <div><strong>{pagoAlerta.nomeCliente}</strong></div>
-              <div className="text-3xl font-black text-emerald-600 tabular-nums mt-2">{brl(pagoAlerta.valor)}</div>
-            </div>
-            <div className="text-xs text-slate-500">
-              Recibo enviado pra impressão automaticamente
-            </div>
-            <button
-              onClick={() => setPagoAlerta(null)}
-              className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-lg"
-            >
-              OK
-            </button>
-          </div>
-        </div>
-      )}
-
       <header className="sticky top-0 z-20 bg-white border-b border-slate-200 shadow-sm">
         <div className="max-w-4xl mx-auto p-4 flex items-center gap-3">
           <Link href="/minha-loja/pdv" className="p-2 rounded-lg hover:bg-rose-100 text-rose-700">
