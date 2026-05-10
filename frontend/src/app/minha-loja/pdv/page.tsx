@@ -2778,26 +2778,23 @@ function PaymentModal({
         </div>
 
         {/* BODY scrollável */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
+        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2 min-h-0">
 
-        {/* Cabeçalho: total + pago + restante */}
-        <div className="bg-emerald-50 rounded p-2 space-y-1">
-          <div className="flex justify-between text-xs text-slate-600">
-            <span>Total da venda</span>
-            <span className="tabular-nums">{brl(total)}</span>
+        {/* Cabeçalho COMPACTO: total + restante numa linha (1 ou 2 linhas se já pago) */}
+        <div className="bg-emerald-50 rounded px-3 py-1.5 flex items-center justify-between gap-3">
+          <div className="flex items-baseline gap-2 text-xs text-slate-600">
+            <span>Total</span>
+            <span className="tabular-nums font-semibold text-slate-800">{brl(total)}</span>
+            {payments.length > 0 && (
+              <span className="text-emerald-700 tabular-nums">−{brl(jaPago)} pago</span>
+            )}
           </div>
-          {payments.length > 0 && (
-            <div className="flex justify-between text-xs text-emerald-700">
-              <span>Já pago</span>
-              <span className="tabular-nums">−{brl(jaPago)}</span>
-            </div>
-          )}
-          <div className="border-t border-emerald-200 pt-1 flex justify-between items-baseline">
-            <span className="text-xs uppercase font-semibold text-slate-700">
-              {pago100 ? 'Pago 100%' : 'Restante'}
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-[10px] uppercase font-bold text-slate-500">
+              {pago100 ? 'Pago' : 'Restante'}
             </span>
             <span
-              className={`text-2xl font-bold tabular-nums ${
+              className={`text-xl font-black tabular-nums ${
                 pago100 ? 'text-emerald-600' : 'text-rose-700'
               }`}
             >
@@ -2905,46 +2902,43 @@ function PaymentModal({
                     type="button"
                     onClick={() => !disabled && selectMethod(p.id)}
                     disabled={disabled}
-                    className={`p-3 rounded-lg border-2 text-sm font-bold transition-colors flex flex-col items-center gap-1 disabled:opacity-30 disabled:cursor-not-allowed ${
+                    className={`px-3 py-2 rounded-lg border-2 text-sm font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed ${
                       isSelected
                         ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
                         : 'border-slate-200 hover:border-slate-300 text-slate-600'
                     }`}
                     title={disabled ? 'Crediário exige CPF do cliente' : ''}
                   >
-                    <Icon className="w-5 h-5" />
+                    <Icon className="w-4 h-4" />
                     {p.label}
                   </button>
                 );
               })}
             </div>
 
-            {/* Input de valor parcial — quanto vai cobrir nessa forma */}
-            {selected && (
-              <div className="space-y-1 pt-2">
-                <label className="text-xs text-slate-600 uppercase font-semibold">
-                  Valor pago nessa forma
+            {/* Input de valor parcial — só aparece se for SPLIT (já tem pagamentos)
+                ou se vendedora quiser cobrir parcial. No 95% dos casos = restante. */}
+            {selected && (payments.length > 0 || valorParcial !== '') && (
+              <div className="flex items-center gap-2 pt-1">
+                <label className="text-[10px] text-slate-600 uppercase font-semibold shrink-0">
+                  Valor:
                 </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={valorParcial}
-                    onChange={(e) => setValorParcial(e.target.value)}
-                    placeholder={restante.toFixed(2).replace('.', ',')}
-                    className="flex-1 border rounded px-3 py-2 text-base font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setValorParcial(restante.toFixed(2).replace('.', ','))
-                    }
-                    className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
-                    title="Preencher com o restante"
-                  >
-                    = restante
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={valorParcial}
+                  onChange={(e) => setValorParcial(e.target.value)}
+                  placeholder={restante.toFixed(2).replace('.', ',')}
+                  className="flex-1 border rounded px-2 py-1 text-sm font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => setValorParcial(restante.toFixed(2).replace('.', ','))}
+                  className="px-2 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
+                  title="Preencher com o restante"
+                >
+                  = restante
+                </button>
               </div>
             )}
           </>
@@ -2953,16 +2947,16 @@ function PaymentModal({
         {/* Sub-bandeiras (débito/crédito) */}
         {needsBandeira && (
           <div className="space-y-2 pt-2 border-t">
-            <label className="text-xs text-slate-600 uppercase font-semibold">Bandeira</label>
-            <div className={`grid gap-1.5 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">Bandeira</label>
+            <div className={`grid gap-1 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
               {bandeiras.map((b) => (
                 <button
                   key={b}
                   type="button"
                   onClick={() => setBandeira(b)}
-                  className={`py-3 px-2 rounded border-2 transition-all flex items-center justify-center min-h-[56px] ${
+                  className={`py-1.5 px-2 rounded border-2 transition-all flex items-center justify-center min-h-[36px] ${
                     bandeira === b
-                      ? 'border-emerald-600 bg-emerald-50 shadow-md scale-105'
+                      ? 'border-emerald-600 bg-emerald-50 shadow-md'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
                   }`}
                 >
@@ -3196,19 +3190,19 @@ function PaymentModal({
             : 0;
           const baseTotal = Math.max(0, total - ent);
           return (
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-xs text-slate-600 uppercase font-semibold flex items-center justify-between">
+            <div className="space-y-1.5 pt-1.5 border-t">
+              <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider flex items-center justify-between">
                 <span>Parcelas (sem juros)</span>
                 {selected === 'crediario' && ent > 0 && (
-                  <span className="normal-case text-slate-500 text-[10px]">
+                  <span className="normal-case text-slate-500 text-[9px]">
                     Financiando {brl(baseTotal)} (entrada {brl(ent)})
                   </span>
                 )}
               </label>
               {/* GRID 3 COLUNAS × 4 LINHAS — todas as 12 parcelas visíveis
-                  ao mesmo tempo, sem precisar rolar. Cada botão mostra Nx +
-                  valor da parcela. Selecionado vira verde. */}
-              <div className="grid grid-cols-3 gap-1.5">
+                  ao mesmo tempo, sem precisar rolar. Compactado: gap menor,
+                  py-1, sem label "à vista/s/juros" pra economizar altura. */}
+              <div className="grid grid-cols-3 gap-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
@@ -3218,54 +3212,38 @@ function PaymentModal({
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 rounded-md transition-all border ${
+                      className={`flex items-center justify-center gap-1.5 px-1.5 py-1.5 rounded-md transition-all border ${
                         ativo
                           ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
                           : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
                       }`}
                     >
-                      <span className={`text-[11px] font-black tabular-nums leading-none ${
+                      <span className={`text-[11px] font-black tabular-nums leading-none shrink-0 ${
                         ativo ? 'text-white/90' : 'text-emerald-700'
                       }`}>{p}×</span>
-                      <span className={`text-[13px] font-black tabular-nums leading-tight ${
+                      <span className={`text-[12px] font-black tabular-nums leading-none ${
                         ativo ? 'text-white' : 'text-slate-800'
                       }`}>
                         {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
-                      </span>
-                      <span className={`text-[9px] uppercase tracking-wider leading-none ${
-                        ativo ? 'text-white/70' : 'text-slate-400'
-                      }`}>
-                        {p === 1 ? 'à vista' : 's/ juros'}
                       </span>
                     </button>
                   );
                 })}
               </div>
 
-              {/* Card destaque compacto da seleção atual — vendedora bate o olho */}
+              {/* Card destaque ULTRA-COMPACTO — uma linha só com info essencial */}
               {(() => {
                 const calc = calcularParcelas(baseTotal, parcelas);
-                if (parcelas === 1) {
-                  return (
-                    <div className="bg-emerald-600 rounded-lg px-3 py-2 flex items-center justify-between text-white shadow-sm">
-                      <span className="text-xs uppercase tracking-wider font-bold opacity-90">À vista</span>
-                      <span className="text-xl font-black tabular-nums">{brl(baseTotal)}</span>
-                    </div>
-                  );
-                }
                 const todasIguais = calc.iguais === calc.ultima;
                 return (
-                  <div className="bg-emerald-600 rounded-lg px-3 py-2 text-white shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs uppercase tracking-wider font-bold opacity-90">Parcelado</span>
-                      <span className="text-xl font-black tabular-nums">
-                        {parcelas}× {brl(calc.iguais)}
-                      </span>
-                    </div>
-                    <div className="text-[10px] opacity-80 text-right">
-                      {!todasIguais && `${calc.qtdIguais}× ${brl(calc.iguais)} + última ${brl(calc.ultima)} · `}
-                      Total {brl(baseTotal)} sem juros{ent > 0 ? ` · entrada ${brl(ent)}` : ''}
-                    </div>
+                  <div className="bg-emerald-600 rounded-lg px-3 py-1.5 flex items-center justify-between text-white shadow-sm">
+                    <span className="text-[10px] uppercase tracking-wider font-bold opacity-90">
+                      {parcelas === 1 ? 'À vista' : 'Parcelado'}
+                      {!todasIguais && ` · últ ${brl(calc.ultima)}`}
+                    </span>
+                    <span className="text-lg font-black tabular-nums">
+                      {parcelas === 1 ? brl(baseTotal) : `${parcelas}× ${brl(calc.iguais)}`}
+                    </span>
                   </div>
                 );
               })()}
@@ -4407,8 +4385,8 @@ function BandeiraLogo({ brand }: { brand: string }) {
     return (
       <div className="flex flex-col items-center justify-center leading-none">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt="Visa Electron" className="h-5 object-contain" />
-        <span className="text-[8px] font-bold tracking-wider text-[#1A1F71] mt-0.5">
+        <img src={src} alt="Visa Electron" className="h-4 object-contain" />
+        <span className="text-[7px] font-bold tracking-wider text-[#1A1F71]">
           ELECTRON
         </span>
       </div>
@@ -4419,7 +4397,7 @@ function BandeiraLogo({ brand }: { brand: string }) {
     <img
       src={src}
       alt={brand}
-      className="h-7 max-h-7 object-contain"
+      className="h-5 max-h-5 object-contain"
       loading="lazy"
     />
   );
