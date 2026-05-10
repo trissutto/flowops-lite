@@ -917,16 +917,22 @@ export class PdvController {
     }
   }
 
-  /** GET /pdv/sales/:id/carne-pdf — 1 folha A4, 2 carnês iguais */
+  /**
+   * GET /pdv/sales/:id/carne-pdf — 1 folha A4, 2 carnês iguais.
+   * ?debug=1 → desenha grade + labels [campo] em vermelho pra calibrar.
+   */
   @Get('sales/:id/carne-pdf')
   async getCarnePdf(
     @Req() req: any,
     @Param('id') id: string,
+    @Query('debug') debug: string,
     @Res() res: Response,
   ) {
     this.requireRole(req);
     try {
-      const { buffer, filename } = await this.crediarioPrint.generateCarne(id);
+      const { buffer, filename } = await this.crediarioPrint.generateCarne(id, {
+        debug: debug === '1' || debug === 'true',
+      });
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
       res.setHeader('Content-Length', String(buffer.length));

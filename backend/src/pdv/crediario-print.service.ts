@@ -849,9 +849,10 @@ export class CrediarioPrintService {
    * Gera PDF do CARNÊ — 1 folha A4 azul (2 carnês iguais por folha).
    * Imprime o MESMO carnê 2× pro cliente recortar uma cópia.
    */
-  async generateCarne(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCarneCoords(); // hot-reload do JSON do carnê
+  async generateCarne(saleId: string, opts?: { debug?: boolean }): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCarneCoords();
     const data = await this.loadSaleForPrint(saleId);
+    const debug = !!opts?.debug;
     const buffer = await new Promise<Buffer>((resolve, reject) => {
       try {
         const doc = new PDFDocument({ size: 'A4', margin: 0 });
@@ -863,22 +864,35 @@ export class CrediarioPrintService {
         this.registerFonts(doc);
         doc.font('Verdana').fontSize(10);
 
-        // Imprime os 2 blocos do carnê (idênticos)
+        const drawDbg = (field: { x: number; dy: number }, blocoY: number, txt: string, label?: string) => {
+          this.drawAt(doc, field, blocoY, txt);
+          if (debug && label) {
+            doc.fillColor('red').fontSize(7).text(`[${label}]`, field.x + 80, blocoY + field.dy, { lineBreak: false });
+            doc.fillColor('black').fontSize(10);
+          }
+        };
+
         for (let bloco = 0; bloco < 2; bloco++) {
           const blocoY = this.CARNE.blocoY[bloco];
           const f = this.CARNE.fields;
 
-          // Cabeçalho
-          this.drawAt(doc, f.numero, blocoY, String(data.cliente.codCliente || data.sale.id.slice(-6).toUpperCase()));
-          this.drawAt(doc, f.data, blocoY, this.fmtDate(new Date()));
-          this.drawAt(doc, f.cliente, blocoY, data.cliente.nome);
-          // ÚLTIMA COMPRA / LIMITE / PONTOS — deixados em branco até confirmar com user
-          // (se quiser preencher, adicionar aqui)
+          if (debug) {
+            doc.rect(20, blocoY, 555, this.CARNE.blocoH).stroke('#cccccc');
+            doc.fillColor('#999').fontSize(7);
+            for (let y = 0; y < this.CARNE.blocoH; y += 50) {
+              doc.text(`y=${y}`, 5, blocoY + y, { lineBreak: false });
+            }
+            for (let x = 0; x < 595; x += 50) {
+              doc.text(`x=${x}`, x, blocoY - 8, { lineBreak: false });
+            }
+            doc.fillColor('black').fontSize(10);
+          }
 
-          // Total e entrada
-          this.drawAt(doc, f.total, blocoY, this.fmtBRL(data.sale.total));
-          // Entrada vem do payment dinheiro com flag isEntradaCrediario
-          // Entrada: do details do payment crediário OU dos payments dinheiro com flag.
+          drawDbg(f.numero, blocoY, String(data.cliente.codCliente || data.sale.id.slice(-6).toUpperCase()), 'numero');
+          drawDbg(f.data, blocoY, this.fmtDate(new Date()), 'data');
+          drawDbg(f.cliente, blocoY, data.cliente.nome, 'cliente');
+
+          drawDbg(f.total, blocoY, this.fmtBRL(data.sale.total), 'total');
           let entrada = data.entrada || 0;
           if (entrada === 0) {
             for (const p of data.sale.payments || []) {
@@ -888,17 +902,20 @@ export class CrediarioPrintService {
               } catch {/* ignora */}
             }
           }
-          this.drawAt(doc, f.entrada, blocoY, entrada > 0 ? this.fmtBRL(entrada) : '0,00');
+          drawDbg(f.entrada, blocoY, entrada > 0 ? this.fmtBRL(entrada) : '0,00', 'entrada');
 
-          // Parcelas — 5 na coluna esquerda (1-5), 5 na direita (6-10)
           for (let i = 0; i < Math.min(data.parcelas, 10); i++) {
             const parc = data.parcelasArr[i];
             const isEsq = i < 5;
-            const config = isEsq ? f.parcelaEsq : f.parcelaDir;
+            const config = isEsq ? (f as any).parcelaEsq : (f as any).parcelaDir;
             const idxNaCol = isEsq ? i : i - 5;
             const yPos = blocoY + config.dy0 + idxNaCol * config.dyStep;
             doc.text(this.fmtBRL(parc.valor), config.xValor, yPos, { lineBreak: false });
             doc.text(this.fmtDate(parc.vencimento), config.xData, yPos, { lineBreak: false });
+            if (debug) {
+              doc.fillColor('red').fontSize(7).text(`[p${i + 1}]`, config.xData + 70, yPos, { lineBreak: false });
+              doc.fillColor('black').fontSize(10);
+            }
           }
         }
 

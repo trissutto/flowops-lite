@@ -1,17 +1,14 @@
 {
   "_help": [
-    "COORDENADAS DO CARNÊ - TUDO EM PONTOS (pt) — pdfkit usa pt nativo.",
-    "1pt = 0.353mm. 1mm = 2.835pt. Folha A4 = 595x842pt.",
+    "COORDENADAS DO CARNÊ - TUDO EM PONTOS (pt). Folha A4 = 595x842pt.",
+    "1pt = 0.353mm. 1mm = 2.835pt.",
     "",
-    "Estrutura: 2 BLOCOS por folha (carnê 1 e 2 idênticos pra recorte).",
-    "Bloco 1 começa em blocoY[0], Bloco 2 em blocoY[1].",
-    "Tudo dentro de um bloco usa 'dy' relativo ao TOPO do bloco.",
+    "Estrutura: 2 BLOCOS por folha (carnê e via cliente, idênticos).",
+    "Cada campo: x = horizontal, dy = vertical relativo ao topo do bloco.",
+    "blocoY = [Y do bloco 1, Y do bloco 2].",
     "",
-    "Como editar:",
-    "1. Use a tela /retaguarda/carne-config (recomendado)",
-    "2. OU edite este JSON e dê restart no backend.",
-    "",
-    "Defaults atuais espelham o que tava hardcoded no service."
+    "Edita pelo painel /retaguarda/carne-config + clica 'Salvar configuração'.",
+    "Hot-reload: a próxima geração de PDF já usa as coords novas (sem restart)."
   ],
 
   "blocoY": [25, 435],
@@ -21,19 +18,19 @@
     "numero":        { "x": 250, "dy": 30 },
     "data":          { "x": 480, "dy": 30 },
     "cliente":       { "x": 230, "dy": 65 },
-    "ultimaCompra":  { "x": 280, "dy": 100 },
-    "limite":        { "x": 480, "dy": 100 },
-    "pontos":        { "x": 480, "dy": 130 },
-    "total":         { "x": 250, "dy": 175 },
-    "entrada":       { "x": 250, "dy": 215 }
+    "ultimaCompra":  { "x": 280, "dy": 95 },
+    "limite":        { "x": 480, "dy": 95 },
+    "pontos":        { "x": 480, "dy": 125 },
+    "total":         { "x": 480, "dy": 155 },
+    "entrada":       { "x": 480, "dy": 185 }
   },
 
-  "parcelaEsq": { "xValor": 280, "xData": 415, "dy0": 175, "dyStep": 28 },
-  "parcelaDir": { "xValor": 565, "xData": 705, "dy0": 175, "dyStep": 28 },
+  "parcelaEsq": { "xValor": 80,  "xData": 200, "dy0": 230, "dyStep": 24 },
+  "parcelaDir": { "xValor": 320, "xData": 440, "dy0": 230, "dyStep": 24 },
 
   "totalAVencer": {
-    "col1": { "x": 60,  "yStart": 1080, "dyStep": 32 },
-    "col2": { "x": 280, "yStart": 1080, "dyStep": 32 },
-    "col3": { "x": 500, "yStart": 1080, "dyStep": 32 }
+    "col1": { "x": 60,  "yStart": 700, "dyStep": 22 },
+    "col2": { "x": 230, "yStart": 700, "dyStep": 22 },
+    "col3": { "x": 410, "yStart": 700, "dyStep": 22 }
   }
 }

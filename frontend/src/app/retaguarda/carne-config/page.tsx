@@ -1,14 +1,8 @@
 'use client';
 
 /**
- * /retaguarda/carne-config
- *
- * Painel de configuração das coordenadas do carnê de crediário.
- * Edita posições X/Y de cada campo + gera PDF de teste pra ver o resultado.
- *
- * Cada campo tem coords em PT (1pt = 0.353mm). Folha A4 = 595x842pt.
- * Bloco 1 e Bloco 2 são idênticos (carnê e via cliente).
- * "totalAVencer" é o bloco de parcelas antigas pendentes (3 colunas).
+ * /retaguarda/carne-config — painel admin pra ajustar coords do carnê.
+ * Salva em /tmp/carne-coords-override.json. Hot-reload no service.
  */
 
 import { useEffect, useState } from 'react';
@@ -66,10 +60,7 @@ export default function CarneConfigPage() {
     if (!coords) return;
     setCoords({
       ...coords,
-      fields: {
-        ...coords.fields,
-        [key]: { ...coords.fields[key], [axis]: value },
-      },
+      fields: { ...coords.fields, [key]: { ...coords.fields[key], [axis]: value } },
     });
   };
 
@@ -82,10 +73,7 @@ export default function CarneConfigPage() {
     if (!coords) return;
     setCoords({
       ...coords,
-      totalAVencer: {
-        ...coords.totalAVencer,
-        [col]: { ...coords.totalAVencer[col], [key]: value },
-      },
+      totalAVencer: { ...coords.totalAVencer, [col]: { ...coords.totalAVencer[col], [key]: value } },
     });
   };
 
@@ -101,10 +89,7 @@ export default function CarneConfigPage() {
     setSaving(true);
     setErr('');
     try {
-      await api('/pdv/carne/coords', {
-        method: 'PUT',
-        body: JSON.stringify(coords),
-      });
+      await api('/pdv/carne/coords', { method: 'PUT', body: JSON.stringify(coords) });
       setSavedAt(new Date());
     } catch (e: any) {
       setErr(e?.message || 'Falha ao salvar');
@@ -114,7 +99,7 @@ export default function CarneConfigPage() {
   };
 
   const resetar = async () => {
-    if (!confirm('Restaurar coordenadas padrão? Vai perder ajustes não-commitados.')) return;
+    if (!confirm('Restaurar padrão?')) return;
     setSaving(true);
     try {
       await api('/pdv/carne/coords', { method: 'DELETE' });
@@ -126,34 +111,32 @@ export default function CarneConfigPage() {
     }
   };
 
-  const gerarTeste = () => {
-    if (!testSaleId.trim()) {
-      alert('Digite um saleId pra gerar o PDF de teste');
-      return;
-    }
-    window.open(`/api/pdv/sales/${testSaleId.trim()}/carne.pdf`, '_blank');
+  const gerarTeste = (debug: boolean) => {
+    if (!testSaleId.trim()) { alert('Digite um saleId'); return; }
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
+    const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : '';
+    const url = `${apiUrl}/pdv/sales/${testSaleId.trim()}/carne-pdf${debug ? '?debug=1' : ''}`;
+    fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((r) => r.ok ? r.blob() : r.json().then((j) => Promise.reject(j)))
+      .then((blob: any) => {
+        if (blob instanceof Blob) {
+          const blobUrl = URL.createObjectURL(blob);
+          window.open(blobUrl, '_blank');
+        }
+      })
+      .catch((e: any) => alert(`Falha: ${e?.message || JSON.stringify(e)}`));
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50 p-6 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-rose-600" />
-      </div>
-    );
+    return <div className="min-h-screen bg-slate-50 p-6 flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-rose-600" /></div>;
   }
-
   if (!coords) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 rounded-lg p-4">
-            <AlertCircle className="inline w-4 h-4 mr-1" />
-            {err || 'Falha ao carregar configurações'}
-          </div>
-          <button onClick={reload} className="mt-3 px-4 py-2 bg-rose-600 text-white rounded">
-            Tentar novamente
-          </button>
+        <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 rounded-lg p-4">
+          <AlertCircle className="inline w-4 h-4 mr-1" /> {err || 'Falha ao carregar'}
         </div>
+        <button onClick={reload} className="mt-3 px-4 py-2 bg-rose-600 text-white rounded">Tentar novamente</button>
       </div>
     );
   }
@@ -162,15 +145,11 @@ export default function CarneConfigPage() {
     <div className="min-h-screen bg-slate-50 p-4 md:p-6">
       <div className="max-w-5xl mx-auto pb-32">
         <Link href="/retaguarda" className="inline-flex items-center gap-2 text-rose-700 hover:text-rose-900 mb-4">
-          <ArrowLeft size={18} /> Voltar pra retaguarda
+          <ArrowLeft size={18} /> Voltar
         </Link>
-
-        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-2">
-          Configuração do Carnê
-        </h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-2">Configuração do Carnê</h1>
         <p className="text-sm text-slate-600 mb-6">
-          Ajusta as coordenadas (em pontos / pt) de cada campo no carnê azul. Folha A4 = 595×842pt.
-          Cada bloco é idêntico (carnê + via). Salvar aplica imediatamente — gera o PDF de teste pra conferir.
+          Coordenadas em <b>pontos (pt)</b>. Folha A4 = 595×842pt. Salvar aplica imediatamente.
         </p>
 
         {err && (
@@ -179,28 +158,24 @@ export default function CarneConfigPage() {
           </div>
         )}
 
-        {/* BLOCO Y posições */}
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
           <h2 className="font-bold text-rose-900 mb-3">Posição vertical dos blocos</h2>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs uppercase font-bold text-slate-600">Bloco 1 (topo Y)</label>
-              <input type="number" value={coords.blocoY[0]} onChange={(e) => updateBlocoY(0, Number(e.target.value))}
-                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg font-mono" />
+              <label className="text-xs uppercase font-bold text-slate-600">Bloco 1 (Y)</label>
+              <input type="number" value={coords.blocoY[0]} onChange={(e) => updateBlocoY(0, Number(e.target.value))} className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg font-mono" />
             </div>
             <div>
-              <label className="text-xs uppercase font-bold text-slate-600">Bloco 2 (topo Y)</label>
-              <input type="number" value={coords.blocoY[1]} onChange={(e) => updateBlocoY(1, Number(e.target.value))}
-                className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg font-mono" />
+              <label className="text-xs uppercase font-bold text-slate-600">Bloco 2 (Y)</label>
+              <input type="number" value={coords.blocoY[1]} onChange={(e) => updateBlocoY(1, Number(e.target.value))} className="w-full px-3 py-2 border-2 border-slate-200 rounded-lg font-mono" />
             </div>
           </div>
         </div>
 
-        {/* CAMPOS DE CABEÇALHO */}
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
           <h2 className="font-bold text-rose-900 mb-3">Campos do cabeçalho (Bloco 1 e 2)</h2>
           <div className="text-xs text-slate-500 mb-3">
-            X = horizontal (esquerda → direita) · dy = vertical (relativo ao topo do bloco)
+            X = horizontal · dY = vertical relativo ao topo do bloco
           </div>
           <div className="space-y-2">
             {Object.keys(FIELD_LABELS).map((key) => {
@@ -211,13 +186,11 @@ export default function CarneConfigPage() {
                   <span className="text-sm font-bold text-slate-700">{FIELD_LABELS[key]}</span>
                   <div>
                     <label className="text-[10px] uppercase font-bold text-slate-500">X</label>
-                    <input type="number" value={f.x} onChange={(e) => updateField(key, 'x', Number(e.target.value))}
-                      className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
+                    <input type="number" value={f.x} onChange={(e) => updateField(key, 'x', Number(e.target.value))} className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
                   </div>
                   <div>
                     <label className="text-[10px] uppercase font-bold text-slate-500">dY</label>
-                    <input type="number" value={f.dy} onChange={(e) => updateField(key, 'dy', Number(e.target.value))}
-                      className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
+                    <input type="number" value={f.dy} onChange={(e) => updateField(key, 'dy', Number(e.target.value))} className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
                   </div>
                 </div>
               );
@@ -225,21 +198,18 @@ export default function CarneConfigPage() {
           </div>
         </div>
 
-        {/* PARCELAS ESQ / DIR */}
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
           <h2 className="font-bold text-rose-900 mb-3">8. Parcelas (5 esquerda + 5 direita)</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {(['parcelaEsq', 'parcelaDir'] as const).map((lado) => (
               <div key={lado} className="bg-slate-50 rounded-lg p-3 space-y-2">
-                <div className="font-bold text-slate-800">{lado === 'parcelaEsq' ? 'Coluna Esquerda (1-5)' : 'Coluna Direita (6-10)'}</div>
+                <div className="font-bold text-slate-800">{lado === 'parcelaEsq' ? 'Esquerda (1-5)' : 'Direita (6-10)'}</div>
                 {(['xValor', 'xData', 'dy0', 'dyStep'] as const).map((k) => (
                   <div key={k} className="grid grid-cols-[1fr_120px] items-center gap-2">
                     <label className="text-xs font-bold text-slate-600">
                       {k === 'xValor' ? 'X do valor' : k === 'xData' ? 'X da data' : k === 'dy0' ? 'dY inicial' : 'dY entre linhas'}
                     </label>
-                    <input type="number" value={coords[lado][k]}
-                      onChange={(e) => updateParcela(lado, k, Number(e.target.value))}
-                      className="px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
+                    <input type="number" value={coords[lado][k]} onChange={(e) => updateParcela(lado, k, Number(e.target.value))} className="px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
                   </div>
                 ))}
               </div>
@@ -247,12 +217,9 @@ export default function CarneConfigPage() {
           </div>
         </div>
 
-        {/* TOTAL A VENCER (3 colunas) */}
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
           <h2 className="font-bold text-rose-900 mb-1">Bloco 3 — Parcelas antigas pendentes</h2>
-          <div className="text-xs text-slate-500 mb-3">
-            3 colunas com valor + vencimento das parcelas em aberto (ordenadas por data).
-          </div>
+          <div className="text-xs text-slate-500 mb-3">3 colunas com valor + vencimento (ordenadas por data).</div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {(['col1', 'col2', 'col3'] as const).map((col) => (
               <div key={col} className="bg-slate-50 rounded-lg p-3 space-y-2">
@@ -260,11 +227,9 @@ export default function CarneConfigPage() {
                 {(['x', 'yStart', 'dyStep'] as const).map((k) => (
                   <div key={k}>
                     <label className="text-[10px] uppercase font-bold text-slate-500">
-                      {k === 'x' ? 'X' : k === 'yStart' ? 'Y inicial' : 'Espaço entre linhas'}
+                      {k === 'x' ? 'X' : k === 'yStart' ? 'Y inicial' : 'Espaço linhas'}
                     </label>
-                    <input type="number" value={coords.totalAVencer[col][k]}
-                      onChange={(e) => updateColuna(col, k, Number(e.target.value))}
-                      className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
+                    <input type="number" value={coords.totalAVencer[col][k]} onChange={(e) => updateColuna(col, k, Number(e.target.value))} className="w-full px-2 py-1 border border-slate-200 rounded font-mono text-sm" />
                   </div>
                 ))}
               </div>
@@ -272,39 +237,34 @@ export default function CarneConfigPage() {
           </div>
         </div>
 
-        {/* TESTAR PDF */}
         <div className="bg-violet-50 border-2 border-violet-300 rounded-2xl p-5 mb-4">
           <h2 className="font-bold text-violet-900 mb-2">Gerar PDF de teste</h2>
           <div className="text-xs text-violet-700 mb-2">
-            Cole o ID de uma venda crediário pra gerar o PDF com as coords atuais (após salvar).
+            Cole o ID de uma venda crediário pra gerar PDF (após salvar).
           </div>
-          <div className="flex gap-2">
-            <input
-              value={testSaleId}
-              onChange={(e) => setTestSaleId(e.target.value)}
-              placeholder="saleId (UUID)"
-              className="flex-1 px-3 py-2 border-2 border-violet-200 rounded-lg font-mono"
-            />
-            <button onClick={gerarTeste} className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg flex items-center gap-1">
-              <Eye size={16} /> Gerar PDF
-            </button>
+          <div className="flex flex-col gap-2">
+            <input value={testSaleId} onChange={(e) => setTestSaleId(e.target.value)} placeholder="saleId (UUID)" className="px-3 py-2 border-2 border-violet-200 rounded-lg font-mono" />
+            <div className="flex gap-2">
+              <button onClick={() => gerarTeste(false)} className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg flex items-center justify-center gap-1">
+                <Eye size={16} /> PDF normal
+              </button>
+              <button onClick={() => gerarTeste(true)} className="flex-1 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg flex items-center justify-center gap-1">
+                <Eye size={16} /> PDF com grade (debug)
+              </button>
+            </div>
+            <div className="text-[11px] text-violet-700">
+              <b>PDF com grade</b> — bordas, régua de coords e labels [campo] em vermelho.
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Footer fixo com salvar/reset */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-2xl p-3 flex items-center justify-between gap-3 z-10">
-        <button onClick={resetar} disabled={saving}
-          className="px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50 disabled:opacity-50 flex items-center gap-2">
+        <button onClick={resetar} disabled={saving} className="px-4 py-3 border-2 border-slate-300 text-slate-700 font-bold rounded-xl hover:bg-slate-50 disabled:opacity-50 flex items-center gap-2">
           <RotateCcw size={16} /> Restaurar padrão
         </button>
-        {savedAt && (
-          <span className="text-xs text-emerald-700 font-semibold">
-            ✓ Salvo às {savedAt.toLocaleTimeString('pt-BR')}
-          </span>
-        )}
-        <button onClick={salvar} disabled={saving}
-          className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-50">
+        {savedAt && <span className="text-xs text-emerald-700 font-semibold">✓ Salvo às {savedAt.toLocaleTimeString('pt-BR')}</span>}
+        <button onClick={salvar} disabled={saving} className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-50">
           {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
           Salvar configuração
         </button>
