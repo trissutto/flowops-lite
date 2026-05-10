@@ -132,39 +132,34 @@ export class ReturnsService {
     const cleanSku = String(sku || '').trim();
     if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
 
-    // Busca vendas finalizadas que tem item com esse SKU (case insensitive)
-    // Pega últimas 60 dias por padrão pra não pesar demais.
+    // Busca vendas finalizadas que tem item com esse SKU/REF/EAN.
+    // Janela 90 dias (era 60) — cobre devolução de venda do mês passado +.
     const dataLimite = new Date();
-    dataLimite.setDate(dataLimite.getDate() - 60);
+    dataLimite.setDate(dataLimite.getDate() - 90);
+
+    // Filtro abrangente: bate em sku, ref OU ean — exato, contains ou
+    // startsWith pra cobrir variações ("5210367" vs "5210367-XL-AZUL")
+    const itemFilter: any = {
+      OR: [
+        { sku: cleanSku },
+        { ref: cleanSku },
+        { ean: cleanSku },
+        { sku: { contains: cleanSku, mode: 'insensitive' } },
+        { ref: { contains: cleanSku, mode: 'insensitive' } },
+        { ean: { contains: cleanSku, mode: 'insensitive' } },
+      ],
+    };
 
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: {
         status: 'finalized',
         finalizedAt: { gte: dataLimite },
-        items: {
-          some: {
-            OR: [
-              { sku: cleanSku },
-              { ref: cleanSku },
-              { sku: { contains: cleanSku, mode: 'insensitive' } },
-              { ref: { contains: cleanSku, mode: 'insensitive' } },
-            ],
-          },
-        },
+        items: { some: itemFilter },
       },
       orderBy: { finalizedAt: 'desc' },
       take: 20,
       include: {
-        items: {
-          where: {
-            OR: [
-              { sku: cleanSku },
-              { ref: cleanSku },
-              { sku: { contains: cleanSku, mode: 'insensitive' } },
-              { ref: { contains: cleanSku, mode: 'insensitive' } },
-            ],
-          },
-        },
+        items: { where: itemFilter },
       },
     });
 
