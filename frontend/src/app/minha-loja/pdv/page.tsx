@@ -1730,10 +1730,32 @@ function VendedoraModal({
   // de loja, o backend ignora o filtro e retorna todos.
   const lojaParam = storeCode ? `&loja=${encodeURIComponent(storeCode)}` : '';
 
-  // Carrega lista inicial sem filtro de nome (top 20 da loja, por nome)
+  // PRIORIDADE 1: tenta carregar a WHITELIST de vendedoras ativas configuradas
+  // pra essa loja em /retaguarda/vendedoras-ativas. Se houver, mostra só elas
+  // (sem hit no Wincred). Se não houver config, cai no fallback de buscar
+  // direto na tabela funcionarios.
+  const [usingActiveList, setUsingActiveList] = useState(false);
   useEffect(() => {
+    if (!storeCode) return;
     (async () => {
       setSearching(true);
+      try {
+        const ativas = await api<Array<{ codigo: string; nome: string }>>(
+          `/pdv/vendedoras-ativas?storeCode=${encodeURIComponent(storeCode)}`,
+        );
+        if (ativas && ativas.length > 0) {
+          // Tem config — usa a whitelist
+          setResults(ativas);
+          setTabelaOk(true);
+          setLojaFiltered(true);
+          setUsingActiveList(true);
+          setSearching(false);
+          return;
+        }
+      } catch { /* sem config — cai no fallback abaixo */ }
+
+      // Fallback: busca direto em funcionarios do Wincred
+      setUsingActiveList(false);
       try {
         const r = await api<{ results: typeof results; table?: string; lojaFiltered?: boolean }>(
           `/pdv/funcionarios-search?q=&limit=20${lojaParam}`,
@@ -1747,11 +1769,26 @@ function VendedoraModal({
         setSearching(false);
       }
     })();
-  }, [lojaParam]);
+  }, [lojaParam, storeCode]);
 
-  // Refaz busca com debounce ao digitar
+  // Refaz busca com debounce ao digitar.
+  // Se está usando a whitelist, filtra LOCAL (sem hit no backend).
+  // Se não, faz busca live na tabela funcionarios do Wincred.
+  const [allActives, setAllActives] = useState<typeof results>([]);
+  useEffect(() => { if (usingActiveList) setAllActives(results); }, [usingActiveList, results.length]);
+
   useEffect(() => {
     if (searchTerm.length < 2 && searchTerm.length > 0) return;
+    if (usingActiveList) {
+      // Filtro local na whitelist
+      const term = searchTerm.trim().toLowerCase();
+      if (!term) {
+        setResults(allActives);
+      } else {
+        setResults(allActives.filter((f) => f.nome.toLowerCase().includes(term)));
+      }
+      return;
+    }
     const t = setTimeout(async () => {
       setSearching(true);
       try {
@@ -1765,7 +1802,7 @@ function VendedoraModal({
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [searchTerm, lojaParam]);
+  }, [searchTerm, lojaParam, usingActiveList, allActives]);
 
   return (
     <>
@@ -1799,10 +1836,19 @@ function VendedoraModal({
 
         {/* Indicador de filtro: "mostrando funcionárias da loja X" */}
         {storeCode && lojaFiltered && (
-          <div className="text-[10px] text-violet-700 bg-violet-50 border border-violet-200 px-2 py-1 rounded flex items-center gap-1">
-            <span className="font-bold">Loja {storeCode}</span>
-            <span className="text-violet-500">·</span>
-            <span>filtro ativo</span>
+          <div className="text-[10px] text-violet-700 bg-violet-50 border border-violet-200 px-2 py-1 rounded flex items-center gap-2 justify-between">
+            <span className="flex items-center gap-1">
+              <span className="font-bold">Loja {storeCode}</span>
+              <span className="text-violet-500">·</span>
+              <span>{usingActiveList ? 'whitelist ativa' : 'filtro de loja'}</span>
+            </span>
+            <Link
+              href="/retaguarda/vendedoras-ativas"
+              className="font-bold underline hover:text-violet-900"
+              onClick={(e) => e.stopPropagation()}
+            >
+              ✎ editar lista
+            </Link>
           </div>
         )}
         {storeCode && !lojaFiltered && tabelaOk && (

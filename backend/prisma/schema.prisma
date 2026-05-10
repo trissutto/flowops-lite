@@ -259,6 +259,23 @@ model Seller {
   @@map("sellers")
 }
 
+// Vendedoras ATIVAS por loja — whitelist pra o PDV mostrar so as que
+// realmente atendem ali. Evita o modal Vendedora puxar todos os 80+
+// funcionarios da tabela funcionarios do Wincred.
+// Admin marca quais funcionarias ficam visiveis no PDV de cada loja.
+// Codigo e nome vem da tabela funcionarios do Wincred (snapshot).
+model PdvActiveSeller {
+  id        String   @id @default(uuid())
+  storeCode String   @map("store_code")
+  codigo    String
+  nome      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([storeCode, codigo])
+  @@index([storeCode])
+  @@map("pdv_active_sellers")
+}
+
 model OrderItem {
   id              String  @id @default(uuid())
   orderId         String  @map("order_id")

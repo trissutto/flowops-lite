@@ -16,11 +16,13 @@ import { CrediarioPrintService } from './crediario-print.service';
 import { PdvDiagController } from './pdv-diag.controller';
 import { MarcadosService } from './marcados.service';
 import { MarcadosController } from './marcados.controller';
+import { ActiveSellersService } from './active-sellers.service';
+import { ActiveSellersController } from './active-sellers.controller';
 
 @Module({
   imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule],
-  controllers: [PdvController, CashController, ReturnsController, PdvDiagController, MarcadosController],
-  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService],
-  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService],
+  controllers: [PdvController, CashController, ReturnsController, PdvDiagController, MarcadosController, ActiveSellersController],
+  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService],
+  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService],
 })
 export class PdvModule {}
