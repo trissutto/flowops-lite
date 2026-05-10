@@ -150,7 +150,31 @@ export class ReturnsService {
       ],
     };
 
-    const sales = await (this.prisma as any).pdvSale.findMany({
+    // ── DIAGNÓSTICO: log no Railway pra debugar caso de venda recente
+    //    que não aparece. Roda 3 queries paralelas pra entender o estado.
+    try {
+      const [totalItems, anyVenda, finalizadasUlt90] = await Promise.all([
+        (this.prisma as any).pdvSaleItem.count({ where: itemFilter }),
+        (this.prisma as any).pdvSale.findFirst({
+          where: { items: { some: itemFilter } },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, status: true, createdAt: true, finalizedAt: true, storeCode: true },
+        }),
+        (this.prisma as any).pdvSale.count({
+          where: { status: 'finalized', finalizedAt: { gte: dataLimite } },
+        }),
+      ]);
+      this.logger.log(
+        `[devolucao/lookup-by-sku] q="${cleanSku}" items_match=${totalItems} ` +
+        `total_finalized_90d=${finalizadasUlt90} ` +
+        `most_recent=${anyVenda ? `${anyVenda.id.slice(0,8)}/status=${anyVenda.status}/loja=${anyVenda.storeCode}/criada=${anyVenda.createdAt?.toISOString()}` : 'NENHUMA'}`,
+      );
+    } catch (e: any) {
+      this.logger.warn(`[devolucao/lookup-by-sku] diag falhou: ${e?.message}`);
+    }
+
+    // 1ª busca: VENDAS FINALIZADAS na janela
+    let sales = await (this.prisma as any).pdvSale.findMany({
       where: {
         status: 'finalized',
         finalizedAt: { gte: dataLimite },
@@ -162,6 +186,33 @@ export class ReturnsService {
         items: { where: itemFilter },
       },
     });
+
+    // 2ª tentativa (fallback): se não achou finalized, tenta vendas RECENTES
+    // em qualquer status (open/cancelled). Cobre venda PIX que ainda não
+    // confirmou via webhook, ou venda cancelada por engano.
+    if (sales.length === 0) {
+      const dataRecente = new Date();
+      dataRecente.setDate(dataRecente.getDate() - 7);
+      const fallback = await (this.prisma as any).pdvSale.findMany({
+        where: {
+          createdAt: { gte: dataRecente },
+          items: { some: itemFilter },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        include: {
+          items: { where: itemFilter },
+        },
+      });
+      if (fallback.length > 0) {
+        this.logger.log(
+          `[devolucao/lookup-by-sku] q="${cleanSku}" sem finalized, ` +
+          `mas achou ${fallback.length} venda(s) recente(s) status: ` +
+          `${fallback.map((f: any) => f.status).join(',')}`,
+        );
+      }
+      sales = fallback;
+    }
 
     if (sales.length === 0) {
       return { sku: cleanSku, sales: [] };
@@ -208,9 +259,10 @@ export class ReturnsService {
         storeName: s.storeName,
         customerName: s.customerName,
         customerCpf: s.customerCpf,
-        finalizedAt: s.finalizedAt,
+        finalizedAt: s.finalizedAt || s.createdAt, // fallback p/ vendas open
         totalVenda: s.total,
         sellerName: s.sellerName,
+        status: s.status, // 'finalized' | 'open' | 'cancelled' — frontend mostra alerta se ≠ finalized
         matchedItems,
         // Se TODOS os items matching já foram devolvidos, marca como indisponível
         totalmenteDevolvido: matchedItems.every((it: any) => it.disponivel === 0),
