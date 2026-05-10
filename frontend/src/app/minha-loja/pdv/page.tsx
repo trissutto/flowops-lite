@@ -1730,65 +1730,60 @@ function VendedoraModal({
   // de loja, o backend ignora o filtro e retorna todos.
   const lojaParam = storeCode ? `&loja=${encodeURIComponent(storeCode)}` : '';
 
-  // PRIORIDADE 1: tenta carregar a WHITELIST de vendedoras ativas configuradas
-  // pra essa loja em /retaguarda/vendedoras-ativas. Se houver, mostra só elas
-  // (sem hit no Wincred). Se não houver config, cai no fallback de buscar
-  // direto na tabela funcionarios.
-  const [usingActiveList, setUsingActiveList] = useState(false);
+  // PRIORIDADE 1: carrega WHITELIST de vendedoras ativas configuradas em
+  // /retaguarda/vendedoras-ativas. Se tem config, usa SÓ ela (filtra local
+  // sem hit no Wincred). Senão, fallback pra busca em funcionarios do Wincred.
+  // Whitelist fica em estado separado pra evitar loop com `results` (busca live).
+  const [whitelist, setWhitelist] = useState<typeof results | null>(null);
+  const usingActiveList = (whitelist?.length ?? 0) > 0;
+
   useEffect(() => {
     if (!storeCode) return;
+    let cancelled = false;
     (async () => {
       setSearching(true);
       try {
         const ativas = await api<Array<{ codigo: string; nome: string }>>(
           `/pdv/vendedoras-ativas?storeCode=${encodeURIComponent(storeCode)}`,
         );
+        if (cancelled) return;
         if (ativas && ativas.length > 0) {
-          // Tem config — usa a whitelist
-          setResults(ativas);
+          // Tem config — guarda whitelist (não toca em `results` pra evitar loop)
+          setWhitelist(ativas);
           setTabelaOk(true);
           setLojaFiltered(true);
-          setUsingActiveList(true);
           setSearching(false);
           return;
         }
-      } catch { /* sem config — cai no fallback abaixo */ }
+        setWhitelist([]); // marca que tentou mas tava vazia
+      } catch {
+        if (!cancelled) setWhitelist([]);
+      }
 
       // Fallback: busca direto em funcionarios do Wincred
-      setUsingActiveList(false);
       try {
         const r = await api<{ results: typeof results; table?: string; lojaFiltered?: boolean }>(
           `/pdv/funcionarios-search?q=&limit=20${lojaParam}`,
         );
+        if (cancelled) return;
         setResults(r.results || []);
         setTabelaOk(r.results && r.results.length > 0);
         setLojaFiltered(!!r.lojaFiltered);
       } catch {
-        setTabelaOk(false);
+        if (!cancelled) setTabelaOk(false);
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [lojaParam, storeCode]);
 
-  // Refaz busca com debounce ao digitar.
-  // Se está usando a whitelist, filtra LOCAL (sem hit no backend).
-  // Se não, faz busca live na tabela funcionarios do Wincred.
-  const [allActives, setAllActives] = useState<typeof results>([]);
-  useEffect(() => { if (usingActiveList) setAllActives(results); }, [usingActiveList, results.length]);
-
+  // Refaz busca com debounce ao digitar — SÓ quando NÃO está usando whitelist.
+  // (Em modo whitelist, o filtro é local via useMemo abaixo, sem setState — evita
+  // loop infinito de re-render que dava "tremida" na tela.)
   useEffect(() => {
+    if (usingActiveList) return; // whitelist filtra local — não faz fetch
     if (searchTerm.length < 2 && searchTerm.length > 0) return;
-    if (usingActiveList) {
-      // Filtro local na whitelist
-      const term = searchTerm.trim().toLowerCase();
-      if (!term) {
-        setResults(allActives);
-      } else {
-        setResults(allActives.filter((f) => f.nome.toLowerCase().includes(term)));
-      }
-      return;
-    }
     const t = setTimeout(async () => {
       setSearching(true);
       try {
@@ -1802,7 +1797,18 @@ function VendedoraModal({
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [searchTerm, lojaParam, usingActiveList, allActives]);
+  }, [searchTerm, lojaParam, usingActiveList]);
+
+  // Lista renderizada: se em whitelist, filtra a whitelist local pelo searchTerm;
+  // senão, usa results da busca live. useMemo = sem setState = sem loop.
+  const visibleResults = useMemo(() => {
+    if (usingActiveList && whitelist) {
+      const term = searchTerm.trim().toLowerCase();
+      if (!term) return whitelist;
+      return whitelist.filter((f) => f.nome.toLowerCase().includes(term));
+    }
+    return results;
+  }, [usingActiveList, whitelist, results, searchTerm]);
 
   return (
     <>
@@ -1877,14 +1883,14 @@ function VendedoraModal({
         )}
 
         <div className="max-h-80 overflow-y-auto p-1">
-          {results.length === 0 && !searching && (
+          {visibleResults.length === 0 && !searching && (
             <div className="text-center text-xs text-slate-400 py-6">
               {searchTerm ? 'Nenhuma vendedora encontrada' : 'Carregando…'}
             </div>
           )}
-          {results.length > 0 && (
+          {visibleResults.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-              {results.map((f) => {
+              {visibleResults.map((f) => {
                 const isAtual = atual && atual.toUpperCase().includes(f.nome.toUpperCase());
                 const primeiroNome = f.nome.split(/\s+/)[0];
                 return (
