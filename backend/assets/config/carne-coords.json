@@ -1,0 +1,39 @@
+{
+  "_help": [
+    "COORDENADAS DO CARNÊ - TUDO EM PONTOS (pt) — pdfkit usa pt nativo.",
+    "1pt = 0.353mm. 1mm = 2.835pt. Folha A4 = 595x842pt.",
+    "",
+    "Estrutura: 2 BLOCOS por folha (carnê 1 e 2 idênticos pra recorte).",
+    "Bloco 1 começa em blocoY[0], Bloco 2 em blocoY[1].",
+    "Tudo dentro de um bloco usa 'dy' relativo ao TOPO do bloco.",
+    "",
+    "Como editar:",
+    "1. Use a tela /retaguarda/carne-config (recomendado)",
+    "2. OU edite este JSON e dê restart no backend.",
+    "",
+    "Defaults atuais espelham o que tava hardcoded no service."
+  ],
+
+  "blocoY": [25, 435],
+  "blocoH": 410,
+
+  "fields": {
+    "numero":        { "x": 250, "dy": 30 },
+    "data":          { "x": 480, "dy": 30 },
+    "cliente":       { "x": 230, "dy": 65 },
+    "ultimaCompra":  { "x": 280, "dy": 100 },
+    "limite":        { "x": 480, "dy": 100 },
+    "pontos":        { "x": 480, "dy": 130 },
+    "total":         { "x": 250, "dy": 175 },
+    "entrada":       { "x": 250, "dy": 215 }
+  },
+
+  "parcelaEsq": { "xValor": 280, "xData": 415, "dy0": 175, "dyStep": 28 },
+  "parcelaDir": { "xValor": 565, "xData": 705, "dy0": 175, "dyStep": 28 },
+
+  "totalAVencer": {
+    "col1": { "x": 60,  "yStart": 1080, "dyStep": 32 },
+    "col2": { "x": 280, "yStart": 1080, "dyStep": 32 },
+    "col3": { "x": 500, "yStart": 1080, "dyStep": 32 }
+  }
+}

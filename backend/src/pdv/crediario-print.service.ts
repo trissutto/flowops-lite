@@ -213,22 +213,22 @@ export class CrediarioPrintService {
   };
 
   // CARNÊ — 2 por folha A4 (azul). Cada bloco ocupa ~410pt.
-  private readonly CARNE = {
+  // Coords vêm do JSON (assets/config/carne-coords.json + override em /tmp).
+  // reloadCarneCoords() é chamado a cada generateCarne pra hot-edit.
+  private CARNE_DEFAULT = {
     blocoY: [25, 435],
     blocoH: 410,
     fields: {
       numero:        { x: 250, dy: 30 },
       data:          { x: 480, dy: 30 },
-      cliente:       { x: 230, dy: 65 },           // nome cliente
-      ultimaCompra:  { x: 280, dy: 100 },          // data última compra
-      limite:        { x: 480, dy: 100 },          // limite crédito
-      pontos:        { x: 480, dy: 130 },          // pontos
-      total:         { x: 250, dy: 175 },          // TOTAL R$
-      entrada:       { x: 250, dy: 215 },          // ENT R$
-      // Parcelas: 5 esquerda (1-5) + 5 direita (6-10)
+      cliente:       { x: 230, dy: 65 },
+      ultimaCompra:  { x: 280, dy: 100 },
+      limite:        { x: 480, dy: 100 },
+      pontos:        { x: 480, dy: 130 },
+      total:         { x: 250, dy: 175 },
+      entrada:       { x: 250, dy: 215 },
       parcelaEsq: { xValor: 280, xData: 415, dy0: 175, dyStep: 28 },
       parcelaDir: { xValor: 565, xData: 705, dy0: 175, dyStep: 28 },
-      // Total a vencer (3 colunas × 12 linhas) — começa após o "TOTAL DE PARCELAS A VENCER"
       totalAVencer: {
         col1: { x: 60,  yStart: 1080, dyStep: 32 },
         col2: { x: 280, yStart: 1080, dyStep: 32 },
@@ -236,6 +236,43 @@ export class CrediarioPrintService {
       },
     },
   };
+
+  private CARNE = this.CARNE_DEFAULT;
+
+  /**
+   * Recarrega coords do carnê do JSON externo.
+   * Chama em generateCarne / generateImpressaoCompleta pra hot-edit pelo painel.
+   */
+  private reloadCarneCoords(): void {
+    try {
+      const fs = require('fs');
+      const OVERRIDE = '/tmp/carne-coords-override.json';
+      let raw: string | null = null;
+      if (fs.existsSync(OVERRIDE)) {
+        raw = fs.readFileSync(OVERRIDE, 'utf-8');
+      } else {
+        const cfgPath = resolveAssetPath('config', 'carne-coords.json');
+        if (cfgPath && fs.existsSync(cfgPath)) {
+          raw = fs.readFileSync(cfgPath, 'utf-8');
+        }
+      }
+      if (!raw) return;
+      const cfg = JSON.parse(raw);
+      this.CARNE = {
+        blocoY: Array.isArray(cfg.blocoY) && cfg.blocoY.length === 2 ? cfg.blocoY : this.CARNE_DEFAULT.blocoY,
+        blocoH: typeof cfg.blocoH === 'number' ? cfg.blocoH : this.CARNE_DEFAULT.blocoH,
+        fields: {
+          ...this.CARNE_DEFAULT.fields,
+          ...(cfg.fields || {}),
+          parcelaEsq: cfg.parcelaEsq || this.CARNE_DEFAULT.fields.parcelaEsq,
+          parcelaDir: cfg.parcelaDir || this.CARNE_DEFAULT.fields.parcelaDir,
+          totalAVencer: cfg.totalAVencer || this.CARNE_DEFAULT.fields.totalAVencer,
+        },
+      };
+    } catch (e: any) {
+      this.logger.warn(`[carne-coords] reload falhou: ${e?.message}. Usando defaults.`);
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // HELPERS
@@ -813,6 +850,7 @@ export class CrediarioPrintService {
    * Imprime o MESMO carnê 2× pro cliente recortar uma cópia.
    */
   async generateCarne(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
+    this.reloadCarneCoords(); // hot-reload do JSON do carnê
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
       try {

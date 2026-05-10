@@ -342,6 +342,12 @@ function PdvPageInner() {
         }
         return;
       }
+      // F3 → tela de Caixa (sangria, suprimento, retiradas)
+      if (e.key === 'F3') {
+        e.preventDefault();
+        window.location.href = '/minha-loja/pdv/caixa';
+        return;
+      }
       // F4 → tela de TROCA / Devolução (atalho rápido pro fluxo de troca)
       if (e.key === 'F4') {
         e.preventDefault();
@@ -1230,10 +1236,12 @@ function PdvPageInner() {
             </Link>
             <Link
               href="/minha-loja/pdv/caixa"
-              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 relative"
+              title="Caixa — sangria, suprimento, retiradas (atalho F3)"
             >
               <DollarSign className="w-3.5 h-3.5 text-slate-600" />
               <span className="text-[10px] font-bold text-slate-700">Caixa</span>
+              <kbd className="absolute top-0.5 right-0.5 text-[8px] font-mono bg-emerald-100 text-emerald-800 border border-emerald-300 rounded px-1 leading-tight">F3</kbd>
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
