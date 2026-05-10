@@ -324,7 +324,7 @@ function PdvPageInner() {
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
-    if (showCustomer || showPayment || showFinalized) return;
+    if (showCustomer || showPayment || showFinalized || showVendedora) return;
     const handler = (e: KeyboardEvent) => {
       // ── ATALHOS GLOBAIS (funcionam mesmo com input em foco) ──
       // F1 → foca o input de bipagem
@@ -342,12 +342,22 @@ function PdvPageInner() {
         }
         return;
       }
-      // F4 → finalizar venda (se carrinho tem itens)
+      // F4 → tela de TROCA / Devolução (atalho rápido pro fluxo de troca)
       if (e.key === 'F4') {
         e.preventDefault();
-        if (sale.items?.length > 0 && sale.total > 0) {
-          setShowPayment(true);
-        }
+        window.location.href = '/minha-loja/pdv/devolucao';
+        return;
+      }
+      // F5 → identificar/trocar cliente (CPF/nome)
+      if (e.key === 'F5') {
+        e.preventDefault();
+        setShowCustomer(true);
+        return;
+      }
+      // F7 → escolher/trocar vendedora (atendente)
+      if (e.key === 'F7') {
+        e.preventDefault();
+        setShowVendedora(true);
         return;
       }
       // ESC → cancelar venda só quando carrinho VAZIO (segurança)
@@ -375,7 +385,7 @@ function PdvPageInner() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [sale, showCustomer, showPayment, showFinalized]);
+  }, [sale, showCustomer, showPayment, showFinalized, showVendedora]);
 
   // ── Bipagem ──
   const handleScan = async (e?: React.FormEvent) => {
@@ -816,7 +826,7 @@ function PdvPageInner() {
             </button>
           )}
 
-          {/* Botão Vendedora — quem está atendendo essa venda */}
+          {/* Botão Vendedora — quem está atendendo · atalho F7 */}
           <button
             onClick={() => setShowVendedora(true)}
             disabled={!sale || sale.status !== 'open'}
@@ -825,15 +835,16 @@ function PdvPageInner() {
                 ? 'bg-emerald-400 hover:bg-emerald-300 text-emerald-950 ring-2 ring-emerald-200/50'
                 : 'bg-white/90 hover:bg-white text-rose-700 ring-2 ring-rose-300/50 animate-pulse'
             }`}
-            title={sale?.sellerName ? `Trocar vendedora (atual: ${sale.sellerName})` : 'Identificar vendedora'}
+            title={sale?.sellerName ? `Trocar vendedora (atalho F7) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F7)'}
           >
             <Sparkles className="w-4 h-4" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
             </span>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-emerald-700/20 text-emerald-950 border border-emerald-700/30 rounded px-1.5 py-0.5">F7</kbd>
           </button>
 
-          {/* Botão Cliente — destaca-se sobre o roxo do header */}
+          {/* Botão Cliente — atalho F5 */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
@@ -842,12 +853,13 @@ function PdvPageInner() {
                 ? 'bg-amber-400 hover:bg-amber-300 text-violet-900 ring-2 ring-amber-200/50'
                 : 'bg-white hover:bg-amber-50 text-violet-800'
             }`}
-            title="Identificar cliente"
+            title="Identificar cliente (atalho F5)"
           >
             <User className="w-4 h-4" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F5</kbd>
           </button>
         </div>
       </header>
@@ -1199,10 +1211,12 @@ function PdvPageInner() {
             </Link>
             <Link
               href="/minha-loja/pdv/devolucao"
-              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200"
+              className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 relative"
+              title="Devolução / Troca (atalho F4)"
             >
               <ArrowRightLeft className="w-3.5 h-3.5 text-slate-600" />
               <span className="text-[10px] font-bold text-slate-700">Trocar</span>
+              <kbd className="absolute top-0.5 right-0.5 text-[8px] font-mono bg-amber-100 text-amber-800 border border-amber-300 rounded px-1 leading-tight">F4</kbd>
             </Link>
             <Link
               href="/minha-loja/pdv/caixa"
