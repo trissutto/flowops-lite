@@ -646,11 +646,18 @@ function PdvPageInner() {
       setShowPayment(false);
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
 
-      // Em fluxo AUTO (PIX confirmado pelo Pagar.me), pula a tela de finalizada
-      // — só imprime e abre próxima venda. Em fluxo MANUAL, mostra a tela.
+      // PIX = NUNCA mostra tela de preview/finalizada. Vai direto pro recibo
+      // + proxima venda. Cobre 3 cenarios:
+      //   1. paymentMethod === 'pix' (PIX unico)
+      //   2. autoFlowRef (PIX confirmado por webhook Pagar.me/PagBank)
+      //   3. split onde TODOS os pagamentos sao PIX (multi-PIX)
       const wasAutoFlow = autoFlowRef.current;
       autoFlowRef.current = false;
-      if (!wasAutoFlow) {
+      const isDirectPix = paymentMethod === 'pix';
+      const allPaymentsPix = (fresh?.payments?.length ?? 0) > 0 &&
+        (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'pix');
+      const skipFinalizedScreen = wasAutoFlow || isDirectPix || allPaymentsPix;
+      if (!skipFinalizedScreen) {
         setShowFinalized(true);
       }
 
@@ -679,9 +686,10 @@ function PdvPageInner() {
         console.error('Falha ao imprimir recibo:', printErr);
       }
 
-      // Em fluxo AUTO: depois de imprimir, abre próxima venda em ~1.5s
+      // PIX e fluxo AUTO: depois de imprimir, abre proxima venda em ~1.5s
       // (tempo suficiente pro recibo carregar e disparar print() no iframe).
-      if (wasAutoFlow) {
+      // Sem tela de preview no caminho — vendedora ja pode bipar proximo cliente.
+      if (skipFinalizedScreen) {
         setTimeout(() => {
           setSale(null);
           createNewSale();

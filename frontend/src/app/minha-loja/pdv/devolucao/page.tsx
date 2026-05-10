@@ -95,32 +95,46 @@ export default function DevolucaoPage() {
     if (!q) return;
     setBusy(true);
     try {
-      // HEURÍSTICA pra decidir o tipo de busca:
-      //  - UUID (36 chars com hífens)  → busca por ID da venda
-      //  - Número >= 10 dígitos puros  → busca por número de NFC-e
-      //  - Resto (SKU/REF, números curtos, alfanuméricos) → busca por SKU
+      // ESTRATÉGIA: sempre tenta SKU/REF primeiro (caso 95% — vendedora bipa
+      // a peça que voltou). Se não achar, e o input parecer ID/número de venda
+      // (UUID ou número longo), tenta lookup direto. Sem heuristicas frageis.
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
-      const isLongNumber = /^\d{6,}$/.test(q);
-      const buscaPorVenda = isUuid || isLongNumber;
+      const looksLikeSaleNumber = isUuid || /^\d{9,}$/.test(q); // NFC-e tem 9+ digitos
 
-      if (buscaPorVenda) {
-        // Busca direta — comportamento antigo
-        const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(q)}`);
-        setData(r);
-      } else {
-        // Busca por SKU/REF — lista vendas que têm essa peça
+      // 1a tentativa: busca por SKU/REF (lista vendas com essa peca)
+      let foundBySku = false;
+      try {
         const r = await api<{
           sku: string;
           sales: Array<any>;
         }>(`/pdv/devolucao/lookup-by-sku?sku=${encodeURIComponent(q)}`);
-        if (!r.sales.length) {
-          setErr(`Nenhuma venda encontrada nos últimos 60 dias com SKU/REF "${q}"`);
-        } else {
+        if (r.sales?.length) {
           setSalesBySku(r.sales);
+          foundBySku = true;
         }
+      } catch {
+        // ignora — vai tentar por venda abaixo
+      }
+
+      // 2a tentativa: busca por ID/NFC-e da venda (so se SKU nao achou nada)
+      if (!foundBySku) {
+        if (looksLikeSaleNumber) {
+          // Input parece ID/NFC-e — tenta busca direta
+          try {
+            const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(q)}`);
+            setData(r);
+            return;
+          } catch (e: any) {
+            // nao achou por venda tambem — mensagem unificada
+            setErr(`Nada encontrado pra "${q}". Verifique o SKU/REF da peca ou o numero da NFC-e.`);
+            return;
+          }
+        }
+        // Input curto e nao achou por SKU
+        setErr(`Nenhuma venda encontrada nos ultimos 60 dias com SKU/REF "${q}"`);
       }
     } catch (e: any) {
-      setErr(e?.message || 'Venda não encontrada');
+      setErr(e?.message || 'Falha na busca');
     } finally {
       setBusy(false);
     }
