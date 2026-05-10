@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
+import ValeTrocaModal from './ValeTrocaModal';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 
 type Sale = {
@@ -492,6 +493,7 @@ function PdvPageInner() {
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
   const [showPixAvulso, setShowPixAvulso] = useState(false);
+  const [showValeTroca, setShowValeTroca] = useState(false);
   // ── Modal de Desconto (% ou R$) — pode ser pra venda inteira ou item ──
   const [showDiscount, setShowDiscount] = useState<
     | null
@@ -1406,6 +1408,16 @@ function PdvPageInner() {
                     }
                     hoverColor="hover:bg-amber-50 hover:border-amber-300"
                   />
+                  <PayBtn
+                    onClick={() => setShowValeTroca(true)}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Tag className="w-4 h-4 text-fuchsia-600" />
+                        <span className="text-xs font-black text-fuchsia-700 tracking-wide">VALE</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-fuchsia-50 hover:border-fuchsia-300"
+                  />
                 </div>
               </div>
             </div>
@@ -1652,6 +1664,35 @@ function PdvPageInner() {
             } catch (e: any) {
               const h = humanizeError(e);
               toast('error', `Erro ao registrar pagamento: ${h.title}`, h.hint);
+            }
+          }}
+        />
+      )}
+
+      {/* Modal Vale-Troca — bipa código TROCA-XXXX, valida e aplica como
+          pagamento parcial. Se cobrir todo o restante, finaliza venda automático. */}
+      {showValeTroca && sale && (
+        <ValeTrocaModal
+          saleId={sale.id}
+          totalRestante={(() => {
+            const pago = (sale.payments || []).reduce((s, p) => s + (p.valor || 0), 0);
+            return Math.max(0, sale.total - pago);
+          })()}
+          onClose={() => setShowValeTroca(false)}
+          onApplied={async () => {
+            const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+            setSale(fresh);
+            setShowValeTroca(false);
+            const totalPago = (fresh.payments || []).reduce((s, p) => s + (p.valor || 0), 0);
+            if (Math.abs(totalPago - fresh.total) < 0.01) {
+              autoFlowRef.current = true;
+              finalizeSale('');
+            } else {
+              toast(
+                'success',
+                'Vale-troca aplicado',
+                `Falta ${brl(Math.max(0, fresh.total - totalPago))} pra fechar`,
+              );
             }
           }}
         />

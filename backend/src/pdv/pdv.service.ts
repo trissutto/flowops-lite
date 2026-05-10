@@ -161,6 +161,46 @@ export class PdvService {
       throw new BadRequestException('Crediário exige CPF do cliente');
     }
 
+    // VALE-TROCA: valida o código antes de aceitar como pagamento.
+    // Confere existe, não usado, não vencido e tem saldo >= valor.
+    if (input.method === 'vale_troca') {
+      const code = String(input.details?.creditoCode || '').trim().toUpperCase();
+      if (!code) throw new BadRequestException('Código TROCA-XXXXX obrigatório');
+      const ret = await (this.prisma as any).pdvReturn.findUnique({
+        where: { creditoCode: code },
+      });
+      if (!ret) throw new BadRequestException(`Vale-troca ${code} não encontrado`);
+      if (ret.status === 'used') {
+        throw new BadRequestException(
+          `Vale-troca ${code} já foi usado em ${ret.creditoUsadoAt ? new Date(ret.creditoUsadoAt).toLocaleString('pt-BR') : 'data desconhecida'}`,
+        );
+      }
+      if (ret.creditoValidade && new Date(ret.creditoValidade).getTime() < Date.now()) {
+        throw new BadRequestException(
+          `Vale-troca ${code} venceu em ${new Date(ret.creditoValidade).toLocaleDateString('pt-BR')}`,
+        );
+      }
+      const valorVale = Number(ret.valorTotal) || 0;
+      if (input.valor > valorVale + 0.01) {
+        throw new BadRequestException(
+          `Vale-troca ${code} tem saldo R$ ${valorVale.toFixed(2)}, não dá pra cobrir R$ ${input.valor.toFixed(2)}`,
+        );
+      }
+      // Não bloqueia outro vale_troca já adicionado nessa venda — também valida
+      // que o mesmo código não tá sendo usado 2x.
+      const jaUsouNaVenda = await (this.prisma as any).pdvSalePayment.findFirst({
+        where: { saleId: input.saleId, method: 'vale_troca' },
+      });
+      if (jaUsouNaVenda) {
+        try {
+          const det = JSON.parse(jaUsouNaVenda.details || '{}');
+          if (det.creditoCode === code) {
+            throw new BadRequestException(`Vale-troca ${code} já foi adicionado nessa venda`);
+          }
+        } catch { /* details mal-formado, ignora */ }
+      }
+    }
+
     // Não deixa pagar mais que o total
     const jaPago = await this.sumPaidValue(input.saleId);
     const restante = sale.total - jaPago;
@@ -1165,6 +1205,41 @@ export class PdvService {
       this.logger.warn(
         `[pdv→wincred] Erro ao gravar venda ${sale.id} no Wincred: ${e?.message || e}. Venda no flowops segue OK.`,
       );
+    }
+
+    // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
+    // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
+    try {
+      const valeTrocaPayments = (payments as any[]).filter(
+        (p: any) => p.method === 'vale_troca',
+      );
+      for (const p of valeTrocaPayments) {
+        let code: string | null = null;
+        try {
+          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
+        } catch { /* ignora */ }
+        if (!code) continue;
+        const ret = await (this.prisma as any).pdvReturn.findUnique({
+          where: { creditoCode: code },
+        });
+        if (!ret) {
+          this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
+          continue;
+        }
+        if (ret.status === 'used') continue; // idempotente
+        await (this.prisma as any).pdvReturn.update({
+          where: { id: ret.id },
+          data: {
+            status: 'used',
+            creditoUsadoEm: sale.id,
+            creditoUsadoAt: new Date(),
+          },
+        });
+        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
     }
 
     return { ok: true, sale: updated, nfcePreview: nfceStub };
