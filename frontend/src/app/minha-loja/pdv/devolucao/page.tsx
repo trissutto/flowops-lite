@@ -213,10 +213,41 @@ export default function DevolucaoPage() {
         }),
       });
       setSuccess(r);
+
+      // AUTO-IMPRIME o vale assim que a devolução em modo crédito/troca
+      // for confirmada — entrega o cupom pra cliente sem vendedora precisar
+      // clicar em mais nada. Usa silentPrintUrl no Electron, fallback iframe.
+      if ((r.modo === 'troca' || r.modo === 'credito') && r.creditoCode) {
+        try {
+          const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
+          const electron = (window as any).electronAPI;
+          if (electron?.silentPrintUrl) {
+            electron.silentPrintUrl(window.location.origin + url).catch(() => {
+              hiddenIframe(url);
+            });
+          } else {
+            hiddenIframe(url);
+          }
+        } catch { /* segue — botão Imprimir Vale fica disponível */ }
+      }
     } catch (e: any) {
       setErr(e?.message || 'Falha na devolução');
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Cria iframe oculto que carrega a página do vale, ela auto-imprime e some.
+  // Mesmo padrão usado em recibos do PDV — sem janela visível pra vendedora.
+  function hiddenIframe(url: string) {
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:300px;height:600px;border:0;';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => { try { iframe.remove(); } catch {} }, 30000);
+    } catch {
+      window.open(url, 'lurds_vale', 'width=400,height=700');
     }
   }
 
@@ -535,18 +566,57 @@ export default function DevolucaoPage() {
               </div>
             )}
             {(success.modo === 'troca' || success.modo === 'credito') && (
-              <div className="bg-emerald-50 rounded-lg p-4 mb-4 text-emerald-800">
-                <div className="text-sm mb-1">Vale-troca gerado:</div>
-                <div className="text-2xl font-mono font-bold tracking-widest">
-                  {success.creditoCode}
-                </div>
-                <div className="text-sm mt-1">
-                  Válido até{' '}
-                  {success.creditoValidade
-                    ? new Date(success.creditoValidade).toLocaleDateString('pt-BR')
-                    : '—'}
-                </div>
-              </div>
+              <>
+                {success.creditoCode ? (
+                  <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-5 mb-4">
+                    <div className="text-xs uppercase tracking-widest text-emerald-700 font-bold">
+                      ★ Vale-Troca gerado ★
+                    </div>
+                    <div className="text-3xl sm:text-4xl font-mono font-black tracking-widest text-slate-900 mt-2 mb-1">
+                      {success.creditoCode}
+                    </div>
+                    <div className="text-2xl font-black text-emerald-700 tabular-nums">
+                      R$ {fmt(success.valorTotal)}
+                    </div>
+                    <div className="text-sm text-slate-600 mt-2">
+                      Válido até{' '}
+                      <strong>
+                        {success.creditoValidade
+                          ? new Date(success.creditoValidade).toLocaleDateString('pt-BR')
+                          : '—'}
+                      </strong>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(success.creditoCode)}?autoprint=1`;
+                        const electron = (window as any).electronAPI;
+                        if (electron?.silentPrintUrl) {
+                          electron.silentPrintUrl(window.location.origin + url).catch(() => {
+                            window.open(url, 'lurds_vale', 'width=400,height=700');
+                          });
+                        } else {
+                          window.open(url, 'lurds_vale', 'width=400,height=700');
+                        }
+                      }}
+                      className="mt-4 w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg flex items-center justify-center gap-2"
+                    >
+                      🖨 IMPRIMIR VALE PRO CLIENTE
+                    </button>
+                    <div className="text-[11px] text-slate-500 mt-2">
+                      Entregue o cupom impresso pra cliente — ela vai precisar pra trocar.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-4 mb-4 text-rose-800">
+                    <strong>⚠ Vale-troca NÃO foi gerado</strong>
+                    <br />
+                    A devolução foi registrada mas o código TROCA-XXXXX não veio
+                    do servidor. Recarregue a página de listagem de devoluções
+                    e busque pelo cliente pra emitir o vale manualmente.
+                  </div>
+                )}
+              </>
             )}
 
             {success.items?.some((it: any) => it.stockError) && (
