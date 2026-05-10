@@ -947,6 +947,10 @@ export class CrediarioPrintService {
         doc.font('Verdana').fontSize(10);
 
         // === PROMISSÓRIAS ===
+        // Layout: 3 promissórias por folha A4 branca.
+        // 1-3 parcelas  → 1 folha
+        // 4-6 parcelas  → 2 folhas
+        // 7+ parcelas   → 3+ folhas
         for (let i = 0; i < data.parcelas; i++) {
           const slotNaPagina = i % 3;
           if (i > 0 && slotNaPagina === 0) doc.addPage();
@@ -955,7 +959,19 @@ export class CrediarioPrintService {
           this.drawPromissoriaBloco(doc, blocoTopY, data, parc);
         }
 
-        // === CARNÊ === (sempre uma página nova)
+        // === FOLHAS BRANCAS DE PADDING ===
+        // Kit de impressão SEMPRE = 2 folhas brancas + 1 azul. Se a venda tem
+        // poucas parcelas e usou só 1 folha de promissória, adiciona folha(s)
+        // em branco até completar 2 — mantém o ritmo da impressora (puxa a
+        // 2ª folha branca mesmo sem texto, depois puxa a azul do carnê).
+        const folhasPromissoriaUsadas = Math.max(1, Math.ceil(data.parcelas / 3));
+        const FOLHAS_MIN = 2;
+        const folhasBrancasExtras = Math.max(0, FOLHAS_MIN - folhasPromissoriaUsadas);
+        for (let i = 0; i < folhasBrancasExtras; i++) {
+          doc.addPage(); // página em branco — só pra impressora puxar a folha
+        }
+
+        // === CARNÊ === (sempre uma página nova — folha azul)
         doc.addPage();
         for (let bloco = 0; bloco < 2; bloco++) {
           const blocoY = this.CARNE.blocoY[bloco];
