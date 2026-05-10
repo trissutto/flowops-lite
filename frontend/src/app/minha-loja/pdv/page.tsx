@@ -348,8 +348,10 @@ function PdvPageInner() {
         window.location.href = '/minha-loja/pdv/devolucao';
         return;
       }
-      // F5 → identificar/trocar cliente (CPF/nome)
-      if (e.key === 'F5') {
+      // F6 → identificar/trocar cliente (CPF/nome)
+      // Não usamos F5 porque o navegador reserva pra reload e preventDefault
+      // não cancela em todos os browsers.
+      if (e.key === 'F6') {
         e.preventDefault();
         setShowCustomer(true);
         return;
@@ -853,13 +855,13 @@ function PdvPageInner() {
                 ? 'bg-amber-400 hover:bg-amber-300 text-violet-900 ring-2 ring-amber-200/50'
                 : 'bg-white hover:bg-amber-50 text-violet-800'
             }`}
-            title="Identificar cliente (atalho F5)"
+            title="Identificar cliente (atalho F6)"
           >
             <User className="w-4 h-4" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F5</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F6</kbd>
           </button>
         </div>
       </header>
