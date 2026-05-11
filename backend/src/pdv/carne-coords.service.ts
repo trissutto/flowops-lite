@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import { PrismaService } from '../prisma/prisma.service';
 
 function resolveAssetPath(...parts: string[]): string | null {
   const candidates = [
@@ -10,14 +11,13 @@ function resolveAssetPath(...parts: string[]): string | null {
     path.resolve(process.cwd(), 'dist', '..', 'assets', ...parts),
   ];
   for (const c of candidates) {
-    try {
-      if (fs.existsSync(c)) return c;
-    } catch {/* ignora */}
+    try { if (fs.existsSync(c)) return c; } catch {/* ignora */}
   }
   return null;
 }
 
-const OVERRIDE_PATH = '/tmp/carne-coords-override.json';
+const CFG_KEY = 'carne-coords';
+const FALLBACK_TMP = '/tmp/carne-coords-override.json';
 
 export type CarneCoords = {
   blocoY: number[];
@@ -35,31 +35,46 @@ export type CarneCoords = {
 @Injectable()
 export class CarneCoordsService {
   private readonly logger = new Logger(CarneCoordsService.name);
+  constructor(private readonly prisma: PrismaService) {}
 
-  read(): CarneCoords {
+  /**
+   * Lê coords. Prioridade:
+   *  1. Postgres AppConfig.key='carne-coords' (sobrevive a redeploys)
+   *  2. /tmp/carne-coords-override.json (fallback legado)
+   *  3. assets/config/carne-coords.json (bundled)
+   */
+  async read(): Promise<CarneCoords> {
+    // 1. Postgres
     try {
-      if (fs.existsSync(OVERRIDE_PATH)) {
-        const raw = fs.readFileSync(OVERRIDE_PATH, 'utf-8');
-        return JSON.parse(raw) as CarneCoords;
+      const row = await (this.prisma as any).appConfig.findUnique({ where: { key: CFG_KEY } });
+      if (row?.valueJson) {
+        return JSON.parse(row.valueJson) as CarneCoords;
       }
     } catch (e: any) {
-      this.logger.warn(`[carne-coords] override invalido: ${e?.message}`);
+      this.logger.warn(`[carne-coords] DB read falhou: ${e?.message}. Caindo no /tmp.`);
     }
+
+    // 2. /tmp
+    try {
+      if (fs.existsSync(FALLBACK_TMP)) {
+        return JSON.parse(fs.readFileSync(FALLBACK_TMP, 'utf-8')) as CarneCoords;
+      }
+    } catch {/* segue */}
+
+    // 3. Bundled
     const cfgPath = resolveAssetPath('config', 'carne-coords.json');
     if (!cfgPath || !fs.existsSync(cfgPath)) {
       throw new BadRequestException('carne-coords.json nao encontrado');
     }
-    try {
-      const raw = fs.readFileSync(cfgPath, 'utf-8');
-      return JSON.parse(raw) as CarneCoords;
-    } catch (e: any) {
-      throw new BadRequestException(`Falha ao ler carne-coords.json: ${e?.message}`);
-    }
+    return JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as CarneCoords;
   }
 
-  write(input: Partial<CarneCoords>): CarneCoords {
+  /**
+   * Salva no Postgres (persiste em redeploys) + /tmp (fallback rapido).
+   */
+  async write(input: Partial<CarneCoords>): Promise<CarneCoords> {
     let current: CarneCoords | null = null;
-    try { current = this.read(); } catch { current = null; }
+    try { current = await this.read(); } catch { current = null; }
     if (!current) throw new BadRequestException('Nao consigo ler coords atuais');
 
     const merged: CarneCoords = {
@@ -78,18 +93,36 @@ export class CarneCoordsService {
       throw new BadRequestException('blocoH precisa ser numero > 0');
     }
 
+    const json = JSON.stringify(merged);
+
+    // 1. Postgres (FONTE PRIMARIA - sobrevive a redeploys)
     try {
-      fs.writeFileSync(OVERRIDE_PATH, JSON.stringify(merged, null, 2), 'utf-8');
-      this.logger.log(`[carne-coords] override salvo em ${OVERRIDE_PATH}`);
+      await (this.prisma as any).appConfig.upsert({
+        where: { key: CFG_KEY },
+        update: { valueJson: json },
+        create: { key: CFG_KEY, valueJson: json },
+      });
+      this.logger.log(`[carne-coords] salvo no Postgres (key=${CFG_KEY})`);
     } catch (e: any) {
-      throw new BadRequestException(`Falha ao salvar: ${e?.message}`);
+      this.logger.error(`[carne-coords] FALHA salvar no Postgres: ${e?.message}`);
+      throw new BadRequestException(`Falha ao salvar no banco: ${e?.message}`);
     }
+
+    // 2. /tmp (cache pra hot-reload sem hit no DB)
+    try {
+      fs.writeFileSync(FALLBACK_TMP, json, 'utf-8');
+    } catch {/* ignora */}
+
     return merged;
   }
 
-  reset(): CarneCoords {
+  /** Reset → apaga do Postgres + /tmp. Volta pro JSON bundled. */
+  async reset(): Promise<CarneCoords> {
     try {
-      if (fs.existsSync(OVERRIDE_PATH)) fs.unlinkSync(OVERRIDE_PATH);
+      await (this.prisma as any).appConfig.delete({ where: { key: CFG_KEY } });
+    } catch {/* nao existia, OK */}
+    try {
+      if (fs.existsSync(FALLBACK_TMP)) fs.unlinkSync(FALLBACK_TMP);
     } catch {/* ignora */}
     return this.read();
   }

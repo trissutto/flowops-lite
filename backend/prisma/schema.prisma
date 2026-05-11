@@ -259,6 +259,17 @@ model Seller {
   @@map("sellers")
 }
 
+// Tabela KV genérica pra config do app que precisa sobreviver a redeploys.
+// Usada pra coords do carnê / promissória editadas pelo painel admin.
+// O /tmp do Railway some a cada deploy — Postgres nao.
+model AppConfig {
+  key       String   @id
+  valueJson String   @db.Text @map("value_json")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_config")
+}
+
 // Vendedoras ATIVAS por loja — whitelist pra o PDV mostrar so as que
 // realmente atendem ali. Evita o modal Vendedora puxar todos os 80+
 // funcionarios da tabela funcionarios do Wincred.

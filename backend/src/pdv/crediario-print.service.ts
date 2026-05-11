@@ -243,18 +243,23 @@ export class CrediarioPrintService {
    * Recarrega coords do carnê do JSON externo.
    * Chama em generateCarne / generateImpressaoCompleta pra hot-edit pelo painel.
    */
-  private reloadCarneCoords(): void {
+  private async reloadCarneCoords(): Promise<void> {
     try {
-      const fs = require('fs');
-      const OVERRIDE = '/tmp/carne-coords-override.json';
       let raw: string | null = null;
-      if (fs.existsSync(OVERRIDE)) {
-        raw = fs.readFileSync(OVERRIDE, 'utf-8');
-      } else {
+      // 1. Postgres (fonte primaria — sobrevive a redeploys)
+      try {
+        const row = await (this.prisma as any).appConfig.findUnique({ where: { key: 'carne-coords' } });
+        if (row?.valueJson) raw = row.valueJson;
+      } catch {/* DB indisponivel, segue */}
+      // 2. /tmp (cache rapido)
+      if (!raw) {
+        const OVERRIDE = '/tmp/carne-coords-override.json';
+        if (fs.existsSync(OVERRIDE)) raw = fs.readFileSync(OVERRIDE, 'utf-8');
+      }
+      // 3. Bundled
+      if (!raw) {
         const cfgPath = resolveAssetPath('config', 'carne-coords.json');
-        if (cfgPath && fs.existsSync(cfgPath)) {
-          raw = fs.readFileSync(cfgPath, 'utf-8');
-        }
+        if (cfgPath && fs.existsSync(cfgPath)) raw = fs.readFileSync(cfgPath, 'utf-8');
       }
       if (!raw) return;
       const cfg = JSON.parse(raw);
@@ -850,7 +855,7 @@ export class CrediarioPrintService {
    * Imprime o MESMO carnê 2× pro cliente recortar uma cópia.
    */
   async generateCarne(saleId: string, opts?: { debug?: boolean }): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCarneCoords();
+    await this.reloadCarneCoords();
     const data = await this.loadSaleForPrint(saleId);
     const debug = !!opts?.debug;
     const buffer = await new Promise<Buffer>((resolve, reject) => {
@@ -933,6 +938,7 @@ export class CrediarioPrintService {
    */
   async generateImpressaoCompleta(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
     this.reloadCoords(); // hot-reload do JSON a cada request
+    await this.reloadCarneCoords(); // hot-reload coords carne (Postgres)
     // pdfkit não tem merge nativo; geramos um único Document concatenando páginas
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
