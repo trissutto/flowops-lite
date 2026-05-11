@@ -158,7 +158,8 @@ function ImprimirCupomPageInner() {
     : new Date(pick.createdAt).toLocaleString('pt-BR');
   const dataImpressao = new Date().toLocaleString('pt-BR');
 
-  const shippingBadge = classifyShipping(pick.order.shippingMethod ?? '');
+  // Passa UF pra resolver PROMOCIONAL → SEDEX (SP) ou PAC (outros estados)
+  const shippingBadge = classifyShipping(pick.order.shippingMethod ?? '', addr?.state ?? null);
 
   return (
     <>

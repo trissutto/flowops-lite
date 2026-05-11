@@ -16,6 +16,8 @@ export interface ParsedAddress {
   neighborhood: string | null;
   /** Cidade / UF */
   cityState: string | null;
+  /** UF isolada (SP, RJ, MG…) — pra regras de envio (PROMOCIONAL → SEDEX se SP) */
+  state: string | null;
   /** CEP já formatado (00000-000) */
   cep: string | null;
   /** Tudo numa linha só (pra fallback inline) */
@@ -46,6 +48,7 @@ export function parseShippingAddress(
     complement: null,
     neighborhood: null,
     cityState: null,
+    state: null,
     cep: null,
     oneLiner: trimmed,
   };
@@ -85,6 +88,7 @@ function buildFromJson(j: any): ParsedAddress {
     complement,
     neighborhood,
     cityState,
+    state: state || null,
     cep,
     oneLiner,
   };

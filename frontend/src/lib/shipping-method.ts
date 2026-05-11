@@ -51,7 +51,7 @@ function normalize(s: string): string {
     .trim();
 }
 
-export function classifyShipping(raw: string | null | undefined): ShippingBadge {
+export function classifyShipping(raw: string | null | undefined, state?: string | null): ShippingBadge {
   if (!raw) return FALLBACK;
 
   const text = normalize(raw);
@@ -70,6 +70,30 @@ export function classifyShipping(raw: string | null | undefined): ShippingBadge 
       short: 'RETIRADA',
       color: 'bg-amber-100 text-amber-900',
       colorBold: 'bg-amber-500 text-white',
+      raw: rawStr,
+    };
+  }
+
+  // PROMOCIONAL — regra Lurd's: SP → SEDEX, outros estados → PAC.
+  // O estado vem do shippingAddress (parseShippingAddress.state).
+  if (text.includes('promocional') || text.includes('promo ')) {
+    const uf = String(state || '').trim().toUpperCase();
+    if (uf === 'SP') {
+      return {
+        kind: 'sedex',
+        label: 'SEDEX',
+        short: 'SEDEX',
+        color: 'bg-red-100 text-red-800',
+        colorBold: 'bg-red-600 text-white',
+        raw: rawStr,
+      };
+    }
+    return {
+      kind: 'pac',
+      label: 'PAC',
+      short: 'PAC',
+      color: 'bg-blue-100 text-blue-800',
+      colorBold: 'bg-blue-600 text-white',
       raw: rawStr,
     };
   }

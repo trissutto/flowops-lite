@@ -431,10 +431,12 @@ function Folha({
       <div>{addrCity}</div>
       {cep && <div>CEP: {cep}</div>}
 
-      {/* ENVIO — destacado em caixa preta invertida (alto contraste pra térmica) */}
+      {/* ENVIO — destacado em caixa preta invertida (alto contraste pra térmica).
+          Passa UF do destinatário pra resolver "PROMOCIONAL" → SEDEX (SP) ou PAC. */}
       <h2>Forma de Envio</h2>
       {(() => {
-        const m = classifyShipping(shippingMethod);
+        const uf = (ship.state || bill.state || '').trim();
+        const m = classifyShipping(shippingMethod, uf);
         const isKnown = m.kind !== 'other';
         return (
           <div
@@ -454,7 +456,7 @@ function Folha({
         );
       })()}
       {/* Linha original (raw) como sub-info — ajuda o cliente a identificar o serviço completo */}
-      {shippingMethod && shippingMethod !== classifyShipping(shippingMethod).label && (
+      {shippingMethod && shippingMethod !== classifyShipping(shippingMethod, ship.state || bill.state).label && (
         <div className="muted" style={{ textAlign: 'center', marginTop: 2 }}>
           {shippingMethod}
         </div>
