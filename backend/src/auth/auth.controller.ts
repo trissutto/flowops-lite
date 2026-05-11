@@ -9,6 +9,11 @@ class LoginDto {
   @IsString() @MinLength(6) password: string;
 }
 
+class ChangePasswordDto {
+  @IsString() @MinLength(1) oldPassword: string;
+  @IsString() @MinLength(8) newPassword: string;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -22,10 +27,19 @@ export class AuthController {
   }
 
   /**
-   * Retorna o user logado (pra frontend saber role/storeId após F5 sem relogar).
-   * Inclui storeCode + storeName quando é user de loja — usado pelo /minha-loja
-   * pra montar título "LURDS ORDER ONE [NOME DA LOJA]".
+   * Troca senha do usuario logado.
+   * Body: { oldPassword, newPassword (min 8 chars) }
    */
+  @UseGuards(JwtAuthGuard)
+  @Post('change-password')
+  changePassword(@Req() req: any, @Body() dto: ChangePasswordDto) {
+    return this.auth.changePassword({
+      userId: req.user.userId || req.user.sub,
+      oldPassword: dto.oldPassword,
+      newPassword: dto.newPassword,
+    });
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('me')
   async me(@Req() req: any) {
