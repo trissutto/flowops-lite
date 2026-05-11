@@ -1529,18 +1529,6 @@ function PdvPageInner() {
                 </div>
               </div>
 
-              {/* PIX RÁPIDO — escondido em telas menores, mostra só em XL */}
-              <button
-                onClick={() => setShowPixAvulso(true)}
-                disabled={!sale.items?.length || sale.total <= 0}
-                className="hidden xl:flex px-3 py-3.5 text-white font-bold rounded-xl items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed text-sm transition shrink-0"
-                style={{ background: `linear-gradient(135deg, ${HUB_TONES.teal.from}, ${HUB_TONES.teal.to})` }}
-                title="Cobrar via PIX agora (Pagar.me/Stone)"
-              >
-                <DollarSign className="w-5 h-5" />
-                <span>PIX</span>
-              </button>
-
               {/* FINALIZAR — botão verde gigante (CTA primário) */}
               <button
                 onClick={() => { setPaymentFilter('all'); setShowPayment(true); }}
