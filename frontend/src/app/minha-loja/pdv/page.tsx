@@ -362,8 +362,8 @@ function PdvPageInner() {
         setShowCustomer(true);
         return;
       }
-      // F7 → escolher/trocar vendedora (atendente)
-      if (e.key === 'F7') {
+      // F9 → escolher/trocar vendedora (atendente)
+      if (e.key === 'F9') {
         e.preventDefault();
         setShowVendedora(true);
         return;
@@ -847,7 +847,7 @@ function PdvPageInner() {
             </button>
           )}
 
-          {/* Botão Vendedora — quem está atendendo · atalho F7 */}
+          {/* Botão Vendedora — quem está atendendo · atalho F9 */}
           <button
             onClick={() => setShowVendedora(true)}
             disabled={!sale || sale.status !== 'open'}
@@ -856,13 +856,13 @@ function PdvPageInner() {
                 ? 'bg-emerald-400 hover:bg-emerald-300 text-emerald-950 ring-2 ring-emerald-200/50'
                 : 'bg-white/90 hover:bg-white text-rose-700 ring-2 ring-rose-300/50 animate-pulse'
             }`}
-            title={sale?.sellerName ? `Trocar vendedora (atalho F7) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F7)'}
+            title={sale?.sellerName ? `Trocar vendedora (atalho F9) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F9)'}
           >
             <Sparkles className="w-4 h-4" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-emerald-700/20 text-emerald-950 border border-emerald-700/30 rounded px-1.5 py-0.5">F7</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-emerald-700/20 text-emerald-950 border border-emerald-700/30 rounded px-1.5 py-0.5">F9</kbd>
           </button>
 
           {/* Botão Cliente — atalho F5 */}

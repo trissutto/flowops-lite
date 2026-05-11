@@ -1161,16 +1161,35 @@ export class PdvService {
     // só LOGA os SQLs sem executar — permite validar antes de ligar real.
     // Erro NÃO bloqueia a venda no flowops (que é a fonte da verdade) — só loga warning.
     try {
+      // ⚡ BUG FIX: rateia o sale.desconto (desconto GERAL via F2)
+      // proporcionalmente entre os items, somando ao desconto individual.
+      // Sem isso, o Wincred grava valor SEM o desconto geral, distorcendo
+      // o fechamento de caixa.
+      const saleItems = (sale.items || []) as any[];
+      const descontoGeral = Number(sale.desconto) || 0;
+      const baseRateio = saleItems
+        .filter((it: any) => (Number(it.precoUnit) || 0) > 0)
+        .reduce((s, it: any) => s + (Number(it.precoUnit) || 0) * (Number(it.qty) || 1), 0);
       const result = await this.erp.gravarVendaPdv({
         storeCode: sale.storeCode,
-        items: (sale.items || []).map((it: any) => ({
-          sku: String(it.sku || it.ean || ''),
-          qty: Number(it.qty) || 1,
-          valorUnit: Number(it.precoUnit) || 0,
-          desconto: Number(it.desconto) || 0,
-          descricao: String(it.descricao || ''),
-          tributo: it.cfop ? String(it.cfop).slice(0, 4) : undefined,
-        })),
+        items: saleItems.map((it: any) => {
+          const valorUnit = Number(it.precoUnit) || 0;
+          const qty = Number(it.qty) || 1;
+          const descontoItem = Number(it.desconto) || 0;
+          const bruto = valorUnit * qty;
+          let descontoRateado = 0;
+          if (descontoGeral > 0 && baseRateio > 0 && bruto > 0) {
+            descontoRateado = Math.round((descontoGeral * (bruto / baseRateio)) * 100) / 100;
+          }
+          return {
+            sku: String(it.sku || it.ean || ''),
+            qty,
+            valorUnit,
+            desconto: descontoItem + descontoRateado,
+            descricao: String(it.descricao || ''),
+            tributo: it.cfop ? String(it.cfop).slice(0, 4) : undefined,
+          };
+        }),
         // Pagamentos: usa array payments (após split) ou fallback pro paymentMethod legado.
         // Quando método é credito/debito genérico, extrai a bandeira do details
         // (ex: method='credito' + details.bandeira='MASTERCARD' → mapeia como MASTERCARD).
