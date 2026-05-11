@@ -727,22 +727,23 @@ export class RealignmentShipmentService {
     const skuBipado = String(input.sku || '').trim();
     if (!skuBipado) throw new BadRequestException('SKU vazio');
 
-    // Normaliza o SKU bipado pelo Giga (1 query MySQL).
-    const info = await this.erp.resolveSkuInfo(skuBipado);
+    // ⚡ PARALELO: resolveSkuInfo (Wincred) + findMany items (Postgres) rodam
+    // ao mesmo tempo — bipe mais rápido (~50-100ms a menos por bipe).
+    const [info, items] = await Promise.all([
+      this.erp.resolveSkuInfo(skuBipado),
+      this.prisma.transferOrder.findMany({
+        where: { shipmentId: shipment.id } as any,
+        select: {
+          id: true,
+          refCode: true,
+          cor: true,
+          tamanho: true,
+          realignmentStatus: true,
+          codigoBipado: true,
+        } as any,
+      }),
+    ]);
     const skuNormalizado = info?.codigo || skuBipado;
-
-    // Pega itens da remessa (1 query Postgres)
-    const items = await this.prisma.transferOrder.findMany({
-      where: { shipmentId: shipment.id } as any,
-      select: {
-        id: true,
-        refCode: true,
-        cor: true,
-        tamanho: true,
-        realignmentStatus: true,
-        codigoBipado: true,
-      } as any,
-    });
 
     const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
     const norm = (s: any) => String(s ?? '').trim().toUpperCase();
@@ -1029,7 +1030,9 @@ export class RealignmentShipmentService {
     if (shipment.status !== 'in_transit')
       throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
 
-    // Verifica que TODOS itens estão em status final
+    // Verifica que TODOS itens estão em status final.
+    // ⚡ Inclui codigoBipado pra evitar refazer lookup no Giga na entrada
+    // (codigoBipado já foi resolvido e salvo durante o bipe).
     const items = await this.prisma.transferOrder.findMany({
       where: { shipmentId: shipment.id } as any,
       select: {
@@ -1039,6 +1042,7 @@ export class RealignmentShipmentService {
         tamanho: true,
         qtyOrigem: true,
         realignmentStatus: true,
+        codigoBipado: true,
       } as any,
     });
 
@@ -1055,22 +1059,38 @@ export class RealignmentShipmentService {
     const receivedItems = (items as any[]).filter((i) => i.realignmentStatus === 'received');
     const missingItems = (items as any[]).filter((i) => i.realignmentStatus === 'missing');
 
-    // Resolve SKU pros itens received e dá entrada Giga.
-    // Usa findCodigoByRefCorTam (busca direta tolerante — mesmo método do closeAndSend).
+    // ⚡ OTIMIZADO: usa codigoBipado salvo no scan (CODIGO real do Giga já
+    //    resolvido durante a bipagem). Evita 1 query por peça no Wincred —
+    //    pra remessa de 60 peças economiza ~6-10s. Fallback PARALELO pros
+    //    raros casos sem codigoBipado (itens antigos ou marcados sem bipe).
     const stockItems: Array<{ sku: string; qty: number; storeCode: string }> = [];
     const naoResolvidos: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    const itensSemCodigo: any[] = [];
     for (const it of receivedItems as any[]) {
-      try {
-        const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
-        if (sku) {
-          stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
+      if (it.codigoBipado) {
+        stockItems.push({ sku: String(it.codigoBipado), qty: it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
+      } else {
+        itensSemCodigo.push(it);
+      }
+    }
+    if (itensSemCodigo.length > 0) {
+      const results = await Promise.all(
+        itensSemCodigo.map(async (it) => {
+          try {
+            const sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+            return { it, sku, err: null as string | null };
+          } catch (e) {
+            return { it, sku: null, err: (e as Error).message };
+          }
+        }),
+      );
+      for (const r of results) {
+        if (r.sku) {
+          stockItems.push({ sku: r.sku, qty: r.it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
         } else {
-          naoResolvidos.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
-          this.logger.warn(`[shipment] confirmReceived: não resolveu SKU pra ${it.refCode}/${it.cor}/${it.tamanho}`);
+          naoResolvidos.push({ refCode: r.it.refCode, cor: r.it.cor, tamanho: r.it.tamanho });
+          this.logger.warn(`[shipment] confirmReceived: não resolveu SKU pra ${r.it.refCode}/${r.it.cor}/${r.it.tamanho}${r.err ? ` (${r.err})` : ''}`);
         }
-      } catch (e) {
-        naoResolvidos.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
-        this.logger.warn(`[shipment] confirmReceived erro pra ${it.refCode}: ${(e as Error).message}`);
       }
     }
     // Se algum item não resolveu, NÃO finaliza — força admin a corrigir o cadastro
