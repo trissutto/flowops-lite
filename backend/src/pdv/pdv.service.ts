@@ -1095,6 +1095,20 @@ export class PdvService {
       );
     }
 
+    // GUARD: precisa ter PELO MENOS 1 forma de pagamento associada.
+    // (defesa em profundidade — addPayment já valida, mas garante que ninguém
+    // burle chamando finalize direto sem registrar payment.)
+    const payments = await (this.prisma as any).pdvSalePayment.findMany({
+      where: { saleId: sale.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    if ((payments as any[]).length === 0) {
+      throw new BadRequestException(
+        'Venda nao pode ser finalizada sem forma de pagamento. ' +
+          'Adicione PIX, cartao, dinheiro, crediario ou vale-troca antes.',
+      );
+    }
+
     // Verifica que pago = total
     const jaPago = await this.sumPaidValue(sale.id);
     if (Math.abs(jaPago - sale.total) > 0.01) {
@@ -1103,11 +1117,6 @@ export class PdvService {
           `Faltam R$${(sale.total - jaPago).toFixed(2)}.`,
       );
     }
-
-    const payments = await (this.prisma as any).pdvSalePayment.findMany({
-      where: { saleId: sale.id },
-      orderBy: { createdAt: 'asc' },
-    });
     // 1 pagamento → método dele · N pagamentos → "MULTIPLO"
     const finalMethod =
       (payments as any[]).length === 1

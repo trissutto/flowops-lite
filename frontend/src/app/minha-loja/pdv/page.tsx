@@ -656,6 +656,13 @@ function PdvPageInner() {
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
   const finalizeSale = async (paymentMethod: string, paymentDetails?: any) => {
     if (!sale) return;
+    // GUARD: bloqueia finalize sem forma de pagamento. Modo SPLIT (paymentMethod
+    // vazio) exige sale.payments com itens; modo direto exige paymentMethod.
+    if (!paymentMethod && (!sale.payments || sale.payments.length === 0)) {
+      toast('warning', 'Sem forma de pagamento', 'Escolha PIX, cartao, dinheiro, crediario ou vale-troca antes de finalizar.');
+      setShowPayment(true);
+      return;
+    }
     setFinalizing(true);
     try {
       const body: any = {};
