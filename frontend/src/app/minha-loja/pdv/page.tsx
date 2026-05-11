@@ -5376,12 +5376,13 @@ function ManualItemModal({
   const adicionar = async () => {
     setError(null);
     if (descricao.trim().length < 2) {
-      setError('Descreva o produto (ex: "Brinco prata", "Camisa azul P")');
+      setError('Descreva o item (ex: "Brinco prata", "Troca defeito")');
       return;
     }
     const v = parseNum(valor);
-    if (v == null || v <= 0) {
-      setError('Valor inválido — use só números (ex: 49,90)');
+    // Aceita NEGATIVO (ex: TROCA DEFEITO -39,90). Bloqueia só zero.
+    if (v == null || v === 0) {
+      setError('Valor inválido — use números (ex: 49,90 ou -39,90 pra abater)');
       return;
     }
     const q = Number(qty);
@@ -5418,6 +5419,8 @@ function ManualItemModal({
 
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-800 leading-snug">
           ⚠️ Use só quando o produto não passa pelo bipe. Não atualiza estoque no Gigasistemas.
+          <br />
+          💡 Valor pode ser <b>negativo</b> pra abater (ex: <b>TROCA DEFEITO -39,90</b>).
         </div>
 
         <div>
@@ -5441,7 +5444,7 @@ function ManualItemModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-[11px] uppercase font-bold text-slate-600 mb-1 block">
-              Valor unitário
+              Valor unitário (pode ser negativo)
             </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">R$</span>
@@ -5452,8 +5455,12 @@ function ManualItemModal({
                 value={valor}
                 onChange={(e) => setValor(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && adicionar()}
-                placeholder="0,00"
-                className="w-full px-3 py-3 pl-10 text-xl font-bold tabular-nums text-emerald-700 border-2 border-emerald-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400"
+                placeholder="0,00 ou -39,90"
+                className={`w-full px-3 py-3 pl-10 text-xl font-bold tabular-nums border-2 rounded-xl focus:outline-none focus:ring-2 ${
+                  (parseNum(valor) ?? 0) < 0
+                    ? 'text-rose-700 border-rose-200 focus:ring-rose-300 focus:border-rose-400'
+                    : 'text-emerald-700 border-emerald-200 focus:ring-emerald-300 focus:border-emerald-400'
+                }`}
               />
             </div>
           </div>

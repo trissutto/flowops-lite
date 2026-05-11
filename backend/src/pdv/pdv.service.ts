@@ -617,8 +617,9 @@ export class PdvService {
     if (descricao.length < 2)
       throw new BadRequestException('Descrição obrigatória (mínimo 2 caracteres)');
     const valor = Number(input.valor);
-    if (!valor || valor <= 0)
-      throw new BadRequestException('Valor deve ser maior que zero');
+    // Aceita valor NEGATIVO (ex: TROCA DEFEITO -R$ 39,90). Bloqueia só zero.
+    if (!Number.isFinite(valor) || valor === 0)
+      throw new BadRequestException('Valor deve ser diferente de zero (pode ser negativo pra descontos)');
     const qty = Math.max(1, Math.min(99, Math.floor(input.qty || 1)));
     const sku = `MANUAL-${Date.now()}`;
 
