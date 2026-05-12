@@ -239,6 +239,7 @@ export class CrediarioBaixaController {
       customerPhone: body?.customerPhone,
       customerEmail: body?.customerEmail,
       expiresInMinutes: 1440, // 24h pra link compartilhável
+      origem: 'link', // alerta global mostra so essas baixas
     });
     return result;
   }
@@ -306,6 +307,7 @@ export class CrediarioBaixaController {
       customerCpf: body?.customerCpf,
       customerPhone: body?.customerPhone,
       customerEmail: body?.customerEmail,
+      origem: 'presencial', // QR loja — vendedora ve o cliente pagar, sem alerta global
     });
   }
 

@@ -913,6 +913,9 @@ export class CrediarioBaixaService {
     /** Validade do PIX em minutos. Default 15min (cliente presente).
      *  Pra link compartilhável usar 1440 (24h). */
     expiresInMinutes?: number;
+    /** Origem do PIX — 'presencial' (QR loja) ou 'link' (WhatsApp remoto).
+     *  Define se mostra alerta global na tela quando pago. */
+    origem?: 'presencial' | 'link';
   }): Promise<{
     baixaId: string;
     pagarmeOrderId: string;
@@ -936,6 +939,7 @@ export class CrediarioBaixaService {
       customerName: input.customerName,
       customerCpf: input.customerCpf,
       customerPhone: input.customerPhone,
+      origem: input.origem || 'presencial',
     });
 
     // Gera PIX no Pagar.me — usa o baixaId como saleId pra rastreio
@@ -1135,6 +1139,7 @@ export class CrediarioBaixaService {
     customerPhone?: string;
     valorDinheiro?: number;
     valorPix?: number;
+    origem?: string;
   }): Promise<string> {
     const cliente = input.preview.parcelas[0] || null;
     const baixa = await (this.prisma as any).crediarioBaixa.create({
@@ -1154,6 +1159,7 @@ export class CrediarioBaixaService {
         formaPagamento: input.formaPagamento,
         valorDinheiro: input.valorDinheiro ?? null,
         valorPix: input.valorPix ?? null,
+        origem: input.origem ?? null,
         status: input.status,
         paidAt: input.paidAt,
         items: {
@@ -1316,9 +1322,12 @@ export class CrediarioBaixaService {
     const since = input.sinceIso
       ? new Date(input.sinceIso)
       : new Date(Date.now() - 10 * 60 * 1000); // default últimos 10 min
+    // FILTRO: alerta global so pra PIX-LINK remoto (mandado por WhatsApp).
+    // PIX presencial QR a vendedora ja ve o cliente pagar — alerta seria ruido.
     const where: any = {
       status: 'paid',
       paidAt: { gt: since },
+      origem: 'link',
     };
     if (input.lojaCode) where.lojaCode = input.lojaCode;
     const baixas = await (this.prisma as any).crediarioBaixa.findMany({

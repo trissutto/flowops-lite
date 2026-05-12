@@ -823,6 +823,11 @@ model CrediarioBaixa {
   totalPago         Float    @default(0) @map("total_pago")
   // Forma de pagamento usada
   formaPagamento    String                              // pix | dinheiro | misto (split dinheiro+pix)
+  // Origem do PIX: 'presencial' (QR loja, cliente la) ou 'link' (WhatsApp remoto).
+  // Usado pra decidir se mostra alerta global "PIX recebido" — so link remoto
+  // mostra alerta (presencial a vendedora ja ve o cliente pagar). Null pra
+  // dinheiro/misto/null antigos.
+  origem            String?  @map("origem")
   // Split: quando formaPagamento='misto', cliente paga parte em dinheiro
   // e parte em PIX. valorDinheiro entra no caixa direto; valorPix gera QR
   // Pagar.me e fica pending ate confirmacao.
