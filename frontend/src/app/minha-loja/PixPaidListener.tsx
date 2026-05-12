@@ -25,6 +25,7 @@ type BaixaInfo = {
   nomeCliente: string;
   valor: number;
   recebidoAt: number; // ms
+  printed: boolean;    // ja foi enviado pra impressao? (controle pra nao reimprimir auto)
   items: Array<{
     parcelaNum: number | null;
     totalParcelas: number | null;
@@ -34,24 +35,45 @@ type BaixaInfo = {
   }>;
 };
 
-function printReceipt(baixaId: string) {
+/**
+ * Tenta imprimir via ELECTRON (silent). Retorna true se conseguiu disparar.
+ * Em browser puro retorna false — caller precisa esperar interacao do user
+ * (click no badge) pra abrir POPUP de impressao.
+ */
+function trySilentPrint(baixaId: string): boolean {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
   const electron = (window as any).electronAPI;
   if (electron?.silentPrintUrl) {
-    electron.silentPrintUrl(window.location.origin + url).catch(() => hiddenIframe(url));
-  } else {
-    hiddenIframe(url);
+    try {
+      electron.silentPrintUrl(window.location.origin + url);
+      return true;
+    } catch {
+      return false;
+    }
   }
+  return false; // browser puro nao consegue silent print sem interacao
 }
-function hiddenIframe(url: string) {
-  try {
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:300px;height:600px;border:0;';
-    iframe.src = url;
-    document.body.appendChild(iframe);
-    setTimeout(() => { try { iframe.remove(); } catch {} }, 30000);
-  } catch {
-    window.open(url, 'lurds_recibo', 'width=320,height=520,resizable=yes');
+
+/**
+ * Abre POPUP visivel pra imprimir. Disparado a partir de click do user
+ * (que libera o browser pra abrir janela e disparar window.print()).
+ * Iframe oculto offscreen NAO funciona — Chrome bloqueia print silencioso
+ * em iframes sem interacao.
+ */
+function printReceipt(baixaId: string) {
+  const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
+  // 1) Electron — print silencioso direto na termica
+  if (trySilentPrint(baixaId)) return;
+  // 2) Browser — abre popup pequeno visivel. O recibo dispara window.print()
+  // sozinho no useEffect e fecha apos afterprint.
+  const w = window.open(
+    url,
+    `lurds_recibo_${baixaId}`,
+    'width=420,height=620,resizable=yes,scrollbars=yes',
+  );
+  if (!w) {
+    // Popup blocker — fallback abre em nova aba
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 }
 
@@ -97,11 +119,16 @@ export default function PixPaidListener() {
         for (const b of apiBaixas) {
           if (seenRef.current.has(b.id)) continue;
           seenRef.current.add(b.id);
+          // Tenta silent print via Electron. Se rolar, ja marca como printed.
+          // Em browser puro retorna false — fica printed=false ate user clicar.
+          let silentOk = false;
+          try { silentOk = trySilentPrint(b.id); } catch { /* segue */ }
           novas.push({
             baixaId: b.id,
             nomeCliente: b.customerName || 'Cliente',
             valor: Number(b.totalPago) || 0,
             recebidoAt: Date.now(),
+            printed: silentOk,
             items: (b.items || []).map((it: any) => ({
               parcelaNum: it.parcelaNum ?? null,
               totalParcelas: it.totalParcelas ?? null,
@@ -110,8 +137,6 @@ export default function PixPaidListener() {
               jurosCalculado: Number(it.jurosCalculado) || 0,
             })),
           });
-          // Imprime recibo automaticamente (silencioso)
-          try { printReceipt(b.id); } catch {/* segue */}
         }
         if (novas.length > 0) {
           setBaixas((prev) => [...novas, ...prev].slice(0, 20)); // limita histórico
@@ -138,21 +163,53 @@ export default function PixPaidListener() {
     setBaixas((prev) => prev.filter((b) => b.baixaId !== id));
   };
 
+  /**
+   * Click do badge — interacao DO USER (libera popup do browser).
+   * Aproveita pra disparar print das baixas ainda nao impressas, com
+   * pequeno delay entre cada pra browser nao engasgar.
+   */
+  const abrirEImprimir = () => {
+    setOpen(true);
+    setPulse(false);
+    const pendentes = baixas.filter((b) => !b.printed);
+    pendentes.forEach((b, idx) => {
+      setTimeout(() => {
+        try { printReceipt(b.baixaId); } catch { /* segue */ }
+      }, idx * 600);
+    });
+    if (pendentes.length > 0) {
+      setBaixas((prev) => prev.map((b) => ({ ...b, printed: true })));
+    }
+  };
+
+  const naoImpressas = baixas.filter((b) => !b.printed).length;
+
   if (baixas.length === 0) return null;
 
   return (
     <>
-      {/* BADGE FLUTUANTE — canto inferior direito, sem obstruir */}
+      {/* BADGE FLUTUANTE — canto inferior direito, sem obstruir.
+          Click DISPARA IMPRESSAO das pendentes (browser libera popup quando
+          rola interacao do user). */}
       {!open && (
         <button
           type="button"
-          onClick={() => { setOpen(true); setPulse(false); }}
-          className={`fixed bottom-4 right-4 z-[200] flex items-center gap-2 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-2xl border-2 border-white transition-transform ${pulse ? 'animate-bounce' : ''}`}
-          title="Pagamentos PIX confirmados"
+          onClick={abrirEImprimir}
+          className={`fixed bottom-4 right-4 z-[200] flex items-center gap-2 px-4 py-3 rounded-full shadow-2xl border-2 border-white transition-transform ${
+            naoImpressas > 0
+              ? 'bg-rose-600 hover:bg-rose-700 text-white'
+              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+          } ${pulse ? 'animate-bounce' : ''}`}
+          title={naoImpressas > 0 ? 'CLICA pra imprimir os recibos pendentes' : 'Pagamentos PIX confirmados'}
         >
           <Bell className="w-5 h-5" />
           <span className="font-black text-sm tabular-nums">{baixas.length}</span>
-          <span className="text-xs font-bold uppercase tracking-wider hidden sm:inline">PIX recebido</span>
+          <span className="text-xs font-bold uppercase tracking-wider hidden sm:inline">
+            {naoImpressas > 0 ? `${naoImpressas} pra imprimir` : 'PIX recebido'}
+          </span>
+          {naoImpressas > 0 && (
+            <Printer className="w-4 h-4 animate-pulse" />
+          )}
         </button>
       )}
 
