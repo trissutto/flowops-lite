@@ -845,7 +845,7 @@ export default function PedidoDetailPage() {
   if (error && !order) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        <Link href="/pedidos" className="text-brand text-sm hover:underline flex items-center gap-1">
+        <Link href="/pedidos?status=processing" className="text-brand text-sm hover:underline flex items-center gap-1">
           <ArrowLeft className="w-4 h-4" /> Voltar
         </Link>
         <div className="bg-red-50 text-red-700 p-4 rounded mt-4">{error}</div>
@@ -865,7 +865,7 @@ export default function PedidoDetailPage() {
   return (
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-4">
-        <Link href="/pedidos" className="text-brand text-sm hover:underline flex items-center gap-1">
+        <Link href="/pedidos?status=processing" className="text-brand text-sm hover:underline flex items-center gap-1">
           <ArrowLeft className="w-4 h-4" /> Voltar pra lista
         </Link>
         <a

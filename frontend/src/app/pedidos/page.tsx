@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { RefreshCw, Search, ExternalLink } from 'lucide-react';
@@ -52,12 +53,24 @@ interface WcOrder {
 }
 
 export default function PedidosPage() {
+  return (
+    <Suspense fallback={<div className="p-6">Carregando…</div>}>
+      <PedidosPageInner />
+    </Suspense>
+  );
+}
+
+function PedidosPageInner() {
+  const searchParams = useSearchParams();
+  // Status inicial vem do query param ?status=processing (usado pelo botão
+  // "Voltar pra lista" do detalhe pra preservar o filtro).
+  const initialStatus = searchParams?.get('status') ?? '';
   const [data, setData] = useState<WcOrder[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [counts, setCounts] = useState<Record<string, { name: string; total: number }>>({});
   const [grand, setGrand] = useState(0);
-  const [status, setStatus] = useState<string>('');
+  const [status, setStatus] = useState<string>(initialStatus);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
