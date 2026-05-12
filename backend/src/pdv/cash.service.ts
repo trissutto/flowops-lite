@@ -400,6 +400,23 @@ export class CashService {
         userName: string | null;
         createdAt: string;
       }>;
+      // Crediarios recebidos hoje na loja — separado por forma (dinheiro/PIX)
+      // Pra cascata clicavel mostrando cada baixa individual.
+      recebimentosCrediario: {
+        totalGeral: number;
+        totalDinheiro: number;
+        totalPix: number;
+        baixas: Array<{
+          id: string;
+          forma: string;             // 'dinheiro' | 'pix' | 'misto'
+          origem: string | null;     // 'presencial' | 'link' | null
+          valor: number;
+          valorDinheiro: number | null;
+          valorPix: number | null;
+          customerName: string | null;
+          paidAt: string;
+        }>;
+      };
     }>;
     consolidado: {
       totalVendas: number;
@@ -445,6 +462,7 @@ export class CashService {
             totais: emptyTotais,
             vendedoras: [],
             movimentos: [],
+            recebimentosCrediario: { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] },
             detalhado: null as any,
           };
         }
@@ -488,6 +506,57 @@ export class CashService {
           createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
         }));
 
+        // Crediarios recebidos hoje nessa loja (baixas pagas no dia)
+        // Inclui baixas em DINHEIRO direto + PIX presencial + PIX-link + MISTO (split).
+        // Pra MISTO contabiliza o valorDinheiro em dinheiro e valorPix em pix.
+        const inicioHoje = new Date(); inicioHoje.setHours(0, 0, 0, 0);
+        const recebimentosRaw = await (this.prisma as any).crediarioBaixa.findMany({
+          where: {
+            lojaCode: s.code,
+            status: 'paid',
+            paidAt: { gte: inicioHoje },
+          },
+          orderBy: { paidAt: 'desc' },
+          select: {
+            id: true,
+            formaPagamento: true,
+            origem: true,
+            totalPago: true,
+            valorDinheiro: true,
+            valorPix: true,
+            customerName: true,
+            paidAt: true,
+          },
+        });
+        const recBaixas = (recebimentosRaw as any[]).map((b) => ({
+          id: b.id,
+          forma: String(b.formaPagamento || ''),
+          origem: b.origem || null,
+          valor: Number(b.totalPago) || 0,
+          valorDinheiro: b.valorDinheiro != null ? Number(b.valorDinheiro) : null,
+          valorPix: b.valorPix != null ? Number(b.valorPix) : null,
+          customerName: b.customerName || null,
+          paidAt: b.paidAt instanceof Date ? b.paidAt.toISOString() : String(b.paidAt),
+        }));
+        let recTotalDin = 0;
+        let recTotalPix = 0;
+        for (const b of recBaixas) {
+          if (b.forma === 'misto') {
+            recTotalDin += b.valorDinheiro || 0;
+            recTotalPix += b.valorPix || 0;
+          } else if (b.forma === 'dinheiro') {
+            recTotalDin += b.valor;
+          } else if (b.forma === 'pix') {
+            recTotalPix += b.valor;
+          }
+        }
+        const recebimentosCrediario = {
+          totalGeral: Math.round((recTotalDin + recTotalPix) * 100) / 100,
+          totalDinheiro: Math.round(recTotalDin * 100) / 100,
+          totalPix: Math.round(recTotalPix * 100) / 100,
+          baixas: recBaixas,
+        };
+
         return {
           storeCode: s.code,
           storeName: s.name,
@@ -510,6 +579,7 @@ export class CashService {
           },
           vendedoras,
           movimentos, // sangria + suprimento — lancamento por lancamento (cascata)
+          recebimentosCrediario, // baixas de crediario do dia (dinheiro/PIX) — cascata
           detalhado, // slots por modalidade+bandeira+vendas (igual /relatorio-detalhado)
         };
       }),

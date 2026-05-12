@@ -9,6 +9,38 @@ import { firstValueFrom } from 'rxjs';
 import * as crypto from 'crypto';
 
 /**
+ * Gera um CPF VALIDO (passa no algoritmo de digitos verificadores) usando
+ * uma seed determinstica (saleId). Mesmo saleId sempre gera mesmo CPF —
+ * idempotente — mas saleIds diferentes geram CPFs diferentes.
+ *
+ * USADO QUANDO: Pagar.me exige customer.document mas o cliente real nao
+ * informou CPF. Antes usavamos CPF fixo '11144477735' — Pagar.me dedup
+ * customers por document e todas cobrancas sem CPF viravam o MESMO cliente
+ * (o primeiro cadastrado com esse CPF). Resultado: nome estranho aparecia
+ * em cobrancas de outras pessoas.
+ */
+function generateValidCpfFromSeed(seed: string): string {
+  // Hash determistico → 9 digitos base
+  const hash = crypto.createHash('sha256').update(`lurds-pdv-${seed}`).digest('hex');
+  const digits: number[] = [];
+  // Pega 9 bytes do hash, converte cada um pra digito 0-9
+  for (let i = 0; i < 9; i++) {
+    digits.push(parseInt(hash.slice(i * 2, i * 2 + 2), 16) % 10);
+  }
+  // Calcula 1o digito verificador
+  let soma = 0;
+  for (let i = 0; i < 9; i++) soma += digits[i] * (10 - i);
+  const r1 = soma % 11;
+  digits.push(r1 < 2 ? 0 : 11 - r1);
+  // Calcula 2o digito verificador
+  soma = 0;
+  for (let i = 0; i < 10; i++) soma += digits[i] * (11 - i);
+  const r2 = soma % 11;
+  digits.push(r2 < 2 ? 0 : 11 - r2);
+  return digits.join('');
+}
+
+/**
  * Pagar.me — integração via API v5 (REST/JSON).
  *
  * Vantagem sobre PagBank: PIX dinâmico funciona em PRODUÇÃO sem homologação
@@ -230,13 +262,21 @@ export class PagarmeService {
     const expiresAt = new Date(Date.now() + expiresInSec * 1000);
 
     // Customer — Pagar.me exige document (CPF/CNPJ). Default fictício se não tem.
-    const customerName = (input.customerName || 'Consumidor Final').slice(0, 64);
-    const customerEmail = input.customerEmail || 'consumidor@lurds.com.br';
+    //
+    // BUG HISTORICO RESOLVIDO: Antes usava CPF ficticio FIXO '11144477735'.
+    // Pagar.me identifica customer por document — todas cobrancas sem CPF
+    // viravam o MESMO customer (o primeiro nome cadastrado com esse CPF).
+    // Resultado: no dashboard aparecia nome errado pra cobrancas de outras pessoas.
+    //
+    // Agora geramos CPF ficticio VALIDO unico por cobranca (algoritmo + saleId
+    // como semente) — assim cada cobranca vira um customer novo no Pagar.me e
+    // o pagador real aparece corretamente.
+    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    const customerEmail = input.customerEmail
+      || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
     if (!customerDoc || (customerDoc.length !== 11 && customerDoc.length !== 14)) {
-      // CPF fictício válido (algoritmo). Em test funciona, em live também aceita
-      // mas é melhor identificar cliente sempre.
-      customerDoc = '11144477735';
+      customerDoc = generateValidCpfFromSeed(input.saleId);
     }
 
     // Phone — Pagar.me EXIGE pelo menos 1 phone no customer pra charge PIX.

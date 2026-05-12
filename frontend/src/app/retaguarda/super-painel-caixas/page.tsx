@@ -49,6 +49,22 @@ type Movimento = {
   userName: string | null;
   createdAt: string;
 };
+type BaixaCrediario = {
+  id: string;
+  forma: string;             // 'dinheiro' | 'pix' | 'misto'
+  origem: string | null;     // 'presencial' | 'link' | null
+  valor: number;
+  valorDinheiro: number | null;
+  valorPix: number | null;
+  customerName: string | null;
+  paidAt: string;
+};
+type RecebimentosCrediario = {
+  totalGeral: number;
+  totalDinheiro: number;
+  totalPix: number;
+  baixas: BaixaCrediario[];
+};
 type Loja = {
   storeCode: string;
   storeName: string;
@@ -71,6 +87,7 @@ type Loja = {
   };
   vendedoras: Vendedora[];
   movimentos?: Movimento[];
+  recebimentosCrediario?: RecebimentosCrediario;
   detalhado: Detalhado | null;
 };
 type Painel = {
@@ -251,8 +268,12 @@ function LojaCard({ loja }: { loja: Loja }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showSangrias, setShowSangrias] = useState(false);
   const [showSuprimentos, setShowSuprimentos] = useState(false);
+  const [showRecebimentos, setShowRecebimentos] = useState(false);
   const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
+  const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
+  const recDinheiroBaixas = rec.baixas.filter((b) => b.forma === 'dinheiro' || (b.forma === 'misto' && (b.valorDinheiro || 0) > 0));
+  const recPixBaixas = rec.baixas.filter((b) => b.forma === 'pix' || (b.forma === 'misto' && (b.valorPix || 0) > 0));
   return (
     <div className={`rounded-xl shadow-lg overflow-hidden border-2 ${
       loja.aberta ? 'bg-white border-emerald-300' : 'bg-slate-100 border-slate-300 opacity-75'
@@ -324,6 +345,81 @@ function LojaCard({ loja }: { loja: Loja }) {
                 <span className="font-bold">💵 Fundo do caixa</span>
                 <span className="font-mono tabular-nums font-bold">{brl(loja.fundoTroco)}</span>
               </div>
+            )}
+
+            {/* Crediarios recebidos — cascata separando PIX e Dinheiro */}
+            {rec.totalGeral > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowRecebimentos((v) => !v)}
+                  className="w-full flex justify-between items-center text-[11px] text-emerald-700 hover:bg-emerald-50 rounded px-1 py-0.5 transition"
+                  title="Clica pra ver os recebimentos"
+                >
+                  <span className="font-bold flex items-center gap-1">
+                    <span className={`transition-transform inline-block ${showRecebimentos ? 'rotate-90' : ''}`}>▶</span>
+                    📥 Crediários recebidos · {rec.baixas.length} baixa{rec.baixas.length !== 1 ? 's' : ''}
+                  </span>
+                  <span className="font-mono tabular-nums font-bold">{brl(rec.totalGeral)}</span>
+                </button>
+                {showRecebimentos && (
+                  <div className="ml-3 pl-2 border-l-2 border-emerald-200 space-y-2">
+                    {rec.totalDinheiro > 0 && (
+                      <div className="space-y-0.5">
+                        <div className="flex justify-between items-center text-[10px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded">
+                          <span>💵 Em DINHEIRO ({recDinheiroBaixas.length})</span>
+                          <span className="font-mono tabular-nums">{brl(rec.totalDinheiro)}</span>
+                        </div>
+                        {recDinheiroBaixas.map((b) => {
+                          const hora = new Date(b.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                          const valor = b.forma === 'misto' ? (b.valorDinheiro || 0) : b.valor;
+                          return (
+                            <div key={`d-${b.id}`} className="flex justify-between items-center text-[10px] gap-2 hover:bg-amber-50 rounded px-1 py-0.5">
+                              <div className="min-w-0 flex-1 flex items-center gap-1">
+                                <span className="text-slate-400 font-mono shrink-0">{hora}</span>
+                                <span className="text-slate-700 truncate">{b.customerName || 'Cliente'}</span>
+                                {b.forma === 'misto' && (
+                                  <span className="text-[9px] text-violet-600 italic shrink-0">misto</span>
+                                )}
+                              </div>
+                              <span className="font-mono font-bold tabular-nums text-amber-700 shrink-0">{brl(valor)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {rec.totalPix > 0 && (
+                      <div className="space-y-0.5">
+                        <div className="flex justify-between items-center text-[10px] font-bold text-cyan-800 bg-cyan-50 px-1.5 py-0.5 rounded">
+                          <span>📱 Em PIX ({recPixBaixas.length})</span>
+                          <span className="font-mono tabular-nums">{brl(rec.totalPix)}</span>
+                        </div>
+                        {recPixBaixas.map((b) => {
+                          const hora = new Date(b.paidAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                          const valor = b.forma === 'misto' ? (b.valorPix || 0) : b.valor;
+                          const isLink = b.origem === 'link';
+                          return (
+                            <div key={`p-${b.id}`} className="flex justify-between items-center text-[10px] gap-2 hover:bg-cyan-50 rounded px-1 py-0.5">
+                              <div className="min-w-0 flex-1 flex items-center gap-1">
+                                <span className="text-slate-400 font-mono shrink-0">{hora}</span>
+                                <span className="text-slate-700 truncate">{b.customerName || 'Cliente'}</span>
+                                {isLink && (
+                                  <span className="text-[9px] text-emerald-600 italic shrink-0 font-bold">🔗 link</span>
+                                )}
+                                {b.forma === 'misto' && (
+                                  <span className="text-[9px] text-violet-600 italic shrink-0">misto</span>
+                                )}
+                              </div>
+                              <span className="font-mono font-bold tabular-nums text-cyan-700 shrink-0">{brl(valor)}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
             {t.totalSangrias > 0 && (
