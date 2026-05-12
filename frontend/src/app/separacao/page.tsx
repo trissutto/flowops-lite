@@ -80,6 +80,7 @@ interface WcOrderListItem {
   total: string;
   customerName: string;
   shippingMethod?: string | null;
+  shippingState?: string | null;
   // Enriquecimento vindo do backend: loja(s) responsável(is) + rastreio
   pickOrders?: PickOrderLite[];
   shipped?: boolean;
@@ -1157,7 +1158,7 @@ function SeparacaoPageInner() {
                     </div>
                     <div className="col-span-4 truncate">
                       {(() => {
-                        const shipBadge = classifyShipping(o.shippingMethod);
+                        const shipBadge = classifyShipping(o.shippingMethod, o.shippingState);
                         if (!o.shippingMethod) return null;
                         return (
                           <span

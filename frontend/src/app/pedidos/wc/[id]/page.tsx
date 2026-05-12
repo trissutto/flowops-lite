@@ -889,7 +889,7 @@ export default function PedidoDetailPage() {
               const raw =
                 order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
               if (!raw) return null;
-              const m = classifyShipping(raw);
+              const m = classifyShipping(raw, order.shipping?.state ?? order.billing?.state ?? null);
               return (
                 <span
                   className={`px-3 py-1 text-sm font-bold rounded shadow-sm ${m.colorBold}`}
@@ -938,7 +938,7 @@ export default function PedidoDetailPage() {
         const raw =
           order.pickup?.shippingMethodTitle ?? separation?.shippingMethod ?? null;
         if (!raw) return null;
-        const m = classifyShipping(raw);
+        const m = classifyShipping(raw, order.shipping?.state ?? order.billing?.state ?? null);
         if (m.kind === 'pickup') return null; // já tem banner próprio abaixo
         const icon =
           m.kind === 'sedex' ? '⚡' :

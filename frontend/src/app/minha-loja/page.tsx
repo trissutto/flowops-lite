@@ -1054,7 +1054,9 @@ function PickOrderCard({
       {(() => {
         const raw = order.shippingMethod ?? null;
         if (!raw) return null;
-        const m = classifyShipping(raw);
+        // UF do destinatário pra resolver PROMOCIONAL → SEDEX (SP) ou PAC
+        const addrPar = parseShippingAddress(order.shippingAddress);
+        const m = classifyShipping(raw, addrPar?.state ?? null);
         const Icon =
           m.kind === 'sedex'
             ? Truck

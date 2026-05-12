@@ -127,6 +127,8 @@ export class OrdersController {
         // Título do método de envio (SEDEX / PAC / Retirar na Loja de X / etc)
         // — lido direto do shipping_lines que o WC já devolve na listagem.
         shippingMethod: o.shipping_lines?.[0]?.method_title ?? null,
+        // UF do destinatário — pra resolver "PROMOCIONAL" → SEDEX (SP) ou PAC.
+        shippingState: o.shipping?.state ?? o.billing?.state ?? null,
         // NOVO: loja responsável + rastreio + flag enviado
         pickOrders,
         shipped: allShipped,
