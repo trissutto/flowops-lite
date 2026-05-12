@@ -11,7 +11,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Play, Eye, Package, Store,
+  ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Play, Eye, Package, Store, Database, Zap,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -167,6 +167,9 @@ export default function ReconciliarEstoquePage() {
             Vendas finalizadas no PDV ANTES do ultimo fix gravavam a venda na tabela <code className="bg-amber-100 px-1 rounded text-xs">caixa</code> do Wincred mas NAO chamavam <code className="bg-amber-100 px-1 rounded text-xs">decreaseStock</code> — entao o estoque ficou inflado. Esse script processa as vendas pendentes (flag <code className="bg-amber-100 px-1 rounded text-xs">stockDecreasedAt=null</code>) e baixa o estoque. <b>Idempotente</b>: nao baixa duas vezes a mesma venda.
           </div>
         </div>
+
+        {/* Diagnostico de indices Wincred */}
+        <IndexDiagnosticCard />
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
@@ -436,6 +439,128 @@ export default function ReconciliarEstoquePage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Card de DIAGNOSTICO de indices Wincred — verifica se tabela estoque tem
+// indice composto (CODIGO, LOJA). Sem isso, batch SELECT varre tabela toda.
+// ═══════════════════════════════════════════════════════════════════════
+function IndexDiagnosticCard() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setError(null); setLoading(true);
+    try {
+      const r = await api<any>('/pdv/admin/erp-indexes');
+      setData(r);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createIndex(table: string, indexName: string, columns: string[]) {
+    if (!confirm(
+      `Criar INDICE ${indexName} em ${table} (${columns.join(', ')})?\n\n` +
+      `Operacao ONLINE (nao bloqueia Giga PDV).\n` +
+      `Pode demorar alguns minutos em tabela grande.\n` +
+      `Idempotente — se ja existir, nao faz nada.`
+    )) return;
+    setCreating(indexName); setError(null);
+    try {
+      const r = await api<any>('/pdv/admin/erp-create-index', {
+        method: 'POST',
+        body: JSON.stringify({ table, indexName, columns }),
+      });
+      alert(
+        `${r.alreadyExists ? 'INDICE JA EXISTIA' : 'INDICE CRIADO COM SUCESSO'}\n\n` +
+        `Tabela: ${r.table}\nNome: ${r.indexName}\nColunas: ${r.columns.join(', ')}\n` +
+        (r.durationMs ? `Tempo: ${(r.durationMs / 1000).toFixed(1)}s` : '')
+      );
+      load(); // recarrega
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setCreating(null);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="font-bold text-slate-800 flex items-center gap-2">
+          <Database size={18} /> Diagnostico de indices Wincred
+        </h2>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded flex items-center gap-1"
+        >
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+          Verificar
+        </button>
+      </div>
+
+      {error && (
+        <div className="text-sm text-rose-700 flex items-center gap-1.5 bg-rose-50 border border-rose-200 rounded p-2">
+          <AlertTriangle size={14} /> {error}
+        </div>
+      )}
+
+      {!data && !loading && (
+        <div className="text-xs text-slate-500">
+          Clique em <b>Verificar</b> pra inspecionar indices das tabelas estoque, caixa, produtos e movimento.
+        </div>
+      )}
+
+      {data?.results && (
+        <div className="space-y-2">
+          {(data.results as any[]).map((t) => (
+            <div key={t.table} className={`border rounded-lg overflow-hidden ${t.recommendation ? 'border-amber-300' : 'border-emerald-300'}`}>
+              <div className={`px-3 py-2 text-xs font-bold flex items-center justify-between ${t.recommendation ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-900'}`}>
+                <span className="font-mono uppercase">{t.table}</span>
+                <span>{t.indexes?.length || 0} indice(s)</span>
+              </div>
+              {t.indexes && t.indexes.length > 0 && (
+                <div className="divide-y divide-slate-100">
+                  {t.indexes.map((idx: any, i: number) => (
+                    <div key={i} className="px-3 py-1.5 text-[11px] flex items-center justify-between gap-2">
+                      <span className="font-mono text-slate-700">
+                        {idx.name}
+                        {idx.unique && <span className="text-emerald-700 ml-1">UNIQUE</span>}
+                      </span>
+                      <span className="font-mono text-slate-500">{idx.columns.join(', ')}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {t.recommendation && (
+                <div className="px-3 py-2 bg-amber-100 border-t border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+                  <Zap size={14} className="flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <b>Recomendacao:</b> {t.recommendation}
+                  </div>
+                  {t.table === 'estoque' && !t.hasCodigoLoja && (
+                    <button
+                      onClick={() => createIndex('estoque', 'idx_lurds_codigo_loja', ['CODIGO', 'LOJA'])}
+                      disabled={creating !== null}
+                      className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-[10px] font-bold rounded shrink-0"
+                    >
+                      {creating === 'idx_lurds_codigo_loja' ? 'Criando…' : 'Criar agora'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -292,26 +292,49 @@ export class RealignmentShipmentService {
       }
     }
 
-    // Pra cada grupo, busca SOMA de todos os SKUs da peça e compara com qty pedida
+    // BATCH: 1 query so pra resolver REF+COR+TAM → estoque (em vez de N queries seriais)
+    const batchInput: Array<{ refCode: string; cor: string | null; tamanho: string | null; storeCode: string }> = [];
     for (const grp of stockByItem.values()) {
+      batchInput.push({
+        refCode: grp.item.refCode,
+        cor: grp.item.cor,
+        tamanho: grp.item.tamanho,
+        storeCode: grp.storeCode,
+      });
+    }
+    let batchResult = new Map<string, { totalQty: number; codigos: string[] }>();
+    try {
+      batchResult = await this.erp.getStockByRefCorTamInStoreBatch(batchInput);
+    } catch (e) {
+      this.logger.warn(`precheck: getStockByRefCorTamInStoreBatch falhou: ${(e as Error).message} — caindo pra leitura individual`);
+    }
+
+    for (const grp of stockByItem.values()) {
+      const key = `${String(grp.item.refCode).trim().toUpperCase()}::${String(grp.item.cor || '').trim().toUpperCase()}::${String(grp.item.tamanho || '').trim().toUpperCase()}::${String(grp.storeCode).trim()}`;
       let estoqueGiga = 0;
-      try {
-        const r = await this.erp.getStockByRefCorTamInStore(
-          grp.item.refCode,
-          grp.item.cor,
-          grp.item.tamanho,
-          grp.storeCode,
-        );
-        estoqueGiga = r.totalQty;
-      } catch (e) {
-        this.logger.warn(`[precheck] falha consultar estoque ${grp.item.refCode}/${grp.item.cor}/${grp.item.tamanho}: ${(e as Error).message}`);
+      const found = batchResult.get(key);
+      if (found) {
+        estoqueGiga = found.totalQty;
+      } else {
+        // Fallback individual (caso o batch tenha falhado)
+        try {
+          const r = await this.erp.getStockByRefCorTamInStore(
+            grp.item.refCode,
+            grp.item.cor,
+            grp.item.tamanho,
+            grp.storeCode,
+          );
+          estoqueGiga = r.totalQty;
+        } catch (e) {
+          this.logger.warn(`precheck fallback ${grp.item.refCode}: ${(e as Error).message}`);
+        }
       }
       if (estoqueGiga < grp.qtyTotal) {
         problemas.push({
           transferOrderId: grp.item.id,
           refCode: grp.item.refCode,
-          cor: grp.item.cor || null,
-          tamanho: grp.item.tamanho || null,
+          cor: grp.item.cor,
+          tamanho: grp.item.tamanho,
           qtyRequerida: grp.qtyTotal,
           sku: grp.sku,
           storeCode: grp.storeCode,

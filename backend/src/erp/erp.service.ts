@@ -4651,6 +4651,164 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Caso real (Lurd's): "13015 MARINHO 50" tem CODIGOs 5383672 e 5383665 cadastrados;
    * o precheck pegava o zerado e bloqueava a remessa mesmo tendo a peça física.
    */
+  /**
+   * Inspeciona indices de uma tabela do Giga. Retorna lista de indices com
+   * suas colunas e tipo. Usado pra diagnostico antes de criar indice novo
+   * (idempotencia + transparencia pra admin).
+   */
+  async inspectTableIndexes(table: string): Promise<{
+    table: string;
+    indexes: Array<{ name: string; columns: string[]; unique: boolean; type: string }>;
+    error?: string;
+  }> {
+    if (!this.pool) return { table, indexes: [], error: 'Pool ERP nao inicializado' };
+    const safeTable = String(table).replace(/[^a-zA-Z0-9_]/g, '');
+    if (!safeTable) return { table, indexes: [], error: 'Nome de tabela invalido' };
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SHOW INDEX FROM \`${safeTable}\``,
+      );
+      // Agrupa por Key_name (cada indice pode ter N colunas)
+      const byKey = new Map<string, { name: string; columns: Array<{ seq: number; col: string }>; unique: boolean; type: string }>();
+      for (const r of rows as any[]) {
+        const name = String(r.Key_name);
+        const unique = Number(r.Non_unique) === 0;
+        const type = String(r.Index_type || 'BTREE');
+        const col = String(r.Column_name);
+        const seq = Number(r.Seq_in_index) || 1;
+        if (!byKey.has(name)) byKey.set(name, { name, columns: [], unique, type });
+        byKey.get(name)!.columns.push({ seq, col });
+      }
+      const indexes = Array.from(byKey.values()).map((k) => ({
+        name: k.name,
+        unique: k.unique,
+        type: k.type,
+        columns: k.columns.sort((a, b) => a.seq - b.seq).map((c) => c.col),
+      }));
+      return { table: safeTable, indexes };
+    } catch (e: any) {
+      return { table: safeTable, indexes: [], error: e?.message || String(e) };
+    }
+  }
+
+  /**
+   * BATCH do getStockByRefCorTamInStore — em vez de N round-trips, faz tudo
+   * em 2 queries (produtos + estoque). Usado pelo precheck de remessa pra
+   * evitar loop serial.
+   *
+   * Retorna Map<key, { totalQty, codigos }> onde key = `${refCode}::${cor}::${tamanho}::${storeCode}`
+   */
+  async getStockByRefCorTamInStoreBatch(
+    items: Array<{ refCode: string; cor: string | null; tamanho: string | null; storeCode: string }>,
+  ): Promise<Map<string, { totalQty: number; codigos: string[] }>> {
+    const out = new Map<string, { totalQty: number; codigos: string[] }>();
+    if (!this.pool || !items?.length) return out;
+
+    const makeKey = (refCode: string, cor: string | null, tamanho: string | null, storeCode: string) =>
+      `${String(refCode).trim().toUpperCase()}::${String(cor || '').trim().toUpperCase()}::${String(tamanho || '').trim().toUpperCase()}::${String(storeCode).trim()}`;
+
+    try {
+      // 1) Coleta TODAS combinacoes unicas de REF+COR+TAM (independente de loja)
+      const uniqRefCorTam = new Map<string, { refCode: string; cor: string; tamanho: string }>();
+      for (const it of items) {
+        const ref = String(it.refCode).trim();
+        const cor = String(it.cor || '').trim();
+        const tam = String(it.tamanho || '').trim();
+        const k = `${ref.toUpperCase()}::${cor.toUpperCase()}::${tam.toUpperCase()}`;
+        if (!uniqRefCorTam.has(k)) uniqRefCorTam.set(k, { refCode: ref, cor, tamanho: tam });
+      }
+
+      // 2) Resolve CODIGOs de cada combinacao via 1 query batch em produtos
+      // Usa OR pra cobrir todas combinacoes — MySQL usa indice em REF
+      const orParts: string[] = [];
+      const orParams: any[] = [];
+      for (const { refCode, cor, tamanho } of uniqRefCorTam.values()) {
+        orParts.push(
+          `(TRIM(UPPER(REF)) = TRIM(UPPER(?)) AND TRIM(UPPER(COALESCE(COR,''))) = TRIM(UPPER(?)) AND TRIM(UPPER(COALESCE(TAMANHO,''))) = TRIM(UPPER(?)))`,
+        );
+        orParams.push(refCode, cor, tamanho);
+      }
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO FROM produtos WHERE ${orParts.join(' OR ')}`,
+        orParams,
+      );
+
+      // refCorTamKey → Set<codigoBase> (sem padding)
+      const refCorTamToCodigos = new Map<string, Set<string>>();
+      for (const r of prodRows as any[]) {
+        const ref = String(r.REF || '').trim().toUpperCase();
+        const cor = String(r.COR || '').trim().toUpperCase();
+        const tam = String(r.TAMANHO || '').trim().toUpperCase();
+        const codigo = String(r.CODIGO || '').trim();
+        if (!codigo) continue;
+        const k = `${ref}::${cor}::${tam}`;
+        if (!refCorTamToCodigos.has(k)) refCorTamToCodigos.set(k, new Set());
+        refCorTamToCodigos.get(k)!.add(codigo);
+      }
+
+      // 3) Expande todas variantes de CODIGOs encontrados
+      const allCodigoVariants = new Set<string>();
+      const codigoToVariants = new Map<string, string[]>();
+      for (const setCodigos of refCorTamToCodigos.values()) {
+        for (const codigo of setCodigos) {
+          if (!codigoToVariants.has(codigo)) {
+            const vs = this.skuVariants(codigo);
+            codigoToVariants.set(codigo, vs);
+            for (const v of vs) allCodigoVariants.add(v);
+          }
+        }
+      }
+      const allStores = Array.from(new Set(items.map((i) => String(i.storeCode).trim())));
+
+      if (allCodigoVariants.size === 0 || allStores.length === 0) {
+        // Sem CODIGOs achados → todos os items retornam 0
+        for (const it of items) out.set(makeKey(it.refCode, it.cor, it.tamanho, it.storeCode), { totalQty: 0, codigos: [] });
+        return out;
+      }
+
+      // 4) 1 SELECT batch trazendo TODO estoque relevante (de todos os codigos em todas as lojas)
+      const [stockRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, LOJA, ESTOQUE FROM estoque WHERE CODIGO IN (?) AND LOJA IN (?) AND ESTOQUE > 0`,
+        [Array.from(allCodigoVariants), allStores],
+      );
+      // mapa (codigo-variant, loja) → estoque
+      const stockMap = new Map<string, number>();
+      for (const r of stockRows as any[]) {
+        const codigo = String(r.CODIGO).trim();
+        const loja = String(r.LOJA).trim();
+        stockMap.set(`${codigo}::${loja}`, Number(r.ESTOQUE) || 0);
+      }
+
+      // 5) Pra cada item de input, soma estoque considerando todas variantes dos CODIGOs daquela REF+COR+TAM
+      for (const it of items) {
+        const refKey = `${String(it.refCode).trim().toUpperCase()}::${String(it.cor || '').trim().toUpperCase()}::${String(it.tamanho || '').trim().toUpperCase()}`;
+        const codigosBase = refCorTamToCodigos.get(refKey);
+        const storeCode = String(it.storeCode).trim();
+        if (!codigosBase || codigosBase.size === 0) {
+          out.set(makeKey(it.refCode, it.cor, it.tamanho, it.storeCode), { totalQty: 0, codigos: [] });
+          continue;
+        }
+        let totalQty = 0;
+        const codigosUsados: string[] = [];
+        for (const codigo of codigosBase) {
+          const variants = codigoToVariants.get(codigo) || [codigo];
+          for (const v of variants) {
+            const qty = stockMap.get(`${v}::${storeCode}`);
+            if (qty && qty > 0) {
+              totalQty += qty;
+            }
+          }
+          codigosUsados.push(codigo);
+        }
+        out.set(makeKey(it.refCode, it.cor, it.tamanho, it.storeCode), { totalQty, codigos: codigosUsados });
+      }
+      return out;
+    } catch (e: any) {
+      this.logger.warn(`getStockByRefCorTamInStoreBatch falhou: ${e?.message || e}`);
+      return out;
+    }
+  }
+
   async getStockByRefCorTamInStore(
     refCode: string,
     cor: string | null,

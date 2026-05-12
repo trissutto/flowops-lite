@@ -1105,4 +1105,62 @@ export class PdvController {
       dryRun: false,
     });
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN — Diagnostico + criacao de indices no Wincred
+  // ═══════════════════════════════════════════════════════════════════════
+
+  @Get('admin/erp-indexes')
+  async inspectErpIndexes(
+    @Req() req: any,
+    @Query('table') table?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    const tables = table ? [table] : ['estoque', 'caixa', 'produtos', 'movimento'];
+    const results = await Promise.all(
+      tables.map((t) => this.erp.inspectTableIndexes(t)),
+    );
+    // Avalia se cada tabela tem indice util pra performance
+    const analysis = results.map((r) => {
+      const tbl = r.table;
+      let recommendation: string | null = null;
+      let hasCodigoLoja = false;
+      let hasRef = false;
+      if (r.indexes && r.indexes.length > 0) {
+        for (const idx of r.indexes) {
+          const cols = idx.columns.map((c) => c.toUpperCase());
+          if (cols.includes('CODIGO') && cols.includes('LOJA')) hasCodigoLoja = true;
+          if (cols[0] === 'REF') hasRef = true;
+        }
+      }
+      if (tbl === 'estoque' && !hasCodigoLoja) {
+        recommendation = 'CRIAR INDICE COMPOSTO (CODIGO, LOJA) — sem isso, SELECT/UPDATE de estoque varre tabela inteira';
+      }
+      if (tbl === 'produtos' && !hasRef) {
+        recommendation = 'CRIAR INDICE em REF — usado em busca por refCode';
+      }
+      return { ...r, hasCodigoLoja, hasRef, recommendation };
+    });
+    return { results: analysis };
+  }
+
+  @Post('admin/erp-create-index')
+  async createErpIndex(
+    @Req() req: any,
+    @Body() body: { table: string; indexName: string; columns: string[] },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    if (!body?.table || !body?.indexName || !body?.columns?.length) {
+      throw new BadRequestException('table, indexName e columns sao obrigatorios');
+    }
+    return this.erp.createIndexIfNotExists({
+      table: body.table,
+      indexName: body.indexName,
+      columns: body.columns,
+    });
+  }
 }
