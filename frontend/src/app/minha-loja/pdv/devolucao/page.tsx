@@ -216,17 +216,25 @@ export default function DevolucaoPage() {
 
       // AUTO-IMPRIME o vale assim que a devolução em modo crédito/troca
       // for confirmada — entrega o cupom pra cliente sem vendedora precisar
-      // clicar em mais nada. Usa silentPrintUrl no Electron, fallback iframe.
+      // clicar em mais nada.
+      //
+      // Estrategia (igual PixPaidListener):
+      //   1) Electron desktop → silentPrintUrl (direto na termica)
+      //   2) Browser puro → POPUP VISIVEL (nao iframe oculto). Chrome bloqueia
+      //      window.print() em iframes offscreen. Como esse codigo roda dentro
+      //      do event handler do clique "Confirmar devolução", o popup eh
+      //      permitido (interacao do user). Popup carrega o vale, imprime
+      //      sozinho via autoprint=1 e fecha apos afterprint.
       if ((r.modo === 'troca' || r.modo === 'credito') && r.creditoCode) {
         try {
           const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
           const electron = (window as any).electronAPI;
           if (electron?.silentPrintUrl) {
             electron.silentPrintUrl(window.location.origin + url).catch(() => {
-              hiddenIframe(url);
+              openValePopup(url);
             });
           } else {
-            hiddenIframe(url);
+            openValePopup(url);
           }
         } catch { /* segue — botão Imprimir Vale fica disponível */ }
       }
@@ -237,17 +245,22 @@ export default function DevolucaoPage() {
     }
   }
 
-  // Cria iframe oculto que carrega a página do vale, ela auto-imprime e some.
-  // Mesmo padrão usado em recibos do PDV — sem janela visível pra vendedora.
-  function hiddenIframe(url: string) {
-    try {
-      const iframe = document.createElement('iframe');
-      iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:300px;height:600px;border:0;';
-      iframe.src = url;
-      document.body.appendChild(iframe);
-      setTimeout(() => { try { iframe.remove(); } catch {} }, 30000);
-    } catch {
-      window.open(url, 'lurds_vale', 'width=400,height=700');
+  // Abre POPUP VISIVEL pequeno pra imprimir o vale-troca. Substitui o
+  // iframe oculto offscreen (que era bloqueado pelo Chrome — print silencioso
+  // sem interacao do user nao funciona em browsers modernos).
+  //
+  // O popup carrega /vale-troca/[code]?autoprint=1 que dispara window.print()
+  // sozinho via useEffect, e fecha apos afterprint. Janela aparece brevemente
+  // mas eh mais rapido que carregar a UI inteira.
+  function openValePopup(url: string) {
+    const w = window.open(
+      url,
+      `lurds_vale_${Date.now()}`,
+      'width=420,height=720,resizable=yes,scrollbars=yes',
+    );
+    if (!w) {
+      // Popup blocker — fallback abre em nova aba (vendedora vê e imprime manual)
+      window.open(url, '_blank', 'noopener,noreferrer');
     }
   }
 
