@@ -18,6 +18,7 @@ import { api } from '@/lib/api';
 type Resultado = {
   mode: 'dry-run' | 'executed';
   sinceIso: string;
+  untilIso?: string;
   storeCode: string | null;
   totalSalesEncontradas: number;
   salesProcessadas: number;
@@ -37,6 +38,9 @@ export default function ReconciliarEstoquePage() {
     const d = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     return d.toISOString().slice(0, 10); // YYYY-MM-DD
   });
+  // ATE — default vazio = ate agora. Permite cobrir janela especifica (ex:
+  // so vendas do dia 13/05) sem mexer em dias ja reconciliados.
+  const [until, setUntil] = useState('');
   const [storeCode, setStoreCode] = useState('');
   const [limit, setLimit] = useState(100);
   const [loading, setLoading] = useState(false);
@@ -46,6 +50,8 @@ export default function ReconciliarEstoquePage() {
   const [historico, setHistorico] = useState<Resultado[]>([]);
 
   const sinceIso = since ? new Date(since + 'T00:00:00').toISOString() : undefined;
+  // Until: pega o FIM do dia escolhido (23:59:59.999) pra incluir toda a data
+  const untilIso = until ? new Date(until + 'T23:59:59.999').toISOString() : undefined;
 
   async function rodar(dryRun: boolean) {
     setError(null);
@@ -53,6 +59,7 @@ export default function ReconciliarEstoquePage() {
     try {
       const params = new URLSearchParams();
       if (sinceIso) params.set('since', sinceIso);
+      if (untilIso) params.set('until', untilIso);
       if (storeCode) params.set('storeCode', storeCode);
       if (limit) params.set('limit', String(limit));
 
@@ -64,6 +71,7 @@ export default function ReconciliarEstoquePage() {
           method: 'POST',
           body: JSON.stringify({
             since: sinceIso,
+            until: untilIso,
             storeCode: storeCode || undefined,
             limit,
           }),
@@ -107,6 +115,7 @@ export default function ReconciliarEstoquePage() {
           method: 'POST',
           body: JSON.stringify({
             since: sinceIso,
+            until: untilIso,
             storeCode: storeCode || undefined,
             limit,
           }),
@@ -164,7 +173,7 @@ export default function ReconciliarEstoquePage() {
           <h2 className="font-bold text-slate-800 flex items-center gap-2">
             <Package size={18} /> Filtros
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
               <label className="text-xs uppercase font-bold text-slate-600 mb-1 block">
                 Desde
@@ -176,7 +185,21 @@ export default function ReconciliarEstoquePage() {
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               />
               <div className="text-[10px] text-slate-500 mt-1">
-                Default: 90 dias atras
+                Default: 90d atras
+              </div>
+            </div>
+            <div>
+              <label className="text-xs uppercase font-bold text-slate-600 mb-1 block">
+                Ate
+              </label>
+              <input
+                type="date"
+                value={until}
+                onChange={(e) => setUntil(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-sm"
+              />
+              <div className="text-[10px] text-slate-500 mt-1">
+                Vazio = ate agora
               </div>
             </div>
             <div>
@@ -207,6 +230,63 @@ export default function ReconciliarEstoquePage() {
                 Recomendado: 100 (max 500)
               </div>
             </div>
+          </div>
+
+          {/* Atalhos rapidos pra janela de data */}
+          <div className="flex flex-wrap gap-2 text-xs pt-1">
+            <span className="text-slate-500 font-bold uppercase self-center mr-1">Atalhos:</span>
+            <button
+              type="button"
+              onClick={() => {
+                const t = new Date(); t.setHours(0, 0, 0, 0);
+                const iso = t.toISOString().slice(0, 10);
+                setSince(iso); setUntil(iso);
+              }}
+              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-bold"
+            >
+              Hoje
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const t = new Date(Date.now() - 24 * 60 * 60 * 1000);
+                const iso = t.toISOString().slice(0, 10);
+                setSince(iso); setUntil(iso);
+              }}
+              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-bold"
+            >
+              Ontem
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const t = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+                setSince(t.toISOString().slice(0, 10));
+                setUntil('');
+              }}
+              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-bold"
+            >
+              Ultimos 7d
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const t = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                setSince(t.toISOString().slice(0, 10));
+                setUntil('');
+              }}
+              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded text-slate-700 font-bold"
+            >
+              Ultimos 30d
+            </button>
+            <button
+              type="button"
+              onClick={() => setUntil('')}
+              className="px-2 py-1 bg-slate-50 hover:bg-slate-100 rounded text-slate-500 font-bold"
+              title="Limpa o campo 'Ate' — usa ate agora"
+            >
+              Limpar 'Ate'
+            </button>
           </div>
 
           <div className="flex flex-wrap gap-2 pt-2 border-t">

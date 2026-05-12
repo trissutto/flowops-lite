@@ -1073,6 +1073,7 @@ export class PdvController {
   async previewReconcileStock(
     @Req() req: any,
     @Query('since') since?: string,
+    @Query('until') until?: string,
     @Query('storeCode') storeCode?: string,
     @Query('limit') limit?: string,
   ) {
@@ -1081,6 +1082,7 @@ export class PdvController {
     }
     return this.svc.reconcileStockBacklog({
       sinceIso: since,
+      untilIso: until,
       storeCode,
       limit: limit ? Number(limit) : 100,
       dryRun: true,
@@ -1090,13 +1092,14 @@ export class PdvController {
   @Post('admin/reconcile-stock/execute')
   async executeReconcileStock(
     @Req() req: any,
-    @Body() body: { since?: string; storeCode?: string; limit?: number },
+    @Body() body: { since?: string; until?: string; storeCode?: string; limit?: number },
   ) {
     if (req?.user?.role !== 'admin') {
       throw new ForbiddenException('Apenas admin pode reconciliar estoque');
     }
     return this.svc.reconcileStockBacklog({
       sinceIso: body?.since,
+      untilIso: body?.until,
       storeCode: body?.storeCode,
       limit: body?.limit || 100,
       dryRun: false,

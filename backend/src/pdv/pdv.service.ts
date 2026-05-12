@@ -1387,12 +1387,14 @@ export class PdvService {
   // ═════════════════════════════════════════════════════════════════════════
   async reconcileStockBacklog(input: {
     sinceIso?: string;
+    untilIso?: string;
     storeCode?: string;
     dryRun?: boolean;
     limit?: number;
   }): Promise<{
     mode: 'dry-run' | 'executed';
     sinceIso: string;
+    untilIso: string;
     storeCode: string | null;
     totalSalesEncontradas: number;
     salesProcessadas: number;
@@ -1405,13 +1407,15 @@ export class PdvService {
     const sinceIso = input.sinceIso
       || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
     const since = new Date(sinceIso);
+    const untilIso = input.untilIso || new Date().toISOString();
+    const until = new Date(untilIso);
     const limit = Math.max(1, Math.min(500, input.limit || 100));
     const dryRun = !!input.dryRun;
     const storeCode = input.storeCode?.trim() || null;
 
     const where: any = {
       status: 'finalized',
-      finalizedAt: { gte: since },
+      finalizedAt: { gte: since, lte: until },
       stockDecreasedAt: null,
     };
     if (storeCode) where.storeCode = storeCode;
@@ -1507,6 +1511,7 @@ export class PdvService {
     return {
       mode: dryRun ? 'dry-run' : 'executed',
       sinceIso,
+      untilIso,
       storeCode,
       totalSalesEncontradas,
       salesProcessadas: (sales as any[]).length,
