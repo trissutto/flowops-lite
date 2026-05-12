@@ -186,18 +186,35 @@ export class PdvService {
           `Vale-troca ${code} tem saldo R$ ${valorVale.toFixed(2)}, não dá pra cobrir R$ ${input.valor.toFixed(2)}`,
         );
       }
-      // Não bloqueia outro vale_troca já adicionado nessa venda — também valida
-      // que o mesmo código não tá sendo usado 2x.
-      const jaUsouNaVenda = await (this.prisma as any).pdvSalePayment.findFirst({
-        where: { saleId: input.saleId, method: 'vale_troca' },
+      // GUARD ANTI-USO-DUPLO: vale-troca é cupom de uso ÚNICO.
+      // Busca QUALQUER pdvSalePayment com esse código em vendas ATIVAS
+      // (open ou finalized). Se já aplicado em OUTRA venda → bloqueia.
+      // (Status do pdvReturn só vira used no finalize; entre addPayment e
+      // finalize, o code fica amarrado no payment.details — essa busca cobre
+      // esse intervalo crítico onde 2 PDVs poderiam usar o mesmo vale.)
+      const outrasOcorrencias = await (this.prisma as any).pdvSalePayment.findMany({
+        where: { method: 'vale_troca' },
+        select: { id: true, saleId: true, details: true, sale: { select: { status: true } } },
       });
-      if (jaUsouNaVenda) {
+      for (const p of outrasOcorrencias as any[]) {
+        let codeDet = '';
         try {
-          const det = JSON.parse(jaUsouNaVenda.details || '{}');
-          if (det.creditoCode === code) {
-            throw new BadRequestException(`Vale-troca ${code} já foi adicionado nessa venda`);
-          }
-        } catch { /* details mal-formado, ignora */ }
+          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+          codeDet = String(det?.creditoCode || '').trim().toUpperCase();
+        } catch { continue; }
+        if (codeDet !== code) continue;
+        // Mesmo código encontrado
+        if (p.saleId !== input.saleId) {
+          const outroStatus = p.sale?.status;
+          // Venda cancelada → libera (vale ficou solto, pode reusar)
+          if (outroStatus === 'cancelled') continue;
+          throw new BadRequestException(
+            `Vale-troca ${code} já foi aplicado em outra venda (status: ${outroStatus || 'desconhecido'}). ` +
+              `Cupom de uso único — não pode ser duplicado.`,
+          );
+        }
+        // Mesma venda → não pode 2x
+        throw new BadRequestException(`Vale-troca ${code} já foi adicionado nessa venda`);
       }
     }
 
