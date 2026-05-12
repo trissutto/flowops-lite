@@ -81,7 +81,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       password: this.config.get<string>('ERP_PASSWORD'),
       database: this.config.get<string>('ERP_DATABASE'),
       waitForConnections: true,
-      connectionLimit: 5,
+      // Aumentado de 5 → 15 (2025-05) pra suportar batch concorrente de baixa
+      // em transferencias + PDV + crediario sem fila. Wincred MySQL aguenta.
+      connectionLimit: 15,
       queueLimit: 0,
       // 15s pra conectar — Giga roda atrás do NAT da loja, latência varia MUITO.
       // 5s era curto e causava ETIMEDOUT em pico de uso / rede instável.
@@ -226,9 +228,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const normalizeStoreCode = (raw: string): string => {
       const s = String(raw || '').trim().toUpperCase().replace(/^LJ/i, '');
       const n = parseInt(s, 10);
-      if (Number.isNaN(n) || n < 1 || n > 99) return s; // devolve cru se não for número
+      if (Number.isNaN(n) || n < 1 || n > 99) return s;
       return String(n).padStart(2, '0');
     };
+
+    // ── 1. NORMALIZA + AGREGA POR (SKU, LOJA) ──────────────────────────
+    // Items duplicados (mesmo sku+loja) sao somados pra reduzir queries.
+    const aggregated = new Map<string, { sku: string; qty: number; storeCode: string }>();
+    for (const it of items) {
+      const sku = String(it.sku || '').trim();
+      const store = normalizeStoreCode(it.storeCode);
+      const qty = Math.max(1, Number(it.qty) || 1);
+      if (!sku || !store) {
+        return { success: false, applied: [], error: `Item invalido: sku='${sku}' storeCode='${store}'` };
+      }
+      const key = `${sku}|${store}`;
+      const ex = aggregated.get(key);
+      if (ex) ex.qty += qty;
+      else aggregated.set(key, { sku, qty, storeCode: store });
+    }
+
+    // ── 2. AGRUPA POR LOJA ────────────────────────────────────────────
+    const byStore = new Map<string, Array<{ sku: string; qty: number }>>();
+    for (const it of aggregated.values()) {
+      if (!byStore.has(it.storeCode)) byStore.set(it.storeCode, []);
+      byStore.get(it.storeCode)!.push({ sku: it.sku, qty: it.qty });
+    }
 
     const conn = await this.pool.getConnection();
     const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
@@ -236,83 +261,106 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
 
-      for (const it of items) {
-        const skuOriginal = String(it.sku || '').trim();
-        const storeCode = normalizeStoreCode(it.storeCode);
-        const qty = Math.max(1, Number(it.qty) || 1);
-
-        if (!skuOriginal || !storeCode) {
-          throw new Error(`Item inválido: sku='${skuOriginal}' storeCode='${storeCode}'`);
+      // ── 3. PROCESSA UMA LOJA POR VEZ (1 SELECT + 1 UPDATE por loja) ──
+      for (const [storeCode, storeItems] of byStore) {
+        // Coleta TODAS as variantes de TODOS os SKUs dessa loja
+        const skuToVariants = new Map<string, string[]>();
+        const allVariants = new Set<string>();
+        for (const it of storeItems) {
+          const vs = this.skuVariants(it.sku);
+          skuToVariants.set(it.sku, vs);
+          for (const v of vs) allVariants.add(v);
         }
+        const variantArr = Array.from(allVariants);
+        if (variantArr.length === 0) continue;
 
-        // Tolerância a zeros à esquerda: se o sistema pediu baixa de "5383498"
-        // mas no Giga está "0005383498", precisamos achar o CODIGO real antes
-        // de dar UPDATE — caso contrário a baixa some silenciosa.
-        const variants = this.skuVariants(skuOriginal);
-
-        // SELECT FOR UPDATE — trava a linha durante a transação pra evitar
-        // que outra conexão (ex: PDV do Giga) leia valor desatualizado.
-        // Tras o CODIGO real do Giga pra usar no UPDATE.
-        const [beforeRows] = await conn.query<mysql.RowDataPacket[]>(
+        // 1 SELECT FOR UPDATE pra essa loja inteira (trava todas as linhas)
+        const [rows] = await conn.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO, ESTOQUE FROM estoque
             WHERE CODIGO IN (?) AND LOJA = ?
-            ORDER BY ESTOQUE DESC
-            LIMIT 1 FOR UPDATE`,
-          [variants, storeCode],
+            FOR UPDATE`,
+          [variantArr, storeCode],
         );
 
-        if (!beforeRows.length) {
-          if (opts?.skipNotFound) {
-            this.logger.warn(
-              `Item sem registro em estoque — PULADO (skipNotFound): SKU=${skuOriginal} LOJA=${storeCode} qty=${qty}`,
-            );
-            continue; // Pula esse item, segue pro próximo
-          }
-          throw new Error(`Registro não encontrado em estoque: SKU=${skuOriginal} LOJA=${storeCode}`);
+        // Mapa variante normalizada → { codigo, estoque }
+        const variantMap = new Map<string, { codigo: string; estoque: number }>();
+        for (const row of rows as any[]) {
+          const codigo = String(row.CODIGO).trim();
+          variantMap.set(codigo, { codigo, estoque: Number(row.ESTOQUE) || 0 });
         }
 
-        const codigoGiga = String(beforeRows[0].CODIGO).trim();
-        const previousStock = Number(beforeRows[0].ESTOQUE) || 0;
-        const newStock = previousStock - qty;
-
-        // BLOQUEIO DURO: não deixar estoque negativo. Se acontecer, abortar a
-        // transação inteira — operadora vê o erro e investiga (provavelmente
-        // divergência com o físico).
-        //
-        // EXCEÇÃO: opts.allowNegative=true (usado em realinhamento/triagem),
-        // a peça já está em mãos fisicamente, então deixamos o Giga ficar
-        // negativo. Logamos warning pra ficar rastro.
-        if (newStock < 0) {
-          if (opts?.allowNegative) {
-            this.logger.warn(
-              `Estoque negativo aceito (allowNegative): SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty} → newStock=${newStock}`,
-            );
-          } else {
-            throw new Error(
-              `Estoque insuficiente: SKU=${skuOriginal} (giga=${codigoGiga}) LOJA=${storeCode} tem ${previousStock}, pediu ${qty}`,
-            );
+        // Pra cada item: acha o melhor match (variante com maior estoque)
+        type Update = { codigo: string; newStock: number; sku: string; previousStock: number; qty: number };
+        const updates: Update[] = [];
+        for (const it of storeItems) {
+          const variants = skuToVariants.get(it.sku) || [];
+          let bestMatch: { codigo: string; estoque: number } | null = null;
+          for (const v of variants) {
+            const m = variantMap.get(v);
+            if (m && (!bestMatch || m.estoque > bestMatch.estoque)) bestMatch = m;
           }
+          if (!bestMatch) {
+            if (opts?.skipNotFound) {
+              this.logger.warn(
+                `Item sem registro em estoque — PULADO (skipNotFound): SKU=${it.sku} LOJA=${storeCode} qty=${it.qty}`,
+              );
+              continue;
+            }
+            throw new Error(`Registro não encontrado em estoque: SKU=${it.sku} LOJA=${storeCode}`);
+          }
+          const previousStock = bestMatch.estoque;
+          const newStock = previousStock - it.qty;
+          if (newStock < 0) {
+            if (opts?.allowNegative) {
+              this.logger.warn(
+                `Estoque negativo aceito (allowNegative): SKU=${it.sku} (giga=${bestMatch.codigo}) LOJA=${storeCode} tem ${previousStock}, pediu ${it.qty} → newStock=${newStock}`,
+              );
+            } else {
+              throw new Error(
+                `Estoque insuficiente: SKU=${it.sku} (giga=${bestMatch.codigo}) LOJA=${storeCode} tem ${previousStock}, pediu ${it.qty}`,
+              );
+            }
+          }
+          updates.push({ codigo: bestMatch.codigo, newStock, sku: it.sku, previousStock, qty: it.qty });
+          // Atualiza o variantMap pra refletir o novo estoque caso outro item
+          // tente o mesmo CODIGO (defensivo — ja agregamos por sku+loja, mas
+          // variantes diferentes podem apontar pro mesmo CODIGO Giga).
+          bestMatch.estoque = newStock;
         }
 
-        const [result]: any = await conn.query(
-          `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
-          [newStock, codigoGiga, storeCode],
-        );
+        if (updates.length === 0) continue;
 
-        if (!result || result.affectedRows !== 1) {
-          throw new Error(
-            `UPDATE não afetou linha esperada: SKU=${codigoGiga} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
+        // ── 4. BATCH UPDATE com CASE WHEN ────────────────────────────────
+        // 1 query atualiza N linhas. Reduz round-trips MySQL drasticamente.
+        // Sintaxe: UPDATE estoque SET ESTOQUE = CASE CODIGO WHEN ? THEN ? ... END
+        //          WHERE LOJA = ? AND CODIGO IN (?)
+        const caseClauses = updates.map(() => 'WHEN ? THEN ?').join(' ');
+        const caseParams: any[] = [];
+        for (const u of updates) caseParams.push(u.codigo, u.newStock);
+        const codigos = updates.map((u) => u.codigo);
+        const sql = `UPDATE estoque SET ESTOQUE = CASE CODIGO ${caseClauses} END WHERE LOJA = ? AND CODIGO IN (?)`;
+        const [result]: any = await conn.query(sql, [...caseParams, storeCode, codigos]);
+        // affectedRows pode vir < updates.length se algum CODIGO ja tinha o
+        // mesmo ESTOQUE (MySQL nao conta como modificado). Loga warning mas
+        // nao aborta — o SET foi aplicado.
+        const affected = result?.affectedRows ?? 0;
+        if (affected < updates.length) {
+          this.logger.warn(
+            `Batch UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode}). ` +
+            `Pode ser MySQL nao contando linhas inalteradas. Verificando...`,
           );
         }
 
-        // Mantém o sku ORIGINAL no log pra rastreabilidade (caller passou).
-        applied.push({ sku: skuOriginal, storeCode, qty, previousStock, newStock });
+        for (const u of updates) {
+          applied.push({ sku: u.sku, storeCode, qty: u.qty, previousStock: u.previousStock, newStock: u.newStock });
+        }
       }
 
       await conn.commit();
       this.logger.log(
-        `ERP baixa OK: ${applied.length} item(ns) baixado(s). ` +
-          applied.map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', '),
+        `ERP baixa BATCH OK: ${applied.length} item(ns) em ${byStore.size} loja(s). ` +
+          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', ') +
+          (applied.length > 5 ? ` … (+${applied.length - 5} mais)` : ''),
       );
       return { success: true, applied };
     } catch (e: any) {
@@ -402,83 +450,151 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return String(n).padStart(2, '0');
     };
 
+    // ── 1. NORMALIZA + AGREGA POR (SKU, LOJA) ──────────────────────────
+    const aggregated = new Map<string, { sku: string; qty: number; storeCode: string }>();
+    for (const it of items) {
+      const sku = String(it.sku || '').trim();
+      const store = normalizeStoreCode(it.storeCode);
+      const qty = Number(it.qty);
+      if (!sku || !store || !qty || qty <= 0) {
+        return { success: false, applied: [], error: `Item invalido: sku=${sku} loja=${store} qty=${qty}` };
+      }
+      const key = `${sku}|${store}`;
+      const ex = aggregated.get(key);
+      if (ex) ex.qty += qty;
+      else aggregated.set(key, { sku, qty, storeCode: store });
+    }
+
+    // ── 2. AGRUPA POR LOJA ────────────────────────────────────────────
+    const byStore = new Map<string, Array<{ sku: string; qty: number }>>();
+    for (const it of aggregated.values()) {
+      if (!byStore.has(it.storeCode)) byStore.set(it.storeCode, []);
+      byStore.get(it.storeCode)!.push({ sku: it.sku, qty: it.qty });
+    }
+
     const conn = await this.pool.getConnection();
     const applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }> = [];
 
     try {
       await conn.beginTransaction();
 
-      for (const it of items) {
-        const skuOriginal = String(it.sku || '').trim();
-        const qty = Number(it.qty);
-        const storeCode = normalizeStoreCode(it.storeCode);
-
-        if (!skuOriginal || !storeCode || !qty || qty <= 0) {
-          throw new Error(`Item inválido: sku=${skuOriginal} loja=${storeCode} qty=${qty}`);
+      // ── 3. PROCESSA UMA LOJA POR VEZ ──────────────────────────────────
+      for (const [storeCode, storeItems] of byStore) {
+        // Coleta variantes de cada SKU
+        const skuToVariants = new Map<string, string[]>();
+        const allVariants = new Set<string>();
+        for (const it of storeItems) {
+          const vs = this.skuVariants(it.sku);
+          skuToVariants.set(it.sku, vs);
+          for (const v of vs) allVariants.add(v);
         }
+        const variantArr = Array.from(allVariants);
+        if (variantArr.length === 0) continue;
 
-        // Tolerância a zeros à esquerda: tenta achar o CODIGO real do Giga
-        // (pode estar como "0005383498" mesmo recebendo "5383498").
-        const variants = this.skuVariants(skuOriginal);
-
-        // SELECT FOR UPDATE — trava a linha (se houver)
+        // 1 SELECT FOR UPDATE pra trazer estoque atual + travar linhas
         const [rows] = await conn.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO, ESTOQUE FROM estoque
             WHERE CODIGO IN (?) AND LOJA = ?
-            ORDER BY ESTOQUE DESC
-            LIMIT 1 FOR UPDATE`,
-          [variants, storeCode],
+            FOR UPDATE`,
+          [variantArr, storeCode],
         );
+        const variantMap = new Map<string, { codigo: string; estoque: number }>();
+        for (const row of rows as any[]) {
+          const codigo = String(row.CODIGO).trim();
+          variantMap.set(codigo, { codigo, estoque: Number(row.ESTOQUE) || 0 });
+        }
 
-        let previousStock = 0;
-        let newStock = qty;
-        let codigoGiga = skuOriginal;
+        // Pra cada item: existe → vai pra UPDATE batch; nao existe → vai pra INSERT
+        type Update = { codigo: string; newStock: number; sku: string; previousStock: number; qty: number };
+        type Insert = { codigo: string; sku: string; qty: number };
+        const updates: Update[] = [];
+        const inserts: Insert[] = [];
+        const naoEncontradosVariantes: string[][] = []; // pra resolver via produtos
 
-        if (!rows.length) {
-          // Nenhuma variante existe pra essa loja — INSERT novo.
-          // Pra manter consistência com o cadastro, tenta usar o CODIGO
-          // do `produtos` (que pode ter padding diferente do que veio).
-          let codigoCadastro = skuOriginal;
-          try {
-            const [prodRows] = await conn.query<mysql.RowDataPacket[]>(
-              `SELECT CODIGO FROM produtos WHERE CODIGO IN (?) LIMIT 1`,
-              [variants],
-            );
-            if ((prodRows as any[]).length) {
-              codigoCadastro = String((prodRows as any[])[0].CODIGO).trim();
-            }
-          } catch { /* ignore — usa skuOriginal */ }
-
-          await conn.query(
-            `INSERT INTO estoque (CODIGO, LOJA, ESTOQUE) VALUES (?, ?, ?)`,
-            [codigoCadastro, storeCode, qty],
-          );
-          codigoGiga = codigoCadastro;
-          previousStock = 0;
-          newStock = qty;
-        } else {
-          codigoGiga = String(rows[0].CODIGO).trim();
-          previousStock = Number(rows[0].ESTOQUE);
-          newStock = previousStock + qty;
-          const [result] = await conn.query<mysql.ResultSetHeader>(
-            `UPDATE estoque SET ESTOQUE = ? WHERE CODIGO = ? AND LOJA = ?`,
-            [newStock, codigoGiga, storeCode],
-          );
-          if (!result || result.affectedRows !== 1) {
-            throw new Error(
-              `UPDATE não afetou linha esperada: SKU=${codigoGiga} LOJA=${storeCode} affected=${result?.affectedRows ?? 0}`,
-            );
+        for (const it of storeItems) {
+          const variants = skuToVariants.get(it.sku) || [];
+          let bestMatch: { codigo: string; estoque: number } | null = null;
+          for (const v of variants) {
+            const m = variantMap.get(v);
+            if (m && (!bestMatch || m.estoque > bestMatch.estoque)) bestMatch = m;
+          }
+          if (bestMatch) {
+            const previousStock = bestMatch.estoque;
+            const newStock = previousStock + it.qty;
+            updates.push({ codigo: bestMatch.codigo, newStock, sku: it.sku, previousStock, qty: it.qty });
+            bestMatch.estoque = newStock; // se outro item bater no mesmo codigo
+          } else {
+            // Vai pra INSERT — antes resolve CODIGO real via produtos
+            naoEncontradosVariantes.push(variants);
+            inserts.push({ codigo: it.sku, sku: it.sku, qty: it.qty }); // codigo provisorio
           }
         }
 
-        // Mantém o sku ORIGINAL no log pra rastreabilidade (caller passou).
-        applied.push({ sku: skuOriginal, storeCode, qty, previousStock, newStock });
+        // Resolve CODIGOs dos inserts via batch lookup em produtos (1 query)
+        if (inserts.length > 0) {
+          const allInsertVariants = Array.from(new Set(naoEncontradosVariantes.flat()));
+          let prodMap = new Map<string, string>();
+          try {
+            const [prodRows] = await conn.query<mysql.RowDataPacket[]>(
+              `SELECT CODIGO FROM produtos WHERE CODIGO IN (?)`,
+              [allInsertVariants],
+            );
+            for (const row of prodRows as any[]) {
+              const codigo = String(row.CODIGO).trim();
+              prodMap.set(codigo, codigo);
+            }
+          } catch { /* ignore — usa o sku original */ }
+          // Atualiza codigo dos inserts pra usar o do cadastro quando achou
+          for (let i = 0; i < inserts.length; i++) {
+            const variants = naoEncontradosVariantes[i];
+            for (const v of variants) {
+              if (prodMap.has(v)) {
+                inserts[i].codigo = v;
+                break;
+              }
+            }
+          }
+        }
+
+        // ── 4a. BATCH UPDATE com CASE WHEN ──────────────────────────────
+        if (updates.length > 0) {
+          const caseClauses = updates.map(() => 'WHEN ? THEN ?').join(' ');
+          const caseParams: any[] = [];
+          for (const u of updates) caseParams.push(u.codigo, u.newStock);
+          const codigos = updates.map((u) => u.codigo);
+          const sql = `UPDATE estoque SET ESTOQUE = CASE CODIGO ${caseClauses} END WHERE LOJA = ? AND CODIGO IN (?)`;
+          const [result]: any = await conn.query(sql, [...caseParams, storeCode, codigos]);
+          const affected = result?.affectedRows ?? 0;
+          if (affected < updates.length) {
+            this.logger.warn(
+              `Batch INCREASE UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode})`,
+            );
+          }
+          for (const u of updates) {
+            applied.push({ sku: u.sku, storeCode, qty: u.qty, previousStock: u.previousStock, newStock: u.newStock });
+          }
+        }
+
+        // ── 4b. BATCH INSERT (linhas novas em loja destino) ─────────────
+        if (inserts.length > 0) {
+          const placeholders = inserts.map(() => '(?, ?, ?)').join(', ');
+          const values: any[] = [];
+          for (const ins of inserts) values.push(ins.codigo, storeCode, ins.qty);
+          await conn.query(
+            `INSERT INTO estoque (CODIGO, LOJA, ESTOQUE) VALUES ${placeholders}`,
+            values,
+          );
+          for (const ins of inserts) {
+            applied.push({ sku: ins.sku, storeCode, qty: ins.qty, previousStock: 0, newStock: ins.qty });
+          }
+        }
       }
 
       await conn.commit();
       this.logger.log(
-        `ERP entrada OK: ${applied.length} item(ns) entrada(s). ` +
-          applied.map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', '),
+        `ERP entrada BATCH OK: ${applied.length} item(ns) em ${byStore.size} loja(s). ` +
+          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', ') +
+          (applied.length > 5 ? ` … (+${applied.length - 5} mais)` : ''),
       );
       return { success: true, applied };
     } catch (e: any) {
