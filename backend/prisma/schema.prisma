@@ -822,7 +822,12 @@ model CrediarioBaixa {
   totalJuros        Float    @default(0) @map("total_juros")
   totalPago         Float    @default(0) @map("total_pago")
   // Forma de pagamento usada
-  formaPagamento    String                              // pix | dinheiro
+  formaPagamento    String                              // pix | dinheiro | misto (split dinheiro+pix)
+  // Split: quando formaPagamento='misto', cliente paga parte em dinheiro
+  // e parte em PIX. valorDinheiro entra no caixa direto; valorPix gera QR
+  // Pagar.me e fica pending ate confirmacao.
+  valorDinheiro     Float?   @map("valor_dinheiro")
+  valorPix          Float?   @map("valor_pix")
   // Quando PIX, vincula com a order Pagar.me
   pagarmeOrderId    String?  @unique @map("pagarme_order_id")
   // Status: pending (PIX não pago ainda) | paid (confirmado) | canceled

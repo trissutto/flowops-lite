@@ -243,6 +243,42 @@ export class CrediarioBaixaController {
     return result;
   }
 
+  // ── Aplicar baixa SPLIT (parte dinheiro + parte PIX) ─────────────────
+  // Cliente paga UMA parte na hora em dinheiro e o resto via QR PIX.
+  // Backend cria baixa pending → gera QR Pagar.me apenas pelo valorPix.
+  // Quando PIX confirma, marca tudo como pago (incluindo dinheiro).
+  @Post('split')
+  async aplicarSplit(
+    @Req() req: any,
+    @Body()
+    body: {
+      parcelas: Array<{ registro: string; controle: string }>;
+      valorDinheiro: number;
+      valorPix: number;
+      storeCode?: string;
+      customerName?: string;
+      customerCpf?: string;
+      customerEmail?: string;
+      customerPhone?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const { code, name } = this.resolveStore(req, body?.storeCode);
+    return this.svc.createPendingBaixaSplit({
+      parcelas: body?.parcelas || [],
+      valorDinheiro: Number(body?.valorDinheiro) || 0,
+      valorPix: Number(body?.valorPix) || 0,
+      lojaCode: code,
+      lojaName: name,
+      userId: req?.user?.sub || req?.user?.id || null,
+      userName: req?.user?.name || req?.user?.email || null,
+      customerName: body?.customerName,
+      customerCpf: body?.customerCpf,
+      customerPhone: body?.customerPhone,
+      customerEmail: body?.customerEmail,
+    });
+  }
+
   // ── Aplicar baixa (PIX — gera Pagar.me) ──────────────────────────
 
   @Post('pix')

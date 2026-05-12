@@ -965,6 +965,98 @@ export class CrediarioBaixaService {
     };
   }
 
+  // ── Aplicar baixa SPLIT (parte dinheiro + parte PIX) ─────────────────
+  // Cliente paga UMA parte na hora em dinheiro e o resto via QR PIX.
+  // Fluxo:
+  //   1. Recebe valorDinheiro + valorPix (soma === totalPago)
+  //   2. Cria baixa com formaPagamento='misto' status='pending'
+  //      (parcelas ainda em aberto no Wincred ate o PIX confirmar)
+  //   3. Gera QR Pagar.me APENAS pelo valorPix
+  //   4. Cliente paga → polling/webhook confirma → marca parcelas pagas
+  //
+  // Se o PIX nao for pago dentro da validade (15min), a baixa fica
+  // pending/expired. Vendedora pode estornar e cobrar so o dinheiro
+  // como pagamento parcial avulso.
+  async createPendingBaixaSplit(input: {
+    parcelas: Array<{ registro: string; controle: string }>;
+    valorDinheiro: number;
+    valorPix: number;
+    lojaCode: string;
+    lojaName?: string;
+    userId?: string;
+    userName?: string;
+    customerName?: string;
+    customerCpf?: string;
+    customerPhone?: string;
+    customerEmail?: string;
+    expiresInMinutes?: number;
+  }): Promise<{
+    baixaId: string;
+    pagarmeOrderId: string;
+    qrCodeText: string;
+    qrCodeImageUrl: string;
+    valor: number;
+    valorDinheiro: number;
+    valorPix: number;
+  }> {
+    const preview = await this.previewBaixa({ parcelas: input.parcelas });
+    const valorDinheiro = Math.round((Number(input.valorDinheiro) || 0) * 100) / 100;
+    const valorPix = Math.round((Number(input.valorPix) || 0) * 100) / 100;
+    if (valorDinheiro <= 0 || valorPix <= 0) {
+      throw new BadRequestException(
+        'Split exige valores > 0 em dinheiro E em PIX. Pra forma unica use /dinheiro ou /pix.',
+      );
+    }
+    const soma = Math.round((valorDinheiro + valorPix) * 100) / 100;
+    if (Math.abs(soma - preview.totalPago) > 0.02) {
+      throw new BadRequestException(
+        `Soma dinheiro+PIX (${soma}) nao bate com total das parcelas (${preview.totalPago}).`,
+      );
+    }
+
+    const baixaId = await this.persistBaixa({
+      preview,
+      formaPagamento: 'misto',
+      status: 'pending',
+      paidAt: null,
+      lojaCode: input.lojaCode,
+      lojaName: input.lojaName,
+      userId: input.userId,
+      userName: input.userName,
+      customerName: input.customerName,
+      customerCpf: input.customerCpf,
+      customerPhone: input.customerPhone,
+      valorDinheiro,
+      valorPix,
+    });
+
+    const pix = await this.pagarme.createPixCharge({
+      saleId: baixaId,
+      valor: valorPix,
+      storeCode: input.lojaCode,
+      customerName: input.customerName || preview.parcelas[0]?.nome || 'Consumidor Final',
+      customerCpf: input.customerCpf,
+      customerEmail: input.customerEmail,
+      customerPhone: input.customerPhone,
+      expiresInMinutes: input.expiresInMinutes || 15,
+    });
+
+    await (this.prisma as any).crediarioBaixa.update({
+      where: { id: baixaId },
+      data: { pagarmeOrderId: pix.pagarmeOrderId },
+    });
+
+    return {
+      baixaId,
+      pagarmeOrderId: pix.pagarmeOrderId,
+      qrCodeText: pix.qrCodeText,
+      qrCodeImageUrl: pix.qrCodeImageUrl,
+      valor: valorPix,
+      valorDinheiro,
+      valorPix,
+    };
+  }
+
   /**
    * Confirma uma baixa PIX que foi paga (chamado pelo polling/webhook).
    * Idempotente — se já tá paid, não faz nada.
@@ -1008,8 +1100,13 @@ export class CrediarioBaixaService {
     if (!baixa) return { found: false };
 
     let status = baixa.status;
-    // Se PIX pendente, consulta Pagar.me ao vivo + auto-confirma
-    if (status === 'pending' && baixa.pagarmeOrderId && baixa.formaPagamento === 'pix') {
+    // Se PIX pendente (formaPagamento='pix' OU 'misto' com parte PIX),
+    // consulta Pagar.me ao vivo + auto-confirma.
+    if (
+      status === 'pending'
+      && baixa.pagarmeOrderId
+      && (baixa.formaPagamento === 'pix' || baixa.formaPagamento === 'misto')
+    ) {
       try {
         const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
         if (live.isPaid) {
@@ -1036,6 +1133,8 @@ export class CrediarioBaixaService {
     customerName?: string;
     customerCpf?: string;
     customerPhone?: string;
+    valorDinheiro?: number;
+    valorPix?: number;
   }): Promise<string> {
     const cliente = input.preview.parcelas[0] || null;
     const baixa = await (this.prisma as any).crediarioBaixa.create({
@@ -1053,6 +1152,8 @@ export class CrediarioBaixaService {
         totalJuros: input.preview.totalJuros,
         totalPago: input.preview.totalPago,
         formaPagamento: input.formaPagamento,
+        valorDinheiro: input.valorDinheiro ?? null,
+        valorPix: input.valorPix ?? null,
         status: input.status,
         paidAt: input.paidAt,
         items: {

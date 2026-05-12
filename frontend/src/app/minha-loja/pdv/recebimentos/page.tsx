@@ -122,7 +122,7 @@ export default function RecebimentosPage() {
 
   // Pagamento
   const [showPagamento, setShowPagamento] = useState(false);
-  const [forma, setForma] = useState<'pix' | 'dinheiro' | 'pix-link' | null>(null);
+  const [forma, setForma] = useState<'pix' | 'dinheiro' | 'pix-link' | 'split' | null>(null);
   const [aplicando, setAplicando] = useState(false);
   // Dinheiro: confirmação com cálculo de troco (igual Wincred)
   const [dinheiroRecebido, setDinheiroRecebido] = useState('');
@@ -131,6 +131,9 @@ export default function RecebimentosPage() {
   const [copyMsg, setCopyMsg] = useState(false);
   const [pixLinkUrl, setPixLinkUrl] = useState<string | null>(null);
   const [copyLinkMsg, setCopyLinkMsg] = useState(false);
+  // Split: parte em dinheiro + parte em PIX
+  const [splitDinheiro, setSplitDinheiro] = useState('');
+  const [splitPix, setSplitPix] = useState('');
   // ── Load clientes ───────────────────────────────────────────
 
   async function loadClientes() {
@@ -281,6 +284,41 @@ export default function RecebimentosPage() {
     }
   }
 
+  // Split — parte em dinheiro (já entra no caixa) + parte em PIX (gera QR).
+  // Backend cria 1 baixa única com formaPagamento='misto'. Parcelas só são
+  // marcadas como pagas no Wincred quando o PIX confirma.
+  async function gerarSplit() {
+    const valorDinheiro = Math.round((Number((splitDinheiro || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+    const valorPix = Math.round((Number((splitPix || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+    if (valorDinheiro <= 0 || valorPix <= 0) {
+      alert('Informa os 2 valores (dinheiro E PIX) maiores que zero.');
+      return;
+    }
+    const soma = Math.round((valorDinheiro + valorPix) * 100) / 100;
+    if (Math.abs(soma - totalPago) > 0.02) {
+      alert(`Soma (${brl(soma)}) precisa bater com o total (${brl(totalPago)}).`);
+      return;
+    }
+    setAplicando(true);
+    try {
+      const r = await api<PixCharge & { valorDinheiro: number; valorPix: number }>('/crediarios/baixa/split', {
+        method: 'POST',
+        body: JSON.stringify({
+          parcelas: selecionadas.map((p) => ({ registro: p.registro, controle: p.controle })),
+          valorDinheiro,
+          valorPix,
+          customerName: clienteAtual?.nome || undefined,
+          customerPhone: clienteAtual?.telefone || undefined,
+        }),
+      });
+      setPixCharge(r);
+    } catch (e: any) {
+      alert('Erro ao gerar split: ' + (e?.message || e));
+    } finally {
+      setAplicando(false);
+    }
+  }
+
   async function gerarPixLink() {
     setAplicando(true);
     try {
@@ -360,6 +398,8 @@ export default function RecebimentosPage() {
     setPixCharge(null);
     setPixPaid(false);
     setPixLinkUrl(null);
+    setSplitDinheiro('');
+    setSplitPix('');
     setTimeout(() => inputRef.current?.focus(), 200);
   }
 
@@ -686,6 +726,24 @@ export default function RecebimentosPage() {
                       <div className="text-[10px] opacity-90">Manda WhatsApp pro cliente pagar (válido 24h)</div>
                     </div>
                   </button>
+                  {/* Split — parte em dinheiro + parte em PIX (cliente presente) */}
+                  <button
+                    onClick={() => {
+                      setForma('split');
+                      const metade = Math.round((totalPago / 2) * 100) / 100;
+                      setSplitDinheiro(metade.toFixed(2).replace('.', ','));
+                      setSplitPix((Math.round((totalPago - metade) * 100) / 100).toFixed(2).replace('.', ','));
+                    }}
+                    disabled={aplicando}
+                    className="w-full p-3 bg-gradient-to-br from-violet-500 to-fuchsia-600 hover:from-violet-600 hover:to-fuchsia-700 text-white rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 shadow-md"
+                  >
+                    <Banknote size={20} />
+                    <QrCode size={20} />
+                    <div className="text-left">
+                      <div className="font-bold text-sm">Dividir: Dinheiro + PIX</div>
+                      <div className="text-[10px] opacity-90">Cliente paga parte na hora e parte via QR</div>
+                    </div>
+                  </button>
                 </>
               )}
 
@@ -788,6 +846,138 @@ export default function RecebimentosPage() {
                             <Check size={18} /> Confirmar baixa{trocoCalc > 0 ? ` · troco ${brl(trocoCalc)}` : ''}
                           </button>
                         </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {forma === 'split' && (() => {
+                const vDin = Math.round((Number((splitDinheiro || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                const vPix = Math.round((Number((splitPix || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                const soma = Math.round((vDin + vPix) * 100) / 100;
+                const diff = Math.round((totalPago - soma) * 100) / 100;
+                const ok = vDin > 0 && vPix > 0 && Math.abs(diff) < 0.02;
+                return (
+                  <div className="space-y-3">
+                    {!pixCharge && (
+                      <>
+                        <div className="bg-violet-50 border-2 border-violet-300 rounded-xl p-3 space-y-2">
+                          <div className="text-xs text-violet-900 font-bold uppercase tracking-wide text-center">
+                            Cliente paga parte em DINHEIRO + parte em PIX
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] uppercase font-bold text-amber-800 mb-1 flex items-center gap-1">
+                                <Banknote size={12} /> Dinheiro
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={splitDinheiro}
+                                autoFocus
+                                onChange={(e) => {
+                                  setSplitDinheiro(e.target.value);
+                                  const v = Math.round((Number((e.target.value || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                                  const resto = Math.round((totalPago - v) * 100) / 100;
+                                  if (resto >= 0) setSplitPix(resto.toFixed(2).replace('.', ','));
+                                }}
+                                placeholder="0,00"
+                                className="w-full px-3 py-3 text-xl font-bold text-amber-800 tabular-nums bg-white border-2 border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] uppercase font-bold text-emerald-800 mb-1 flex items-center gap-1">
+                                <QrCode size={12} /> PIX
+                              </label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={splitPix}
+                                onChange={(e) => {
+                                  setSplitPix(e.target.value);
+                                  const v = Math.round((Number((e.target.value || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+                                  const resto = Math.round((totalPago - v) * 100) / 100;
+                                  if (resto >= 0) setSplitDinheiro(resto.toFixed(2).replace('.', ','));
+                                }}
+                                placeholder="0,00"
+                                className="w-full px-3 py-3 text-xl font-bold text-emerald-700 tabular-nums bg-white border-2 border-emerald-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                              />
+                            </div>
+                          </div>
+                          <div className={`flex justify-between text-xs px-1 ${ok ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            <span>Soma: <b className="tabular-nums">{brl(soma)}</b></span>
+                            <span>
+                              {Math.abs(diff) < 0.02
+                                ? '✓ confere'
+                                : diff > 0
+                                  ? `Falta ${brl(diff)}`
+                                  : `Sobra ${brl(-diff)}`}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[11px] text-amber-900 leading-snug">
+                          <b>Como funciona:</b> recebe o dinheiro agora + gera QR só do valor PIX.
+                          Quando o cliente pagar o PIX, as parcelas são quitadas automaticamente.
+                        </div>
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setForma(null); setSplitDinheiro(''); setSplitPix(''); }}
+                            className="flex-1 px-3 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold rounded-lg"
+                          >
+                            Voltar
+                          </button>
+                          <button
+                            onClick={gerarSplit}
+                            disabled={!ok || aplicando}
+                            className="flex-[2] px-3 py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg disabled:opacity-40 flex items-center justify-center gap-2"
+                          >
+                            {aplicando ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode size={18} />}
+                            Gerar QR PIX ({brl(vPix)})
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {pixCharge && (
+                      <>
+                        {pixPaid ? (
+                          <div className="bg-emerald-100 border-2 border-emerald-400 rounded-lg p-4 text-center text-emerald-900 font-bold">
+                            <CheckCircle2 size={32} className="mx-auto mb-2" />
+                            Pagamento PIX confirmado! Imprimindo recibo…
+                          </div>
+                        ) : (
+                          <>
+                            <div className="bg-violet-50 border-2 border-violet-300 rounded-xl p-3 grid grid-cols-2 gap-2 text-xs">
+                              <div className="text-center">
+                                <div className="text-[9px] uppercase font-bold text-amber-800">Já recebido</div>
+                                <div className="text-amber-900 font-black tabular-nums text-base">{brl(vDin)}</div>
+                                <div className="text-[9px] text-amber-700">em dinheiro ✓</div>
+                              </div>
+                              <div className="text-center">
+                                <div className="text-[9px] uppercase font-bold text-emerald-800">Aguardando PIX</div>
+                                <div className="text-emerald-900 font-black tabular-nums text-base">{brl(vPix)}</div>
+                                <div className="text-[9px] text-emerald-700">cliente paga agora</div>
+                              </div>
+                            </div>
+                            <div className="bg-emerald-50 border-2 border-emerald-300 rounded-xl p-3 flex justify-center">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={pixCharge.qrCodeImageUrl} alt="QR PIX" className="max-w-[220px] w-full" />
+                            </div>
+                            <button
+                              onClick={copyPix}
+                              className="w-full px-3 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold rounded text-sm flex items-center justify-center gap-2"
+                            >
+                              <Copy size={16} />
+                              {copyMsg ? 'Copiado!' : 'Copiar PIX Copia e Cola'}
+                            </button>
+                            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900">
+                              Cliente paga o PIX → sistema confirma sozinho e baixa todas as parcelas.
+                            </div>
+                          </>
+                        )}
                       </>
                     )}
                   </div>
