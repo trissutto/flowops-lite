@@ -1402,6 +1402,8 @@ model PdvSaleItem {
 
   @@index([saleId])
   @@index([sku])
+  @@index([ref])
+  @@index([ean])
   @@map("pdv_sale_items")
 }
 

@@ -37,7 +37,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Gera todas as variantes de um SKU (com padding zero de 3 a 14 dígitos
    * + versão sem zeros à esquerda + original).
    */
-  private skuVariants(sku: string): string[] {
+  // Public (era private) — usado tambem pelo returns.service.ts pra lookup
+  // de troca tolerar zeros a esquerda (5210367 vs 0005210367 batem).
+  skuVariants(sku: string): string[] {
     const trimmed = String(sku || '').trim();
     if (!trimmed) return [];
     const out = new Set<string>([trimmed]);

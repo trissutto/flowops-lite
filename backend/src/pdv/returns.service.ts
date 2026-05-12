@@ -133,50 +133,32 @@ export class ReturnsService {
     if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
 
     // Busca vendas finalizadas que tem item com esse SKU/REF/EAN.
-    // Janela 90 dias (era 60) — cobre devolução de venda do mês passado +.
+    // Janela 90 dias — cobre devolução de venda do mês passado +.
     const dataLimite = new Date();
     dataLimite.setDate(dataLimite.getDate() - 90);
 
-    // Filtro RESTRITIVO: match exato em sku/ref/ean OU startsWith (pra
-    // cobrir variações tipo "5210367" vs "5210367-XL-AZUL"). Sem contains
-    // amplo — antes "517" batia em "1517", "2517123" e qualquer SKU com
-    // essa substring no meio, puxando vendas que NÃO tinham o item bipado.
+    // VARIANTES: gera todas variacoes do SKU com/sem zeros a esquerda
+    // (ex: '5210367', '0005210367', '00000005210367', ...). Sem isso, peca
+    // bipada como '5210367' nao bateria em item salvo como '0005210367'.
+    // skuVariants foi tornado publico no ErpService pra ser reutilizado aqui.
+    const variants = this.erp.skuVariants(cleanSku);
+
+    // Filtro RESTRITIVO: match EXATO contra qualquer variante em sku/ref/ean.
+    // `IN` de Prisma usa index — bem mais rapido que startsWith.
+    // Mantem startsWith APENAS pra sku/ref (cobrir REF base que tem multiplos
+    // SKUs derivados, ex: '5210367' bate em '5210367-XL').
     const useStartsWith = cleanSku.length >= 5;
     const itemFilter: any = {
       OR: [
-        { sku: cleanSku },
-        { ref: cleanSku },
-        { ean: cleanSku },
+        { sku: { in: variants } },
+        { ref: { in: variants } },
+        { ean: { in: variants } },
         ...(useStartsWith ? [
           { sku: { startsWith: cleanSku, mode: 'insensitive' as const } },
           { ref: { startsWith: cleanSku, mode: 'insensitive' as const } },
-          { ean: { startsWith: cleanSku, mode: 'insensitive' as const } },
         ] : []),
       ],
     };
-
-    // ── DIAGNÓSTICO: log no Railway pra debugar caso de venda recente
-    //    que não aparece. Roda 3 queries paralelas pra entender o estado.
-    try {
-      const [totalItems, anyVenda, finalizadasUlt90] = await Promise.all([
-        (this.prisma as any).pdvSaleItem.count({ where: itemFilter }),
-        (this.prisma as any).pdvSale.findFirst({
-          where: { items: { some: itemFilter } },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true, status: true, createdAt: true, finalizedAt: true, storeCode: true },
-        }),
-        (this.prisma as any).pdvSale.count({
-          where: { status: 'finalized', finalizedAt: { gte: dataLimite } },
-        }),
-      ]);
-      this.logger.log(
-        `[devolucao/lookup-by-sku] q="${cleanSku}" items_match=${totalItems} ` +
-        `total_finalized_90d=${finalizadasUlt90} ` +
-        `most_recent=${anyVenda ? `${anyVenda.id.slice(0,8)}/status=${anyVenda.status}/loja=${anyVenda.storeCode}/criada=${anyVenda.createdAt?.toISOString()}` : 'NENHUMA'}`,
-      );
-    } catch (e: any) {
-      this.logger.warn(`[devolucao/lookup-by-sku] diag falhou: ${e?.message}`);
-    }
 
     // 1ª busca: VENDAS FINALIZADAS na janela
     let sales = await (this.prisma as any).pdvSale.findMany({
