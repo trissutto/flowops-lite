@@ -665,10 +665,29 @@ function PdvPageInner() {
     if (!sale) return;
     // GUARD: bloqueia finalize sem forma de pagamento. Modo SPLIT (paymentMethod
     // vazio) exige sale.payments com itens; modo direto exige paymentMethod.
-    if (!paymentMethod && (!sale.payments || sale.payments.length === 0)) {
-      toast('warning', 'Sem forma de pagamento', 'Escolha PIX, cartao, dinheiro, crediario ou vale-troca antes de finalizar.');
-      setShowPayment(true);
-      return;
+    //
+    // ANTI-RACE: payments sao POSTados pelo PaymentModal e refletem no backend
+    // imediatamente, mas o state `sale.payments` no parent eh atualizado via
+    // refetch assincrono (onPaymentsChanged). Se o user clica em "Finalizar
+    // venda" rapido depois de adicionar a forma, o `sale.payments` ainda ta
+    // stale -> guard dispara falso negativo. Refetch sale FRESCA antes de
+    // checar pra evitar isso.
+    if (!paymentMethod) {
+      let payments = sale.payments || [];
+      if (payments.length === 0) {
+        try {
+          const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+          payments = fresh.payments || [];
+          if (payments.length > 0) {
+            setSale(fresh);
+          }
+        } catch { /* segue com state local */ }
+      }
+      if (payments.length === 0) {
+        toast('warning', 'Sem forma de pagamento', 'Escolha PIX, cartao, dinheiro, crediario ou vale-troca antes de finalizar.');
+        setShowPayment(true);
+        return;
+      }
     }
     setFinalizing(true);
     try {
