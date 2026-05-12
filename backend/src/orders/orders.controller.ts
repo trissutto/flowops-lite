@@ -59,12 +59,16 @@ export class OrdersController {
     @Query('page') page?: string,
     @Query('per_page') perPage?: string,
     @Query('search') search?: string,
+    @Query('after') after?: string,
+    @Query('before') before?: string,
   ) {
     const res = await this.wc.listOrders({
       status,
       page: page ? Number(page) : 1,
       perPage: perPage ? Number(perPage) : 50,
       search,
+      after,
+      before,
     });
 
     // Enriquecimento: pra cada pedido retornado, anexa
@@ -930,5 +934,4 @@ export class OrdersController {
   }
 }
 
-// extractVariantFromLineItem foi movido pra ../woocommerce/wc-order-extract.util
-// pra ser reutilizado pelo PilotService.
+// extractVariantFromLi

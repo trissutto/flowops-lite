@@ -65,6 +65,11 @@ function PedidosPageInner() {
   // Status inicial vem do query param ?status=processing (usado pelo botão
   // "Voltar pra lista" do detalhe pra preservar o filtro).
   const initialStatus = searchParams?.get('status') ?? '';
+  // Hoje em YYYY-MM-DD (timezone local) — default do filtro de data.
+  const todayStr = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
   const [data, setData] = useState<WcOrder[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
@@ -74,10 +79,12 @@ function PedidosPageInner() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [dateFrom, setDateFrom] = useState(todayStr);
+  const [dateTo, setDateTo] = useState(todayStr);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { load(); /* eslint-disable-line */ }, [status, page, search]);
+  useEffect(() => { load(); /* eslint-disable-line */ }, [status, page, search, dateFrom, dateTo]);
   useEffect(() => {
     loadCounts();
     const t = setInterval(loadCounts, 30_000);
@@ -93,6 +100,10 @@ function PedidosPageInner() {
       q.set('page', String(page));
       q.set('per_page', '50');
       if (search) q.set('search', search);
+      // Datas: WooCommerce REST aceita ISO 8601. Início do dia local → 00:00,
+      // fim do dia → 23:59:59 (inclusivo).
+      if (dateFrom) q.set('after', `${dateFrom}T00:00:00`);
+      if (dateTo) q.set('before', `${dateTo}T23:59:59`);
       const res = await api<{ data: WcOrder[]; total: number; totalPages: number }>(`/orders/wc?${q}`);
       setData(res.data);
       setTotal(res.total);
@@ -185,6 +196,83 @@ function PedidosPageInner() {
             </button>
           );
         })}
+      </div>
+
+      {/* Filtro de data + atalhos rápidos */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded p-2.5">
+        <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">Período:</span>
+        <input
+          type="date"
+          value={dateFrom}
+          max={dateTo || undefined}
+          onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+          className="px-2 py-1 border rounded text-sm font-mono"
+        />
+        <span className="text-slate-400 text-sm">até</span>
+        <input
+          type="date"
+          value={dateTo}
+          min={dateFrom || undefined}
+          onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+          className="px-2 py-1 border rounded text-sm font-mono"
+        />
+        {/* Atalhos rápidos */}
+        <button
+          type="button"
+          onClick={() => {
+            const t = new Date();
+            const s = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+            setDateFrom(s); setDateTo(s); setPage(1);
+          }}
+          className="px-2 py-1 text-xs font-semibold border rounded hover:bg-white"
+        >
+          Hoje
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const t = new Date();
+            t.setDate(t.getDate() - 1);
+            const s = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+            setDateFrom(s); setDateTo(s); setPage(1);
+          }}
+          className="px-2 py-1 text-xs font-semibold border rounded hover:bg-white"
+        >
+          Ontem
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const hoje = new Date();
+            const ini = new Date();
+            ini.setDate(hoje.getDate() - 6);
+            const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            setDateFrom(fmt(ini)); setDateTo(fmt(hoje)); setPage(1);
+          }}
+          className="px-2 py-1 text-xs font-semibold border rounded hover:bg-white"
+        >
+          7 dias
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const t = new Date();
+            const ini = new Date(t.getFullYear(), t.getMonth(), 1);
+            const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            setDateFrom(fmt(ini)); setDateTo(fmt(t)); setPage(1);
+          }}
+          className="px-2 py-1 text-xs font-semibold border rounded hover:bg-white"
+        >
+          Mês
+        </button>
+        <button
+          type="button"
+          onClick={() => { setDateFrom(''); setDateTo(''); setPage(1); }}
+          className="px-2 py-1 text-xs text-slate-500 hover:text-rose-700"
+          title="Remove filtro de data (mostra tudo)"
+        >
+          ✕ Limpar data
+        </button>
       </div>
 
       {/* Busca */}
