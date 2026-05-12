@@ -137,16 +137,21 @@ export class ReturnsService {
     const dataLimite = new Date();
     dataLimite.setDate(dataLimite.getDate() - 90);
 
-    // Filtro abrangente: bate em sku, ref OU ean — exato, contains ou
-    // startsWith pra cobrir variações ("5210367" vs "5210367-XL-AZUL")
+    // Filtro RESTRITIVO: match exato em sku/ref/ean OU startsWith (pra
+    // cobrir variações tipo "5210367" vs "5210367-XL-AZUL"). Sem contains
+    // amplo — antes "517" batia em "1517", "2517123" e qualquer SKU com
+    // essa substring no meio, puxando vendas que NÃO tinham o item bipado.
+    const useStartsWith = cleanSku.length >= 5;
     const itemFilter: any = {
       OR: [
         { sku: cleanSku },
         { ref: cleanSku },
         { ean: cleanSku },
-        { sku: { contains: cleanSku, mode: 'insensitive' } },
-        { ref: { contains: cleanSku, mode: 'insensitive' } },
-        { ean: { contains: cleanSku, mode: 'insensitive' } },
+        ...(useStartsWith ? [
+          { sku: { startsWith: cleanSku, mode: 'insensitive' as const } },
+          { ref: { startsWith: cleanSku, mode: 'insensitive' as const } },
+          { ean: { startsWith: cleanSku, mode: 'insensitive' as const } },
+        ] : []),
       ],
     };
 

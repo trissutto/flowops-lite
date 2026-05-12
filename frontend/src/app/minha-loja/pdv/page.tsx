@@ -407,6 +407,13 @@ function PdvPageInner() {
     if (!sale) return;
     const sku = scanInput.trim();
     if (!sku) return;
+    // GUARD: vendedora OBRIGATÓRIA antes do primeiro bipe.
+    // Sem vendedora atribuída, abre modal e bloqueia bipagem.
+    if (!sale.sellerName) {
+      toast('warning', 'Escolha a vendedora primeiro', 'A venda precisa ter vendedora atribuída antes de bipar produtos.');
+      setShowVendedora(true);
+      return;
+    }
     // Atalho item manual: vendedora digita "0" → abre modal pra lançar
     // produto livre (descrição + valor) sem precisar achar no Giga.
     if (sku === '0') {
