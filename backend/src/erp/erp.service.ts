@@ -39,15 +39,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   // Public (era private) — usado tambem pelo returns.service.ts pra lookup
   // de troca tolerar zeros a esquerda (5210367 vs 0005210367 batem).
+  //
+  // Gera variantes do SKU com/sem zeros a esquerda em TODOS os tamanhos
+  // entre 3 e 14 caracteres. Garante que o lookup ache mesmo se o item
+  // foi salvo com padding intermediario (ex: bipe '0000011298861' bate em
+  // '011298861', '0011298861', etc).
   skuVariants(sku: string): string[] {
     const trimmed = String(sku || '').trim();
     if (!trimmed) return [];
     const out = new Set<string>([trimmed]);
     const stripped = trimmed.replace(/^0+/, '');
     if (stripped) out.add(stripped);
-    if (/^\d+$/.test(trimmed)) {
-      for (let len = 3; len <= 14; len++) {
-        if (trimmed.length < len) out.add(trimmed.padStart(len, '0'));
+    // Pra SKUs numericos: gera TODOS paddings entre 3 e 14 a partir do
+    // numero limpo (stripped). Cobre todos os formatos possiveis no banco.
+    const base = stripped || trimmed;
+    if (/^\d+$/.test(base)) {
+      for (let len = Math.max(3, base.length); len <= 14; len++) {
+        out.add(base.padStart(len, '0'));
       }
     }
     return Array.from(out);
