@@ -1115,15 +1115,40 @@ function MovModal({
     try {
       const body: any = { valor: v, motivo: motivo.trim() };
       if (storeCode) body.storeCode = storeCode;
-      await api(`/pdv/caixa/${tipo}`, {
+      const mov = await api<{ id: string }>(`/pdv/caixa/${tipo}`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
+      // Imprime cupom SILENCIOSO (sem preview) com espaço pra assinatura.
+      // Vale só pra sangria; suprimento também sai daqui (mesmo formato).
+      if (mov?.id) {
+        try {
+          const url = `/minha-loja/pdv/caixa/sangria/${mov.id}?autoprint=1`;
+          const electron = (window as any).electronAPI;
+          if (electron?.silentPrintUrl) {
+            electron.silentPrintUrl(window.location.origin + url).catch(() => imprimirHidden(url));
+          } else {
+            imprimirHidden(url);
+          }
+        } catch { /* segue mesmo se falhar a impressão */ }
+      }
       onSuccess();
     } catch (e: any) {
       setErr(e?.message || 'Falha');
     } finally {
       setBusy(false);
+    }
+  }
+
+  function imprimirHidden(url: string) {
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:300px;height:600px;border:0;';
+      iframe.src = url;
+      document.body.appendChild(iframe);
+      setTimeout(() => { try { iframe.remove(); } catch {} }, 30000);
+    } catch {
+      window.open(url, 'lurds_sangria', 'width=320,height=520,resizable=yes');
     }
   }
 

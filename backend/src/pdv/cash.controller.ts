@@ -87,6 +87,15 @@ export class CashController {
   }
 
   /**
+   * GET /pdv/caixa/movimento/:id — dados pra cupom de sangria/suprimento.
+   */
+  @Get('movimento/:id')
+  async getMovimento(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.getMovement(id);
+  }
+
+  /**
    * POST /pdv/caixa/sangria
    * Body: { valor, motivo }
    */

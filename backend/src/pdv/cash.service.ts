@@ -609,6 +609,30 @@ export class CashService {
   }
 
   /**
+   * Busca 1 movimentação por ID (usado pelo impresso de sangria/suprimento).
+   */
+  async getMovement(id: string) {
+    const m = await (this.prisma as any).pdvCashMovement.findUnique({
+      where: { id },
+    });
+    if (!m) throw new BadRequestException('Movimentação não encontrada');
+    const session = await (this.prisma as any).pdvCashSession.findUnique({
+      where: { id: m.cashSessionId },
+      select: { storeCode: true, storeName: true, openedAt: true },
+    });
+    return {
+      id: m.id,
+      tipo: m.tipo,
+      valor: m.valor,
+      motivo: m.motivo,
+      userName: m.userName,
+      createdAt: m.createdAt,
+      storeCode: session?.storeCode ?? null,
+      storeName: session?.storeName ?? null,
+    };
+  }
+
+  /**
    * Lista todas as movimentações da sessão atual.
    */
   async listMovements(storeCode: string) {

@@ -1,26 +1,38 @@
 'use client';
 
 /**
- * PixPaidListener — listener GLOBAL pra detectar PIX-link confirmados
- * via webhook (Pagar.me).
+ * PixPaidListener — listener GLOBAL pra PIX-link confirmados via webhook.
  *
- * Roda em qualquer tela de /minha-loja/* (incluído via layout.tsx).
- * A cada 5s consulta /crediarios/baixa/recentes-pagas. Quando detecta
- * baixa nova:
- *   1. Toca beep duplo (Web Audio)
- *   2. Mostra modal verde fullscreen com cliente + valor
- *   3. Imprime recibo automaticamente
+ * UX: badge discreto FLUTUANTE no canto inferior direito (não obstrui tela).
+ *   - Pulsa quando chega pagamento novo
+ *   - Click → abre painel lateral com lista de parcelas pagas
+ *   - Botão "Imprimir recibo" silencioso (sem preview)
+ *   - Toca 1 beep curto (não 2 estridentes)
  *
- * Funciona estando a vendedora no PDV, no Caixa, em Recebimentos —
- * em qualquer subpágina de minha-loja.
+ * Roda em qualquer subpágina de /minha-loja/* (incluído via layout.tsx).
+ * Polling a cada 5s em /crediarios/baixa/recentes-pagas.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { Bell, X, Printer, CheckCircle2 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+type BaixaInfo = {
+  baixaId: string;
+  nomeCliente: string;
+  valor: number;
+  recebidoAt: number; // ms
+  items: Array<{
+    parcelaNum: number | null;
+    totalParcelas: number | null;
+    vencimento: string;
+    valorPago: number;
+    jurosCalculado: number;
+  }>;
+};
 
 function printReceipt(baixaId: string) {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
@@ -44,64 +56,52 @@ function hiddenIframe(url: string) {
 }
 
 export default function PixPaidListener() {
-  const [pagoAlerta, setPagoAlerta] = useState<{
-    baixaId: string;
-    nomeCliente: string;
-    valor: number;
-    items: Array<{
-      parcelaNum: number | null;
-      totalParcelas: number | null;
-      vencimento: string;
-      valorPago: number;
-      jurosCalculado: number;
-    }>;
-  } | null>(null);
+  // Fila de baixas recebidas nessa sessão (todas ficam até user dispensar)
+  const [baixas, setBaixas] = useState<BaixaInfo[]>([]);
+  // Estado UI: badge fechado ou painel aberto
+  const [open, setOpen] = useState(false);
+  // Pulsa quando chega novo
+  const [pulse, setPulse] = useState(false);
 
-  // Inicia 5min atrás — pega baixas que rolaram pouco antes da tela abrir
   const sinceRef = useRef<string>(new Date(Date.now() - 5 * 60 * 1000).toISOString());
-  const seenBaixasRef = useRef<Set<string>>(new Set());
+  const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
 
+    const beepCurto = () => {
+      try {
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = 880; osc.type = 'sine';
+        gain.gain.setValueAtTime(0.18, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.25);
+      } catch {/* sem Web Audio — segue */}
+    };
+
     const poll = async () => {
-      // Só faz polling se tiver token (vendedora logada)
       if (typeof window === 'undefined') return;
       const token = localStorage.getItem('flowops_token');
       if (!token) return;
 
       try {
         const since = sinceRef.current;
-        const baixas = await api<any[]>(`/crediarios/baixa/recentes-pagas?since=${encodeURIComponent(since)}`);
-        if (cancelled || !baixas?.length) return;
-        // Atualiza marca pra próximo poll
+        const apiBaixas = await api<any[]>(`/crediarios/baixa/recentes-pagas?since=${encodeURIComponent(since)}`);
+        if (cancelled || !apiBaixas?.length) return;
         sinceRef.current = new Date().toISOString();
-        for (const b of baixas) {
-          if (seenBaixasRef.current.has(b.id)) continue;
-          seenBaixasRef.current.add(b.id);
-          // Toca beep alto
-          try {
-            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.frequency.value = 880; osc.type = 'sine';
-            gain.gain.setValueAtTime(0.3, ctx.currentTime);
-            osc.connect(gain); gain.connect(ctx.destination);
-            osc.start(); osc.stop(ctx.currentTime + 0.5);
-            setTimeout(() => {
-              const o2 = ctx.createOscillator();
-              const g2 = ctx.createGain();
-              o2.frequency.value = 1320; o2.type = 'sine';
-              g2.gain.setValueAtTime(0.3, ctx.currentTime);
-              o2.connect(g2); g2.connect(ctx.destination);
-              o2.start(); o2.stop(ctx.currentTime + 0.4);
-            }, 250);
-          } catch {/* sem Web Audio — segue */}
-          // Mostra alerta com discriminação das parcelas
-          setPagoAlerta({
+
+        const novas: BaixaInfo[] = [];
+        for (const b of apiBaixas) {
+          if (seenRef.current.has(b.id)) continue;
+          seenRef.current.add(b.id);
+          novas.push({
             baixaId: b.id,
             nomeCliente: b.customerName || 'Cliente',
             valor: Number(b.totalPago) || 0,
+            recebidoAt: Date.now(),
             items: (b.items || []).map((it: any) => ({
               parcelaNum: it.parcelaNum ?? null,
               totalParcelas: it.totalParcelas ?? null,
@@ -110,73 +110,148 @@ export default function PixPaidListener() {
               jurosCalculado: Number(it.jurosCalculado) || 0,
             })),
           });
-          // Imprime recibo
+          // Imprime recibo automaticamente (silencioso)
           try { printReceipt(b.id); } catch {/* segue */}
         }
+        if (novas.length > 0) {
+          setBaixas((prev) => [...novas, ...prev].slice(0, 20)); // limita histórico
+          beepCurto();
+          setPulse(true);
+          setTimeout(() => setPulse(false), 4000);
+        }
       } catch {
-        /* erro de rede — silencioso, tenta de novo no próximo poll */
+        /* erro de rede — silencioso */
       }
     };
 
-    // Primeira chamada imediata, depois a cada 5s
     poll();
     const interval = setInterval(poll, 5000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  if (!pagoAlerta) return null;
+  const dispensarTodos = () => {
+    setBaixas([]);
+    setOpen(false);
+  };
+
+  const dispensarUm = (id: string) => {
+    setBaixas((prev) => prev.filter((b) => b.baixaId !== id));
+  };
+
+  if (baixas.length === 0) return null;
 
   return (
-    <div
-      className="fixed inset-0 bg-emerald-600/95 z-[200] flex items-center justify-center p-6 cursor-pointer"
-      onClick={() => setPagoAlerta(null)}
-    >
-      <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full text-center space-y-4 animate-pulse">
-        <div className="w-24 h-24 mx-auto bg-emerald-100 rounded-full flex items-center justify-center">
-          <CheckCircle2 size={56} className="text-emerald-600" />
-        </div>
-        <h2 className="text-3xl font-black text-emerald-700 uppercase tracking-wide">PAGO!</h2>
-        <div className="text-lg text-slate-700">
-          <div><strong>{pagoAlerta.nomeCliente}</strong></div>
-          <div className="text-3xl font-black text-emerald-600 tabular-nums mt-2">{brl(pagoAlerta.valor)}</div>
-        </div>
+    <>
+      {/* BADGE FLUTUANTE — canto inferior direito, sem obstruir */}
+      {!open && (
+        <button
+          type="button"
+          onClick={() => { setOpen(true); setPulse(false); }}
+          className={`fixed bottom-4 right-4 z-[200] flex items-center gap-2 px-3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-2xl border-2 border-white transition-transform ${pulse ? 'animate-bounce' : ''}`}
+          title="Pagamentos PIX confirmados"
+        >
+          <Bell className="w-5 h-5" />
+          <span className="font-black text-sm tabular-nums">{baixas.length}</span>
+          <span className="text-xs font-bold uppercase tracking-wider hidden sm:inline">PIX recebido</span>
+        </button>
+      )}
 
-        {/* Discriminação das parcelas pagas */}
-        {pagoAlerta.items && pagoAlerta.items.length > 0 && (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-left">
-            <div className="text-[10px] uppercase font-bold text-emerald-700 tracking-wide mb-1.5">
-              Parcelas baixadas
+      {/* PAINEL LATERAL — só aparece quando user clica no badge */}
+      {open && (
+        <div className="fixed inset-0 z-[200] flex items-end justify-end p-0 sm:p-4 pointer-events-none">
+          {/* Backdrop transparente (clica fora pra fechar — não escurece tela toda) */}
+          <div
+            className="absolute inset-0 pointer-events-auto"
+            onClick={() => setOpen(false)}
+          />
+          {/* Painel */}
+          <div
+            className="relative w-full sm:w-[400px] max-h-[80vh] bg-white sm:rounded-2xl shadow-2xl border-2 border-emerald-300 overflow-hidden flex flex-col pointer-events-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="bg-emerald-600 text-white px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5" />
+                <div>
+                  <div className="font-black text-sm uppercase tracking-wide">PIX recebido</div>
+                  <div className="text-[11px] opacity-90">{baixas.length} pagamento(s) pendente(s)</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={dispensarTodos}
+                  className="text-[10px] font-bold uppercase px-2 py-1 bg-white/15 hover:bg-white/25 rounded"
+                  title="Dispensar todos"
+                >
+                  Limpar
+                </button>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="p-1 hover:bg-white/15 rounded"
+                  title="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {pagoAlerta.items.map((it, i) => {
-                const venc = it.vencimento ? (() => {
-                  try { const s = String(it.vencimento); const d = s.includes('T') ? new Date(s) : new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR'); } catch { return '—'; }
-                })() : '—';
-                const parcLabel = it.parcelaNum && it.totalParcelas
-                  ? `${it.parcelaNum}/${it.totalParcelas}`
-                  : `parc ${i + 1}`;
-                return (
-                  <div key={i} className="flex items-center justify-between text-xs gap-2">
-                    <span className="font-bold text-emerald-800 shrink-0">{parcLabel}</span>
-                    <span className="text-slate-600 font-mono shrink-0">venc {venc}</span>
-                    <span className="font-mono font-black text-emerald-700 tabular-nums ml-auto">{brl(it.valorPago)}</span>
+
+            {/* Lista de baixas */}
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+              {baixas.map((b) => (
+                <div key={b.baixaId} className="p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-slate-800 truncate" title={b.nomeCliente}>
+                        {b.nomeCliente}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {new Date(b.recebidoAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-emerald-700 tabular-nums shrink-0">
+                      {brl(b.valor)}
+                    </div>
                   </div>
-                );
-              })}
+                  {/* Parcelas */}
+                  {b.items.length > 0 && (
+                    <div className="bg-emerald-50 border border-emerald-100 rounded p-2 space-y-0.5">
+                      {b.items.map((it, i) => {
+                        const venc = it.vencimento ? (() => {
+                          try { const s = String(it.vencimento); const d = s.includes('T') ? new Date(s) : new Date(s + 'T00:00:00'); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('pt-BR'); } catch { return '—'; }
+                        })() : '—';
+                        const lbl = it.parcelaNum && it.totalParcelas ? `${it.parcelaNum}/${it.totalParcelas}` : `parc ${i + 1}`;
+                        return (
+                          <div key={i} className="flex items-center justify-between text-[11px] gap-2">
+                            <span className="font-bold text-emerald-800 shrink-0 w-12">{lbl}</span>
+                            <span className="text-slate-600 font-mono shrink-0">venc {venc}</span>
+                            <span className="font-mono font-bold text-emerald-700 tabular-nums ml-auto">{brl(it.valorPago)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {/* Botões */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => printReceipt(b.baixaId)}
+                      className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded flex items-center justify-center gap-1.5"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Imprimir
+                    </button>
+                    <button
+                      onClick={() => dispensarUm(b.baixaId)}
+                      className="px-3 py-2 border border-slate-300 text-slate-600 text-xs font-bold rounded hover:bg-slate-50"
+                    >
+                      OK
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-        )}
-
-        <div className="text-xs text-slate-500">
-          Recibo enviado pra impressão automaticamente
         </div>
-        <button
-          onClick={() => setPagoAlerta(null)}
-          className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-lg"
-        >
-          OK
-        </button>
-      </div>
-    </div>
+      )}
+    </>
   );
 }
