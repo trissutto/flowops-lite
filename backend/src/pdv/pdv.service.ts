@@ -1253,6 +1253,62 @@ export class PdvService {
       );
     }
 
+    // ── BAIXA DE ESTOQUE NO WINCRED ─────────────────────────────────────────────
+    // Decrementa estoque na tabela `estoque` do Giga pra cada item da venda.
+    // PULA: items MANUAL (sku=MANUAL-*) e items MARCADO (estoque ja foi baixado
+    // quando a peca foi marcada como "provar em casa").
+    // allowNegative=true: nao bloqueia se estoque ja estava zerado (divergencia
+    // fisico x sistema — Wincred aceita estoque negativo).
+    // skipNotFound=true: nao bloqueia se o SKU nao existir mais no Wincred.
+    try {
+      if (this.erp.isWriteEnabled) {
+        const saleItems = (sale.items || []) as any[];
+        const stockItems = saleItems
+          .filter((it: any) => {
+            const sku = String(it.sku || '').trim();
+            if (!sku) return false;
+            if (sku.startsWith('MANUAL-')) return false;
+            if (it.ref === 'MANUAL') return false;
+            if (it.ref === 'MARCADO') return false;
+            if (it.promoTag === 'MARCADO') return false;
+            if (it.promoTag === 'MANUAL') return false;
+            return true;
+          })
+          .map((it: any) => ({
+            sku: String(it.sku || '').trim(),
+            qty: Math.max(1, Number(it.qty) || 1),
+            storeCode: sale.storeCode,
+          }));
+
+        if (stockItems.length > 0) {
+          const r = await this.erp.decreaseStock(stockItems, {
+            allowNegative: true,
+            skipNotFound: true,
+          });
+          if (!r.success) {
+            this.logger.warn(
+              `[pdv→estoque] Venda ${sale.id}: falha na baixa de estoque — ${r.error}. ` +
+              `Venda no flowops segue OK. Estoque Wincred pode estar divergente. ` +
+              `Items: ${stockItems.length} (${stockItems.map((i) => i.sku).join(',')})`,
+            );
+          } else {
+            this.logger.log(
+              `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Wincred ` +
+              `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
+            );
+          }
+        }
+      } else {
+        this.logger.warn(
+          `[pdv→estoque] Venda ${sale.id}: ERP_WRITE_ENABLED=false — estoque NAO baixado no Wincred.`,
+        );
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[pdv→estoque] Erro inesperado ao baixar estoque da venda ${sale.id}: ${e?.message || e}. Venda no flowops segue OK.`,
+      );
+    }
+
     // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
     // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
     try {
