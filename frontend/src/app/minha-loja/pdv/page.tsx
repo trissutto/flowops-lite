@@ -3263,11 +3263,18 @@ function PaymentModal({
            vendedora cantar pro cliente sem pegar calculadora ("10x de R$ 23,90").
            Selecionado vira card GIGANTE embaixo. */}
         {(selected === 'credito' || selected === 'crediario') && (() => {
-          // Base de cálculo: crediário desconta entrada antes de parcelar.
+          // Base de cálculo: parte do valorParcial (que default = restante).
+          // SPLIT-AWARE: antes usava `total` (venda inteira) — bug em split
+          // pq mostrava parcelas baseadas no total quando ja tinha pagamentos
+          // parciais. Ex: venda 1000 com 500 pagos → mostrava 4× R$ 250
+          // (baseado em 1000) quando deveria ser 4× R$ 125 (baseado em 500).
+          //
+          // Crediário continua descontando entrada antes de parcelar.
+          const valorBase = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || restante;
           const ent = selected === 'crediario'
             ? (Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0)
             : 0;
-          const baseTotal = Math.max(0, total - ent);
+          const baseTotal = Math.max(0, valorBase - ent);
           return (
             <div className="space-y-1.5 pt-1.5 border-t">
               <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider flex items-center justify-between">
