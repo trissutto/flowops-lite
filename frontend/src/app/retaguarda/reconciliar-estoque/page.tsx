@@ -11,7 +11,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import {
-  ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Play, Eye, Package, Store, Database, Zap,
+  ArrowLeft, Loader2, AlertTriangle, CheckCircle2, Play, Eye, Package, Store, Database, Zap, RefreshCw,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -170,6 +170,9 @@ export default function ReconciliarEstoquePage() {
 
         {/* Diagnostico de indices Wincred */}
         <IndexDiagnosticCard />
+
+        {/* Diagnostico de estorno de estoque em devolucoes */}
+        <ReturnsStockCard />
 
         {/* Filtros */}
         <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
@@ -559,6 +562,157 @@ function IndexDiagnosticCard() {
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Card de diagnostico de estorno de estoque em DEVOLUCOES.
+// Cada devolucao deveria chamar increaseStock — esse card lista as que NAO
+// voltaram pro estoque (stockReturnedAt=null) e tem botao de retry idempotente.
+// ═══════════════════════════════════════════════════════════════════════
+function ReturnsStockCard() {
+  const [since, setSince] = useState(() => new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [until, setUntil] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryResult, setRetryResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const sinceIso = since ? new Date(since + 'T00:00:00').toISOString() : undefined;
+  const untilIso = until ? new Date(until + 'T23:59:59.999').toISOString() : undefined;
+
+  async function inspect() {
+    setError(null); setLoading(true); setRetryResult(null);
+    try {
+      const params = new URLSearchParams();
+      if (sinceIso) params.set('since', sinceIso);
+      if (untilIso) params.set('until', untilIso);
+      const r = await api<any>(`/pdv/admin/returns-stock-status?${params.toString()}`);
+      setData(r);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function retry() {
+    if (!confirm('Reprocessar estorno de estoque das devolucoes pendentes?\n\nIdempotente — so processa items com stockReturnedAt=null.')) return;
+    setRetrying(true); setError(null);
+    try {
+      const r = await api<any>('/pdv/admin/returns-stock-retry', {
+        method: 'POST',
+        body: JSON.stringify({ since: sinceIso, until: untilIso, limit: 100, dryRun: false }),
+      });
+      setRetryResult(r);
+      // Recarrega diagnostico
+      await inspect();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <h2 className="font-bold text-slate-800 flex items-center gap-2">
+          <RefreshCw size={18} /> Devolucoes — estorno de estoque
+        </h2>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] uppercase font-bold text-slate-600 block">Desde</label>
+          <input type="date" value={since} onChange={(e) => setSince(e.target.value)} className="w-full px-2 py-1 border rounded text-sm" />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase font-bold text-slate-600 block">Ate</label>
+          <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="w-full px-2 py-1 border rounded text-sm" />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={inspect}
+          disabled={loading}
+          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded flex items-center gap-1"
+        >
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+          Verificar
+        </button>
+        {data && data.itemsPendentes > 0 && (
+          <button
+            onClick={retry}
+            disabled={retrying}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold rounded flex items-center gap-1"
+          >
+            {retrying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            Reprocessar {data.itemsPendentes} item(s)
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="text-sm text-rose-700 flex items-center gap-1.5 bg-rose-50 border border-rose-200 rounded p-2">
+          <AlertTriangle size={14} /> {error}
+        </div>
+      )}
+
+      {data && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-center pt-2 border-t">
+          <div className="bg-slate-50 rounded p-2">
+            <div className="text-[9px] uppercase font-bold text-slate-500">Devolucoes</div>
+            <div className="text-xl font-black tabular-nums text-slate-800">{data.totalReturns}</div>
+          </div>
+          <div className="bg-emerald-50 rounded p-2">
+            <div className="text-[9px] uppercase font-bold text-emerald-700">Items OK</div>
+            <div className="text-xl font-black tabular-nums text-emerald-700">{data.itemsOk}</div>
+          </div>
+          <div className={`rounded p-2 ${data.itemsPendentes > 0 ? 'bg-amber-50' : 'bg-slate-50'}`}>
+            <div className="text-[9px] uppercase font-bold text-amber-700">Pendentes</div>
+            <div className={`text-xl font-black tabular-nums ${data.itemsPendentes > 0 ? 'text-amber-700' : 'text-slate-400'}`}>{data.itemsPendentes}</div>
+          </div>
+          <div className={`rounded p-2 ${data.itemsComErro > 0 ? 'bg-rose-50' : 'bg-slate-50'}`}>
+            <div className="text-[9px] uppercase font-bold text-rose-700">Com erro</div>
+            <div className={`text-xl font-black tabular-nums ${data.itemsComErro > 0 ? 'text-rose-700' : 'text-slate-400'}`}>{data.itemsComErro}</div>
+          </div>
+        </div>
+      )}
+
+      {retryResult && (
+        <div className={`rounded p-3 text-sm ${retryResult.itemsFalha > 0 ? 'bg-amber-50 border border-amber-200' : 'bg-emerald-50 border border-emerald-200'}`}>
+          <b>Reprocessamento:</b> {retryResult.itemsOk} OK / {retryResult.itemsFalha} falha · {retryResult.finished ? 'Acabou' : 'Tem mais — rode de novo'}
+        </div>
+      )}
+
+      {data?.pendentes && data.pendentes.length > 0 && (
+        <div className="border rounded overflow-hidden">
+          <div className="px-2 py-1 bg-amber-50 text-[10px] uppercase font-bold text-amber-900">
+            {data.pendentes.length} devolucao(oes) com items pendentes (mostrando max 10)
+          </div>
+          <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+            {(data.pendentes as any[]).slice(0, 10).map((p) => (
+              <div key={p.returnId} className="px-2 py-1.5 text-[11px]">
+                <div className="flex justify-between text-slate-700 font-bold">
+                  <span>{p.customerName || 'Sem nome'} · {p.storeCode} · {p.modo}</span>
+                  <span className="font-mono text-slate-500">{new Date(p.createdAt).toLocaleDateString('pt-BR')}</span>
+                </div>
+                {(p.itemsPendentes as any[]).map((it: any) => (
+                  <div key={it.itemId} className="ml-2 text-[10px] text-slate-600">
+                    • {it.sku} qty {it.qty} — {it.descricao?.slice(0, 50)}
+                    {it.stockError && <span className="text-rose-700"> ⚠ {it.stockError}</span>}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

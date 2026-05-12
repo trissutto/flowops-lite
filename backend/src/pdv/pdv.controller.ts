@@ -25,6 +25,7 @@ import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { CrediarioPrintService } from './crediario-print.service';
 import { WooCommerceService } from '../woocommerce/woocommerce.service';
+import { ReturnsService } from './returns.service';
 
 /**
  * /pdv — frente de caixa.
@@ -43,6 +44,7 @@ export class PdvController {
     private readonly crediarioBaixa: CrediarioBaixaService,
     private readonly crediarioPrint: CrediarioPrintService,
     private readonly woo: WooCommerceService,
+    private readonly returns: ReturnsService,
   ) {}
 
   private requireRole(req: any) {
@@ -1161,6 +1163,40 @@ export class PdvController {
       table: body.table,
       indexName: body.indexName,
       columns: body.columns,
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN — Diagnostico + retry de estorno de estoque em devolucoes
+  // ═══════════════════════════════════════════════════════════════════════
+
+  @Get('admin/returns-stock-status')
+  async returnsStockStatus(
+    @Req() req: any,
+    @Query('since') since?: string,
+    @Query('until') until?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.returns.getReturnsStockStatus({ sinceIso: since, untilIso: until, storeCode });
+  }
+
+  @Post('admin/returns-stock-retry')
+  async returnsStockRetry(
+    @Req() req: any,
+    @Body() body: { since?: string; until?: string; storeCode?: string; limit?: number; dryRun?: boolean },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.returns.retryReturnsStock({
+      sinceIso: body?.since,
+      untilIso: body?.until,
+      storeCode: body?.storeCode,
+      limit: body?.limit || 100,
+      dryRun: !!body?.dryRun,
     });
   }
 }

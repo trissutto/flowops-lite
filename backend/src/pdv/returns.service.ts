@@ -553,4 +553,224 @@ export class ReturnsService {
       origem: { saleId: ret.originalSaleId, store: ret.storeCode },
     };
   }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN — Diagnostico + retry de estorno de estoque em devolucoes
+  //
+  // Pra cada PdvReturnItem, stockReturnedAt indica se a peca voltou pro
+  // estoque Giga (increaseStock chamado com sucesso). stockError indica
+  // erro caso tenha falhado. Estes endpoints listam o status e permitem
+  // retry idempotente (so processa os com stockReturnedAt=null).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  async getReturnsStockStatus(input: {
+    sinceIso?: string;
+    untilIso?: string;
+    storeCode?: string;
+  }): Promise<{
+    sinceIso: string;
+    untilIso: string;
+    storeCode: string | null;
+    totalReturns: number;
+    totalItems: number;
+    itemsOk: number;
+    itemsPendentes: number;
+    itemsComErro: number;
+    pendentes: Array<{
+      returnId: string;
+      storeCode: string;
+      modo: string;
+      createdAt: string;
+      customerName: string | null;
+      itemsPendentes: Array<{ itemId: string; sku: string; descricao: string; qty: number; stockError: string | null }>;
+    }>;
+  }> {
+    const sinceIso = input.sinceIso || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const untilIso = input.untilIso || new Date().toISOString();
+    const since = new Date(sinceIso);
+    const until = new Date(untilIso);
+    const storeCode = input.storeCode?.trim() || null;
+
+    const where: any = { createdAt: { gte: since, lte: until } };
+    if (storeCode) where.storeCode = storeCode;
+
+    const returns = await (this.prisma as any).pdvReturn.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: { items: true },
+      take: 500,
+    });
+
+    let totalItems = 0;
+    let itemsOk = 0;
+    let itemsPendentes = 0;
+    let itemsComErro = 0;
+    const pendentes: any[] = [];
+    for (const r of returns as any[]) {
+      const pendentesDoRet: any[] = [];
+      for (const it of (r.items || []) as any[]) {
+        totalItems++;
+        if (it.stockReturnedAt) {
+          itemsOk++;
+        } else {
+          itemsPendentes++;
+          if (it.stockError) itemsComErro++;
+          pendentesDoRet.push({
+            itemId: it.id,
+            sku: it.sku,
+            descricao: it.descricao,
+            qty: it.qty,
+            stockError: it.stockError || null,
+          });
+        }
+      }
+      if (pendentesDoRet.length > 0) {
+        pendentes.push({
+          returnId: r.id,
+          storeCode: r.storeCode,
+          modo: r.modo,
+          createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
+          customerName: r.customerName || null,
+          itemsPendentes: pendentesDoRet,
+        });
+      }
+    }
+
+    return {
+      sinceIso,
+      untilIso,
+      storeCode,
+      totalReturns: (returns as any[]).length,
+      totalItems,
+      itemsOk,
+      itemsPendentes,
+      itemsComErro,
+      pendentes,
+    };
+  }
+
+  async retryReturnsStock(input: {
+    sinceIso?: string;
+    untilIso?: string;
+    storeCode?: string;
+    dryRun?: boolean;
+    limit?: number;
+  }): Promise<{
+    mode: 'dry-run' | 'executed';
+    sinceIso: string;
+    untilIso: string;
+    totalPendentes: number;
+    itemsProcessados: number;
+    itemsOk: number;
+    itemsFalha: number;
+    falhas: Array<{ returnId: string; sku: string; error: string }>;
+    finished: boolean;
+  }> {
+    const sinceIso = input.sinceIso || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const untilIso = input.untilIso || new Date().toISOString();
+    const since = new Date(sinceIso);
+    const until = new Date(untilIso);
+    const storeCode = input.storeCode?.trim() || null;
+    const limit = Math.max(1, Math.min(500, input.limit || 100));
+    const dryRun = !!input.dryRun;
+
+    const where: any = {
+      createdAt: { gte: since, lte: until },
+      stockReturnedAt: null,
+    };
+    if (storeCode) {
+      where.return = { storeCode };
+    }
+
+    const totalPendentes = await (this.prisma as any).pdvReturnItem.count({ where });
+
+    const itemsPendentes = await (this.prisma as any).pdvReturnItem.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      include: { return: { select: { id: true, storeCode: true, modo: true } } },
+    });
+
+    let itemsOk = 0;
+    let itemsFalha = 0;
+    const falhas: Array<{ returnId: string; sku: string; error: string }> = [];
+
+    if (dryRun) {
+      return {
+        mode: 'dry-run',
+        sinceIso,
+        untilIso,
+        totalPendentes,
+        itemsProcessados: (itemsPendentes as any[]).length,
+        itemsOk: 0,
+        itemsFalha: 0,
+        falhas: [],
+        finished: (itemsPendentes as any[]).length < limit,
+      };
+    }
+
+    // Agrupa items pendentes por storeCode pra usar 1 batch increaseStock por loja
+    const byStore = new Map<string, Array<{ itemId: string; sku: string; qty: number; returnId: string }>>();
+    for (const it of itemsPendentes as any[]) {
+      const sc = it.return?.storeCode || '';
+      if (!sc || !it.sku) {
+        itemsFalha++;
+        falhas.push({ returnId: it.return?.id || '', sku: it.sku || '', error: 'sku ou storeCode vazio' });
+        continue;
+      }
+      if (!byStore.has(sc)) byStore.set(sc, []);
+      byStore.get(sc)!.push({ itemId: it.id, sku: it.sku, qty: it.qty, returnId: it.return.id });
+    }
+
+    for (const [sc, items] of byStore) {
+      try {
+        const r = await this.erp.increaseStock(
+          items.map((i) => ({ sku: i.sku, qty: i.qty, storeCode: sc })),
+        );
+        if (r.success) {
+          // Marca todos os items dessa loja como OK
+          const ids = items.map((i) => i.itemId);
+          await (this.prisma as any).pdvReturnItem.updateMany({
+            where: { id: { in: ids } },
+            data: { stockReturnedAt: new Date(), stockError: null },
+          });
+          itemsOk += items.length;
+        } else {
+          // Marca todos como erro (com a mesma mensagem do batch)
+          const ids = items.map((i) => i.itemId);
+          await (this.prisma as any).pdvReturnItem.updateMany({
+            where: { id: { in: ids } },
+            data: { stockError: r.error || 'falha desconhecida' },
+          });
+          itemsFalha += items.length;
+          for (const i of items) {
+            falhas.push({ returnId: i.returnId, sku: i.sku, error: r.error || 'falha' });
+          }
+        }
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        const ids = items.map((i) => i.itemId);
+        try {
+          await (this.prisma as any).pdvReturnItem.updateMany({
+            where: { id: { in: ids } },
+            data: { stockError: msg },
+          });
+        } catch { /* segue */ }
+        itemsFalha += items.length;
+        for (const i of items) falhas.push({ returnId: i.returnId, sku: i.sku, error: msg });
+      }
+    }
+
+    return {
+      mode: 'executed',
+      sinceIso,
+      untilIso,
+      totalPendentes,
+      itemsProcessados: (itemsPendentes as any[]).length,
+      itemsOk,
+      itemsFalha,
+      falhas,
+      finished: (itemsPendentes as any[]).length < limit,
+    };
+  }
 }
