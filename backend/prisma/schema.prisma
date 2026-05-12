@@ -951,6 +951,12 @@ model PdvSale {
   // do Wincred caixa que originaram os itens. Ao finalizar a venda, esses
   // marcados devem ser fechados (DELETE/UPDATE MARCADO='NAO' no Wincred).
   marcadosRegistros String?  @map("marcados_registros") @db.Text
+  // Flag de idempotencia: timestamp do momento em que o estoque Wincred foi
+  // baixado pra essa venda. Quando NULL, o script de reconciliacao retroativa
+  // sabe que precisa rodar decreaseStock pra essa venda. Quando preenchido,
+  // pula (ja foi baixado). Marcado automaticamente no finalize() quando a
+  // baixa de estoque sucede.
+  stockDecreasedAt  DateTime? @map("stock_decreased_at")
   // Timestamps
   createdAt       DateTime @default(now()) @map("created_at")
   finalizedAt     DateTime? @map("finalized_at")

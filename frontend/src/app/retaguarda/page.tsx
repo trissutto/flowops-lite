@@ -59,6 +59,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/enviados-hoje',        label: 'Enviados Hoje',     subtitle: 'Pedidos WC',    description: 'Por filial',                    tone: 'green',  icon: ClipboardList   },
   { href: '/relatorios/giga',                 label: 'Giga Explorer',     subtitle: 'SQL',           description: 'ERP em tempo real',             tone: 'slate',  icon: FileSearch      },
   { href: '/retaguarda/baixas-log',           label: 'Auditoria',         subtitle: 'Baixas ERP',    description: 'Histórico ERP → WC',            tone: 'amber',  icon: FileSearch      },
+  { href: '/retaguarda/reconciliar-estoque',  label: 'Reconciliar',       subtitle: 'Estoque PDV',   description: 'Baixar estoque retroativo Wincred', tone: 'rose', icon: Package       },
   { href: '/logs',                            label: 'Logs',              subtitle: 'Sistema',       description: 'Eventos do servidor',           tone: 'slate',  icon: Activity        },
 ];
 

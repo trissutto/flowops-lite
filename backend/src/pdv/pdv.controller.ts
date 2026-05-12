@@ -1064,4 +1064,42 @@ export class PdvController {
       res.status(500).json({ statusCode: 500, message: 'Erro ao gerar PDF debug', detail: e?.message });
     }
   }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ADMIN — Reconciliacao retroativa de estoque PDV → Wincred
+  // ═════════════════════════════════════════════════════════════════════════
+
+  @Get('admin/reconcile-stock/preview')
+  async previewReconcileStock(
+    @Req() req: any,
+    @Query('since') since?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileStockBacklog({
+      sinceIso: since,
+      storeCode,
+      limit: limit ? Number(limit) : 100,
+      dryRun: true,
+    });
+  }
+
+  @Post('admin/reconcile-stock/execute')
+  async executeReconcileStock(
+    @Req() req: any,
+    @Body() body: { since?: string; storeCode?: string; limit?: number },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode reconciliar estoque');
+    }
+    return this.svc.reconcileStockBacklog({
+      sinceIso: body?.since,
+      storeCode: body?.storeCode,
+      limit: body?.limit || 100,
+      dryRun: false,
+    });
+  }
 }

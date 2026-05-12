@@ -1296,7 +1296,20 @@ export class PdvService {
               `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Wincred ` +
               `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
             );
+            try {
+              await (this.prisma as any).pdvSale.update({
+                where: { id: sale.id },
+                data: { stockDecreasedAt: new Date() },
+              });
+            } catch { /* segue */ }
           }
+        } else {
+          try {
+            await (this.prisma as any).pdvSale.update({
+              where: { id: sale.id },
+              data: { stockDecreasedAt: new Date() },
+            });
+          } catch { /* segue */ }
         }
       } else {
         this.logger.warn(
@@ -1363,6 +1376,146 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // RECONCILIACAO DE ESTOQUE — script admin pra baixar estoque retroativo
+  // de vendas finalizadas que NAO baixaram estoque (bug historico fixado).
+  //
+  // Idempotente via flag stockDecreasedAt: vendas ja processadas sao puladas.
+  // Pode rodar em modo dryRun=true (preview, sem mudar nada) ou execute.
+  // ═════════════════════════════════════════════════════════════════════════
+  async reconcileStockBacklog(input: {
+    sinceIso?: string;
+    storeCode?: string;
+    dryRun?: boolean;
+    limit?: number;
+  }): Promise<{
+    mode: 'dry-run' | 'executed';
+    sinceIso: string;
+    storeCode: string | null;
+    totalSalesEncontradas: number;
+    salesProcessadas: number;
+    itemsAgregados: number;
+    qtdTotal: number;
+    falhas: Array<{ saleId: string; storeCode: string; error: string }>;
+    aplicados: number;
+    finished: boolean;
+  }> {
+    const sinceIso = input.sinceIso
+      || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    const since = new Date(sinceIso);
+    const limit = Math.max(1, Math.min(500, input.limit || 100));
+    const dryRun = !!input.dryRun;
+    const storeCode = input.storeCode?.trim() || null;
+
+    const where: any = {
+      status: 'finalized',
+      finalizedAt: { gte: since },
+      stockDecreasedAt: null,
+    };
+    if (storeCode) where.storeCode = storeCode;
+
+    const totalSalesEncontradas = await (this.prisma as any).pdvSale.count({ where });
+
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where,
+      orderBy: { finalizedAt: 'asc' },
+      take: limit,
+      include: {
+        items: {
+          select: { sku: true, qty: true, ref: true, promoTag: true },
+        },
+      },
+    });
+
+    const falhas: Array<{ saleId: string; storeCode: string; error: string }> = [];
+    let aplicados = 0;
+    let itemsAgregados = 0;
+    let qtdTotal = 0;
+
+    for (const sale of sales as any[]) {
+      try {
+        const stockItems = (sale.items as any[])
+          .filter((it) => {
+            const sku = String(it.sku || '').trim();
+            if (!sku) return false;
+            if (sku.startsWith('MANUAL-')) return false;
+            if (it.ref === 'MANUAL') return false;
+            if (it.ref === 'MARCADO') return false;
+            if (it.promoTag === 'MANUAL') return false;
+            if (it.promoTag === 'MARCADO') return false;
+            return true;
+          })
+          .map((it) => ({
+            sku: String(it.sku || '').trim(),
+            qty: Math.max(1, Number(it.qty) || 1),
+            storeCode: sale.storeCode,
+          }));
+
+        if (stockItems.length === 0) {
+          if (!dryRun) {
+            await (this.prisma as any).pdvSale.update({
+              where: { id: sale.id },
+              data: { stockDecreasedAt: new Date() },
+            });
+          }
+          continue;
+        }
+
+        itemsAgregados += stockItems.length;
+        qtdTotal += stockItems.reduce((s, i) => s + i.qty, 0);
+
+        if (dryRun) continue;
+
+        if (!this.erp.isWriteEnabled) {
+          falhas.push({
+            saleId: sale.id,
+            storeCode: sale.storeCode,
+            error: 'ERP_WRITE_ENABLED=false — sem permissao pra baixar estoque',
+          });
+          continue;
+        }
+
+        const r = await this.erp.decreaseStock(stockItems, {
+          allowNegative: true,
+          skipNotFound: true,
+        });
+
+        if (!r.success) {
+          falhas.push({
+            saleId: sale.id,
+            storeCode: sale.storeCode,
+            error: r.error || 'falha desconhecida',
+          });
+        } else {
+          aplicados++;
+          await (this.prisma as any).pdvSale.update({
+            where: { id: sale.id },
+            data: { stockDecreasedAt: new Date() },
+          });
+        }
+      } catch (e: any) {
+        falhas.push({
+          saleId: sale.id,
+          storeCode: sale.storeCode,
+          error: e?.message || String(e),
+        });
+      }
+    }
+
+    return {
+      mode: dryRun ? 'dry-run' : 'executed',
+      sinceIso,
+      storeCode,
+      totalSalesEncontradas,
+      salesProcessadas: (sales as any[]).length,
+      itemsAgregados,
+      qtdTotal,
+      falhas,
+      aplicados,
+      finished: (sales as any[]).length < limit,
+    };
   }
 
   /**
