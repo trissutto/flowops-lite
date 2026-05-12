@@ -17,7 +17,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Search, Loader2, Check, AlertCircle, Tag, RefreshCw } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Search, Loader2, Check, AlertCircle, Tag, RefreshCw, ShoppingCart } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Marcado = {
@@ -56,12 +57,14 @@ const brl = (n: number) =>
 const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString('pt-BR') : '—';
 
 export default function MarcadosPage() {
+  const router = useRouter();
   const [cpf, setCpf] = useState('');
   const [info, setInfo] = useState<ClienteInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [voltadas, setVoltadas] = useState<Set<number>>(new Set());
   const [processing, setProcessing] = useState(false);
+  const [puxando, setPuxando] = useState(false);
   const [processResult, setProcessResult] = useState<{ ok: number; falhas: string[] } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -143,6 +146,43 @@ export default function MarcadosPage() {
 
     // Recarrega lista
     await buscar();
+  }
+
+  // Puxa as pecas marcadas pra dentro do PDV como itens de uma venda nova.
+  // Backend cria PdvSale aberta com os items, retorna saleId. Frontend
+  // redireciona pra /pdv onde a vendedora retoma a venda e cobra normal.
+  async function puxarParaVenda() {
+    if (!info || voltadas.size === 0) return;
+    if (!confirm(
+      `Puxar ${voltadas.size} peca(s) marcada(s) pra finalizar venda no PDV?\n\n` +
+      `Total: R$ ${valorVoltadas.toFixed(2).replace('.', ',')}\n\n` +
+      `Vai abrir uma venda nova no PDV com essas pecas. Quando finalizar a venda, ` +
+      `as pecas saem dos marcados automaticamente.`,
+    )) return;
+
+    setPuxando(true);
+    try {
+      const registros = Array.from(voltadas);
+      const r = await api<{ saleId: string; itemsAdded: number; total: number }>(
+        '/pdv/marcados/puxar-pra-venda',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            registros,
+            customerCpf: info.cliente?.cpf || undefined,
+            customerName: info.cliente?.nome || undefined,
+          }),
+        },
+      );
+      if (!r.saleId) throw new Error('Backend nao retornou saleId');
+      try {
+        localStorage.setItem('lurds_pdv_retomar_sale_id', r.saleId);
+      } catch {}
+      router.push('/minha-loja/pdv');
+    } catch (e: any) {
+      alert('Erro ao puxar pra venda: ' + (e?.message || e));
+      setPuxando(false);
+    }
   }
 
   const valorVoltadas = info
@@ -301,17 +341,29 @@ export default function MarcadosPage() {
                 <div className="text-sm">
                   <span className="text-slate-600">Selecionadas: </span>
                   <b>{voltadas.size}</b> peça(s) ·
-                  <span className="text-slate-600 ml-2">Valor a estornar: </span>
-                  <b className="text-rose-700">{brl(valorVoltadas)}</b>
+                  <span className="text-slate-600 ml-2">Valor: </span>
+                  <b className="text-emerald-700">{brl(valorVoltadas)}</b>
                 </div>
-                <button
-                  onClick={processarDevolucao}
-                  disabled={processing || voltadas.size === 0}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold rounded flex items-center gap-2"
-                >
-                  {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                  Processar devolução ({voltadas.size})
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={puxarParaVenda}
+                    disabled={puxando || processing || voltadas.size === 0}
+                    title="Cobrar essas pecas no PDV — abre uma venda nova com elas"
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold rounded flex items-center gap-2 shadow-md"
+                  >
+                    {puxando ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
+                    Puxar pra venda no PDV ({voltadas.size})
+                  </button>
+                  <button
+                    onClick={processarDevolucao}
+                    disabled={processing || puxando || voltadas.size === 0}
+                    title="Devolver essas pecas ao estoque (cliente trouxe de volta)"
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold rounded flex items-center gap-2"
+                  >
+                    {processing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    Devolver ao estoque ({voltadas.size})
+                  </button>
+                </div>
               </div>
             </div>
           )}

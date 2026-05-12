@@ -335,4 +335,120 @@ export class MarcadosService {
     const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 15000 });
     return { rows: r.rows, total: r.rows.length };
   }
+
+  // ── PUXAR MARCADOS PRA VENDA NO PDV ──────────────────────────────
+  // Vendedora seleciona N pecas marcadas que o cliente vai pagar.
+  // Backend cria uma PdvSale aberta, adiciona cada peca como item
+  // (manual, sem decrementar estoque — ja saiu quando foi marcado),
+  // guarda os REGISTROs no campo marcadosRegistros pra rastreio.
+  //
+  // Vendedora retoma essa venda no PDV, cobra (PIX/cartao/etc) e finaliza.
+  // No finalize, o backend dispara "fechar marcado" no Wincred
+  // (UPDATE MARCADO='NAO' nas linhas correspondentes — vira venda final).
+  async puxarParaVenda(input: {
+    registros: number[];
+    storeCode: string;
+    customerCpf?: string;
+    customerName?: string;
+    customerPhone?: string;
+    vendedorUserId?: string;
+    vendedorName?: string;
+  }): Promise<{ saleId: string; itemsAdded: number; total: number }> {
+    if (!input.registros || input.registros.length === 0) {
+      throw new BadRequestException('Nenhum REGISTRO informado');
+    }
+    if (!input.storeCode) {
+      throw new BadRequestException('storeCode obrigatorio');
+    }
+
+    const regsCsv = input.registros.map((r) => Number(r)).filter((r) => Number.isFinite(r) && r > 0);
+    if (regsCsv.length === 0) throw new BadRequestException('REGISTROs invalidos');
+
+    const sql = `
+      SELECT REGISTRO, CODIGO, DESCRICAO, QUANTIDADE, VALOR, VALORTOTAL, LOJA
+      FROM caixa
+      WHERE REGISTRO IN (${regsCsv.join(',')})
+        AND UPPER(MARCADO) = 'SIM'
+    `;
+    const r = await this.erp.runReadOnly(sql, { maxRows: 100, timeoutMs: 15000 });
+    const rows: any[] = r.rows || [];
+    if (rows.length === 0) {
+      throw new BadRequestException('Nenhum marcado ativo encontrado pros REGISTROs informados');
+    }
+
+    const store = await this.prisma.store.findUnique({
+      where: { code: input.storeCode },
+      select: { code: true, name: true },
+    });
+    if (!store) throw new BadRequestException(`Loja ${input.storeCode} nao cadastrada`);
+
+    let cashSessionId: string | null = null;
+    try {
+      const s = await (this.prisma as any).pdvCashSession.findFirst({
+        where: { storeCode: store.code, status: 'open' },
+        select: { id: true },
+      });
+      cashSessionId = s?.id || null;
+    } catch { /* segue sem caixa */ }
+
+    const sale = await (this.prisma as any).pdvSale.create({
+      data: {
+        storeCode: store.code,
+        storeName: store.name,
+        cashSessionId,
+        vendedorUserId: input.vendedorUserId || null,
+        vendedorName: input.vendedorName || null,
+        customerCpf: input.customerCpf || null,
+        customerName: input.customerName || null,
+        customerPhone: input.customerPhone || null,
+        status: 'open',
+        marcadosRegistros: rows.map((x) => Number(x.REGISTRO)).join(','),
+      },
+    });
+
+    let total = 0;
+    let itemsAdded = 0;
+    for (const row of rows) {
+      const qty = Math.max(1, Number(row.QUANTIDADE) || 1);
+      const valorTotal = Number(row.VALORTOTAL) || (Number(row.VALOR) || 0) * qty;
+      const precoUnit = qty > 0 ? Math.round((valorTotal / qty) * 100) / 100 : Number(row.VALOR) || 0;
+      const descricao = String(row.DESCRICAO || row.CODIGO || 'Item marcado').slice(0, 80);
+      const sku = String(row.CODIGO || `MARCADO-${row.REGISTRO}`);
+      try {
+        await (this.prisma as any).pdvSaleItem.create({
+          data: {
+            saleId: sale.id,
+            sku,
+            ean: null,
+            ref: 'MARCADO',
+            cor: null,
+            tamanho: null,
+            descricao,
+            ncm: null,
+            cfop: null,
+            dataCadastro: null,
+            qty,
+            precoUnit,
+            desconto: 0,
+            total: precoUnit * qty,
+            promoTag: 'MARCADO',
+          },
+        });
+        total += precoUnit * qty;
+        itemsAdded++;
+      } catch (e: any) {
+        this.logger.warn(`[marcados/puxar] falha ao add item REGISTRO=${row.REGISTRO}: ${e?.message}`);
+      }
+    }
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: sale.id },
+      data: {
+        subtotal: total,
+        total,
+      },
+    });
+
+    return { saleId: sale.id, itemsAdded, total };
+  }
 }

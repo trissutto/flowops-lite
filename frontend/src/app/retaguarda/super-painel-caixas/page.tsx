@@ -41,6 +41,14 @@ type Detalhado = {
   };
 };
 type Vendedora = { nome: string; qtd: number; total: number };
+type Movimento = {
+  id: string;
+  tipo: string;        // 'sangria' | 'suprimento'
+  valor: number;
+  motivo: string;
+  userName: string | null;
+  createdAt: string;
+};
 type Loja = {
   storeCode: string;
   storeName: string;
@@ -62,6 +70,7 @@ type Loja = {
     qtdVendas: number;
   };
   vendedoras: Vendedora[];
+  movimentos?: Movimento[];
   detalhado: Detalhado | null;
 };
 type Painel = {
@@ -240,6 +249,10 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
 function LojaCard({ loja }: { loja: Loja }) {
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showSangrias, setShowSangrias] = useState(false);
+  const [showSuprimentos, setShowSuprimentos] = useState(false);
+  const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
+  const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
   return (
     <div className={`rounded-xl shadow-lg overflow-hidden border-2 ${
       loja.aberta ? 'bg-white border-emerald-300' : 'bg-slate-100 border-slate-300 opacity-75'
@@ -303,14 +316,90 @@ function LojaCard({ loja }: { loja: Loja }) {
           </div>
         )}
 
-        {/* Sangria/Suprimento (só se houver) */}
-        {(t.totalSangrias > 0 || t.totalSuprimentos > 0) && (
-          <div className="flex justify-between text-[10px] pt-1 border-t border-slate-100">
-            {t.totalSangrias > 0 && (
-              <span className="text-rose-600 font-bold">↓ Sangria {brl(t.totalSangrias)}</span>
+        {/* Fundo de troco + Sangria/Suprimento clicaveis (cascata) */}
+        {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0) && (
+          <div className="pt-1 border-t border-slate-100 space-y-1">
+            {loja.fundoTroco > 0 && (
+              <div className="flex justify-between text-[11px] text-slate-700">
+                <span className="font-bold">💵 Fundo do caixa</span>
+                <span className="font-mono tabular-nums font-bold">{brl(loja.fundoTroco)}</span>
+              </div>
             )}
+
+            {t.totalSangrias > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowSangrias((v) => !v)}
+                  className="w-full flex justify-between items-center text-[11px] text-rose-700 hover:bg-rose-50 rounded px-1 py-0.5 transition"
+                  title="Clica pra ver os lancamentos"
+                >
+                  <span className="font-bold flex items-center gap-1">
+                    <span className={`transition-transform inline-block ${showSangrias ? 'rotate-90' : ''}`}>▶</span>
+                    ↓ Sangria · {sangriasList.length} lanc.
+                  </span>
+                  <span className="font-mono tabular-nums font-bold">{brl(t.totalSangrias)}</span>
+                </button>
+                {showSangrias && sangriasList.length > 0 && (
+                  <div className="ml-3 pl-2 border-l-2 border-rose-200 space-y-0.5 max-h-48 overflow-y-auto">
+                    {sangriasList.map((m) => {
+                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                      return (
+                        <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-rose-50 rounded px-1 py-0.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1">
+                              <span className="text-slate-400 font-mono shrink-0">{hora}</span>
+                              <span className="text-slate-700 truncate">{m.motivo || '(sem motivo)'}</span>
+                            </div>
+                            {m.userName && (
+                              <div className="text-slate-400 italic truncate">por {m.userName.split(' ')[0]}</div>
+                            )}
+                          </div>
+                          <span className="font-mono font-bold tabular-nums text-rose-700 shrink-0">{brl(m.valor)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
             {t.totalSuprimentos > 0 && (
-              <span className="text-amber-600 font-bold">↑ Suprim. {brl(t.totalSuprimentos)}</span>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowSuprimentos((v) => !v)}
+                  className="w-full flex justify-between items-center text-[11px] text-amber-700 hover:bg-amber-50 rounded px-1 py-0.5 transition"
+                  title="Clica pra ver os lancamentos"
+                >
+                  <span className="font-bold flex items-center gap-1">
+                    <span className={`transition-transform inline-block ${showSuprimentos ? 'rotate-90' : ''}`}>▶</span>
+                    ↑ Suprimento · {suprimentosList.length} lanc.
+                  </span>
+                  <span className="font-mono tabular-nums font-bold">{brl(t.totalSuprimentos)}</span>
+                </button>
+                {showSuprimentos && suprimentosList.length > 0 && (
+                  <div className="ml-3 pl-2 border-l-2 border-amber-200 space-y-0.5 max-h-48 overflow-y-auto">
+                    {suprimentosList.map((m) => {
+                      const hora = new Date(m.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                      return (
+                        <div key={m.id} className="flex justify-between items-start text-[10px] gap-2 hover:bg-amber-50 rounded px-1 py-0.5">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1">
+                              <span className="text-slate-400 font-mono shrink-0">{hora}</span>
+                              <span className="text-slate-700 truncate">{m.motivo || '(sem motivo)'}</span>
+                            </div>
+                            {m.userName && (
+                              <div className="text-slate-400 italic truncate">por {m.userName.split(' ')[0]}</div>
+                            )}
+                          </div>
+                          <span className="font-mono font-bold tabular-nums text-amber-700 shrink-0">{brl(m.valor)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

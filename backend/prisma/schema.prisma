@@ -941,6 +941,11 @@ model PdvSale {
   // Envio
   sentEmailAt     DateTime? @map("sent_email_at")
   sentWhatsappAt  DateTime? @map("sent_whatsapp_at")
+  // Vinculo com sistema de MARCADOS (provar em casa). Quando a venda foi
+  // criada via "Puxar pra venda" da tela /pdv/marcados, guarda os REGISTROs
+  // do Wincred caixa que originaram os itens. Ao finalizar a venda, esses
+  // marcados devem ser fechados (DELETE/UPDATE MARCADO='NAO' no Wincred).
+  marcadosRegistros String?  @map("marcados_registros") @db.Text
   // Timestamps
   createdAt       DateTime @default(now()) @map("created_at")
   finalizedAt     DateTime? @map("finalized_at")

@@ -241,10 +241,36 @@ function PdvPageInner() {
     } catch {
       /* noop */
     }
-    // Abre venda nova (se não tiver uma OPEN salva)
+
+    // PRIORIDADE 1: venda vinda de /pdv/marcados (botao "Puxar pra venda").
+    let retomarPuxado: string | null = null;
+    try { retomarPuxado = localStorage.getItem('lurds_pdv_retomar_sale_id'); } catch {}
+    if (retomarPuxado) {
+      try { localStorage.removeItem('lurds_pdv_retomar_sale_id'); } catch {}
+      api<Sale>(`/pdv/sales/${retomarPuxado}`)
+        .then((s) => {
+          if (s.status === 'open' && s.storeCode === storeCode) {
+            setSale(s);
+            try { localStorage.setItem(`lurds_pdv_sale_${storeCode}`, s.id); } catch {}
+          } else {
+            const lastSaleId = localStorage.getItem(`lurds_pdv_sale_${storeCode}`);
+            if (lastSaleId) {
+              api<Sale>(`/pdv/sales/${lastSaleId}`).then((sx) => {
+                if (sx.status === 'open' && sx.storeCode === storeCode) setSale(sx);
+                else { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); createNewSale(); }
+              }).catch(() => { localStorage.removeItem(`lurds_pdv_sale_${storeCode}`); createNewSale(); });
+            } else {
+              createNewSale();
+            }
+          }
+        })
+        .catch(() => createNewSale());
+      return;
+    }
+
+    // PRIORIDADE 2: venda OPEN salva no localStorage
     const lastSaleId = localStorage.getItem(`lurds_pdv_sale_${storeCode}`);
     if (lastSaleId) {
-      // Tenta retomar
       api<Sale>(`/pdv/sales/${lastSaleId}`)
         .then((s) => {
           if (s.status === 'open' && s.storeCode === storeCode) {

@@ -87,4 +87,37 @@ export class MarcadosController {
       userId,
     });
   }
+
+  /**
+   * POST /pdv/marcados/puxar-pra-venda
+   * Body: { registros: number[], customerCpf?, customerName?, customerPhone? }
+   * Cria uma PdvSale aberta com as pecas marcadas como itens, retorna saleId.
+   * Frontend redireciona pro PDV pra retomar e finalizar a venda.
+   */
+  @Post('puxar-pra-venda')
+  puxarParaVenda(
+    @Req() req: any,
+    @Body() body: {
+      registros: Array<number | string>;
+      customerCpf?: string;
+      customerName?: string;
+      customerPhone?: string;
+    },
+  ) {
+    this.requireRole(req);
+    const storeCode = req?.user?.storeCode || req?.user?.storeId;
+    if (!storeCode) throw new ForbiddenException('Usuário sem loja vinculada');
+    const vendedorUserId = req?.user?.sub || req?.user?.id;
+    const vendedorName = req?.user?.name || req?.user?.email;
+    const registros = (body?.registros || []).map((r) => Number(r)).filter((r) => Number.isFinite(r) && r > 0);
+    return this.svc.puxarParaVenda({
+      registros,
+      storeCode,
+      customerCpf: body?.customerCpf,
+      customerName: body?.customerName,
+      customerPhone: body?.customerPhone,
+      vendedorUserId,
+      vendedorName,
+    });
+  }
 }

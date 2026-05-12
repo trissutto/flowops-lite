@@ -391,6 +391,15 @@ export class CashService {
         qtdVendas: number;
       };
       vendedoras: Array<{ nome: string; qtd: number; total: number }>;
+      // Movimentos (sangria/suprimento) da sessao — pra cascata clicavel
+      movimentos: Array<{
+        id: string;
+        tipo: string;
+        valor: number;
+        motivo: string;
+        userName: string | null;
+        createdAt: string;
+      }>;
     }>;
     consolidado: {
       totalVendas: number;
@@ -435,6 +444,7 @@ export class CashService {
             fundoTroco: 0,
             totais: emptyTotais,
             vendedoras: [],
+            movimentos: [],
             detalhado: null as any,
           };
         }
@@ -460,6 +470,24 @@ export class CashService {
         }
         const vendedoras = Object.values(ranking).sort((a, b) => b.total - a.total);
 
+        // Lista de movimentos (sangria/suprimento) — pra cascata clicavel
+        const movimentosRaw = await (this.prisma as any).pdvCashMovement.findMany({
+          where: { cashSessionId: session.id },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true, tipo: true, valor: true, motivo: true,
+            userName: true, createdAt: true,
+          },
+        });
+        const movimentos = (movimentosRaw as any[]).map((m) => ({
+          id: m.id,
+          tipo: m.tipo,
+          valor: Number(m.valor) || 0,
+          motivo: m.motivo || '',
+          userName: m.userName || null,
+          createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
+        }));
+
         return {
           storeCode: s.code,
           storeName: s.name,
@@ -481,6 +509,7 @@ export class CashService {
             qtdVendas: t.qtdVendas,
           },
           vendedoras,
+          movimentos, // sangria + suprimento — lancamento por lancamento (cascata)
           detalhado, // slots por modalidade+bandeira+vendas (igual /relatorio-detalhado)
         };
       }),
