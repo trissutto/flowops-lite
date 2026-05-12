@@ -1120,10 +1120,20 @@ function MovModal({
         body: JSON.stringify(body),
       });
       // Imprime cupom SILENCIOSO (sem preview) com espaço pra assinatura.
-      // Vale só pra sangria; suprimento também sai daqui (mesmo formato).
+      // Passa TODOS os dados via query string pra evitar race condition
+      // (iframe oculto não precisa esperar fetch ao backend).
       if (mov?.id) {
         try {
-          const url = `/minha-loja/pdv/caixa/sangria/${mov.id}?autoprint=1`;
+          const qsImp = new URLSearchParams({
+            autoprint: '1',
+            tipo,
+            valor: String(v),
+            motivo: motivo.trim(),
+            userName: (typeof window !== 'undefined' && localStorage.getItem('flowops_user_name')) || '',
+            createdAt: new Date().toISOString(),
+            storeCode: storeCode || '',
+          });
+          const url = `/minha-loja/pdv/caixa/sangria/${mov.id}?${qsImp.toString()}`;
           const electron = (window as any).electronAPI;
           if (electron?.silentPrintUrl) {
             electron.silentPrintUrl(window.location.origin + url).catch(() => imprimirHidden(url));

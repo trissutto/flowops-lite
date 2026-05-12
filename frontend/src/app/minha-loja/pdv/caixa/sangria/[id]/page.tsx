@@ -3,13 +3,14 @@
 /**
  * /minha-loja/pdv/caixa/sangria/[id]
  *
- * Cupom de SANGRIA pra térmica 80mm. Layout simples:
- *   - LURD'S header
- *   - SANGRIA / SUPRIMENTO em destaque
- *   - Valor, motivo, data/hora, operador
- *   - Linha pra assinatura
+ * Cupom de SANGRIA pra térmica 80mm com espaço pra assinatura.
  *
- * ?autoprint=1 dispara window.print() automaticamente quando carrega.
+ * Estratégia ANTI-RACE: lê todos os dados via query params (passados pelo
+ * caller que ACABOU de criar a movimentação). Não depende de fetch ao
+ * backend — imprime IMEDIATAMENTE, sem race condition de iframe oculto.
+ * Fallback: se faltar algum param, tenta GET /pdv/caixa/movimento/:id.
+ *
+ * ?autoprint=1 dispara window.print() automaticamente.
  */
 
 import { useEffect, useState } from 'react';
@@ -21,7 +22,7 @@ const brl = (n: number) =>
 
 type Movimento = {
   id: string;
-  tipo: 'sangria' | 'suprimento' | string;
+  tipo: string;
   valor: number;
   motivo: string;
   userName: string | null;
@@ -32,24 +33,42 @@ type Movimento = {
 
 export default function SangriaImpressoPage() {
   const params = useParams<{ id: string }>();
-  const searchParams = useSearchParams();
+  const sp = useSearchParams();
   const id = params.id || '';
-  const autoprint = searchParams.get('autoprint') === '1';
-  const [m, setM] = useState<Movimento | null>(null);
+  const autoprint = sp.get('autoprint') === '1';
+
+  // 1) Tenta montar tudo via query params (fonte primária — sem race)
+  const valorParam = Number(sp.get('valor') || 0);
+  const dadosViaQuery: Movimento | null = valorParam > 0
+    ? {
+        id,
+        tipo: sp.get('tipo') || 'sangria',
+        valor: valorParam,
+        motivo: sp.get('motivo') || '',
+        userName: sp.get('userName') || null,
+        createdAt: sp.get('createdAt') || new Date().toISOString(),
+        storeCode: sp.get('storeCode') || null,
+        storeName: sp.get('storeName') || null,
+      }
+    : null;
+
+  const [m, setM] = useState<Movimento | null>(dadosViaQuery);
   const [err, setErr] = useState('');
 
+  // 2) Se não veio via query, fallback pra fetch (ex: user acessou direto)
   useEffect(() => {
-    if (!id) return;
+    if (m || !id) return;
     api<Movimento>(`/pdv/caixa/movimento/${id}`)
       .then((d) => setM(d))
       .catch((e) => setErr(e?.message || 'Falha ao carregar'));
-  }, [id]);
+  }, [id, m]);
 
+  // Auto-print quando tem dados
   useEffect(() => {
     if (autoprint && m && !err) {
       const t = setTimeout(() => {
         try { window.print(); } catch {}
-      }, 400);
+      }, 300);
       return () => clearTimeout(t);
     }
   }, [autoprint, m, err]);
@@ -58,7 +77,6 @@ export default function SangriaImpressoPage() {
   if (!m) return <div className="p-4 text-slate-500">Carregando…</div>;
 
   const isSangria = m.tipo === 'sangria';
-  const titulo = isSangria ? 'SANGRIA' : 'SUPRIMENTO';
   const data = new Date(m.createdAt);
   const dataFmt = data.toLocaleDateString('pt-BR');
   const horaFmt = data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -66,10 +84,7 @@ export default function SangriaImpressoPage() {
   return (
     <>
       <style jsx global>{`
-        @page {
-          size: 80mm auto;
-          margin: 0;
-        }
+        @page { size: 80mm auto; margin: 0; }
         @media print {
           html, body {
             margin: 0 !important;
@@ -127,7 +142,7 @@ export default function SangriaImpressoPage() {
               Motivo
             </div>
             <div className="text-sm font-bold leading-tight break-words">
-              {m.motivo}
+              {m.motivo || '—'}
             </div>
           </div>
 
@@ -149,7 +164,7 @@ export default function SangriaImpressoPage() {
             )}
           </div>
 
-          {/* ÁREA DE ASSINATURA */}
+          {/* ASSINATURAS */}
           <div className="mt-8 pt-2">
             <div className="border-t-2 border-black"></div>
             <div className="text-center text-[10px] uppercase tracking-wider font-bold mt-1">
@@ -164,15 +179,13 @@ export default function SangriaImpressoPage() {
             </div>
           </div>
 
-          {/* FOOTER */}
           <div className="text-center text-[8px] mt-4 pt-2 border-t border-dashed border-black opacity-70">
-            ID: {m.id.slice(-8).toUpperCase()}
+            ID: {m.id ? m.id.slice(-8).toUpperCase() : '—'}
             <br />
             Comprovante interno — guardar pra fechamento
           </div>
         </div>
 
-        {/* Botões não imprimíveis */}
         <div className="fixed bottom-4 right-4 flex flex-col gap-2 no-print">
           <button
             onClick={() => window.print()}
