@@ -2389,10 +2389,9 @@ function PaymentModal({
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
     }
-    if (selected === 'pix' && !pixCharge) {
-      toast('info', 'Gerando QR PIX', 'Aguarde alguns segundos');
-      return;
-    }
+    // PIX sem QR: permite finalizar mesmo sem QR Pagar.me (vendedora pode
+    // ter recebido o PIX no celular dela direto, sem usar o sistema).
+    // Marca details.pixManual=true pra rastrear que veio "manual" (sem txid).
     if (selected === 'dinheiro' && recebidoNum > 0 && recebidoNum < valor) {
       toast('warning', 'Valor recebido insuficiente', `Recebido ${brl(recebidoNum)} é menor que ${brl(valor)}`);
       return;
@@ -2411,9 +2410,14 @@ function PaymentModal({
       details.recebido = recebidoNum || valor;
       details.troco = trocoP;
     }
-    if (selected === 'pix' && pixCharge) {
-      details.pixTxid = pixCharge.txid;
-      details.pixChave = pixCharge.chave;
+    if (selected === 'pix') {
+      if (pixCharge) {
+        details.pixTxid = pixCharge.txid;
+        details.pixChave = pixCharge.chave;
+      } else {
+        // PIX manual — vendedora recebeu no celular dela, sem QR do sistema
+        details.pixManual = true;
+      }
     }
     if (needsBandeira) details.bandeira = bandeira;
 
@@ -3501,7 +3505,6 @@ function PaymentModal({
                   addingPayment ||
                   !valorParcial ||
                   (needsBandeira && !bandeira) ||
-                  (selected === 'pix' && !pixCharge) ||
                   (selected === 'crediario' && !customerCpf)
                 }
                 className={`w-full px-3 py-3 font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-colors ${
