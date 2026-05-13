@@ -1136,6 +1136,51 @@ function PdvPageInner() {
               <span className="ml-2 text-[9px] font-bold text-violet-500 uppercase tracking-wider">↓ último bipado no topo</span>
             </div>
             <div className="divide-y">
+              {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
+                  na venda, aparece como "produto devolvido" no carrinho com valor
+                  negativo, deixando claro que o abatimento foi feito. Renderizado
+                  ANTES dos items (no topo) com estilo diferenciado teal. */}
+              {(sale.payments || []).filter((p: any) => p.method === 'vale_troca').map((p: any) => {
+                let code = '';
+                try {
+                  const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+                  code = String(det?.creditoCode || '').trim();
+                } catch { /* segue sem codigo */ }
+                return (
+                  <div
+                    key={`vt-${p.id}`}
+                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-teal-50 border-l-4 border-teal-500"
+                    title="Vale-troca aplicado — abate da venda"
+                  >
+                    <div className="font-mono text-[10px] text-teal-700 truncate">{code || 'VALE'}</div>
+                    <div className="flex items-center justify-center text-teal-600 text-xl">↺</div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-teal-900 uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
+                      <div className="text-[10px] text-teal-700 font-mono">{code}</div>
+                    </div>
+                    <div className="text-right text-[11px] text-slate-500">1×</div>
+                    <div className="text-right text-[11px] text-slate-500 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
+                    <div className="text-right text-sm font-bold text-rose-700 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
+                    <button
+                      onClick={async () => {
+                        if (!confirm(`Remover vale-troca ${code}?\n\nO codigo TROCA volta a ficar disponivel.`)) return;
+                        try {
+                          await api(`/pdv/sales/${sale.id}/payments/${p.id}`, { method: 'DELETE' });
+                          const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+                          setSale(fresh);
+                          toast('success', 'Vale-troca removido', code);
+                        } catch (e: any) {
+                          toast('error', 'Falha ao remover vale', e?.message || '');
+                        }
+                      }}
+                      className="text-rose-600 hover:text-rose-800 flex items-center justify-center"
+                      title="Remover vale-troca"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })}
               {/* ORDEM INVERTIDA — último item bipado fica no topo pra vendedora
                   conferir o que acabou de passar. Slice + reverse não muta o array
                   original (sale.items continua na ordem original no estado). */}
