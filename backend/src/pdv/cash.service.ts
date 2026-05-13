@@ -232,6 +232,11 @@ export class CashService {
     // IMPORTANTE: parcelas pagas hoje em DINHEIRO/PIX entram no caixa mas
     // NÃO são "venda do dia" — são pagamento de venda antiga. Precisam
     // aparecer separados nos somatórios pra reconciliação correta.
+    //
+    // Pagamentos MISTOS (split PIX+Dinheiro) entram em AMBOS os slots:
+    // valorDinheiro vai pra recebimentosDinheiro, valorPix vai pra
+    // recebimentosPix. Sem esse split, o total inteiro caía em dinheiro e
+    // bagunçava o fechamento.
     const baixasCrediario = await (this.prisma as any).crediarioBaixa.findMany({
       where: {
         lojaCode: session.storeCode,
@@ -245,30 +250,72 @@ export class CashService {
     const recebimentosDinheiro = mkSlot();
     const recebimentosPix = mkSlot();
     for (const b of baixasCrediario as any[]) {
-      const valor = Number(b.totalPago) || 0;
+      const valorTotal = Number(b.totalPago) || 0;
       const forma = String(b.formaPagamento || '').toLowerCase();
-      const slot = forma === 'pix' ? recebimentosPix : recebimentosDinheiro;
-      slot.valor += valor;
-      slot.qtd += 1;
-      slot.vendas.push({
+      const baseItems = (b.items || []).map((it: any) => ({
+        parcelaNum: it.parcelaNum ?? null,
+        totalParcelas: it.totalParcelas ?? null,
+        vencimento: it.vencimento || '',
+        valorPago: Number(it.valorPago) || 0,
+        jurosCalculado: Number(it.jurosCalculado) || 0,
+      }));
+      const baseVenda = {
         saleId: String(b.id),
-        saleTotal: valor,
         paymentId: String(b.id),
-        method: forma,
         bandeira: null,
-        valor,
         customerName: b.customerName || null,
         customerCpf: b.customerCpf || null,
         sellerName: b.userName || null,
         finalizedAt: b.paidAt || b.createdAt || null,
-        items: (b.items || []).map((it: any) => ({
-          parcelaNum: it.parcelaNum ?? null,
-          totalParcelas: it.totalParcelas ?? null,
-          vencimento: it.vencimento || '',
-          valorPago: Number(it.valorPago) || 0,
-          jurosCalculado: Number(it.jurosCalculado) || 0,
-        })),
-      });
+        items: baseItems,
+      };
+
+      if (forma === 'misto') {
+        const vDin = Number(b.valorDinheiro) || 0;
+        const vPix = Number(b.valorPix) || 0;
+        if (vDin > 0) {
+          recebimentosDinheiro.valor += vDin;
+          recebimentosDinheiro.qtd += 1;
+          recebimentosDinheiro.vendas.push({
+            ...baseVenda,
+            saleTotal: vDin,
+            method: 'misto-dinheiro',
+            valor: vDin,
+          });
+        }
+        if (vPix > 0) {
+          recebimentosPix.valor += vPix;
+          recebimentosPix.qtd += 1;
+          recebimentosPix.vendas.push({
+            ...baseVenda,
+            saleTotal: vPix,
+            method: 'misto-pix',
+            valor: vPix,
+          });
+        }
+        // Fallback paranoico: baixa misto antiga sem valorDinheiro/Pix
+        // preenchido — joga total em dinheiro mas marca pra alertar.
+        if (vDin <= 0 && vPix <= 0) {
+          recebimentosDinheiro.valor += valorTotal;
+          recebimentosDinheiro.qtd += 1;
+          recebimentosDinheiro.vendas.push({
+            ...baseVenda,
+            saleTotal: valorTotal,
+            method: 'misto-sem-split',
+            valor: valorTotal,
+          });
+        }
+      } else {
+        const slot = forma === 'pix' ? recebimentosPix : recebimentosDinheiro;
+        slot.valor += valorTotal;
+        slot.qtd += 1;
+        slot.vendas.push({
+          ...baseVenda,
+          saleTotal: valorTotal,
+          method: forma,
+          valor: valorTotal,
+        });
+      }
     }
 
     // Movimentações de caixa
