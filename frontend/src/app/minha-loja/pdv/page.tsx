@@ -1599,6 +1599,54 @@ function PdvPageInner() {
                     }
                     hoverColor="hover:bg-fuchsia-50 hover:border-fuchsia-300"
                   />
+                  {/* MARCAR — cliente leva pra provar em casa.
+                      Exige cliente identificado (CPF) — senao abre modal de
+                      cliente primeiro. O click executa o fluxo direto: chama
+                      backend pra criar marcado + baixa estoque + fecha venda.
+                      Backend valida classe A e limite — se nao puder, retorna
+                      erro claro pra vendedora. */}
+                  <PayBtn
+                    onClick={async () => {
+                      if (!sale.customerCpf) {
+                        toast('warning', 'Identifique a cliente primeiro', 'CPF é obrigatorio pra marcar (provar em casa)');
+                        setShowCustomer(true);
+                        return;
+                      }
+                      if (!sale.items?.length) {
+                        toast('warning', 'Carrinho vazio', 'Bipe as peças que a cliente vai levar pra provar');
+                        return;
+                      }
+                      if (!confirm(
+                        `MARCAR ${sale.items.length} peça(s) pra ${sale.customerName || 'cliente'}?\n\n` +
+                        `Total: ${brl(sale.total)}\n\n` +
+                        `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
+                        `Cliente precisa ser classe A com limite disponivel no Giga.`,
+                      )) return;
+                      try {
+                        const r = await api<any>('/pdv/marcados/criar', {
+                          method: 'POST',
+                          body: JSON.stringify({ saleId: sale.id }),
+                        });
+                        if (r.ok) {
+                          toast('success', `${r.totalItems || sale.items.length} peças marcadas!`, `Controle ${r.controle || ''} · Cliente vai provar em casa`);
+                          setSale(null);
+                          setTimeout(() => createNewSale(), 500);
+                        } else {
+                          toast('error', 'Falha ao marcar', r.error || 'Tente de novo');
+                        }
+                      } catch (e: any) {
+                        const h = humanizeError(e);
+                        toast('error', 'Cliente nao pode marcar', h.hint || h.title);
+                      }
+                    }}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <span className="text-base">📋</span>
+                        <span className="text-xs font-black text-violet-700 tracking-wide">MARCAR</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-violet-50 hover:border-violet-300"
+                  />
                 </div>
               </div>
             </div>
