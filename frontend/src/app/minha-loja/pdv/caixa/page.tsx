@@ -396,6 +396,31 @@ function OpenCashPanel({
               sub={`${detalhado?.recebimentosCrediario.qtdTotal || 0} baixa(s)`}
             />
           </div>
+
+          {/* Botoes principais: SUBIDOS pra ficar visiveis sem precisar rolar.
+              Antes ficavam la embaixo apos o DetalhesCaixa + Dinheiro esperado.
+              Vendedora gasta menos tempo procurando Sangria/Suprimento/Fechar. */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <button
+              onClick={onSangria}
+              className="bg-amber-100 hover:bg-amber-200 text-amber-900 p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
+            >
+              <TrendingDown size={20} /> Sangria
+            </button>
+            <button
+              onClick={onSuprimento}
+              className="bg-emerald-100 hover:bg-emerald-200 text-emerald-900 p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
+            >
+              <TrendingUp size={20} /> Suprimento
+            </button>
+            <button
+              onClick={onFechar}
+              className="bg-rose-600 hover:bg-rose-700 text-white p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
+            >
+              <Lock size={20} /> Fechar Caixa
+            </button>
+          </div>
+
           {detalhado ? (
             <DetalhesCaixa
               detalhado={detalhado}
@@ -420,26 +445,8 @@ function OpenCashPanel({
         </>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <button
-          onClick={onSangria}
-          className="bg-amber-100 hover:bg-amber-200 text-amber-900 p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
-        >
-          <TrendingDown size={20} /> Sangria
-        </button>
-        <button
-          onClick={onSuprimento}
-          className="bg-emerald-100 hover:bg-emerald-200 text-emerald-900 p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
-        >
-          <TrendingUp size={20} /> Suprimento
-        </button>
-        <button
-          onClick={onFechar}
-          className="bg-rose-600 hover:bg-rose-700 text-white p-4 rounded-xl font-semibold flex items-center justify-center gap-2"
-        >
-          <Lock size={20} /> Fechar Caixa
-        </button>
-      </div>
+      {/* Botoes movidos pra cima (apos KpiCards) — ficam acima da rolagem.
+          Bloco antigo removido daqui pra evitar duplicidade. */}
 
       {totals && (
         <div className="bg-white rounded-2xl shadow-md p-5">
