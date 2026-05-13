@@ -104,6 +104,20 @@ export default function ValeImprimirPage() {
             font-family: 'Courier New', monospace;
             color: black;
           }
+          /* IMPRESSAO: forca tudo preto sobre branco. Antes o bloco do codigo
+             era bg-black text-white — browser nao imprime background por default,
+             entao texto BRANCO ficava invisivel no papel BRANCO. Override pra
+             garantir codigo TROCA-XXXXX legivel. */
+          #vale-content * {
+            color: black !important;
+            background: transparent !important;
+          }
+          /* Caixa do codigo: borda dupla pra dar destaque sem precisar de
+             background preto (que nao imprime na termica). */
+          #vale-content .bg-black {
+            border: 3px double black !important;
+            padding: 8px !important;
+          }
           .no-print { display: none !important; }
         }
       `}</style>
