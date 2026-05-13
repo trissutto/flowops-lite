@@ -198,6 +198,10 @@ function PdvPageInner() {
   const [scanInput, setScanInput] = useState('');
   const [scanLoading, setScanLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // SKU pendente quando vendedora ainda nao foi escolhida — bipe fica em
+  // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
+  // (vendedora nao precisa voltar e clicar de novo na setinha).
+  const pendingScanRef = useRef<string | null>(null);
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
@@ -435,8 +439,11 @@ function PdvPageInner() {
     if (!sku) return;
     // GUARD: vendedora OBRIGATÓRIA antes do primeiro bipe.
     // Sem vendedora atribuída, abre modal e bloqueia bipagem.
+    // SALVA o SKU pendente — apos saveVendedora, o bipe eh re-executado
+    // automaticamente (vendedora nao precisa voltar e bipar de novo).
     if (!sale.sellerName) {
-      toast('warning', 'Escolha a vendedora primeiro', 'A venda precisa ter vendedora atribuída antes de bipar produtos.');
+      pendingScanRef.current = sku;
+      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça bipada vai entrar no carrinho automaticamente.');
       setShowVendedora(true);
       return;
     }
@@ -643,6 +650,29 @@ function PdvPageInner() {
       setSale(fresh);
       setShowVendedora(false);
       toast('success', 'Vendedora identificada', data.nome);
+
+      // AUTO-BIPE: se tem um SKU pendente (vendedora bipou antes de escolher
+      // vendedora), faz o POST direto na API (sem passar pelo handleScan que
+      // leria scanInput stale via closure). Vendedora nao precisa voltar pra
+      // apertar a setinha — a peça entra direto no carrinho.
+      const pending = pendingScanRef.current;
+      if (pending) {
+        pendingScanRef.current = null;
+        setScanInput('');
+        try {
+          await api(`/pdv/sales/${sale.id}/items`, {
+            method: 'POST',
+            body: JSON.stringify({ skuOrEan: pending }),
+          });
+          const fresh2 = await api<Sale>(`/pdv/sales/${sale.id}`);
+          setSale(fresh2);
+          toast('success', 'Peça adicionada', `${pending} entrou no carrinho`);
+        } catch (e: any) {
+          const h = humanizeError(e);
+          toast('error', `Falha ao adicionar ${pending}`, h.hint || h.title);
+        }
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
