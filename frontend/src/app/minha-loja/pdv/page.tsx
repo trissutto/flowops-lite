@@ -215,6 +215,10 @@ function PdvPageInner() {
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'pix' | 'cartao' | 'crediario'>('all');
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  // Ref SINCRONO pra guard de double-fire em finalizeSale (setFinalizing é
+  // async — só vira true no proximo render, deixa janela pra 2a chamada
+  // passar). Resetado no finally.
+  const finalizingRef = useRef(false);
 
   // Quando true, o filho (PaymentModal) confirmou PIX automaticamente via webhook/polling.
   // Após finalizeSale, em vez de mostrar a tela "Venda finalizada", o PDV
@@ -719,6 +723,15 @@ function PdvPageInner() {
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
   const finalizeSale = async (paymentMethod: string, paymentDetails?: any) => {
     if (!sale) return;
+    // GUARD SINCRONO contra double-fire: ref muda IMEDIATAMENTE (antes do
+    // setFinalizing(true) que so reflete no proximo render). Cobre o cenario
+    // de auto-finalize via setTimeout(80ms) + click manual no botao Finalizar
+    // disparando quase ao mesmo tempo — segundo disparo é ignorado aqui em
+    // vez de chegar no backend e tomar 400 "Venda ja esta finalized".
+    if (finalizingRef.current) {
+      return;
+    }
+    finalizingRef.current = true;
     // GUARD: bloqueia finalize sem forma de pagamento. Modo SPLIT (paymentMethod
     // vazio) exige sale.payments com itens; modo direto exige paymentMethod.
     //
@@ -742,6 +755,7 @@ function PdvPageInner() {
       if (payments.length === 0) {
         toast('warning', 'Sem forma de pagamento', 'Escolha PIX, cartao, dinheiro, crediario ou vale-troca antes de finalizar.');
         setShowPayment(true);
+        finalizingRef.current = false; // libera pra proximo finalize
         return;
       }
     }
@@ -815,6 +829,7 @@ function PdvPageInner() {
       toast('error', h.title, h.hint);
     } finally {
       setFinalizing(false);
+      finalizingRef.current = false;
     }
   };
 

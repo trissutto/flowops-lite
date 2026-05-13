@@ -1045,6 +1045,17 @@ export class PdvService {
     userStoreCode?: string;
   }) {
     const sale = await this.getSale(input.saleId);
+    // IDEMPOTENTE: se a venda ja esta finalized, retorna OK sem refazer nada.
+    // Cobre race condition de double-click no botao Finalizar + auto-finalize
+    // (setTimeout 80ms dispara depois de adicionarPagamento). Antes lancava
+    // 400 "Venda ja esta finalized" e a vendedora via erro chato na tela
+    // mesmo a venda tendo fechado certo no banco.
+    if (sale.status === 'finalized') {
+      this.logger.warn(
+        `[pdv] finalize chamado em venda ja finalized ${sale.id} — retornando OK (idempotente)`,
+      );
+      return { ok: true, sale, nfcePreview: null };
+    }
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda já está ${sale.status}`);
     if (!sale.items?.length) throw new BadRequestException('Carrinho vazio');
