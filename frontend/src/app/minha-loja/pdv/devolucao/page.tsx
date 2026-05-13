@@ -60,7 +60,9 @@ export default function DevolucaoPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Record<string, number>>({});
-  const [modo, setModo] = useState<'dinheiro' | 'troca' | 'credito'>('dinheiro');
+  // Modo default = TROCA (caso mais comum: cliente leva outra peça no
+  // mesmo dia). Vendedora pode trocar pra Dinheiro/Crédito se precisar.
+  const [modo, setModo] = useState<'dinheiro' | 'troca' | 'credito'>('troca');
   const [motivo, setMotivo] = useState('');
   const [validade, setValidade] = useState(90);
   const [success, setSuccess] = useState<any>(null);

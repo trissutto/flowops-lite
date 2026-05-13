@@ -1603,12 +1603,30 @@ function PdvPageInner() {
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
                   whitespace-nowrap (sem truncate) — valor grande NAO pode cortar.
                   Escala progressiva: vai diminuindo a fonte em telas estreitas
-                  pra caber sempre, mesmo com R$ 9.999,99+ */}
+                  pra caber sempre, mesmo com R$ 9.999,99+
+                  SHOW RESTANTE: desconta pagamentos ja feitos (vale-troca, etc)
+                  pra vendedora ver de cara quanto FALTA cobrar. */}
               <div className="flex-1 px-2 min-w-[140px] text-center overflow-visible">
-                <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">Total a pagar</div>
-                <div className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 whitespace-nowrap">
-                  {brl(sale.total)}
-                </div>
+                {(() => {
+                  const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+                  const restante = Math.max(0, Math.round((sale.total - paid) * 100) / 100);
+                  const temPgtoParcial = paid > 0.01 && paid < sale.total - 0.01;
+                  return (
+                    <>
+                      {temPgtoParcial && (
+                        <div className="text-[10px] text-slate-500 font-bold leading-none mb-0.5">
+                          {brl(sale.total)} · <span className="text-emerald-600">✓ {brl(paid)} pago</span>
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">
+                        {temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
+                      </div>
+                      <div className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 whitespace-nowrap">
+                        {brl(restante)}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
 
               {/* FINALIZAR removido — botões diretos de forma de pagamento (PIX,
