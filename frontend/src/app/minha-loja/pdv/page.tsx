@@ -1915,7 +1915,11 @@ function PdvPageInner() {
             setShowValeTroca(false);
             const totalPago = (fresh.payments || []).reduce((s, p) => s + (p.valor || 0), 0);
             if (Math.abs(totalPago - fresh.total) < 0.01) {
-              autoFlowRef.current = true;
+              // Vale-troca cobriu TUDO — finaliza venda.
+              // NOTA: NAO seta autoFlowRef=true (diferente de PIX) — vendedora
+              // precisa ver a tela "Venda finalizada" pra conferir o vale aplicado,
+              // imprimir recibo, etc. PIX presencial faz auto-flow porque cliente
+              // ja foi embora; vale-troca a cliente esta na frente do balcao.
               finalizeSale('');
             } else {
               toast(

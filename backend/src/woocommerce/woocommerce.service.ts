@@ -344,6 +344,71 @@ export class WooCommerceService {
     return res.data ?? [];
   }
 
+  /**
+   * Cria cupom de desconto no WooCommerce.
+   * Usado quando rola troca/credito de venda do site — o cliente pode usar
+   * o mesmo codigo TROCA-XXXXX no site dentro da validade.
+   *
+   * Caracteristicas do cupom:
+   *  - discount_type fixed_cart (desconto fixo no carrinho)
+   *  - usage_limit 1 (uso unico)
+   *  - individual_use true (nao acumula com outros cupons)
+   *  - exclude_sale_items false (vale em qualquer produto, incluindo promocao)
+   *  - free_shipping false (nao libera frete)
+   *  - date_expires data validade ISO
+   *
+   * Retorna { ok, couponId, code, error }. Erro NAO bloqueia — caller decide.
+   */
+  async createDiscountCoupon(input: {
+    code: string;
+    amount: number;
+    expiresAt: Date;
+    description?: string;
+    customerEmail?: string;
+  }): Promise<{
+    ok: boolean;
+    couponId?: number;
+    code?: string;
+    error?: string;
+  }> {
+    const code = String(input.code || '').trim().toUpperCase();
+    const amount = Number(input.amount) || 0;
+    if (!code || amount <= 0) {
+      return { ok: false, error: `code/amount invalidos (code='${code}' amount=${amount})` };
+    }
+    try {
+      const body: any = {
+        code,
+        discount_type: 'fixed_cart',
+        amount: amount.toFixed(2),
+        usage_limit: 1,
+        individual_use: true,
+        exclude_sale_items: false,
+        free_shipping: false,
+        date_expires: input.expiresAt.toISOString(),
+        description: input.description || `Vale-troca ${code} — gerado automaticamente`,
+      };
+      if (input.customerEmail) {
+        body.email_restrictions = [input.customerEmail];
+      }
+      const res = await firstValueFrom(
+        this.http.post(`${this.baseUrl}/coupons`, body, {
+          auth: this.auth,
+          timeout: 10000,
+        }),
+      );
+      await this.log('out', 'coupon.create', { code, amount, expiresAt: input.expiresAt }, res.status);
+      return { ok: true, couponId: res.data?.id, code: res.data?.code };
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const data = e?.response?.data;
+      const msg = data?.message || e?.message || String(e);
+      await this.log('out', 'coupon.create', { code, amount }, status, msg);
+      this.logger.warn(`[wc.coupon] Falha ao criar cupom ${code}: ${msg}`);
+      return { ok: false, error: msg };
+    }
+  }
+
   private async log(direction: 'in' | 'out', event: string, payload: any, status?: number, error?: string) {
     await this.prisma.integrationLog.create({
       data: {

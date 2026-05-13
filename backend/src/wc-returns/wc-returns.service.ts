@@ -387,6 +387,39 @@ export class WcReturnsService {
         (creditoCode ? `código=${creditoCode}` : ''),
     );
 
+    // CUPOM WC: cria cupom de desconto no WooCommerce com o mesmo codigo
+    // TROCA-XXXX, valido por 30 dias (independente do creditoValidadeDias
+    // local — no site da pra dar mais tempo pra cliente usar). Cliente
+    // aplica esse codigo no checkout do lurds.com.br pra abater o valor.
+    //
+    // Se a criacao falhar (WC fora, key invalida, etc), nao bloqueia a
+    // troca — loga warning e segue. Admin pode criar manualmente depois.
+    if (creditoCode && (modo === 'troca' || modo === 'credito')) {
+      try {
+        const expiresAt = new Date(Date.now() + 30 * 86400_000);
+        const couponResult = await this.wc.createDiscountCoupon({
+          code: creditoCode,
+          amount: valorTotal,
+          expiresAt,
+          description: `Troca/credito pedido WC #${detail.wcOrderNumber || wcOrderId}`,
+          customerEmail: detail.customerEmail || undefined,
+        });
+        if (couponResult.ok) {
+          this.logger.log(
+            `[wc-return] cupom WC criado: ${creditoCode} (id=${couponResult.couponId}) ` +
+            `R$${valorTotal.toFixed(2)} valido ate ${expiresAt.toISOString().slice(0, 10)}`,
+          );
+        } else {
+          this.logger.warn(
+            `[wc-return] FALHA ao criar cupom WC ${creditoCode}: ${couponResult.error}. ` +
+            `Vale-troca local funciona normal, mas cliente nao pode usar no site ate criar manualmente.`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(`[wc-return] Erro inesperado ao criar cupom WC: ${e?.message || e}`);
+      }
+    }
+
     return ret;
   }
 
