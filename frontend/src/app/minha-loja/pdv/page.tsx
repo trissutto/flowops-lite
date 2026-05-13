@@ -30,6 +30,33 @@ import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvTo
 import ValeTrocaModal from './ValeTrocaModal';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 
+/**
+ * Helper pro backdrop dos modais:
+ * Só fecha se o mousedown E o click final foram NO BACKDROP (não no conteúdo).
+ *
+ * Antes: arrastar pra selecionar texto e soltar o mouse fora do modal fechava
+ * a janela e perdia tudo. Agora o backdrop é "smart" — drag de dentro pra fora
+ * não conta como click.
+ *
+ * Uso:
+ *   const close = useSmartBackdropClose(onClose);
+ *   <div onMouseDown={close.onMouseDown} onClick={close.onClick}>...</div>
+ */
+function useSmartBackdropClose(onClose: () => void) {
+  const startedOnBackdropRef = useRef(false);
+  return {
+    onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => {
+      startedOnBackdropRef.current = e.target === e.currentTarget;
+    },
+    onClick: (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === e.currentTarget && startedOnBackdropRef.current) {
+        onClose();
+      }
+      startedOnBackdropRef.current = false;
+    },
+  };
+}
+
 type Sale = {
   id: string;
   storeCode: string;
@@ -2327,12 +2354,14 @@ function CustomerModal({
     });
   }
 
+  const backdropClose = useSmartBackdropClose(onClose);
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4"
-      onClick={onClose}
+      onMouseDown={backdropClose.onMouseDown}
+      onClick={backdropClose.onClick}
     >
-      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-semibold flex items-center gap-2">
             <User className="w-4 h-4" /> Identificar cliente
@@ -2558,6 +2587,19 @@ function PaymentModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
+
+  // DINHEIRO: sincroniza valorParcial = min(recebido, restante) automaticamente.
+  // Vendedora só precisa digitar quanto a cliente entregou — sistema calcula
+  // sozinho quanto vai pagar dessa forma (limitado ao restante) e quanto sobra
+  // de troco. Sem mexer no campo "Valor parcial" manualmente.
+  useEffect(() => {
+    if (selected !== 'dinheiro') return;
+    const recNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.')) || 0;
+    if (recNum <= 0) return;
+    const valorPgto = Math.min(recNum, restante);
+    setValorParcial(valorPgto.toFixed(2).replace('.', ','));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recebido, selected]);
   // PIX state — providers possíveis: pagarme (preferido), pagbank, local
   const [pixCharge, setPixCharge] = useState<{
     txid: string;
@@ -3082,10 +3124,12 @@ function PaymentModal({
     onConfirm(selected, details);
   };
 
+  const backdropClose = useSmartBackdropClose(onClose);
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4"
-      onClick={onClose}
+      onMouseDown={backdropClose.onMouseDown}
+      onClick={backdropClose.onClick}
     >
       {/* Modal: layout flex-col com header/body/footer separados.
          Footer sticky no FUNDO pra botão "Adicionar/Finalizar" SEMPRE aparecer
@@ -3093,6 +3137,7 @@ function PaymentModal({
       <div
         className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-lg flex flex-col max-h-[95vh] sm:max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         {/* HEADER fixo */}
         <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b border-slate-100 shrink-0">
@@ -3105,27 +3150,48 @@ function PaymentModal({
         {/* BODY scrollável */}
         <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2 min-h-0">
 
-        {/* Cabeçalho COMPACTO: total + restante numa linha (1 ou 2 linhas se já pago) */}
-        <div className="bg-emerald-50 rounded px-3 py-1.5 flex items-center justify-between gap-3">
-          <div className="flex items-baseline gap-2 text-xs text-slate-600">
-            <span>Total</span>
-            <span className="tabular-nums font-semibold text-slate-800">{brl(total)}</span>
-            {payments.length > 0 && (
-              <span className="text-emerald-700 tabular-nums">−{brl(jaPago)} pago</span>
-            )}
-          </div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-[10px] uppercase font-bold text-slate-500">
-              {pago100 ? 'Pago' : 'Restante'}
+        {/* Cabeçalho VISUAL: barra de progresso colorida por forma + valores grandes.
+            Mostra de uma vez: quanto foi pago, quanto falta, e o split visual em
+            fatias coloridas (cada forma de pagamento tem cor). Quando completa 100%,
+            barra fica toda verde com check. */}
+        <div className={`rounded-xl px-3 py-2 transition-colors ${pago100 ? 'bg-emerald-50 border border-emerald-300' : payments.length > 0 ? 'bg-amber-50 border border-amber-300' : 'bg-slate-50 border border-slate-200'}`}>
+          <div className="flex items-baseline justify-between gap-2 mb-1.5">
+            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">
+              {pago100 ? '✓ Pago' : payments.length > 0 ? 'Falta pagar' : 'Total a pagar'}
             </span>
-            <span
-              className={`text-xl font-black tabular-nums ${
-                pago100 ? 'text-emerald-600' : 'text-rose-700'
-              }`}
-            >
-              {pago100 ? '✓' : brl(restante)}
+            <span className={`text-2xl font-black tabular-nums leading-none ${pago100 ? 'text-emerald-600' : payments.length > 0 ? 'text-rose-700' : 'text-slate-800'}`}>
+              {pago100 ? brl(total) : brl(restante)}
             </span>
           </div>
+          {/* Barra de progresso — fatias coloridas por forma de pagamento */}
+          <div className="h-2.5 bg-slate-200 rounded-full overflow-hidden flex">
+            {payments.map((p, i) => {
+              const pct = (p.valor / total) * 100;
+              const colorMap: Record<string, string> = {
+                dinheiro: 'bg-emerald-500',
+                pix: 'bg-cyan-500',
+                credito: 'bg-violet-500',
+                debito: 'bg-blue-500',
+                crediario: 'bg-rose-500',
+                vale_troca: 'bg-teal-500',
+              };
+              const cor = colorMap[p.method?.toLowerCase()] || 'bg-slate-500';
+              return (
+                <div
+                  key={p.id || i}
+                  className={`${cor} h-full transition-all`}
+                  style={{ width: `${pct}%` }}
+                  title={`${p.method} · ${brl(p.valor)}`}
+                />
+              );
+            })}
+          </div>
+          {payments.length > 0 && !pago100 && (
+            <div className="flex items-baseline justify-between mt-1.5 text-[11px]">
+              <span className="text-slate-500">Total {brl(total)}</span>
+              <span className="text-emerald-700 font-bold tabular-nums">{brl(jaPago)} já pago</span>
+            </div>
+          )}
         </div>
 
         {/* Botão MARCAR — sistema de "leva pra provar em casa".
@@ -3143,45 +3209,67 @@ function PaymentModal({
           />
         )}
 
-        {/* Lista de pagamentos parciais já adicionados */}
+        {/* Lista de pagamentos parciais — cada um com bolinha colorida igual barra */}
         {payments.length > 0 && (
           <div className="space-y-1">
             <div className="text-[10px] uppercase font-semibold text-slate-500">
-              Pagamentos ({payments.length})
+              Formas adicionadas ({payments.length})
             </div>
             {payments.map((p) => {
               const det = p.details ? JSON.parse(p.details) : {};
+              const colorMap: Record<string, string> = {
+                dinheiro: 'bg-emerald-500',
+                pix: 'bg-cyan-500',
+                credito: 'bg-violet-500',
+                debito: 'bg-blue-500',
+                crediario: 'bg-rose-500',
+                vale_troca: 'bg-teal-500',
+              };
+              const cor = colorMap[p.method?.toLowerCase()] || 'bg-slate-500';
+              const label = p.method === 'MULTIPLO' ? 'Múltiplo' : (p.method || '').toUpperCase();
               return (
                 <div
                   key={p.id}
-                  className="flex items-center gap-2 bg-slate-50 border rounded px-2 py-1.5"
+                  className="flex items-center gap-2 bg-white border-2 border-slate-200 rounded-lg px-2.5 py-2"
                 >
-                  <span className="text-xs font-bold uppercase text-slate-700">
-                    {p.method === 'MULTIPLO' ? 'Múltiplo' : p.method}
-                  </span>
-                  {det.bandeira && (
-                    <span className="text-[10px] text-slate-500">
-                      {det.bandeira}
-                    </span>
-                  )}
-                  {det.parcelas > 1 && (
-                    <span className="text-[10px] text-slate-500">
-                      {det.parcelas}×
-                    </span>
-                  )}
-                  <span className="ml-auto font-bold text-emerald-700 tabular-nums">
+                  <span className={`w-3 h-3 rounded-full shrink-0 ${cor}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-sm font-bold text-slate-800">{label}</span>
+                      {det.bandeira && (
+                        <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                          {det.bandeira}
+                        </span>
+                      )}
+                      {det.parcelas > 1 && (
+                        <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                          {det.parcelas}× {brl(p.valor / det.parcelas)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="font-black text-emerald-700 tabular-nums text-base">
                     {brl(p.valor)}
                   </span>
                   <button
                     onClick={() => removerPagamento(p.id)}
-                    className="text-rose-500 hover:bg-rose-50 p-1 rounded"
+                    className="text-rose-500 hover:bg-rose-50 p-1 rounded shrink-0"
                     title="Remover"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
                 </div>
               );
             })}
+            {/* CTA grande: vai escolher próxima forma */}
+            {!pago100 && (
+              <div className="bg-violet-50 border-2 border-violet-300 rounded-lg px-3 py-2 flex items-center gap-2 mt-2">
+                <span className="text-violet-700 font-black text-sm">↓</span>
+                <span className="text-xs font-bold text-violet-900">
+                  Escolha como pagar os {brl(restante)} restantes
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -3195,7 +3283,7 @@ function PaymentModal({
                 {effectiveFilter === 'pix' && 'Pagar com PIX'}
                 {effectiveFilter === 'cartao' && 'Pagar com cartão'}
                 {effectiveFilter === 'crediario' && 'Vender no crediário'}
-                {effectiveFilter === 'all' && (payments.length > 0 ? 'Completar com outra forma' : 'Adicionar forma de pagamento')}
+                {effectiveFilter === 'all' && (payments.length > 0 ? `2ª forma — pagar os ${brl(restante)} que faltam` : 'Escolha a forma de pagamento')}
               </span>
               {/* Toggle: se filtrou por algo específico, permite expandir pra todas */}
               {effectiveFilter !== 'all' && (
@@ -3292,45 +3380,51 @@ function PaymentModal({
           </div>
         )}
 
-        {/* Detalhes dinheiro — painel destaque estilo Wincred */}
+        {/* Detalhes dinheiro — simplificado.
+            Antes: 2 inputs (Valor a receber + Valor recebido) que confundia.
+            Agora: 1 input só ("Quanto a cliente entregou") + cálculo automático.
+            O `valorParcial` (forma de pagamento) é sincronizado automaticamente
+            via useEffect — se cliente entrega > restante: paga o restante e
+            mostra troco. Se entrega < restante: paga o que entregou e o resto
+            vai pra próxima forma. */}
         {selected === 'dinheiro' && (() => {
-          // Calcula com base no valorParcial (não o total) — caso seja split,
-          // o troco deve refletir o valor da forma, não da venda inteira.
-          const valorFormaNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
           const recebidoLocal = Number((recebido || '0').replace(/\./g, '').replace(',', '.')) || 0;
-          const trocoLocal = recebidoLocal > valorFormaNum ? Math.round((recebidoLocal - valorFormaNum) * 100) / 100 : 0;
-          const insuficiente = recebidoLocal > 0 && recebidoLocal < valorFormaNum;
+          const troco = recebidoLocal > restante
+            ? Math.round((recebidoLocal - restante) * 100) / 100
+            : 0;
+          const faltam = recebidoLocal > 0 && recebidoLocal < restante
+            ? Math.round((restante - recebidoLocal) * 100) / 100
+            : 0;
           return (
             <div className="pt-2 border-t">
-              <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-bold text-amber-900 tracking-wide">Valor a receber</span>
-                  <span className="text-xl font-black text-amber-900 tabular-nums">{brl(valorFormaNum)}</span>
-                </div>
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-3 space-y-3">
                 <div>
-                  <label className="text-xs uppercase font-bold text-amber-900 mb-1 block">
-                    Valor recebido (opcional — pra calcular troco)
+                  <label className="text-xs uppercase font-bold text-amber-900 mb-1.5 block">
+                    Quanto a cliente entregou?
                   </label>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={recebido}
                     onChange={(e) => setRecebido(e.target.value)}
-                    placeholder={valorFormaNum.toFixed(2).replace('.', ',')}
-                    className="w-full px-3 py-3 text-2xl font-bold text-emerald-700 tabular-nums bg-white border-2 border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500"
+                    placeholder={restante.toFixed(2).replace('.', ',')}
+                    className="w-full px-3 py-3 text-3xl font-black text-emerald-700 tabular-nums bg-white border-2 border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-500"
                     autoFocus
                   />
+                  <div className="text-[10px] text-amber-700 mt-1 text-right">
+                    Total a pagar: <b className="tabular-nums">{brl(restante)}</b>
+                  </div>
                 </div>
-                {/* Troco — destaque MASSIVO em verde quando há troco */}
-                {trocoLocal > 0 && (
+                {troco > 0 && (
                   <div className="bg-emerald-600 text-white rounded-lg p-3 flex items-center justify-between shadow-md">
-                    <span className="text-sm font-bold uppercase tracking-wide">Troco</span>
-                    <span className="text-3xl font-black tabular-nums">{brl(trocoLocal)}</span>
+                    <span className="text-sm font-bold uppercase tracking-wide">💰 Troco</span>
+                    <span className="text-3xl font-black tabular-nums">{brl(troco)}</span>
                   </div>
                 )}
-                {insuficiente && (
-                  <div className="bg-rose-100 border border-rose-300 text-rose-800 rounded-lg p-2 text-xs font-bold flex items-center gap-2">
-                    Faltam {brl(valorFormaNum - recebidoLocal)}
+                {faltam > 0 && (
+                  <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 rounded-lg p-2.5 flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase">Faltam (pra próxima forma)</span>
+                    <span className="text-xl font-black tabular-nums">{brl(faltam)}</span>
                   </div>
                 )}
               </div>
@@ -3711,11 +3805,12 @@ function PaymentModal({
           {selected && !pago100 && (() => {
             const valorAtualNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
             const vaiFinalizar = valorAtualNum > 0 && Math.abs(valorAtualNum - restante) < 0.01;
-            const labelMain = selected === 'pix' && !vaiFinalizar
-              ? 'Recebi o PIX — adicionar parcial'
-              : vaiFinalizar
-                ? `FINALIZAR · ${brl(valorAtualNum)}`
-                : `Adicionar parcial · ${brl(valorAtualNum)}`;
+            const sobra = restante - valorAtualNum;
+            const labelMain = vaiFinalizar
+              ? `✓ FINALIZAR · ${brl(valorAtualNum)}`
+              : selected === 'pix'
+                ? `Recebi o PIX · ${brl(valorAtualNum)} → faltam ${brl(sobra)}`
+                : `+ Adicionar ${brl(valorAtualNum)} · faltam ${brl(sobra)}`;
             return (
               <button
                 onClick={adicionarPagamento}
@@ -3725,17 +3820,17 @@ function PaymentModal({
                   (needsBandeira && !bandeira) ||
                   (selected === 'crediario' && !customerCpf)
                 }
-                className={`w-full px-3 py-3 font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-colors ${
+                className={`w-full px-3 py-4 font-black rounded-xl text-base disabled:opacity-40 flex items-center justify-center gap-2 transition-all shadow-md ${
                   vaiFinalizar
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md ring-2 ring-emerald-300/60'
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-4 ring-emerald-300/60 text-lg'
                     : 'bg-amber-500 hover:bg-amber-600 text-white'
                 }`}
               >
                 {addingPayment ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Check className="w-5 h-5" />
-                )}
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : vaiFinalizar ? (
+                  <Check className="w-6 h-6" />
+                ) : null}
                 {labelMain}
               </button>
             );
@@ -4626,13 +4721,16 @@ function OpenSalesModal({
     }
   };
 
+  const backdropClose = useSmartBackdropClose(onClose);
   return (
     <div
       className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto"
-      onClick={onClose}
+      onMouseDown={backdropClose.onMouseDown}
+      onClick={backdropClose.onClick}
     >
       <div
         className="bg-white rounded-lg w-full max-w-md my-8 overflow-hidden"
+        onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-4 py-3 bg-amber-50 border-b flex items-center justify-between">
@@ -4970,9 +5068,10 @@ function PixAvulsoModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qr, paid, saleId]);
 
+  const backdropClose = useSmartBackdropClose(onClose);
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onMouseDown={backdropClose.onMouseDown} onClick={backdropClose.onClick}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-emerald-700 flex items-center gap-2">
             <DollarSign className="w-5 h-5" /> PIX Rápido
