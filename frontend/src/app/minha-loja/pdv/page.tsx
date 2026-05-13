@@ -578,8 +578,9 @@ function PdvPageInner() {
     if (!storeCode) return;
     try {
       const list = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
-      // Não conta a venda ATUAL (que também é open)
-      const others = list.filter((s) => s.id !== sale?.id);
+      // Não conta a venda ATUAL (que também é open) nem vendas FANTASMAS
+      // (carrinho vazio — vendedora abriu o PDV e nao bipou nada, acumula).
+      const others = list.filter((s) => s.id !== sale?.id && (s.items?.length || 0) > 0);
       setOpenCount(others.length);
     } catch {
       setOpenCount(0);
@@ -4504,7 +4505,9 @@ function OpenSalesModal({
     setLoading(true);
     try {
       const arr = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
-      setList(arr.filter((s) => s.id !== currentSaleId));
+      // Filtra: nao mostra a venda atual nem fantasmas vazias
+      // (vendedora abriu PDV mas nao bipou nada — acumula sem necessidade)
+      setList(arr.filter((s) => s.id !== currentSaleId && (s.items?.length || 0) > 0));
     } catch {
       setList([]);
     } finally {

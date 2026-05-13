@@ -1396,6 +1396,76 @@ export class PdvService {
   // Idempotente via flag stockDecreasedAt: vendas ja processadas sao puladas.
   // Pode rodar em modo dryRun=true (preview, sem mudar nada) ou execute.
   // ═════════════════════════════════════════════════════════════════════════
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // CLEANUP de VENDAS FANTASMA — open + items vazios + criadas ha > X min.
+  // Sao vendas criadas quando vendedora abre o PDV mas nao bipa nada e sai.
+  // Acumulam ao longo do dia e poluem o "Pausadas". Esse metodo cancela elas
+  // em lote (status='cancelled' com reason='auto-cleanup-fantasma').
+  // ═════════════════════════════════════════════════════════════════════════
+  async cleanupGhostSales(input: {
+    olderThanMinutes?: number;
+    storeCode?: string;
+    dryRun?: boolean;
+  }): Promise<{
+    mode: 'dry-run' | 'executed';
+    cutoff: string;
+    storeCode: string | null;
+    encontradas: number;
+    canceladas: number;
+    ids: string[];
+  }> {
+    const olderThanMinutes = Math.max(1, input.olderThanMinutes || 30);
+    const cutoff = new Date(Date.now() - olderThanMinutes * 60 * 1000);
+    const dryRun = !!input.dryRun;
+    const storeCode = input.storeCode?.trim() || null;
+
+    const where: any = {
+      status: 'open',
+      createdAt: { lt: cutoff },
+      items: { none: {} },
+    };
+    if (storeCode) where.storeCode = storeCode;
+
+    const fantasmas = await (this.prisma as any).pdvSale.findMany({
+      where,
+      select: { id: true },
+      take: 500,
+    });
+    const ids = (fantasmas as any[]).map((s) => s.id);
+
+    if (dryRun || ids.length === 0) {
+      return {
+        mode: dryRun ? 'dry-run' : 'executed',
+        cutoff: cutoff.toISOString(),
+        storeCode,
+        encontradas: ids.length,
+        canceladas: 0,
+        ids,
+      };
+    }
+
+    const r = await (this.prisma as any).pdvSale.updateMany({
+      where: { id: { in: ids } },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: 'auto-cleanup-fantasma',
+      },
+    });
+
+    this.logger.log(`[pdv/cleanup] ${r.count} venda(s) fantasma canceladas (criadas antes de ${cutoff.toISOString()})`);
+
+    return {
+      mode: 'executed',
+      cutoff: cutoff.toISOString(),
+      storeCode,
+      encontradas: ids.length,
+      canceladas: r.count,
+      ids,
+    };
+  }
+
   async reconcileStockBacklog(input: {
     sinceIso?: string;
     untilIso?: string;

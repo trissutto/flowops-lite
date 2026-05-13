@@ -1108,6 +1108,46 @@ export class PdvController {
     });
   }
 
+  /**
+   * GET /pdv/admin/cleanup-ghost-sales/preview?olderThanMinutes=30&storeCode=01
+   * Lista vendas fantasma (open + sem items + criadas ha > N min). Dry-run.
+   */
+  @Get('admin/cleanup-ghost-sales/preview')
+  async previewCleanupGhost(
+    @Req() req: any,
+    @Query('olderThanMinutes') olderThanMinutes?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.svc.cleanupGhostSales({
+      olderThanMinutes: olderThanMinutes ? Number(olderThanMinutes) : 30,
+      storeCode,
+      dryRun: true,
+    });
+  }
+
+  /**
+   * POST /pdv/admin/cleanup-ghost-sales/execute
+   * Body: { olderThanMinutes?, storeCode? }
+   * Cancela todas vendas fantasma (status=cancelled, reason=auto-cleanup-fantasma).
+   */
+  @Post('admin/cleanup-ghost-sales/execute')
+  async executeCleanupGhost(
+    @Req() req: any,
+    @Body() body: { olderThanMinutes?: number; storeCode?: string },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.svc.cleanupGhostSales({
+      olderThanMinutes: body?.olderThanMinutes || 30,
+      storeCode: body?.storeCode,
+      dryRun: false,
+    });
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // ADMIN — Diagnostico + criacao de indices no Wincred
   // ═══════════════════════════════════════════════════════════════════════
