@@ -78,6 +78,7 @@ export class ReturnsController {
       creditoValidadeDias?: number;
       storeCode?: string;
       storeName?: string;
+      attachToSaleId?: string | null;
     },
   ) {
     this.requireRole(req);
@@ -90,6 +91,7 @@ export class ReturnsController {
       items: body.items,
       motivo: body.motivo,
       creditoValidadeDias: body.creditoValidadeDias,
+      attachToSaleId: body.attachToSaleId ?? null,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
     });

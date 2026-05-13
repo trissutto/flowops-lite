@@ -204,6 +204,13 @@ export default function DevolucaoPage() {
     }
     setBusy(true);
     try {
+      // Se veio do PDV com uma venda em andamento (F4 / botão Trocar), anexa
+      // o vale_troca naquela venda em vez de criar uma nova. Backend só usa
+      // attachToSaleId quando modo === 'troca'.
+      let attachToSaleId: string | null = null;
+      try {
+        attachToSaleId = localStorage.getItem('lurds_pdv_attach_to_sale_id');
+      } catch {}
       const r = await api<any>('/pdv/devolucao', {
         method: 'POST',
         body: JSON.stringify({
@@ -212,8 +219,11 @@ export default function DevolucaoPage() {
           items,
           motivo: motivo || undefined,
           creditoValidadeDias: modo === 'credito' ? validade : undefined,
+          attachToSaleId: modo === 'troca' ? attachToSaleId : null,
         }),
       });
+      // Consome o attach (uso único)
+      try { localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {}
       setSuccess(r);
 
       // AUTO-IMPRIME o vale assim que a devolução em modo crédito/troca
@@ -589,7 +599,27 @@ export default function DevolucaoPage() {
                     Sem codigo, sem impresso. Backend ja criou nova PdvSale com
                     o vale_troca aplicado direto — vendedora vai pro PDV bipar
                     as peças novas e finalizar. */}
-                {success.modo === 'troca' && success.directSaleId ? (
+                {success.modo === 'troca' && success.attachedToExistingSale ? (
+                  /* Vale_troca foi ANEXADO na venda em andamento no PDV.
+                     Não reinicia nada — só volta pra venda que estava aberta. */
+                  <div className="bg-teal-50 border-2 border-teal-400 rounded-2xl p-5 mb-4">
+                    <div className="text-xs uppercase tracking-widest text-teal-700 font-bold">
+                      ✓ Crédito anexado à venda em andamento
+                    </div>
+                    <div className="text-2xl font-black text-teal-900 mt-2">
+                      R$ {fmt(success.valorTotal)} abatido na venda atual
+                    </div>
+                    <div className="text-sm text-slate-700 mt-1">
+                      Os itens já no carrinho continuam intactos. O crédito da troca foi aplicado como forma de pagamento.
+                    </div>
+                    <button
+                      onClick={() => { window.location.href = '/minha-loja/pdv'; }}
+                      className="mt-4 w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-black text-lg flex items-center justify-center gap-2"
+                    >
+                      → VOLTAR PRO PDV
+                    </button>
+                  </div>
+                ) : success.modo === 'troca' && success.directSaleId ? (
                   <div className="bg-teal-50 border-2 border-teal-400 rounded-2xl p-5 mb-4">
                     <div className="text-xs uppercase tracking-widest text-teal-700 font-bold">
                       ✓ Crédito aplicado direto

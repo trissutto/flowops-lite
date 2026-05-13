@@ -385,6 +385,12 @@ function PdvPageInner() {
       // F4 → tela de TROCA / Devolução (atalho rápido pro fluxo de troca)
       if (e.key === 'F4') {
         e.preventDefault();
+        // Salva a venda em andamento pra que a troca seja ANEXADA nela (não cria
+        // nova venda). Ler em /pdv/devolucao via localStorage.getItem.
+        try {
+          if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', sale.id);
+          else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
+        } catch {}
         window.location.href = '/minha-loja/pdv/devolucao';
         return;
       }
@@ -1377,6 +1383,12 @@ function PdvPageInner() {
             </Link>
             <Link
               href="/minha-loja/pdv/devolucao"
+              onClick={() => {
+                try {
+                  if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', sale.id);
+                  else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
+                } catch {}
+              }}
               className="bg-white hover:bg-slate-50 rounded-lg py-2 px-1.5 flex flex-col items-center gap-1 transition border border-slate-200 relative"
               title="Devolução / Troca (atalho F4)"
             >
@@ -1481,7 +1493,7 @@ function PdvPageInner() {
           <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
           <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
           <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
-          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao"    icon={ArrowRightLeft} label="Trocar" />
+          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao" onClick={() => { try { if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', sale.id); else localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {} }} icon={ArrowRightLeft} label="Trocar" />
           <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
           <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
         </div>
@@ -5257,7 +5269,7 @@ function PdvMobilePill({
     </>
   );
   if (href) {
-    return <Link href={href} className={cls} style={style}>{inner}</Link>;
+    return <Link href={href} onClick={onClick} className={cls} style={style}>{inner}</Link>;
   }
   return <button type="button" onClick={onClick} disabled={disabled} className={cls} style={style}>{inner}</button>;
 }

@@ -288,10 +288,12 @@ export class ReturnsService {
     items: Array<{ originalItemId: string; qty: number }>;
     motivo?: string;
     creditoValidadeDias?: number;
+    attachToSaleId?: string | null;
     userId?: string;
     userName?: string;
   }) {
     const { originalSaleId, storeCode, storeName, modo, items, motivo, userId, userName } = input;
+    const attachToSaleId = input.attachToSaleId || null;
 
     if (!['dinheiro', 'troca', 'credito'].includes(modo)) {
       throw new BadRequestException(`Modo inválido: ${modo}`);
@@ -453,76 +455,141 @@ export class ReturnsService {
         (creditoCode ? `código=${creditoCode}` : ''),
     );
 
-    // FLUXO MESMO-DIA (modo='troca'): cria PdvSale nova aberta com customer
-    // pre-preenchido + aplica o vale_troca como payment automaticamente.
-    // Vendedora vai pro PDV ja com o credito aplicado, so bipa as peças novas
-    // e finaliza. Cliente NAO precisa receber codigo nem cupom impresso.
+    // FLUXO MESMO-DIA (modo='troca'): dois caminhos:
+    //
+    //  A) attachToSaleId presente: vendedora veio do PDV com uma venda em
+    //     andamento (ex.: cliente trazendo peça pra trocar no meio de uma
+    //     compra). ANEXA o vale_troca naquela venda existente — sem reiniciar
+    //     o carrinho. Itens já bipados permanecem intactos.
+    //
+    //  B) attachToSaleId ausente: vendedora começou direto pela tela de
+    //     devolução (não tinha venda aberta). CRIA uma nova PdvSale com
+    //     customer pré-preenchido e o vale_troca aplicado, e oferece o botão
+    //     "CONTINUAR NO PDV" pra retomá-la.
+    //
+    // Cliente NUNCA precisa receber código nem cupom impresso pro modo troca.
+    const itemsDevolvidosPayload = itemsToCreate.map((it) => ({
+      sku: it.sku,
+      ref: it.ref,
+      cor: it.cor,
+      tamanho: it.tamanho,
+      descricao: it.descricao,
+      qty: it.qty,
+      valor: it.total,
+    }));
+
     let directSaleId: string | null = null;
+    let attachedToExistingSale = false;
+
     if (modo === 'troca' && creditoCode) {
-      try {
-        const store = await this.prisma.store.findUnique({
-          where: { code: storeCode },
-          select: { code: true, name: true },
-        });
-        if (store) {
-          let cashSessionId: string | null = null;
-          try {
-            const s = await (this.prisma as any).pdvCashSession.findFirst({
-              where: { storeCode: store.code, status: 'open' },
-              select: { id: true },
+      // Caminho A: anexa numa venda existente
+      if (attachToSaleId) {
+        try {
+          const target = await (this.prisma as any).pdvSale.findUnique({
+            where: { id: attachToSaleId },
+            select: { id: true, storeCode: true, status: true },
+          });
+          if (!target) {
+            this.logger.warn(
+              `[devolução/troca-anexa] sale ${attachToSaleId} não encontrada — caindo pro fluxo nova-venda`,
+            );
+          } else if (target.status !== 'open') {
+            this.logger.warn(
+              `[devolução/troca-anexa] sale ${attachToSaleId.slice(0, 8)} está ${target.status} (não open) — ` +
+              `caindo pro fluxo nova-venda`,
+            );
+          } else if (target.storeCode !== storeCode) {
+            this.logger.warn(
+              `[devolução/troca-anexa] sale ${attachToSaleId.slice(0, 8)} é da loja ${target.storeCode} ` +
+              `mas devolução é em ${storeCode} — caindo pro fluxo nova-venda`,
+            );
+          } else {
+            await (this.prisma as any).pdvSalePayment.create({
+              data: {
+                saleId: target.id,
+                method: 'vale_troca',
+                valor: valorTotal,
+                details: JSON.stringify({
+                  creditoCode,
+                  fromReturnId: ret.id,
+                  modo: 'troca-anexada',
+                  itemsDevolvidos: itemsDevolvidosPayload,
+                }),
+              },
             });
-            cashSessionId = s?.id || null;
-          } catch { /* segue sem caixa */ }
-
-          const newSale = await (this.prisma as any).pdvSale.create({
-            data: {
-              storeCode: store.code,
-              storeName: store.name,
-              cashSessionId,
-              vendedorUserId: userId || null,
-              vendedorName: userName || null,
-              customerCpf: sale.customerCpf || null,
-              customerName: sale.customerName || null,
-              status: 'open',
-            },
-          });
-
-          await (this.prisma as any).pdvSalePayment.create({
-            data: {
-              saleId: newSale.id,
-              method: 'vale_troca',
-              valor: valorTotal,
-              details: JSON.stringify({
-                creditoCode,
-                fromReturnId: ret.id,
-                modo: 'troca-mesmo-dia',
-                itemsDevolvidos: itemsToCreate.map((it) => ({
-                  sku: it.sku,
-                  ref: it.ref,
-                  cor: it.cor,
-                  tamanho: it.tamanho,
-                  descricao: it.descricao,
-                  qty: it.qty,
-                  valor: it.total,
-                })),
-              }),
-            },
-          });
-
-          directSaleId = newSale.id;
-          this.logger.log(
-            `[devolução/troca-direta] Nova venda ${newSale.id.slice(0, 8)} criada com vale ${creditoCode} R$${valorTotal.toFixed(2)} aplicado`,
+            attachedToExistingSale = true;
+            this.logger.log(
+              `[devolução/troca-anexa] Vale ${creditoCode} R$${valorTotal.toFixed(2)} ` +
+              `anexado à venda ${target.id.slice(0, 8)} em andamento`,
+            );
+          }
+        } catch (e: any) {
+          this.logger.warn(
+            `[devolução/troca-anexa] Falha ao anexar na venda ${attachToSaleId}: ${e?.message || e}. ` +
+            `Caindo pro fluxo nova-venda.`,
           );
         }
-      } catch (e: any) {
-        this.logger.warn(
-          `[devolução/troca-direta] Falha ao criar venda direta: ${e?.message || e}. ` +
-          `Vale-troca ${creditoCode} foi gerado normal — vendedora pode aplicar manual no PDV.`,
-        );
+      }
+
+      // Caminho B: cria nova venda (só se não conseguiu anexar)
+      if (!attachedToExistingSale) {
+        try {
+          const store = await this.prisma.store.findUnique({
+            where: { code: storeCode },
+            select: { code: true, name: true },
+          });
+          if (store) {
+            let cashSessionId: string | null = null;
+            try {
+              const s = await (this.prisma as any).pdvCashSession.findFirst({
+                where: { storeCode: store.code, status: 'open' },
+                select: { id: true },
+              });
+              cashSessionId = s?.id || null;
+            } catch { /* segue sem caixa */ }
+
+            const newSale = await (this.prisma as any).pdvSale.create({
+              data: {
+                storeCode: store.code,
+                storeName: store.name,
+                cashSessionId,
+                vendedorUserId: userId || null,
+                vendedorName: userName || null,
+                customerCpf: sale.customerCpf || null,
+                customerName: sale.customerName || null,
+                status: 'open',
+              },
+            });
+
+            await (this.prisma as any).pdvSalePayment.create({
+              data: {
+                saleId: newSale.id,
+                method: 'vale_troca',
+                valor: valorTotal,
+                details: JSON.stringify({
+                  creditoCode,
+                  fromReturnId: ret.id,
+                  modo: 'troca-mesmo-dia',
+                  itemsDevolvidos: itemsDevolvidosPayload,
+                }),
+              },
+            });
+
+            directSaleId = newSale.id;
+            this.logger.log(
+              `[devolução/troca-direta] Nova venda ${newSale.id.slice(0, 8)} criada com vale ${creditoCode} R$${valorTotal.toFixed(2)} aplicado`,
+            );
+          }
+        } catch (e: any) {
+          this.logger.warn(
+            `[devolução/troca-direta] Falha ao criar venda direta: ${e?.message || e}. ` +
+            `Vale-troca ${creditoCode} foi gerado normal — vendedora pode aplicar manual no PDV.`,
+          );
+        }
       }
     }
 
-    return { ...ret, directSaleId };
+    return { ...ret, directSaleId, attachedToExistingSale };
   }
 
   // ── Listagem ────────────────────────────────────────────────────────
