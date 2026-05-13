@@ -483,56 +483,55 @@ export class ReturnsService {
 
     if (modo === 'troca' && creditoCode) {
       // Caminho A: anexa numa venda existente
+      //
+      // REGRA: se o frontend mandou attachToSaleId, é porque tem venda em
+      // andamento no PDV. NUNCA criar venda nova nesse caso — se anexar
+      // falhar, retorna erro claro. Senão sumiriam os itens do carrinho.
       if (attachToSaleId) {
-        try {
-          const target = await (this.prisma as any).pdvSale.findUnique({
-            where: { id: attachToSaleId },
-            select: { id: true, storeCode: true, status: true },
-          });
-          if (!target) {
-            this.logger.warn(
-              `[devolução/troca-anexa] sale ${attachToSaleId} não encontrada — caindo pro fluxo nova-venda`,
-            );
-          } else if (target.status !== 'open') {
-            this.logger.warn(
-              `[devolução/troca-anexa] sale ${attachToSaleId.slice(0, 8)} está ${target.status} (não open) — ` +
-              `caindo pro fluxo nova-venda`,
-            );
-          } else if (target.storeCode !== storeCode) {
-            this.logger.warn(
-              `[devolução/troca-anexa] sale ${attachToSaleId.slice(0, 8)} é da loja ${target.storeCode} ` +
-              `mas devolução é em ${storeCode} — caindo pro fluxo nova-venda`,
-            );
-          } else {
-            await (this.prisma as any).pdvSalePayment.create({
-              data: {
-                saleId: target.id,
-                method: 'vale_troca',
-                valor: valorTotal,
-                details: JSON.stringify({
-                  creditoCode,
-                  fromReturnId: ret.id,
-                  modo: 'troca-anexada',
-                  itemsDevolvidos: itemsDevolvidosPayload,
-                }),
-              },
-            });
-            attachedToExistingSale = true;
-            this.logger.log(
-              `[devolução/troca-anexa] Vale ${creditoCode} R$${valorTotal.toFixed(2)} ` +
-              `anexado à venda ${target.id.slice(0, 8)} em andamento`,
-            );
-          }
-        } catch (e: any) {
-          this.logger.warn(
-            `[devolução/troca-anexa] Falha ao anexar na venda ${attachToSaleId}: ${e?.message || e}. ` +
-            `Caindo pro fluxo nova-venda.`,
+        const target = await (this.prisma as any).pdvSale.findUnique({
+          where: { id: attachToSaleId },
+          select: { id: true, storeCode: true, status: true },
+        });
+        if (!target) {
+          throw new BadRequestException(
+            `Venda em andamento (${attachToSaleId.slice(0, 8)}) não foi encontrada. ` +
+            `Atualize a página do PDV e tente novamente.`,
           );
         }
+        if (target.status !== 'open') {
+          throw new BadRequestException(
+            `A venda em andamento está ${target.status}, não dá mais pra anexar troca. ` +
+            `Comece uma nova venda no PDV.`,
+          );
+        }
+        if (target.storeCode !== storeCode) {
+          throw new BadRequestException(
+            `A venda em andamento é da loja ${target.storeCode} mas a devolução é em ${storeCode}.`,
+          );
+        }
+        await (this.prisma as any).pdvSalePayment.create({
+          data: {
+            saleId: target.id,
+            method: 'vale_troca',
+            valor: valorTotal,
+            details: JSON.stringify({
+              creditoCode,
+              fromReturnId: ret.id,
+              modo: 'troca-anexada',
+              itemsDevolvidos: itemsDevolvidosPayload,
+            }),
+          },
+        });
+        attachedToExistingSale = true;
+        this.logger.log(
+          `[devolução/troca-anexa] Vale ${creditoCode} R$${valorTotal.toFixed(2)} ` +
+          `anexado à venda ${target.id.slice(0, 8)} em andamento`,
+        );
       }
 
-      // Caminho B: cria nova venda (só se não conseguiu anexar)
-      if (!attachedToExistingSale) {
+      // Caminho B: cria nova venda (só se NÃO veio attachToSaleId — vendedora
+      // começou direto pela tela de devolução, sem venda aberta no PDV)
+      if (!attachToSaleId && !attachedToExistingSale) {
         try {
           const store = await this.prisma.store.findUnique({
             where: { code: storeCode },

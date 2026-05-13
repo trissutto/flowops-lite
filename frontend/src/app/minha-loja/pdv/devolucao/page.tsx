@@ -66,11 +66,26 @@ export default function DevolucaoPage() {
   const [motivo, setMotivo] = useState('');
   const [validade, setValidade] = useState(90);
   const [success, setSuccess] = useState<any>(null);
+  // Indica que a vendedora veio do PDV com uma venda em andamento (F4 ou
+  // botão Trocar). O crédito da troca será ANEXADO nessa venda, sem
+  // reiniciar o carrinho. Mostra banner pra confirmar visualmente.
+  const [attachInfo, setAttachInfo] = useState<{ id: string; items: number } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
+    // Lê info do attach (venda em andamento) só pra display.
+    try {
+      const raw = localStorage.getItem('lurds_pdv_attach_to_sale_id');
+      if (raw && raw.startsWith('{')) {
+        const p = JSON.parse(raw);
+        const ageMs = Date.now() - (p.ts || 0);
+        if (ageMs < 30 * 60 * 1000 && p.id) {
+          setAttachInfo({ id: String(p.id), items: Number(p.items) || 0 });
+        }
+      }
+    } catch {}
   }, []);
 
   // Lista de vendas encontradas pela busca por SKU (peça que voltou)
@@ -206,10 +221,21 @@ export default function DevolucaoPage() {
     try {
       // Se veio do PDV com uma venda em andamento (F4 / botão Trocar), anexa
       // o vale_troca naquela venda em vez de criar uma nova. Backend só usa
-      // attachToSaleId quando modo === 'troca'.
+      // attachToSaleId quando modo === 'troca'. TTL de 30min pra evitar
+      // anexar em sale stale de sessão antiga.
       let attachToSaleId: string | null = null;
       try {
-        attachToSaleId = localStorage.getItem('lurds_pdv_attach_to_sale_id');
+        const raw = localStorage.getItem('lurds_pdv_attach_to_sale_id');
+        if (raw) {
+          // Aceita formato novo (JSON) ou antigo (string pura)
+          if (raw.startsWith('{')) {
+            const parsed = JSON.parse(raw);
+            const ageMs = Date.now() - (parsed.ts || 0);
+            if (ageMs < 30 * 60 * 1000) attachToSaleId = parsed.id;
+          } else {
+            attachToSaleId = raw;
+          }
+        }
       } catch {}
       const r = await api<any>('/pdv/devolucao', {
         method: 'POST',
@@ -299,7 +325,21 @@ export default function DevolucaoPage() {
           <ArrowLeft size={18} /> Voltar pro PDV
         </Link>
 
-        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-6">Devolução / Troca</h1>
+        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-4">Devolução / Troca</h1>
+
+        {/* Banner: indica que tem venda em andamento aguardando o crédito */}
+        {attachInfo && !success && (
+          <div className="mb-4 bg-teal-50 border-2 border-teal-400 rounded-xl p-3 flex items-center gap-3">
+            <div className="text-2xl">🛒</div>
+            <div className="flex-1 text-sm">
+              <div className="font-bold text-teal-900">Venda em andamento no PDV</div>
+              <div className="text-teal-700 text-xs">
+                {attachInfo.items} {attachInfo.items === 1 ? 'item' : 'itens'} no carrinho.
+                Se escolher <b>Troca</b>, o crédito vai pra essa venda — os itens NÃO somem.
+              </div>
+            </div>
+          </div>
+        )}
 
         {!success && (
           <div className="bg-white rounded-2xl shadow-md p-5 mb-6">

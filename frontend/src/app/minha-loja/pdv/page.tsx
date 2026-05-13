@@ -388,7 +388,7 @@ function PdvPageInner() {
         // Salva a venda em andamento pra que a troca seja ANEXADA nela (não cria
         // nova venda). Ler em /pdv/devolucao via localStorage.getItem.
         try {
-          if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', sale.id);
+          if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
           else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
         } catch {}
         window.location.href = '/minha-loja/pdv/devolucao';
@@ -1493,7 +1493,7 @@ function PdvPageInner() {
           <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
           <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
           <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
-          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao" onClick={() => { try { if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', sale.id); else localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {} }} icon={ArrowRightLeft} label="Trocar" />
+          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao" onClick={() => { try { if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 })); else localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {} }} icon={ArrowRightLeft} label="Trocar" />
           <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
           <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
         </div>
