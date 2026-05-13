@@ -587,7 +587,13 @@ export default function DevolucaoPage() {
                     <div className="text-xs uppercase tracking-widest text-emerald-700 font-bold">
                       ★ Vale-Troca gerado ★
                     </div>
-                    <div className="text-3xl sm:text-4xl font-mono font-black tracking-widest text-slate-900 mt-2 mb-1">
+                    {/* CODIGO selecionavel — `select-all` faz 1 clique selecionar
+                        o codigo inteiro (mais facil que arrastar). User pode
+                        Ctrl+C direto ou usar o botao copiar abaixo. */}
+                    <div
+                      className="text-3xl sm:text-4xl font-mono font-black tracking-widest text-slate-900 mt-2 mb-1 cursor-text select-all"
+                      title="Clique pra selecionar — Ctrl+C pra copiar"
+                    >
                       {success.creditoCode}
                     </div>
                     <div className="text-2xl font-black text-emerald-700 tabular-nums">
@@ -602,22 +608,26 @@ export default function DevolucaoPage() {
                       </strong>
                     </div>
 
-                    <button
-                      onClick={() => {
-                        const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(success.creditoCode)}?autoprint=1`;
-                        const electron = (window as any).electronAPI;
-                        if (electron?.silentPrintUrl) {
-                          electron.silentPrintUrl(window.location.origin + url).catch(() => {
+                    {/* Botoes em GRID — Copiar + Imprimir lado a lado */}
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <CopiarCodigoBtn code={success.creditoCode} />
+                      <button
+                        onClick={() => {
+                          const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(success.creditoCode)}?autoprint=1`;
+                          const electron = (window as any).electronAPI;
+                          if (electron?.silentPrintUrl) {
+                            electron.silentPrintUrl(window.location.origin + url).catch(() => {
+                              window.open(url, 'lurds_vale', 'width=400,height=700');
+                            });
+                          } else {
                             window.open(url, 'lurds_vale', 'width=400,height=700');
-                          });
-                        } else {
-                          window.open(url, 'lurds_vale', 'width=400,height=700');
-                        }
-                      }}
-                      className="mt-4 w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg flex items-center justify-center gap-2"
-                    >
-                      🖨 IMPRIMIR VALE PRO CLIENTE
-                    </button>
+                          }
+                        }}
+                        className="py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-lg flex items-center justify-center gap-2"
+                      >
+                        🖨 IMPRIMIR
+                      </button>
+                    </div>
                     <div className="text-[11px] text-slate-500 mt-2">
                       Entregue o cupom impresso pra cliente — ela vai precisar pra trocar.
                     </div>
@@ -680,6 +690,44 @@ function ModoBtn({
       <div className="flex justify-center mb-1">{icon}</div>
       <div className="font-bold">{title}</div>
       <div className={`text-xs ${active ? 'text-rose-100' : 'text-gray-500'}`}>{sub}</div>
+    </button>
+  );
+}
+
+// Botao "Copiar codigo" — clipboard API + feedback visual 2s.
+// Em browsers antigos/sem permissao, usa fallback document.execCommand.
+function CopiarCodigoBtn({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(code);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = code;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      alert('Falha ao copiar — selecione o codigo manualmente');
+    }
+  };
+  return (
+    <button
+      onClick={copy}
+      className={`py-3 rounded-xl font-black text-lg flex items-center justify-center gap-2 transition ${
+        copied
+          ? 'bg-emerald-700 text-white'
+          : 'bg-slate-800 hover:bg-slate-900 text-white'
+      }`}
+    >
+      {copied ? '✓ COPIADO!' : '📋 COPIAR CÓDIGO'}
     </button>
   );
 }
