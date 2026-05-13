@@ -453,7 +453,76 @@ export class ReturnsService {
         (creditoCode ? `código=${creditoCode}` : ''),
     );
 
-    return ret;
+    // FLUXO MESMO-DIA (modo='troca'): cria PdvSale nova aberta com customer
+    // pre-preenchido + aplica o vale_troca como payment automaticamente.
+    // Vendedora vai pro PDV ja com o credito aplicado, so bipa as peças novas
+    // e finaliza. Cliente NAO precisa receber codigo nem cupom impresso.
+    let directSaleId: string | null = null;
+    if (modo === 'troca' && creditoCode) {
+      try {
+        const store = await this.prisma.store.findUnique({
+          where: { code: storeCode },
+          select: { code: true, name: true },
+        });
+        if (store) {
+          let cashSessionId: string | null = null;
+          try {
+            const s = await (this.prisma as any).pdvCashSession.findFirst({
+              where: { storeCode: store.code, status: 'open' },
+              select: { id: true },
+            });
+            cashSessionId = s?.id || null;
+          } catch { /* segue sem caixa */ }
+
+          const newSale = await (this.prisma as any).pdvSale.create({
+            data: {
+              storeCode: store.code,
+              storeName: store.name,
+              cashSessionId,
+              vendedorUserId: userId || null,
+              vendedorName: userName || null,
+              customerCpf: sale.customerCpf || null,
+              customerName: sale.customerName || null,
+              status: 'open',
+            },
+          });
+
+          await (this.prisma as any).pdvSalePayment.create({
+            data: {
+              saleId: newSale.id,
+              method: 'vale_troca',
+              valor: valorTotal,
+              details: JSON.stringify({
+                creditoCode,
+                fromReturnId: ret.id,
+                modo: 'troca-mesmo-dia',
+                itemsDevolvidos: itemsToCreate.map((it) => ({
+                  sku: it.sku,
+                  ref: it.ref,
+                  cor: it.cor,
+                  tamanho: it.tamanho,
+                  descricao: it.descricao,
+                  qty: it.qty,
+                  valor: it.total,
+                })),
+              }),
+            },
+          });
+
+          directSaleId = newSale.id;
+          this.logger.log(
+            `[devolução/troca-direta] Nova venda ${newSale.id.slice(0, 8)} criada com vale ${creditoCode} R$${valorTotal.toFixed(2)} aplicado`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(
+          `[devolução/troca-direta] Falha ao criar venda direta: ${e?.message || e}. ` +
+          `Vale-troca ${creditoCode} foi gerado normal — vendedora pode aplicar manual no PDV.`,
+        );
+      }
+    }
+
+    return { ...ret, directSaleId };
   }
 
   // ── Listagem ────────────────────────────────────────────────────────

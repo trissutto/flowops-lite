@@ -227,7 +227,10 @@ export default function DevolucaoPage() {
       //      do event handler do clique "Confirmar devolução", o popup eh
       //      permitido (interacao do user). Popup carrega o vale, imprime
       //      sozinho via autoprint=1 e fecha apos afterprint.
-      if ((r.modo === 'troca' || r.modo === 'credito') && r.creditoCode) {
+      // AUTO-IMPRIME so pro modo CREDITO (90 dias). Modo TROCA (1 dia) NAO
+      // imprime — cliente esta presente e vai usar o credito na hora. Backend
+      // ja criou a venda nova com o vale aplicado, frontend redireciona pro PDV.
+      if (r.modo === 'credito' && r.creditoCode) {
         try {
           const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
           const electron = (window as any).electronAPI;
@@ -582,14 +585,43 @@ export default function DevolucaoPage() {
             )}
             {(success.modo === 'troca' || success.modo === 'credito') && (
               <>
-                {success.creditoCode ? (
+                {/* MODO TROCA (mesmo dia) — cliente esta na frente do balcao.
+                    Sem codigo, sem impresso. Backend ja criou nova PdvSale com
+                    o vale_troca aplicado direto — vendedora vai pro PDV bipar
+                    as peças novas e finalizar. */}
+                {success.modo === 'troca' && success.directSaleId ? (
+                  <div className="bg-teal-50 border-2 border-teal-400 rounded-2xl p-5 mb-4">
+                    <div className="text-xs uppercase tracking-widest text-teal-700 font-bold">
+                      ✓ Crédito aplicado direto
+                    </div>
+                    <div className="text-2xl font-black text-teal-900 mt-2">
+                      R$ {fmt(success.valorTotal)} disponível
+                    </div>
+                    <div className="text-sm text-slate-700 mt-1">
+                      Nova venda aberta no PDV pra <b>{success.customerName || 'cliente'}</b> com o crédito já aplicado.
+                    </div>
+                    <button
+                      onClick={() => {
+                        try {
+                          localStorage.setItem('lurds_pdv_retomar_sale_id', success.directSaleId);
+                        } catch { /* segue */ }
+                        window.location.href = '/minha-loja/pdv';
+                      }}
+                      className="mt-4 w-full py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-black text-lg flex items-center justify-center gap-2"
+                    >
+                      → CONTINUAR NO PDV
+                    </button>
+                    <div className="text-[11px] text-slate-500 mt-2 text-center">
+                      No PDV bipa as peças novas — o sistema abate o crédito automaticamente.
+                    </div>
+                  </div>
+                ) : success.creditoCode ? (
+                  /* MODO CREDITO (90 dias) — cliente leva cupom pra usar depois.
+                     Imprime + mostra codigo + valor + items devolvidos. */
                   <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-5 mb-4">
                     <div className="text-xs uppercase tracking-widest text-emerald-700 font-bold">
-                      ★ Vale-Troca gerado ★
+                      ★ Vale-Crédito gerado ★
                     </div>
-                    {/* CODIGO selecionavel — `select-all` faz 1 clique selecionar
-                        o codigo inteiro (mais facil que arrastar). User pode
-                        Ctrl+C direto ou usar o botao copiar abaixo. */}
                     <div
                       className="text-3xl sm:text-4xl font-mono font-black tracking-widest text-slate-900 mt-2 mb-1 cursor-text select-all"
                       title="Clique pra selecionar — Ctrl+C pra copiar"
@@ -608,7 +640,23 @@ export default function DevolucaoPage() {
                       </strong>
                     </div>
 
-                    {/* Botoes em GRID — Copiar + Imprimir lado a lado */}
+                    {/* Lista do que foi devolvido — pra cliente ver no cupom */}
+                    {success.items && success.items.length > 0 && (
+                      <div className="mt-3 bg-white rounded-lg border border-emerald-200 p-2 text-xs">
+                        <div className="font-bold text-emerald-800 mb-1 uppercase tracking-wide text-[10px]">Referente à devolução:</div>
+                        <ul className="space-y-0.5">
+                          {success.items.map((it: any, i: number) => (
+                            <li key={i} className="flex justify-between gap-2">
+                              <span className="truncate text-slate-700">
+                                {it.qty}× {it.ref || it.sku} {it.cor ? `· ${it.cor}` : ''} {it.tamanho ? `/ ${it.tamanho}` : ''}
+                              </span>
+                              <span className="font-mono text-slate-600 tabular-nums shrink-0">R$ {fmt(Number(it.total) || 0)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
                     <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <CopiarCodigoBtn code={success.creditoCode} />
                       <button
