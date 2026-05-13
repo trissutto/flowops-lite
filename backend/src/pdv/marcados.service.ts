@@ -46,11 +46,19 @@ export class MarcadosService {
     saleId: string;
     storeCode: string;
     userId?: string;
+    userName?: string;
+    /**
+     * Quando true, pula a validação de limite de marcação (gerente forçou
+     * pela UI sabendo que o cliente tem marcações antigas acumuladas).
+     * Ainda valida classe A e CPF identificado — só relaxa o limite.
+     */
+    force?: boolean;
   }): Promise<{
     ok: boolean;
     controle?: number;
     totalItems?: number;
     totalValor?: number;
+    forced?: boolean;
     error?: string;
   }> {
     // 1. Carrega venda
@@ -74,10 +82,21 @@ export class MarcadosService {
     if (!info.permitido) {
       throw new BadRequestException(info.motivo || 'Cliente não pode marcar');
     }
+    // Validação de limite: gerente pode forçar via force=true quando sabe
+    // que tem marcações antigas (MARCADO=SIM no Giga nunca limpo). Loga
+    // quem forçou pra auditoria.
     if (Number(sale.total) > info.limiteDisponivel) {
-      throw new BadRequestException(
-        `Valor da venda (R$ ${Number(sale.total).toFixed(2)}) maior que limite disponível ` +
-        `(R$ ${info.limiteDisponivel.toFixed(2)}). Cliente já tem R$ ${info.totalMarcadosAtivos.toFixed(2)} em marcados.`,
+      if (!input.force) {
+        throw new BadRequestException(
+          `Valor da venda (R$ ${Number(sale.total).toFixed(2)}) maior que limite disponível ` +
+          `(R$ ${info.limiteDisponivel.toFixed(2)}). Cliente já tem R$ ${info.totalMarcadosAtivos.toFixed(2)} em marca`,
+        );
+      }
+      this.logger.warn(
+        `[marcados/FORCE] ${input.userName || input.userId || 'user'} forçou marcação ` +
+        `de R$${Number(sale.total).toFixed(2)} pra cliente ${info.cliente.nome} ` +
+        `(limite R$${info.cliente.limiteTotal.toFixed(2)}, já em marca R$${info.totalMarcadosAtivos.toFixed(2)}, ` +
+        `disponível R$${info.limiteDisponivel.toFixed(2)})`,
       );
     }
 
@@ -143,6 +162,7 @@ export class MarcadosService {
       controle: insertResult.controle,
       totalItems: sale.items.length,
       totalValor: Number(sale.total),
+      forced: Number(sale.total) > info.limiteDisponivel,
     };
   }
 

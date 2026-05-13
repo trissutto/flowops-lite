@@ -1635,19 +1635,47 @@ function PdvPageInner() {
                         `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
                         `Cliente precisa ser classe A com limite disponivel no Giga.`,
                       )) return;
-                      try {
+                      const doMarcar = async (force: boolean) => {
                         const r = await api<any>('/pdv/marcados/criar', {
                           method: 'POST',
-                          body: JSON.stringify({ saleId: sale.id }),
+                          body: JSON.stringify({ saleId: sale.id, force }),
                         });
                         if (r.ok) {
-                          toast('success', `${r.totalItems || sale.items.length} peças marcadas!`, `Controle ${r.controle || ''} · Cliente vai provar em casa`);
+                          toast(
+                            'success',
+                            `${r.totalItems || sale.items.length} peças marcadas!`,
+                            `Controle ${r.controle || ''} · ${r.forced ? '⚠ FORÇADO (acima do limite) · ' : ''}Cliente vai provar em casa`,
+                          );
                           setSale(null);
                           setTimeout(() => createNewSale(), 500);
                         } else {
                           toast('error', 'Falha ao marcar', r.error || 'Tente de novo');
                         }
+                      };
+                      try {
+                        await doMarcar(false);
                       } catch (e: any) {
+                        const msg = String(e?.message || '');
+                        // Erro de limite estourado — oferece override
+                        const isLimite = /limite dispon[ií]vel|em marca/i.test(msg);
+                        if (isLimite) {
+                          const ok = window.confirm(
+                            `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
+                            `Isso costuma acontecer quando a cliente tem marcações antigas no Giga ` +
+                            `que nunca foram baixadas (peças que voltaram mas o flag MARCADO=SIM ficou).\n\n` +
+                            `Quer MARCAR MESMO ASSIM?\n` +
+                            `(Vai ficar registrado quem forçou — só faça se tiver certeza)`,
+                          );
+                          if (ok) {
+                            try {
+                              await doMarcar(true);
+                            } catch (e2: any) {
+                              const h2 = humanizeError(e2);
+                              toast('error', 'Falha mesmo com override', h2.hint || h2.title);
+                            }
+                          }
+                          return;
+                        }
                         const h = humanizeError(e);
                         toast('error', 'Cliente nao pode marcar', h.hint || h.title);
                       }

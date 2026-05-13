@@ -75,16 +75,19 @@ export class MarcadosController {
   @Post('criar')
   criar(
     @Req() req: any,
-    @Body() body: { saleId: string },
+    @Body() body: { saleId: string; force?: boolean },
   ) {
     this.requireRole(req);
     const storeCode = req?.user?.storeCode || req?.user?.storeId;
     if (!storeCode) throw new ForbiddenException('Usuário sem loja vinculada');
     const userId = req?.user?.userId || req?.user?.sub;
+    const userName = req?.user?.name || req?.user?.email || null;
     return this.svc.criarMarcadoFromSale({
       saleId: body.saleId,
       storeCode,
       userId,
+      userName,
+      force: !!body.force,
     });
   }
 
