@@ -2044,6 +2044,32 @@ function VendedoraModal({
     return results;
   }, [usingActiveList, whitelist, results, searchTerm]);
 
+  // ─── Navegação por teclado (↑↓ Enter) ─────────────────────────────────
+  // Cascata navegável: setas movem o highlight, Enter confirma. Reset ao
+  // mudar a lista (ex.: novo filtro) pra evitar highlight em índice inválido.
+  const [highlight, setHighlight] = useState(0);
+  useEffect(() => {
+    setHighlight(0);
+  }, [visibleResults]);
+
+  function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (visibleResults.length === 0) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlight((h) => Math.min(h + 1, visibleResults.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlight((h) => Math.max(h - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const pick = visibleResults[highlight];
+      if (pick) onSave({ codigo: pick.codigo, nome: pick.nome });
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    }
+  }
+
   return (
     <>
       {/* Backdrop transparente — fecha ao clicar fora */}
@@ -2102,7 +2128,8 @@ function VendedoraModal({
           <input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Nome da vendedora…"
+            onKeyDown={handleKey}
+            placeholder="Nome da vendedora… (↑↓ Enter)"
             className="flex-1 bg-transparent text-sm focus:outline-none"
             autoFocus
             autoComplete="off"
@@ -2116,44 +2143,64 @@ function VendedoraModal({
           </div>
         )}
 
-        <div className="max-h-80 overflow-y-auto p-1">
+        <div
+          className="max-h-80 overflow-y-auto p-1"
+          ref={(el) => {
+            if (!el) return;
+            const target = el.querySelector(`[data-vendedora-idx="${highlight}"]`) as HTMLElement | null;
+            target?.scrollIntoView({ block: 'nearest' });
+          }}
+        >
           {visibleResults.length === 0 && !searching && (
             <div className="text-center text-xs text-slate-400 py-6">
               {searchTerm ? 'Nenhuma vendedora encontrada' : 'Carregando…'}
             </div>
           )}
           {visibleResults.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-              {visibleResults.map((f) => {
-                const isAtual = atual && atual.toUpperCase().includes(f.nome.toUpperCase());
+            <ul className="flex flex-col gap-1" role="listbox" aria-label="Vendedoras">
+              {visibleResults.map((f, idx) => {
+                const isAtual = !!atual && atual.toUpperCase().includes(f.nome.toUpperCase());
+                const isHighlight = idx === highlight;
                 const primeiroNome = f.nome.split(/\s+/)[0];
                 return (
-                  <button
-                    key={f.codigo + f.nome}
-                    type="button"
-                    onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
-                    title={`${f.nome}${f.codigo ? ' · cód ' + f.codigo : ''}`}
-                    className={`text-center px-2 py-2.5 rounded-lg transition border-2 active:scale-95 ${
-                      isAtual
-                        ? 'bg-emerald-500 border-emerald-600 text-white shadow-md ring-2 ring-emerald-300'
-                        : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-400 text-slate-800'
-                    }`}
-                  >
-                    <div className={`w-8 h-8 mx-auto mb-1 rounded-full flex items-center justify-center text-sm font-bold ${
-                      isAtual ? 'bg-white/20' : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                      {primeiroNome.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="text-[11px] font-bold truncate leading-tight">{primeiroNome}</div>
-                    {f.codigo && (
-                      <div className={`text-[9px] ${isAtual ? 'text-white/80' : 'text-slate-400'}`}>
-                        cód {f.codigo}
+                  <li key={f.codigo + f.nome} role="option" aria-selected={isHighlight} data-vendedora-idx={idx}>
+                    <button
+                      type="button"
+                      onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
+                      onMouseEnter={() => setHighlight(idx)}
+                      title={`${f.nome}${f.codigo ? ' · cód ' + f.codigo : ''}`}
+                      className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg transition border-2 active:scale-[0.98] ${
+                        isHighlight
+                          ? 'bg-emerald-500 border-emerald-600 text-white shadow ring-2 ring-emerald-300'
+                          : isAtual
+                            ? 'bg-emerald-50 border-emerald-400 text-emerald-900'
+                            : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300 text-slate-800'
+                      }`}
+                    >
+                      <div className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
+                        isHighlight ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {primeiroNome.charAt(0).toUpperCase()}
                       </div>
-                    )}
-                  </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[12px] font-bold truncate leading-tight">{f.nome}</div>
+                        {f.codigo && (
+                          <div className={`text-[9px] ${isHighlight ? 'text-white/80' : 'text-slate-400'}`}>
+                            cód {f.codigo}
+                          </div>
+                        )}
+                      </div>
+                      {isAtual && !isHighlight && (
+                        <span className="text-[9px] font-bold bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded">ATUAL</span>
+                      )}
+                      {isHighlight && (
+                        <span className="text-[10px] font-bold text-white/90">↵</span>
+                      )}
+                    </button>
+                  </li>
                 );
               })}
-            </div>
+            </ul>
           )}
         </div>
 
