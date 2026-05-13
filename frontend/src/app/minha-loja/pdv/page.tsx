@@ -1611,16 +1611,10 @@ function PdvPageInner() {
                 </div>
               </div>
 
-              {/* FINALIZAR — botão verde gigante (CTA primário) */}
-              <button
-                onClick={() => { setPaymentFilter('all'); setShowPayment(true); }}
-                disabled={!sale.items?.length || sale.total <= 0}
-                className="px-4 sm:px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-base sm:text-lg shadow-md shadow-emerald-200 transition shrink-0"
-                title="Finalizar venda"
-              >
-                <Check className="w-5 h-5" />
-                <span className="hidden sm:inline">Finalizar</span>
-              </button>
+              {/* FINALIZAR removido — botões diretos de forma de pagamento (PIX,
+                  DINHEIRO, CARTÃO, CREDIÁRIO, VALE) já abrem o modal de
+                  pagamento com o método pré-selecionado. Botão Finalizar
+                  separado virou redundante na UX. */}
             </div>
           </div>
         </footer>
