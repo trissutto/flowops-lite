@@ -162,6 +162,7 @@ export default function RealinhamentoPage() {
   const [sobraMinQty, setSobraMinQty] = useState(2);
   const [sobraOnlyPlusSize, setSobraOnlyPlusSize] = useState(true);
   const [sobraDesc, setSobraDesc] = useState('');
+  const [sobraStoreCode, setSobraStoreCode] = useState(''); // '' = todas; senao filtra 1 loja
   const [sobraLoading, setSobraLoading] = useState(false);
   const [sobraError, setSobraError] = useState<string | null>(null);
   const [sobraResults, setSobraResults] = useState<
@@ -186,6 +187,7 @@ export default function RealinhamentoPage() {
         minQty: String(sobraMinQty),
         ...(sobraOnlyPlusSize ? { plusSize: '1' } : {}),
         ...(sobraDesc.trim() ? { desc: sobraDesc.trim() } : {}),
+        ...(sobraStoreCode ? { storeCode: sobraStoreCode } : {}),
       });
       const data = await api<typeof sobraResults>(`/realignment/search-refs-com-sobra?${params}`);
       setSobraResults(Array.isArray(data) ? data : []);
@@ -885,7 +887,7 @@ export default function RealinhamentoPage() {
             Lista REFs onde alguma variação cor×tamanho tem N+ unidades. Útil pra encontrar
             sobras e redistribuir entre lojas (ex: blusas plus size com 2+ por SKU).
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-6 gap-2 items-end">
             <div>
               <label className="block text-[11px] font-semibold text-sky-900 mb-0.5">Mín. por SKU</label>
               <input
@@ -896,6 +898,21 @@ export default function RealinhamentoPage() {
                 onChange={(e) => setSobraMinQty(Math.max(1, parseInt(e.target.value, 10) || 2))}
                 className="w-full border border-sky-300 rounded-lg px-2 py-1.5 text-sm bg-white"
               />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-sky-900 mb-0.5">Loja</label>
+              <select
+                value={sobraStoreCode}
+                onChange={(e) => setSobraStoreCode(e.target.value)}
+                className="w-full border border-sky-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+              >
+                <option value="">Todas as lojas</option>
+                {activeStores.map((store) => (
+                  <option key={store.code} value={store.code}>
+                    {store.code} — {store.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-sky-900 mb-0.5">Descrição contém</label>
