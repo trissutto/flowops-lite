@@ -563,10 +563,19 @@ export class RealignmentShipmentService {
       `(${itemsSemCodigoBipado.length} via batch, ${items.length - itemsSemCodigoBipado.length} via codigoBipado)`,
     );
 
+    // POLITICA: itens unresolved (REF+COR+TAM nao casam no Giga) NAO bloqueiam mais
+    // o fechamento. Vendedora ja confirmou peca em maos clicando FORCAR FECHAMENTO.
+    // Esses itens passam adiante (status sent + shipment in_transit) MAS nao baixam
+    // estoque Giga na origem (porque nao tem SKU pra baixar). Admin acompanha pelo
+    // log e pode resolver depois.
+    //
+    // ANTES: bloqueava com BadRequestException -> vendedora nao conseguia fechar
+    // remessas com cadastro divergente, pecas paravam de circular.
     if (unresolved.length) {
-      throw new BadRequestException(
-        `Não consegui resolver SKU pra ${unresolved.length} item(ns): ` +
-          unresolved.map((u) => `${u.refCode} ${u.cor || ''}/${u.tamanho || ''}`).join(', '),
+      this.logger.warn(
+        `[closeAndSend] ${shipment.code}: ${unresolved.length} item(ns) sem SKU resolvido - ` +
+        `seguem na remessa SEM baixa Giga. Itens: ` +
+        unresolved.map((u) => `${u.refCode} ${u.cor || ''}/${u.tamanho || ''}`).join(', '),
       );
     }
 

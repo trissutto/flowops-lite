@@ -397,6 +397,129 @@ export class RealignmentService {
       perSku.push({ sku, totalMoved, stillMissing });
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // VALIDAÇÃO DEFENSIVA — estoque REAL Giga na origem antes de devolver
+    // ─────────────────────────────────────────────────────────────────
+    // Porquê: o algoritmo acima itera POR SKU usando `stockMap` (que vem do
+    // getStockBySkusDetailed). Se a mesma peça (REF+COR+TAM) tiver MÚLTIPLOS
+    // CODIGOs cadastrados no Giga, o estoque pode estar fragmentado entre
+    // esses CODIGOs e o algoritmo pode somar errado, OU pegar estoque de
+    // um CODIGO que na verdade não existe fisicamente mas tem qty no Giga.
+    //
+    // Solução: depois de gerar o plano, RE-VALIDA cada linha contra o estoque
+    // REAL agregado por (REF+COR+TAM, LOJA) — mesmo método usado pelo
+    // precheck do shipment. Se na origem não tem estoque suficiente, remove
+    // a linha do plano e marca como filtered pra log/auditoria.
+    //
+    // Isso evita o problema reportado de sugerir Itanhaém como origem
+    // pra peças que ela não tem fisicamente nem no Giga.
+    const removedByValidation: Array<{
+      ref: string;
+      cor: string | null;
+      tamanho: string | null;
+      fromCode: string;
+      qtyOriginal: number;
+      estoqueReal: number;
+    }> = [];
+
+    if (plan.length > 0) {
+      const validationInput: Array<{
+        refCode: string;
+        cor: string | null;
+        tamanho: string | null;
+        storeCode: string;
+      }> = [];
+      const validationKeys = new Set<string>();
+      for (const p of plan) {
+        if (!p.ref) continue;
+        const k = `${p.ref}|${p.cor || ''}|${p.tamanho || ''}|${p.fromCode}`;
+        if (validationKeys.has(k)) continue;
+        validationKeys.add(k);
+        validationInput.push({
+          refCode: p.ref,
+          cor: p.cor,
+          tamanho: p.tamanho,
+          storeCode: p.fromCode,
+        });
+      }
+
+      let realStockMap = new Map<string, { totalQty: number; codigos: string[] }>();
+      try {
+        realStockMap = await this.erp.getStockByRefCorTamInStoreBatch(validationInput);
+      } catch (e) {
+        this.logger.warn(
+          `[preview] validacao defensiva falhou (batch estoque real): ${(e as Error).message}. ` +
+          `Plano sai sem essa validacao.`,
+        );
+      }
+
+      // Agrupa linhas por (REF+COR+TAM+ORIGEM) pra somar qty se houver multiplas
+      const groupedByOrigin = new Map<string, PlanLine[]>();
+      for (const p of plan) {
+        if (!p.ref) continue;
+        const k = `${String(p.ref).trim().toUpperCase()}::${String(p.cor || '').trim().toUpperCase()}::${String(p.tamanho || '').trim().toUpperCase()}::${String(p.fromCode).trim()}`;
+        if (!groupedByOrigin.has(k)) groupedByOrigin.set(k, []);
+        groupedByOrigin.get(k)!.push(p);
+      }
+
+      const linesToRemove = new Set<PlanLine>();
+      for (const [key, lines] of groupedByOrigin.entries()) {
+        const found = realStockMap.get(key);
+        const estoqueReal = found?.totalQty || 0;
+        const qtyTotalPedido = lines.reduce((s, l) => s + l.qty, 0);
+
+        if (estoqueReal < qtyTotalPedido) {
+          let restante = estoqueReal;
+          const sortedLines = [...lines].sort((a, b) => b.qty - a.qty);
+          for (const l of sortedLines) {
+            if (restante <= 0) {
+              linesToRemove.add(l);
+              removedByValidation.push({
+                ref: l.ref || '',
+                cor: l.cor,
+                tamanho: l.tamanho,
+                fromCode: l.fromCode,
+                qtyOriginal: l.qty,
+                estoqueReal,
+              });
+              continue;
+            }
+            if (l.qty > restante) {
+              removedByValidation.push({
+                ref: l.ref || '',
+                cor: l.cor,
+                tamanho: l.tamanho,
+                fromCode: l.fromCode,
+                qtyOriginal: l.qty - restante,
+                estoqueReal,
+              });
+              l.qty = restante;
+              l.stockFromAfter = 0;
+              restante = 0;
+            } else {
+              restante -= l.qty;
+            }
+          }
+        }
+      }
+
+      if (linesToRemove.size > 0) {
+        const before = plan.length;
+        for (let i = plan.length - 1; i >= 0; i--) {
+          if (linesToRemove.has(plan[i])) plan.splice(i, 1);
+        }
+        this.logger.warn(
+          `[preview] Validacao defensiva removeu ${linesToRemove.size}/${before} linhas — ` +
+          `origens sem estoque real Giga. Detalhes (primeiros 5): ` +
+          JSON.stringify(removedByValidation.slice(0, 5)),
+        );
+      } else if (removedByValidation.length > 0) {
+        this.logger.warn(
+          `[preview] Validacao defensiva ajustou qty em ${removedByValidation.length} linha(s).`,
+        );
+      }
+    }
+
     const totalMoves = plan.length;
     const totalUnits = plan.reduce((a, p) => a + p.qty, 0);
     const skusWithFullCoverage = perSku.filter((p) => p.stillMissing === 0 && p.totalMoved > 0).length;
@@ -429,6 +552,7 @@ export class RealignmentService {
       perRef,
       notFoundRefs,
       ambiguousRefs,
+      removedByValidation,
       totals: {
         totalMoves,
         totalUnits,

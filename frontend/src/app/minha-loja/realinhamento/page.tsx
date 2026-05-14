@@ -1198,13 +1198,16 @@ export default function MinhaLojaRealinhamentoPage() {
 
             <div className="p-5 space-y-4">
               <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-sm text-amber-900">
-                <b>O que aconteceu:</b> uma ou mais peças desta remessa <b>não tem mais estoque no Giga</b>.
-                Provavelmente foram <b>vendidas fisicamente</b> entre o momento de criar a remessa e agora,
-                ou o estoque tem divergência ERP × físico.
+                <b>O que aconteceu:</b> uma ou mais peças desta remessa <b>não estão no estoque Giga da sua loja</b>.
+                Causas possíveis: o plano de realinhamento sugeriu origem errada (peça nunca esteve aqui),
+                a peça foi vendida fisicamente entre o pedido e a separação, ou tem divergência ERP × físico.
                 <br />
                 <br />
-                <b>Como resolver:</b> remova os itens problemáticos abaixo e tente fechar de novo.
-                Os outros itens da remessa continuam intactos.
+                <b>Como resolver:</b>
+                <br />
+                • Se a peça <b>está fisicamente em mãos</b>, clique <b>FORÇAR FECHAMENTO</b> abaixo (Giga fica negativo, conserta no inventário).
+                <br />
+                • Se a peça <b>não existe</b>, clique <b>Remover TODOS</b> pra tirar da remessa (não mexe no Giga).
               </div>
 
               {/* Items sem estoque */}
@@ -1615,10 +1618,4 @@ function RealignCell({
         }}
         title="Não achei a peça — reportar pra matriz"
         aria-label="Não achei essa peça"
-        className="absolute top-0 left-0 w-5 h-5 rounded-tl rounded-br bg-rose-500/90 hover:bg-rose-600 text-white flex items-center justify-center text-[10px] font-black shadow z-10 active:scale-90 transition"
-      >
-        ✕
-      </button>
-    </div>
-  );
-}
+     
