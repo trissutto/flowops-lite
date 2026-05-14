@@ -77,12 +77,48 @@ function ImprimirCupomPageInner() {
   const autoprint = searchParams?.get('autoprint') === '1';
   const [pick, setPick] = useState<PickDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Fotos dos produtos buscadas no WooCommerce — usadas no impresso pra
+  // facilitar separação. Map<sku, url|null>. undefined = ainda carregando.
+  const [photos, setPhotos] = useState<Record<string, string | null>>({});
+  const [photosReady, setPhotosReady] = useState(false);
 
   useEffect(() => {
     api<PickDetail>(`/pick-orders/${id}`)
       .then((data) => setPick(data))
       .catch((e) => setError(e.message));
   }, [id]);
+
+  // Carrega fotos de TODOS os itens em paralelo. Marca photosReady=true
+  // quando terminar (mesmo que algumas tenham falhado). O auto-print só
+  // dispara depois disso pra garantir que as fotos saiam no impresso.
+  useEffect(() => {
+    if (!pick) return;
+    const skus = Array.from(new Set(pick.order.items.map((it) => it.sku).filter(Boolean)));
+    if (skus.length === 0) {
+      setPhotosReady(true);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const results = await Promise.all(
+        skus.map(async (sku) => {
+          try {
+            const r = await api<{ url: string | null }>(`/pdv/product-image?sku=${encodeURIComponent(sku)}`);
+            return [sku, r.url] as const;
+          } catch {
+            return [sku, null] as const;
+          }
+        }),
+      );
+      if (cancelled) return;
+      const map: Record<string, string | null> = {};
+      for (const [sku, url] of results) map[sku] = url;
+      setPhotos(map);
+      // Pequeno delay extra pro <img> decodificar antes do print
+      setTimeout(() => { if (!cancelled) setPhotosReady(true); }, 300);
+    })();
+    return () => { cancelled = true; };
+  }, [pick]);
 
   // Quando os dados carregam, dispara a impressão.
   //
@@ -95,7 +131,7 @@ function ImprimirCupomPageInner() {
   // MODO 2 (popup browser ou impressão local): window.print() abre o diálogo
   //   normal do sistema operacional.
   useEffect(() => {
-    if (!pick) return;
+    if (!pick || !photosReady) return; // espera fotos carregarem
     const t = setTimeout(async () => {
       const electron = (window as any).electronAPI;
       if (autoprint && electron?.notifyPrintReady) {
@@ -112,7 +148,7 @@ function ImprimirCupomPageInner() {
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [pick, autoprint]);
+  }, [pick, photosReady, autoprint]);
 
   // Após print (ou cancelamento), fecha a janela
   useEffect(() => {
@@ -243,6 +279,38 @@ function ImprimirCupomPageInner() {
           font-size: 9px;
           color: #444;
         }
+        .item-row-with-img {
+          display: flex;
+          gap: 6px;
+          align-items: flex-start;
+        }
+        .item-photo {
+          width: 56px;
+          height: 56px;
+          object-fit: cover;
+          border: 1px solid #000;
+          flex-shrink: 0;
+          filter: grayscale(100%) contrast(1.6) brightness(1.05);
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        .item-photo-placeholder {
+          width: 56px;
+          height: 56px;
+          border: 1px dashed #888;
+          flex-shrink: 0;
+          font-size: 8px;
+          color: #888;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 2px;
+        }
+        .item-body {
+          flex: 1;
+          min-width: 0;
+        }
         .checkbox {
           display: inline-block;
           width: 11px;
@@ -362,19 +430,35 @@ function ImprimirCupomPageInner() {
         <div className="label">
           Itens ({pick.order.items.length}) — separar:
         </div>
-        {pick.order.items.map((it, idx) => (
-          <div key={it.id ?? `${it.sku}-${idx}`} className="item">
-            <div className="row">
-              <div>
-                <span className="checkbox" />
-                <span className="qty">{it.quantity}x</span>
+        {pick.order.items.map((it, idx) => {
+          const photoUrl = photos[it.sku];
+          return (
+            <div key={it.id ?? `${it.sku}-${idx}`} className="item">
+              <div className="item-row-with-img">
+                {photoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={photoUrl}
+                    alt={it.sku}
+                    className="item-photo"
+                    crossOrigin="anonymous"
+                  />
+                ) : (
+                  <div className="item-photo-placeholder">sem foto</div>
+                )}
+                <div className="item-body">
+                  <div>
+                    <span className="checkbox" />
+                    <span className="qty">{it.quantity}x</span>
+                  </div>
+                  <div className="bold">{it.productName ?? '—'}</div>
+                  {it.variant && <div>{it.variant}</div>}
+                  <div className="sku">SKU: {it.sku}</div>
+                </div>
               </div>
             </div>
-            <div className="bold">{it.productName ?? '—'}</div>
-            {it.variant && <div>{it.variant}</div>}
-            <div className="sku">SKU: {it.sku}</div>
-          </div>
-        ))}
+          );
+        })}
 
         <hr className="sep" />
 
