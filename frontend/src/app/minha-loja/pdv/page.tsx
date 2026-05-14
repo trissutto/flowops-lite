@@ -913,7 +913,10 @@ function PdvPageInner() {
     <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
           /minha-loja/realinhamento pra unificar identidade visual. */}
-      <header className="sticky top-0 z-20 bg-gradient-to-r from-violet-800 via-violet-700 to-fuchsia-700 border-b border-violet-900/40 shadow-md">
+      <header
+        className="sticky top-0 z-20 border-b border-white/10 shadow-md"
+        style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
+      >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
@@ -1017,32 +1020,37 @@ function PdvPageInner() {
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-4 pb-[240px] lg:pb-[230px]">
+      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px]">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
-          Painel MARINHO/NAVY escuro (#0a1029) com botões VERTICAIS empilhados:
-          ícone à esquerda + label à direita + atalho na ponta (estilo Notion/
-          mockup ChatGPT). Ícones e labels em branco. Hover ilumina sutil.
+          Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
+          Botões QUADRADOS em grid 2 colunas: ícone em cima + label embaixo +
+          atalho como chip no canto superior direito. Sticky logo abaixo do
+          header (top-0 — encosta no header pra dar sensação de bloco único).
           Em mobile (<lg) some — PdvMobilePill horizontais continuam acima
           do footer pra mesma navegação. */}
       {sale?.status === 'open' && (
-        <aside className="w-[200px] shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pr-1">
-          <div
-            className="rounded-2xl shadow-2xl p-2.5"
-            style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
-          >
-            <div className="text-[10px] font-black uppercase tracking-widest text-white/50 px-2 py-1 mb-1">
+        <aside
+          className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start overflow-y-auto"
+          style={{
+            top: '0',
+            maxHeight: 'calc(100vh - 0px)',
+            background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+          }}
+        >
+          <div className="p-2.5 pt-3">
+            <div className="text-[10px] font-black uppercase tracking-widest text-white/50 px-1 mb-2">
               Ações do PDV
             </div>
-            <nav className="flex flex-col gap-0.5">
+            <div className="grid grid-cols-2 gap-1.5">
               <Link
                 href="/minha-loja/consultar"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Consultar produto (F10)"
               >
-                <Search className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Consultar</span>
-                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F10</kbd>
+                <Search className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Consultar</span>
+                <kbd className="absolute top-1 right-1 text-[8px] font-mono bg-white/20 text-white rounded px-1 leading-tight">F10</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1052,95 +1060,95 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Devolução / Troca (F4)"
               >
-                <ArrowRightLeft className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Trocar</span>
-                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F4</kbd>
+                <ArrowRightLeft className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Trocar</span>
+                <kbd className="absolute top-1 right-1 text-[8px] font-mono bg-white/20 text-white rounded px-1 leading-tight">F4</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Caixa — sangria, suprimento, retiradas (F3)"
               >
-                <DollarSign className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Caixa</span>
-                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F3</kbd>
+                <DollarSign className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Caixa</span>
+                <kbd className="absolute top-1 right-1 text-[8px] font-mono bg-white/20 text-white rounded px-1 leading-tight">F3</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/fechamento"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Fechamento diário"
               >
-                <Wallet className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Fechamento</span>
+                <Wallet className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Fechamento</span>
               </Link>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Receber/baixar parcelas de crediário"
               >
-                <Receipt className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold leading-tight">Baixa Crediário</span>
+                <Receipt className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Baixa Crediário</span>
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                className="bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white/5 disabled:hover:border-white/10"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-left text-[12px] font-bold">Simular</span>
+                <CreditCard className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Simular</span>
               </button>
               <Link
                 href="/minha-loja"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Pedidos do site"
               >
-                <Globe className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Pedidos</span>
+                <Globe className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Pedidos</span>
                 {pedidosSitePending > 0 && (
-                  <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
+                  <span className="absolute -top-1.5 -right-1.5 bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow-lg">
                     {pedidosSitePending}
                   </span>
                 )}
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="NFC-es emitidas (cancelar/reimprimir)"
               >
-                <FileText className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">NFC-es</span>
+                <FileText className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">NFC-es</span>
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
+                className="bg-white/5 hover:bg-white/10 rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border border-white/10 hover:border-white/30 min-h-[70px] justify-center"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-4 h-4 text-white shrink-0" />
-                <span className="flex-1 text-[12px] font-bold">Marcados</span>
+                <Tag className="w-5 h-5 text-white" />
+                <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Marcados</span>
               </Link>
               <Link
                 href="/minha-loja/realinhamento"
-                className={`group flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition ${
+                className={`relative rounded-xl py-3 px-1.5 flex flex-col items-center gap-1.5 transition border min-h-[70px] justify-center ${
                   realignPending > 0
-                    ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-100'
-                    : 'hover:bg-white/10 text-white/90'
+                    ? 'bg-rose-500/20 hover:bg-rose-500/30 border-rose-400/60'
+                    : 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-white/30'
                 }`}
                 title="Realinhamento de estoque"
               >
-                <Shuffle className={`w-4 h-4 shrink-0 ${realignPending > 0 ? 'text-rose-300' : 'text-white'}`} />
-                <span className="flex-1 text-[12px] font-bold">Realinhar</span>
+                <Shuffle className={`w-5 h-5 ${realignPending > 0 ? 'text-rose-300' : 'text-white'}`} />
+                <span className={`text-[10px] font-bold text-center leading-tight ${realignPending > 0 ? 'text-rose-100' : 'text-white/90'}`}>Realinhar</span>
                 {realignPending > 0 && (
-                  <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[20px] flex items-center justify-center px-1.5 shadow">
+                  <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shadow-lg">
                     {realignPending}
                   </span>
                 )}
               </Link>
-            </nav>
+            </div>
           </div>
         </aside>
       )}

@@ -584,23 +584,29 @@ export default function MinhaLojaRealinhamentoPage() {
   }
 
   async function markSent(itemId: string) {
+    // CAPTURA o item ANTES do await — fix race condition: o socket
+    // 'realignment:sent' pode chegar ANTES da response do PATCH e remover
+    // o item de items. Se a gente buscasse DEPOIS do await, encontraria
+    // undefined e a peça não iria pra sentItems (sumia da lista sem
+    // aparecer em enviados). Capturar agora garante que temos a referência
+    // mesmo que o socket limpe antes.
+    const captured = items.find((i) => i.id === itemId) || null;
     setSendingIds((prev) => new Set(prev).add(itemId));
     try {
       await api(`/realignment/${itemId}/sent`, { method: 'PATCH' });
-      // Move otimisticamente: tira dos pendentes e coloca no topo de "enviados
-      // hoje" com timestamp local, pra aparecer na aba de conferência na hora.
-      let moved: RealignmentItem | null = null;
-      setItems((prev) => {
-        const found = prev.find((i) => i.id === itemId);
-        if (found) moved = found;
-        return prev.filter((i) => i.id !== itemId);
-      });
-      if (moved) {
+      setItems((prev) => prev.filter((i) => i.id !== itemId));
+      if (captured) {
         const stamped: RealignmentItem = {
-          ...(moved as RealignmentItem),
+          ...captured,
           sentAt: new Date().toISOString(),
         };
-        setSentItems((prev) => [stamped, ...prev]);
+        setSentItems((prev) => {
+          if (prev.some((i) => i.id === captured.id)) return prev;
+          return [stamped, ...prev];
+        });
+      } else {
+        // Fallback paranoico: item já removido antes do clique? Força recarga.
+        loadSentItems();
       }
       pushToast('Marcado como enviado ✓');
     } catch (err: any) {
