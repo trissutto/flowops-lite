@@ -1379,11 +1379,39 @@ function PdvPageInner() {
                   </div>
                 );
               })()}
+              {/* Devoluções/Vale-troca já aplicados — mostra em vermelho negativo */}
+              {(() => {
+                const valeTrocaPago = (sale.payments || []).reduce(
+                  (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
+                  0,
+                );
+                if (valeTrocaPago <= 0.01) return null;
+                return (
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600 uppercase text-[10px] tracking-wide">Devolução / Vale</span>
+                    <span className="font-bold text-rose-600 tabular-nums">− {brl(valeTrocaPago)}</span>
+                  </div>
+                );
+              })()}
             </div>
-            <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
-              <span className="text-[11px] font-black uppercase tracking-wider text-slate-700">Total</span>
-              <span className="text-xl font-black text-emerald-600 tabular-nums">{brl(sale.total)}</span>
-            </div>
+            {(() => {
+              const valeTrocaPago = (sale.payments || []).reduce(
+                (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
+                0,
+              );
+              const liquido = Math.round((sale.total - valeTrocaPago) * 100) / 100;
+              const ehCredito = liquido < -0.01;
+              return (
+                <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                    {ehCredito ? 'Sobra crédito' : 'A pagar'}
+                  </span>
+                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1785,7 +1813,11 @@ function PdvPageInner() {
               <div className="flex-1 px-2 min-w-[140px] text-center overflow-visible">
                 {(() => {
                   const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-                  const restante = Math.max(0, Math.round((sale.total - paid) * 100) / 100);
+                  // SEM Math.max — se vale_troca > total das peças, mostra
+                  // negativo (cliente ainda tem crédito sobrando). Atualiza em
+                  // tempo real conforme bipa: -49,90 → -10,00 → +19,90.
+                  const liquido = Math.round((sale.total - paid) * 100) / 100;
+                  const ehCredito = liquido < -0.01;
                   const temPgtoParcial = paid > 0.01 && paid < sale.total - 0.01;
                   return (
                     <>
@@ -1795,10 +1827,10 @@ function PdvPageInner() {
                         </div>
                       )}
                       <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">
-                        {temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
+                        {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
                       </div>
-                      <div className="text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black text-emerald-600 tabular-nums leading-none mt-1 whitespace-nowrap">
-                        {brl(restante)}
+                      <div className={`text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                       </div>
                     </>
                   );
