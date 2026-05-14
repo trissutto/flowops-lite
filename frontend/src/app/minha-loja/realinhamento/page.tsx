@@ -1618,4 +1618,10 @@ function RealignCell({
         }}
         title="Não achei a peça — reportar pra matriz"
         aria-label="Não achei essa peça"
-     
+        className="absolute top-0 left-0 w-5 h-5 rounded-tl rounded-br bg-rose-500/90 hover:bg-rose-600 text-white flex items-center justify-center text-[10px] font-black shadow z-10 active:scale-90 transition"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
