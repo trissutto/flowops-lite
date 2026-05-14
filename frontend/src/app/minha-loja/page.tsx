@@ -27,6 +27,7 @@ import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
 import Logo from '@/components/Logo';
 import TrackingTimeline from '@/components/TrackingTimeline';
+import ProductThumb from '@/components/ProductThumb';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
@@ -1106,6 +1107,8 @@ function PickOrderCard({
         ) : (
           items.map((it, idx) => (
             <div key={it.id ?? `${it.sku}-${idx}`} className="flex gap-3 items-start">
+              {/* Foto do produto — ajuda vendedora a encontrar a peça rápido na loja */}
+              <ProductThumb sku={it.sku} refCode={it.productName ?? it.sku} size={64} />
               <span className="inline-flex items-center justify-center min-w-[2.25rem] h-9 px-2 rounded-full bg-slate-900 text-white font-extrabold text-sm shrink-0">
                 {it.quantity}x
               </span>
