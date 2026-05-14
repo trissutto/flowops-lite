@@ -1107,8 +1107,14 @@ function PickOrderCard({
         ) : (
           items.map((it, idx) => (
             <div key={it.id ?? `${it.sku}-${idx}`} className="flex gap-3 items-start">
-              {/* Foto do produto — ajuda vendedora a encontrar a peça rápido na loja */}
-              <ProductThumb sku={it.sku} refCode={it.productName ?? it.sku} size={64} />
+              {/* Foto do produto — ajuda vendedora a encontrar a peça rápido na loja.
+                  Click amplia em lightbox com nome+SKU pra conferir detalhes. */}
+              <ProductThumb
+                sku={it.sku}
+                refCode={it.productName ?? it.sku}
+                productName={it.productName ?? null}
+                size={64}
+              />
               <span className="inline-flex items-center justify-center min-w-[2.25rem] h-9 px-2 rounded-full bg-slate-900 text-white font-extrabold text-sm shrink-0">
                 {it.quantity}x
               </span>
