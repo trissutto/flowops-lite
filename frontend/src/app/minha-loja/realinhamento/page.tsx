@@ -25,6 +25,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import ProductThumb from '@/components/ProductThumb';
 import {
   ArrowLeft, Shuffle, CheckCircle2, Loader2, RefreshCw, Package,
   AlertCircle, Send, Sparkles, Shirt, ChevronDown, Printer, Undo2,
@@ -1010,24 +1011,30 @@ export default function MinhaLojaRealinhamentoPage() {
                             pra vendedora reconhecer visualmente a peça antes de
                             ir na arara. */}
                         <div className="flex items-start gap-3 flex-wrap">
+                          {/* Foto do produto. Prioriza g.imageUrl (cache wpDb backend);
+                              fallback ProductThumb que busca WooCommerce REST por REF
+                              (cache 1h + lightbox no click). Funciona em tela e print. */}
                           {g.imageUrl ? (
-                            <div className="w-16 h-20 sm:w-20 sm:h-24 rounded-xl overflow-hidden shrink-0 shadow-lg ring-1 ring-slate-200 bg-slate-100 relative">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={g.imageUrl}
-                                alt={g.ref}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                                onError={(e) => {
-                                  // Fallback silencioso: esconde img quebrada
-                                  (e.currentTarget as HTMLImageElement).style.display = 'none';
-                                }}
-                              />
-                            </div>
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={g.imageUrl}
+                              alt={g.ref}
+                              className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shrink-0 shadow-lg ring-1 ring-slate-200 bg-slate-100 cursor-zoom-in hover:ring-2 hover:ring-violet-400 transition"
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onClick={(e) => {
+                                const src = (e.currentTarget as HTMLImageElement).src;
+                                window.open(src, '_blank', 'noopener,noreferrer');
+                              }}
+                              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                            />
                           ) : (
-                            <div className="w-16 h-20 sm:w-20 sm:h-24 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-lg shadow-fuchsia-500/20">
-                              <Shirt className="w-8 h-8 text-white" />
-                            </div>
+                            <ProductThumb
+                              sku={g.ref}
+                              refCode={g.ref}
+                              productName={g.descricao || g.ref}
+                              size={80}
+                            />
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -1118,8 +1125,17 @@ export default function MinhaLojaRealinhamentoPage() {
           html, body {
             background: white !important;
             color: #000 !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           .no-print { display: none !important; }
+          /* Garante fotos saírem no print (Chrome às vezes pula imagens externas) */
+          img {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            display: block !important;
+            visibility: visible !important;
+          }
           header.sticky { position: static !important; box-shadow: none !important; }
           /* Gradientes e glass viram fundos sólidos limpos pra não gastar tinta */
           header[class*="from-indigo"],
