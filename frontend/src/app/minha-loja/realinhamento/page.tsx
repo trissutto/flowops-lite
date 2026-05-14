@@ -143,11 +143,27 @@ export default function MinhaLojaRealinhamentoPage() {
 
   const handlePrint = useCallback(async () => {
     setPrintMode(true);
-    // Espera React renderizar todas as pilhas antes de chamar print
-    await new Promise((r) => setTimeout(r, 150));
+    // Espera React renderizar TODAS as pilhas + ciclo extra do layout antes
+    // de chamar window.print(). 150ms era pouco em telas com muitos destinos:
+    // o React enfileirava o re-render e o print disparava antes do DOM expandir.
+    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
     window.print();
-    // Restaura estado original depois que fechou o diálogo de impressão
-    setTimeout(() => setPrintMode(false), 500);
+    setTimeout(() => setPrintMode(false), 1000);
+  }, []);
+
+  // Detecta Ctrl+P do navegador (não passa pelo handlePrint do botão).
+  // Quando usuário aperta Ctrl+P, `beforeprint` dispara antes do snapshot
+  // do print — setPrintMode forçar abertura de todas as pilhas.
+  useEffect(() => {
+    const onBefore = () => setPrintMode(true);
+    const onAfter = () => setPrintMode(false);
+    window.addEventListener('beforeprint', onBefore);
+    window.addEventListener('afterprint', onAfter);
+    return () => {
+      window.removeEventListener('beforeprint', onBefore);
+      window.removeEventListener('afterprint', onAfter);
+    };
   }, []);
 
   const pushToast = useCallback((msg: string) => {
