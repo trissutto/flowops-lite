@@ -339,15 +339,29 @@ export default function MinhaLojaRealinhamentoPage() {
         }>;
       }>(`/realignment/shipments/${shipmentId}/precheck`);
 
-      // Se tem problema, abre modal — não tenta fechar agora
-      if (!pre.ok && (pre.problemas.length > 0 || pre.unresolved.length > 0)) {
+      // Bloqueia SÓ se tem `unresolved` (SKU não resolvido no Giga — peça não
+      // bate com o cadastro, problema REAL que precisa correção manual).
+      //
+      // `problemas` (estoque insuficiente) NÃO bloqueia mais: o backend já roda
+      // closeAndSend com `allowNegative: true` (peça está fisicamente em mãos
+      // da vendedora, divergência é só ERP×físico que será corrigida na baixa).
+      // Antes esse modal aparecia bloqueando vendedora e ela tinha que remover
+      // peças que estavam na frente dela — sumindo trabalho de separação.
+      if (pre.unresolved.length > 0) {
         setProblemasShipment({ shipmentId, code, ...pre });
         setClosingShipmentId(null);
         return;
       }
 
-      // 2) Confirmação final + fechar
-      if (!confirm(`Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças. Não pode desfazer.`)) {
+      // 2) Confirmação final + fechar. Se tem peças com estoque divergente,
+      // mostra um aviso EXTRA no confirm — mas deixa fechar.
+      let confirmMsg = `Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças. Não pode desfazer.`;
+      if (pre.problemas.length > 0) {
+        confirmMsg =
+          `⚠ ${pre.problemas.length} peça(s) com estoque divergente no Giga (vamos baixar mesmo assim — as peças estão fisicamente em mãos).\n\n` +
+          confirmMsg;
+      }
+      if (!confirm(confirmMsg)) {
         setClosingShipmentId(null);
         return;
       }

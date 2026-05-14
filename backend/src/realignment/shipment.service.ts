@@ -472,21 +472,47 @@ export class RealignmentShipmentService {
     });
     if (!items.length) throw new BadRequestException('Remessa vazia — adicione itens antes de fechar');
 
-    // Resolve SKU de cada item.
-    // PRIORIDADE: usa o codigoBipado (CODIGO real do Giga, salvo na hora do
-    // bipe). Sem ambiguidade quando há peças com mesma REF+COR+TAMANHO mas
-    // códigos diferentes (ex: linha CHIC vs 3/4 ambas REF 2088).
-    // FALLBACK: items antigos (pré-feature) tem codigoBipado=null. Usa o
-    // findCodigoByRefCorTam clássico — pode dar ambiguidade.
+    // Resolve SKU de cada item — OTIMIZADO: items com codigoBipado direto,
+    // items sem fazem 1 ÚNICA query batch pra resolver todos de uma vez.
+    //
+    // ANTES (lento): loop sync com N queries MySQL serial pelo
+    // findCodigoByRefCorTam — uma remessa com 114 itens fazia 114 queries
+    // sequenciais, ~50ms cada = ~5-6 segundos só pra resolver SKUs.
+    // AGORA (rápido): items com codigoBipado vão direto (zero query); items
+    // sem usam batchFindCodigosByRefCorTam (1 query SQL com OR pra todos).
+    const tStart = Date.now();
     const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
     const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+
+    const itemsSemCodigoBipado: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      if (!it.codigoBipado) {
+        itemsSemCodigoBipado.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+
+    let batchSkus = new Map<string, string>();
+    if (itemsSemCodigoBipado.length > 0) {
+      try {
+        batchSkus = await this.erp.batchFindCodigosByRefCorTam(itemsSemCodigoBipado);
+      } catch (e) {
+        this.logger.warn(
+          `[closeAndSend] batchFindCodigosByRefCorTam falhou: ${(e as Error).message}. ` +
+          `Caindo pra resolucao individual.`,
+        );
+      }
+    }
+    const keyOf = (ref: string, cor: string | null, tam: string | null) =>
+      `${String(ref).trim().toUpperCase()}|${String(cor || '').trim().toUpperCase()}|${String(tam || '').trim().toUpperCase()}`;
 
     for (const it of items as any[]) {
       try {
         let sku: string | null = it.codigoBipado || null;
         if (!sku) {
-          // Fallback pra items antigos sem codigoBipado
-          sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          sku = batchSkus.get(keyOf(it.refCode, it.cor, it.tamanho)) || null;
+          if (!sku) {
+            sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          }
         }
         if (!sku) {
           unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
@@ -502,6 +528,10 @@ export class RealignmentShipmentService {
         unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
       }
     }
+    this.logger.log(
+      `[closeAndSend] resolveSku: ${items.length} items em ${Date.now() - tStart}ms ` +
+      `(${itemsSemCodigoBipado.length} via batch, ${items.length - itemsSemCodigoBipado.length} via codigoBipado)`,
+    );
 
     if (unresolved.length) {
       throw new BadRequestException(
@@ -510,24 +540,23 @@ export class RealignmentShipmentService {
       );
     }
 
-    // Pré-verifica estoque antes de iniciar transação. Antes bloqueava o
-    // fechamento. Agora, como permitimos estoque negativo em realinhamento
-    // (a peça já está em mãos fisicamente), apenas loga warning com a lista
-    // de divergências pra auditoria. NÃO bloqueia mais.
+    // Pré-verifica estoque antes de iniciar transação.
+    const tPrecheck = Date.now();
     const precheck = await this.precheckStockForShipment(items as any[], stockItems);
+    this.logger.log(`[closeAndSend] precheck: ${Date.now() - tPrecheck}ms`);
     if (precheck.problemas.length > 0) {
       this.logger.warn(
-        `closeAndSend ${shipment.code}: ${precheck.problemas.length} item(ns) com estoque insuficiente no Giga — fechando mesmo assim (allowNegative). Detalhes: ${JSON.stringify(precheck.problemas).slice(0, 500)}`,
+        `closeAndSend ${shipment.code}: ${precheck.problemas.length} item(ns) com estoque insuficiente no Giga - fechando mesmo assim (allowNegative). Detalhes: ${JSON.stringify(precheck.problemas).slice(0, 500)}`,
       );
     }
 
     // BAIXA estoque Giga origem em transação (todos ou nada).
-    // allowNegative=true: a peça já está em mãos fisicamente, então deixamos
-    // o Giga ficar negativo se houver divergência. Loga warning pra rastro.
+    const tDecrease = Date.now();
     const result = await this.erp.decreaseStock(
       stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
       { allowNegative: true, skipNotFound: true },
     );
+    this.logger.log(`[closeAndSend] decreaseStock: ${Date.now() - tDecrease}ms (${stockItems.length} SKUs)`);
     if (!result.success) {
       throw new BadRequestException(
         `Falha ao baixar estoque Giga origem: ${result.error}. Remessa NÃO foi fechada.`,
