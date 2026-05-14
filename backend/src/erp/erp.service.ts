@@ -4696,10 +4696,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool || !items.length) return out;
 
     const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => s.replace(/^0+/, '') || '0';
     const keyOf = (ref: string, cor: any, tam: any) => `${norm(ref)}|${norm(cor)}|${norm(tam)}`;
 
+    // TOLERANCIA DE ZEROS A ESQUERDA NA REF:
+    // Giga pode ter REF "012467" e TransferOrder ter "12467" (ou vice-versa).
+    // Match exato falha. Geramos variantes de padding e usamos IN().
+    const refVariants = (ref: string): string[] => {
+      const core = stripZeros(ref);
+      const vs = new Set<string>();
+      vs.add(ref);
+      vs.add(core);
+      for (let i = 1; i <= 3; i++) vs.add('0'.repeat(i) + core);
+      return Array.from(vs);
+    };
+
     const seen = new Set<string>();
-    const uniq: Array<{ ref: string; cor: string; tam: string }> = [];
+    const uniq: Array<{ ref: string; refCore: string; cor: string; tam: string }> = [];
     for (const it of items) {
       const ref = norm(it.refCode);
       if (!ref) continue;
@@ -4708,29 +4721,50 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const k = `${ref}|${cor}|${tam}`;
       if (seen.has(k)) continue;
       seen.add(k);
-      uniq.push({ ref, cor, tam });
+      uniq.push({ ref, refCore: stripZeros(ref), cor, tam });
     }
     if (!uniq.length) return out;
+
+    // refCore → items originais com essa core (pode haver vários com cor/tam diferentes)
+    const byRefCore = new Map<string, typeof uniq>();
+    for (const u of uniq) {
+      const arr = byRefCore.get(u.refCore) || [];
+      arr.push(u);
+      byRefCore.set(u.refCore, arr);
+    }
 
     const chunks: typeof uniq[] = [];
     for (let i = 0; i < uniq.length; i += 500) chunks.push(uniq.slice(i, i + 500));
 
     for (const chunk of chunks) {
       const conds = chunk
-        .map(() => `(TRIM(UPPER(REF)) = ? AND TRIM(UPPER(COALESCE(COR,''))) = ? AND TRIM(UPPER(COALESCE(TAMANHO,''))) = ?)`)
+        .map(() => `(TRIM(UPPER(REF)) IN (?,?,?,?,?) AND TRIM(UPPER(COALESCE(COR,''))) = ? AND TRIM(UPPER(COALESCE(TAMANHO,''))) = ?)`)
         .join(' OR ');
       const params: string[] = [];
       for (const u of chunk) {
-        params.push(u.ref, u.cor, u.tam);
+        const vs = refVariants(u.ref);
+        const padded = [...vs];
+        while (padded.length < 5) padded.push(vs[0]);
+        params.push(padded[0], padded[1], padded[2], padded[3], padded[4], u.cor, u.tam);
       }
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO FROM produtos WHERE ${conds}`,
           params,
         );
+        // Mapeia REF do Giga (possivelmente com zeros) de volta pra REF do input via refCore
         for (const r of rows as any[]) {
-          const k = keyOf(r.REF, r.COR, r.TAMANHO);
-          if (!out.has(k)) out.set(k, String(r.CODIGO).trim());
+          const refGiga = norm(r.REF);
+          const refCore = stripZeros(refGiga);
+          const cor = norm(r.COR);
+          const tam = norm(r.TAMANHO);
+          const matches = byRefCore.get(refCore) || [];
+          for (const m of matches) {
+            if (m.cor === cor && m.tam === tam) {
+              const k = keyOf(m.ref, m.cor, m.tam);
+              if (!out.has(k)) out.set(k, String(r.CODIGO).trim());
+            }
+          }
         }
       } catch (e: any) {
         this.logger.warn(`batchFindCodigosByRefCorTam falhou em chunk: ${e?.message || e}`);
@@ -4821,31 +4855,64 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
 
       // 2) Resolve CODIGOs de cada combinacao via 1 query batch em produtos
-      // Usa OR pra cobrir todas combinacoes — MySQL usa indice em REF
+      // TOLERANCIA DE ZEROS A ESQUERDA NA REF: Giga pode ter REF "012467"
+      // mas input "12467" (ou vice-versa). Gera variantes e usa IN().
+      const stripZeros = (s: string) => s.replace(/^0+/, '') || '0';
+      const refVariants = (ref: string): string[] => {
+        const core = stripZeros(ref);
+        const vs = new Set<string>();
+        vs.add(ref);
+        vs.add(core);
+        for (let i = 1; i <= 3; i++) vs.add('0'.repeat(i) + core);
+        return Array.from(vs);
+      };
+
       const orParts: string[] = [];
       const orParams: any[] = [];
       for (const { refCode, cor, tamanho } of uniqRefCorTam.values()) {
+        const refUp = String(refCode).trim().toUpperCase();
+        const vs = refVariants(refUp);
+        const padded = [...vs];
+        while (padded.length < 5) padded.push(vs[0]);
         orParts.push(
-          `(TRIM(UPPER(REF)) = TRIM(UPPER(?)) AND TRIM(UPPER(COALESCE(COR,''))) = TRIM(UPPER(?)) AND TRIM(UPPER(COALESCE(TAMANHO,''))) = TRIM(UPPER(?)))`,
+          `(TRIM(UPPER(REF)) IN (?,?,?,?,?) AND TRIM(UPPER(COALESCE(COR,''))) = TRIM(UPPER(?)) AND TRIM(UPPER(COALESCE(TAMANHO,''))) = TRIM(UPPER(?)))`,
         );
-        orParams.push(refCode, cor, tamanho);
+        orParams.push(padded[0], padded[1], padded[2], padded[3], padded[4], cor, tamanho);
       }
       const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO FROM produtos WHERE ${orParts.join(' OR ')}`,
         orParams,
       );
 
-      // refCorTamKey → Set<codigoBase> (sem padding)
+      // Mapeia input por refCore pra reconectar com REF do Giga
+      const inputByRefCore = new Map<string, Array<{ ref: string; cor: string; tam: string }>>();
+      for (const { refCode, cor, tamanho } of uniqRefCorTam.values()) {
+        const refUp = String(refCode).trim().toUpperCase();
+        const refCore = stripZeros(refUp);
+        const corUp = String(cor).trim().toUpperCase();
+        const tamUp = String(tamanho).trim().toUpperCase();
+        const arr = inputByRefCore.get(refCore) || [];
+        arr.push({ ref: refUp, cor: corUp, tam: tamUp });
+        inputByRefCore.set(refCore, arr);
+      }
+
+      // refCorTamKey (do input) → Set<codigoBase>
       const refCorTamToCodigos = new Map<string, Set<string>>();
       for (const r of prodRows as any[]) {
-        const ref = String(r.REF || '').trim().toUpperCase();
+        const refGiga = String(r.REF || '').trim().toUpperCase();
+        const refCore = stripZeros(refGiga);
         const cor = String(r.COR || '').trim().toUpperCase();
         const tam = String(r.TAMANHO || '').trim().toUpperCase();
         const codigo = String(r.CODIGO || '').trim();
         if (!codigo) continue;
-        const k = `${ref}::${cor}::${tam}`;
-        if (!refCorTamToCodigos.has(k)) refCorTamToCodigos.set(k, new Set());
-        refCorTamToCodigos.get(k)!.add(codigo);
+        const candidates = inputByRefCore.get(refCore) || [];
+        for (const cand of candidates) {
+          if (cand.cor === cor && cand.tam === tam) {
+            const k = `${cand.ref}::${cor}::${tam}`;
+            if (!refCorTamToCodigos.has(k)) refCorTamToCodigos.set(k, new Set());
+            refCorTamToCodigos.get(k)!.add(codigo);
+          }
+        }
       }
 
       // 3) Expande todas variantes de CODIGOs encontrados
