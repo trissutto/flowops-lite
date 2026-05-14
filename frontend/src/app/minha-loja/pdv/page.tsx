@@ -2943,9 +2943,22 @@ function PaymentModal({
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await api<{ status: string; isPaid?: boolean }>(endpoint);
+        const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(endpoint);
         if (cancelled) return;
-        if (r.status === 'paid') setPixPaid(true);
+        if (r.status === 'paid') {
+          setPixPaid(true);
+        } else if (r.status === 'failed' || r.status === 'canceled' || r.isFailed) {
+          // FIX CRÍTICO: PIX falhou na Pagar.me — alerta a vendedora e NÃO
+          // finaliza a venda. Antes desse fix, status revertido pro failed
+          // depois de webhook paid podia deixar a venda finalizada errada.
+          toast(
+            'error',
+            'PIX falhou / cancelado',
+            'A Pagar.me reportou erro no pagamento. NÃO finalize — peça pra cliente pagar de novo ou trocar de forma.',
+          );
+          // Limpa pra forçar nova geração de QR
+          setPixCharge(null);
+        }
       } catch {
         // silencioso
       }

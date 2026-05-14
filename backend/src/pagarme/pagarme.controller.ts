@@ -90,17 +90,24 @@ export class PagarmeController {
     const p = await this.svc.getPaymentBySale(saleId);
     if (!p) return { found: false, status: 'none' };
 
-    // Se ainda pendente, consulta a Pagar.me AO VIVO (não depende do webhook).
-    // Assim o polling do frontend (3s) já força sync direto com a Pagar.me.
+    // SEGURANÇA: SEMPRE consulta Pagar.me ao vivo se o pagamento foi criado
+    // nos últimos 30min (independente do status local).
+    //
+    // ANTES: confiava no banco local — webhook marcava paid, e mesmo se
+    // Pagar.me revertesse depois (failed/canceled), o frontend recebia paid
+    // e finalizava a venda. AGORA: live é a fonte de verdade enquanto recente.
     let currentStatus = p.status;
     let paidAt = p.paidAt;
-    if (p.status === 'pending') {
+    const ageMs = Date.now() - new Date(p.createdAt).getTime();
+    const isRecent = ageMs < 30 * 60 * 1000;
+    if (isRecent && p.pagarmeOrderId) {
       try {
         const live = await this.svc.checkOrderStatus(p.pagarmeOrderId);
         currentStatus = live.status;
         if (live.isPaid) paidAt = new Date();
+        // Se Pagar.me reverteu (failed/canceled) mas banco tinha paid: persiste a reversão
       } catch {
-        // Falha de rede com Pagar.me — mantém status local
+        // Falha de rede com Pagar.me — mantém status local (não force paid)
       }
     }
 
@@ -108,6 +115,7 @@ export class PagarmeController {
       found: true,
       status: currentStatus,
       isPaid: currentStatus === 'paid',
+      isFailed: currentStatus === 'failed' || currentStatus === 'canceled',
       pagarmeOrderId: p.pagarmeOrderId,
       paidAt,
       expiresAt: p.expiresAt,

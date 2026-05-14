@@ -85,11 +85,39 @@ export default function PixPaidListener() {
   // Pulsa quando chega novo
   const [pulse, setPulse] = useState(false);
 
-  const sinceRef = useRef<string>(new Date(Date.now() - 5 * 60 * 1000).toISOString());
+  // Persistência: `since` e `seen` ficam no localStorage pra sobreviver a
+  // recarregamentos da página. ANTES: ao recarregar, since virava "agora -5min"
+  // e perdia alertas de pagamentos do começo do dia. AGORA: pega tudo desde a
+  // última visita (cap 12h pra não acumular antigo demais).
+  const LAST_SEEN_KEY = 'lurds_pix_listener_last_seen_iso';
+  const SEEN_IDS_KEY = 'lurds_pix_listener_seen_ids';
+  const sinceRef = useRef<string>('');
   const seenRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
+    // Carrega persistido (se houver) — janela mínima de 5min, máxima de 12h
+    try {
+      const stored = localStorage.getItem(LAST_SEEN_KEY);
+      if (stored) {
+        const dt = new Date(stored);
+        const ageHours = (Date.now() - dt.getTime()) / (1000 * 60 * 60);
+        if (!isNaN(dt.getTime()) && ageHours < 12) {
+          sinceRef.current = dt.toISOString();
+        }
+      }
+      if (!sinceRef.current) {
+        // Fallback: 12h atrás (cobre turno completo de loja)
+        sinceRef.current = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+      }
+      const seenRaw = localStorage.getItem(SEEN_IDS_KEY);
+      if (seenRaw) {
+        const arr = JSON.parse(seenRaw);
+        if (Array.isArray(arr)) {
+          seenRef.current = new Set(arr.slice(-200)); // cap pra não estourar storage
+        }
+      }
+    } catch { /* segue com defaults */ }
 
     const beepCurto = () => {
       try {
@@ -112,13 +140,17 @@ export default function PixPaidListener() {
       try {
         const since = sinceRef.current;
         const apiBaixas = await api<any[]>(`/crediarios/baixa/recentes-pagas?since=${encodeURIComponent(since)}`);
-        if (cancelled || !apiBaixas?.length) return;
+        // Atualiza `since` SEMPRE que o poll completa (mesmo sem resultado),
+        // pra não relistar as antigas no próximo ciclo.
         sinceRef.current = new Date().toISOString();
+        try { localStorage.setItem(LAST_SEEN_KEY, sinceRef.current); } catch {}
+        if (cancelled || !apiBaixas?.length) return;
 
         const novas: BaixaInfo[] = [];
         for (const b of apiBaixas) {
           if (seenRef.current.has(b.id)) continue;
           seenRef.current.add(b.id);
+          try { localStorage.setItem(SEEN_IDS_KEY, JSON.stringify([...seenRef.current].slice(-200))); } catch {}
           // Tenta silent print via Electron. Se rolar, ja marca como printed.
           // Em browser puro retorna false — fica printed=false ate user clicar.
           let silentOk = false;
