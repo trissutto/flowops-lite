@@ -386,8 +386,11 @@ export class RealignmentShipmentService {
     }
 
     const { problemas } = await this.precheckStockForShipment(items as any[], stockItems);
+    // `ok` agora considera SO `unresolved` (SKU nao encontrado) como bloqueador.
+    // Estoque divergente (problemas) e apenas AVISO - backend ja roda
+    // closeAndSend com allowNegative, peca em maos prevalece.
     return {
-      ok: problemas.length === 0 && unresolved.length === 0,
+      ok: unresolved.length === 0,
       totalItems: items.length,
       unresolved,
       problemas,

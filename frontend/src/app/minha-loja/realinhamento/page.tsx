@@ -1289,13 +1289,46 @@ export default function MinhaLojaRealinhamentoPage() {
               )}
             </div>
 
-            <div className="px-5 py-3 bg-slate-50 border-t flex justify-end gap-2">
-              <button
-                onClick={() => setProblemasShipment(null)}
-                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded font-bold text-sm"
-              >
-                Fechar
-              </button>
+            <div className="px-5 py-3 bg-slate-50 border-t flex flex-wrap justify-between items-center gap-2">
+              <div className="text-[11px] text-slate-600 max-w-[400px]">
+                <b>Pecas em maos?</b> Use o botao laranja. O Giga ficara
+                negativo nessas pecas (corrige no proximo inventario).
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setProblemasShipment(null)}
+                  className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 rounded font-bold text-sm"
+                >
+                  Fechar
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!problemasShipment) return;
+                    const total = problemasShipment.problemas.length;
+                    const msg = 'FORCAR fechamento da remessa ' + problemasShipment.code + '?\n\n' + total + ' peca(s) com estoque divergente no Giga.\n\nUse SO se as pecas estao fisicamente em maos. O Giga ficara negativo nelas - voce corrige no proximo inventario.';
+                    if (!confirm(msg)) return;
+                    const shipmentId = problemasShipment.shipmentId;
+                    setClosingShipmentId(shipmentId);
+                    setProblemasShipment(null);
+                    try {
+                      const res = await api<{ ok: boolean; code: string; totalItems: number; totalQty: number }>(
+                        '/realignment/shipments/' + shipmentId + '/close-and-send',
+                        { method: 'POST', body: '{}' },
+                      );
+                      pushToast('Remessa ' + res.code + ' FORCADA e enviada (' + res.totalQty + ' pecas).');
+                      await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
+                    } catch (e: any) {
+                      alert('Erro ao forcar fechamento: ' + (e?.message || e));
+                    } finally {
+                      setClosingShipmentId(null);
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white border-2 border-amber-700 rounded font-black text-sm flex items-center gap-1.5 shadow-md"
+                  title="Fecha a remessa ignorando divergencia de estoque (pecas em maos)"
+                >
+                  FORCAR FECHAMENTO ({problemasShipment.problemas.length})
+                </button>
+              </div>
             </div>
           </div>
         </div>
