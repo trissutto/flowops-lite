@@ -1392,6 +1392,91 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * BUSCA REFs com SOBRA DE ESTOQUE — quaisquer SKUs (cor × tamanho) que
+   * tenham >= minQty unidades em estoque. Útil pra encontrar candidatas a
+   * realinhamento (ex.: "todas as blusas manga curta plus size com 2+ por SKU").
+   *
+   * Diferença pra getParados: aqui não filtra por "sem venda há X dias",
+   * só pelo critério bruto de sobra >= minQty POR SKU. Filtro de descrição
+   * permite restringir tipo (BLUSA, CALÇA, etc).
+   */
+  async searchRefsComSobraPorSku(input: {
+    minQty?: number;
+    descricaoContains?: string;
+    plusSizeOnly?: boolean;
+    storeCode?: string | null;
+    limit?: number;
+  }): Promise<Array<{
+    ref: string;
+    descricao: string;
+    variantesComSobra: number;
+    estoqueTotalSobra: number;
+    skuExemplo: string | null;
+  }>> {
+    if (!this.pool) return [];
+    const minQty = Math.max(1, Math.min(100, input.minQty || 2));
+    const limit = Math.max(1, Math.min(2000, input.limit || 500));
+
+    const conds: string[] = [
+      'e.ESTOQUE >= ?',
+      'p.REF IS NOT NULL',
+      "p.REF <> ''",
+    ];
+    const vals: any[] = [minQty];
+
+    if (input.storeCode) {
+      conds.push('e.LOJA = ?');
+      vals.push(input.storeCode);
+    }
+    if (input.plusSizeOnly) {
+      conds.push(
+        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'",
+      );
+    }
+    if (input.descricaoContains?.trim()) {
+      conds.push(
+        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ?",
+      );
+      vals.push(`%${input.descricaoContains.trim().toUpperCase()}%`);
+    }
+
+    const sql = `
+      SELECT p.REF                                                AS ref,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO))      AS descricao,
+             COUNT(DISTINCT p.CODIGO)                             AS variantesComSobra,
+             SUM(e.ESTOQUE)                                       AS estoqueTotalSobra,
+             MAX(p.CODIGO)                                        AS skuExemplo
+        FROM estoque e
+        INNER JOIN produtos p
+                ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
+       WHERE ${conds.join(' AND ')}
+       GROUP BY p.REF
+       ORDER BY estoqueTotalSobra DESC, variantesComSobra DESC
+       LIMIT ?
+    `;
+    vals.push(limit);
+
+    try {
+      this.logger.log(
+        `[erp] searchRefsComSobraPorSku minQty=${minQty} loja=${input.storeCode || 'all'} ` +
+        `plusSize=${!!input.plusSizeOnly} desc=${input.descricaoContains || '(none)'}`,
+      );
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
+      this.logger.log(`[erp] searchRefsComSobraPorSku retornou ${rows.length} REF(s)`);
+      return (rows as any[]).map((r) => ({
+        ref: String(r.ref).trim(),
+        descricao: String(r.descricao || '').trim(),
+        variantesComSobra: Number(r.variantesComSobra) || 0,
+        estoqueTotalSobra: Number(r.estoqueTotalSobra) || 0,
+        skuExemplo: r.skuExemplo ? String(r.skuExemplo).trim() : null,
+      }));
+    } catch (e) {
+      this.logger.error(`searchRefsComSobraPorSku falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
    * DIAGNÓSTICO de searchRefsByDateRange — usado pra debugar quando "0 resultados".
    * Retorna:
    *   - qual coluna de data foi detectada

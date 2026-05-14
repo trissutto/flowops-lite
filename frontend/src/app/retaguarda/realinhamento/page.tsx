@@ -157,6 +157,53 @@ export default function RealinhamentoPage() {
   // Filtro client-side ao vivo: digita "REGATA" → mostra só REFs com REGATA
   // Aceita múltiplas palavras AND: "REGATA MANIFESTO" → tem AS DUAS
   const [dateDescFilter, setDateDescFilter] = useState('');
+
+  // ── BUSCA POR SOBRA DE ESTOQUE (REFs com SKUs >= minQty) ──────────────
+  const [sobraMinQty, setSobraMinQty] = useState(2);
+  const [sobraOnlyPlusSize, setSobraOnlyPlusSize] = useState(true);
+  const [sobraDesc, setSobraDesc] = useState('');
+  const [sobraLoading, setSobraLoading] = useState(false);
+  const [sobraError, setSobraError] = useState<string | null>(null);
+  const [sobraResults, setSobraResults] = useState<
+    Array<{ ref: string; descricao: string; variantesComSobra: number; estoqueTotalSobra: number; skuExemplo: string | null }>
+  >([]);
+  const [sobraDescFilter, setSobraDescFilter] = useState('');
+  const filteredSobraResults = useMemo(() => {
+    const f = sobraDescFilter.trim().toUpperCase();
+    if (!f) return sobraResults;
+    const words = f.split(/\s+/).filter(Boolean);
+    return sobraResults.filter((r) => {
+      const desc = (r.descricao || '').toUpperCase();
+      return words.every((w) => desc.includes(w));
+    });
+  }, [sobraResults, sobraDescFilter]);
+
+  const handleSearchSobra = async () => {
+    setSobraLoading(true);
+    setSobraError(null);
+    try {
+      const params = new URLSearchParams({
+        minQty: String(sobraMinQty),
+        ...(sobraOnlyPlusSize ? { plusSize: '1' } : {}),
+        ...(sobraDesc.trim() ? { desc: sobraDesc.trim() } : {}),
+      });
+      const data = await api<typeof sobraResults>(`/realignment/search-refs-com-sobra?${params}`);
+      setSobraResults(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      setSobraError(e?.message || 'Erro buscando REFs com sobra');
+    } finally {
+      setSobraLoading(false);
+    }
+  };
+
+  const addAllSobraRefs = () => {
+    const lista = filteredSobraResults;
+    if (!lista.length) return;
+    const novos = lista.map((r) => r.ref);
+    const atuais = new Set(refsText.split('\n').map((s) => s.trim()).filter(Boolean));
+    novos.forEach((r) => atuais.add(r));
+    setRefsText(Array.from(atuais).sort().join('\n'));
+  };
   const filteredDateResults = useMemo(() => {
     const f = dateDescFilter.trim().toUpperCase();
     if (!f) return dateResults;
@@ -817,6 +864,135 @@ export default function RealinhamentoPage() {
                     {filteredDateResults.length > 100 && (
                       <div className="px-3 py-1.5 text-slate-500 italic">
                         + {filteredDateResults.length - 100} REFs adicionais (use "Adicionar")
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── BUSCA POR SOBRA DE ESTOQUE (REFs com SKUs >= N) ── */}
+        <div className="border border-sky-200 bg-sky-50/60 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Search className="w-4 h-4 text-sky-700" />
+            <div className="text-sm font-semibold text-sky-900">
+              Buscar REFs com sobra de estoque (SKUs &gt;= N)
+            </div>
+          </div>
+          <div className="text-xs text-sky-900/80 mb-2">
+            Lista REFs onde alguma variação cor×tamanho tem N+ unidades. Útil pra encontrar
+            sobras e redistribuir entre lojas (ex: blusas plus size com 2+ por SKU).
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 items-end">
+            <div>
+              <label className="block text-[11px] font-semibold text-sky-900 mb-0.5">Mín. por SKU</label>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={sobraMinQty}
+                onChange={(e) => setSobraMinQty(Math.max(1, parseInt(e.target.value, 10) || 2))}
+                className="w-full border border-sky-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-semibold text-sky-900 mb-0.5">Descrição contém</label>
+              <input
+                type="text"
+                value={sobraDesc}
+                onChange={(e) => setSobraDesc(e.target.value)}
+                placeholder="Ex: BLUSA MANGA CURTA"
+                className="w-full border border-sky-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-sky-900 sm:pb-2">
+              <input
+                type="checkbox"
+                checked={sobraOnlyPlusSize}
+                onChange={(e) => setSobraOnlyPlusSize(e.target.checked)}
+              />
+              Só PLUS SIZE
+            </label>
+            <button
+              type="button"
+              onClick={handleSearchSobra}
+              disabled={sobraLoading}
+              className="bg-sky-600 hover:bg-sky-700 disabled:bg-slate-300 text-white font-bold rounded-lg px-4 py-2 text-sm flex items-center justify-center gap-2"
+            >
+              {sobraLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Buscar
+            </button>
+          </div>
+          {sobraError && (
+            <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+              {sobraError}
+            </div>
+          )}
+          {!sobraLoading && !sobraError && sobraResults.length === 0 && (
+            <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+              <div className="text-xs text-amber-900 font-bold mb-1">
+                ⚠️ Nenhuma REF encontrada com esses critérios.
+              </div>
+              <div className="text-xs text-amber-900/80">
+                Tente diminuir a quantidade mínima, desmarcar Só PLUS SIZE ou ajustar o filtro de descrição.
+              </div>
+            </div>
+          )}
+          {sobraResults.length > 0 && (
+            <div className="mt-3 bg-white border border-sky-200 rounded-lg overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-2 bg-sky-100/50 border-b border-sky-200">
+                <div className="text-xs font-bold text-sky-900 shrink-0">
+                  {filteredSobraResults.length === sobraResults.length
+                    ? `${sobraResults.length} REF(s)`
+                    : `${filteredSobraResults.length} de ${sobraResults.length}`}
+                </div>
+                <input
+                  type="text"
+                  value={sobraDescFilter}
+                  onChange={(e) => setSobraDescFilter(e.target.value)}
+                  placeholder="Filtrar resultados…"
+                  className="flex-1 border border-sky-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-sky-400 min-w-0"
+                />
+                {sobraDescFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setSobraDescFilter('')}
+                    className="text-xs px-2 py-1 text-slate-500 hover:bg-slate-100 rounded"
+                    title="Limpar filtro"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={addAllSobraRefs}
+                  disabled={filteredSobraResults.length === 0}
+                  className="text-xs bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-bold rounded px-3 py-1 flex items-center gap-1 shrink-0"
+                >
+                  <Plus className="w-3 h-3" />
+                  Adicionar {filteredSobraResults.length > 0 ? `(${filteredSobraResults.length})` : ''}
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto divide-y divide-sky-100 text-xs">
+                {filteredSobraResults.length === 0 ? (
+                  <div className="px-3 py-3 text-slate-500 italic text-center">
+                    Nada bate com esse filtro
+                  </div>
+                ) : (
+                  <>
+                    {filteredSobraResults.slice(0, 200).map((r) => (
+                      <div key={r.ref} className="px-3 py-1.5 flex items-center gap-2">
+                        <span className="font-mono font-bold text-sky-900">{r.ref}</span>
+                        <span className="text-slate-600 truncate flex-1">{r.descricao}</span>
+                        <span className="text-sky-700 font-bold tabular-nums">{r.variantesComSobra}var</span>
+                        <span className="text-emerald-700 font-bold tabular-nums">{r.estoqueTotalSobra}un</span>
+                      </div>
+                    ))}
+                    {filteredSobraResults.length > 200 && (
+                      <div className="px-3 py-1.5 text-slate-500 italic">
+                        + {filteredSobraResults.length - 200} REFs adicionais (use Adicionar)
                       </div>
                     )}
                   </>

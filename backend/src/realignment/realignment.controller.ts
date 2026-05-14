@@ -125,6 +125,33 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/search-refs-com-sobra?minQty=2&plusSize=1&desc=BLUSA
+   *
+   * Lista REFs que têm SKUs (cor × tamanho) com estoque >= minQty. Útil pra
+   * encontrar candidatas a realinhamento (peças com sobra na rede ou em
+   * uma loja específica).
+   */
+  @Get('search-refs-com-sobra')
+  async searchRefsComSobra(
+    @Query('minQty') minQtyStr?: string,
+    @Query('plusSize') plusSizeStr?: string,
+    @Query('desc') desc?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('limit') limitStr?: string,
+  ) {
+    const minQty = minQtyStr ? Math.max(1, Math.min(100, parseInt(minQtyStr, 10))) : 2;
+    const plusSize = plusSizeStr === '1' || plusSizeStr === 'true';
+    const limit = limitStr ? Math.max(1, Math.min(2000, parseInt(limitStr, 10))) : 500;
+    return this.erp.searchRefsComSobraPorSku({
+      minQty,
+      plusSizeOnly: plusSize,
+      descricaoContains: desc?.trim() || undefined,
+      storeCode: storeCode?.trim() || null,
+      limit,
+    });
+  }
+
+  /**
    * GET /realignment/search-refs-by-date-debug — diagnóstico
    * Mostra todas as colunas, qual data foi detectada, contagens, sample.
    * Use quando search-refs-by-date retorna 0 pra entender por quê.
