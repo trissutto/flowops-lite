@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles, Shirt, ChevronDown } from 'lucide-react';
+import { Loader2, Shuffle, Send, ArrowRight, AlertTriangle, CheckCircle2, Trash2, ArrowUpFromLine, ArrowDownToLine, Search, Plus, X, Sparkles, Shirt, ChevronDown, Settings } from 'lucide-react';
 
 interface Store {
   id: string;
@@ -1002,34 +1002,71 @@ export default function RealinhamentoPage() {
           )}
         </div>
 
-        {/* ── AUTO-REALINHAMENTO ── (recolhido por padrão; expande no clique) */}
-        {autoConfig && (
-          <div className="border border-violet-200 bg-violet-50/60 rounded-lg px-3 py-2">
-            <button
-              type="button"
-              onClick={() => setAutoOpen(!autoOpen)}
-              className="w-full flex items-center gap-2 hover:bg-violet-50 -mx-1 px-1 py-0.5 rounded transition"
-            >
-              <Sparkles className="w-4 h-4 text-violet-700" />
-              <span className="text-sm font-semibold text-violet-900 flex-1 text-left">
-                Auto-realinhamento (cron diário 06h)
-              </span>
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                autoConfig.enabled
-                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                  : 'bg-slate-100 text-slate-600 border border-slate-300'
-              }`}>
-                {autoConfig.enabled ? '● ATIVO' : '○ OFF'}
-              </span>
-              {autoPending?.refs && autoPending.refs.length > 0 && (
-                <span className="text-[10px] font-bold bg-violet-600 text-white rounded-full px-2 py-0.5">
-                  🔔 {autoPending.refs.length}
+        {/* ── BARRA COMPACTA: Auto-realin (toggle) + Filtro PLUS SIZE (botão config) ── */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Toggle Auto-realinhamento — pill compacto */}
+          {autoConfig && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => saveAutoConfig({ enabled: !autoConfig.enabled })}
+                disabled={autoSaving}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 text-xs font-bold transition disabled:opacity-50 ${
+                  autoConfig.enabled
+                    ? 'bg-violet-600 border-violet-700 text-white hover:bg-violet-700'
+                    : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+                title="Auto-realinhamento (cron 06h)"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Auto-realin
+                <span className={`text-[9px] font-black px-1 rounded ${
+                  autoConfig.enabled ? 'bg-white/25' : 'bg-slate-200 text-slate-500'
+                }`}>
+                  {autoConfig.enabled ? 'ON' : 'OFF'}
                 </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAutoOpen(!autoOpen)}
+                className="p-1.5 rounded-lg hover:bg-violet-100 text-violet-700 border-2 border-transparent hover:border-violet-300"
+                title="Configurar auto-realinhamento"
+              >
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+              {autoPending?.refs && autoPending.refs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAutoOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border-2 border-rose-300 text-rose-800 text-xs font-bold"
+                  title="REFs sugeridas pendentes"
+                >
+                  🔔 {autoPending.refs.length}
+                </button>
               )}
-              <ChevronDown className={`w-4 h-4 text-violet-700 transition-transform ${autoOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {autoOpen && autoPending?.refs && autoPending.refs.length > 0 && (
-              <div className="bg-white border-2 border-violet-300 rounded-lg p-3 mt-2 mb-2">
+            </div>
+          )}
+
+          {/* Botão quadrado config — Filtro de tamanhos PLUS SIZE */}
+          <button
+            type="button"
+            onClick={() => setPlusSizesOpen(!plusSizesOpen)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 text-xs font-bold transition"
+            title="Filtro de tamanhos PLUS SIZE"
+          >
+            <Shirt className="w-3.5 h-3.5" />
+            Tamanhos
+            <span className="text-[9px] font-mono font-normal text-rose-700/70 hidden sm:inline">
+              {plusSizes ? `(${plusSizes.split(',').length})` : '(off)'}
+            </span>
+          </button>
+        </div>
+
+        {/* Painel expandido do Auto-realinhamento — só quando autoOpen=true */}
+        {autoConfig && autoOpen && (
+          <div className="border border-violet-200 bg-violet-50/60 rounded-lg p-3">
+            {autoPending?.refs && autoPending.refs.length > 0 && (
+              <div className="bg-white border-2 border-violet-300 rounded-lg p-3 mb-2">
                 <div className="text-xs text-violet-900 mb-1">
                   🔔 <b>{autoPending.refs.length} REF(s) sugeridas</b> — geradas{' '}
                   {autoPending.generatedAt ? new Date(autoPending.generatedAt).toLocaleString('pt-BR') : ''}{' '}
@@ -1054,13 +1091,11 @@ export default function RealinhamentoPage() {
                 </div>
               </div>
             )}
-            {autoOpen && !(autoPending?.refs && autoPending.refs.length > 0) && (
-              <div className="text-xs text-violet-900/70 mt-2 mb-2">
-                {autoConfig.enabled
-                  ? `Ativo. Procura REFs cadastradas há ${autoConfig.diasAtras} dias com "${autoConfig.descricaoFilter}". Próxima execução: amanhã 06h.`
-                  : 'Desativado. Ative pra receber sugestões diárias automáticas.'}
-              </div>
-            )}
+            <div className="text-xs text-violet-900/70 mb-2">
+              {autoConfig.enabled
+                ? `Ativo. Procura REFs cadastradas há ${autoConfig.diasAtras} dias com "${autoConfig.descricaoFilter}". Próxima execução: amanhã 06h.`
+                : 'Desativado. Ative pra receber sugestões diárias automáticas.'}
+            </div>
             {autoOpen && (
               <div className="bg-white border border-violet-200 rounded-lg p-3 space-y-2">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -1117,63 +1152,60 @@ export default function RealinhamentoPage() {
           </div>
         )}
 
-        {/* ── FILTRO TAMANHOS PLUS SIZE — recolhido por padrão ── */}
-        <div className="border border-rose-200 bg-rose-50/60 rounded-lg px-3 py-2">
-          <button
-            type="button"
-            onClick={() => setPlusSizesOpen(!plusSizesOpen)}
-            className="w-full flex items-center gap-2 hover:bg-rose-50 -mx-1 px-1 py-0.5 rounded transition"
-          >
-            <Shirt className="w-4 h-4 text-rose-700" />
-            <span className="text-sm font-semibold text-rose-900 flex-1 text-left">
-              Filtro de tamanhos PLUS SIZE
-            </span>
-            {plusSizesIsDefault && (
-              <span className="text-[10px] bg-rose-200 text-rose-900 px-2 py-0.5 rounded font-bold">
-                DEFAULT
+        {/* Painel expandido — Filtro de tamanhos PLUS SIZE (só quando aberto) */}
+        {plusSizesOpen && (
+          <div className="border border-rose-200 bg-rose-50/60 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Shirt className="w-4 h-4 text-rose-700" />
+              <span className="text-sm font-semibold text-rose-900 flex-1">
+                Filtro de tamanhos PLUS SIZE
+                {plusSizesIsDefault && (
+                  <span className="ml-2 text-[10px] bg-rose-200 text-rose-900 px-2 py-0.5 rounded font-bold">
+                    DEFAULT
+                  </span>
+                )}
               </span>
-            )}
-            <span className="text-[10px] font-mono text-rose-700/80 truncate max-w-[260px] hidden sm:inline">
-              {plusSizes ? plusSizes.split(',').slice(0, 4).join(',') + (plusSizes.split(',').length > 4 ? '…' : '') : '(sem filtro)'}
-            </span>
-            <ChevronDown className={`w-4 h-4 text-rose-700 transition-transform ${plusSizesOpen ? 'rotate-180' : ''}`} />
-          </button>
-          {plusSizesOpen && (
-            <div className="space-y-2 mt-2">
-              <div className="text-xs text-rose-900/80">
-                Variações com tamanho fora dessa lista são <b>ignoradas</b> automaticamente em todo realinhamento
-                (ex: REF de jeans com 40, 42, 44, 46, 48 → só 46+ entra). Vazio = sem filtro.
-              </div>
-              <textarea
-                value={plusSizes}
-                onChange={(e) => setPlusSizes(e.target.value)}
-                placeholder="46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60"
-                disabled={plusSizesSaving}
-                className="w-full border border-rose-300 rounded-lg px-3 py-2 text-sm font-mono bg-white min-h-[60px] focus:outline-none focus:ring-2 focus:ring-rose-400"
-              />
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPlusSizes('46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60');
-                  }}
-                  className="text-xs px-3 py-1.5 border border-slate-300 rounded hover:bg-slate-50"
-                >
-                  Restaurar default
-                </button>
-                <button
-                  type="button"
-                  onClick={savePlusSizes}
-                  disabled={plusSizesSaving}
-                  className="text-xs px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold rounded flex items-center gap-1"
-                >
-                  {plusSizesSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
-                  Salvar
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setPlusSizesOpen(false)}
+                className="text-rose-600 hover:bg-rose-100 rounded p-1"
+                title="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          )}
-        </div>
+            <div className="text-xs text-rose-900/80">
+              Variações com tamanho fora dessa lista são <b>ignoradas</b> em todo realinhamento. Vazio = sem filtro.
+            </div>
+            <textarea
+              value={plusSizes}
+              onChange={(e) => setPlusSizes(e.target.value)}
+              placeholder="46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60"
+              disabled={plusSizesSaving}
+              className="w-full border border-rose-300 rounded-lg px-3 py-2 text-sm font-mono bg-white min-h-[60px] focus:outline-none focus:ring-2 focus:ring-rose-400"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPlusSizes('46,48,50,52,54,56,58,60,46/48,48/50,50/52,52/54,54/56,56/58,58/60');
+                }}
+                className="text-xs px-3 py-1.5 border border-slate-300 rounded hover:bg-slate-50"
+              >
+                Restaurar default
+              </button>
+              <button
+                type="button"
+                onClick={savePlusSizes}
+                disabled={plusSizesSaving}
+                className="text-xs px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold rounded flex items-center gap-1"
+              >
+                {plusSizesSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                Salvar
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Refs */}
         <div>
