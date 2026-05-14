@@ -375,7 +375,7 @@ export class RealignmentShipmentService {
     // = ~3-5 segundos pra 45 itens. Agora: ~150ms total.
     const tResolve = Date.now();
     const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
-    const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    const unresolved: Array<{ transferOrderId: string; refCode: string; cor: string | null; tamanho: string | null }> = [];
 
     const itemsSemCodigoBipado: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
     for (const it of items as any[]) {
@@ -400,12 +400,12 @@ export class RealignmentShipmentService {
         let sku: string | null = it.codigoBipado || null;
         if (!sku) sku = batchSkus.get(keyOf(it.refCode, it.cor, it.tamanho)) || null;
         if (!sku) {
-          unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+          unresolved.push({ transferOrderId: it.id, refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
           continue;
         }
         stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.fromStoreCode, refCode: it.refCode });
       } catch {
-        unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        unresolved.push({ transferOrderId: it.id, refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
       }
     }
     this.logger.log(`[precheck] resolveSku ${items.length} items em ${Date.now() - tResolve}ms`);

@@ -326,7 +326,7 @@ export default function MinhaLojaRealinhamentoPage() {
       const pre = await api<{
         ok: boolean;
         totalItems: number;
-        unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }>;
+        unresolved: Array<{ transferOrderId?: string; refCode: string; cor: string | null; tamanho: string | null }>;
         problemas: Array<{
           transferOrderId: string;
           refCode: string;
@@ -394,7 +394,7 @@ export default function MinhaLojaRealinhamentoPage() {
       storeCode: string;
       estoqueGiga: number;
     }>;
-    unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }>;
+    unresolved: Array<{ transferOrderId?: string; refCode: string; cor: string | null; tamanho: string | null }>;
   } | null>(null);
 
   /** Remove item da remessa (transferOrder) — usado no modal de problemas */
@@ -428,10 +428,23 @@ export default function MinhaLojaRealinhamentoPage() {
    */
   const handleRemoveAllProblematic = useCallback(async () => {
     if (!problemasShipment) return;
-    const total = problemasShipment.problemas.length;
+    // Pega BOTH: estoque insuficiente + SKU não identificado (ambos travam o fechamento)
+    const allIds: Array<{ id: string; desc: string }> = [
+      ...problemasShipment.problemas.map((p) => ({
+        id: p.transferOrderId,
+        desc: `${p.refCode} ${p.cor || ''} ${p.tamanho || ''}`.trim(),
+      })),
+      ...problemasShipment.unresolved
+        .filter((u: any) => u.transferOrderId)
+        .map((u: any) => ({
+          id: u.transferOrderId,
+          desc: `${u.refCode} ${u.cor || ''} ${u.tamanho || ''}`.trim(),
+        })),
+    ];
+    const total = allIds.length;
     if (!total) return;
     if (!confirm(
-      `Remover TODOS os ${total} item(s) com estoque insuficiente da remessa?\n\n` +
+      `Remover TODOS os ${total} item(s) problemáticos da remessa?\n\n` +
       `✓ Os outros itens da remessa ficam intactos\n` +
       `✓ NÃO mexe no estoque Giga\n` +
       `✓ Os itens removidos voltam pra fila "pendente" e somem dessa remessa\n\n` +
@@ -442,19 +455,18 @@ export default function MinhaLojaRealinhamentoPage() {
     let removidos = 0;
     let falhas: string[] = [];
 
-    // Faz em série pra não estourar conexão e mostrar progresso preciso
-    for (const p of problemasShipment.problemas) {
+    for (const it of allIds) {
       try {
-        await api(`/realignment/shipments/items/${p.transferOrderId}`, { method: 'DELETE' });
+        await api(`/realignment/shipments/items/${it.id}`, { method: 'DELETE' });
         removidos++;
       } catch (e: any) {
-        falhas.push(`${p.refCode} ${p.cor || ''} ${p.tamanho || ''}`.trim());
+        falhas.push(it.desc);
       }
       setBatchRemoving({ done: removidos + falhas.length, total });
     }
 
     setBatchRemoving(null);
-    setProblemasShipment(null); // fecha modal
+    setProblemasShipment(null);
     await Promise.all([loadOpenShipments(), loadItems()]);
 
     if (falhas.length === 0) {
@@ -1210,6 +1222,25 @@ export default function MinhaLojaRealinhamentoPage() {
                 • Se a peça <b>não existe</b>, clique <b>Remover TODOS</b> pra tirar da remessa (não mexe no Giga).
               </div>
 
+              {/* Botão geral: Remover TODOS (problemas + unresolved) */}
+              {(problemasShipment.problemas.length + problemasShipment.unresolved.length) > 0 && (
+                <div className="flex justify-end -mt-2">
+                  <button
+                    type="button"
+                    onClick={handleRemoveAllProblematic}
+                    disabled={!!batchRemoving}
+                    className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold flex items-center gap-1.5"
+                    title="Remove TUDO problemático (estoque insuficiente + SKU não identificado). Não mexe no Giga."
+                  >
+                    {batchRemoving ? (
+                      <>⏳ Removendo {batchRemoving.done}/{batchRemoving.total}…</>
+                    ) : (
+                      <>🗑️ Remover TODOS ({problemasShipment.problemas.length + problemasShipment.unresolved.length})</>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {/* Items sem estoque */}
               {problemasShipment.problemas.length > 0 && (
                 <div>
@@ -1217,20 +1248,6 @@ export default function MinhaLojaRealinhamentoPage() {
                     <div className="text-xs font-bold uppercase text-rose-700 tracking-wider">
                       {problemasShipment.problemas.length} item(s) com estoque insuficiente
                     </div>
-                    {/* Batch remove — remove TODOS de uma vez (sem mexer no Giga) */}
-                    <button
-                      type="button"
-                      onClick={handleRemoveAllProblematic}
-                      disabled={!!batchRemoving}
-                      className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold flex items-center gap-1.5"
-                      title="Remove os 12 problemáticos de uma vez. Não mexe no Giga."
-                    >
-                      {batchRemoving ? (
-                        <>⏳ Removendo {batchRemoving.done}/{batchRemoving.total}…</>
-                      ) : (
-                        <>🗑️ Remover TODOS ({problemasShipment.problemas.length})</>
-                      )}
-                    </button>
                   </div>
                   <div className="space-y-2">
                     {problemasShipment.problemas.map((p) => {
@@ -1275,18 +1292,33 @@ export default function MinhaLojaRealinhamentoPage() {
                     {problemasShipment.unresolved.length} item(s) com SKU não identificado
                   </div>
                   <div className="space-y-1.5">
-                    {problemasShipment.unresolved.map((u, idx) => (
-                      <div key={idx} className="text-sm bg-amber-50 border border-amber-200 rounded p-2">
-                        <span className="font-mono font-bold">{u.refCode}</span>
-                        <span className="ml-2 text-slate-600">
-                          {u.cor || '—'} / {u.tamanho || '—'}
-                        </span>
-                        <div className="text-[10px] text-amber-700 mt-1">
-                          O sistema não conseguiu casar essa combinação no Giga (cadastro divergente).
-                          Pra resolver: remova manualmente da remessa ou conserte o cadastro no Wincred.
+                    {problemasShipment.unresolved.map((u, idx) => {
+                      const desc = `${u.refCode} ${u.cor || ''} ${u.tamanho || ''}`.trim();
+                      return (
+                        <div key={u.transferOrderId || idx} className="text-sm bg-amber-50 border border-amber-200 rounded p-2">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div>
+                              <span className="font-mono font-bold">{u.refCode}</span>
+                              <span className="ml-2 text-slate-600">
+                                {u.cor || '—'} / {u.tamanho || '—'}
+                              </span>
+                              <div className="text-[10px] text-amber-700 mt-1">
+                                Cadastro Giga divergente. Remove daqui ou conserte no Wincred.
+                              </div>
+                            </div>
+                            {u.transferOrderId && (
+                              <button
+                                onClick={() => handleRemoveItem(u.transferOrderId!, desc)}
+                                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-bold flex items-center gap-1.5 shrink-0"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                Remover
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1307,8 +1339,16 @@ export default function MinhaLojaRealinhamentoPage() {
                 <button
                   onClick={async () => {
                     if (!problemasShipment) return;
-                    const total = problemasShipment.problemas.length;
-                    const msg = 'FORCAR fechamento da remessa ' + problemasShipment.code + '?\n\n' + total + ' peca(s) com estoque divergente no Giga.\n\nUse SO se as pecas estao fisicamente em maos. O Giga ficara negativo nelas - voce corrige no proximo inventario.';
+                    const totalProb = problemasShipment.problemas.length;
+                    const totalUnres = problemasShipment.unresolved.length;
+                    const partes: string[] = [];
+                    if (totalProb > 0) partes.push(totalProb + ' com estoque divergente');
+                    if (totalUnres > 0) partes.push(totalUnres + ' com SKU nao identificado');
+                    const msg = 'FORCAR fechamento da remessa ' + problemasShipment.code + '?\n\n' +
+                      partes.join(' + ') + '.\n\n' +
+                      'Use SO se as pecas estao fisicamente em maos. ' +
+                      'Os itens com estoque divergente ficam Giga negativo (corrige no inventario). ' +
+                      'Os com SKU nao identificado vao pra remessa SEM baixar Giga (admin revisa).';
                     if (!confirm(msg)) return;
                     const shipmentId = problemasShipment.shipmentId;
                     setClosingShipmentId(shipmentId);
@@ -1327,9 +1367,9 @@ export default function MinhaLojaRealinhamentoPage() {
                     }
                   }}
                   className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white border-2 border-amber-700 rounded font-black text-sm flex items-center gap-1.5 shadow-md"
-                  title="Fecha a remessa ignorando divergencia de estoque (pecas em maos)"
+                  title="Fecha a remessa ignorando divergencia de estoque/cadastro (pecas em maos)"
                 >
-                  FORCAR FECHAMENTO ({problemasShipment.problemas.length})
+                  FORCAR FECHAMENTO ({problemasShipment.problemas.length + problemasShipment.unresolved.length})
                 </button>
               </div>
             </div>
