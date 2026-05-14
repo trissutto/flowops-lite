@@ -100,6 +100,7 @@ function ImprimirCupomPageInner() {
     }
     let cancelled = false;
     (async () => {
+      // 1) Busca URLs da API
       const results = await Promise.all(
         skus.map(async (sku) => {
           try {
@@ -114,8 +115,28 @@ function ImprimirCupomPageInner() {
       const map: Record<string, string | null> = {};
       for (const [sku, url] of results) map[sku] = url;
       setPhotos(map);
-      // Pequeno delay extra pro <img> decodificar antes do print
-      setTimeout(() => { if (!cancelled) setPhotosReady(true); }, 300);
+
+      // 2) Pré-carrega as imagens via Image() — garante que estão no cache
+      // do browser ANTES do print. Sem isso, o window.print() disparava com
+      // <img> ainda sem byte algum e saía em branco no impresso.
+      const urls = results.map(([, u]) => u).filter((u): u is string => !!u);
+      if (urls.length === 0) {
+        setPhotosReady(true);
+        return;
+      }
+      await Promise.all(
+        urls.map(
+          (u) =>
+            new Promise<void>((resolve) => {
+              const im = new Image();
+              im.onload = () => resolve();
+              im.onerror = () => resolve(); // segue mesmo se falhar
+              im.src = u;
+              setTimeout(() => resolve(), 6000); // fail-safe
+            }),
+        ),
+      );
+      setTimeout(() => { if (!cancelled) setPhotosReady(true); }, 400);
     })();
     return () => { cancelled = true; };
   }, [pick]);
@@ -211,9 +232,19 @@ function ImprimirCupomPageInner() {
             width: 76mm;
             background: #fff;
             color: #000;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           .no-print {
             display: none !important;
+          }
+          /* Força fotos saírem no print. Sem isso o Chrome pode esconder
+             imagens de origens externas. */
+          .item-photo {
+            display: block !important;
+            visibility: visible !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
         }
         body {
@@ -441,7 +472,7 @@ function ImprimirCupomPageInner() {
                     src={photoUrl}
                     alt={it.sku}
                     className="item-photo"
-                    crossOrigin="anonymous"
+                    referrerPolicy="no-referrer"
                   />
                 ) : (
                   <div className="item-photo-placeholder">sem foto</div>
