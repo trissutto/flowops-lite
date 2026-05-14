@@ -1020,29 +1020,29 @@ function PdvPageInner() {
       <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-4 pb-[240px] lg:pb-[230px]">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
-          Painel escuro (violet-950) com botões quadrados em grid 2 colunas:
-          ícone em cima, label embaixo. Badge de atalho no canto superior
-          direito de cada botão. Estilo sóbrio inspirado no mockup do ChatGPT.
+          Painel MARINHO/NAVY escuro (#0a1029) com botões VERTICAIS empilhados:
+          ícone à esquerda + label à direita + atalho na ponta (estilo Notion/
+          mockup ChatGPT). Ícones e labels em branco. Hover ilumina sutil.
           Em mobile (<lg) some — PdvMobilePill horizontais continuam acima
           do footer pra mesma navegação. */}
       {sale?.status === 'open' && (
-        <aside className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pr-1">
+        <aside className="w-[200px] shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pr-1">
           <div
-            className="rounded-2xl shadow-xl p-3"
-            style={{ background: 'linear-gradient(180deg, #1a1442 0%, #0f0a2e 100%)' }}
+            className="rounded-2xl shadow-2xl p-2.5"
+            style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
           >
-            <div className="text-[10px] font-black uppercase tracking-widest text-violet-300/80 px-1 mb-2">
+            <div className="text-[10px] font-black uppercase tracking-widest text-white/50 px-2 py-1 mb-1">
               Ações do PDV
             </div>
-            <div className="grid grid-cols-2 gap-1.5">
+            <nav className="flex flex-col gap-0.5">
               <Link
                 href="/minha-loja/consultar"
-                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-sky-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Consultar produto (F10)"
               >
-                <Search className="w-5 h-5 text-sky-400" />
-                <span className="text-[10px] font-bold text-white/90">Consultar</span>
-                <kbd className="absolute top-0.5 right-0.5 text-[8px] font-mono bg-sky-500/90 text-white rounded px-1 leading-tight">F10</kbd>
+                <Search className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Consultar</span>
+                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F10</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1052,98 +1052,95 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-amber-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Devolução / Troca (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-amber-400" />
-                <span className="text-[10px] font-bold text-white/90">Trocar</span>
-                <kbd className="absolute top-0.5 right-0.5 text-[8px] font-mono bg-amber-500/90 text-white rounded px-1 leading-tight">F4</kbd>
+                <ArrowRightLeft className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Trocar</span>
+                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F4</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-emerald-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Caixa — sangria, suprimento, retiradas (F3)"
               >
-                <DollarSign className="w-5 h-5 text-emerald-400" />
-                <span className="text-[10px] font-bold text-white/90">Caixa</span>
-                <kbd className="absolute top-0.5 right-0.5 text-[8px] font-mono bg-emerald-500/90 text-white rounded px-1 leading-tight">F3</kbd>
+                <DollarSign className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Caixa</span>
+                <kbd className="text-[9px] font-mono bg-white/15 text-white rounded px-1 leading-tight">F3</kbd>
               </Link>
               <Link
                 href="/minha-loja/pdv/fechamento"
-                className="bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-violet-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Fechamento diário"
               >
-                <Wallet className="w-5 h-5 text-violet-300" />
-                <span className="text-[10px] font-bold text-white/90">Fechamento</span>
+                <Wallet className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Fechamento</span>
               </Link>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-rose-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Receber/baixar parcelas de crediário"
               >
-                <Receipt className="w-5 h-5 text-rose-400" />
-                <span className="text-[10px] font-bold text-white/90 leading-tight text-center">Baixa Crediário</span>
+                <Receipt className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold leading-tight">Baixa Crediário</span>
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-teal-400/60 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white/5 disabled:hover:border-white/10"
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-teal-400" />
-                <span className="text-[10px] font-bold text-white/90">Simular</span>
+                <CreditCard className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-left text-[12px] font-bold">Simular</span>
               </button>
               <Link
                 href="/minha-loja"
-                className="relative bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-violet-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Pedidos do site"
               >
-                <Globe className="w-5 h-5 text-violet-300" />
-                <span className="text-[10px] font-bold text-white/90">Pedidos</span>
+                <Globe className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Pedidos</span>
                 {pedidosSitePending > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow-lg">
+                  <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shadow">
                     {pedidosSitePending}
                   </span>
                 )}
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-blue-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="NFC-es emitidas (cancelar/reimprimir)"
               >
-                <FileText className="w-5 h-5 text-blue-400" />
-                <span className="text-[10px] font-bold text-white/90">NFC-es</span>
+                <FileText className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">NFC-es</span>
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="bg-white/5 hover:bg-white/10 rounded-xl py-2.5 px-1.5 flex flex-col items-center gap-1 transition border border-white/10 hover:border-purple-400/60"
+                className="group flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition text-white/90"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-purple-300" />
-                <span className="text-[10px] font-bold text-white/90">Marcados</span>
+                <Tag className="w-4 h-4 text-white shrink-0" />
+                <span className="flex-1 text-[12px] font-bold">Marcados</span>
               </Link>
-            </div>
-            {/* Realinhar wide — destaque em vermelho quando tem pendência */}
-            <Link
-              href="/minha-loja/realinhamento"
-              className={`mt-1.5 relative w-full rounded-xl py-2.5 px-3 flex items-center justify-between gap-2 transition border ${
-                realignPending > 0
-                  ? 'bg-rose-500/20 hover:bg-rose-500/30 border-rose-400/60 text-rose-100'
-                  : 'bg-white/5 hover:bg-white/10 border-white/10 text-white/90'
-              }`}
-              title="Realinhamento de estoque"
-            >
-              <span className="flex items-center gap-2 text-xs font-bold">
-                <Shuffle className={`w-4 h-4 ${realignPending > 0 ? 'text-rose-300' : 'text-slate-400'}`} />
-                Realinhar
-              </span>
-              {realignPending > 0 && (
-                <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[24px] h-[22px] flex items-center justify-center px-1.5 shadow-lg">
-                  {realignPending}
-                </span>
-              )}
-            </Link>
+              <Link
+                href="/minha-loja/realinhamento"
+                className={`group flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition ${
+                  realignPending > 0
+                    ? 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-100'
+                    : 'hover:bg-white/10 text-white/90'
+                }`}
+                title="Realinhamento de estoque"
+              >
+                <Shuffle className={`w-4 h-4 shrink-0 ${realignPending > 0 ? 'text-rose-300' : 'text-white'}`} />
+                <span className="flex-1 text-[12px] font-bold">Realinhar</span>
+                {realignPending > 0 && (
+                  <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[20px] flex items-center justify-center px-1.5 shadow">
+                    {realignPending}
+                  </span>
+                )}
+              </Link>
+            </nav>
           </div>
         </aside>
       )}
