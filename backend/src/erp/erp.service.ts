@@ -2329,10 +2329,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool || !code) return [];
     const clean = String(code).trim();
     try {
-      // 1) Tenta achar em CODIGO direto (SKU bipado)
+      // FIX zeros à esquerda: gera TODAS as variações de padding (3 a 14
+      // dígitos). Vendedora bipa "05344710" e Giga tem "5344710" — sem
+      // skuVariants o lookup falha. skuVariants já cobre todos os paddings
+      // intermediários que aparecem em diferentes pontos do Wincred.
+      const variants = this.skuVariants(clean);
+      const placeholders = variants.map(() => '?').join(',');
+
+      // 1) Tenta achar em CODIGO direto (SKU bipado) — testa todas variações
       let [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT REF FROM produtos WHERE CODIGO = ? LIMIT 1`,
-        [clean],
+        `SELECT REF FROM produtos WHERE CODIGO IN (${placeholders}) LIMIT 1`,
+        variants,
       );
       let ref: string | null = (rows as any[])[0]?.REF ?? null;
 
@@ -2342,8 +2349,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         for (const col of eanCols) {
           try {
             const [r] = await this.pool.query<mysql.RowDataPacket[]>(
-              `SELECT REF FROM produtos WHERE \`${col}\` = ? LIMIT 1`,
-              [clean],
+              `SELECT REF FROM produtos WHERE \`${col}\` IN (${placeholders}) LIMIT 1`,
+              variants,
             );
             const found = (r as any[])[0]?.REF;
             if (found) { ref = String(found); break; }
