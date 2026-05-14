@@ -317,59 +317,47 @@ export default function DevolucaoPage() {
 
   return (
     <div className="min-h-screen bg-[#f4f1ec] p-4 md:p-6">
-      <div className="max-w-4xl mx-auto">
-        <Link
-          href="/minha-loja/pdv"
-          className="inline-flex items-center gap-2 text-rose-700 hover:text-rose-900 mb-4"
-        >
-          <ArrowLeft size={18} /> Voltar pro PDV
-        </Link>
+      <div className="max-w-5xl mx-auto">
+        {/* Header compacto: voltar + título na mesma linha */}
+        <div className="flex items-center gap-3 mb-3">
+          <Link
+            href="/minha-loja/pdv"
+            className="inline-flex items-center gap-1 text-rose-700 hover:text-rose-900 text-sm shrink-0"
+          >
+            <ArrowLeft size={16} /> Voltar
+          </Link>
+          <h1 className="text-xl md:text-2xl font-bold text-rose-900">Devolução / Troca</h1>
+        </div>
 
-        <h1 className="text-2xl md:text-3xl font-bold text-rose-900 mb-4">Devolução / Troca</h1>
-
-        {/* Banner: indica que tem venda em andamento aguardando o crédito */}
+        {/* Banner compacto: venda em andamento aguardando crédito */}
         {attachInfo && !success && (
-          <div className="mb-4 bg-teal-50 border-2 border-teal-400 rounded-xl p-3 flex items-center gap-3">
-            <div className="text-2xl">🛒</div>
-            <div className="flex-1 text-sm">
-              <div className="font-bold text-teal-900">Venda em andamento no PDV</div>
-              <div className="text-teal-700 text-xs">
-                {attachInfo.items} {attachInfo.items === 1 ? 'item' : 'itens'} no carrinho.
-                Se escolher <b>Troca</b>, o crédito vai pra essa venda — os itens NÃO somem.
-              </div>
-            </div>
+          <div className="mb-2 bg-teal-50 border border-teal-400 rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs">
+            <span>🛒</span>
+            <span className="font-bold text-teal-900">Venda no PDV ({attachInfo.items} {attachInfo.items === 1 ? 'item' : 'itens'}):</span>
+            <span className="text-teal-700">Troca anexa nela — itens não somem.</span>
           </div>
         )}
 
         {!success && (
-          <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Bipe a peça que voltou (SKU/REF) ou digite cupom da venda
-            </label>
+          <div className="bg-white rounded-xl shadow-sm p-3 mb-2">
             <div className="flex gap-2">
               <input
                 ref={inputRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') lookup();
-                }}
-                placeholder="Ex: SKU 12345 (peça) ou número da NFC-e"
-                className="flex-1 p-3 border rounded-lg text-lg focus:ring-2 focus:ring-rose-400"
+                onKeyDown={(e) => { if (e.key === 'Enter') lookup(); }}
+                placeholder="Bipe o SKU/REF da peça ou número da NFC-e"
+                className="flex-1 p-2 border rounded text-base focus:ring-2 focus:ring-rose-400 focus:outline-none"
               />
               <button
                 onClick={lookup}
                 disabled={busy}
-                className="bg-rose-600 hover:bg-rose-700 text-white px-6 py-3 rounded-lg font-semibold disabled:opacity-50 flex items-center gap-2"
+                className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded font-semibold disabled:opacity-50 flex items-center gap-1.5 text-sm"
               >
-                <Search size={18} /> Buscar
+                <Search size={16} /> Buscar
               </button>
             </div>
-            <div className="mt-2 text-xs text-slate-500">
-              💡 <b>Bipa o SKU/REF da peça</b> — sistema acha as últimas vendas dela.
-              Não precisa do cupom.
-            </div>
-            {err && <div className="mt-3 text-sm text-red-600">{err}</div>}
+            {err && <div className="mt-1.5 text-xs text-red-600">{err}</div>}
           </div>
         )}
 
@@ -447,33 +435,34 @@ export default function DevolucaoPage() {
         )}
 
         {data && !success && (
-          <div className="space-y-5">
-            <div className="bg-white rounded-2xl shadow-md p-5">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="font-bold text-rose-900">Venda original</h2>
-                {data.previousReturns > 0 && (
-                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded">
-                    {data.previousReturns} devolução(ões) anteriores
+          <div className="space-y-2">
+            {/* Venda original — ULTRA-COMPACTO: 2 linhas só */}
+            <div className="bg-white rounded-xl shadow-sm px-3 py-2 text-xs">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="font-bold text-rose-900">
+                  {data.sale.nfceNumber ? `NFC-e #${data.sale.nfceNumber}` : 'Venda original'}
+                  <span className="text-gray-500 font-normal ml-2">
+                    {data.sale.storeName} · {new Date(data.sale.finalizedAt).toLocaleDateString('pt-BR')}
                   </span>
-                )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {data.previousReturns > 0 && (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                      {data.previousReturns} devolução(ões) anteriores
+                    </span>
+                  )}
+                  <span className="font-bold text-rose-900">R$ {fmt(data.sale.total)}</span>
+                </div>
               </div>
-              <div className="text-sm text-gray-600">
-                {data.sale.nfceNumber ? `NFC-e #${data.sale.nfceNumber} · ` : ''}
-                {data.sale.storeName} ·{' '}
-                {new Date(data.sale.finalizedAt).toLocaleString('pt-BR')}
-              </div>
-              <div className="text-sm text-gray-600">
-                Cliente: {data.sale.customerName || '—'}{' '}
-                {data.sale.customerCpf ? `· CPF ${data.sale.customerCpf}` : ''}
-              </div>
-              <div className="text-lg font-bold text-rose-900 mt-2">
-                Total: R$ {fmt(data.sale.total)}
+              <div className="text-gray-600 truncate">
+                {data.sale.customerName || 'Sem identificação'}
+                {data.sale.customerCpf ? ` · CPF ${data.sale.customerCpf}` : ''}
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl shadow-md p-5">
-              <h3 className="font-bold text-rose-900 mb-3">Selecione as peças a devolver</h3>
-              <div className="space-y-2">
+            <div className="bg-white rounded-xl shadow-sm p-3">
+              <h3 className="font-bold text-rose-900 text-sm mb-2">Selecione as peças a devolver</h3>
+              <div className="space-y-1">
                 {data.items.map((it) => {
                   const isSel = !!selected[it.id];
                   const sel = selected[it.id] || 0;
@@ -481,7 +470,7 @@ export default function DevolucaoPage() {
                   return (
                     <div
                       key={it.id}
-                      className={`rounded-lg p-3 transition-all border-2 ${
+                      className={`rounded-lg px-2.5 py-1.5 transition-all border-2 ${
                         disabled
                           ? 'bg-gray-100 border-gray-200 opacity-50'
                           : isSel
@@ -489,28 +478,25 @@ export default function DevolucaoPage() {
                           : 'bg-white border-gray-200 hover:border-rose-300'
                       }`}
                     >
-                      <div className="flex items-start gap-3">
+                      <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
                           checked={isSel}
                           disabled={disabled}
                           onChange={() => toggle(it.id, it.disponivel)}
-                          className="mt-1 w-5 h-5"
+                          className="w-5 h-5 shrink-0"
                         />
-                        <div className="flex-1">
-                          <div className="font-semibold text-gray-800">{it.descricao}</div>
-                          <div className="text-xs text-gray-500">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-gray-800 text-sm leading-tight truncate">
+                            {it.descricao}
+                          </div>
+                          <div className="text-[11px] text-gray-500 leading-tight">
                             SKU {it.sku}
                             {it.cor ? ` · ${it.cor}` : ''}
                             {it.tamanho ? ` · ${it.tamanho}` : ''}
-                          </div>
-                          <div className="text-sm text-gray-600 mt-1">
-                            R$ {fmt(it.precoUnit)} · Comprou {it.qty}
+                            <span className="text-gray-700"> · R$ {fmt(it.precoUnit)} · Comprou {it.qty}</span>
                             {it.jaDevolvido > 0 && (
-                              <span className="text-amber-700">
-                                {' '}
-                                · já devolveu {it.jaDevolvido}
-                              </span>
+                              <span className="text-amber-700"> · já devolveu {it.jaDevolvido}</span>
                             )}
                           </div>
                         </div>
@@ -542,75 +528,84 @@ export default function DevolucaoPage() {
             </div>
 
             {Object.keys(selected).length > 0 && (
-              <div className="bg-white rounded-2xl shadow-md p-5">
-                <h3 className="font-bold text-rose-900 mb-3">Modo de devolução</h3>
-                <div className="grid grid-cols-3 gap-2 mb-4">
-                  <ModoBtn
-                    active={modo === 'dinheiro'}
-                    onClick={() => setModo('dinheiro')}
-                    icon={<Banknote size={20} />}
-                    title="Dinheiro"
-                    sub="Sangria caixa"
-                  />
-                  <ModoBtn
-                    active={modo === 'troca'}
-                    onClick={() => setModo('troca')}
-                    icon={<ArrowRightLeft size={20} />}
-                    title="Troca"
-                    sub="Hoje mesmo"
-                  />
-                  <ModoBtn
-                    active={modo === 'credito'}
-                    onClick={() => setModo('credito')}
-                    icon={<CreditCard size={20} />}
-                    title="Vale"
-                    sub="Usar depois"
-                  />
-                </div>
+              <div className="bg-white rounded-xl shadow-sm p-3">
+                {/* GRID: modo (esq) + valor+confirmar (dir) lado a lado */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs font-bold text-rose-900 uppercase tracking-wide mb-1.5">Modo</div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <ModoBtn
+                        active={modo === 'dinheiro'}
+                        onClick={() => setModo('dinheiro')}
+                        icon={<Banknote size={16} />}
+                        title="Dinheiro"
+                        sub="Sangria"
+                      />
+                      <ModoBtn
+                        active={modo === 'troca'}
+                        onClick={() => setModo('troca')}
+                        icon={<ArrowRightLeft size={16} />}
+                        title="Troca"
+                        sub="Hoje"
+                      />
+                      <ModoBtn
+                        active={modo === 'credito'}
+                        onClick={() => setModo('credito')}
+                        icon={<CreditCard size={16} />}
+                        title="Vale"
+                        sub="Depois"
+                      />
+                    </div>
 
-                {modo === 'credito' && (
-                  <div className="mb-4">
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Validade do vale-troca (dias)
-                    </label>
-                    <input
-                      type="number"
-                      value={validade}
-                      onChange={(e) => setValidade(parseInt(e.target.value, 10) || 90)}
-                      min={1}
-                      max={365}
-                      className="w-full p-2 border rounded-lg"
-                    />
+                    {modo === 'credito' && (
+                      <div className="mt-2">
+                        <label className="text-[11px] font-semibold text-gray-700">
+                          Validade do vale (dias)
+                        </label>
+                        <input
+                          type="number"
+                          value={validade}
+                          onChange={(e) => setValidade(parseInt(e.target.value, 10) || 90)}
+                          min={1}
+                          max={365}
+                          className="w-full p-1.5 border rounded text-sm"
+                        />
+                      </div>
+                    )}
+
+                    <div className="mt-2">
+                      <label className="text-[11px] font-semibold text-gray-700">
+                        Motivo (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={motivo}
+                        onChange={(e) => setMotivo(e.target.value)}
+                        placeholder="Defeito, tamanho, arrependimento…"
+                        className="w-full p-1.5 border rounded text-sm"
+                      />
+                    </div>
                   </div>
-                )}
 
-                <label className="block text-sm font-semibold text-gray-700 mb-1">
-                  Motivo (opcional)
-                </label>
-                <textarea
-                  value={motivo}
-                  onChange={(e) => setMotivo(e.target.value)}
-                  rows={2}
-                  placeholder="Defeito, tamanho, arrependimento..."
-                  className="w-full p-3 border rounded-lg mb-4"
-                />
+                  <div className="flex flex-col">
+                    <div className="bg-rose-50 rounded-lg p-3 text-center flex-1 flex flex-col justify-center">
+                      <div className="text-xs text-rose-700 uppercase tracking-wide">Valor da devolução</div>
+                      <div className="text-3xl font-black text-rose-900 tabular-nums leading-tight">
+                        R$ {fmt(totalDevolucao)}
+                      </div>
+                    </div>
 
-                <div className="bg-rose-50 rounded-lg p-4 mb-4 text-center">
-                  <div className="text-sm text-rose-700">Valor da devolução</div>
-                  <div className="text-3xl font-bold text-rose-900">
-                    R$ {fmt(totalDevolucao)}
+                    {err && <div className="mt-2 text-xs text-red-600">{err}</div>}
+
+                    <button
+                      onClick={confirm}
+                      disabled={busy || !Object.keys(selected).length}
+                      className="mt-2 w-full py-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-base disabled:opacity-50 shadow-md"
+                    >
+                      {busy ? 'Processando…' : 'Confirmar Devolução'}
+                    </button>
                   </div>
                 </div>
-
-                {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
-
-                <button
-                  onClick={confirm}
-                  disabled={busy || !Object.keys(selected).length}
-                  className="w-full py-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-lg disabled:opacity-50"
-                >
-                  {busy ? 'Processando…' : 'Confirmar Devolução'}
-                </button>
               </div>
             )}
           </div>
