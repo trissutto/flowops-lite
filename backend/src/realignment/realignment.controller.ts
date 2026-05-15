@@ -780,21 +780,14 @@ export class RealignmentController {
   }
 
   /**
-   * GET /realignment/shipments/admin/:id · admin
-   * Detalhe completo de uma remessa qualquer (sem filtro de loja).
-   */
-  @Get('shipments/admin/:id')
-  adminShipmentDetail(@Req() req: any, @Param('id') id: string) {
-    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.shipment.getShipmentDetailAdmin(id);
-  }
-
-  /**
    * GET /realignment/shipments/admin/needs-stock-reprocess?daysAgo=30
    *
    * Lista remessas fechadas (in_transit/received) que NÃO tiveram baixa
    * Giga aplicada (stockDecreasedAt = null). Causa típica: mismatch
    * de storeCode ou itens unresolved que silenciaram com skipNotFound.
+   *
+   * IMPORTANTE: tem que vir ANTES de `@Get('shipments/admin/:id')` senão o
+   * Nest faz match em :id="needs-stock-reprocess" e retorna 404.
    */
   @Get('shipments/admin/needs-stock-reprocess')
   needsStockReprocess(
@@ -808,6 +801,16 @@ export class RealignmentController {
     const days = Number(daysAgo) || 30;
     const all = forceAll === '1' || forceAll === 'true';
     return this.shipment.listShipmentsNeedingStockReprocess(days, all);
+  }
+
+  /**
+   * GET /realignment/shipments/admin/:id · admin
+   * Detalhe completo de uma remessa qualquer (sem filtro de loja).
+   */
+  @Get('shipments/admin/:id')
+  adminShipmentDetail(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.getShipmentDetailAdmin(id);
   }
 
   /**
