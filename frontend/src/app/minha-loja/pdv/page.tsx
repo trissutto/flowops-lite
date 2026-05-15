@@ -1039,13 +1039,12 @@ function PdvPageInner() {
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
-            {/* ─── SIDEBAR PDV — todos os botoes em horizontal cinza gelo ──
-                Visual unificado: card slate-100 com icone colorido + titulo +
-                subtitulo + atalho/badge a direita. As 3 secoes (Principais,
-                Diario, Outros) dao respiro mas o estilo do botao e o mesmo. */}
+            {/* ─── SIDEBAR ESQUERDA — Operacoes da venda ─────────────────
+                Vendas: acoes imediatas que tocam no carrinho atual.
+                Auxiliar: complementos esporadicos da mesma venda. */}
             <div>
               <div className="text-[9px] font-black uppercase tracking-widest text-amber-300/80 px-1 mb-1.5">
-                Principais
+                Vendas
               </div>
               <div className="space-y-1.5">
                 <Link
@@ -1095,86 +1094,9 @@ function PdvPageInner() {
 
             <div>
               <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
-                Diário
+                Auxiliar
               </div>
               <div className="space-y-1.5">
-                <Link
-                  href="/minha-loja/pdv/marcados"
-                  className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Marcados (provar em casa)"
-                >
-                  <Tag className="w-5 h-5 text-purple-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
-                  </div>
-                </Link>
-                <Link
-                  href="/minha-loja"
-                  className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Pedidos do site"
-                >
-                  <Globe className="w-5 h-5 text-violet-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Pedidos</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
-                  </div>
-                  {pedidosSitePending > 0 && (
-                    <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
-                      {pedidosSitePending}
-                    </span>
-                  )}
-                </Link>
-                <Link
-                  href="/minha-loja/realinhamento"
-                  className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
-                    realignPending > 0
-                      ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
-                      : 'bg-slate-100 hover:bg-white'
-                  }`}
-                  title="Realinhamento de estoque"
-                >
-                  <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
-                    <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
-                  </div>
-                  {realignPending > 0 && (
-                    <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
-                      {realignPending}
-                    </span>
-                  )}
-                </Link>
-                <Link
-                  href="/minha-loja/pdv/fechamento"
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Fechamento diário"
-                >
-                  <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
-                  </div>
-                </Link>
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
-                Outros
-              </div>
-              <div className="space-y-1.5">
-                <Link
-                  href="/minha-loja/pdv/recebimentos"
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Receber/baixar parcelas de crediário"
-                >
-                  <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
-                  </div>
-                </Link>
                 <button
                   type="button"
                   onClick={() => setShowSimular(true)}
@@ -1189,14 +1111,14 @@ function PdvPageInner() {
                   </div>
                 </button>
                 <Link
-                  href="/minha-loja/pdv/notas"
+                  href="/minha-loja/pdv/marcados"
                   className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="NFC-es emitidas"
+                  title="Marcados (provar em casa)"
                 >
-                  <FileText className="w-5 h-5 text-slate-600 shrink-0" />
+                  <Tag className="w-5 h-5 text-purple-600 shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">NFC-es</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Notas emitidas</div>
+                    <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
                   </div>
                 </Link>
               </div>
@@ -1529,14 +1451,22 @@ function PdvPageInner() {
         ) : null}
       </main>
 
-      {/* SIDEBAR DIREITA — ações do PDV em modo COMPACT (linha única, w-52).
-          Paleta reduzida: só rose/teal/sky/slate pra primárias.
-          Secundárias usam outline branca pra não competir visualmente.
-          Em mobile (<lg) vira faixa horizontal com scroll no topo. */}
-      <aside className="w-60 shrink-0 hidden lg:flex flex-col gap-2 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pr-1">
+      {/* SIDEBAR DIREITA — RESUMO DA VENDA + GESTAO/RELATORIOS
+          Mesmo estilo navy marinho da sidebar esquerda. Encosta no header
+          (top-0) pra dar sensacao de bloco unico. Resumo no topo destacado
+          em card branco; abaixo botoes em horizontal cinza gelo. */}
+      {sale?.status === 'open' && (
+      <aside
+        className="w-[230px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start overflow-y-auto"
+        style={{
+          top: '0',
+          maxHeight: 'calc(100vh - 0px)',
+          background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+        }}
+      >
+        <div className="p-2.5 pt-3 space-y-3">
 
-        {/* ─── RESUMO DA VENDA ───────────────────────────────────────────── */}
-        {sale?.status === 'open' && (
+          {/* ─── RESUMO DA VENDA (card branco destacado) ─── */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
             <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
               Resumo da venda
@@ -1600,18 +1530,98 @@ function PdvPageInner() {
               );
             })()}
           </div>
-        )}
+          {/* fim do resumo da venda */}
 
-        {/* ALERTAS — Pausadas migrou pro header, Realinhar foi pra Ações do PDV */}
+          {/* ─── GESTAO (pedidos site, transferencias, fechamento) ─── */}
+          <div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-amber-300/80 px-1 mb-1.5">
+              Gestão
+            </div>
+            <div className="space-y-1.5">
+              <Link
+                href="/minha-loja"
+                className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Pedidos do site"
+              >
+                <Globe className="w-5 h-5 text-violet-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Pedidos</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
+                </div>
+                {pedidosSitePending > 0 && (
+                  <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
+                    {pedidosSitePending}
+                  </span>
+                )}
+              </Link>
+              <Link
+                href="/minha-loja/realinhamento"
+                className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
+                  realignPending > 0
+                    ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
+                    : 'bg-slate-100 hover:bg-white'
+                }`}
+                title="Realinhamento de estoque"
+              >
+                <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
+                <div className="flex-1 min-w-0">
+                  <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
+                  <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
+                </div>
+                {realignPending > 0 && (
+                  <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
+                    {realignPending}
+                  </span>
+                )}
+              </Link>
+              <Link
+                href="/minha-loja/pdv/fechamento"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Fechamento diário"
+              >
+                <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
+                </div>
+              </Link>
+            </div>
+          </div>
 
-        {/* PAGAMENTOS migraram pra BARRA HORIZONTAL fixa acima do footer
-           (procurar "PaymentBar — barra inferior" abaixo). Mantido aqui só
-           o comentário pra não confundir quem busca por "Formas de pagamento". */}
+          {/* ─── RELATORIOS (recebimentos e NFC-es) ─── */}
+          <div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
+              Relatórios
+            </div>
+            <div className="space-y-1.5">
+              <Link
+                href="/minha-loja/pdv/recebimentos"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Receber/baixar parcelas de crediário"
+              >
+                <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
+                </div>
+              </Link>
+              <Link
+                href="/minha-loja/pdv/notas"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="NFC-es emitidas"
+              >
+                <FileText className="w-5 h-5 text-slate-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">NFC-es</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Notas emitidas</div>
+                </div>
+              </Link>
+            </div>
+          </div>
 
-        {/* AÇÕES DO PDV migrou pra sidebar ESQUERDA (vertical) — busca por
-            "SIDEBAR ESQUERDA — AÇÕES DO PDV" no início do main+sidebar flex. */}
-
+        </div>
       </aside>
+      )}
 
       </div>{/* fim do flex main+sidebar */}
 
