@@ -568,13 +568,14 @@ function PdvPageInner() {
 
   // ── Effect: busca inline com debounce ──
   // Se digitar texto (com letra), busca por descricao no Giga.
-  // Se digitar so numero pequeno (3-6 digitos), tambem busca (REF/CODIGO parcial).
-  // Numeros >=8 digitos (EAN/codigo de barras) NAO acionam busca — vai pro bipe normal.
+  // Se digitar so numero pequeno (3-6 digitos = REF curta), tambem busca.
+  // Numeros >=7 digitos (CODIGO Wincred / EAN) NAO acionam dropdown — sao bipados direto
+  // (evita conflito: bipe de 7 dig usado pra abrir dropdown E enviar pro handleScan).
   useEffect(() => {
     const term = scanInput.trim();
     const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
-    const isShortNumeric = /^\d{3,7}$/.test(term);
-    // 3+ chars com letra OU 3-7 digitos (REF) abrem busca
+    const isShortNumeric = /^\d{3,6}$/.test(term);
+    // 3+ chars com letra OU 3-6 digitos (REF) abrem busca
     if (term.length < 3 || (!hasLetter && !isShortNumeric)) {
       setSearchResults([]);
       setShowResults(false);

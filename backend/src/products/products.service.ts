@@ -2566,11 +2566,23 @@ export class ProductsService {
     }
 
     const isLikelyEan = /^\d{8,14}$/.test(term);
+    // CODIGO interno do Wincred tem 5-8 dígitos (ex: 5399536). EAN tem 8-13.
+    // Se for SÓ DÍGITOS com 5+ chars, tenta como código/EAN antes de REF.
+    // Cobre o caso "vendedora bipa código de etiqueta na aba REF/Descrição".
+    const isLikelyCodeOrEan = /^\d{5,14}$/.test(term);
     let detectedAs: 'ean' | 'text' = 'text';
     let matchedSkuForResult: string | null = null;
 
-    // Modo DESC — retorna LISTA de REFs pra vendedora escolher (não expande tudo).
-    if (mode === 'desc') {
+    // Modo DESC — DEFESA EM PROFUNDIDADE: se o termo for só dígitos (5+),
+    // a vendedora provavelmente bipou código de etiqueta na aba errada.
+    // Promove o modo pra 'sku' antes de seguir, garantindo expansão da REF.
+    let effectiveMode: Mode = mode;
+    if (mode === 'desc' && isLikelyCodeOrEan) {
+      effectiveMode = 'sku';
+    }
+
+    // Modo DESC puro — retorna LISTA de REFs pra vendedora escolher (não expande).
+    if (effectiveMode === 'desc') {
       const grouped = await this.erp.searchByDescriptionGrouped(term);
       return {
         query: term,
@@ -2587,9 +2599,10 @@ export class ProductsService {
     }
 
     // Modo SKU/COD — acha a linha, pega a REF, expande TODA a REF.
-    // Também dispara quando parece EAN puro no modo ref (fallback inteligente).
+    // Também dispara quando parece código/EAN no modo ref (vendedora bipou
+    // etiqueta na aba REF/Descrição — comportamento mais comum na prática).
     let rawRows: any[] = [];
-    if (mode === 'sku' || (mode === 'ref' && isLikelyEan)) {
+    if (effectiveMode === 'sku' || (effectiveMode === 'ref' && isLikelyCodeOrEan)) {
       if (isLikelyEan) detectedAs = 'ean';
       // Guarda o código exato que a vendedora passou — marca a variante no resultado
       matchedSkuForResult = term;

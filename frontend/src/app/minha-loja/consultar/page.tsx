@@ -149,7 +149,10 @@ function ConsultarInner() {
     const c = s.trim().toLowerCase();
     if (!c || c.includes(' ')) return false;
     if (c.length < 3) return false;
-    if (/^\d{3,6}$/.test(c)) return true;
+    // Dígitos puros 3-14: cobre REF curta (3-6 dig) E CODIGO/EAN bipado
+    // (7-8 dig CODIGO Wincred, 8-13 dig EAN). O backend faz lookup duplo:
+    // primeiro como código/EAN, depois como REF, e expande a REF resultante.
+    if (/^\d{3,14}$/.test(c)) return true;
     if (/^[a-z]{1,5}-?\d{2,6}[a-z0-9]*$/.test(c)) return true;
     return false;
   };
