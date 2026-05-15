@@ -700,6 +700,7 @@ export class CashService {
     const lojas = await Promise.all(
       (stores as any[]).map(async (s) => {
         // 1) Vendas finalizadas no range
+        // Carrega vendas COM dados completos pra cascata (id, cliente, vendedor, payments com details)
         const sales = await (this.prisma as any).pdvSale.findMany({
           where: {
             storeCode: s.code,
@@ -709,9 +710,48 @@ export class CashService {
           select: {
             id: true, total: true, paymentMethod: true,
             sellerName: true, vendedorName: true,
-            payments: { select: { method: true, valor: true } },
+            customerName: true, customerCpf: true,
+            finalizedAt: true, createdAt: true,
+            payments: { select: { id: true, method: true, valor: true, details: true } },
           },
+          orderBy: { finalizedAt: 'desc' },
         });
+
+        // Detalhado por bandeira + lista de vendas (igual modo ao vivo, pra cascata)
+        type Slot = { valor: number; qtd: number; vendas: any[] };
+        const mkSlot = (): Slot => ({ valor: 0, qtd: 0, vendas: [] });
+        const totaisDet: Record<string, Slot> = {
+          DINHEIRO: mkSlot(), PIX: mkSlot(), CREDIARIO: mkSlot(),
+          MASTERCARD: mkSlot(), VISANET: mkSlot(), CIELO: mkSlot(), ELO: mkSlot(),
+          AMEX: mkSlot(), HIPERCARD: mkSlot(), VISA_ELECTRON: mkSlot(),
+          REDE_SHOP: mkSlot(), CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
+          OUTROS: mkSlot(),
+        };
+        const bandeiraMap: Record<string, string> = {
+          'MASTERCARD': 'MASTERCARD', 'VISA': 'VISANET', 'VISANET': 'VISANET',
+          'CIELO': 'CIELO', 'ELO': 'ELO', 'AMEX': 'AMEX',
+          'AMERICAN EXPRESS': 'AMEX', 'HIPERCARD': 'HIPERCARD',
+          'VISA ELECTRON': 'VISA_ELECTRON', 'VISA_ELECTRON': 'VISA_ELECTRON',
+          'VISAELECTRON': 'VISA_ELECTRON', 'REDESHOP': 'REDE_SHOP',
+          'REDE SHOP': 'REDE_SHOP', 'REDE_SHOP': 'REDE_SHOP',
+        };
+        const pushVenda = (key: string, sale: any, payment: any, valor: number, parcelas?: number, bandeira?: string | null) => {
+          totaisDet[key].valor += valor;
+          totaisDet[key].qtd += 1;
+          totaisDet[key].vendas.push({
+            saleId: String(sale.id),
+            saleTotal: Number(sale.total) || 0,
+            paymentId: String(payment.id),
+            method: String(payment.method || ''),
+            bandeira: bandeira || null,
+            valor,
+            customerName: sale.customerName || null,
+            customerCpf: sale.customerCpf || null,
+            sellerName: sale.sellerName || sale.vendedorName || null,
+            finalizedAt: sale.finalizedAt instanceof Date ? sale.finalizedAt.toISOString() : (sale.finalizedAt || sale.createdAt || null),
+            parcelas,
+          });
+        };
 
         let totalVendas = 0;
         let totalMarcados = 0;
@@ -738,11 +778,31 @@ export class CashService {
           for (const p of (sale.payments as any[]) || []) {
             const v = Number(p.valor) || 0;
             const m = String(p.method || '').toLowerCase();
-            if (m === 'dinheiro') totalDinheiro += v;
-            else if (m === 'pix') totalPix += v;
-            else if (m === 'credito' || m === 'credit') totalCartaoCredito += v;
-            else if (m === 'debito' || m === 'debit') totalCartaoDebito += v;
-            else if (m === 'crediario') totalCrediario += v;
+            let bandeira: string | null = null;
+            let parcelas: number | undefined = undefined;
+            if (p.details) {
+              try {
+                const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+                if (det?.bandeira) bandeira = String(det.bandeira).toUpperCase().trim();
+                if (det?.parcelas) parcelas = Number(det.parcelas);
+              } catch { /* ignora */ }
+            }
+            if (m === 'dinheiro') { totalDinheiro += v; pushVenda('DINHEIRO', sale, p, v); }
+            else if (m === 'pix') { totalPix += v; pushVenda('PIX', sale, p, v); }
+            else if (m === 'crediario') { totalCrediario += v; pushVenda('CREDIARIO', sale, p, v, parcelas); }
+            else if (m === 'credito' || m === 'credit') {
+              totalCartaoCredito += v;
+              const key = bandeira ? bandeiraMap[bandeira] : null;
+              if (key && key in totaisDet) pushVenda(key, sale, p, v, parcelas, bandeira);
+              else pushVenda('CREDITO_GENERICO', sale, p, v, parcelas, bandeira);
+            } else if (m === 'debito' || m === 'debit') {
+              totalCartaoDebito += v;
+              const key = bandeira ? bandeiraMap[bandeira] : null;
+              if (key && key in totaisDet) pushVenda(key, sale, p, v, parcelas, bandeira);
+              else pushVenda('DEBITO_GENERICO', sale, p, v, parcelas, bandeira);
+            } else {
+              pushVenda('OUTROS', sale, p, v);
+            }
           }
         }
         const vendedoras = Object.values(ranking).sort((a, b) => b.total - a.total);
@@ -832,7 +892,7 @@ export class CashService {
             totalPix: recPix,
             baixas: recBaixas,
           },
-          detalhado: null,
+          detalhado: { totais: totaisDet },
         };
       }),
     );
