@@ -659,6 +659,183 @@ export class CashService {
     };
   }
 
+  // ── Historico por DATA / PERIODO ─────────────────────────────────────
+
+  /**
+   * Super-painel agregado por DATA. Diferente do `getSuperPainelCaixas`
+   * (que mostra a sessao atual aberta), esse agrega tudo que ocorreu no
+   * range [from, to] independente de sessao — pra ver dias passados.
+   *
+   * Estrutura compativel com o painel ao vivo pra reutilizar componentes
+   * do frontend, mas sem detalhamento por sessao (aberta=false sempre).
+   */
+  async getSuperPainelHistorico(from: Date, to: Date): Promise<any> {
+    // Normaliza range: from=00:00:00, to=23:59:59 do dia
+    const fromStart = new Date(from);
+    fromStart.setHours(0, 0, 0, 0);
+    const toEnd = new Date(to);
+    toEnd.setHours(23, 59, 59, 999);
+
+    const stores = await this.prisma.store.findMany({
+      where: { active: true } as any,
+      orderBy: { code: 'asc' },
+      select: { code: true, name: true } as any,
+    });
+
+    const lojas = await Promise.all(
+      (stores as any[]).map(async (s) => {
+        // 1) Vendas finalizadas no range
+        const sales = await (this.prisma as any).pdvSale.findMany({
+          where: {
+            storeCode: s.code,
+            status: 'finalized',
+            finalizedAt: { gte: fromStart, lte: toEnd },
+          },
+          select: {
+            id: true, total: true,
+            sellerName: true, vendedorName: true,
+            payments: { select: { method: true, valor: true } },
+          },
+        });
+
+        let totalVendas = 0;
+        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0;
+        const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
+
+        for (const sale of sales as any[]) {
+          totalVendas += Number(sale.total) || 0;
+          const nome = String(sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
+          if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
+          ranking[nome].qtd += 1;
+          ranking[nome].total += Number(sale.total) || 0;
+
+          for (const p of (sale.payments as any[]) || []) {
+            const v = Number(p.valor) || 0;
+            const m = String(p.method || '').toLowerCase();
+            if (m === 'dinheiro') totalDinheiro += v;
+            else if (m === 'pix') totalPix += v;
+            else if (m === 'credito' || m === 'credit') totalCartaoCredito += v;
+            else if (m === 'debito' || m === 'debit') totalCartaoDebito += v;
+            else if (m === 'crediario') totalCrediario += v;
+          }
+        }
+        const vendedoras = Object.values(ranking).sort((a, b) => b.total - a.total);
+
+        // 2) Recebimentos de crediario no range
+        const baixas = await (this.prisma as any).crediarioBaixa.findMany({
+          where: { lojaCode: s.code, status: 'paid', paidAt: { gte: fromStart, lte: toEnd } },
+          select: {
+            id: true, formaPagamento: true, origem: true, totalPago: true,
+            valorDinheiro: true, valorPix: true, customerName: true, paidAt: true,
+          },
+          orderBy: { paidAt: 'desc' },
+        });
+        let recTotal = 0, recDinheiro = 0, recPix = 0;
+        const recBaixas: any[] = [];
+        for (const b of baixas as any[]) {
+          const total = Number(b.totalPago) || 0;
+          const vd = Number(b.valorDinheiro) || 0;
+          const vp = Number(b.valorPix) || 0;
+          recTotal += total;
+          recDinheiro += vd;
+          recPix += vp;
+          recBaixas.push({
+            id: b.id,
+            forma: String(b.formaPagamento || '').toLowerCase(),
+            origem: b.origem || null,
+            valor: total,
+            valorDinheiro: vd || null,
+            valorPix: vp || null,
+            customerName: b.customerName || null,
+            paidAt: b.paidAt instanceof Date ? b.paidAt.toISOString() : String(b.paidAt),
+          });
+        }
+
+        // 3) Sangrias/suprimentos via cashSessions abertas no range
+        const sessions = await (this.prisma as any).pdvCashSession.findMany({
+          where: { storeCode: s.code, openedAt: { gte: fromStart, lte: toEnd } },
+          select: { id: true },
+        });
+        let totalSangrias = 0, totalSuprimentos = 0;
+        const movimentos: any[] = [];
+        if (sessions.length > 0) {
+          const movs = await (this.prisma as any).pdvCashMovement.findMany({
+            where: { cashSessionId: { in: sessions.map((x: any) => x.id) } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, tipo: true, valor: true, motivo: true, userName: true, createdAt: true },
+          });
+          for (const m of movs as any[]) {
+            const v = Number(m.valor) || 0;
+            if (m.tipo === 'sangria') totalSangrias += v;
+            else if (m.tipo === 'suprimento') totalSuprimentos += v;
+            movimentos.push({
+              id: m.id, tipo: m.tipo, valor: v, motivo: m.motivo || '',
+              userName: m.userName || null,
+              createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : String(m.createdAt),
+            });
+          }
+        }
+
+        return {
+          storeCode: s.code,
+          storeName: s.name,
+          sessionId: null,
+          aberta: false,
+          openedAt: null,
+          openedByName: null,
+          fundoTroco: 0,
+          totais: {
+            totalVendas,
+            totalDinheiro,
+            totalPix,
+            totalCartaoCredito,
+            totalCartaoDebito,
+            totalCrediario,
+            totalSangrias,
+            totalSuprimentos,
+            dinheiroEsperado: 0,
+            qtdVendas: sales.length,
+          },
+          vendedoras,
+          movimentos,
+          recebimentosCrediario: {
+            totalGeral: recTotal,
+            totalDinheiro: recDinheiro,
+            totalPix: recPix,
+            baixas: recBaixas,
+          },
+          detalhado: null,
+        };
+      }),
+    );
+
+    // Consolidado
+    const consolidado = {
+      totalVendas: 0, totalDinheiro: 0, totalPix: 0,
+      totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
+      qtdLojasAbertas: 0, qtdLojasFechadas: lojas.length,
+    };
+    for (const l of lojas) {
+      consolidado.totalVendas += l.totais.totalVendas;
+      consolidado.totalDinheiro += l.totais.totalDinheiro;
+      consolidado.totalPix += l.totais.totalPix;
+      consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
+      consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
+      consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalSangrias += l.totais.totalSangrias;
+      consolidado.totalSuprimentos += l.totais.totalSuprimentos;
+      consolidado.qtdVendas += l.totais.qtdVendas;
+    }
+
+    return {
+      lojas,
+      consolidado,
+      range: { from: fromStart.toISOString(), to: toEnd.toISOString() },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   // ── Abertura ────────────────────────────────────────────────────────
 
   /**

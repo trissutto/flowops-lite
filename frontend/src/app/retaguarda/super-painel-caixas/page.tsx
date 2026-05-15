@@ -120,6 +120,17 @@ const fmtTime = (iso: string | null) => {
 
 const POLL_INTERVAL_MS = 60_000;
 
+// Formata Date pra YYYY-MM-DD (local time)
+function toYmd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function todayYmd(): string {
+  return toYmd(new Date());
+}
+
 export default function SuperPainelCaixas() {
   const [data, setData] = useState<Painel | null>(null);
   const [loading, setLoading] = useState(true);
@@ -127,11 +138,23 @@ export default function SuperPainelCaixas() {
   const [secsToRefresh, setSecsToRefresh] = useState(POLL_INTERVAL_MS / 1000);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Filtro de data — default: HOJE (modo ao vivo, sem range)
+  const [filterFrom, setFilterFrom] = useState<string>(todayYmd());
+  const [filterTo, setFilterTo] = useState<string>(todayYmd());
+
+  // É modo "ao vivo" (hoje) — usa endpoint atual com polling
+  const isLiveMode = filterFrom === todayYmd() && filterTo === todayYmd();
+
   async function load(silent = false) {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const r = await api<Painel>('/pdv/caixa/super-painel');
+      // Modo ao vivo: endpoint atual /super-painel (snapshot da sessao atual)
+      // Modo historico: /super-painel-historico?from&to (agregado por data)
+      const url = isLiveMode
+        ? '/pdv/caixa/super-painel'
+        : `/pdv/caixa/super-painel-historico?from=${filterFrom}&to=${filterTo}`;
+      const r = await api<Painel>(url);
       setData(r);
       setSecsToRefresh(POLL_INTERVAL_MS / 1000);
     } catch (e: any) {
@@ -141,14 +164,43 @@ export default function SuperPainelCaixas() {
     }
   }
 
-  // Polling automático a cada 60s
+  // Polling automático a cada 60s — SOMENTE em modo ao vivo (hoje)
   useEffect(() => {
     load();
-    intervalRef.current = setInterval(() => load(true), POLL_INTERVAL_MS);
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (isLiveMode) {
+      intervalRef.current = setInterval(() => load(true), POLL_INTERVAL_MS);
+    }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterFrom, filterTo]);
+
+  // Atalhos rapidos de periodo
+  function applyShortcut(kind: 'hoje' | 'ontem' | '7d' | '30d' | 'mes' | 'mesAnterior') {
+    const now = new Date();
+    let from = new Date(now);
+    let to = new Date(now);
+    if (kind === 'hoje') {
+      // ja eh hoje
+    } else if (kind === 'ontem') {
+      from.setDate(now.getDate() - 1);
+      to.setDate(now.getDate() - 1);
+    } else if (kind === '7d') {
+      from.setDate(now.getDate() - 6);
+    } else if (kind === '30d') {
+      from.setDate(now.getDate() - 29);
+    } else if (kind === 'mes') {
+      from = new Date(now.getFullYear(), now.getMonth(), 1);
+      to = new Date(now);
+    } else if (kind === 'mesAnterior') {
+      from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      to = new Date(now.getFullYear(), now.getMonth(), 0);
+    }
+    setFilterFrom(toYmd(from));
+    setFilterTo(toYmd(to));
+  }
 
   // Countdown do próximo refresh
   useEffect(() => {
@@ -160,7 +212,7 @@ export default function SuperPainelCaixas() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
       <div className="max-w-7xl mx-auto p-4 space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-3">
             <Link href="/retaguarda" className="p-2 rounded-lg hover:bg-slate-200 text-slate-700">
               <ArrowLeft size={22} />
@@ -168,14 +220,18 @@ export default function SuperPainelCaixas() {
             <div>
               <h1 className="text-3xl font-black text-slate-900">SUPER PAINEL · CAIXAS</h1>
               <p className="text-xs text-slate-500">
-                Ao vivo · todas as lojas · refresh a cada {POLL_INTERVAL_MS / 1000}s
+                {isLiveMode
+                  ? `Ao vivo · todas as lojas · refresh a cada ${POLL_INTERVAL_MS / 1000}s`
+                  : `Histórico · ${filterFrom === filterTo ? filterFrom : `${filterFrom} → ${filterTo}`}`}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-mono tabular-nums">
-              próximo em {secsToRefresh}s
-            </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {isLiveMode && (
+              <span className="text-xs text-slate-500 font-mono tabular-nums">
+                próximo em {secsToRefresh}s
+              </span>
+            )}
             <button
               onClick={() => load()}
               disabled={loading}
@@ -185,6 +241,60 @@ export default function SuperPainelCaixas() {
               Atualizar
             </button>
           </div>
+        </div>
+
+        {/* Filtros de data */}
+        <div className="bg-white rounded-xl border border-slate-200 p-3 flex items-center gap-2 flex-wrap shadow-sm">
+          <div className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-slate-600 mr-2">
+            <span>Período:</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-slate-500">De</label>
+            <input
+              type="date"
+              value={filterFrom}
+              max={filterTo}
+              onChange={(e) => setFilterFrom(e.target.value)}
+              className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm font-mono"
+            />
+            <label className="text-xs text-slate-500">até</label>
+            <input
+              type="date"
+              value={filterTo}
+              min={filterFrom}
+              max={todayYmd()}
+              onChange={(e) => setFilterTo(e.target.value)}
+              className="px-2 py-1.5 border border-slate-300 rounded-lg text-sm font-mono"
+            />
+          </div>
+          <div className="h-6 w-px bg-slate-200" />
+          {[
+            { k: 'hoje', label: 'Hoje' },
+            { k: 'ontem', label: 'Ontem' },
+            { k: '7d', label: 'Últ. 7 dias' },
+            { k: '30d', label: 'Últ. 30 dias' },
+            { k: 'mes', label: 'Este mês' },
+            { k: 'mesAnterior', label: 'Mês anterior' },
+          ].map((opt) => (
+            <button
+              key={opt.k}
+              type="button"
+              onClick={() => applyShortcut(opt.k as any)}
+              className="px-2.5 py-1 bg-slate-100 hover:bg-rose-100 hover:text-rose-700 text-slate-700 rounded text-xs font-bold transition"
+            >
+              {opt.label}
+            </button>
+          ))}
+          {!isLiveMode && (
+            <button
+              type="button"
+              onClick={() => applyShortcut('hoje')}
+              className="ml-auto px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold"
+              title="Volta pro modo ao vivo (hoje)"
+            >
+              ← Voltar ao vivo
+            </button>
+          )}
         </div>
 
         {error && (

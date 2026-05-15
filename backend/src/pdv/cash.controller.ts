@@ -254,4 +254,33 @@ export class CashController {
     }
     return this.svc.getSuperPainelCaixas();
   }
+
+  /**
+   * GET /pdv/caixa/super-painel-historico?from=YYYY-MM-DD&to=YYYY-MM-DD
+   * Painel agregado por DATA/PERIODO. Pra ver dias passados.
+   * Sem polling — snapshot da data.
+   */
+  @Get('super-painel-historico')
+  async getSuperPainelHistorico(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    if (!from) {
+      throw new BadRequestException('Parametro "from" obrigatorio (YYYY-MM-DD)');
+    }
+    const dFrom = new Date(from + 'T00:00:00');
+    const dTo = to ? new Date(to + 'T00:00:00') : dFrom;
+    if (isNaN(dFrom.getTime()) || isNaN(dTo.getTime())) {
+      throw new BadRequestException('Data invalida (use YYYY-MM-DD)');
+    }
+    if (dTo < dFrom) {
+      throw new BadRequestException('"to" nao pode ser anterior a "from"');
+    }
+    return this.svc.getSuperPainelHistorico(dFrom, dTo);
+  }
 }
