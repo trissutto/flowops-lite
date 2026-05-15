@@ -949,12 +949,70 @@ export class CashService {
       throw new BadRequestException('Fundo de troco inválido');
     }
 
-    // Já tem caixa aberto?
+    // Ja tem caixa aberto?
     const existing = await this.getCurrentSession(storeCode);
+    let autoClosedInfo: any = null;
     if (existing) {
-      throw new BadRequestException(
-        `Já existe um caixa aberto nesta loja desde ${new Date(existing.openedAt).toLocaleString('pt-BR')}. Feche o caixa atual antes de abrir outro.`,
-      );
+      // Se a sessao aberta eh de um DIA ANTERIOR (vendedora esqueceu de
+      // fechar ontem), faz AUTO-CLOSE com os totais calculados — pra ter
+      // o demonstrativo do dia salvo e abrir um caixa novo limpo HOJE.
+      // Mesma logica do Wincred: ao abrir caixa, ele gera "retirada final"
+      // do dia anterior automaticamente.
+      const inicioHoje = new Date();
+      inicioHoje.setHours(0, 0, 0, 0);
+      const openedAt = new Date(existing.openedAt);
+      const ehDeOntemOuAntes = openedAt < inicioHoje;
+      if (ehDeOntemOuAntes) {
+        // Calcula totais da sessao antiga
+        const totals = await this.computeSessionTotals(existing.id);
+        // Auto-fecha: dinheiroFisico = esperado (sem diferenca), marca como SISTEMA
+        try {
+          await (this.prisma as any).pdvCashSession.update({
+            where: { id: existing.id },
+            data: {
+              status: 'closed',
+              closedAt: new Date(),
+              closedByName: 'SISTEMA (auto-close ao abrir novo)',
+              observacao: existing.observacao
+                ? `${existing.observacao}\n---\nAuto-fechada em ${new Date().toLocaleString('pt-BR')} ao abrir novo caixa.`
+                : `Auto-fechada em ${new Date().toLocaleString('pt-BR')} ao abrir novo caixa.`,
+              totalVendas: totals.totalVendas,
+              totalDinheiro: totals.totalDinheiro,
+              totalPix: totals.totalPix,
+              totalCartaoCredito: totals.totalCartaoCredito,
+              totalCartaoDebito: totals.totalCartaoDebito,
+              totalCrediario: totals.totalCrediario,
+              totalSangrias: totals.totalSangrias,
+              totalSuprimentos: totals.totalSuprimentos,
+              dinheiroEsperado: totals.dinheiroEsperado,
+              dinheiroFisico: totals.dinheiroEsperado,
+              diferenca: 0,
+            },
+          });
+          autoClosedInfo = {
+            sessionId: existing.id,
+            openedAt: existing.openedAt,
+            totalVendas: totals.totalVendas,
+            dinheiroEsperado: totals.dinheiroEsperado,
+          };
+          this.logger.log(
+            `[caixa] AUTO-CLOSE: loja=${storeCode} sessao=${existing.id} ` +
+            `aberta em ${new Date(existing.openedAt).toLocaleString('pt-BR')} ` +
+            `vendas=R$${totals.totalVendas.toFixed(2)} esperado=R$${totals.dinheiroEsperado.toFixed(2)} ` +
+            `por SISTEMA (vendedora ${openedByName || '?'} abrindo novo caixa)`,
+          );
+        } catch (e: any) {
+          this.logger.error(`[caixa] auto-close FALHOU: ${e?.message || e}`);
+          throw new BadRequestException(
+            `Falha ao auto-fechar caixa do dia anterior: ${e?.message || e}. Feche manual em /pdv/fechamento.`,
+          );
+        }
+      } else {
+        // Mesmo dia — fluxo antigo: nao deixa abrir outro caixa
+        throw new BadRequestException(
+          `Ja existe um caixa aberto nesta loja desde ${openedAt.toLocaleString('pt-BR')}. Feche o caixa atual antes de abrir outro.`,
+        );
+      }
     }
 
     const session = await (this.prisma as any).pdvCashSession.create({
@@ -970,9 +1028,10 @@ export class CashService {
     });
 
     this.logger.log(
-      `[caixa] aberto: loja=${storeCode} fundo=R$${fundoTroco} por ${openedByName || 'sistema'}`,
+      `[caixa] aberto: loja=${storeCode} fundo=R$${fundoTroco} por ${openedByName || 'sistema'}` +
+      (autoClosedInfo ? ` (apos auto-close da sessao ${autoClosedInfo.sessionId})` : ''),
     );
-    return session;
+    return { ...session, autoClosed: autoClosedInfo };
   }
 
   // ── Sangria/Suprimento ──────────────────────────────────────────────
