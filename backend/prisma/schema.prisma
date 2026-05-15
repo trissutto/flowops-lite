@@ -957,6 +957,12 @@ model PdvSale {
   // pula (ja foi baixado). Marcado automaticamente no finalize() quando a
   // baixa de estoque sucede.
   stockDecreasedAt  DateTime? @map("stock_decreased_at")
+  // ── Conciliação Stone (maquininha) — webhook bate aqui ──
+  stoneConciliatedAt DateTime? @map("stone_conciliated_at")
+  stoneTxId          String?   @map("stone_tx_id")           // transaction_id da Stone
+  stoneNsu           String?   @map("stone_nsu")             // NSU/autorização
+  stoneBandeira      String?   @map("stone_bandeira")        // VISA, MASTER, etc
+  stoneLast4         String?   @map("stone_last4")           // últimos 4 dígitos do cartão
   // Timestamps
   createdAt       DateTime @default(now()) @map("created_at")
   finalizedAt     DateTime? @map("finalized_at")
@@ -971,7 +977,46 @@ model PdvSale {
   @@index([customerCpf])
   @@index([cashSessionId])
   @@index([sellerId])
+  @@index([stoneTxId])
   @@map("pdv_sales")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CONCILIAÇÃO STONE — transações da maquininha
+// ═══════════════════════════════════════════════════════════════════════
+// Cada webhook recebido da Stone vira 1 linha aqui. Se conseguimos casar
+// com uma PdvSale, marca matchedSaleId. Se não, fica "órfã" pra revisão.
+model StoneTransaction {
+  id               String   @id @default(uuid())
+  // Identificadores Stone
+  stoneTxId        String   @unique @map("stone_tx_id")
+  stoneNsu         String?  @map("stone_nsu")
+  authorizationCode String? @map("authorization_code")
+  // Valores/dados do pagamento
+  amount           Float                                  // em reais (centavos / 100)
+  bandeira         String?                                // VISA, MASTER, etc
+  last4            String?  @map("last4")
+  installments     Int?     @default(1)
+  // Origem na maquininha
+  merchantId       String?  @map("merchant_id")
+  storeCode        String?  @map("store_code")           // resolvido via merchantId
+  // Status
+  status           String   @default("captured")          // captured | refunded | denied
+  capturedAt       DateTime @map("captured_at")
+  // Conciliação com PdvSale
+  matchedSaleId    String?  @map("matched_sale_id")       // FK lógica (sem cascade)
+  matchedAt        DateTime? @map("matched_at")
+  matchScore       Int?     @map("match_score")           // 0-100, qualidade do match
+  matchReason      String?  @map("match_reason")          // exact, fuzzy_time, manual
+  // Payload bruto pra auditoria
+  rawPayload       String   @map("raw_payload") @db.Text
+  receivedAt       DateTime @default(now()) @map("received_at")
+
+  @@index([capturedAt(sort: Desc)])
+  @@index([matchedSaleId])
+  @@index([storeCode, capturedAt(sort: Desc)])
+  @@index([status])
+  @@map("stone_transactions")
 }
 
 // ═══════════════════════════════════════════════════════════════════════

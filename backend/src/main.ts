@@ -26,8 +26,16 @@ async function bootstrap() {
   });
 
   app.use(helmet());
-  // Limite aumentado pro endpoint de restore (backup xlsx em base64 pode passar de 10MB)
-  app.use(json({ limit: '50mb' }));
+  // Limite aumentado pro endpoint de restore (backup xlsx em base64 pode passar de 10MB).
+  // `verify` salva o rawBody no request — necessário pra validação HMAC do webhook Stone.
+  app.use(
+    json({
+      limit: '50mb',
+      verify: (req: any, _res, buf) => {
+        if (buf?.length) req.rawBody = buf;
+      },
+    }),
+  );
   app.use(urlencoded({ extended: true, limit: '50mb' }));
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({

@@ -38,6 +38,7 @@ import { WcReturnsModule } from './wc-returns/wc-returns.module';
 import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
 import { ProductRegistrationModule } from './product-registration/product-registration.module';
+import { StoneModule } from './stone/stone.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { ProductRegistrationModule } from './product-registration/product-regist
     PagbankModule,
     PagarmeModule,
     ProductRegistrationModule,
+    StoneModule,
   ],
 })
 export class AppModule {}
