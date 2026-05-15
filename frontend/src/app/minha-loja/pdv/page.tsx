@@ -223,6 +223,22 @@ function PdvPageInner() {
   const [error, setError] = useState<string | null>(null);
 
   const [scanInput, setScanInput] = useState('');
+
+  // ── BUSCA INLINE POR DESCRICAO ──
+  // Quando vendedora digita texto (nao codigo de barras), aparece dropdown
+  // com sugestoes do Giga em tempo real. Click adiciona ao carrinho.
+  type ErpSearchHit = {
+    CODIGO: string;
+    REF: string;
+    DESCRICAOCOMPLETA?: string;
+    COR?: string | null;
+    TAMANHO?: string | null;
+    ESTOQUE?: number;
+  };
+  const [searchResults, setSearchResults] = useState<ErpSearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [highlightedIdx, setHighlightedIdx] = useState(-1);
   const [scanLoading, setScanLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   // SKU pendente quando vendedora ainda nao foi escolhida — bipe fica em
@@ -513,6 +529,73 @@ function PdvPageInner() {
       }, 50);
     }
   };
+
+  // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
+  const addBySku = useCallback(async (sku: string) => {
+    if (!sale) return;
+    if (!sale.sellerName) {
+      pendingScanRef.current = sku;
+      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça vai entrar no carrinho automaticamente.');
+      setShowVendedora(true);
+      return;
+    }
+    setShowResults(false);
+    setSearchResults([]);
+    setScanLoading(true);
+    setError(null);
+    try {
+      await api(`/pdv/sales/${sale.id}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ skuOrEan: sku }),
+      });
+      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      setSale(fresh);
+      setScanInput('');
+    } catch (e: any) {
+      setError(e?.message || 'Erro ao adicionar');
+    } finally {
+      setScanLoading(false);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
+    }
+  }, [sale, toast]);
+
+  // ── Effect: busca inline com debounce ──
+  // Se digitar texto (com letra), busca por descricao no Giga.
+  // Se digitar so numero pequeno (3-6 digitos), tambem busca (REF/CODIGO parcial).
+  // Numeros >=8 digitos (EAN/codigo de barras) NAO acionam busca — vai pro bipe normal.
+  useEffect(() => {
+    const term = scanInput.trim();
+    const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
+    const isShortNumeric = /^\d{3,7}$/.test(term);
+    // 3+ chars com letra OU 3-7 digitos (REF) abrem busca
+    if (term.length < 3 || (!hasLetter && !isShortNumeric)) {
+      setSearchResults([]);
+      setShowResults(false);
+      setHighlightedIdx(-1);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(term)}`);
+        const arr = Array.isArray(res) ? res : [];
+        setSearchResults(arr);
+        setShowResults(arr.length > 0);
+        setHighlightedIdx(arr.length > 0 ? 0 : -1);
+      } catch {
+        setSearchResults([]);
+        setShowResults(false);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [scanInput]);
 
   // ── Atualizar qty/desconto do item ──
   const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number }) => {
@@ -1153,9 +1236,17 @@ function PdvPageInner() {
 
         {/* Input bipagem — FULL-WIDTH (estilo mockup) com botão grande à direita */}
         {sale?.status === 'open' && (
-          <>
+          <div className="relative w-full">
           <form
-            onSubmit={handleScan}
+            onSubmit={(e) => {
+              e.preventDefault();
+              // Se tem item destacado no dropdown, escolhe ele. Senao bipe normal.
+              if (showResults && highlightedIdx >= 0 && searchResults[highlightedIdx]) {
+                addBySku(searchResults[highlightedIdx].CODIGO);
+              } else {
+                handleScan(e);
+              }
+            }}
             className="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-md flex items-center gap-3 w-full"
           >
             <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
@@ -1164,7 +1255,27 @@ function PdvPageInner() {
               type="text"
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
-              placeholder="Bipe ou digite SKU / nome do produto…"
+              onKeyDown={(e) => {
+                if (!showResults || searchResults.length === 0) return;
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setHighlightedIdx((i) => Math.min(searchResults.length - 1, i + 1));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setHighlightedIdx((i) => Math.max(0, i - 1));
+                } else if (e.key === 'Escape') {
+                  setShowResults(false);
+                  setHighlightedIdx(-1);
+                }
+              }}
+              onBlur={() => {
+                // delay pra permitir click no item antes do dropdown fechar
+                setTimeout(() => setShowResults(false), 150);
+              }}
+              onFocus={() => {
+                if (searchResults.length > 0) setShowResults(true);
+              }}
+              placeholder="Bipe SKU/EAN ou digite parte do nome do produto…"
               disabled={scanLoading}
               className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
               autoComplete="off"
@@ -1172,6 +1283,9 @@ function PdvPageInner() {
               autoCapitalize="off"
               spellCheck={false}
             />
+            {searchLoading && (
+              <Loader2 className="w-4 h-4 text-slate-400 animate-spin shrink-0" />
+            )}
             <button
               type="submit"
               disabled={!scanInput || scanLoading}
@@ -1182,7 +1296,51 @@ function PdvPageInner() {
             </button>
           </form>
 
-          </>
+          {/* DROPDOWN DE BUSCA — aparece abaixo do input quando ha resultados */}
+          {showResults && searchResults.length > 0 && (
+            <div className="absolute z-30 left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-[420px] overflow-y-auto">
+              <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-[10px] uppercase tracking-wider font-black text-slate-500 flex items-center justify-between">
+                <span>{searchResults.length} resultado(s) — clique pra adicionar</span>
+                <span className="text-[9px] font-normal">↑↓ navegar · Enter escolher · Esc fechar</span>
+              </div>
+              {searchResults.map((r, idx) => {
+                const isHi = idx === highlightedIdx;
+                const desc = (r.DESCRICAOCOMPLETA || '').trim();
+                const corTam = [r.COR, r.TAMANHO].filter(Boolean).join(' / ');
+                const estoque = Number(r.ESTOQUE) || 0;
+                return (
+                  <button
+                    key={`${r.CODIGO}-${idx}`}
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); addBySku(r.CODIGO); }}
+                    onMouseEnter={() => setHighlightedIdx(idx)}
+                    className={`w-full px-3 py-2 flex items-center gap-3 text-left transition border-b border-slate-50 last:border-b-0 ${
+                      isHi ? 'bg-violet-50' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex flex-col items-center justify-center w-12 shrink-0">
+                      <div className="font-mono text-[10px] text-slate-400">SKU</div>
+                      <div className="font-mono font-bold text-[11px] text-slate-700">{r.CODIGO}</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono font-black text-sm text-slate-900">{r.REF}</span>
+                        {corTam && <span className="text-[10px] font-bold text-slate-500">{corTam}</span>}
+                      </div>
+                      {desc && (
+                        <div className="text-xs text-slate-700 truncate font-semibold">{desc}</div>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-[9px] uppercase text-slate-400 font-bold">Estoque</div>
+                      <div className={`text-base font-black tabular-nums ${estoque > 0 ? 'text-emerald-700' : 'text-rose-500'}`}>{estoque}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          </div>
         )}
 
         {/* Carrinho */}
