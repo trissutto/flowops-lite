@@ -789,6 +789,44 @@ export class RealignmentController {
     return this.shipment.getShipmentDetailAdmin(id);
   }
 
+  /**
+   * GET /realignment/shipments/admin/needs-stock-reprocess?daysAgo=30
+   *
+   * Lista remessas fechadas (in_transit/received) que NÃO tiveram baixa
+   * Giga aplicada (stockDecreasedAt = null). Causa típica: mismatch
+   * de storeCode ou itens unresolved que silenciaram com skipNotFound.
+   */
+  @Get('shipments/admin/needs-stock-reprocess')
+  needsStockReprocess(@Req() req: any, @Query('daysAgo') daysAgo?: string) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    const days = Number(daysAgo) || 30;
+    return this.shipment.listShipmentsNeedingStockReprocess(days);
+  }
+
+  /**
+   * POST /realignment/shipments/admin/:id/reprocess-stock
+   * Body: { force?: boolean }
+   *
+   * Reaplica decreaseStock na origem pra uma remessa fechada. Idempotente:
+   * recusa se já tem stockDecreasedAt (a menos que force=true). Use pra
+   * consertar casos tipo São José → Campinas que fecharam mas Giga não baixou.
+   */
+  @Post('shipments/admin/:id/reprocess-stock')
+  reprocessStock(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { force?: boolean },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.reprocessStockForShipment({
+      shipmentId: id,
+      force: !!body?.force,
+      userId: req?.user?.userId,
+    });
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // WIPE / DESTRUTIVOS (admin)
   // ════════════════════════════════════════════════════════════════════

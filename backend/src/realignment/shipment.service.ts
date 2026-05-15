@@ -595,14 +595,30 @@ export class RealignmentShipmentService {
       stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
       { allowNegative: true, skipNotFound: true },
     );
-    this.logger.log(`[closeAndSend] decreaseStock: ${Date.now() - tDecrease}ms (${stockItems.length} SKUs)`);
+    const appliedCount = result.applied?.length || 0;
+    this.logger.log(
+      `[closeAndSend] decreaseStock: ${Date.now() - tDecrease}ms ` +
+      `(${stockItems.length} SKUs solicitados, ${appliedCount} aplicados)`,
+    );
+    // ALERTA: se decreaseStock retornou success mas NENHUM SKU foi aplicado,
+    // significa que o estoque não baixou (skipNotFound silenciou). Causa
+    // comum: storeCode não bate com formato LOJA do Giga, ou todos SKUs
+    // estavam zerados/inexistentes na tabela estoque.
     if (!result.success) {
       throw new BadRequestException(
         `Falha ao baixar estoque Giga origem: ${result.error}. Remessa NÃO foi fechada.`,
       );
     }
+    if (stockItems.length > 0 && appliedCount === 0) {
+      this.logger.error(
+        `[closeAndSend] ${shipment.code}: decreaseStock retornou success mas 0 SKUs aplicados! ` +
+        `Possível mismatch de storeCode. fromStoreCode=${shipment.fromStoreCode} ` +
+        `SKUs=[${stockItems.slice(0, 5).map((s) => s.sku).join(',')}${stockItems.length > 5 ? '...' : ''}]. ` +
+        `Use POST /realignment/shipments/:id/reprocess-stock pra reaplicar.`,
+      );
+    }
 
-    // Atualiza shipment → in_transit
+    // Atualiza shipment → in_transit + marca stockDecreasedAt apenas se aplicou
     const now = new Date();
     const totalQty = stockItems.reduce((s, x) => s + x.qty, 0);
     await (this.prisma as any).realignmentShipment.update({
@@ -613,7 +629,9 @@ export class RealignmentShipmentService {
         sentByUserId: input.userId ?? null,
         totalItems: items.length,
         totalQty,
-      },
+        // Só marca se realmente aplicou — assim reprocess sabe quem precisa
+        stockDecreasedAt: appliedCount > 0 ? now : null,
+      } as any,
     });
 
     // ── FINANCEIRO: cria obrigações p/ itens entre grupos diferentes (REDE↔FILIAL)
@@ -993,6 +1011,153 @@ export class RealignmentShipmentService {
    *   - search: substring no code da remessa (opcional)
    *   - daysAgo: filtra remessas abertas/enviadas nos últimos N dias (default 30)
    */
+  // ═══════════════════════════════════════════════════════════════════════
+  // REPROCESSAMENTO DE ESTOQUE — remessas fechadas que NÃO baixaram Giga
+  // ═══════════════════════════════════════════════════════════════════════
+  /**
+   * Lista remessas que fecharam (in_transit/received) mas que NÃO tiveram
+   * decreaseStock aplicado (stockDecreasedAt = null). Causa típica:
+   * mismatch de storeCode no Giga ou itens unresolved que travaram.
+   * Admin pode então reprocessar uma a uma.
+   */
+  async listShipmentsNeedingStockReprocess(daysAgo: number = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - daysAgo);
+    const rows = await (this.prisma as any).realignmentShipment.findMany({
+      where: {
+        status: { in: ['in_transit', 'received'] },
+        stockDecreasedAt: null,
+        sentAt: { gte: since },
+      } as any,
+      orderBy: { sentAt: 'desc' },
+      take: 200,
+    });
+    // Pra cada uma, conta os items
+    const result = await Promise.all(
+      (rows as any[]).map(async (s) => {
+        const cnt = await this.prisma.transferOrder.count({
+          where: { shipmentId: s.id } as any,
+        });
+        return {
+          ...s,
+          totalItemsLive: cnt,
+        };
+      }),
+    );
+    return result;
+  }
+
+  /**
+   * Reprocessa a baixa de estoque Giga origem pra uma remessa específica.
+   * Idempotente: se já tem stockDecreasedAt setado, recusa (a menos que force=true).
+   *
+   * Útil pra consertar remessas tipo "São José → Campinas" onde o decreaseStock
+   * silenciosamente pulou (skipNotFound). Reaplica a baixa pelos itens da
+   * remessa, atualiza stockDecreasedAt no sucesso.
+   */
+  async reprocessStockForShipment(input: { shipmentId: string; force?: boolean; userId?: string }) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.status === 'open') {
+      throw new BadRequestException('Remessa ainda aberta — use o fluxo normal de fechamento');
+    }
+    if (shipment.stockDecreasedAt && !input.force) {
+      throw new BadRequestException(
+        `Remessa ${shipment.code} já teve baixa Giga em ${new Date(shipment.stockDecreasedAt).toLocaleString('pt-BR')}. ` +
+        `Use force=true se TEM CERTEZA que precisa reaplicar (cuidado: vai duplicar baixa).`,
+      );
+    }
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id } as any,
+      select: { id: true, refCode: true, codigoBipado: true, cor: true, tamanho: true, qtyOrigem: true } as any,
+    });
+    if (!items.length) {
+      throw new BadRequestException('Remessa sem items — nada pra reprocessar');
+    }
+
+    // Resolve SKU (igual closeAndSend) — usa codigoBipado direto, batch pro resto
+    const itemsSemCodigoBipado: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      if (!it.codigoBipado) {
+        itemsSemCodigoBipado.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+    let batchSkus = new Map<string, string>();
+    if (itemsSemCodigoBipado.length > 0) {
+      try {
+        batchSkus = await this.erp.batchFindCodigosByRefCorTam(itemsSemCodigoBipado);
+      } catch (e) {
+        this.logger.warn(`[reprocess] batchFind falhou: ${(e as Error).message}`);
+      }
+    }
+    const keyOf = (ref: string, cor: string | null, tam: string | null) =>
+      `${String(ref).trim().toUpperCase()}|${String(cor || '').trim().toUpperCase()}|${String(tam || '').trim().toUpperCase()}`;
+
+    const stockItems: Array<{ sku: string; qty: number; storeCode: string; refCode: string }> = [];
+    const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      let sku: string | null = it.codigoBipado || null;
+      if (!sku) sku = batchSkus.get(keyOf(it.refCode, it.cor, it.tamanho)) || null;
+      if (!sku) {
+        try { sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho); } catch {}
+      }
+      if (!sku) {
+        unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        continue;
+      }
+      stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.fromStoreCode, refCode: it.refCode });
+    }
+
+    if (stockItems.length === 0) {
+      throw new BadRequestException(
+        `Nenhum SKU resolvido pra reprocessar. Items unresolved: ${unresolved.map((u) => `${u.refCode}/${u.cor}/${u.tamanho}`).join(', ')}`,
+      );
+    }
+
+    // Aplica baixa
+    const result = await this.erp.decreaseStock(
+      stockItems.map((s) => ({ sku: s.sku, qty: s.qty, storeCode: s.storeCode })),
+      { allowNegative: true, skipNotFound: true },
+    );
+    const appliedCount = result.applied?.length || 0;
+
+    this.logger.log(
+      `[reprocess] ${shipment.code} (${shipment.fromStoreCode}→${shipment.toStoreCode}): ` +
+      `${stockItems.length} SKUs solicitados, ${appliedCount} aplicados por user=${input.userId || 'unknown'}`,
+    );
+
+    if (!result.success) {
+      throw new BadRequestException(
+        `decreaseStock falhou: ${result.error}. Estoque não reaplicado.`,
+      );
+    }
+
+    if (appliedCount === 0) {
+      throw new BadRequestException(
+        `decreaseStock retornou success mas 0 SKUs aplicados. Possível mismatch de storeCode "${shipment.fromStoreCode}" com formato LOJA do Giga (pode ser "01", "02", etc). Verifique no Giga e ajuste o mapping.`,
+      );
+    }
+
+    // Marca stockDecreasedAt
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: { stockDecreasedAt: new Date() } as any,
+    });
+
+    return {
+      ok: true,
+      code: shipment.code,
+      itemsTotal: items.length,
+      stockItemsAttempted: stockItems.length,
+      stockItemsApplied: appliedCount,
+      unresolved: unresolved.length,
+      message: `Baixa Giga reaplicada em ${shipment.fromStoreCode}: ${appliedCount} SKUs.`,
+    };
+  }
+
   async listAllShipmentsAdmin(input: {
     status?: string;
     fromStoreCode?: string;

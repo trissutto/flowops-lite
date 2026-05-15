@@ -172,6 +172,11 @@ model RealignmentShipment {
   totalQty          Int      @default(0) @map("total_qty")       // soma das quantidades
   receivedQty       Int      @default(0) @map("received_qty")    // qty efetivamente recebida
   missingQty        Int      @default(0) @map("missing_qty")     // qty marcada como faltante
+  // Marcador de baixa Giga: setado quando decreaseStock origem rodou com sucesso.
+  // Permite reprocessar remessas que fecharam mas o estoque não baixou (idempotência).
+  stockDecreasedAt  DateTime? @map("stock_decreased_at")
+  // Marcador de aumento Giga no destino: setado quando confirmReceived rodou.
+  stockIncreasedAt  DateTime? @map("stock_increased_at")
   notes             String?
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
