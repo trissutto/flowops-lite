@@ -22,7 +22,7 @@ import {
   AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt, Globe, Shuffle, Tag, Wallet,
+  Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -1129,19 +1129,18 @@ function PdvPageInner() {
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
-            {/* SIDEBAR ESQUERDA — 7 botoes em sequencia (sem secoes) */}
-            <div className="space-y-1.5">
+            {/* SIDEBAR ESQUERDA — cards coloridos estilo Retaguarda hub */}
+            <div className="space-y-2">
               <Link
                 href="/minha-loja/consultar"
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-teal-700 hover:bg-teal-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Consulta de produtos (F10)"
               >
-                <Search className="w-5 h-5 text-blue-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Consulta Produtos</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Buscar produto, estoque</div>
-                </div>
-                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F10</kbd>
+                <Search className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">F10</div>
+                <div className="text-base font-black leading-tight mt-0.5">Consulta Produtos</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Buscar produto, estoque</div>
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1151,73 +1150,71 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-green-700 hover:bg-green-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Trocas / Devolução (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Trocas</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Devolução / troca</div>
-                </div>
-                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F4</kbd>
+                <ArrowRightLeft className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">F4</div>
+                <div className="text-base font-black leading-tight mt-0.5">Trocas</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Devolução / troca</div>
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-violet-700 hover:bg-violet-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-purple-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
-                </div>
+                <Tag className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Cliente</div>
+                <div className="text-base font-black leading-tight mt-0.5">Marcados</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Provar em casa</div>
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
+                className="group relative block w-full text-left bg-blue-700 hover:bg-blue-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-700 disabled:hover:translate-y-0 disabled:hover:shadow-none min-h-[78px]"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-sky-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Simular</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Simular parcelamento</div>
-                </div>
+                <CreditCard className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Parcelas</div>
+                <div className="text-base font-black leading-tight mt-0.5">Simular</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Simular parcelamento</div>
               </button>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-orange-700 hover:bg-orange-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Baixa de Crediário"
               >
-                <Receipt className="w-5 h-5 text-emerald-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
-                </div>
+                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Crediário</div>
+                <div className="text-base font-black leading-tight mt-0.5">Baixa Crediário</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Receber parcelas</div>
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-amber-700 hover:bg-amber-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Retiradas, sangria, suprimento (F3)"
               >
-                <DollarSign className="w-5 h-5 text-amber-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Retiradas</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Caixa, sangria</div>
-                </div>
-                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F3</kbd>
+                <DollarSign className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">F3</div>
+                <div className="text-base font-black leading-tight mt-0.5">Retiradas</div>
+                <div className="text-[10px] opacity-85 mt-0.5">Caixa, sangria</div>
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+                className="group relative block bg-slate-600 hover:bg-slate-700 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
                 title="Notas Fiscais emitidas"
               >
-                <FileText className="w-5 h-5 text-slate-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Notas Fiscais</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">NFC-es emitidas</div>
-                </div>
+                <FileText className="w-5 h-5 text-white shrink-0" />
+                <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Fiscal</div>
+                <div className="text-base font-black leading-tight mt-0.5">Notas Fiscais</div>
+                <div className="text-[10px] opacity-85 mt-0.5">NFC-es emitidas</div>
               </Link>
             </div>
           </div>
@@ -1714,54 +1711,54 @@ function PdvPageInner() {
           </div>
           {/* fim do resumo da venda */}
 
-          {/* 3 botoes em sequencia (sem secoes) */}
-          <div className="space-y-1.5">
+          {/* SIDEBAR DIREITA — cards coloridos estilo hub */}
+          <div className="space-y-2">
             <Link
               href="/minha-loja"
-              className="relative group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+              className="group relative block bg-violet-700 hover:bg-violet-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
               title="Pedidos do site"
             >
-              <Globe className="w-5 h-5 text-violet-600 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-black text-slate-900 leading-tight">Pedidos Site</div>
-                <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
-              </div>
+              <Globe className="w-5 h-5 text-white shrink-0" />
+              <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               {pedidosSitePending > 0 && (
-                <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
+                <span className="absolute top-2 right-8 bg-white text-violet-700 text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1.5">
                   {pedidosSitePending}
                 </span>
               )}
+              <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">E-commerce</div>
+              <div className="text-base font-black leading-tight mt-0.5">Pedidos Site</div>
+              <div className="text-[10px] opacity-85 mt-0.5">Pedidos do site</div>
             </Link>
             <Link
               href="/minha-loja/realinhamento"
-              className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
+              className={`group relative block rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px] ${
                 realignPending > 0
-                  ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
-                  : 'bg-slate-100 hover:bg-white'
+                  ? 'bg-rose-700 hover:bg-rose-800 ring-2 ring-rose-300/50 animate-pulse-slow'
+                  : 'bg-pink-700 hover:bg-pink-800'
               }`}
               title="Realinhamento de estoque"
             >
-              <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
-              <div className="flex-1 min-w-0">
-                <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
-                <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
-              </div>
+              <Shuffle className="w-5 h-5 text-white shrink-0" />
+              <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               {realignPending > 0 && (
-                <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
+                <span className="absolute top-2 right-8 bg-white text-rose-700 text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5">
                   {realignPending}
                 </span>
               )}
+              <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Inter-lojas</div>
+              <div className="text-base font-black leading-tight mt-0.5">Realinhar</div>
+              <div className="text-[10px] opacity-85 mt-0.5">Transferências</div>
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
-              className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
+              className="group relative block bg-slate-700 hover:bg-slate-800 rounded-xl p-3 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] min-h-[78px]"
               title="Fechamento diário"
             >
-              <Wallet className="w-5 h-5 text-slate-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
-                <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
-              </div>
+              <Wallet className="w-5 h-5 text-white shrink-0" />
+              <ArrowUpRight className="w-3.5 h-3.5 text-white/60 absolute top-2.5 right-2.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <div className="text-[9px] font-bold uppercase tracking-wider opacity-90 mt-2">Caixa</div>
+              <div className="text-base font-black leading-tight mt-0.5">Fechamento</div>
+              <div className="text-[10px] opacity-85 mt-0.5">Fechamento diário</div>
             </Link>
           </div>
 
