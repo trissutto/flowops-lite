@@ -1041,89 +1041,96 @@ function PdvPageInner() {
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
-            {/* ─── SIDEBAR ESQUERDA — Operacoes da venda ─────────────────
-                Vendas: acoes imediatas que tocam no carrinho atual.
-                Auxiliar: complementos esporadicos da mesma venda. */}
-            <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-amber-300/80 px-1 mb-1.5">
-                Vendas
-              </div>
-              <div className="space-y-1.5">
-                <Link
-                  href="/minha-loja/consultar"
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Consultar produto (F10)"
-                >
-                  <Search className="w-5 h-5 text-blue-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Consultar</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Buscar produto, estoque</div>
-                  </div>
-                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F10</kbd>
-                </Link>
-                <Link
-                  href="/minha-loja/pdv/devolucao"
-                  onClick={() => {
-                    try {
-                      if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
-                      else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
-                    } catch {}
-                  }}
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Devolução / Troca (F4)"
-                >
-                  <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Trocar</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Devolução / troca</div>
-                  </div>
-                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F4</kbd>
-                </Link>
-                <Link
-                  href="/minha-loja/pdv/caixa"
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Caixa — sangria, suprimento, retiradas (F3)"
-                >
-                  <DollarSign className="w-5 h-5 text-amber-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Caixa</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Sangria, suprimento</div>
-                  </div>
-                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F3</kbd>
-                </Link>
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
-                Auxiliar
-              </div>
-              <div className="space-y-1.5">
-                <button
-                  type="button"
-                  onClick={() => setShowSimular(true)}
-                  disabled={!sale?.total || sale.total <= 0}
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
-                  title="Simular parcelamento"
-                >
-                  <CreditCard className="w-5 h-5 text-sky-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Simular</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Simular parcelamento</div>
-                  </div>
-                </button>
-                <Link
-                  href="/minha-loja/pdv/marcados"
-                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                  title="Marcados (provar em casa)"
-                >
-                  <Tag className="w-5 h-5 text-purple-600 shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
-                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
-                  </div>
-                </Link>
-              </div>
+            {/* SIDEBAR ESQUERDA — 7 botoes em sequencia (sem secoes) */}
+            <div className="space-y-1.5">
+              <Link
+                href="/minha-loja/consultar"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Consulta de produtos (F10)"
+              >
+                <Search className="w-5 h-5 text-blue-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Consulta Produtos</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Buscar produto, estoque</div>
+                </div>
+                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F10</kbd>
+              </Link>
+              <Link
+                href="/minha-loja/pdv/devolucao"
+                onClick={() => {
+                  try {
+                    if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
+                    else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
+                  } catch {}
+                }}
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Trocas / Devolução (F4)"
+              >
+                <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Trocas</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Devolução / troca</div>
+                </div>
+                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F4</kbd>
+              </Link>
+              <Link
+                href="/minha-loja/pdv/marcados"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Marcados (provar em casa)"
+              >
+                <Tag className="w-5 h-5 text-purple-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
+                </div>
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowSimular(true)}
+                disabled={!sale?.total || sale.total <= 0}
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
+                title="Simular parcelamento"
+              >
+                <CreditCard className="w-5 h-5 text-sky-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Simular</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Simular parcelamento</div>
+                </div>
+              </button>
+              <Link
+                href="/minha-loja/pdv/recebimentos"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Baixa de Crediário"
+              >
+                <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
+                </div>
+              </Link>
+              <Link
+                href="/minha-loja/pdv/caixa"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Retiradas, sangria, suprimento (F3)"
+              >
+                <DollarSign className="w-5 h-5 text-amber-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Retiradas</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Caixa, sangria</div>
+                </div>
+                <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F3</kbd>
+              </Link>
+              <Link
+                href="/minha-loja/pdv/notas"
+                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                title="Notas Fiscais emitidas"
+              >
+                <FileText className="w-5 h-5 text-slate-600 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-black text-slate-900 leading-tight">Notas Fiscais</div>
+                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">NFC-es emitidas</div>
+                </div>
+              </Link>
             </div>
           </div>
         </aside>
@@ -1536,91 +1543,55 @@ function PdvPageInner() {
           </div>
           {/* fim do resumo da venda */}
 
-          {/* ─── GESTAO (pedidos site, transferencias, fechamento) ─── */}
-          <div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-amber-300/80 px-1 mb-1.5">
-              Gestão
-            </div>
-            <div className="space-y-1.5">
-              <Link
-                href="/minha-loja"
-                className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                title="Pedidos do site"
-              >
-                <Globe className="w-5 h-5 text-violet-600 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Pedidos</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
-                </div>
-                {pedidosSitePending > 0 && (
-                  <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
-                    {pedidosSitePending}
-                  </span>
-                )}
-              </Link>
-              <Link
-                href="/minha-loja/realinhamento"
-                className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
-                  realignPending > 0
-                    ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
-                    : 'bg-slate-100 hover:bg-white'
-                }`}
-                title="Realinhamento de estoque"
-              >
-                <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
-                  <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
-                </div>
-                {realignPending > 0 && (
-                  <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
-                    {realignPending}
-                  </span>
-                )}
-              </Link>
-              <Link
-                href="/minha-loja/pdv/fechamento"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                title="Fechamento diário"
-              >
-                <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
-                </div>
-              </Link>
-            </div>
-          </div>
-
-          {/* ─── RELATORIOS (recebimentos e NFC-es) ─── */}
-          <div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
-              Relatórios
-            </div>
-            <div className="space-y-1.5">
-              <Link
-                href="/minha-loja/pdv/recebimentos"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                title="Receber/baixar parcelas de crediário"
-              >
-                <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
-                </div>
-              </Link>
-              <Link
-                href="/minha-loja/pdv/notas"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
-                title="NFC-es emitidas"
-              >
-                <FileText className="w-5 h-5 text-slate-600 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-black text-slate-900 leading-tight">NFC-es</div>
-                  <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Notas emitidas</div>
-                </div>
-              </Link>
-            </div>
+          {/* 3 botoes em sequencia (sem secoes) */}
+          <div className="space-y-1.5">
+            <Link
+              href="/minha-loja"
+              className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+              title="Pedidos do site"
+            >
+              <Globe className="w-5 h-5 text-violet-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-black text-slate-900 leading-tight">Pedidos Site</div>
+                <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
+              </div>
+              {pedidosSitePending > 0 && (
+                <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
+                  {pedidosSitePending}
+                </span>
+              )}
+            </Link>
+            <Link
+              href="/minha-loja/realinhamento"
+              className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
+                realignPending > 0
+                  ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
+                  : 'bg-slate-100 hover:bg-white'
+              }`}
+              title="Realinhamento de estoque"
+            >
+              <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
+                <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
+              </div>
+              {realignPending > 0 && (
+                <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
+                  {realignPending}
+                </span>
+              )}
+            </Link>
+            <Link
+              href="/minha-loja/pdv/fechamento"
+              className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+              title="Fechamento diário"
+            >
+              <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
+                <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
+              </div>
+            </Link>
           </div>
 
         </div>
