@@ -1342,7 +1342,7 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center transition ${
+                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_72px_82px_100px_48px] gap-2 items-center transition ${
                     isLast
                       ? 'bg-violet-100/70 ring-2 ring-inset ring-violet-400'
                       : 'hover:bg-violet-50/40'
@@ -1356,14 +1356,13 @@ function PdvPageInner() {
                   {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
                   <ProductThumb sku={it.sku} refCode={it.ref} />
 
-                  {/* DESCRIÇÃO — REF + COR/TAM + descrição em UMA LINHA, truncada */}
+                  {/* DESCRIÇÃO — REF + descrição em UMA LINHA, truncada
+                      (cor/tamanho fazem parte da descrição completa do Giga). */}
                   <div className="min-w-0 flex items-center gap-2">
-                    <div className="font-mono text-xs text-slate-900 truncate flex-1 min-w-0">
-                      <span className="font-bold">{it.ref || it.sku}</span>
-                      {it.cor && <span className="ml-1.5 text-slate-500">{it.cor}</span>}
-                      {it.tamanho && <span className="ml-1 text-slate-500">/{it.tamanho}</span>}
+                    <div className="text-xs text-slate-900 truncate flex-1 min-w-0">
+                      <span className="font-mono font-bold">{it.ref || it.sku}</span>
                       {it.descricao && (
-                        <span className="ml-2 text-slate-500 font-sans font-normal">· {it.descricao}</span>
+                        <span className="ml-2 text-slate-800 font-sans font-bold">· {it.descricao}</span>
                       )}
                     </div>
                     {it.promoTag && (
