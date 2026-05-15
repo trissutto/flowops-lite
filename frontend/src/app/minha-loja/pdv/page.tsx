@@ -1334,9 +1334,15 @@ function PdvPageInner() {
                         <div className="text-xs text-slate-700 truncate font-semibold">{desc}</div>
                       )}
                     </div>
-                    <div className="shrink-0 text-right">
-                      <div className="text-[9px] uppercase text-slate-400 font-bold">Estoque</div>
-                      <div className={`text-base font-black tabular-nums ${estoque > 0 ? 'text-emerald-700' : 'text-rose-500'}`}>{estoque}</div>
+                    <div className="shrink-0 text-right flex items-center gap-3">
+                      <div>
+                        <div className="text-[9px] uppercase text-slate-400 font-bold">Sua loja</div>
+                        <div className={`text-base font-black tabular-nums ${qtyLoja > 0 ? 'text-emerald-700' : 'text-rose-400'}`}>{qtyLoja}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] uppercase text-slate-400 font-bold">Rede</div>
+                        <div className={`text-sm font-bold tabular-nums ${qtyRede > 0 ? 'text-slate-700' : 'text-slate-400'}`}>{qtyRede}</div>
+                      </div>
                     </div>
                   </button>
                 );
