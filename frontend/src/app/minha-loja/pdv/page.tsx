@@ -917,8 +917,8 @@ function PdvPageInner() {
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
           /minha-loja/realinhamento pra unificar identidade visual. */}
       <header
-        className="sticky top-0 z-20 border-b border-white/10 shadow-md"
-        style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
+        className="sticky top-0 z-20"
+        style={{ background: '#0d1442' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
