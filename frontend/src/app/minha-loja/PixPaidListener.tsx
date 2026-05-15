@@ -96,25 +96,17 @@ export default function PixPaidListener() {
 
   useEffect(() => {
     let cancelled = false;
-    // Carrega persistido (se houver) — janela mínima de 5min, máxima de 12h
+    // ESTRATEGIA: since SEMPRE 30min atras (janela larga) + deduplicacao via
+    // seenRef. Antes: since ia avancando a cada poll e em PCs com aba em
+    // background + Chrome throttling, alertas podiam ser pulados.
+    // Agora: janela larga pega tudo dos ultimos 30min, seen impede duplicar.
+    sinceRef.current = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     try {
-      const stored = localStorage.getItem(LAST_SEEN_KEY);
-      if (stored) {
-        const dt = new Date(stored);
-        const ageHours = (Date.now() - dt.getTime()) / (1000 * 60 * 60);
-        if (!isNaN(dt.getTime()) && ageHours < 12) {
-          sinceRef.current = dt.toISOString();
-        }
-      }
-      if (!sinceRef.current) {
-        // Fallback: 12h atrás (cobre turno completo de loja)
-        sinceRef.current = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
-      }
       const seenRaw = localStorage.getItem(SEEN_IDS_KEY);
       if (seenRaw) {
         const arr = JSON.parse(seenRaw);
         if (Array.isArray(arr)) {
-          seenRef.current = new Set(arr.slice(-200)); // cap pra não estourar storage
+          seenRef.current = new Set(arr.slice(-200));
         }
       }
     } catch { /* segue com defaults */ }
@@ -138,12 +130,13 @@ export default function PixPaidListener() {
       if (!token) return;
 
       try {
-        const since = sinceRef.current;
+        // since FIXO em 30min atras — janela larga garante que mesmo se aba
+        // ficou em background e Chrome suspendeu polling, ao voltar pega
+        // tudo que aconteceu. Deduplicacao via seenRef impede repetir alertas.
+        const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+        sinceRef.current = since;
         const apiBaixas = await api<any[]>(`/crediarios/baixa/recentes-pagas?since=${encodeURIComponent(since)}`);
-        // Atualiza `since` SEMPRE que o poll completa (mesmo sem resultado),
-        // pra não relistar as antigas no próximo ciclo.
-        sinceRef.current = new Date().toISOString();
-        try { localStorage.setItem(LAST_SEEN_KEY, sinceRef.current); } catch {}
+        try { localStorage.setItem(LAST_SEEN_KEY, new Date().toISOString()); } catch {}
         if (cancelled || !apiBaixas?.length) return;
 
         const novas: BaixaInfo[] = [];
@@ -183,7 +176,26 @@ export default function PixPaidListener() {
 
     poll();
     const interval = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(interval); };
+
+    // VISIBILITY: quando aba volta ao foco, dispara poll imediato.
+    // Chrome/Edge suspendem setInterval em abas em background pra economizar
+    // bateria — sem isso, vendedora podia voltar pra aba e nao receber alerta
+    // do pagamento que entrou enquanto estava em outra aba.
+    const onVisible = () => {
+      if (!cancelled && document.visibilityState === 'visible') {
+        poll();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    // Tambem dispara em window focus (mais robusto, alguns navegadores)
+    window.addEventListener('focus', onVisible);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
   }, []);
 
   const dispensarTodos = () => {
