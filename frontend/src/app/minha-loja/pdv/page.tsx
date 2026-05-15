@@ -13,7 +13,7 @@
  * Mobile-first. Listener global de teclas pra foco automático.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import {
