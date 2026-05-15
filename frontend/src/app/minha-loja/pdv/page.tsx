@@ -910,7 +910,10 @@ function PdvPageInner() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div
+      className="min-h-screen flex flex-col"
+      style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
+    >
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
           /minha-loja/realinhamento pra unificar identidade visual. */}
       <header
@@ -1020,7 +1023,7 @@ function PdvPageInner() {
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px]">
+      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
           Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
