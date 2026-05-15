@@ -59,6 +59,7 @@ export default function ReprocessarEstoquePage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [daysAgo, setDaysAgo] = useState<number>(30);
+  const [forceAll, setForceAll] = useState<boolean>(false);
   const [processing, setProcessing] = useState<Set<string>>(new Set());
   const [results, setResults] = useState<Record<string, ProcessResult>>({});
 
@@ -66,7 +67,8 @@ export default function ReprocessarEstoquePage() {
     setLoading(true);
     setErr(null);
     try {
-      const r = await api<ShipmentRow[]>(`/realignment/shipments/admin/needs-stock-reprocess?daysAgo=${daysAgo}`);
+      const url = `/realignment/shipments/admin/needs-stock-reprocess?daysAgo=${daysAgo}${forceAll ? '&forceAll=1' : ''}`;
+      const r = await api<ShipmentRow[]>(url);
       setRows(Array.isArray(r) ? r : []);
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar');
@@ -75,7 +77,7 @@ export default function ReprocessarEstoquePage() {
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [daysAgo]);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [daysAgo, forceAll]);
 
   async function reprocessar(id: string, code: string, force = false) {
     if (!confirm(`Reprocessar baixa de estoque da remessa ${code}?\n\nIsso vai chamar decreaseStock no Giga pra cada item da remessa. Idempotente — só baixa se ainda não tinha baixado.`)) return;
@@ -130,7 +132,7 @@ export default function ReprocessarEstoquePage() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs text-slate-500">Últimos</label>
             <select
               value={daysAgo}
@@ -143,6 +145,14 @@ export default function ReprocessarEstoquePage() {
               <option value={60}>60 dias</option>
               <option value={90}>90 dias</option>
             </select>
+            <label className="flex items-center gap-1.5 text-xs text-slate-700 px-2 py-1.5 border border-slate-300 rounded-lg cursor-pointer bg-white">
+              <input
+                type="checkbox"
+                checked={forceAll}
+                onChange={(e) => setForceAll(e.target.checked)}
+              />
+              <span className="font-bold">Mostrar TODAS</span>
+            </label>
             <button
               onClick={load}
               disabled={loading}
@@ -170,9 +180,13 @@ export default function ReprocessarEstoquePage() {
         {!loading && rows.length === 0 && (
           <div className="bg-emerald-50 border-2 border-emerald-200 rounded-xl p-8 text-center">
             <CheckCircle2 size={48} className="mx-auto text-emerald-600 mb-3" />
-            <div className="text-lg font-bold text-emerald-800">Tudo conciliado!</div>
+            <div className="text-lg font-bold text-emerald-800">
+              {forceAll ? 'Nenhuma remessa no período' : 'Tudo conciliado!'}
+            </div>
             <div className="text-sm text-emerald-700 mt-1">
-              Nenhuma remessa nos últimos {daysAgo} dias precisa de reprocessamento.
+              {forceAll
+                ? `Nenhuma remessa em trânsito/recebida nos últimos ${daysAgo} dias.`
+                : `Nenhuma remessa nos últimos ${daysAgo} dias precisa de reprocessamento. Marque "Mostrar TODAS" pra ver mesmo as já baixadas (pode forçar nova baixa).`}
             </div>
           </div>
         )}
@@ -180,7 +194,7 @@ export default function ReprocessarEstoquePage() {
         {!loading && rows.length > 0 && (
           <div className="space-y-2">
             <div className="text-sm font-bold text-slate-700 mb-2">
-              {rows.length} remessa(s) com problema de estoque Giga
+              {rows.length} remessa(s) {forceAll ? 'no período (todas)' : 'com problema de estoque Giga'}
             </div>
             {rows.map((r) => {
               const isProc = processing.has(r.id);
@@ -211,15 +225,25 @@ export default function ReprocessarEstoquePage() {
                         {r.totalItemsLive} item(s) · {r.totalQty} peça(s) · enviada em {fmtDT(r.sentAt)}
                       </div>
                       <div className="flex gap-3 mt-2 text-[11px] flex-wrap">
-                        {r.needsDecrease && (
+                        {r.needsDecrease ? (
                           <span className="bg-rose-100 text-rose-800 border border-rose-300 px-2 py-0.5 rounded font-bold">
                             ⚠ Estoque ORIGEM não baixou
                           </span>
-                        )}
-                        {r.needsIncrease && (
-                          <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded font-bold">
-                            ⚠ Estoque DESTINO não aumentou
+                        ) : (
+                          <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded font-bold">
+                            ✓ Origem baixada em {fmtDT(r.stockDecreasedAt)}
                           </span>
+                        )}
+                        {r.status === 'received' && (
+                          r.needsIncrease ? (
+                            <span className="bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 rounded font-bold">
+                              ⚠ Estoque DESTINO não aumentou
+                            </span>
+                          ) : (
+                            <span className="bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded font-bold">
+                              ✓ Destino aumentado em {fmtDT(r.stockIncreasedAt)}
+                            </span>
+                          )
                         )}
                       </div>
                     </div>
@@ -233,6 +257,20 @@ export default function ReprocessarEstoquePage() {
                         >
                           {isProc ? <Loader2 size={14} className="animate-spin" /> : <ArrowDown size={14} />}
                           Baixar estoque {r.fromStoreCode}
+                        </button>
+                      )}
+                      {!r.needsDecrease && forceAll && (
+                        <button
+                          onClick={() => {
+                            if (!confirm(`⚠ ATENÇÃO: ${r.code} JÁ teve baixa Giga em ${fmtDT(r.stockDecreasedAt)}.\n\nFORÇAR uma nova baixa vai DUPLICAR o desconto de estoque na origem. Tem CERTEZA?`)) return;
+                            reprocessar(r.id, r.code, true);
+                          }}
+                          disabled={isProc}
+                          className="px-3 py-2 bg-rose-800 hover:bg-rose-900 disabled:opacity-50 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 border-2 border-rose-300"
+                          title={`FORÇA baixa novamente em ${r.fromStoreCode} (já baixada)`}
+                        >
+                          {isProc ? <Loader2 size={14} className="animate-spin" /> : <ArrowDown size={14} />}
+                          FORÇAR baixar {r.fromStoreCode}
                         </button>
                       )}
                       {r.needsIncrease && (

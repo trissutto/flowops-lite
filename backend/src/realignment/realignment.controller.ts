@@ -797,12 +797,17 @@ export class RealignmentController {
    * de storeCode ou itens unresolved que silenciaram com skipNotFound.
    */
   @Get('shipments/admin/needs-stock-reprocess')
-  needsStockReprocess(@Req() req: any, @Query('daysAgo') daysAgo?: string) {
+  needsStockReprocess(
+    @Req() req: any,
+    @Query('daysAgo') daysAgo?: string,
+    @Query('forceAll') forceAll?: string,
+  ) {
     if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
       throw new ForbiddenException('Apenas admin/operator');
     }
     const days = Number(daysAgo) || 30;
-    return this.shipment.listShipmentsNeedingStockReprocess(days);
+    const all = forceAll === '1' || forceAll === 'true';
+    return this.shipment.listShipmentsNeedingStockReprocess(days, all);
   }
 
   /**
@@ -835,6 +840,7 @@ export class RealignmentController {
    * que nao teve aumento Giga aplicado. Idempotente: recusa se ja marcado.
    */
   @Post('shipments/admin/:id/reprocess-stock-increase')
+
   reprocessStockIncrease(
     @Req() req: any,
     @Param('id') id: string,

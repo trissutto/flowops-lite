@@ -1015,41 +1015,102 @@ export class RealignmentShipmentService {
   // REPROCESSAMENTO DE ESTOQUE — remessas fechadas que NÃO baixaram Giga
   // ═══════════════════════════════════════════════════════════════════════
   /**
-   * Lista remessas que fecharam (in_transit/received) mas tem PROBLEMA de
-   * estoque Giga: ou nao baixou na origem (stockDecreasedAt=null) ou nao
-   * aumentou no destino (stockIncreasedAt=null em remessa received).
-   * Causa tipica: mismatch de storeCode no Giga.
+   * Lista remessas FECHADAS recentes pra reprocessamento manual de estoque.
+   * Inclui TODAS as in_transit/received do periodo — admin escolhe quais
+   * reprocessar baseado no problema observado.
+   *
+   * O campo stockDecreasedAt eh exibido (se existir na migration); admin
+   * usa pra saber se ja foi conciliada. Quando null, mostra alerta vermelho.
    */
-  async listShipmentsNeedingStockReprocess(daysAgo: number = 30) {
-    const since = new Date();
-    since.setDate(since.getDate() - daysAgo);
-    const rows = await (this.prisma as any).realignmentShipment.findMany({
-      where: {
-        status: { in: ['in_transit', 'received'] },
-        sentAt: { gte: since },
-        OR: [
-          { stockDecreasedAt: null },
-          // Se recebida mas nao aumentou destino
-          { AND: [{ status: 'received' }, { stockIncreasedAt: null } as any] },
-        ],
-      } as any,
-      orderBy: { sentAt: 'desc' },
-      take: 200,
-    });
+  async listShipmentsNeedingStockReprocess(daysAgo: number = 30, forceAll: boolean = false) {
+    // Estratégia robusta via RAW SQL — NÃO depende de stock_decreased_at /
+    // stock_increased_at existirem (caso migration nao tenha rodado).
+    // Filtra por opened_at (sempre presente) ao invés de sent_at (pode ser null).
+    // Tenta enriquecer com os 2 campos novos via segundo query tolerante.
+
+    let rows: any[] = [];
+    try {
+      // Query base — usa SOMENTE colunas que sempre existem
+      const sql = `
+        SELECT id, code, from_store_code, from_store_name, to_store_code, to_store_name,
+               status, opened_at, sent_at, received_at, total_items, total_qty,
+               received_qty, missing_qty
+        FROM realignment_shipments
+        WHERE status IN ('in_transit', 'received')
+          AND opened_at >= NOW() - ($1::int * INTERVAL '1 day')
+        ORDER BY COALESCE(sent_at, opened_at) DESC
+        LIMIT 500
+      `;
+      rows = await (this.prisma as any).$queryRawUnsafe(sql, daysAgo);
+      this.logger.log(`[needs-reprocess] daysAgo=${daysAgo} forceAll=${forceAll} → ${rows.length} remessa(s) base`);
+    } catch (e: any) {
+      this.logger.error(`[needs-reprocess] RAW query falhou: ${e?.message}`);
+      return [];
+    }
+
+    // Tenta carregar os marcadores stock_decreased_at / stock_increased_at
+    // num segundo query. Se a coluna NÃO existir (migration pendente), seta tudo null.
+    const markers = new Map<string, { stockDecreasedAt: Date | null; stockIncreasedAt: Date | null }>();
+    try {
+      const ids = rows.map((r: any) => r.id);
+      if (ids.length) {
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+        const sql2 = `
+          SELECT id, stock_decreased_at, stock_increased_at
+          FROM realignment_shipments
+          WHERE id IN (${placeholders})
+        `;
+        const mr: any[] = await (this.prisma as any).$queryRawUnsafe(sql2, ...ids);
+        for (const m of mr) {
+          markers.set(m.id, {
+            stockDecreasedAt: m.stock_decreased_at || null,
+            stockIncreasedAt: m.stock_increased_at || null,
+          });
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`[needs-reprocess] markers query falhou (migration pendente?): ${e?.message}`);
+    }
+
     const result = await Promise.all(
-      (rows as any[]).map(async (s) => {
+      rows.map(async (s: any) => {
         const cnt = await this.prisma.transferOrder.count({
           where: { shipmentId: s.id } as any,
         });
+        const mk = markers.get(s.id) || { stockDecreasedAt: null, stockIncreasedAt: null };
+        const needsDecrease = !mk.stockDecreasedAt;
+        const needsIncrease = s.status === 'received' && !mk.stockIncreasedAt;
         return {
-          ...s,
+          id: s.id,
+          code: s.code,
+          fromStoreCode: s.from_store_code,
+          fromStoreName: s.from_store_name,
+          toStoreCode: s.to_store_code,
+          toStoreName: s.to_store_name,
+          status: s.status,
+          openedAt: s.opened_at,
+          sentAt: s.sent_at,
+          receivedAt: s.received_at,
+          totalItems: s.total_items,
+          totalQty: s.total_qty,
+          receivedQty: s.received_qty,
+          missingQty: s.missing_qty,
+          stockDecreasedAt: mk.stockDecreasedAt,
+          stockIncreasedAt: mk.stockIncreasedAt,
           totalItemsLive: cnt,
-          needsDecrease: !s.stockDecreasedAt,
-          needsIncrease: s.status === 'received' && !s.stockIncreasedAt,
+          needsDecrease,
+          needsIncrease,
         };
       }),
     );
-    return result;
+
+    // Se forceAll=true → retorna TUDO (admin pode forçar baixa em qualquer).
+    // Caso contrario → filtra só quem PRECISA de algo (needsDecrease OU needsIncrease).
+    const filtered = forceAll
+      ? result
+      : result.filter((r) => r.needsDecrease || r.needsIncrease);
+    this.logger.log(`[needs-reprocess] retornando ${filtered.length} de ${result.length} (forceAll=${forceAll})`);
+    return filtered;
   }
 
   /**
