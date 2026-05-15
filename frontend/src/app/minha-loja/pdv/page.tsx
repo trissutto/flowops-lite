@@ -1031,10 +1031,12 @@ function PdvPageInner() {
           do footer pra mesma navegação. */}
       {sale?.status === 'open' && (
         <aside
-          className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start overflow-y-auto"
+          className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
           style={{
             top: '0',
-            maxHeight: 'calc(100vh - 0px)',
+            minHeight: '100vh',
+            maxHeight: '100vh',
+            overflowY: 'auto',
             background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
           }}
         >
@@ -1457,10 +1459,12 @@ function PdvPageInner() {
           em card branco; abaixo botoes em horizontal cinza gelo. */}
       {sale?.status === 'open' && (
       <aside
-        className="w-[230px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start overflow-y-auto"
+        className="w-[230px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
         style={{
           top: '0',
-          maxHeight: 'calc(100vh - 0px)',
+          minHeight: '100vh',
+          maxHeight: '100vh',
+          overflowY: 'auto',
           background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
         }}
       >
