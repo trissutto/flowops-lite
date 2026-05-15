@@ -1670,8 +1670,8 @@ export class ProductsService {
     return this.erp.describeSalesTable();
   }
 
-  searchErpProductsLike(q: string) {
-    return this.erp.searchProductsLike(q || '');
+  searchErpProductsLike(q: string, storeCode?: string) {
+    return this.erp.searchProductsLike(q || '', storeCode);
   }
 
   async testErpStock(skus: string[]): Promise<{

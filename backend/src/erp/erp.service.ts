@@ -2230,18 +2230,62 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * DIAGNÓSTICO: busca produtos no ERP por trecho (LIKE) em CODIGO, REF ou DESCRICAOCOMPLETA.
    * Limita a 20 resultados. Retorna os campos relevantes pra entender o match.
    */
-  async searchProductsLike(term: string): Promise<any[]> {
+  async searchProductsLike(term: string, storeCode?: string): Promise<any[]> {
     if (!this.pool || !term) return [];
     const like = `%${term}%`;
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
+      // 1) Busca produtos que matcham — limita 20 pra dropdown nao explodir
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
            FROM produtos
           WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
           LIMIT 20`,
         [like, like, like],
       );
-      return rows as any[];
+      const products = prodRows as any[];
+      if (!products.length) return [];
+
+      // 2) Pra cada CODIGO, soma estoque REAL na tabela `estoque`.
+      //    - qtyMyStore: estoque na loja do usuario (vendedora)
+      //    - qtyTotal: estoque TOTAL na rede (todas lojas)
+      //    Tolerancia a zero-padding via expandSkus.
+      const codigos = products.map((p) => String(p.CODIGO).trim()).filter(Boolean);
+      const { allVariants, variantToOriginal } = this.expandSkus(codigos);
+
+      const stockByCodigo = new Map<string, { myStore: number; total: number }>();
+      if (allVariants.length > 0) {
+        const lojaClean = storeCode
+          ? String(storeCode).trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0')
+          : null;
+        const [stockRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, LOJA, SUM(ESTOQUE) AS qty
+             FROM estoque
+            WHERE CODIGO IN (?) AND ESTOQUE > 0
+            GROUP BY CODIGO, LOJA`,
+          [allVariants],
+        );
+        for (const r of stockRows as any[]) {
+          const codigoGiga = String(r.CODIGO).trim();
+          const original = variantToOriginal.get(codigoGiga) || codigoGiga;
+          const loja = String(r.LOJA || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
+          const qty = Number(r.qty) || 0;
+          const cur = stockByCodigo.get(original) || { myStore: 0, total: 0 };
+          cur.total += qty;
+          if (lojaClean && loja === lojaClean) cur.myStore += qty;
+          stockByCodigo.set(original, cur);
+        }
+      }
+
+      return products.map((p) => {
+        const c = String(p.CODIGO).trim();
+        const s = stockByCodigo.get(c) || { myStore: 0, total: 0 };
+        return {
+          ...p,
+          ESTOQUE: s.myStore,   // legado — alguns consumers ainda leem ESTOQUE
+          qtyMyStore: s.myStore,
+          qtyTotal: s.total,
+        };
+      });
     } catch (e) {
       this.logger.error(`searchProductsLike falhou: ${(e as Error).message}`);
       return [];

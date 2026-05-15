@@ -144,8 +144,11 @@ export class ProductsController {
    * Temporário, pra investigação do padrão de SKU.
    */
   @Get('erp-search')
-  erpSearch(@Query('q') q: string) {
-    return this.products.searchErpProductsLike(q);
+  erpSearch(@Req() req: any, @Query('q') q: string) {
+    const user = req?.user as { role?: string; storeCode?: string | null } | undefined;
+    // Vendedora ve estoque da loja dela; admin/operator ve apenas total da rede
+    const storeCode = user?.role === 'store' ? user?.storeCode || undefined : undefined;
+    return this.products.searchErpProductsLike(q, storeCode);
   }
 
   /**

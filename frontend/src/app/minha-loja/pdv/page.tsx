@@ -233,7 +233,9 @@ function PdvPageInner() {
     DESCRICAOCOMPLETA?: string;
     COR?: string | null;
     TAMANHO?: string | null;
-    ESTOQUE?: number;
+    ESTOQUE?: number;       // legado — alias de qtyMyStore
+    qtyMyStore?: number;    // estoque na loja do usuario
+    qtyTotal?: number;      // estoque total da rede (todas lojas)
   };
   const [searchResults, setSearchResults] = useState<ErpSearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -1106,7 +1108,7 @@ function PdvPageInner() {
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
+      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
           Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
@@ -1307,7 +1309,8 @@ function PdvPageInner() {
                 const isHi = idx === highlightedIdx;
                 const desc = (r.DESCRICAOCOMPLETA || '').trim();
                 const corTam = [r.COR, r.TAMANHO].filter(Boolean).join(' / ');
-                const estoque = Number(r.ESTOQUE) || 0;
+                const qtyLoja = Number(r.qtyMyStore ?? r.ESTOQUE) || 0;
+                const qtyRede = Number(r.qtyTotal ?? 0) || 0;
                 return (
                   <button
                     key={`${r.CODIGO}-${idx}`}
