@@ -1133,10 +1133,10 @@ function PdvPageInner() {
             <div className="space-y-1.5">
               <Link
                 href="/minha-loja/consultar"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Consulta de produtos (F10)"
               >
-                <Search className="w-5 h-5 text-blue-600 shrink-0" />
+                <Search className="w-5 h-5 text-blue-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Consulta Produtos</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Buscar produto, estoque</div>
@@ -1151,10 +1151,10 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Trocas / Devolução (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0" />
+                <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Trocas</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Devolução / troca</div>
@@ -1163,10 +1163,10 @@ function PdvPageInner() {
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-purple-600 shrink-0" />
+                <Tag className="w-5 h-5 text-purple-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
@@ -1176,10 +1176,10 @@ function PdvPageInner() {
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-sky-600 shrink-0" />
+                <CreditCard className="w-5 h-5 text-sky-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Simular</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Simular parcelamento</div>
@@ -1187,10 +1187,10 @@ function PdvPageInner() {
               </button>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Baixa de Crediário"
               >
-                <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
+                <Receipt className="w-5 h-5 text-emerald-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
@@ -1198,10 +1198,10 @@ function PdvPageInner() {
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Retiradas, sangria, suprimento (F3)"
               >
-                <DollarSign className="w-5 h-5 text-amber-600 shrink-0" />
+                <DollarSign className="w-5 h-5 text-amber-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Retiradas</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Caixa, sangria</div>
@@ -1210,10 +1210,10 @@ function PdvPageInner() {
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+                className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
                 title="Notas Fiscais emitidas"
               >
-                <FileText className="w-5 h-5 text-slate-600 shrink-0" />
+                <FileText className="w-5 h-5 text-slate-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-black text-slate-900 leading-tight">Notas Fiscais</div>
                   <div className="text-[9px] text-slate-500 leading-tight mt-0.5">NFC-es emitidas</div>
@@ -1718,7 +1718,7 @@ function PdvPageInner() {
           <div className="space-y-1.5">
             <Link
               href="/minha-loja"
-              className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+              className="relative group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
               title="Pedidos do site"
             >
               <Globe className="w-5 h-5 text-violet-600 shrink-0" />
@@ -1754,10 +1754,10 @@ function PdvPageInner() {
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
-              className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
+              className="group bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition-all duration-200 active:scale-[0.97] hover:shadow-lg hover:-translate-y-0.5 hover:ring-2 hover:ring-violet-200 ring-1 ring-transparent"
               title="Fechamento diário"
             >
-              <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
+              <Wallet className="w-5 h-5 text-slate-600 shrink-0 transition-transform duration-200 group-hover:scale-110 group-hover:rotate-[-4deg]" />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
                 <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
