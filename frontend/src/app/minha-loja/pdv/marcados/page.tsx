@@ -56,9 +56,21 @@ const brl = (n: number) =>
 
 const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString('pt-BR') : '—';
 
+type ClienteMatch = {
+  codCliente: string;
+  nome: string;
+  cpf: string;
+  classificacao: string;
+  limiteTotal: number;
+  qtdMarcados: number;
+  totalMarcados: number;
+};
+
 export default function MarcadosPage() {
   const router = useRouter();
-  const [cpf, setCpf] = useState('');
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<ClienteMatch[]>([]);
+  const [searching, setSearching] = useState(false);
   const [info, setInfo] = useState<ClienteInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -70,24 +82,73 @@ export default function MarcadosPage() {
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  async function buscar() {
+  // Debounce: ao digitar nome OU CPF parcial, busca matches automaticamente.
+  // Se for CPF completo (11 digitos), faz a busca direta no cliente.
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setMatches([]);
+      return;
+    }
+    // CPF completo (11 digitos) — pula dropdown, busca direto
+    const cpfLimpo = q.replace(/\D/g, '');
+    if (cpfLimpo.length === 11) {
+      setMatches([]);
+      return;
+    }
+    // Debounce 350ms
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await api<ClienteMatch[]>(`/pdv/marcados/search?q=${encodeURIComponent(q)}`);
+        setMatches(Array.isArray(r) ? r : []);
+      } catch {
+        setMatches([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  async function buscarPorCpf(cpfNum: string) {
     setErr(null);
     setInfo(null);
     setVoltadas(new Set());
     setProcessResult(null);
-    const cpfLimpo = cpf.replace(/\D/g, '');
-    if (cpfLimpo.length !== 11) {
-      setErr('CPF inválido — digite os 11 dígitos');
-      return;
-    }
+    setMatches([]);
     setBusy(true);
     try {
-      const r = await api<ClienteInfo>(`/pdv/marcados/cliente?cpf=${cpfLimpo}`);
+      const r = await api<ClienteInfo>(`/pdv/marcados/cliente?cpf=${cpfNum}`);
       setInfo(r);
     } catch (e: any) {
       setErr(e?.message || 'Falha ao buscar cliente');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function buscar() {
+    const q = query.trim();
+    const cpfLimpo = q.replace(/\D/g, '');
+    if (cpfLimpo.length === 11) {
+      await buscarPorCpf(cpfLimpo);
+      return;
+    }
+    if (matches.length > 0) {
+      // Se tem matches no dropdown, escolhe o primeiro
+      await escolherCliente(matches[0]);
+    } else {
+      setErr('Digite CPF completo ou parte do nome (mínimo 2 letras)');
+    }
+  }
+
+  async function escolherCliente(m: ClienteMatch) {
+    const cpfNum = (m.cpf || '').replace(/\D/g, '');
+    if (cpfNum.length === 11) {
+      await buscarPorCpf(cpfNum);
+    } else {
+      setErr('Cliente sem CPF cadastrado — não dá pra abrir os marcados');
     }
   }
 
@@ -202,20 +263,22 @@ export default function MarcadosPage() {
         </h1>
       </div>
 
-      {/* Busca por CPF */}
-      <div className="bg-white border rounded-lg p-4 space-y-2">
-        <label className="block text-sm font-bold text-slate-700">CPF do cliente</label>
+      {/* Busca por CPF ou nome */}
+      <div className="bg-white border rounded-lg p-4 space-y-2 relative">
+        <label className="block text-sm font-bold text-slate-700">CPF ou nome do cliente</label>
         <div className="flex gap-2">
           <input
             ref={inputRef}
             type="text"
-            inputMode="numeric"
-            value={cpf}
-            onChange={(e) => setCpf(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && buscar()}
-            placeholder="Só números ou com . e -"
-            maxLength={14}
-            className="flex-1 border rounded px-3 py-2 text-base font-mono"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') buscar();
+              if (e.key === 'Escape') { setMatches([]); }
+            }}
+            placeholder="Ex: MARIA SILVA, 123.456.789-00, ou 12345 (CPF parcial)"
+            maxLength={120}
+            className="flex-1 border rounded px-3 py-2 text-base"
           />
           <button
             onClick={buscar}
@@ -229,6 +292,43 @@ export default function MarcadosPage() {
         {err && (
           <div className="text-sm text-rose-700 flex items-center gap-1.5">
             <AlertCircle className="w-4 h-4" /> {err}
+          </div>
+        )}
+
+        {/* DROPDOWN de matches (busca por nome ou CPF parcial) */}
+        {matches.length > 0 && !info && (
+          <div className="mt-2 border rounded-lg overflow-hidden bg-white shadow-md">
+            <div className="px-3 py-2 bg-slate-50 border-b text-[11px] uppercase font-bold tracking-wider text-slate-600">
+              {matches.length} cliente(s) com marcados ativos — clique pra abrir
+            </div>
+            <div className="max-h-[400px] overflow-y-auto">
+              {matches.map((m) => (
+                <button
+                  key={m.codCliente}
+                  type="button"
+                  onClick={() => escolherCliente(m)}
+                  className="w-full px-3 py-2.5 hover:bg-blue-50 border-b last:border-b-0 text-left flex items-center gap-3 transition"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-slate-900 truncate">{m.nome || '—'}</div>
+                    <div className="text-xs text-slate-500 font-mono">{m.cpf || '—'}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-[10px] uppercase font-bold text-slate-500">Em marca</div>
+                    <div className="font-black text-rose-700 tabular-nums">{brl(m.totalMarcados)}</div>
+                    <div className="text-[10px] text-slate-500">{m.qtdMarcados} peça(s)</div>
+                  </div>
+                  {m.classificacao === 'A' && (
+                    <span className="text-[10px] font-black bg-emerald-600 text-white px-1.5 py-0.5 rounded">A</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {searching && matches.length === 0 && query.trim().length >= 2 && (
+          <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> buscando…
           </div>
         )}
       </div>

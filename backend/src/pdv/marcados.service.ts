@@ -272,6 +272,85 @@ export class MarcadosService {
   }
 
   /**
+   * Busca clientes por nome OU CPF parcial. Retorna ate 20 matches pra
+   * vendedora escolher. Filtro: clientes que TEM pelo menos 1 marcado
+   * ativo (status='SIM' na tabela `caixa`).
+   *
+   * Usado na tela /pdv/marcados quando vendedora nao tem o CPF em maos
+   * e quer pesquisar pelo nome (ex: "MARIA SILVA").
+   */
+  async searchClientesByNameOrCpf(query: string): Promise<Array<{
+    codCliente: string;
+    nome: string;
+    cpf: string;
+    classificacao: string;
+    limiteTotal: number;
+    qtdMarcados: number;
+    totalMarcados: number;
+  }>> {
+    const q = String(query || '').trim();
+    if (q.length < 2) return [];
+
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm) return [];
+
+    // Detecta se eh CPF (so digitos, 5+ chars) ou nome (com letras)
+    const onlyDigits = q.replace(/\D/g, '');
+    const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-]/g, ''));
+
+    // Escapa aspas simples pra evitar injection. SQL com LIKE.
+    const safeQ = q.replace(/'/g, "''");
+    const safeDigits = onlyDigits.replace(/'/g, "''");
+    const nomeCol = cm.nome || 'NOME';
+    const cpfCol = cm.cpf || 'CPF';
+    const codCol = cm.codCliente || 'CODIGO';
+
+    // Busca clientes que tem MARCADOS ATIVOS (JOIN com caixa)
+    // 1) Lista candidatos por nome/cpf (LIMIT 50)
+    // 2) Filtra so quem tem >=1 linha em caixa com MARCADO='SIM'
+    let where: string;
+    if (isCpfLike) {
+      // Busca por CPF parcial (tolera com ou sem formatacao)
+      where = `(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`,'.',''),'-',''),'/','') LIKE '%${safeDigits}%')`;
+    } else {
+      // Busca por nome (case-insensitive via UPPER)
+      where = `(UPPER(\`${nomeCol}\`) LIKE UPPER('%${safeQ}%'))`;
+    }
+
+    const sql = `
+      SELECT c.\`${codCol}\` AS codCliente,
+             c.\`${nomeCol}\` AS nome,
+             c.\`${cpfCol}\` AS cpf,
+             c.AVALIACAO AS classificacao,
+             c.LIMITECOMPRAS AS limiteTotal,
+             COUNT(cx.REGISTRO) AS qtdMarcados,
+             COALESCE(SUM(cx.VALORTOTAL), 0) AS totalMarcados
+        FROM \`${cm.table}\` c
+        INNER JOIN caixa cx ON cx.CLIENTE = c.\`${codCol}\` AND UPPER(cx.MARCADO) = 'SIM'
+       WHERE ${where}
+       GROUP BY c.\`${codCol}\`, c.\`${nomeCol}\`, c.\`${cpfCol}\`, c.AVALIACAO, c.LIMITECOMPRAS
+       ORDER BY MAX(cx.DATA) DESC
+       LIMIT 20
+    `;
+
+    try {
+      const r = await this.erp.runReadOnly(sql, { maxRows: 20, timeoutMs: 10000 });
+      return (r.rows || []).map((row: any) => ({
+        codCliente: String(row.codCliente || '').trim(),
+        nome: String(row.nome || '').trim(),
+        cpf: String(row.cpf || '').trim(),
+        classificacao: String(row.classificacao || '').trim().toUpperCase(),
+        limiteTotal: Number(row.limiteTotal) || 0,
+        qtdMarcados: Number(row.qtdMarcados) || 0,
+        totalMarcados: Math.round((Number(row.totalMarcados) || 0) * 100) / 100,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`[marcados] searchClientesByNameOrCpf falhou: ${e?.message}`);
+      return [];
+    }
+  }
+
+  /**
    * DEVOLVE 1 peça marcada — o cliente trouxe de volta.
    *  - DELETE FROM caixa WHERE REGISTRO + CONTROLE (chave composta)
    *  - increaseStock(SKU, qty, loja) — peça volta pro estoque Giga

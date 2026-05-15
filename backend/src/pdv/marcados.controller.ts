@@ -32,6 +32,18 @@ export class MarcadosController {
   }
 
   /**
+   * GET /pdv/marcados/search?q=...
+   * Busca clientes por nome OU CPF parcial — retorna ate 20 matches
+   * que TEM marcados ativos. Usado pela tela quando vendedora nao tem
+   * o CPF e quer achar pelo nome.
+   */
+  @Get('search')
+  searchClientes(@Req() req: any, @Query('q') q: string) {
+    this.requireRole(req);
+    return this.svc.searchClientesByNameOrCpf(q || '');
+  }
+
+  /**
    * GET /pdv/marcados — lista todos os marcados ativos (visão geral retaguarda).
    * Query: loja, dataInicial, dataFinal, limit
    */
