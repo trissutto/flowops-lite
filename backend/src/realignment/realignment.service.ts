@@ -1059,24 +1059,17 @@ export class RealignmentService {
     if (fromTipo === toTipo) return;
 
     // ── busca preço Giga ──
-    // TransferOrder não tem coluna SKU direto, mas o realinhamento foi criado
-    // a partir de SKU em confirm() (em mensagem). Pra MVP, busca preço pela
-    // primeira variação que casar com REF+cor+tamanho via Giga searchByRef.
+    // Usa findCodigoByRefCorTam (método canônico, já trata duplicidade Wincred
+    // priorizando CODIGO com estoque) em vez de searchByRef + find — assim o
+    // SKU gravado na obrigação reflete o produto VIVO no estoque, e o preço
+    // puxado bate com a peça que realmente saiu.
     let preco = 0;
     let sku: string | null = null;
     try {
-      const variations = await this.erp.searchByRef(order.refCode);
-      const match = variations.find(
-        (v: any) =>
-          (v.cor || '').toUpperCase() === (order.cor || '').toUpperCase() &&
-          (v.tamanho || '').toUpperCase() === (order.tamanho || '').toUpperCase(),
-      );
-      if (match) {
-        sku = match.codigo || match.sku || null;
-        if (sku) {
-          const priceMap = await this.erp.getProductPricesBySkus([sku]);
-          preco = priceMap.get(sku) || 0;
-        }
+      sku = await this.erp.findCodigoByRefCorTam(order.refCode, order.cor || null, order.tamanho || null);
+      if (sku) {
+        const priceMap = await this.erp.getProductPricesBySkus([sku]);
+        preco = priceMap.get(sku) || 0;
       }
     } catch (e) {
       this.logger.warn(

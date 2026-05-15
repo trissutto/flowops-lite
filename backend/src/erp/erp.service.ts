@@ -2349,11 +2349,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       // Busca tudo que começa com a REF base — cada cor pode estar com sufixo
       // diferente no Giga. Filtramos os falsos positivos no JS abaixo.
+      //
+      // ⚠ Inclui TOTAL_EST (soma estoque consolidado por CODIGO em todas as
+      // lojas) — usado pra DEDUPLICAR duplicidade no Wincred (mesma REF+COR+TAM
+      // cadastrada em 2 CODIGOs por mudança de preço, etc). Sem dedup, o
+      // realinhamento gera 2 TransferOrder pra mesma peça e a baixa Giga
+      // pode ir pro CODIGO sem estoque.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ESTOQUE, ID
-           FROM produtos
-          WHERE REF = ? OR REF LIKE ?
-          ORDER BY COR, TAMANHO
+        `SELECT p.CODIGO, p.REF, p.DESCRICAOCOMPLETA, p.COR, p.TAMANHO, p.ESTOQUE,
+                COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST,
+                p.ID
+           FROM produtos p
+          WHERE p.REF = ? OR p.REF LIKE ?
+          ORDER BY p.COR, p.TAMANHO
           LIMIT 1000`,
         [clean, `${clean}%`],
       );
@@ -2364,22 +2372,39 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (foundRef === baseRef) return true;
         if (!foundRef.startsWith(baseRef)) return false;
         const suffix = foundRef.slice(baseRef.length);
-        // Sufixos VÁLIDOS (variação de cor da mesma REF base):
-        //   " ALGO" (espaço + texto), "-ALGO" (hífen + texto),
-        //   "LETRAS" (só letras direto, sem dígitos)
-        // Sufixos REJEITADOS:
-        //   começa com dígito → outra REF (ex: 9002 + 71 = 900271)
         if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
-        // Sufixo direto sem separador: aceita SE não começar com dígito
         if (/^[A-Za-z]/.test(suffix)) return true;
         return false;
       };
 
       const filtered = all.filter((r: any) => isVariationOf(String(r.REF || ''), clean));
+
+      // ⚠ DEDUP por (REF+COR+TAM) — escolhe CODIGO com mais TOTAL_EST.
+      // Empate → CODIGO numericamente maior (cadastro mais novo).
+      const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+      const byKey = new Map<string, any>();
+      for (const r of filtered) {
+        const k = `${norm(r.REF)}|${norm(r.COR)}|${norm(r.TAMANHO)}`;
+        const cur = byKey.get(k);
+        const totalEst = Number(r.TOTAL_EST) || 0;
+        const codigoNum = Number(r.CODIGO) || 0;
+        if (!cur) {
+          byKey.set(k, r);
+          continue;
+        }
+        const curTotal = Number(cur.TOTAL_EST) || 0;
+        const curCod = Number(cur.CODIGO) || 0;
+        if (totalEst > curTotal || (totalEst === curTotal && codigoNum > curCod)) {
+          byKey.set(k, r);
+        }
+      }
+      const deduped = Array.from(byKey.values());
       this.logger.log(
-        `[erp] searchByRef("${clean}"): SQL retornou ${all.length}, filtrado pra ${filtered.length} variações.`,
+        `[erp] searchByRef("${clean}"): SQL ${all.length} → filtrado ${filtered.length} → dedup ${deduped.length} variações${
+          filtered.length !== deduped.length ? ` (DUPLICIDADE Wincred: ${filtered.length - deduped.length} CODIGOs descartados)` : ''
+        }.`,
       );
-      return filtered;
+      return deduped;
     } catch (e) {
       this.logger.error(`searchByRef falhou: ${(e as Error).message}`);
       return [];
