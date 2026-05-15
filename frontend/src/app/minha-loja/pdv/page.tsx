@@ -1039,9 +1039,10 @@ function PdvPageInner() {
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
-            {/* ─── TIER 1 — PRINCIPAIS (uso constante) ──────────────────────
-                Cards brancos grandes com icone colorido, descricao e tecla F.
-                Vendedora bate o olho aqui primeiro. */}
+            {/* ─── SIDEBAR PDV — todos os botoes em horizontal cinza gelo ──
+                Visual unificado: card slate-100 com icone colorido + titulo +
+                subtitulo + atalho/badge a direita. As 3 secoes (Principais,
+                Diario, Outros) dao respiro mas o estilo do botao e o mesmo. */}
             <div>
               <div className="text-[9px] font-black uppercase tracking-widest text-amber-300/80 px-1 mb-1.5">
                 Principais
@@ -1049,7 +1050,7 @@ function PdvPageInner() {
               <div className="space-y-1.5">
                 <Link
                   href="/minha-loja/consultar"
-                  className="group bg-white hover:bg-slate-50 rounded-xl p-2.5 flex items-center gap-2.5 transition shadow-sm active:scale-[0.98]"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Consultar produto (F10)"
                 >
                   <Search className="w-5 h-5 text-blue-600 shrink-0" />
@@ -1057,7 +1058,7 @@ function PdvPageInner() {
                     <div className="text-xs font-black text-slate-900 leading-tight">Consultar</div>
                     <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Buscar produto, estoque</div>
                   </div>
-                  <kbd className="text-[9px] font-mono bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 leading-tight shrink-0">F10</kbd>
+                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F10</kbd>
                 </Link>
                 <Link
                   href="/minha-loja/pdv/devolucao"
@@ -1067,7 +1068,7 @@ function PdvPageInner() {
                       else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                     } catch {}
                   }}
-                  className="group bg-white hover:bg-slate-50 rounded-xl p-2.5 flex items-center gap-2.5 transition shadow-sm active:scale-[0.98]"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Devolução / Troca (F4)"
                 >
                   <ArrowRightLeft className="w-5 h-5 text-emerald-600 shrink-0" />
@@ -1075,11 +1076,11 @@ function PdvPageInner() {
                     <div className="text-xs font-black text-slate-900 leading-tight">Trocar</div>
                     <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Devolução / troca</div>
                   </div>
-                  <kbd className="text-[9px] font-mono bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 leading-tight shrink-0">F4</kbd>
+                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F4</kbd>
                 </Link>
                 <Link
                   href="/minha-loja/pdv/caixa"
-                  className="group bg-white hover:bg-slate-50 rounded-xl p-2.5 flex items-center gap-2.5 transition shadow-sm active:scale-[0.98]"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Caixa — sangria, suprimento, retiradas (F3)"
                 >
                   <DollarSign className="w-5 h-5 text-amber-600 shrink-0" />
@@ -1087,99 +1088,116 @@ function PdvPageInner() {
                     <div className="text-xs font-black text-slate-900 leading-tight">Caixa</div>
                     <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Sangria, suprimento</div>
                   </div>
-                  <kbd className="text-[9px] font-mono bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 leading-tight shrink-0">F3</kbd>
+                  <kbd className="text-[9px] font-mono bg-white text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 leading-tight shrink-0">F3</kbd>
                 </Link>
               </div>
             </div>
 
-            {/* ─── TIER 2 — DIARIO (vendedora opera todo dia) ───────────────
-                Botoes medios escuros com icone+label. Badges de contador. */}
             <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 mb-1.5">
+              <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
                 Diário
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="space-y-1.5">
                 <Link
                   href="/minha-loja/pdv/marcados"
-                  className="relative bg-white/10 hover:bg-white/15 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-white/10 hover:border-white/25 min-h-[58px] justify-center"
+                  className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Marcados (provar em casa)"
                 >
-                  <Tag className="w-4 h-4 text-white" />
-                  <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Marcados</span>
+                  <Tag className="w-5 h-5 text-purple-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">Marcados</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Provar em casa</div>
+                  </div>
                 </Link>
                 <Link
                   href="/minha-loja"
-                  className="relative bg-white/10 hover:bg-white/15 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-white/10 hover:border-white/25 min-h-[58px] justify-center"
+                  className="relative bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Pedidos do site"
                 >
-                  <Globe className="w-4 h-4 text-white" />
-                  <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Pedidos</span>
+                  <Globe className="w-5 h-5 text-violet-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">Pedidos</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Pedidos do site</div>
+                  </div>
                   {pedidosSitePending > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 shadow-lg">
+                    <span className="bg-violet-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 shrink-0">
                       {pedidosSitePending}
                     </span>
                   )}
                 </Link>
                 <Link
                   href="/minha-loja/realinhamento"
-                  className={`relative rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border min-h-[58px] justify-center ${
+                  className={`relative rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] ${
                     realignPending > 0
-                      ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-400/60'
-                      : 'bg-white/10 hover:bg-white/15 border-white/10 hover:border-white/25'
+                      ? 'bg-rose-50 hover:bg-rose-100 border border-rose-200'
+                      : 'bg-slate-100 hover:bg-white'
                   }`}
                   title="Realinhamento de estoque"
                 >
-                  <Shuffle className={`w-4 h-4 ${realignPending > 0 ? 'text-rose-200' : 'text-white'}`} />
-                  <span className={`text-[10px] font-bold text-center leading-tight ${realignPending > 0 ? 'text-rose-100' : 'text-white/90'}`}>Realinhar</span>
+                  <Shuffle className={`w-5 h-5 shrink-0 ${realignPending > 0 ? 'text-rose-600' : 'text-rose-500'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-xs font-black leading-tight ${realignPending > 0 ? 'text-rose-900' : 'text-slate-900'}`}>Realinhar</div>
+                    <div className={`text-[9px] leading-tight mt-0.5 ${realignPending > 0 ? 'text-rose-700' : 'text-slate-500'}`}>Transferências entre lojas</div>
+                  </div>
                   {realignPending > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1 shadow-lg">
+                    <span className="bg-rose-500 text-white text-[10px] font-black rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1.5 shrink-0">
                       {realignPending}
                     </span>
                   )}
                 </Link>
                 <Link
                   href="/minha-loja/pdv/fechamento"
-                  className="bg-white/10 hover:bg-white/15 rounded-lg py-2.5 px-2 flex flex-col items-center gap-1 transition border border-white/10 hover:border-white/25 min-h-[58px] justify-center"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Fechamento diário"
                 >
-                  <Wallet className="w-4 h-4 text-white" />
-                  <span className="text-[10px] font-bold text-white/90 text-center leading-tight">Fechamento</span>
+                  <Wallet className="w-5 h-5 text-slate-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">Fechamento</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Fechamento diário</div>
+                  </div>
                 </Link>
               </div>
             </div>
 
-            {/* ─── TIER 3 — OUTROS (uso esporadico) ────────────────────────
-                Chips compactos em linha. Acoes raras nao competem por atencao. */}
             <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-white/40 px-1 mb-1.5">
+              <div className="text-[9px] font-black uppercase tracking-widest text-white/50 px-1 mb-1.5">
                 Outros
               </div>
-              <div className="grid grid-cols-3 gap-1">
+              <div className="space-y-1.5">
                 <Link
                   href="/minha-loja/pdv/recebimentos"
-                  className="bg-white/[0.04] hover:bg-white/10 rounded-md py-1.5 px-1 flex flex-col items-center gap-0.5 transition border border-white/[0.06]"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="Receber/baixar parcelas de crediário"
                 >
-                  <Receipt className="w-3.5 h-3.5 text-white/70" />
-                  <span className="text-[8px] font-bold text-white/60 text-center leading-tight">Crediário</span>
+                  <Receipt className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">Baixa Crediário</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Receber parcelas</div>
+                  </div>
                 </Link>
                 <button
                   type="button"
                   onClick={() => setShowSimular(true)}
                   disabled={!sale?.total || sale.total <= 0}
-                  className="bg-white/[0.04] hover:bg-white/10 rounded-md py-1.5 px-1 flex flex-col items-center gap-0.5 transition border border-white/[0.06] disabled:opacity-30 disabled:cursor-not-allowed"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-100 w-full text-left"
                   title="Simular parcelamento"
                 >
-                  <CreditCard className="w-3.5 h-3.5 text-white/70" />
-                  <span className="text-[8px] font-bold text-white/60 text-center leading-tight">Simular</span>
+                  <CreditCard className="w-5 h-5 text-sky-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">Simular</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Simular parcelamento</div>
+                  </div>
                 </button>
                 <Link
                   href="/minha-loja/pdv/notas"
-                  className="bg-white/[0.04] hover:bg-white/10 rounded-md py-1.5 px-1 flex flex-col items-center gap-0.5 transition border border-white/[0.06]"
+                  className="bg-slate-100 hover:bg-white rounded-xl p-2.5 flex items-center gap-2.5 transition active:scale-[0.98]"
                   title="NFC-es emitidas"
                 >
-                  <FileText className="w-3.5 h-3.5 text-white/70" />
-                  <span className="text-[8px] font-bold text-white/60 text-center leading-tight">NFC-es</span>
+                  <FileText className="w-5 h-5 text-slate-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-900 leading-tight">NFC-es</div>
+                    <div className="text-[9px] text-slate-500 leading-tight mt-0.5">Notas emitidas</div>
+                  </div>
                 </Link>
               </div>
             </div>
