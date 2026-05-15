@@ -827,46 +827,24 @@ export class RealignmentController {
     });
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  // WIPE / DESTRUTIVOS (admin)
-  // ════════════════════════════════════════════════════════════════════
-
   /**
-   * GET /realignment/wipe-preview · admin
+   * POST /realignment/shipments/admin/:id/reprocess-stock-increase
+   * Body: { force?: boolean }
    *
-   * Conta quantos realinhamentos existem hoje (por status e por loja).
-   * NÃO deleta nada — usado pra UI mostrar preview antes do wipe.
+   * Reaplica increaseStock no destino pra uma remessa recebida (received)
+   * que nao teve aumento Giga aplicado. Idempotente: recusa se ja marcado.
    */
-  @Get('wipe-preview')
-  wipePreview(@Req() req: any) {
-    const role = req?.user?.role;
-    if (role !== 'admin') {
-      throw new ForbiddenException('Apenas admin');
-    }
-    return this.svc.wipePreview();
-  }
-
-  /**
-   * DELETE /realignment/wipe-all?confirm=YES · admin
-   *
-   * ⚠️ DELETA TODOS os realinhamentos do banco (todas lojas, todos status).
-   * Preserva REPOSICAO e VENDA_CERTA (mesma tabela, tipos diferentes).
-   *
-   * Proteção dupla:
-   *   - role=admin no JWT
-   *   - query string ?confirm=YES (evita curl acidental)
-   */
-  @Delete('wipe-all')
-  async wipeAll(@Req() req: any, @Query('confirm') confirm?: string) {
-    const role = req?.user?.role;
-    if (role !== 'admin') {
-      throw new ForbiddenException('Apenas admin');
-    }
-    if (confirm !== 'YES') {
-      throw new BadRequestException(
-        'Faltou confirm=YES na query. Ação destrutiva, sem rollback.',
-      );
-    }
-    return this.svc.wipeAll();
+  @Post('shipments/admin/:id/reprocess-stock-increase')
+  reprocessStockIncrease(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { force?: boolean },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.shipment.reprocessStockIncreaseForShipment({
+      shipmentId: id,
+      force: !!body?.force,
+      userId: req?.user?.userId,
+    });
   }
 }

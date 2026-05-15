@@ -1015,10 +1015,10 @@ export class RealignmentShipmentService {
   // REPROCESSAMENTO DE ESTOQUE — remessas fechadas que NÃO baixaram Giga
   // ═══════════════════════════════════════════════════════════════════════
   /**
-   * Lista remessas que fecharam (in_transit/received) mas que NÃO tiveram
-   * decreaseStock aplicado (stockDecreasedAt = null). Causa típica:
-   * mismatch de storeCode no Giga ou itens unresolved que travaram.
-   * Admin pode então reprocessar uma a uma.
+   * Lista remessas que fecharam (in_transit/received) mas tem PROBLEMA de
+   * estoque Giga: ou nao baixou na origem (stockDecreasedAt=null) ou nao
+   * aumentou no destino (stockIncreasedAt=null em remessa received).
+   * Causa tipica: mismatch de storeCode no Giga.
    */
   async listShipmentsNeedingStockReprocess(daysAgo: number = 30) {
     const since = new Date();
@@ -1026,13 +1026,16 @@ export class RealignmentShipmentService {
     const rows = await (this.prisma as any).realignmentShipment.findMany({
       where: {
         status: { in: ['in_transit', 'received'] },
-        stockDecreasedAt: null,
         sentAt: { gte: since },
+        OR: [
+          { stockDecreasedAt: null },
+          // Se recebida mas nao aumentou destino
+          { AND: [{ status: 'received' }, { stockIncreasedAt: null } as any] },
+        ],
       } as any,
       orderBy: { sentAt: 'desc' },
       take: 200,
     });
-    // Pra cada uma, conta os items
     const result = await Promise.all(
       (rows as any[]).map(async (s) => {
         const cnt = await this.prisma.transferOrder.count({
@@ -1041,10 +1044,116 @@ export class RealignmentShipmentService {
         return {
           ...s,
           totalItemsLive: cnt,
+          needsDecrease: !s.stockDecreasedAt,
+          needsIncrease: s.status === 'received' && !s.stockIncreasedAt,
         };
       }),
     );
     return result;
+  }
+
+  /**
+   * Reprocessa o AUMENTO de estoque Giga no destino pra uma remessa
+   * recebida (status='received') que nao teve increaseStock aplicado.
+   * Idempotente: recusa se ja tem stockIncreasedAt (a menos que force=true).
+   *
+   * Aplica apenas pros items que foram RECEBIDOS (realignmentStatus='received')
+   * — os 'missing' ficam de fora (vendedora ja marcou como faltante).
+   */
+  async reprocessStockIncreaseForShipment(input: { shipmentId: string; force?: boolean; userId?: string }) {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa nao encontrada');
+    if (shipment.status !== 'received') {
+      throw new BadRequestException(
+        `Remessa esta com status=${shipment.status} — so reprocessa aumento em remessas com status=received`,
+      );
+    }
+    if (shipment.stockIncreasedAt && !input.force) {
+      throw new BadRequestException(
+        `Remessa ${shipment.code} ja teve aumento Giga destino em ${new Date(shipment.stockIncreasedAt).toLocaleString('pt-BR')}. ` +
+        `Use force=true se TEM CERTEZA que precisa reaplicar (cuidado: vai duplicar entrada).`,
+      );
+    }
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId: shipment.id, realignmentStatus: 'received' } as any,
+      select: { id: true, refCode: true, codigoBipado: true, cor: true, tamanho: true, qtyOrigem: true } as any,
+    });
+    if (!items.length) {
+      throw new BadRequestException('Remessa sem itens recebidos — nada pra reprocessar');
+    }
+
+    const itemsSemCodigoBipado: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      if (!it.codigoBipado) {
+        itemsSemCodigoBipado.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+      }
+    }
+    let batchSkus = new Map<string, string>();
+    if (itemsSemCodigoBipado.length > 0) {
+      try {
+        batchSkus = await this.erp.batchFindCodigosByRefCorTam(itemsSemCodigoBipado);
+      } catch (e) {
+        this.logger.warn(`[reprocess-increase] batchFind falhou: ${(e as Error).message}`);
+      }
+    }
+    const keyOf = (ref: string, cor: string | null, tam: string | null) =>
+      `${String(ref).trim().toUpperCase()}|${String(cor || '').trim().toUpperCase()}|${String(tam || '').trim().toUpperCase()}`;
+
+    const stockItems: Array<{ sku: string; qty: number; storeCode: string }> = [];
+    const unresolved: Array<{ refCode: string; cor: string | null; tamanho: string | null }> = [];
+    for (const it of items as any[]) {
+      let sku: string | null = it.codigoBipado || null;
+      if (!sku) sku = batchSkus.get(keyOf(it.refCode, it.cor, it.tamanho)) || null;
+      if (!sku) {
+        try { sku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho); } catch {}
+      }
+      if (!sku) {
+        unresolved.push({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho });
+        continue;
+      }
+      stockItems.push({ sku, qty: it.qtyOrigem || 1, storeCode: shipment.toStoreCode });
+    }
+
+    if (stockItems.length === 0) {
+      throw new BadRequestException(
+        `Nenhum SKU resolvido. Unresolved: ${unresolved.map((u) => `${u.refCode}/${u.cor}/${u.tamanho}`).join(', ')}`,
+      );
+    }
+
+    const result = await this.erp.increaseStock(stockItems);
+    const appliedCount = result.applied?.length || 0;
+
+    this.logger.log(
+      `[reprocess-increase] ${shipment.code} (${shipment.fromStoreCode}->${shipment.toStoreCode}): ` +
+      `${stockItems.length} SKUs solicitados, ${appliedCount} aplicados por user=${input.userId || 'unknown'}`,
+    );
+
+    if (!result.success) {
+      throw new BadRequestException(`increaseStock falhou: ${result.error}`);
+    }
+    if (appliedCount === 0) {
+      throw new BadRequestException(
+        `increaseStock retornou success mas 0 SKUs aplicados. Possivel mismatch de storeCode "${shipment.toStoreCode}" com formato LOJA do Giga.`,
+      );
+    }
+
+    await (this.prisma as any).realignmentShipment.update({
+      where: { id: shipment.id },
+      data: { stockIncreasedAt: new Date() } as any,
+    });
+
+    return {
+      ok: true,
+      code: shipment.code,
+      itemsTotal: items.length,
+      stockItemsAttempted: stockItems.length,
+      stockItemsApplied: appliedCount,
+      unresolved: unresolved.length,
+      message: `Entrada Giga reaplicada em ${shipment.toStoreCode}: ${appliedCount} SKUs.`,
+    };
   }
 
   /**
@@ -1379,6 +1488,14 @@ export class RealignmentShipmentService {
         );
       }
     }
+    const appliedIncreaseCount = increaseResult.applied?.length || 0;
+    if (stockItems.length > 0 && appliedIncreaseCount === 0) {
+      this.logger.error(
+        `[confirmReceived] ${shipment.code}: increaseStock retornou success mas 0 SKUs aplicados! ` +
+        `Possivel mismatch de storeCode. toStoreCode=${shipment.toStoreCode}. ` +
+        `Use POST /realignment/shipments/admin/:id/reprocess-stock-increase pra reaplicar.`,
+      );
+    }
 
     // Atualiza shipment
     const now = new Date();
@@ -1393,7 +1510,9 @@ export class RealignmentShipmentService {
         receivedByUserId: input.userId ?? null,
         receivedQty,
         missingQty,
-      },
+        // So marca se realmente aplicou — pra reprocess saber quem precisa
+        stockIncreasedAt: appliedIncreaseCount > 0 ? now : null,
+      } as any,
     });
 
     this.invalidateSkuCache(shipment.id);
