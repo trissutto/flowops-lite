@@ -1225,6 +1225,80 @@ export class RealignmentShipmentService {
    * silenciosamente pulou (skipNotFound). Reaplica a baixa pelos itens da
    * remessa, atualiza stockDecreasedAt no sucesso.
    */
+  /**
+   * Lista TODAS as remessas de uma loja origem (opcionalmente filtrando por
+   * loja destino) nos últimos N dias. RAW SQL — não depende de
+   * stock_decreased_at existir. Pra rotina rápida "ver tudo que saiu de
+   * SJOSE essa semana e baixar Giga".
+   */
+  async listShipmentsByRoute(input: {
+    fromStoreCode: string;
+    toStoreCode?: string | null;
+    daysAgo: number;
+  }) {
+    const days = Math.max(1, Math.min(180, input.daysAgo || 7));
+    let rows: any[] = [];
+    try {
+      const sql = `
+        SELECT id, code, from_store_code, from_store_name, to_store_code, to_store_name,
+               status, opened_at, sent_at, received_at, total_items, total_qty
+        FROM realignment_shipments
+        WHERE from_store_code = $1
+          AND status IN ('in_transit', 'received')
+          AND opened_at >= NOW() - ($2::int * INTERVAL '1 day')
+          ${input.toStoreCode ? 'AND to_store_code = $3' : ''}
+        ORDER BY COALESCE(sent_at, opened_at) DESC
+        LIMIT 500
+      `;
+      const params: any[] = [input.fromStoreCode, days];
+      if (input.toStoreCode) params.push(input.toStoreCode);
+      rows = await (this.prisma as any).$queryRawUnsafe(sql, ...params);
+    } catch (e: any) {
+      this.logger.error(`[by-route] RAW falhou: ${e?.message}`);
+      return [];
+    }
+
+    // Tenta enriquecer com marcador (tolerante)
+    const markers = new Map<string, Date | null>();
+    try {
+      const ids = rows.map((r: any) => r.id);
+      if (ids.length) {
+        const ph = ids.map((_, i) => `$${i + 1}`).join(',');
+        const mr: any[] = await (this.prisma as any).$queryRawUnsafe(
+          `SELECT id, stock_decreased_at FROM realignment_shipments WHERE id IN (${ph})`,
+          ...ids,
+        );
+        for (const m of mr) markers.set(m.id, m.stock_decreased_at || null);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[by-route] markers query falhou: ${e?.message}`);
+    }
+
+    return Promise.all(
+      rows.map(async (s: any) => {
+        const cnt = await this.prisma.transferOrder.count({ where: { shipmentId: s.id } as any });
+        const stockDecreasedAt = markers.get(s.id) || null;
+        return {
+          id: s.id,
+          code: s.code,
+          fromStoreCode: s.from_store_code,
+          fromStoreName: s.from_store_name,
+          toStoreCode: s.to_store_code,
+          toStoreName: s.to_store_name,
+          status: s.status,
+          openedAt: s.opened_at,
+          sentAt: s.sent_at,
+          receivedAt: s.received_at,
+          totalItems: s.total_items,
+          totalQty: s.total_qty,
+          totalItemsLive: cnt,
+          stockDecreasedAt,
+          alreadyDecreased: !!stockDecreasedAt,
+        };
+      }),
+    );
+  }
+
   async reprocessStockForShipment(input: { shipmentId: string; force?: boolean; userId?: string }) {
     const shipment = await (this.prisma as any).realignmentShipment.findUnique({
       where: { id: input.shipmentId },

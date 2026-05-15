@@ -804,6 +804,35 @@ export class RealignmentController {
   }
 
   /**
+   * GET /realignment/shipments/admin/by-route?from=SJOSE&to=CAMP&daysAgo=7
+   *
+   * Rotina rápida: lista TODAS as remessas fechadas (in_transit/received)
+   * de uma loja origem nos últimos N dias. Filtro opcional por destino.
+   * Usado pela tela /retaguarda/baixa-origem pra forçar baixa Giga em
+   * lote sem depender de marcadores.
+   */
+  @Get('shipments/admin/by-route')
+  shipmentsByRoute(
+    @Req() req: any,
+    @Query('from') from: string,
+    @Query('to') to?: string,
+    @Query('daysAgo') daysAgo?: string,
+  ) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    if (!from || !from.trim()) {
+      throw new BadRequestException('Query param "from" (loja origem) é obrigatório');
+    }
+    const days = Number(daysAgo) || 7;
+    return this.shipment.listShipmentsByRoute({
+      fromStoreCode: from.trim(),
+      toStoreCode: to?.trim() || null,
+      daysAgo: days,
+    });
+  }
+
+  /**
    * GET /realignment/shipments/admin/:id · admin
    * Detalhe completo de uma remessa qualquer (sem filtro de loja).
    */
