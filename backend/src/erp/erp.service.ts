@@ -4675,13 +4675,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const corClean = (cor || '').trim();
     const tamClean = (tamanho || '').trim();
 
-    // 1. Match exato com TRIM e UPPER
+    // ⚠ Quando Wincred tem DUPLICIDADE (mesma REF+COR+TAM cadastrada em 2
+    // CODIGOs distintos, ex: produto re-cadastrado com preço novo), a query
+    // anterior fazia LIMIT 1 sem ORDER BY → pegava ALEATÓRIO, frequentemente
+    // o CODIGO sem estoque → app mostrava "sem estoque" e baixava SKU errado.
+    //
+    // FIX: JOIN com tabela `estoque`, GROUP BY CODIGO, ORDER BY estoque DESC
+    // (CODIGO com estoque > 0 ganha; empate → mais novo via CODIGO DESC).
+
+    // 1. Match exato (com priorização por estoque)
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO FROM produtos
-          WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
-            AND TRIM(UPPER(COALESCE(COR, ''))) = TRIM(UPPER(?))
-            AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+        `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
+          FROM produtos p
+          LEFT JOIN estoque e ON e.CODIGO = p.CODIGO
+          WHERE TRIM(UPPER(p.REF)) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(p.COR, ''))) = TRIM(UPPER(?))
+            AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
+          GROUP BY p.CODIGO
+          ORDER BY TOTAL_EST DESC, p.CODIGO DESC
           LIMIT 1`,
         [ref, corClean, tamClean],
       );
@@ -4696,10 +4708,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (corClean) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO FROM produtos
-            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
-              AND UPPER(COR) LIKE UPPER(?)
-              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+          `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
+            FROM produtos p
+            LEFT JOIN estoque e ON e.CODIGO = p.CODIGO
+            WHERE TRIM(UPPER(p.REF)) = TRIM(UPPER(?))
+              AND UPPER(p.COR) LIKE UPPER(?)
+              AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
+            GROUP BY p.CODIGO
+            ORDER BY TOTAL_EST DESC, p.CODIGO DESC
             LIMIT 1`,
           [ref, `%${corClean}%`, tamClean],
         );
@@ -4708,10 +4724,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         }
         // Tenta o reverso (cor cadastrada está dentro da bipada)
         const [rows2] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO FROM produtos
-            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
-              AND ? LIKE CONCAT('%', UPPER(COR), '%')
-              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+          `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
+            FROM produtos p
+            LEFT JOIN estoque e ON e.CODIGO = p.CODIGO
+            WHERE TRIM(UPPER(p.REF)) = TRIM(UPPER(?))
+              AND ? LIKE CONCAT('%', UPPER(p.COR), '%')
+              AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
+            GROUP BY p.CODIGO
+            ORDER BY TOTAL_EST DESC, p.CODIGO DESC
             LIMIT 1`,
           [ref, corClean.toUpperCase(), tamClean],
         );
@@ -4727,9 +4747,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (tamClean) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT CODIGO FROM produtos
-            WHERE TRIM(UPPER(REF)) = TRIM(UPPER(?))
-              AND TRIM(UPPER(COALESCE(TAMANHO, ''))) = TRIM(UPPER(?))
+          `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
+            FROM produtos p
+            LEFT JOIN estoque e ON e.CODIGO = p.CODIGO
+            WHERE TRIM(UPPER(p.REF)) = TRIM(UPPER(?))
+              AND TRIM(UPPER(COALESCE(p.TAMANHO, ''))) = TRIM(UPPER(?))
+            GROUP BY p.CODIGO
+            ORDER BY TOTAL_EST DESC, p.CODIGO DESC
             LIMIT 1`,
           [ref, tamClean],
         );
@@ -4802,9 +4826,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const chunks: typeof uniq[] = [];
     for (let i = 0; i < uniq.length; i += 500) chunks.push(uniq.slice(i, i + 500));
 
+    // ⚠ DUPLICIDADE NO WINCRED: mesma REF+COR+TAM pode ter 2 CODIGOs diferentes
+    // (cadastro repetido por mudança de preço, etc). Selecionamos o CODIGO com
+    // MAIOR estoque consolidado — desempate por CODIGO DESC (mais novo).
+    //
+    // Score por (refCore|cor|tam): { codigo, totalEst } — guarda o melhor.
+    const bestByKey = new Map<string, { codigo: string; totalEst: number }>();
+
     for (const chunk of chunks) {
       const conds = chunk
-        .map(() => `(TRIM(UPPER(REF)) IN (?,?,?,?,?) AND TRIM(UPPER(COALESCE(COR,''))) = ? AND TRIM(UPPER(COALESCE(TAMANHO,''))) = ?)`)
+        .map(() => `(TRIM(UPPER(p.REF)) IN (?,?,?,?,?) AND TRIM(UPPER(COALESCE(p.COR,''))) = ? AND TRIM(UPPER(COALESCE(p.TAMANHO,''))) = ?)`)
         .join(' OR ');
       const params: string[] = [];
       for (const u of chunk) {
@@ -4815,7 +4846,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO FROM produtos WHERE ${conds}`,
+          `SELECT p.REF, COALESCE(p.COR,'') AS COR, COALESCE(p.TAMANHO,'') AS TAMANHO, p.CODIGO,
+                  COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST
+            FROM produtos p
+            WHERE ${conds}`,
           params,
         );
         // Mapeia REF do Giga (possivelmente com zeros) de volta pra REF do input via refCore
@@ -4824,11 +4858,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           const refCore = stripZeros(refGiga);
           const cor = norm(r.COR);
           const tam = norm(r.TAMANHO);
+          const totalEst = Number(r.TOTAL_EST) || 0;
+          const codigo = String(r.CODIGO).trim();
           const matches = byRefCore.get(refCore) || [];
           for (const m of matches) {
             if (m.cor === cor && m.tam === tam) {
               const k = keyOf(m.ref, m.cor, m.tam);
-              if (!out.has(k)) out.set(k, String(r.CODIGO).trim());
+              const cur = bestByKey.get(k);
+              // Prefere mais estoque; empate → CODIGO numericamente maior (mais novo).
+              if (
+                !cur ||
+                totalEst > cur.totalEst ||
+                (totalEst === cur.totalEst && Number(codigo) > Number(cur.codigo))
+              ) {
+                bestByKey.set(k, { codigo, totalEst });
+              }
             }
           }
         }
@@ -4836,6 +4880,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`batchFindCodigosByRefCorTam falhou em chunk: ${e?.message || e}`);
       }
     }
+    for (const [k, v] of bestByKey.entries()) out.set(k, v.codigo);
     return out;
   }
 
