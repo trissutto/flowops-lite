@@ -1106,7 +1106,7 @@ function PdvPageInner() {
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 max-w-7xl mx-auto w-full flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
+      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-3 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
           Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
@@ -1503,7 +1503,7 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_72px_82px_100px_48px] gap-2 items-center transition ${
+                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_56px_72px_96px_44px] gap-2 items-center transition ${
                     isLast
                       ? 'bg-violet-100/70 ring-2 ring-inset ring-violet-400'
                       : 'hover:bg-violet-50/40'
@@ -1517,13 +1517,15 @@ function PdvPageInner() {
                   {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
                   <ProductThumb sku={it.sku} refCode={it.ref} />
 
-                  {/* DESCRIÇÃO — REF + descrição em UMA LINHA, truncada
-                      (cor/tamanho fazem parte da descrição completa do Giga). */}
+                  {/* DESCRIÇÃO — REF como chip destacado + descrição em negrito.
+                      Ordem: SKU (col 1) -> REF (chip) -> descrição. */}
                   <div className="min-w-0 flex items-center gap-2">
-                    <div className="text-xs text-slate-900 truncate flex-1 min-w-0">
-                      <span className="font-mono font-bold">{it.ref || it.sku}</span>
+                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                      <span className="font-mono font-black text-[11px] bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5 shrink-0 tracking-wide">
+                        {it.ref || it.sku}
+                      </span>
                       {it.descricao && (
-                        <span className="ml-2 text-slate-800 font-sans font-bold">· {it.descricao}</span>
+                        <span className="text-sm font-bold text-slate-900 truncate font-sans">{it.descricao}</span>
                       )}
                     </div>
                     {it.promoTag && (
