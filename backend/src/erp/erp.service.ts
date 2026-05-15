@@ -2232,16 +2232,38 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async searchProductsLike(term: string, storeCode?: string): Promise<any[]> {
     if (!this.pool || !term) return [];
-    const like = `%${term}%`;
+    const cleanTerm = String(term).trim();
+    const fullLike = `%${cleanTerm}%`;
+    // BUSCA MAGICA: divide o termo em palavras (>=2 chars cada) e exige
+    // que TODAS apareçam na DESCRICAOCOMPLETA, em qualquer ordem.
+    // Ex: "plus blusa size" acha "BLUSA PLUS SIZE", "PLUS SIZE BLUSA", etc.
+    // CODIGO/REF continuam com match exato/contains pra busca direta por SKU.
+    const words = cleanTerm
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length >= 2);
     try {
-      // 1) Busca produtos que matcham — limita 20 pra dropdown nao explodir
-      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
-           FROM produtos
-          WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
-          LIMIT 20`,
-        [like, like, like],
-      );
+      let sql: string;
+      let params: any[];
+      if (words.length >= 2) {
+        // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
+        const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
+        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                 FROM produtos
+                WHERE (${ands})
+                   OR CODIGO LIKE ?
+                   OR REF LIKE ?
+                LIMIT 20`;
+        params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+      } else {
+        // 1 palavra (ou termo curto): comportamento anterior — LIKE em tudo
+        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                 FROM produtos
+                WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+                LIMIT 20`;
+        params = [fullLike, fullLike, fullLike];
+      }
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
       const products = prodRows as any[];
       if (!products.length) return [];
 

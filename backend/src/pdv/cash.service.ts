@@ -47,6 +47,8 @@ export class CashService {
     });
 
     let totalVendas = 0;
+    let totalMarcados = 0;
+    let qtdMarcados = 0;
     const byMethod: Record<string, number> = {
       dinheiro: 0,
       pix: 0,
@@ -57,6 +59,14 @@ export class CashService {
     };
 
     for (const s of sales as any[]) {
+      // MARCADO nao e venda — e peca que cliente levou pra provar em casa.
+      // Nao entra em totalVendas nem em byMethod. Vai pra totalMarcados.
+      const pm = String(s.paymentMethod || '').toUpperCase();
+      if (pm === 'MARCADO') {
+        totalMarcados += Number(s.total) || 0;
+        qtdMarcados += 1;
+        continue;
+      }
       totalVendas += Number(s.total) || 0;
       for (const p of s.payments || []) {
         const method = String(p.method || '').toLowerCase();
@@ -94,10 +104,12 @@ export class CashService {
       totalCartaoDebito: byMethod.debito,
       totalCrediario: byMethod.crediario,
       totalOutros: byMethod.outros,
+      totalMarcados,
+      qtdMarcados,
       totalSangrias,
       totalSuprimentos,
       dinheiroEsperado,
-      qtdVendas: sales.length,
+      qtdVendas: sales.length - qtdMarcados,
     };
   }
 
@@ -633,9 +645,10 @@ export class CashService {
     );
 
     // Consolidado
-    const consolidado = {
+    const consolidado: any = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: 0,
     };
@@ -647,6 +660,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalMarcados += (l.totais as any).totalMarcados || 0;
+      consolidado.qtdMarcados += (l.totais as any).qtdMarcados || 0;
       consolidado.totalSangrias += l.totais.totalSangrias;
       consolidado.totalSuprimentos += l.totais.totalSuprimentos;
       consolidado.qtdVendas += l.totais.qtdVendas;
@@ -692,18 +707,29 @@ export class CashService {
             finalizedAt: { gte: fromStart, lte: toEnd },
           },
           select: {
-            id: true, total: true,
+            id: true, total: true, paymentMethod: true,
             sellerName: true, vendedorName: true,
             payments: { select: { method: true, valor: true } },
           },
         });
 
         let totalVendas = 0;
+        let totalMarcados = 0;
+        let qtdMarcados = 0;
+        let qtdVendasReais = 0;
         let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0;
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
 
         for (const sale of sales as any[]) {
+          // MARCADO nao conta como venda — separa em totalMarcados
+          const pm = String(sale.paymentMethod || '').toUpperCase();
+          if (pm === 'MARCADO') {
+            totalMarcados += Number(sale.total) || 0;
+            qtdMarcados += 1;
+            continue;
+          }
           totalVendas += Number(sale.total) || 0;
+          qtdVendasReais += 1;
           const nome = String(sale.sellerName || sale.vendedorName || 'Sem vendedora').trim();
           if (!ranking[nome]) ranking[nome] = { nome, qtd: 0, total: 0 };
           ranking[nome].qtd += 1;
@@ -791,10 +817,12 @@ export class CashService {
             totalCartaoCredito,
             totalCartaoDebito,
             totalCrediario,
+            totalMarcados,
+            qtdMarcados,
             totalSangrias,
             totalSuprimentos,
             dinheiroEsperado: 0,
-            qtdVendas: sales.length,
+            qtdVendas: qtdVendasReais,
           },
           vendedoras,
           movimentos,
@@ -813,6 +841,7 @@ export class CashService {
     const consolidado = {
       totalVendas: 0, totalDinheiro: 0, totalPix: 0,
       totalCartaoCredito: 0, totalCartaoDebito: 0, totalCrediario: 0,
+      totalMarcados: 0, qtdMarcados: 0,
       totalSangrias: 0, totalSuprimentos: 0, qtdVendas: 0,
       qtdLojasAbertas: 0, qtdLojasFechadas: lojas.length,
     };
@@ -823,6 +852,8 @@ export class CashService {
       consolidado.totalCartaoCredito += l.totais.totalCartaoCredito;
       consolidado.totalCartaoDebito += l.totais.totalCartaoDebito;
       consolidado.totalCrediario += l.totais.totalCrediario;
+      consolidado.totalMarcados += l.totais.totalMarcados;
+      consolidado.qtdMarcados += l.totais.qtdMarcados;
       consolidado.totalSangrias += l.totais.totalSangrias;
       consolidado.totalSuprimentos += l.totais.totalSuprimentos;
       consolidado.qtdVendas += l.totais.qtdVendas;
