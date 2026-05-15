@@ -320,57 +320,19 @@ export default function MinhaLojaRealinhamentoPage() {
    * antes de tentar de novo. Se OK, fecha direto.
    */
   const handleCloseShipment = useCallback(async (shipmentId: string, code: string) => {
+    // SIMPLIFICADO: sem modal de precheck. Vendedora separou, pecas em maos,
+    // clica Fechar e enviar -> confirma -> fecha. Backend ja aceita unresolved
+    // e roda decreaseStock com allowNegative=true (peca fisica prevalece).
+    if (!confirm(`Fechar remessa ${code} e enviar pra destino?\n\nIsso vai BAIXAR o estoque Giga das pecas e marcar a remessa como em transito. Nao pode desfazer.`)) {
+      return;
+    }
     setClosingShipmentId(shipmentId);
     try {
-      // 1) Precheck — detecta problemas SEM tocar no estoque
-      const pre = await api<{
-        ok: boolean;
-        totalItems: number;
-        unresolved: Array<{ transferOrderId?: string; refCode: string; cor: string | null; tamanho: string | null }>;
-        problemas: Array<{
-          transferOrderId: string;
-          refCode: string;
-          cor: string | null;
-          tamanho: string | null;
-          qtyRequerida: number;
-          sku: string;
-          storeCode: string;
-          estoqueGiga: number;
-        }>;
-      }>(`/realignment/shipments/${shipmentId}/precheck`);
-
-      // Bloqueia SÓ se tem `unresolved` (SKU não resolvido no Giga — peça não
-      // bate com o cadastro, problema REAL que precisa correção manual).
-      //
-      // `problemas` (estoque insuficiente) NÃO bloqueia mais: o backend já roda
-      // closeAndSend com `allowNegative: true` (peça está fisicamente em mãos
-      // da vendedora, divergência é só ERP×físico que será corrigida na baixa).
-      // Antes esse modal aparecia bloqueando vendedora e ela tinha que remover
-      // peças que estavam na frente dela — sumindo trabalho de separação.
-      if (pre.unresolved.length > 0) {
-        setProblemasShipment({ shipmentId, code, ...pre });
-        setClosingShipmentId(null);
-        return;
-      }
-
-      // 2) Confirmação final + fechar. Se tem peças com estoque divergente,
-      // mostra um aviso EXTRA no confirm — mas deixa fechar.
-      let confirmMsg = `Fechar remessa ${code} e enviar?\n\nIsso vai BAIXAR o estoque Giga das peças. Não pode desfazer.`;
-      if (pre.problemas.length > 0) {
-        confirmMsg =
-          `⚠ ${pre.problemas.length} peça(s) com estoque divergente no Giga (vamos baixar mesmo assim — as peças estão fisicamente em mãos).\n\n` +
-          confirmMsg;
-      }
-      if (!confirm(confirmMsg)) {
-        setClosingShipmentId(null);
-        return;
-      }
-
       const res = await api<{ ok: boolean; code: string; totalItems: number; totalQty: number }>(
         `/realignment/shipments/${shipmentId}/close-and-send`,
         { method: 'POST', body: '{}' },
       );
-      pushToast(`✅ Remessa ${res.code} enviada (${res.totalQty} peças). Loja destino recebeu alerta.`);
+      pushToast(`✅ Remessa ${res.code} enviada (${res.totalQty} pecas). Loja destino recebeu alerta.`);
       await Promise.all([loadOpenShipments(), loadItems(), loadSentItems()]);
     } catch (e: any) {
       alert(`Erro ao fechar remessa: ${e?.message || e}`);
