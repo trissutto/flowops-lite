@@ -910,34 +910,30 @@ function PdvPageInner() {
         setShowFinalized(true);
       }
 
-      // ── Imprime cupom NÃO FISCAL SILENCIOSAMENTE ──
-      // Estratégia:
-      //   - Electron (loja com instalador): usa electronAPI.silentPrintUrl()
-      //     → abre hidden window invisível no main process e imprime direto
-      //       na térmica padrão. Vendedora não vê nada.
-      //   - Browser puro: cria <iframe> oculto carregando o recibo. A tela
-      //     do recibo dispara window.print() sozinha no useEffect → o browser
-      //     imprime só o conteúdo do iframe. Mostra diálogo do SO mas não
-      //     abre janela visível.
-      try {
-        const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
-        const electron = (window as any).electronAPI;
-        if (electron?.silentPrintUrl) {
-          const absoluteUrl = window.location.origin + reciboPath;
-          electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
-            console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
-            printViaHiddenIframe(reciboPath);
-          });
-        } else {
-          printViaHiddenIframe(reciboPath);
-        }
-      } catch (printErr) {
-        console.error('Falha ao imprimir recibo:', printErr);
-      }
+      // ── Impressão automática de cupom DESATIVADA por solicitação ──
+      // O recibo de venda continua acessível em /minha-loja/pdv/recibo/${sale.id}
+      // (página "Notas Fiscais" do PDV, ou abrir manual). Pra reativar, descomente
+      // o bloco abaixo. Vale-troca, crediário (carnê) e devolução têm fluxos
+      // de impressão SEPARADOS — não foram afetados.
+      //
+      // try {
+      //   const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
+      //   const electron = (window as any).electronAPI;
+      //   if (electron?.silentPrintUrl) {
+      //     const absoluteUrl = window.location.origin + reciboPath;
+      //     electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
+      //       console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
+      //       printViaHiddenIframe(reciboPath);
+      //     });
+      //   } else {
+      //     printViaHiddenIframe(reciboPath);
+      //   }
+      // } catch (printErr) {
+      //   console.error('Falha ao imprimir recibo:', printErr);
+      // }
 
-      // PIX e fluxo AUTO: depois de imprimir, abre proxima venda em ~1.5s
-      // (tempo suficiente pro recibo carregar e disparar print() no iframe).
-      // Sem tela de preview no caminho — vendedora ja pode bipar proximo cliente.
+      // PIX e fluxo AUTO: abre proxima venda em ~1.5s (sem tela de preview
+      // no caminho — vendedora ja pode bipar proximo cliente direto).
       if (skipFinalizedScreen) {
         setTimeout(() => {
           setSale(null);
