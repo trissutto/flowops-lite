@@ -910,13 +910,17 @@ function PdvPageInner() {
         setShowFinalized(true);
       }
 
-      // ── Impressão automática de cupom: SÓ PRA VENDA PIX (em 2 vias) ──
-      // Demais formas (dinheiro/cartão/crediário) NÃO imprimem cupom auto.
-      // A página /pdv/recibo/[saleId] detecta o pagamento PIX e monta as
-      // 2 vias automaticamente (1ª LOJA · 2ª CLIENTE) — uma única chamada
-      // de window.print() já imprime as duas no mesmo job.
+      // ── Impressão automática de cupom: PIX ou DINHEIRO (em 2 vias) ──
+      // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
+      // A página /pdv/recibo/[saleId] detecta o pagamento e monta as 2 vias
+      // automaticamente (1ª LOJA · 2ª CLIENTE) — uma única chamada de
+      // window.print() já imprime as duas no mesmo job.
+      const isDirectDinheiro = paymentMethod === 'dinheiro';
+      const allPaymentsDinheiro = (fresh?.payments?.length ?? 0) > 0 &&
+        (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'dinheiro');
       const shouldAutoPrintPix = isDirectPix || allPaymentsPix;
-      if (shouldAutoPrintPix) {
+      const shouldAutoPrintDinheiro = isDirectDinheiro || allPaymentsDinheiro;
+      if (shouldAutoPrintPix || shouldAutoPrintDinheiro) {
         try {
           const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
           const electron = (window as any).electronAPI;
@@ -930,7 +934,7 @@ function PdvPageInner() {
             printViaHiddenIframe(reciboPath);
           }
         } catch (printErr) {
-          console.error('Falha ao imprimir recibo PIX:', printErr);
+          console.error('Falha ao imprimir recibo:', printErr);
         }
       }
 

@@ -94,14 +94,18 @@ function ReciboPdvInner() {
       .catch((e) => setError(e?.message || String(e)));
   }, [saleId]);
 
-  // Duplica em 2 vias quando pagamento é PIX (1ª VIA LOJA + 2ª VIA CLIENTE)
+  // Duplica em 2 vias quando pagamento é PIX ou DINHEIRO (1ª LOJA + 2ª CLIENTE)
   useEffect(() => {
     if (!sale) return;
     if (typeof document === 'undefined') return;
-    // Detecta se a venda tem PIX (em payments[] ou paymentMethod legado)
-    const isPix = (sale.payments || []).some((p: any) => String(p.method || '').toLowerCase() === 'pix')
-      || String(sale.paymentMethod || '').toLowerCase() === 'pix';
-    if (!isPix) return;
+    // Detecta PIX ou DINHEIRO (em payments[] ou paymentMethod legado)
+    const needsDoubleVia =
+      (sale.payments || []).some((p: any) => {
+        const m = String(p.method || '').toLowerCase();
+        return m === 'pix' || m === 'dinheiro';
+      }) ||
+      ['pix', 'dinheiro'].includes(String(sale.paymentMethod || '').toLowerCase());
+    if (!needsDoubleVia) return;
     const t = setTimeout(() => {
       const cupom = document.querySelector('.cupom') as HTMLElement | null;
       if (!cupom) return;
