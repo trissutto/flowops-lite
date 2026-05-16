@@ -30,11 +30,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: desktop-app/package-lock.json
 
       - name: Install deps do desktop-app
-        run: npm ci
+        # Usa npm install (não npm ci) — assim o lock é atualizado quando
+        # adicionamos novas deps (electron-updater, electron-log) sem precisar
+        # rodar npm install local antes do tag.
+        run: npm install --no-audit --no-fund
         working-directory: desktop-app
 
       - name: Build instalador Windows + publish no GitHub Release
