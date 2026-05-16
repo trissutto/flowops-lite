@@ -91,9 +91,11 @@ export default function SangriaImpressoPage() {
             padding: 0 !important;
             background: white !important;
             width: 80mm !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           body * { visibility: hidden; }
-          #recibo-content, #recibo-content * { visibility: visible; }
+          #recibo-content, #recibo-content * { visibility: visible; color: #000 !important; }
           #recibo-content {
             position: absolute;
             left: 0;
@@ -101,7 +103,21 @@ export default function SangriaImpressoPage() {
             width: 80mm;
             padding: 4mm 3mm;
             font-family: 'Courier New', monospace;
-            color: black;
+            color: black !important;
+          }
+          /* Valor em destaque: NUNCA inverter cores em térmica ELGIN —
+             fundo preto + texto branco SOME na impressão. Usa borda grossa +
+             texto preto enorme em negrito. */
+          .valor-destaque {
+            background: #fff !important;
+            color: #000 !important;
+            border: 3px solid #000 !important;
+            font-weight: 900 !important;
+          }
+          .valor-num {
+            color: #000 !important;
+            font-weight: 900 !important;
+            -webkit-text-stroke: 0.5px #000;
           }
           .no-print { display: none !important; }
         }
@@ -128,10 +144,11 @@ export default function SangriaImpressoPage() {
             </div>
           </div>
 
-          {/* VALOR EM DESTAQUE */}
-          <div className="bg-black text-white rounded p-3 text-center my-3">
-            <div className="text-[9px] uppercase tracking-widest opacity-70">Valor</div>
-            <div className="font-mono font-black text-3xl tabular-nums mt-1">
+          {/* VALOR EM DESTAQUE — borda grossa + texto preto enorme (térmica ELGIN
+              não imprime fundo preto direito; texto branco sumia). */}
+          <div className="valor-destaque border-[3px] border-black rounded p-3 text-center my-3 bg-white">
+            <div className="text-[10px] uppercase tracking-widest font-black text-black">VALOR</div>
+            <div className="valor-num font-mono font-black text-4xl tabular-nums mt-1 text-black leading-none">
               {brl(m.valor)}
             </div>
           </div>
