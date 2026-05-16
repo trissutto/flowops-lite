@@ -108,10 +108,14 @@ function createWindow() {
     }
   });
 
-  mainWindow.on('minimize', () => {
-    // Em vez de só minimizar pra taskbar, esconde (vai pra tray)
-    mainWindow.hide();
-  });
+  // ❌ NÃO esconder ao minimizar — vendedora aperta minimizar achando que
+  // tá só "guardando" e o app some da barra de tarefas. Comportamento esperado:
+  // - Minimizar (--) → vai pra barra de tarefas (Windows padrão) ✓
+  // - Fechar (X)    → vai pra tray (não encerra) — já tá ok no on('close') acima
+  //
+  // mainWindow.on('minimize', () => {
+  //   mainWindow.hide();
+  // });
 
   // Atalhos de debug (opcional)
   mainWindow.webContents.on('before-input-event', (_e, input) => {
