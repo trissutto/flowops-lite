@@ -3195,6 +3195,21 @@ function PaymentModal({
     }
   };
 
+  // ── AUTO-GERAR QR AO ABRIR MODAL EM PIX ──
+  // Quando o modal abre já com selected='pix' (filtro PIX direto da sidebar
+  // do PDV), gera o QR Code IMEDIATAMENTE — sem precisar a vendedora clicar
+  // no botão "PIX". Roda 1x quando entra na tela. Se trocar de forma e voltar
+  // pra PIX, o selectMethod já dispara generatePix sozinho.
+  const autoPixTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (autoPixTriggeredRef.current) return;
+    if (selected !== 'pix') return;
+    if (pixCharge || pixLoading) return;
+    autoPixTriggeredRef.current = true;
+    generatePix();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
   // ── POLLING (Pagar.me ou PagBank) ──
   // Quando PIX foi gerado via provider externo, faz polling a cada 1s
   // (era 3s — reduzido pra UX no caixa: confirmação <1.5s após pagamento).
