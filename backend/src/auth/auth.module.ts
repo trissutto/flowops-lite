@@ -14,9 +14,10 @@ import { PrismaModule } from '../prisma/prisma.module';
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => ({
         secret: cfg.get<string>('JWT_SECRET'),
-        // TTL default 12h — bulks longos de separação (40+ pedidos) estouravam
-        // o antigo 15m no meio da operação. Sessão de 12h cobre um dia operacional.
-        signOptions: { expiresIn: cfg.get<string>('JWT_ACCESS_TTL') ?? '12h' },
+        // TTL default 24h — vendedora abre app de manhã e só pede login no dia
+        // seguinte. Cobre turno duplo (8h-22h) sem expirar no meio.
+        // Pra ajustar via env, setar JWT_ACCESS_TTL=Xh no Railway.
+        signOptions: { expiresIn: cfg.get<string>('JWT_ACCESS_TTL') ?? '24h' },
       }),
     }),
   ],
