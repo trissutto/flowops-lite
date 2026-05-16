@@ -91,17 +91,29 @@ export default function FechamentoPage() {
 
     setLoading(true);
     setError(null);
-    const storeCode = typeof window !== 'undefined'
-      ? localStorage.getItem('lurds_pdv_store') || ''
-      : '';
-    const url = storeCode
-      ? `/pdv/caixa/relatorio-detalhado?storeCode=${encodeURIComponent(storeCode)}`
-      : '/pdv/caixa/relatorio-detalhado';
+    // CRÍTICO: storeCode SEMPRE do JWT pra user role=store (não confia localStorage stale).
+    // Pra admin/operator, mantém comportamento de localStorage.
+    (async () => {
+      let storeCode = '';
+      try {
+        const me = await api<{ role: string; storeCode?: string | null }>('/auth/me');
+        if (me?.role === 'store' && me?.storeCode) {
+          storeCode = me.storeCode;
+          try { localStorage.setItem('lurds_pdv_store', storeCode); } catch {}
+        } else {
+          storeCode = (typeof window !== 'undefined' ? localStorage.getItem('lurds_pdv_store') : '') || '';
+        }
+      } catch {}
 
-    api<RelatorioDetalhado>(url)
-      .then((d) => setData(d))
-      .catch((e: any) => setError(e?.message || 'Erro ao carregar relatório'))
-      .finally(() => setLoading(false));
+      const url = storeCode
+        ? `/pdv/caixa/relatorio-detalhado?storeCode=${encodeURIComponent(storeCode)}`
+        : '/pdv/caixa/relatorio-detalhado';
+
+      api<RelatorioDetalhado>(url)
+        .then((d) => setData(d))
+        .catch((e: any) => setError(e?.message || 'Erro ao carregar relatório'))
+        .finally(() => setLoading(false));
+    })();
   }, [router, refreshKey]);
 
   const handlePrint = () => {

@@ -270,20 +270,42 @@ function PdvPageInner() {
   // imprime + abre nova venda direto (fluxo full-auto pra caixa não travar).
   const autoFlowRef = useRef(false);
 
-  // ── Load lojas + restaura store + abre/retoma venda ──
+  // ── Load lojas + DETERMINA STORE CORRETA ──
+  // CRÍTICO: pra user role=store, o storeCode é FIXO no JWT (loja da vendedora).
+  // Não pode usar localStorage stale — se outro user da loja X tiver usado o PC,
+  // o localStorage pode ter store antigo e a vendedora atual ia vender pro
+  // estoque/caixa errado. Pra admin/operator, deixa escolher pelo localStorage.
   useEffect(() => {
-    api<Store[]>('/stores')
-      .then((arr) => {
+    (async () => {
+      try {
+        const [arr, me] = await Promise.all([
+          api<Store[]>('/stores'),
+          api<{ role: string; storeCode?: string | null }>('/auth/me').catch(() => null as any),
+        ]);
         const ativas = arr.filter((s) => s.active).sort((a, b) => a.code.localeCompare(b.code));
         setStores(ativas);
+
+        // 1) Se user é STORE, FORÇA loja dele (ignora localStorage)
+        if (me?.role === 'store' && me?.storeCode) {
+          const userStore = ativas.find((s) => s.code === me.storeCode);
+          if (userStore) {
+            setStoreCode(userStore.code);
+            try { localStorage.setItem('lurds_pdv_store', userStore.code); } catch {}
+            return;
+          }
+        }
+
+        // 2) Admin/operator: restaura do localStorage se existir
         const saved = typeof window !== 'undefined' ? localStorage.getItem('lurds_pdv_store') : null;
         if (saved && ativas.find((s) => s.code === saved)) {
           setStoreCode(saved);
         } else if (ativas.length === 1) {
           setStoreCode(ativas[0].code);
         }
-      })
-      .catch(() => setError('Erro ao carregar lojas'));
+      } catch {
+        setError('Erro ao carregar lojas');
+      }
+    })();
   }, []);
 
   // Salva store escolhida + abre venda

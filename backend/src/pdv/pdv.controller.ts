@@ -85,8 +85,17 @@ export class PdvController {
   @Post('sales')
   createSale(@Req() req: any, @Body() body: { storeCode: string; sellerId?: string; sellerName?: string }) {
     this.requireRole(req);
+    // SEGURANÇA CRÍTICA: pra user role=store, IGNORA o storeCode do body e
+    // FORÇA o storeCode do JWT. Senão um localStorage stale no PC da loja
+    // X pode fazer vendedora abrir venda como loja Y por engano (e gravar
+    // NFC-e no CNPJ errado, sumiço de estoque, etc).
+    const userRole = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode;
+    const effectiveStoreCode = userRole === 'store' && userStoreCode
+      ? userStoreCode
+      : body?.storeCode;
     return this.svc.createSale({
-      storeCode: body?.storeCode,
+      storeCode: effectiveStoreCode,
       vendedorUserId: req?.user?.id || req?.user?.sub,
       vendedorName: req?.user?.name || null,
       sellerId: body?.sellerId,
