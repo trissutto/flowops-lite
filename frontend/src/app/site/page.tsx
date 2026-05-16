@@ -16,7 +16,7 @@ import Link from 'next/link';
 import {
   ClipboardList, Megaphone, Users, Globe, ShoppingBag,
   FileSearch, MessageCircle, Store, ArrowRightLeft, ArrowLeft,
-  LayoutDashboard, Globe2, BarChart3, Settings,
+  LayoutDashboard, Globe2, BarChart3, Settings, DollarSign,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -41,6 +41,7 @@ interface SiteItem {
 
 const SITE_ITEMS: SiteItem[] = [
   { href: '/separacao',                label: 'Pedidos',         subtitle: 'WooCommerce',  description: 'Separação e envio',     tone: 'teal',   icon: ClipboardList  },
+  { href: '/financeiro',               label: 'Financeiro',      subtitle: 'Analítico WC', description: 'Faturamento · ticket médio · KPIs', tone: 'green', icon: DollarSign },
   { href: '/marketing',                label: 'Marketing',       subtitle: 'CRM',          description: 'Recuperação · campanhas', tone: 'rose',  icon: Megaphone      },
   { href: '/retaguarda/vendedoras',    label: 'Vendedoras',      subtitle: 'Atribuição',   description: 'Quem vende cada pedido',  tone: 'orange', icon: Users         },
   { href: '/retaguarda/publicar-site', label: 'Publicar no Site',subtitle: 'IA',           description: 'Cadastros automáticos',   tone: 'green',  icon: Globe         },
