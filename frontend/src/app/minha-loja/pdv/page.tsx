@@ -22,7 +22,7 @@ import {
   AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
-  Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight,
+  Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -912,9 +912,8 @@ function PdvPageInner() {
 
       // ── Impressão automática de cupom: PIX ou DINHEIRO (em 2 vias) ──
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
-      // A página /pdv/recibo/[saleId] detecta o pagamento e monta as 2 vias
-      // automaticamente (1ª LOJA · 2ª CLIENTE) — uma única chamada de
-      // window.print() já imprime as duas no mesmo job.
+      // Roteado via printer-router → vai SEMPRE pra impressora térmica
+      // configurada em /minha-loja/pdv/config-impressora.
       const isDirectDinheiro = paymentMethod === 'dinheiro';
       const allPaymentsDinheiro = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'dinheiro');
@@ -922,17 +921,11 @@ function PdvPageInner() {
       const shouldAutoPrintDinheiro = isDirectDinheiro || allPaymentsDinheiro;
       if (shouldAutoPrintPix || shouldAutoPrintDinheiro) {
         try {
-          const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
-          const electron = (window as any).electronAPI;
-          if (electron?.silentPrintUrl) {
-            const absoluteUrl = window.location.origin + reciboPath;
-            electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
-              console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
-              printViaHiddenIframe(reciboPath);
-            });
-          } else {
-            printViaHiddenIframe(reciboPath);
-          }
+          const { routePrint } = await import('@/lib/printer-router');
+          await routePrint({
+            kind: 'cupom',
+            url: `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`,
+          });
         } catch (printErr) {
           console.error('Falha ao imprimir recibo:', printErr);
         }
@@ -1226,6 +1219,18 @@ function PdvPageInner() {
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Notas Fiscais</div>
                   <div className="text-[10px] opacity-85 leading-tight mt-0.5">NFC-es emitidas</div>
+                </div>
+                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              </Link>
+              <Link
+                href="/minha-loja/pdv/config-impressora"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                title="Configurar impressoras térmica e A4"
+              >
+                <Printer className="w-5 h-5 text-white shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-black leading-tight">Impressoras</div>
+                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Térmica + A4</div>
                 </div>
                 <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
