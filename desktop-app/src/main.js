@@ -546,15 +546,16 @@ ipcMain.handle('flowops:open-external', (_evt, url) => {
 
 // ----------------- Lifecycle -----------------
 app.whenReady().then(async () => {
-  // Limpa cache HTTP no startup pra evitar ChunkLoadError quando a Vercel
-  // faz redeploy (HTML cacheado pede chunks JS antigos que viraram 404).
-  // Faz isso só na 1ª inicialização — não atrasa muito o boot.
-  try {
-    await session.defaultSession.clearCache();
-    console.log('[startup] cache HTTP limpo');
-  } catch (err) {
-    console.warn('[startup] falha ao limpar cache:', err.message);
-  }
+  // ⚠ NÃO usar `await session.clearCache()` no caminho crítico — em PCs
+  // lentos demora 20-60s e Windows mata o app como "não responsivo".
+  // Em vez disso, dispara em BACKGROUND DEPOIS de abrir a janela.
+  // Cache desatualizado é mitigado pelo Cache-Control headers abaixo,
+  // que SEMPRE pegam HTML fresco da Vercel.
+  setTimeout(() => {
+    session.defaultSession.clearCache()
+      .then(() => console.log('[startup-bg] cache HTTP limpo'))
+      .catch((err) => console.warn('[startup-bg] falha clearCache:', err?.message));
+  }, 10000); // 10s depois da abertura — UX já estabilizada
 
   // Defesa extra: intercepta requests HTML e adiciona Cache-Control: no-store.
   // Isso garante que o HTML do Next sempre vem fresco, mas mantém cache
