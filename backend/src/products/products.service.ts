@@ -2576,7 +2576,7 @@ export class ProductsService {
     // Modo DESC — DEFESA EM PROFUNDIDADE: se o termo for só dígitos (5+),
     // a vendedora provavelmente bipou código de etiqueta na aba errada.
     // Promove o modo pra 'sku' antes de seguir, garantindo expansão da REF.
-    let effectiveMode: Mode = mode;
+    let effectiveMode: 'ref' | 'desc' | 'sku' = mode;
     if (mode === 'desc' && isLikelyCodeOrEan) {
       effectiveMode = 'sku';
     }
