@@ -1,0 +1,57 @@
+name: Build Desktop App (Windows)
+
+# Dispara quando você cria uma tag tipo v1.0.1, v1.0.2, etc
+# Comando local: git tag v1.0.1 && git push --tags
+#
+# O workflow:
+#   1. Builda o app desktop em Windows
+#   2. Gera LURDS-ORDER-ONE-Setup-X.Y.Z.exe + arquivo latest.yml (auto-update)
+#   3. Cria GitHub Release público com os arquivos
+#   4. As lojas com app instalado detectam a release em até 4h e baixam sozinhas
+
+on:
+  push:
+    tags:
+      - 'v*'    # qualquer tag v* (v1.0.1, v2.0.0, etc)
+  workflow_dispatch:    # permite disparar manual na UI do GitHub também
+
+permissions:
+  contents: write    # precisa pra criar Release
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop-app/package-lock.json
+
+      - name: Install deps do desktop-app
+        run: npm ci
+        working-directory: desktop-app
+
+      - name: Build instalador Windows + publish no GitHub Release
+        run: npm run build
+        working-directory: desktop-app
+        env:
+          # Token padrão do GitHub Actions — já tem permissão pra criar Release no próprio repo
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Garante que electron-builder PUBLICA o artefato (não só builda)
+          EP_DRAFT: 'false'
+          EP_PRE_RELEASE: 'false'
+
+      - name: Upload artefatos como anexo do workflow run (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: lurds-installer-${{ github.ref_name }}
+          path: |
+            desktop-app/dist/*.exe
+            desktop-app/dist/latest.yml
+          retention-days: 90

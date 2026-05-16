@@ -17,6 +17,14 @@
 const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, shell, session } = require('electron');
 const path = require('path');
 const Store = require('electron-store');
+const { autoUpdater } = require('electron-updater');
+const log = require('electron-log');
+
+// Configura logger do auto-updater — vai pra %APPDATA%/lurds-order-one-desktop/logs/main.log
+log.transports.file.level = 'info';
+autoUpdater.logger = log;
+autoUpdater.autoDownload = true;          // baixa em background sem perguntar
+autoUpdater.autoInstallOnAppQuit = true;  // instala silenciosamente ao próximo restart
 
 const store = new Store({
   name: 'flowops-config',
@@ -560,6 +568,45 @@ app.whenReady().then(async () => {
   applyAutoLaunch(!!store.get('autoLaunch'));
   createWindow();
   createTray();
+
+  // ── AUTO-UPDATE ──
+  // Verifica updates 30s após boot (deixa o app abrir tranquilo primeiro)
+  // e a cada 4h enquanto rodando. Pacote baixa em background; instalação
+  // só acontece no próximo restart (não interrompe vendedora no meio da venda).
+  setTimeout(() => checkForUpdatesQuietly(), 30000);
+  setInterval(() => checkForUpdatesQuietly(), 4 * 60 * 60 * 1000);
+});
+
+/** Verifica updates silenciosamente. Não bloqueia UI. */
+function checkForUpdatesQuietly() {
+  if (!app.isPackaged) {
+    log.info('[updater] dev mode — pulando check de update');
+    return;
+  }
+  autoUpdater.checkForUpdates().catch((err) => {
+    log.warn('[updater] check falhou:', err?.message || err);
+  });
+}
+
+// Eventos do auto-updater pra log
+autoUpdater.on('checking-for-update', () => log.info('[updater] verificando...'));
+autoUpdater.on('update-available', (info) => {
+  log.info(`[updater] update disponivel: v${info.version}`);
+  // Notifica vendedora discretamente no tray (não toast — pode atrapalhar PDV)
+  if (tray) {
+    tray.setToolTip(`LURDS ORDER ONE — baixando update v${info.version}...`);
+  }
+});
+autoUpdater.on('update-not-available', () => log.info('[updater] sem updates'));
+autoUpdater.on('error', (err) => log.error('[updater] erro:', err?.message || err));
+autoUpdater.on('download-progress', (progress) => {
+  log.info(`[updater] download ${progress.percent.toFixed(0)}% (${(progress.bytesPerSecond/1024).toFixed(0)} KB/s)`);
+});
+autoUpdater.on('update-downloaded', (info) => {
+  log.info(`[updater] update v${info.version} baixado — instala no proximo restart`);
+  if (tray) {
+    tray.setToolTip(`LURDS ORDER ONE — v${info.version} pronta. Sera instalada no proximo restart.`);
+  }
 });
 
 app.on('window-all-closed', (e) => {
