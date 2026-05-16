@@ -2923,9 +2923,32 @@ function PaymentModal({
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
     }
-    // PIX sem QR: permite finalizar mesmo sem QR Pagar.me (vendedora pode
-    // ter recebido o PIX no celular dela direto, sem usar o sistema).
-    // Marca details.pixManual=true pra rastrear que veio "manual" (sem txid).
+    // PIX: SEMPRE exige QR gerado (clique no botão "PIX"). Se for provider
+    // Pagar.me/PagBank, exige TAMBÉM confirmação automática (pixPaid=true via
+    // webhook/polling) — não deixa fechar venda "no escuro". Provider local
+    // (chave celular) não tem webhook → vendedora confirma manualmente via
+    // botão "Marcar como pago" (linha ~4063).
+    if (selected === 'pix') {
+      if (!pixCharge) {
+        toast(
+          'warning',
+          'Gere o QR Code primeiro',
+          'Clique no botão PIX pra gerar o QR Code. Sem QR, a venda não pode ser finalizada.',
+        );
+        return;
+      }
+      if (
+        (pixCharge.provider === 'pagarme' || pixCharge.provider === 'pagbank') &&
+        !pixPaid
+      ) {
+        toast(
+          'warning',
+          'Aguardando pagamento PIX',
+          'O sistema confirma automaticamente quando o cliente pagar. Aguarde.',
+        );
+        return;
+      }
+    }
     if (selected === 'dinheiro' && recebidoNum > 0 && recebidoNum < valor) {
       toast('warning', 'Valor recebido insuficiente', `Recebido ${brl(recebidoNum)} é menor que ${brl(valor)}`);
       return;
@@ -2945,11 +2968,15 @@ function PaymentModal({
       details.troco = trocoP;
     }
     if (selected === 'pix') {
+      // pixCharge é GARANTIDO existir aqui — bloqueio acima impede passar sem.
+      // (Mantém else defensivo apenas pra log; nunca deveria executar.)
       if (pixCharge) {
         details.pixTxid = pixCharge.txid;
         details.pixChave = pixCharge.chave;
+        details.pixProvider = pixCharge.provider;
+        details.pixPaidByWebhook = pixPaid;
       } else {
-        // PIX manual — vendedora recebeu no celular dela, sem QR do sistema
+        // (não deve cair aqui — bloqueio em adicionarPagamento garante pixCharge)
         details.pixManual = true;
       }
     }
