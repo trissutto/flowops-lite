@@ -80,12 +80,12 @@ const normalize = (s: string): string => {
   return out;
 };
 
-function printReceipt(baixaId: string) {
+async function printReceipt(baixaId: string) {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
-  const electron = (window as any).electronAPI;
-  if (electron?.silentPrintUrl) {
-    electron.silentPrintUrl(window.location.origin + url).catch(() => hiddenIframe(url));
-  } else {
+  try {
+    const { routePrint } = await import('@/lib/printer-router');
+    await routePrint({ kind: 'recibo_pix', url });
+  } catch {
     hiddenIframe(url);
   }
 }

@@ -269,14 +269,8 @@ export default function DevolucaoPage() {
       if (r.modo === 'credito' && r.creditoCode) {
         try {
           const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
-          const electron = (window as any).electronAPI;
-          if (electron?.silentPrintUrl) {
-            electron.silentPrintUrl(window.location.origin + url).catch(() => {
-              openValePopup(url);
-            });
-          } else {
-            openValePopup(url);
-          }
+          const { routePrint } = await import('@/lib/printer-router');
+          await routePrint({ kind: 'vale', url }).catch(() => openValePopup(url));
         } catch { /* segue — botão Imprimir Vale fica disponível */ }
       }
     } catch (e: any) {
@@ -725,14 +719,12 @@ export default function DevolucaoPage() {
                     <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <CopiarCodigoBtn code={success.creditoCode} />
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(success.creditoCode)}?autoprint=1`;
-                          const electron = (window as any).electronAPI;
-                          if (electron?.silentPrintUrl) {
-                            electron.silentPrintUrl(window.location.origin + url).catch(() => {
-                              window.open(url, 'lurds_vale', 'width=400,height=700');
-                            });
-                          } else {
+                          try {
+                            const { routePrint } = await import('@/lib/printer-router');
+                            await routePrint({ kind: 'vale', url });
+                          } catch {
                             window.open(url, 'lurds_vale', 'width=400,height=700');
                           }
                         }}

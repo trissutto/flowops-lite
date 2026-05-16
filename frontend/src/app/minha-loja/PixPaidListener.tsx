@@ -42,16 +42,20 @@ type BaixaInfo = {
  */
 function trySilentPrint(baixaId: string): boolean {
   const url = `/minha-loja/pdv/recebimentos/recibo/${baixaId}?autoprint=1`;
-  const electron = (window as any).electronAPI;
-  if (electron?.silentPrintUrl) {
-    try {
-      electron.silentPrintUrl(window.location.origin + url);
-      return true;
-    } catch {
-      return false;
-    }
+  // Roteia via printer-router (kind=recibo_pix → profile=termica).
+  // Setar impressora e disparar em background — não aguarda.
+  try {
+    import('@/lib/printer-router').then(({ routePrint, isElectron }) => {
+      if (!isElectron()) return;
+      routePrint({ kind: 'recibo_pix', url }).catch((e) =>
+        console.warn('[PixPaidListener] routePrint falhou:', e),
+      );
+    });
+    const electron = (window as any).electronAPI;
+    return !!electron?.silentPrintUrl;
+  } catch {
+    return false;
   }
-  return false; // browser puro nao consegue silent print sem interacao
 }
 
 /**

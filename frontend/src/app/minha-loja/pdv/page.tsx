@@ -4495,12 +4495,18 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
 
-      // Tenta Electron silent print (PC desktop)
+      // Carnê de crediário → A4 (HP/Brother). Roteado pelo printer-router:
+      // antes do silent print, seta a impressora A4 escolhida em config.
       const electron = (window as any).electronAPI;
       if (electron?.silentPrintUrl) {
         try {
+          const { loadPrinterConfig } = await import('@/lib/printer-router');
+          const cfg = loadPrinterConfig();
+          if (cfg.a4) {
+            await electron.setConfig({ printer: cfg.a4 });
+          }
           await electron.silentPrintUrl(url);
-          toast('success', 'Enviado pra impressora', 'Confira a bandeja');
+          toast('success', 'Carnê enviado pra impressora A4', 'Confira a bandeja');
           setTimeout(() => URL.revokeObjectURL(url), 60_000);
           return;
         } catch (e) {
@@ -4709,9 +4715,23 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   </script>
 </body></html>`;
 
-    // Abre popup com cupom + window.print() auto.
-    // Vendedora escolhe ELGIN UMA VEZ no diálogo do Chrome → próximas vendas
-    // o Chrome lembra a impressora e basta apertar Enter.
+    // Roteado pelo printer-router: Electron → silentPrintHTML na térmica
+    // configurada (kind=nfce → profile=termica). Browser → popup + window.print().
+    try {
+      const { loadPrinterConfig, isElectron } = await import('@/lib/printer-router');
+      const electron = (window as any).electronAPI;
+      if (isElectron() && electron?.silentPrintHTML) {
+        const cfg = loadPrinterConfig();
+        if (cfg.termica) {
+          await electron.setConfig({ printer: cfg.termica });
+        }
+        await electron.silentPrintHTML(html);
+        return;
+      }
+    } catch (e) {
+      console.warn('[nfce] silentPrintHTML falhou, caindo pra popup:', e);
+    }
+    // Fallback browser: popup + window.print() injetado no HTML
     const w = window.open('', 'nfce_print_' + sale.id, 'width=400,height=600');
     if (!w) {
       toast('warning', 'Popup bloqueado', 'Habilite popups pra esse site (ícone na barra de endereço do Chrome)');
@@ -4721,17 +4741,18 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     w.document.close();
   }
 
-  // Auto-print NFC-e DESATIVADO por solicitação. Vendedora aciona manual via
-  // botão "Imprimir DANFE" no modal de venda finalizada se precisar.
+  // Auto-print NFC-e: assim que SEFAZ autoriza, o cupom fiscal sai sozinho
+  // na térmica configurada em /pdv/config-impressora. Vendedora não precisa
+  // clicar "Imprimir DANFE" — sai junto com o cupom não-fiscal de venda.
   const lastPrintedRef = useRef<string | null>(null);
-  // useEffect(() => {
-  //   if (!isAuthorized) return;
-  //   if (!sale.nfceChave) return;
-  //   if (lastPrintedRef.current === sale.nfceChave) return;
-  //   lastPrintedRef.current = sale.nfceChave;
-  //   setTimeout(() => imprimirDanfeNfce(), 300);
-  //   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, [isAuthorized, sale.nfceChave]);
+  useEffect(() => {
+    if (!isAuthorized) return;
+    if (!sale.nfceChave) return;
+    if (lastPrintedRef.current === sale.nfceChave) return;
+    lastPrintedRef.current = sale.nfceChave;
+    setTimeout(() => imprimirDanfeNfce(), 300);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthorized, sale.nfceChave]);
 
   async function emitirNfce() {
     setEmitting(true);

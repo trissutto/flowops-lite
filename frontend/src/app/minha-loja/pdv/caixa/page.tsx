@@ -1141,10 +1141,10 @@ function MovModal({
             storeCode: storeCode || '',
           });
           const url = `/minha-loja/pdv/caixa/sangria/${mov.id}?${qsImp.toString()}`;
-          const electron = (window as any).electronAPI;
-          if (electron?.silentPrintUrl) {
-            electron.silentPrintUrl(window.location.origin + url).catch(() => imprimirHidden(url));
-          } else {
+          try {
+            const { routePrint } = await import('@/lib/printer-router');
+            await routePrint({ kind: 'sangria', url });
+          } catch {
             imprimirHidden(url);
           }
         } catch { /* segue mesmo se falhar a impressão */ }
