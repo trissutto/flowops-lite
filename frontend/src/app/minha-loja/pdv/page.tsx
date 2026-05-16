@@ -910,27 +910,29 @@ function PdvPageInner() {
         setShowFinalized(true);
       }
 
-      // ── Impressão automática de cupom DESATIVADA por solicitação ──
-      // O recibo de venda continua acessível em /minha-loja/pdv/recibo/${sale.id}
-      // (página "Notas Fiscais" do PDV, ou abrir manual). Pra reativar, descomente
-      // o bloco abaixo. Vale-troca, crediário (carnê) e devolução têm fluxos
-      // de impressão SEPARADOS — não foram afetados.
-      //
-      // try {
-      //   const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
-      //   const electron = (window as any).electronAPI;
-      //   if (electron?.silentPrintUrl) {
-      //     const absoluteUrl = window.location.origin + reciboPath;
-      //     electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
-      //       console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
-      //       printViaHiddenIframe(reciboPath);
-      //     });
-      //   } else {
-      //     printViaHiddenIframe(reciboPath);
-      //   }
-      // } catch (printErr) {
-      //   console.error('Falha ao imprimir recibo:', printErr);
-      // }
+      // ── Impressão automática de cupom: SÓ PRA VENDA PIX (em 2 vias) ──
+      // Demais formas (dinheiro/cartão/crediário) NÃO imprimem cupom auto.
+      // A página /pdv/recibo/[saleId] detecta o pagamento PIX e monta as
+      // 2 vias automaticamente (1ª LOJA · 2ª CLIENTE) — uma única chamada
+      // de window.print() já imprime as duas no mesmo job.
+      const shouldAutoPrintPix = isDirectPix || allPaymentsPix;
+      if (shouldAutoPrintPix) {
+        try {
+          const reciboPath = `/minha-loja/pdv/recibo/${sale.id}?autoprint=1`;
+          const electron = (window as any).electronAPI;
+          if (electron?.silentPrintUrl) {
+            const absoluteUrl = window.location.origin + reciboPath;
+            electron.silentPrintUrl(absoluteUrl).catch((e: any) => {
+              console.warn('silentPrintUrl falhou, caindo pra iframe:', e);
+              printViaHiddenIframe(reciboPath);
+            });
+          } else {
+            printViaHiddenIframe(reciboPath);
+          }
+        } catch (printErr) {
+          console.error('Falha ao imprimir recibo PIX:', printErr);
+        }
+      }
 
       // PIX e fluxo AUTO: abre proxima venda em ~1.5s (sem tela de preview
       // no caminho — vendedora ja pode bipar proximo cliente direto).
@@ -4710,18 +4712,17 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     w.document.close();
   }
 
-  // Quando NFC-e fica autorizada (de não-autorizada → autorizada), imprime auto
+  // Auto-print NFC-e DESATIVADO por solicitação. Vendedora aciona manual via
+  // botão "Imprimir DANFE" no modal de venda finalizada se precisar.
   const lastPrintedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isAuthorized) return;
-    if (!sale.nfceChave) return;
-    // Só imprime UMA vez por chave (evita reimprimir se modal re-renderiza)
-    if (lastPrintedRef.current === sale.nfceChave) return;
-    lastPrintedRef.current = sale.nfceChave;
-    // Pequeno delay pra garantir que o sale.nfceProtocolo já está populado
-    setTimeout(() => imprimirDanfeNfce(), 300);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthorized, sale.nfceChave]);
+  // useEffect(() => {
+  //   if (!isAuthorized) return;
+  //   if (!sale.nfceChave) return;
+  //   if (lastPrintedRef.current === sale.nfceChave) return;
+  //   lastPrintedRef.current = sale.nfceChave;
+  //   setTimeout(() => imprimirDanfeNfce(), 300);
+  //   // eslint-disable-next-line react-hooks/exhaustive-deps
+  // }, [isAuthorized, sale.nfceChave]);
 
   async function emitirNfce() {
     setEmitting(true);
