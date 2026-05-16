@@ -486,6 +486,7 @@ export class NfceService {
     <transp><modFrete>9</modFrete></transp>
     <pag>${pagLines}</pag>
     <infAdic><infCpl>Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.</infCpl></infAdic>
+    <infRespTec><CNPJ>20104813000139</CNPJ><xContato>THIAGO RISSUTTO</xContato><email>atendimento@lurds.com.br</email><fone>1132331004</fone></infRespTec>
   </infNFe><infNFeSupl><qrCode><![CDATA[${buildQrCodeUrlNfce({chave,ambiente:ambiente as '1'|'2',idCSC:config.cscId||'1',cscToken:config.cscToken||''})}]]></qrCode><urlChave>${buildUrlConsultaNfce(ambiente as '1'|'2')}</urlChave></infNFeSupl></NFe>`.trim();
     this.logger.log(`[NFCe-V3-SUPL] XML gerado tamanho=${xml.length} contemSupl=${xml.includes('infNFeSupl')}`);
 
