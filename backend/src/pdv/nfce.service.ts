@@ -400,7 +400,10 @@ export class NfceService {
           const cnpjCred = String(config.cnpj || '').replace(/\D/g, '').padStart(14, '0').slice(0, 14);
           cardBlock = `<card><tpIntegra>2</tpIntegra><CNPJ>${cnpjCred}</CNPJ><tBand>99</tBand><cAut>0</cAut></card>`;
         }
-        return `<detPag><tPag>${tPag}</tPag><vPag>${(p.valor || 0).toFixed(2)}</vPag>${cardBlock}</detPag>`;
+        // indPag=0 (à vista) é tecnicamente opcional, mas SEFAZ-SP PL_009
+        // tem reportes de rejeição cStat 225 sem ele em algumas variantes
+        // de venda. Adiciona pra garantir compatibilidade.
+        return `<detPag><indPag>0</indPag><tPag>${tPag}</tPag><vPag>${(p.valor || 0).toFixed(2)}</vPag>${cardBlock}</detPag>`;
       })
       .join('');
 
