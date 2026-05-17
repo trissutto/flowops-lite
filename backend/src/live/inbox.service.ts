@@ -104,6 +104,150 @@ export class InboxService {
   }
 
   /**
+   * SEED de Live Commerce — cria 1 live ativa + 5 produtos pros vídeos
+   * dos próximos casos de uso (instagram_manage_comments, etc).
+   */
+  async seedLiveData() {
+    this.logger.warn('[Inbox] SEED LIVE DEMO sendo executado…');
+
+    const liveId = '55555555-5555-5555-5555-555555555555';
+
+    // Upsert da live
+    await this.prisma.live.upsert({
+      where: { id: liveId },
+      update: {
+        status: 'live',
+        startedAt: new Date(),
+        endedAt: null,
+        aiEnabled: true,
+      },
+      create: {
+        id: liveId,
+        title: 'Live de Teste — Inverno Plus Size 2026',
+        status: 'live',
+        startedAt: new Date(),
+        aiEnabled: true,
+      },
+    });
+
+    // Produtos
+    const produtos = [
+      {
+        id: 'aaaaaaaa-1111-1111-1111-111111111111',
+        liveId,
+        erpProductId: 'erp_205',
+        refCode: '205',
+        displayName: 'Calça Wide Leg Preta Cintura Alta',
+        priceCents: 19900,
+        promoPriceCents: 15900,
+        sizes: [
+          { size: '52', stock: 8 },
+          { size: '54', stock: 3 },
+          { size: '56', stock: 12 },
+          { size: '58', stock: 5 },
+        ],
+        position: 1,
+        isCurrent: true,
+      },
+      {
+        id: 'aaaaaaaa-2222-2222-2222-222222222222',
+        liveId,
+        erpProductId: 'erp_198',
+        refCode: '198',
+        displayName: 'Blusa Cropped Estampa Floral',
+        priceCents: 8990,
+        promoPriceCents: null,
+        sizes: [
+          { size: '52', stock: 15 },
+          { size: '54', stock: 10 },
+          { size: '56', stock: 7 },
+          { size: '58', stock: 2 },
+        ],
+        position: 2,
+        isCurrent: false,
+      },
+      {
+        id: 'aaaaaaaa-3333-3333-3333-333333333333',
+        liveId,
+        erpProductId: 'erp_312',
+        refCode: '312',
+        displayName: 'Vestido Midi Marrom com Elastano',
+        priceCents: 24900,
+        promoPriceCents: 19900,
+        sizes: [
+          { size: '52', stock: 4 },
+          { size: '54', stock: 6 },
+          { size: '56', stock: 1 },
+          { size: '58', stock: 0 },
+        ],
+        position: 3,
+        isCurrent: false,
+      },
+      {
+        id: 'aaaaaaaa-4444-4444-4444-444444444444',
+        liveId,
+        erpProductId: 'erp_401',
+        refCode: '401',
+        displayName: 'Saia Lápis Couro Sintético Preta',
+        priceCents: 13900,
+        promoPriceCents: null,
+        sizes: [
+          { size: '52', stock: 6 },
+          { size: '54', stock: 4 },
+          { size: '56', stock: 8 },
+          { size: '58', stock: 3 },
+        ],
+        position: 4,
+        isCurrent: false,
+      },
+      {
+        id: 'aaaaaaaa-5555-5555-5555-555555555555',
+        liveId,
+        erpProductId: 'erp_528',
+        refCode: '528',
+        displayName: 'Blazer Alfaiataria Bege',
+        priceCents: 32900,
+        promoPriceCents: 29900,
+        sizes: [
+          { size: '52', stock: 3 },
+          { size: '54', stock: 2 },
+          { size: '56', stock: 5 },
+          { size: '58', stock: 4 },
+        ],
+        position: 5,
+        isCurrent: false,
+      },
+    ];
+
+    let productsCreated = 0;
+    for (const p of produtos) {
+      try {
+        await this.prisma.liveProduct.upsert({
+          where: { liveId_refCode: { liveId, refCode: p.refCode } },
+          update: {
+            displayName: p.displayName,
+            priceCents: p.priceCents,
+            promoPriceCents: p.promoPriceCents,
+            sizes: p.sizes,
+            position: p.position,
+            isCurrent: p.isCurrent,
+          },
+          create: p as any,
+        });
+        productsCreated++;
+      } catch (err: any) {
+        this.logger.error(`Falha produto ${p.refCode}: ${err.message}`);
+      }
+    }
+
+    this.logger.warn(
+      `[Inbox] SEED LIVE concluído — liveId=${liveId} produtos=${productsCreated}`,
+    );
+
+    return { liveId, productsCreated };
+  }
+
+  /**
    * Lista conversas com última mensagem + contagem de não lidas.
    * Agrupa por customer, ordena pela mais recente.
    */

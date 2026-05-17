@@ -53,4 +53,14 @@ export class InboxController {
   async seedPost() {
     return this.inbox.seedDemoData();
   }
+
+  @Get('dev/seed-live')
+  async seedLiveGet() {
+    return this.inbox.seedLiveData();
+  }
+
+  @Post('dev/seed-live')
+  async seedLivePost() {
+    return this.inbox.seedLiveData();
+  }
 }
