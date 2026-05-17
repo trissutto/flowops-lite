@@ -23,7 +23,7 @@ const LURDS_PHYSICAL_STORES: PhysicalStore[] = [
   { city: 'Indaiatuba',          state: 'SP', slug: 'indaiatuba' },
   { city: 'Itanhaém',            state: 'SP', slug: 'itanhaem',
     aliases: ['itanhaem'] },
-  { city: 'Itu',                 state: 'SP', slug: 'itu' },
+  // Itu — fechada (mai/2026)
   { city: 'Jundiaí',             state: 'SP', slug: 'jundiai',
     aliases: ['jundiai'] },
   { city: 'Limeira',             state: 'SP', slug: 'limeira' },
@@ -103,6 +103,78 @@ export class AiAgentService {
    */
   private listAllStoresAsText(): string {
     return LURDS_PHYSICAL_STORES.map((s) => s.city).join(', ');
+  }
+
+  /**
+   * Detecta CEP no texto (aceita variações: 13050-000, 13050000, 13050 000).
+   * Retorna CEP normalizado (8 dígitos) ou null.
+   */
+  private detectCep(text: string): string | null {
+    const m = /\b(\d{5})[\s\-]?(\d{3})\b/.exec(text);
+    if (!m) return null;
+    const cep = `${m[1]}${m[2]}`;
+    return cep.length === 8 ? cep : null;
+  }
+
+  /**
+   * Consulta ViaCEP (grátis) pra descobrir cidade/UF a partir do CEP.
+   * Retorna null se inválido ou erro.
+   */
+  private async lookupCep(
+    cep: string,
+  ): Promise<{ city: string; uf: string } | null> {
+    const cleaned = cep.replace(/\D/g, '');
+    if (cleaned.length !== 8) return null;
+
+    try {
+      const resp = await firstValueFrom(
+        this.http.get(`https://viacep.com.br/ws/${cleaned}/json/`, {
+          timeout: 5000,
+        }),
+      );
+      const data = resp.data as any;
+      if (data?.erro) return null;
+      return {
+        city: data.localidade || '',
+        uf: data.uf || '',
+      };
+    } catch (err: any) {
+      this.logger.warn(`[Lú Posts] ViaCEP falhou pro ${cep}: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Dado uma cidade/UF, encontra a loja Lurds correspondente OU a mais
+   * próxima da MESMA região (heurística simples — sem geocoding caro).
+   *
+   * @TODO V2 — geocoding real (Google Maps Distance Matrix) pra distância
+   * em km exata. Por enquanto: match exato de cidade.
+   */
+  private findStoreNearCity(
+    city: string,
+    uf: string,
+  ): { exact: PhysicalStore | null; sameState: PhysicalStore[] } {
+    const cityNorm = city
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '');
+
+    let exact: PhysicalStore | null = null;
+    for (const store of LURDS_PHYSICAL_STORES) {
+      const storeNorm = store.city
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '');
+      if (storeNorm === cityNorm) {
+        exact = store;
+        break;
+      }
+    }
+
+    const sameState = LURDS_PHYSICAL_STORES.filter((s) => s.state === uf);
+
+    return { exact, sameState };
   }
 
   /**
@@ -253,14 +325,34 @@ export class AiAgentService {
     // Monta CTA url (genérica ou específica do produto)
     const cta = this.buildCtaUrl(parsed.code ?? null, parsed.size ?? null);
 
-    // Detecta menção a cidade com loja física
+    // Detecta menção a cidade com loja física (texto mesmo)
     const mentionedStore =
       parsed.intent === 'location_query'
         ? this.detectMentionedStore(opts.question)
         : null;
 
+    // Detecta CEP no comentário (qualquer intent — pode ser cliente respondendo)
+    const cep = this.detectCep(opts.question);
+    let cepMatch: {
+      exact: PhysicalStore | null;
+      sameState: PhysicalStore[];
+      city: string;
+      uf: string;
+    } | null = null;
+
+    if (cep) {
+      const cepInfo = await this.lookupCep(cep);
+      if (cepInfo) {
+        const found = this.findStoreNearCity(cepInfo.city, cepInfo.uf);
+        cepMatch = { ...found, city: cepInfo.city, uf: cepInfo.uf };
+        this.logger.log(
+          `[Lú Posts] CEP ${cep} → ${cepInfo.city}/${cepInfo.uf} → loja exata: ${cepMatch.exact?.city ?? 'nenhuma'}`,
+        );
+      }
+    }
+
     this.logger.debug(
-      `[Lú Posts] parsed=${JSON.stringify({ intent: parsed.intent, code: parsed.code, size: parsed.size })} cta=${cta.isProductSpecific ? 'produto' : 'geral'} mentionedStore=${mentionedStore?.city ?? 'nenhuma'}`,
+      `[Lú Posts] parsed=${JSON.stringify({ intent: parsed.intent, code: parsed.code, size: parsed.size })} cta=${cta.isProductSpecific ? 'produto' : 'geral'} mentionedStore=${mentionedStore?.city ?? 'nenhuma'} cep=${cep ?? 'sem'}`,
     );
 
     const answer = await this.generatePostAnswer({
@@ -272,6 +364,7 @@ export class AiAgentService {
       size: parsed.size ?? null,
       intent: parsed.intent,
       mentionedStore,
+      cepMatch,
     });
 
     if (!answer) {
@@ -308,6 +401,12 @@ export class AiAgentService {
     size: string | null;
     intent?: string;
     mentionedStore?: PhysicalStore | null;
+    cepMatch?: {
+      exact: PhysicalStore | null;
+      sameState: PhysicalStore[];
+      city: string;
+      uf: string;
+    } | null;
   }): Promise<string | null> {
     if (!this.apiKey) return null;
     const model =
@@ -316,8 +415,49 @@ export class AiAgentService {
     // ─── BLOCO CTA — adapta conforme tipo de pergunta ───────────────
     let ctaBlock: string;
 
+    // CASO 0: cliente passou CEP — usar pra indicar loja mais próxima
+    if (input.cepMatch) {
+      if (input.cepMatch.exact) {
+        // CEP é DE uma cidade onde Lurds tem loja
+        const url = `${LURDS_TREE_URL}/${input.cepMatch.exact.slug}/`;
+        ctaBlock = `📍 A cliente passou um CEP de **${input.cepMatch.city}/${input.cepMatch.uf}** — e TEMOS LOJA NESSA CIDADE!
+
+INSTRUÇÃO:
+- Comemora com entusiasmo: "que sorte! temos loja aí em ${input.cepMatch.city}!"
+- Inclui o link da loja específica: ${url}
+- Convida pra visitar pessoalmente
+- TAMBÉM menciona opção online: ${input.ctaUrl}
+
+Exemplo: "Aaaai amor, que sorte! 🥰 Temos loja aí em ${input.cepMatch.city}! 💖 Endereço, Maps e telefone aqui: ${url} ✨ Ou se preferir comprar online: ${input.ctaUrl} 🛍️"`;
+      } else if (input.cepMatch.uf === 'SP') {
+        // CEP de SP, mas não da mesma cidade — sugerir lojas próximas do estado
+        const exemplos = input.cepMatch.sameState
+          .slice(0, 5)
+          .map((s) => s.city)
+          .join(', ');
+        ctaBlock = `📍 A cliente passou um CEP de **${input.cepMatch.city}/${input.cepMatch.uf}** — mesmo estado das lojas, mas SEM loja exata na cidade.
+
+INSTRUÇÃO:
+- Diz que não tem loja exatamente em ${input.cepMatch.city}
+- Mas oferece lojas próximas em SP (cita 3-4: ${exemplos}, etc.)
+- Link com TODAS as lojas: ${LURDS_TREE_URL}/
+- TAMBÉM opção online: ${input.ctaUrl}
+
+Exemplo: "Florzinha, em ${input.cepMatch.city} ainda não temos loja 😢 Mas temos por perto em ${exemplos.split(', ').slice(0, 2).join(' e ')}! 💖 Vê todas aqui: ${LURDS_TREE_URL}/ ✨ Se preferir, atendemos online: ${input.ctaUrl} 🛍️"`;
+      } else {
+        // CEP de outro estado — só online
+        ctaBlock = `📍 A cliente passou um CEP de **${input.cepMatch.city}/${input.cepMatch.uf}** — fora do estado de SP (não temos loja física aí).
+
+INSTRUÇÃO:
+- Avisa carinhosamente que não tem loja física em ${input.cepMatch.uf}
+- Reforça que atendemos online com entrega pro Brasil inteiro
+- Link site: ${input.ctaUrl}
+
+Exemplo: "Amor, em ${input.cepMatch.uf} ainda não temos loja física 😢 Mas o site entrega aí pra você! 💖 ${input.ctaUrl} ✨ E quando estiver em SP, dá um pulo numa das nossas: ${LURDS_TREE_URL}/ 🛍️"`;
+      }
+    }
     // CASO 1: pergunta sobre LOJA FÍSICA
-    if (input.intent === 'location_query') {
+    else if (input.intent === 'location_query') {
       if (input.mentionedStore) {
         // Cliente mencionou uma cidade que TEM loja Lurds
         const storeUrl = `${LURDS_TREE_URL}/${input.mentionedStore.slug}/`;
@@ -330,21 +470,21 @@ INSTRUÇÃO:
 
 Exemplo: "Aaaai amor, temos sim em ${input.mentionedStore.city}! 🥰 Endereço, telefone e Maps aqui: ${storeUrl} 💖 Ou se preferir comprar online: ${input.ctaUrl} ✨"`;
       } else {
-        // Cliente perguntou sobre loja mas não mencionou cidade OU mencionou cidade sem loja
-        ctaBlock = `🏪 A cliente perguntou sobre LOJA FÍSICA mas não mencionou cidade específica (ou mencionou cidade onde não temos).
+        // Cliente perguntou sobre loja mas não mencionou cidade nem CEP
+        ctaBlock = `🏪 A cliente perguntou sobre LOJA FÍSICA mas NÃO mencionou cidade nem CEP.
 
 LISTA DE CIDADES com loja Lurds (estado de SP):
 ${this.listAllStoresAsText()}
 
-INSTRUÇÃO:
-- Cite que temos lojas no estado de SP (interior, capital, litoral)
-- Pode citar 3-4 cidades de exemplo se ficar natural
-- SEMPRE incluir o link com todas as lojas (com Maps e telefone): ${LURDS_TREE_URL}/
-- TAMBÉM sugerir compra online: ${input.ctaUrl}
+INSTRUÇÃO PRINCIPAL:
+- PEÇA O CEP DELA pra você descobrir a loja mais próxima
+- Diz que temos lojas no estado de SP
+- TAMBÉM oferece site online como opção: ${input.ctaUrl}
+- Link com todas as lojas: ${LURDS_TREE_URL}/
 
-Exemplo SEM cidade mencionada: "Temos várias lojas no estado de SP, amor! 💖 Vê todas (com Maps e telefone) aqui: ${LURDS_TREE_URL}/ 🛍️ Ou compra online em ${input.ctaUrl} ✨"
+Exemplo: "Amor, manda teu CEP que eu te conto a loja mais próxima de você! 🥰 Temos várias em SP. Ou se preferir comprar online: ${input.ctaUrl} 💖✨"
 
-Exemplo CIDADE FORA da lista (ex: "tem em Manaus?"): "Ainda não temos loja em [cidade], florzinha 😢 Mas atendemos online com entrega pra todo Brasil: ${input.ctaUrl} 💖 E temos lojas no estado de SP: ${LURDS_TREE_URL}/ ✨"`;
+Outro exemplo: "Florzinha, qual seu CEP? Te indico nossa loja mais perto! 💖 Vê todas aqui também: ${LURDS_TREE_URL}/ 🛍️ Ou compra online: ${input.ctaUrl} ✨"`;
       }
     }
     // CASO 2: cliente mencionou produto específico (código + tamanho)
