@@ -9,6 +9,7 @@ export type Intent =
   | 'price_query'
   | 'fabric_query'
   | 'color_query'
+  | 'location_query'   // pergunta sobre loja física, onde fica, etc.
   | 'greeting'
   | 'unknown';
 
@@ -65,6 +66,20 @@ export class CommentParserService {
     'tem outra cor', 'outras cores', 'tem em',
   ];
   private readonly GREETING_KEYWORDS = ['oi', 'ola', 'olá', 'boa noite', 'boa tarde'];
+
+  // Palavras-chave de pergunta sobre LOJA FÍSICA / localização
+  private readonly LOCATION_QUERY_KEYWORDS = [
+    'loja fisica', 'loja física', 'loja presencial',
+    'onde fica', 'onde tem', 'onde encontro', 'onde compro',
+    'endereco', 'endereço', 'enderecos', 'endereços',
+    'tem loja em', 'tem em', 'voces tem em', 'vocês têm em',
+    'voces tem loja', 'vocês têm loja',
+    'tem loja na', 'tem loja no',
+    'qual cidade', 'quais cidades',
+    'shopping', 'mapa', 'maps', 'localização', 'localizacao',
+    'experimentar', 'provar', 'visitar a loja',
+    'ponto de venda',
+  ];
 
   constructor(
     private readonly config: ConfigService,
@@ -141,6 +156,17 @@ export class CommentParserService {
     if (this.hasAny(normalized, this.COLOR_QUERY_KEYWORDS)) {
       return {
         intent: 'color_query',
+        code: ctx.currentRefCode,
+        size: null,
+        confidence: 0.85,
+        normalized,
+        method: 'keyword',
+      };
+    }
+
+    if (this.hasAny(normalized, this.LOCATION_QUERY_KEYWORDS)) {
+      return {
+        intent: 'location_query',
         code: ctx.currentRefCode,
         size: null,
         confidence: 0.85,

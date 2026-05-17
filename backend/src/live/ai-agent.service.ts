@@ -4,6 +4,44 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service'; // @TODO_VALIDATE_VS_LOJA
 import { MetaService } from './meta.service';
+import { CommentParserService } from './comment-parser.service';
+
+// ═══════════════════════════════════════════════════════════════════════
+// Lista de lojas físicas da Lurds Plus Size
+// Atualize aqui quando abrir/fechar loja. Cada loja tem página própria em
+// lurds.com.br/tree/{slug}/ com endereço completo, Maps e telefone.
+// ═══════════════════════════════════════════════════════════════════════
+interface PhysicalStore {
+  city: string;
+  state: string;
+  slug: string;          // URL: lurds.com.br/tree/{slug}/
+  aliases?: string[];    // como a cliente pode escrever (variantes)
+}
+
+const LURDS_PHYSICAL_STORES: PhysicalStore[] = [
+  { city: 'Campinas',            state: 'SP', slug: 'campinas' },
+  { city: 'Indaiatuba',          state: 'SP', slug: 'indaiatuba' },
+  { city: 'Itanhaém',            state: 'SP', slug: 'itanhaem',
+    aliases: ['itanhaem'] },
+  { city: 'Itu',                 state: 'SP', slug: 'itu' },
+  { city: 'Jundiaí',             state: 'SP', slug: 'jundiai',
+    aliases: ['jundiai'] },
+  { city: 'Limeira',             state: 'SP', slug: 'limeira' },
+  { city: 'Moema',               state: 'SP', slug: 'moema',
+    aliases: ['sao paulo', 'são paulo', 'sp capital', 'capital', 'zona sul'] },
+  { city: 'Mogi das Cruzes',     state: 'SP', slug: 'mogi-das-cruzes',
+    aliases: ['mogi'] },
+  { city: 'Piracicaba',          state: 'SP', slug: 'piracicaba' },
+  { city: 'Praia Grande',        state: 'SP', slug: 'praia-grande' },
+  { city: 'Santos',              state: 'SP', slug: 'santos' },
+  { city: 'São José dos Campos', state: 'SP', slug: 'sao-jose-dos-campos',
+    aliases: ['sao jose', 'são josé', 'sjc'] },
+  { city: 'Sorocaba',            state: 'SP', slug: 'sorocaba' },
+  { city: 'Suzano',              state: 'SP', slug: 'suzano' },
+  { city: 'Vinhedo',             state: 'SP', slug: 'vinhedo' },
+];
+
+const LURDS_TREE_URL = 'https://lurds.com.br/tree';
 
 /**
  * AiAgentService — a "Lú", atendente IA da live.
@@ -26,7 +64,74 @@ export class AiAgentService {
     private readonly http: HttpService,
     private readonly prisma: PrismaService,
     private readonly meta: MetaService,
+    private readonly parser: CommentParserService,
   ) {}
+
+  // URL base do site (configurável via env)
+  private get siteBaseUrl(): string {
+    return this.config.get<string>('LURDS_SITE_URL') || 'https://lurds.com.br';
+  }
+
+  /**
+   * Tenta identificar uma cidade mencionada pela cliente que bata com a lista
+   * de lojas físicas da Lurds. Retorna a loja correspondente ou null.
+   */
+  private detectMentionedStore(text: string): PhysicalStore | null {
+    const norm = text
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, ''); // remove acentos pra match mais robusto
+
+    for (const store of LURDS_PHYSICAL_STORES) {
+      const cityNorm = store.city
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '');
+      // Match exato da cidade ou aliases
+      if (norm.includes(cityNorm)) return store;
+      if (store.aliases) {
+        for (const alias of store.aliases) {
+          if (norm.includes(alias.toLowerCase())) return store;
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Lista todas as cidades onde há loja física, formatada pra usar no prompt.
+   */
+  private listAllStoresAsText(): string {
+    return LURDS_PHYSICAL_STORES.map((s) => s.city).join(', ');
+  }
+
+  /**
+   * Monta a URL de CTA pro Instagram comment.
+   * Se o parser detectou código (e opcionalmente tamanho), tenta levar direto
+   * pro produto específico. Senão, manda pra loja geral.
+   *
+   * @TODO V1.1 — criar endpoint /api/cart-redirect?code=X&size=Y no backend
+   * que faz lookup no banco/ERP e retorna URL precisa do WooCommerce com
+   * carrinho já populado. Por enquanto, usa search do site (WooCommerce
+   * indexa por ref_code).
+   */
+  private buildCtaUrl(refCode: string | null, size: string | null): {
+    url: string;
+    isProductSpecific: boolean;
+  } {
+    if (refCode) {
+      // Busca no site pelo código. Quando V1.1 chegar, troca por endpoint
+      // de redirect que sabe o slug correto do produto.
+      const url = size
+        ? `${this.siteBaseUrl}/?s=${encodeURIComponent(refCode)}&utm_source=instagram&utm_medium=comment&utm_campaign=lu-posts`
+        : `${this.siteBaseUrl}/?s=${encodeURIComponent(refCode)}&utm_source=instagram&utm_medium=comment&utm_campaign=lu-posts`;
+      return { url, isProductSpecific: true };
+    }
+    return {
+      url: `${this.siteBaseUrl}/?utm_source=instagram&utm_medium=comment&utm_campaign=lu-posts`,
+      isProductSpecific: false,
+    };
+  }
 
   private get apiKey(): string | null {
     const k = this.config.get<string>('ANTHROPIC_API_KEY');
@@ -138,9 +243,35 @@ export class AiAgentService {
       return { ok: false, error: 'IA desabilitada' };
     }
 
+    // Roda parser pra detectar código + tamanho mesmo sem live ativa
+    const parsed = await this.parser.parse(opts.question, {
+      liveId: '',
+      currentRefCode: null,
+      aiFallbackEnabled: false,
+    });
+
+    // Monta CTA url (genérica ou específica do produto)
+    const cta = this.buildCtaUrl(parsed.code ?? null, parsed.size ?? null);
+
+    // Detecta menção a cidade com loja física
+    const mentionedStore =
+      parsed.intent === 'location_query'
+        ? this.detectMentionedStore(opts.question)
+        : null;
+
+    this.logger.debug(
+      `[Lú Posts] parsed=${JSON.stringify({ intent: parsed.intent, code: parsed.code, size: parsed.size })} cta=${cta.isProductSpecific ? 'produto' : 'geral'} mentionedStore=${mentionedStore?.city ?? 'nenhuma'}`,
+    );
+
     const answer = await this.generatePostAnswer({
       question: opts.question,
       username: opts.igUsername,
+      ctaUrl: cta.url,
+      isProductSpecific: cta.isProductSpecific,
+      refCode: parsed.code ?? null,
+      size: parsed.size ?? null,
+      intent: parsed.intent,
+      mentionedStore,
     });
 
     if (!answer) {
@@ -166,57 +297,115 @@ export class AiAgentService {
 
   /**
    * Gera resposta da Lú Posts via Claude.
-   * Tom: acolhedor, informativo, sempre direciona pro DM.
+   * Tom: SUPER amável com emojis, direciona pro link do site.
    */
   private async generatePostAnswer(input: {
     question: string;
     username: string;
+    ctaUrl: string;
+    isProductSpecific: boolean;
+    refCode: string | null;
+    size: string | null;
+    intent?: string;
+    mentionedStore?: PhysicalStore | null;
   }): Promise<string | null> {
     if (!this.apiKey) return null;
     const model =
       this.config.get<string>('ANTHROPIC_MODEL') || this.defaultModel;
 
+    // ─── BLOCO CTA — adapta conforme tipo de pergunta ───────────────
+    let ctaBlock: string;
+
+    // CASO 1: pergunta sobre LOJA FÍSICA
+    if (input.intent === 'location_query') {
+      if (input.mentionedStore) {
+        // Cliente mencionou uma cidade que TEM loja Lurds
+        const storeUrl = `${LURDS_TREE_URL}/${input.mentionedStore.slug}/`;
+        ctaBlock = `🏪 A cliente perguntou sobre loja física e mencionou **${input.mentionedStore.city}** — onde TEMOS loja!
+
+INSTRUÇÃO:
+- Confirma com entusiasmo que tem loja em ${input.mentionedStore.city}
+- Inclui o link da loja específica: ${storeUrl}
+- TAMBÉM sugere o site online como alternativa: ${input.ctaUrl}
+
+Exemplo: "Aaaai amor, temos sim em ${input.mentionedStore.city}! 🥰 Endereço, telefone e Maps aqui: ${storeUrl} 💖 Ou se preferir comprar online: ${input.ctaUrl} ✨"`;
+      } else {
+        // Cliente perguntou sobre loja mas não mencionou cidade OU mencionou cidade sem loja
+        ctaBlock = `🏪 A cliente perguntou sobre LOJA FÍSICA mas não mencionou cidade específica (ou mencionou cidade onde não temos).
+
+LISTA DE CIDADES com loja Lurds (estado de SP):
+${this.listAllStoresAsText()}
+
+INSTRUÇÃO:
+- Cite que temos lojas no estado de SP (interior, capital, litoral)
+- Pode citar 3-4 cidades de exemplo se ficar natural
+- SEMPRE incluir o link com todas as lojas (com Maps e telefone): ${LURDS_TREE_URL}/
+- TAMBÉM sugerir compra online: ${input.ctaUrl}
+
+Exemplo SEM cidade mencionada: "Temos várias lojas no estado de SP, amor! 💖 Vê todas (com Maps e telefone) aqui: ${LURDS_TREE_URL}/ 🛍️ Ou compra online em ${input.ctaUrl} ✨"
+
+Exemplo CIDADE FORA da lista (ex: "tem em Manaus?"): "Ainda não temos loja em [cidade], florzinha 😢 Mas atendemos online com entrega pra todo Brasil: ${input.ctaUrl} 💖 E temos lojas no estado de SP: ${LURDS_TREE_URL}/ ✨"`;
+      }
+    }
+    // CASO 2: cliente mencionou produto específico (código + tamanho)
+    else if (input.isProductSpecific) {
+      ctaBlock = `🎯 A cliente mencionou ${input.refCode ? `o código ${input.refCode}` : 'um produto'}${input.size ? ` no tamanho ${input.size}` : ''}.
+INCLUA SEMPRE este link COMPLETO no final da resposta (leva direto pro produto no site):
+${input.ctaUrl}
+
+Exemplo: "Tá disponível sim, linda! Garante o seu aqui ${input.ctaUrl} 💖✨"`;
+    }
+    // CASO 3 (default): site geral
+    else {
+      ctaBlock = `INCLUA SEMPRE este link COMPLETO no final da resposta (leva pra loja online):
+${input.ctaUrl}
+
+Exemplo: "Te conto tudo aqui, amor! ${input.ctaUrl} 💖✨"`;
+    }
+
     // ─── POSTS_SYSTEM_PROMPT — edite aqui pra ajustar tom e objetivo ───
-    const system = `Você é a Lú, atendente da Lurds Plus Size respondendo
-comentários em posts do Instagram (NÃO é live).
+    const system = `Você é a Lú, atendente da Lurds Plus Size respondendo comentários em posts do Instagram.
 
 CONTEXTO:
-- Lurds Plus Size é uma rede de lojas de moda feminina plus size.
-- A cliente comentou num post (foto/reels) e quer informação.
-- Você NÃO está numa live — então NÃO mencione "live", "ao vivo", etc.
+- Lurds Plus Size é uma rede de lojas femininas plus size com loja online.
+- A cliente comentou num post/reels da @lurdsplussize.
+- NÃO é live ao vivo. Não fale "live", "ao vivo", etc.
 
-PERSONALIDADE:
-- Brasileira, 32 anos, vendedora acolhedora.
-- NUNCA julga corpo, tamanho ou idade.
-- Direta, sem enrolar.
-- "amor", "linda", "querida" — máximo 1x por mensagem.
-- Máximo 1 emoji por mensagem.
-- Resposta CURTA: até 180 caracteres (pra caber bem no Instagram).
+🌸 PERSONALIDADE (MUITO AMÁVEL!):
+- Brasileira, calorosa, expressiva, super acolhedora.
+- ADORA usar emojis — 2 a 3 por mensagem (💖✨🥰❤️😍🛍️🌸🙌🤩💕)
+- Usa expressões carinhosas: "linda", "amor", "querida", "florzinha", "amorzinho", "maravilhosa"
+- Pode usar 2 dessas expressões por mensagem
+- Tom de amiga, vendedora apaixonada
+- NUNCA julga corpo, tamanho, idade ou aparência
+- Sempre dá REAÇÃO emocional ao elogio ("aaai gente, obrigada!", "ameeei seu comentário")
+- Resposta curtinha: até 220 caracteres (cabe bem no IG)
 
-REGRAS DE OURO (NUNCA QUEBRAR):
+🎯 CTA (CALL TO ACTION — OBRIGATÓRIO):
+${ctaBlock}
+
+⛔ REGRAS DE OURO (NUNCA QUEBRAR):
 1. NUNCA prometa prazo de entrega.
-2. NUNCA invente preço, tecido, medida que não saiba.
+2. NUNCA invente preço, tecido, medida.
 3. NUNCA dê desconto.
-4. SEMPRE convide a cliente a chamar no DM pra detalhes.
-5. Se for pergunta sobre estoque/tamanho/preço específico: "te passo no DM, linda"
-6. Se for elogio ou marca de amiga: agradece curto e convida pro DM.
-7. Se for spam ou ofensa: NÃO responde (retorna vazio).
+4. Se for SPAM, OFENSA, palavrão ou marca de amiga sem pergunta: retorne SKIP (não responde).
+5. SEMPRE inclui o link de CTA na resposta.
 
-EXEMPLOS DE BOA RESPOSTA:
-- "quanto custa?" → "Te passo o valor agora no DM, linda 💖"
-- "tem 54?" → "Tenho sim, amor! Me chama no DM que separo pra você ✨"
-- "linda demais!" → "Obrigada, amor! Qualquer dúvida me chama no DM 💖"
-- "tenho 90kg, serve?" → "Tenho certeza que serve! Me chama no DM que vou te ajudar a escolher o tamanho perfeito 🙌"
-- "qual o tecido?" → "Te passo todos os detalhes no DM, linda 💖"
-- "@maria_amiga olha isso" → (não responde, ignora)
-- "que feio" → (não responde, ignora)
-- "vocês têm em loja física?" → "Sim! Me chama no DM que te passo os endereços ❤️"
+📝 EXEMPLOS DE BOA RESPOSTA (tom amável + CTA):
+
+- "quanto custa?" → "Aaaai amor, te conto tudinho aqui 💖✨ ${input.ctaUrl} 🛍️"
+- "tem 54?" → "Tenho sim, linda! 🥰 Garante o seu aqui: ${input.ctaUrl} 💕"
+- "linda demais!" → "Aaaai obrigada, florzinha! 🥰💖 Quer ver mais? ${input.ctaUrl} ✨"
+- "tenho 90kg, serve?" → "Com certeza serve, amor! 💖 Confere a tabela de medidas aqui ${input.ctaUrl} 🙌✨"
+- "qual o tecido?" → "Te conto tudo aqui, linda! 💕 ${input.ctaUrl} 🌸"
+- "@maria_amiga olha" → SKIP
+- "feio demais" → SKIP
 
 @${input.username} comentou:
 "${input.question}"
 
-Responda em PT-BR, natural, curto. Sem markdown. Sem aspas envoltórias.
-Se NÃO for pra responder (spam/ofensa/ambíguo), retorne apenas a palavra: SKIP`;
+Responda em PT-BR, natural, amável, com emojis e o link CTA. Sem markdown. Sem aspas envoltórias.
+Se for spam/ofensa, retorne APENAS a palavra: SKIP`;
 
     try {
       const resp = await firstValueFrom(
