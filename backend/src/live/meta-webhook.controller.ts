@@ -142,10 +142,16 @@ export class MetaWebhookController {
       ? await this.prisma.live.findUnique({ where: { igMediaId } })
       : await this.prisma.live.findFirst({ where: { status: 'live' } });
 
+    // ─── Sem live ativa → roteia pra "Lú Posts" ─────────────────────
     if (!live) {
-      this.logger.warn(
-        `Comentário sem live ativa: ${igCommentId} mediaId=${igMediaId}`,
+      this.logger.log(
+        `[Lú Posts] @${igUsername}: "${text}" (sem live ativa)`,
       );
+      await this.aiAgent
+        .replyToPostComment({ igCommentId, igUsername, question: text })
+        .catch((err) =>
+          this.logger.warn(`Lú Posts falhou: ${err?.message}`),
+        );
       return;
     }
 

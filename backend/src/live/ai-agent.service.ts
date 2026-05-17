@@ -115,6 +115,147 @@ export class AiAgentService {
     return { answer, model: this.config.get('ANTHROPIC_MODEL') || this.defaultModel };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // "LÚ POSTS" — IA pra responder comentários em POSTS NORMAIS (sem live ativa)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Recebe um comentário de post normal (não-live) e responde publicamente
+   * no Instagram. Sem reserva, sem produto específico — foco em engajar e
+   * redirecionar pro DM.
+   *
+   * @TODO_CUSTOMIZAR_TOM: o system prompt aqui é a versão inicial.
+   * Pra alterar tom/objetivo (ex: enviar link de carrinho, link do site,
+   * agendar consultora), edita só a constante POSTS_SYSTEM_PROMPT abaixo.
+   */
+  async replyToPostComment(opts: {
+    igCommentId: string;
+    igUsername: string;
+    question: string;
+  }): Promise<{ ok: boolean; answer?: string; error?: string }> {
+    if (!this.isEnabled()) {
+      this.logger.warn('[Lú Posts] IA desabilitada — sem ANTHROPIC_API_KEY');
+      return { ok: false, error: 'IA desabilitada' };
+    }
+
+    const answer = await this.generatePostAnswer({
+      question: opts.question,
+      username: opts.igUsername,
+    });
+
+    if (!answer) {
+      return { ok: false, error: 'IA não gerou resposta' };
+    }
+
+    // Posta a resposta como reply público
+    const result = await this.meta.replyToComment({
+      igCommentId: opts.igCommentId,
+      text: answer,
+    });
+
+    // Registra no histórico (independente de sucesso)
+    // Como não tem customer no banco ainda, salva como log no integration-logs.
+    this.logger.log(
+      `[Lú Posts] @${opts.igUsername}: "${opts.question}" → "${answer}"${result.error ? ` ERRO: ${result.error}` : ''}`,
+    );
+
+    return result.error
+      ? { ok: false, answer, error: result.error }
+      : { ok: true, answer };
+  }
+
+  /**
+   * Gera resposta da Lú Posts via Claude.
+   * Tom: acolhedor, informativo, sempre direciona pro DM.
+   */
+  private async generatePostAnswer(input: {
+    question: string;
+    username: string;
+  }): Promise<string | null> {
+    if (!this.apiKey) return null;
+    const model =
+      this.config.get<string>('ANTHROPIC_MODEL') || this.defaultModel;
+
+    // ─── POSTS_SYSTEM_PROMPT — edite aqui pra ajustar tom e objetivo ───
+    const system = `Você é a Lú, atendente da Lurds Plus Size respondendo
+comentários em posts do Instagram (NÃO é live).
+
+CONTEXTO:
+- Lurds Plus Size é uma rede de lojas de moda feminina plus size.
+- A cliente comentou num post (foto/reels) e quer informação.
+- Você NÃO está numa live — então NÃO mencione "live", "ao vivo", etc.
+
+PERSONALIDADE:
+- Brasileira, 32 anos, vendedora acolhedora.
+- NUNCA julga corpo, tamanho ou idade.
+- Direta, sem enrolar.
+- "amor", "linda", "querida" — máximo 1x por mensagem.
+- Máximo 1 emoji por mensagem.
+- Resposta CURTA: até 180 caracteres (pra caber bem no Instagram).
+
+REGRAS DE OURO (NUNCA QUEBRAR):
+1. NUNCA prometa prazo de entrega.
+2. NUNCA invente preço, tecido, medida que não saiba.
+3. NUNCA dê desconto.
+4. SEMPRE convide a cliente a chamar no DM pra detalhes.
+5. Se for pergunta sobre estoque/tamanho/preço específico: "te passo no DM, linda"
+6. Se for elogio ou marca de amiga: agradece curto e convida pro DM.
+7. Se for spam ou ofensa: NÃO responde (retorna vazio).
+
+EXEMPLOS DE BOA RESPOSTA:
+- "quanto custa?" → "Te passo o valor agora no DM, linda 💖"
+- "tem 54?" → "Tenho sim, amor! Me chama no DM que separo pra você ✨"
+- "linda demais!" → "Obrigada, amor! Qualquer dúvida me chama no DM 💖"
+- "tenho 90kg, serve?" → "Tenho certeza que serve! Me chama no DM que vou te ajudar a escolher o tamanho perfeito 🙌"
+- "qual o tecido?" → "Te passo todos os detalhes no DM, linda 💖"
+- "@maria_amiga olha isso" → (não responde, ignora)
+- "que feio" → (não responde, ignora)
+- "vocês têm em loja física?" → "Sim! Me chama no DM que te passo os endereços ❤️"
+
+@${input.username} comentou:
+"${input.question}"
+
+Responda em PT-BR, natural, curto. Sem markdown. Sem aspas envoltórias.
+Se NÃO for pra responder (spam/ofensa/ambíguo), retorne apenas a palavra: SKIP`;
+
+    try {
+      const resp = await firstValueFrom(
+        this.http.post(
+          'https://api.anthropic.com/v1/messages',
+          {
+            model,
+            max_tokens: 180,
+            system,
+            messages: [
+              { role: 'user', content: input.question },
+            ],
+          },
+          {
+            headers: {
+              'x-api-key': this.apiKey,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json',
+            },
+            timeout: 12_000,
+          },
+        ),
+      );
+      const text = resp.data?.content?.[0]?.text ?? '';
+      const sanitized = this.sanitize(text);
+
+      // Se modelo decidiu não responder (spam/ofensa)
+      if (!sanitized || sanitized.toUpperCase() === 'SKIP') {
+        return null;
+      }
+      return sanitized;
+    } catch (err: any) {
+      this.logger.error(
+        `[Lú Posts] Claude falhou: ${err.response?.data?.error?.message || err.message}`,
+      );
+      return null;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   // Geração de resposta (Claude)
   // ─────────────────────────────────────────────────────────────────────
