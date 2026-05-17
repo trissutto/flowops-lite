@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { InboxService } from './inbox.service';
+import { MetaService } from './meta.service';
 
 /**
  * /api/inbox — Caixa de entrada da equipe de atendimento humano.
@@ -16,7 +17,21 @@ import { InboxService } from './inbox.service';
  */
 @Controller('inbox')
 export class InboxController {
-  constructor(private readonly inbox: InboxService) {}
+  constructor(
+    private readonly inbox: InboxService,
+    private readonly meta: MetaService,
+  ) {}
+
+  // ─── Conta Instagram (instagram_business_basic) ─────────────
+  @Get('instagram/account')
+  async accountInfo() {
+    return this.meta.getAccountInfo();
+  }
+
+  @Get('instagram/media')
+  async recentMedia(@Query('limit') limit?: string) {
+    return this.meta.getRecentMedia(limit ? Number(limit) : 12);
+  }
 
   @Get('conversations')
   async listConversations(@Query('filter') filter?: string) {

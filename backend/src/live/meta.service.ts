@@ -45,6 +45,55 @@ export class MetaService {
     return !!this.pageToken && !!this.igUserId;
   }
 
+  /**
+   * Busca dados básicos da conta Instagram conectada via Graph API.
+   * Demonstra o uso da permissão `instagram_business_basic`.
+   */
+  async getAccountInfo(): Promise<any> {
+    if (!this.isConfigured()) return { error: 'Meta não configurada' };
+    await this.acquireToken();
+    const fields =
+      'id,username,name,biography,profile_picture_url,followers_count,follows_count,media_count,website';
+    const url = `${this.graphBase}/${this.igUserId}?fields=${fields}`;
+    try {
+      const resp = await firstValueFrom(
+        this.http.get(url, {
+          params: { access_token: this.pageToken },
+          timeout: 10_000,
+        }),
+      );
+      return resp.data;
+    } catch (err: any) {
+      const msg = err.response?.data?.error?.message || err.message;
+      this.logger.error(`getAccountInfo falhou: ${msg}`);
+      return { error: msg };
+    }
+  }
+
+  /**
+   * Lista as últimas mídias (posts/reels) da conta.
+   */
+  async getRecentMedia(limit = 12): Promise<any> {
+    if (!this.isConfigured()) return { error: 'Meta não configurada' };
+    await this.acquireToken();
+    const fields =
+      'id,media_type,caption,permalink,media_url,thumbnail_url,timestamp,like_count,comments_count';
+    const url = `${this.graphBase}/${this.igUserId}/media?fields=${fields}&limit=${limit}`;
+    try {
+      const resp = await firstValueFrom(
+        this.http.get(url, {
+          params: { access_token: this.pageToken },
+          timeout: 10_000,
+        }),
+      );
+      return resp.data;
+    } catch (err: any) {
+      const msg = err.response?.data?.error?.message || err.message;
+      this.logger.error(`getRecentMedia falhou: ${msg}`);
+      return { error: msg };
+    }
+  }
+
   private async acquireToken(): Promise<void> {
     // Refill baseado em tempo
     const now = Date.now();

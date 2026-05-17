@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
-  Smartphone, FileSearch,
+  Smartphone, FileSearch, MessageSquare, Radio, Instagram,
 } from 'lucide-react';
 
 type NavItem = {
@@ -70,6 +70,16 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/publicar-site',   label: 'Publicar no Site', icon: Globe },
       { href: '/retaguarda/whatsapp',        label: 'WhatsApp',         icon: Smartphone },
       { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
+    ],
+  },
+  {
+    key: 'instagram_live',
+    label: 'Instagram / Live',
+    color: 'rose',
+    items: [
+      { href: '/retaguarda/inbox',     label: 'Inbox Instagram',  icon: MessageSquare },
+      { href: '/retaguarda/live',      label: 'Live Commerce',    icon: Radio },
+      { href: '/retaguarda/instagram', label: 'Conta Instagram',  icon: Instagram },
     ],
   },
   {
@@ -134,6 +144,14 @@ const COLOR_CLASSES: Record<string, {
     activeText: 'text-white',
     activeDot: 'bg-slate-600',
     hoverBg: 'hover:bg-slate-100',
+  },
+  rose: {
+    headerBg: 'bg-rose-50',
+    headerText: 'text-rose-900',
+    activeBg: 'bg-gradient-to-r from-rose-500 to-pink-600',
+    activeText: 'text-white',
+    activeDot: 'bg-rose-500',
+    hoverBg: 'hover:bg-rose-50',
   },
 };
 
