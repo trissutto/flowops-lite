@@ -13,6 +13,7 @@ import { AuthModule } from '../auth/auth.module';
 
 import { LiveController } from './live.controller';
 import { MetaWebhookController } from './meta-webhook.controller';
+import { InboxController } from './inbox.controller';
 
 import { LiveService } from './live.service';
 import { MetaService } from './meta.service';
@@ -22,6 +23,7 @@ import { ReservationExpiryCron } from './reservation-expiry.cron';
 import { AiAgentService } from './ai-agent.service';
 import { LiveRealtimeGateway } from './live-realtime.gateway';
 import { LiveBroadcasterService } from './live-broadcaster.service';
+import { InboxService } from './inbox.service';
 
 @Module({
   imports: [
@@ -34,7 +36,7 @@ import { LiveBroadcasterService } from './live-broadcaster.service';
     WhatsappModule,
     AuthModule,
   ],
-  controllers: [LiveController, MetaWebhookController],
+  controllers: [LiveController, MetaWebhookController, InboxController],
   providers: [
     LiveService,
     MetaService,
@@ -44,7 +46,8 @@ import { LiveBroadcasterService } from './live-broadcaster.service';
     AiAgentService,
     LiveRealtimeGateway,
     LiveBroadcasterService,
+    InboxService,
   ],
-  exports: [LiveService, ReservationService, MetaService],
+  exports: [LiveService, ReservationService, MetaService, InboxService],
 })
 export class LiveModule {}
