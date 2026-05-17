@@ -19,6 +19,90 @@ export class InboxService {
     private readonly meta: MetaService,
   ) {}
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // SEED DE DEMO — popula 6 conversas pra usar nos vídeos da App Review
+  // ═══════════════════════════════════════════════════════════════════════
+  async seedDemoData() {
+    this.logger.warn('[Inbox] SEED DEMO sendo executado…');
+
+    // ─── Customers (6 personas) ─────────────────────────────────────
+    const customers = [
+      { id: 'cccccccc-1111-1111-1111-aaaaaaaaaaaa', name: 'Maria Aparecida', igUserId: 'ig_demo_2001', igUsername: 'maria.aparecida', vipTier: 'gold',    sizeDefault: '54', phone: '11999990001' },
+      { id: 'cccccccc-2222-2222-2222-aaaaaaaaaaaa', name: 'Carla Mendes',    igUserId: 'ig_demo_2002', igUsername: 'carla.mendes',    vipTier: 'silver',  sizeDefault: '56', phone: '13988887777' },
+      { id: 'cccccccc-3333-3333-3333-aaaaaaaaaaaa', name: 'Roberta Lima',    igUserId: 'ig_demo_2003', igUsername: 'roberta.lima_',   vipTier: 'bronze',  sizeDefault: '52', phone: '19977776666' },
+      { id: 'cccccccc-4444-4444-4444-aaaaaaaaaaaa', name: 'Fernanda Costa',  igUserId: 'ig_demo_2004', igUsername: 'fer.costa',       vipTier: 'diamond', sizeDefault: '58', phone: '11944443333' },
+      { id: 'cccccccc-5555-5555-5555-aaaaaaaaaaaa', name: 'Patricia Souza',  igUserId: 'ig_demo_2005', igUsername: 'paty_souza',      vipTier: 'gold',    sizeDefault: '54', phone: '15966665555' },
+      { id: 'cccccccc-6666-6666-6666-aaaaaaaaaaaa', name: 'Juliana Alves',   igUserId: 'ig_demo_2006', igUsername: 'juju.alves',      vipTier: 'silver',  sizeDefault: '50', phone: '13977778888' },
+    ];
+
+    let customersCreated = 0;
+    for (const c of customers) {
+      try {
+        await this.prisma.customer.upsert({
+          where: { igUserId: c.igUserId },
+          update: {
+            name: c.name,
+            vipTier: c.vipTier,
+            sizeDefault: c.sizeDefault,
+            phone: c.phone,
+          },
+          create: c as any,
+        });
+        customersCreated++;
+      } catch (err: any) {
+        this.logger.error(`Falha criando customer ${c.name}: ${err.message}`);
+      }
+    }
+
+    // ─── Limpa dm_messages antigas dos 6 customers (idempotência) ───
+    await this.prisma.dmMessage.deleteMany({
+      where: {
+        customerId: { in: customers.map((c) => c.id) },
+      },
+    });
+
+    // ─── DMs com timestamps relativos ───────────────────────────────
+    const now = Date.now();
+    const minutes = (n: number) => new Date(now - n * 60 * 1000);
+    const hours = (n: number) => new Date(now - n * 60 * 60 * 1000);
+    const days = (n: number) => new Date(now - n * 24 * 60 * 60 * 1000);
+
+    const messages = [
+      // Maria — 3 dias (Human Agent!)
+      { customerId: customers[0].id, direction: 'in',  channel: 'ig_direct', body: 'Oi! Tô interessada na calça 205. Vocês tem no 54? Tenho 92kg, será que vai servir?', aiGenerated: false, status: 'delivered', createdAt: days(3) },
+      { customerId: customers[0].id, direction: 'in',  channel: 'ig_direct', body: 'Outra coisa, tem desconto pra primeira compra?', aiGenerated: false, status: 'delivered', createdAt: new Date(days(3).getTime() + 2 * 60 * 1000) },
+      // Carla — 2 dias (Human Agent!)
+      { customerId: customers[1].id, direction: 'in',  channel: 'ig_direct', body: 'Boa tarde! Meu pedido #45678 já saiu pra entrega? Faz 5 dias que comprei.', aiGenerated: false, status: 'delivered', createdAt: days(2) },
+      // Roberta — 5h
+      { customerId: customers[2].id, direction: 'in',  channel: 'ig_direct', body: 'Amei o vestido que recebi ontem!! 😍 Vocês tem o mesmo modelo em outra cor?', aiGenerated: false, status: 'delivered', createdAt: hours(5) },
+      { customerId: customers[2].id, direction: 'in',  channel: 'ig_direct', body: 'Mandei foto no story marcando vocês ❤️', aiGenerated: false, status: 'delivered', createdAt: hours(4) },
+      // Fernanda VIP Diamond — conversa ativa
+      { customerId: customers[3].id, direction: 'in',  channel: 'ig_direct', body: 'Oi Lurds! Posso reservar 3 peças pra eu provar na loja de Moema sábado?', aiGenerated: false, status: 'delivered', createdAt: hours(2) },
+      { customerId: customers[3].id, direction: 'out', channel: 'ig_direct', body: 'Oi Fernanda! 💖 Claro que pode, como cliente Diamond você tem prioridade. Me manda os códigos das peças que reservo na hora ✨', aiGenerated: false, status: 'sent', createdAt: minutes(110), sentAt: minutes(110) },
+      { customerId: customers[3].id, direction: 'in',  channel: 'ig_direct', body: '205, 312 e 528 — todos no 58. Pode ser?', aiGenerated: false, status: 'delivered', createdAt: minutes(30) },
+      // Patricia — 4 dias (Human Agent!)
+      { customerId: customers[4].id, direction: 'in',  channel: 'ig_direct', body: 'Bom dia! Tem loja em São José dos Campos? Vou tar aí no fim de semana 🙌', aiGenerated: false, status: 'delivered', createdAt: days(4) },
+      // Juliana — 18h
+      { customerId: customers[5].id, direction: 'in',  channel: 'ig_direct', body: 'Comprei a blusa floral ontem na loja, ela pode ser usada na máquina ou só lavagem a mão?', aiGenerated: false, status: 'delivered', createdAt: hours(18) },
+    ];
+
+    let messagesCreated = 0;
+    for (const m of messages) {
+      try {
+        await this.prisma.dmMessage.create({ data: m as any });
+        messagesCreated++;
+      } catch (err: any) {
+        this.logger.error(`Falha criando mensagem: ${err.message}`);
+      }
+    }
+
+    this.logger.warn(
+      `[Inbox] SEED concluído — customers=${customersCreated} messages=${messagesCreated}`,
+    );
+
+    return { customersCreated, messagesCreated };
+  }
+
   /**
    * Lista conversas com última mensagem + contagem de não lidas.
    * Agrupa por customer, ordena pela mais recente.

@@ -39,4 +39,18 @@ export class InboxController {
       agentName: body.agentName,
     });
   }
+
+  /**
+   * SEED demo — popula 6 conversas pra videos da App Review.
+   * Pode chamar pelo navegador (GET) ou via curl POST.
+   */
+  @Get('dev/seed')
+  async seedGet() {
+    return this.inbox.seedDemoData();
+  }
+
+  @Post('dev/seed')
+  async seedPost() {
+    return this.inbox.seedDemoData();
+  }
 }
