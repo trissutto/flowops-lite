@@ -1472,3 +1472,167 @@ model EanSequence {
 
   @@map("ean_sequence")
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// LIVE OS — Live commerce no Instagram
+// ═══════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id              String   @id @default(uuid())
+  name            String?
+  email           String?  @unique
+  phone           String?
+  whatsapp        String?
+  igUserId        String?  @unique @map("ig_user_id")
+  igUsername      String?  @map("ig_username")
+  sizeDefault     String?  @map("size_default")
+  vipTier         String   @default("bronze") @map("vip_tier")
+  livesAttended   Int      @default(0) @map("lives_attended")
+  ltvCents        BigInt   @default(0) @map("ltv_cents")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  comments        Comment[]
+  reservations    Reservation[]
+  liveCarts       LiveCart[]
+  dmMessages      DmMessage[]
+
+  @@map("customers")
+}
+
+model Live {
+  id           String   @id @default(uuid())
+  igMediaId    String?  @unique @map("ig_media_id")
+  title        String
+  status       String   @default("scheduled") // scheduled | live | ended | archived
+  hostUserId   String?  @map("host_user_id")
+  startedAt    DateTime? @map("started_at")
+  endedAt      DateTime? @map("ended_at")
+  aiEnabled    Boolean  @default(true) @map("ai_enabled")
+  metadata     Json?    @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  products     LiveProduct[]
+  comments     Comment[]
+  reservations Reservation[]
+  carts        LiveCart[]
+
+  @@map("lives")
+}
+
+model LiveProduct {
+  id              String   @id @default(uuid())
+  liveId          String   @map("live_id")
+  erpProductId    String   @map("erp_product_id")
+  refCode         String   @map("ref_code")
+  displayName     String   @map("display_name")
+  priceCents      Int      @map("price_cents")
+  promoPriceCents Int?     @map("promo_price_cents")
+  sizes           Json     // [{ "size": "54", "stock": 8 }]
+  position        Int
+  shownAt         DateTime? @map("shown_at")
+  endedShownAt    DateTime? @map("ended_shown_at")
+  isCurrent       Boolean  @default(false) @map("is_current")
+  commentsCount   Int      @default(0) @map("comments_count")
+  reservationsCnt Int      @default(0) @map("reservations_cnt")
+  salesCount      Int      @default(0) @map("sales_count")
+  wcProductId     String?  @map("wc_product_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  live            Live          @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  comments        Comment[]
+  reservations    Reservation[]
+
+  @@unique([liveId, refCode])
+  @@map("live_products")
+}
+
+model Comment {
+  id              String   @id @default(uuid())
+  liveId          String   @map("live_id")
+  igCommentId     String   @unique @map("ig_comment_id")
+  igUserId        String   @map("ig_user_id")
+  igUsername      String   @map("ig_username")
+  rawText         String   @map("raw_text")
+  normalizedText  String?  @map("normalized_text")
+  detectedIntent  String?  @map("detected_intent")
+  detectedCode    String?  @map("detected_code")
+  detectedSize    String?  @map("detected_size")
+  confidence      Decimal? @db.Decimal(3, 2)
+  liveProductId   String?  @map("live_product_id")
+  customerId      String?  @map("customer_id")
+  aiAnswer        String?  @map("ai_answer")
+  processedAt     DateTime? @map("processed_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  live            Live         @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  liveProduct     LiveProduct? @relation(fields: [liveProductId], references: [id], onDelete: SetNull)
+  customer        Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@map("comments")
+}
+
+model Reservation {
+  id              String   @id @default(uuid())
+  liveId          String   @map("live_id")
+  liveProductId   String   @map("live_product_id")
+  customerId      String   @map("customer_id")
+  commentId       String?  @map("comment_id")
+  size            String
+  qty             Int      @default(1)
+  priceCents      Int      @map("price_cents")
+  status          String   @default("reserved") // reserved | confirmed | paid | expired | cancelled
+  source          String   @default("comment")  // comment | dm | site | manual
+  reservedAt      DateTime @default(now()) @map("reserved_at")
+  expiresAt       DateTime @map("expires_at")
+  confirmedAt     DateTime? @map("confirmed_at")
+  paidAt          DateTime? @map("paid_at")
+  cancelledAt     DateTime? @map("cancelled_at")
+  erpOrderId      String?  @map("erp_order_id")
+  wcOrderId       String?  @map("wc_order_id")
+  notes           String?
+
+  live            Live         @relation(fields: [liveId], references: [id])
+  liveProduct     LiveProduct  @relation(fields: [liveProductId], references: [id])
+  customer        Customer     @relation(fields: [customerId], references: [id])
+
+  @@map("reservations")
+}
+
+model LiveCart {
+  id            String   @id @default(uuid())
+  liveId        String   @map("live_id")
+  customerId    String   @map("customer_id")
+  status        String   @default("open") // open | checked_out | abandoned
+  totalCents    Int      @default(0) @map("total_cents")
+  checkoutUrl   String?  @map("checkout_url")
+  wcOrderId     String?  @map("wc_order_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  live          Live     @relation(fields: [liveId], references: [id], onDelete: Cascade)
+  customer      Customer @relation(fields: [customerId], references: [id])
+
+  @@unique([liveId, customerId])
+  @@map("live_carts")
+}
+
+model DmMessage {
+  id            String   @id @default(uuid())
+  customerId    String   @map("customer_id")
+  liveId        String?  @map("live_id")
+  direction     String                          // in | out
+  channel       String                          // ig_direct | whatsapp
+  igMessageId   String?  @map("ig_message_id")
+  body          String
+  template      String?
+  aiGenerated   Boolean  @default(false) @map("ai_generated")
+  status        String   @default("queued")     // queued | sent | delivered | read | failed
+  error         String?
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  customer      Customer @relation(fields: [customerId], references: [id])
+
+  @@map("dm_messages")
+}

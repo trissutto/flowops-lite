@@ -39,6 +39,7 @@ import { PagbankModule } from './pagbank/pagbank.module';
 import { PagarmeModule } from './pagarme/pagarme.module';
 import { ProductRegistrationModule } from './product-registration/product-registration.module';
 import { StoneModule } from './stone/stone.module';
+import { LiveModule } from './live/live.module';
 
 @Module({
   imports: [
@@ -81,6 +82,7 @@ import { StoneModule } from './stone/stone.module';
     PagarmeModule,
     ProductRegistrationModule,
     StoneModule,
+    LiveModule,
   ],
 })
 export class AppModule {}
