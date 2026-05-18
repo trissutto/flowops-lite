@@ -84,7 +84,7 @@ export default function AuditoriaNcmPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api<AuditResult>('/admin/ncm-audit?limit=10000');
+      const res = await api<AuditResult>('/admin/ncm-audit?limit=200000');
       setData(res);
       setSelected(new Set());
     } catch (e: any) {

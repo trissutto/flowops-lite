@@ -208,7 +208,9 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
     }
 
     const { ncm: ncmCol, grupo: grupoCol, subgrupo: subgrupoCol } = await this.detectCols();
-    const limit = Math.max(1, Math.min(50000, opts?.limit || 10000));
+    // Aumentado pra 200k: catálogos plus-size grandes podem ter 30-50k REFs.
+    // Como agregamos por REF (não por SKU), 200k cobre praticamente qualquer cenário.
+    const limit = Math.max(1, Math.min(200000, opts?.limit || 200000));
 
     // Agrega por REF (1 NCM por modelo, não por SKU)
     const selects = [
