@@ -1141,6 +1141,78 @@ export class CashService {
    * Fecha o caixa. Calcula totais, persiste snapshot, marca status=closed.
    * Recebe o dinheiro físico contado pra calcular diferença (sobra/falta).
    */
+  /**
+   * Fecha automaticamente TODAS as sessões de caixa que estão abertas desde
+   * um DIA ANTERIOR ao atual. Salva os totais calculados (igual fechamento
+   * normal) sem exigir conferência de dinheiro físico.
+   *
+   * Usos:
+   *  - Endpoint admin manual (`POST /pdv/cash/admin/auto-close-expired`)
+   *  - Cron diário ~23:55 (não implementado ainda, mas o método tá pronto)
+   *
+   * Marca closedByName='SISTEMA (auto-close ao final do dia)' pra rastrear.
+   *
+   * Retorna { closed: N, details: [...] }.
+   */
+  async autoCloseExpiredSessions(): Promise<{ closed: number; details: any[] }> {
+    const inicioHoje = new Date();
+    inicioHoje.setHours(0, 0, 0, 0);
+
+    const expired = await (this.prisma as any).pdvCashSession.findMany({
+      where: {
+        status: 'open',
+        openedAt: { lt: inicioHoje },
+      } as any,
+      select: { id: true, storeCode: true, storeName: true, openedAt: true } as any,
+    });
+
+    const details: any[] = [];
+    for (const s of expired as any[]) {
+      try {
+        const totals = await this.computeSessionTotals(s.id);
+        await (this.prisma as any).pdvCashSession.update({
+          where: { id: s.id },
+          data: {
+            status: 'closed',
+            closedAt: new Date(),
+            closedByName: 'SISTEMA (auto-close fim do dia)',
+            observacao: `Sessão de ${new Date(s.openedAt).toLocaleDateString('pt-BR')} fechada automaticamente em ${new Date().toLocaleString('pt-BR')}.`,
+            totalVendas: totals.totalVendas,
+            totalDinheiro: totals.totalDinheiro,
+            totalPix: totals.totalPix,
+            totalCartaoCredito: totals.totalCartaoCredito,
+            totalCartaoDebito: totals.totalCartaoDebito,
+            totalCrediario: totals.totalCrediario,
+            totalSangrias: totals.totalSangrias,
+            totalSuprimentos: totals.totalSuprimentos,
+            dinheiroEsperado: totals.dinheiroEsperado,
+            dinheiroFisico: totals.dinheiroEsperado,
+            diferenca: 0,
+          },
+        });
+        details.push({
+          sessionId: s.id,
+          storeCode: s.storeCode,
+          storeName: s.storeName,
+          openedAt: s.openedAt,
+          totalVendas: totals.totalVendas,
+          ok: true,
+        });
+        this.logger.log(`[auto-close-expired] ${s.storeCode} ${s.storeName} → R$${totals.totalVendas.toFixed(2)}`);
+      } catch (e: any) {
+        details.push({
+          sessionId: s.id,
+          storeCode: s.storeCode,
+          storeName: s.storeName,
+          ok: false,
+          error: e?.message || String(e),
+        });
+        this.logger.error(`[auto-close-expired] FALHA ${s.storeCode}: ${e?.message}`);
+      }
+    }
+    return { closed: details.filter((d) => d.ok).length, details };
+  }
+
   async closeCash(input: {
     storeCode: string;
     dinheiroFisico: number;

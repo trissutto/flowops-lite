@@ -823,6 +823,128 @@ export class RealignmentShipmentService {
    *
    * Itens já marcados como `received` ou `missing` não podem ser bipados de novo.
    */
+  /**
+   * RECONCILIAÇÃO: pra remessa em trânsito, percorre cada item e tenta
+   * encontrar o CODIGO Wincred real pela DESCRIÇÃO + COR + TAMANHO.
+   * Salva como codigoBipado no TransferOrder — fazendo bipe E1 (match direto)
+   * funcionar instantaneamente, sem precisar do lookup REF+COR+TAM.
+   *
+   * Lida com zeros à esquerda via skuVariants no fallback E2.
+   *
+   * Usado quando vendedora reclama "bipe não acha" — admin roda esse e
+   * a remessa volta a aceitar bipes.
+   */
+  async refreshSkusForShipment(shipmentId: string): Promise<{
+    ok: boolean;
+    code: string;
+    total: number;
+    updated: number;
+    unresolved: number;
+    details: Array<{
+      transferOrderId: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string | null;
+      codigoAntes: string | null;
+      codigoDepois: string | null;
+      via: 'descricao' | 'ref-cor-tam' | 'sku-variants' | 'nao-encontrado';
+    }>;
+  }> {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId } as any,
+      select: {
+        id: true, refCode: true, cor: true, tamanho: true,
+        descricao: true, codigoBipado: true,
+      } as any,
+    });
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
+    const details: any[] = [];
+    let updated = 0;
+    let unresolved = 0;
+
+    for (const it of items as any[]) {
+      let codigoNovo: string | null = null;
+      let via: 'descricao' | 'ref-cor-tam' | 'sku-variants' | 'nao-encontrado' = 'nao-encontrado';
+
+      // ESTRATÉGIA 1: busca por DESCRIÇÃO + COR + TAMANHO (priorizada por estoque)
+      if (it.descricao) {
+        try {
+          const rows = await this.erp.searchByDescriptionPlusCorTam(
+            it.descricao, it.cor, it.tamanho,
+          );
+          if (rows && rows.length > 0) {
+            codigoNovo = String(rows[0].CODIGO).trim();
+            via = 'descricao';
+          }
+        } catch (e) {
+          this.logger.warn(`[refresh-skus] searchByDescription falhou pra ${it.refCode}: ${(e as Error).message}`);
+        }
+      }
+
+      // ESTRATÉGIA 2: fallback REF + COR + TAM com variantes de zero-padding
+      if (!codigoNovo) {
+        try {
+          codigoNovo = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          if (codigoNovo) via = 'ref-cor-tam';
+        } catch {}
+      }
+
+      // ESTRATÉGIA 3: se já tinha codigoBipado salvo, mantém (não força sobrescrever)
+      if (!codigoNovo && it.codigoBipado) {
+        codigoNovo = it.codigoBipado;
+        via = 'sku-variants';
+      }
+
+      const codigoAntes = it.codigoBipado;
+      const mudou = codigoNovo && codigoNovo !== codigoAntes;
+
+      if (codigoNovo && mudou) {
+        await this.prisma.transferOrder.update({
+          where: { id: it.id },
+          data: { codigoBipado: codigoNovo } as any,
+        });
+        updated++;
+      }
+
+      if (!codigoNovo) unresolved++;
+
+      details.push({
+        transferOrderId: it.id,
+        refCode: it.refCode,
+        cor: it.cor,
+        tamanho: it.tamanho,
+        descricao: it.descricao,
+        codigoAntes,
+        codigoDepois: codigoNovo,
+        via,
+      });
+    }
+
+    // Invalida cache pra forçar refresh no próximo bipe
+    this.invalidateSkuCache(shipmentId);
+
+    this.logger.log(
+      `[refresh-skus] ${shipment.code}: ${items.length} items, ${updated} atualizados, ${unresolved} unresolved`,
+    );
+
+    return {
+      ok: true,
+      code: shipment.code,
+      total: items.length,
+      updated,
+      unresolved,
+      details,
+    };
+  }
+
   async scanItem(input: { shipmentId: string; sku: string; storeId: string; userId?: string }) {
     const store = await this.prisma.store.findUnique({
       where: { id: input.storeId },
@@ -881,22 +1003,35 @@ export class RealignmentShipmentService {
     }
 
     // E2: BATCH lookup Wincred COM CACHE — 1 query no 1º bipe, próximos batem na memória.
-    // Reduz tempo total de 60 peças de ~9s pra ~2s.
+    // Usa batchFindAllCodigos (não o que filtra por estoque) — bipagem precisa
+    // comparar com TODOS os CODIGOs candidatos. Wincred costuma ter cadastro
+    // duplicado (mesma REF+COR+TAM em 2 CODIGOs); a peça física pode ser
+    // QUALQUER UM deles, não só o de maior estoque.
     if (!matchedItemId && pendingItems.length > 0) {
       let cached = this.skuCache.get(shipment.id);
       const nowMs = Date.now();
       if (!cached || cached.expiresAt < nowMs) {
-        const codigoMap = await this.erp.batchFindCodigosByRefCorTam(
+        const allCodigosMap = await this.erp.batchFindAllCodigosByRefCorTam(
           (items as any[]).map((it) => ({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho })),
         );
-        cached = { skuMap: codigoMap, expiresAt: nowMs + this.CACHE_TTL_MS };
+        // Mantém compatibilidade do skuCache (Map<string, string>) gravando
+        // todos os CODIGOs separados por vírgula. Match abaixo trata como Set.
+        const flatMap = new Map<string, string>();
+        for (const [k, set] of allCodigosMap.entries()) {
+          flatMap.set(k, Array.from(set).join(','));
+        }
+        cached = { skuMap: flatMap, expiresAt: nowMs + this.CACHE_TTL_MS };
         this.skuCache.set(shipment.id, cached);
-        this.logger.log(`[shipment] cache SKU populado pra ${shipment.code} (${codigoMap.size} entradas)`);
+        this.logger.log(`[shipment] cache SKU populado pra ${shipment.code} (${flatMap.size} chaves, ${Array.from(allCodigosMap.values()).reduce((s, set) => s + set.size, 0)} CODIGOs totais)`);
       }
       for (const it of pendingItems) {
         const key = `${norm(it.refCode)}|${norm(it.cor)}|${norm(it.tamanho)}`;
-        const itemSku = cached.skuMap.get(key);
-        if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
+        const allCodigosStr = cached.skuMap.get(key);
+        if (!allCodigosStr) continue;
+        // Compara com TODOS os CODIGOs candidatos (split por vírgula)
+        const candidatos = allCodigosStr.split(',');
+        const hit = candidatos.some((c) => stripZeros(c) === skuBipadoStripped);
+        if (hit) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;
           break;
@@ -904,8 +1039,37 @@ export class RealignmentShipmentService {
       }
     }
 
-    // E3: fallback LIKE/REF+TAM (cobre REF "12852" vs "12852V", cor "BEGE" vs "XADREZ BEGE").
-    // Só roda pros items que sobraram (raro).
+    // E3 (antes da E4): match por REF BASE + COR + TAM — INSTANTÂNEO (sem query MySQL).
+    // Usa o `info` já resolvido no Promise.all inicial. Cobre o caso clássico Lurd's:
+    // Remessa tem REF "12608" (base), peça Wincred tem REF "12608V" (sufixo da cor).
+    // Strip sufixo de letras em ambas REFs antes de comparar.
+    if (!matchedItemId && info && info.ref) {
+      const stripSufixoLetras = (s: string) => norm(s).replace(/[A-Z]+$/, '');
+      const skuRefBase = stripSufixoLetras(info.ref);
+      const skuCor = norm(info.cor);
+      const skuTam = norm(info.tamanho);
+      if (skuRefBase && skuCor && skuTam) {
+        for (const it of pendingItems) {
+          const itRefBase = stripSufixoLetras(it.refCode);
+          if (
+            itRefBase === skuRefBase &&
+            norm(it.cor) === skuCor &&
+            norm(it.tamanho) === skuTam
+          ) {
+            matchedItemId = it.id;
+            matchedRefCode = it.refCode;
+            this.logger.log(
+              `[scanItem] E3 match por REF base: ${skuBipado} (${info.ref}/${info.cor}/${info.tamanho}) bateu com item ${it.refCode}/${it.cor}/${it.tamanho}`,
+            );
+            break;
+          }
+        }
+      }
+    }
+
+    // E4: ÚLTIMO recurso — fallback LIKE/REF+TAM (cobre caso raro de cor com
+    // grafia diferente, ex: "BEGE" vs "XADREZ BEGE"). LENTO porque faz 1 query
+    // MySQL por item pendente — só roda se TODAS as outras 3 estratégias falharam.
     if (!matchedItemId) {
       for (const it of pendingItems) {
         try {
@@ -920,9 +1084,27 @@ export class RealignmentShipmentService {
     }
 
     if (!matchedItemId) {
+      // LOG DETALHADO pra debug — quando bipe não acha, manda TUDO pro Railway log
+      this.logger.error(
+        `[scanItem] FALHA shipment=${shipment.code} skuBipado=${skuBipado} skuNormalizado=${skuNormalizado} skuStripped=${skuBipadoStripped}`,
+      );
+      this.logger.error(
+        `[scanItem] info Wincred: ${info ? JSON.stringify({ref: info.ref, cor: info.cor, tamanho: info.tamanho, codigo: info.codigo}) : 'NULL'}`,
+      );
+      this.logger.error(
+        `[scanItem] items pendentes (${pendingItems.length}): ${pendingItems.map((it) => `${it.refCode}/${it.cor}/${it.tamanho}[codBip=${it.codigoBipado || '-'}]`).join('; ')}`,
+      );
+      const cached = this.skuCache.get(shipment.id);
+      if (cached) {
+        this.logger.error(
+          `[scanItem] cache (${cached.skuMap.size} chaves): ${Array.from(cached.skuMap.entries()).slice(0, 10).map(([k, v]) => `${k}=>[${v}]`).join(' | ')}`,
+        );
+      } else {
+        this.logger.error(`[scanItem] cache VAZIO`);
+      }
       throw new BadRequestException(
         `SKU ${skuBipado} nao pertence a essa remessa (ou ja foi bipado). ` +
-          (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : ''),
+          (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : 'SKU nao encontrado no Wincred.'),
       );
     }
 

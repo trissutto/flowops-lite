@@ -843,6 +843,24 @@ export class RealignmentController {
   }
 
   /**
+   * POST /realignment/shipments/admin/:id/refresh-skus
+   *
+   * Reconcilia SKUs (codigoBipado) de cada item da remessa buscando o CODIGO
+   * Wincred pela DESCRIÇÃO + COR + TAMANHO. Tolera zeros à esquerda na REF.
+   * Resolve o caso "bipe nao acha peca" quando o lookup REF+COR+TAM falhou
+   * na criacao da remessa (REF cadastrada errado, duplicidade, etc).
+   *
+   * Retorna relatorio: { total, updated, unresolved, details: [...] }.
+   */
+  @Post('shipments/admin/:id/refresh-skus')
+  refreshSkus(@Req() req: any, @Param('id') id: string) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.shipment.refreshSkusForShipment(id);
+  }
+
+  /**
    * POST /realignment/shipments/admin/:id/reprocess-stock
    * Body: { force?: boolean }
    *
