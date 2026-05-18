@@ -372,27 +372,48 @@ export class MarcadosService {
     if (!input.qty || input.qty < 1) throw new BadRequestException('QTY inválida');
     if (!input.loja) throw new BadRequestException('LOJA obrigatória');
 
-    // 1. Estorna estoque Giga (peça volta pra loja)
-    if (this.erp.isWriteEnabled) {
-      const stockResult = await this.erp.increaseStock([
-        { sku: input.sku, qty: input.qty, storeCode: input.loja },
-      ]);
-      if (!stockResult.success) {
-        return {
-          ok: false,
-          error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
-        };
-      }
+    // Bloqueia se ERP_WRITE não habilitado — não fica em half-state silencioso
+    if (!this.erp.isWriteEnabled) {
+      return {
+        ok: false,
+        error: 'ERP_WRITE_ENABLED desabilitado no Railway. Operação seria SHADOW (não persistiria).',
+      };
     }
 
-    // 2. DELETE da linha de caixa (some o marcado)
-    // OBS: erp.service não tem método de DELETE arbitrário. Usaremos
-    // markCrediarioParcelaPaid? Não — esse é pra movimento. Vou usar
-    // um método novo: deleteCaixaRow(registro). Por enquanto retorno OK
-    // e logo o que aconteceu — implementar DELETE depois com cuidado.
-    this.logger.warn(
-      `[marcados] Devolução marcada como OK (estoque estornado). ` +
-      `DELETE da linha caixa REGISTRO=${reg} ainda manual no Giga.`,
+    // 1. Estorna estoque Giga (peça volta pra loja)
+    const stockResult = await this.erp.increaseStock([
+      { sku: input.sku, qty: input.qty, storeCode: input.loja },
+    ]);
+    if (!stockResult.success) {
+      return {
+        ok: false,
+        error: `Falha ao estornar estoque Giga: ${stockResult.error}`,
+      };
+    }
+    const appliedCount = stockResult.applied?.length || 0;
+    if (appliedCount === 0) {
+      return {
+        ok: false,
+        error: `increaseStock retornou success mas 0 SKUs aplicados. Possível mismatch storeCode "${input.loja}" vs LOJA Giga.`,
+      };
+    }
+
+    // 2. DELETE da linha caixa (tira do nome da pessoa marcada)
+    const deleteResult = await this.erp.deleteCaixaMarcadoRow({ registro: reg });
+    if (!deleteResult.success) {
+      // Estoque já voltou, mas remoção da marcação falhou.
+      // Loga AVISO e retorna ERRO pra admin investigar — meio-caminho é pior que falhar limpo.
+      this.logger.error(
+        `[marcados.devolver] estoque OK porém DELETE caixa REGISTRO=${reg} falhou: ${deleteResult.error}`,
+      );
+      return {
+        ok: false,
+        error: `Estoque voltou mas marcação não foi removida do nome do cliente: ${deleteResult.error}. Remova manualmente no Wincred.`,
+      };
+    }
+
+    this.logger.log(
+      `[marcados.devolver] REGISTRO=${reg} OK · estoque +${appliedCount}/${input.qty} em ${input.loja} · caixa.MARCADO removido`,
     );
 
     return { ok: true };

@@ -323,6 +323,22 @@ export class NfceService {
       descontoPorItem.set(idx, descItemOriginal + parcelaExtra);
     });
 
+    // Regime tributário define que tipo de bloco ICMS/PIS/COFINS gera:
+    //   CRT=1: Simples Nacional       → CSOSN/PISNT/COFINSNT
+    //   CRT=3: Lucro Real/Presumido   → CST/PIS Cumulativo/COFINS Cumulativo
+    // Alíquotas configuráveis com defaults padrão SP varejo de vestuário.
+    const crt = String(config.regime || '1');
+    const isSimples = crt === '1' || crt === '2' || crt === '4';
+    const pICMS = Number(config.aliqICMS || 18.0);  // 18% SP padrão
+    const pPIS = Number(config.aliqPIS || 0.65);    // 0.65% Lucro Presumido cumulativo
+    const pCOFINS = Number(config.aliqCOFINS || 3.0); // 3% Lucro Presumido cumulativo
+
+    // Acumuladores pros totais (preenchidos em loop pra Lucro Presumido)
+    let vBCTot = 0;
+    let vICMSTot = 0;
+    let vPISTot = 0;
+    let vCOFINSTot = 0;
+
     const detLines = items
       .map((it: any, idx: number) => {
         const nItem = idx + 1;
@@ -333,13 +349,40 @@ export class NfceService {
           ambiente === '2' && idx === 0
             ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
             : it.descricao || cProd;
-        const ncm = it.ncm || '00000000';
+        // NCM: SEFAZ valida contra TIPI real em produção (cStat 778 se inválido).
+        //   Simples Nacional pode usar 00000000 (genérico aceito).
+        //   Lucro Presumido/Real PRECISA NCM real existente na TIPI — 99999999
+        //   só funciona em homologação. Em produção, SEFAZ rejeita.
+        // Fallback 61099000 = "T-shirts, camisetas interiores e similares, de
+        // malha" — NCM real válido na TIPI, comumente aceito como genérico pra
+        // vestuário. IDEAL: cadastrar NCM real por produto no Wincred.
+        const ncm = (it.ncm && it.ncm !== '00000000' && it.ncm !== '99999999')
+          ? it.ncm
+          : (isSimples ? '00000000' : '61099000');
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
         const brutoItem = (it.qty || 0) * (it.precoUnit || 0);
         const vProd = brutoItem.toFixed(2);
         const vDesc = (descontoPorItem.get(idx) || 0).toFixed(2);
+
+        // Base de cálculo = valor líquido do item (vProd - vDesc)
+        const baseCalc = Math.max(0, brutoItem - (descontoPorItem.get(idx) || 0));
+        const vICMSItem = isSimples ? 0 : Math.round(baseCalc * (pICMS / 100) * 100) / 100;
+        const vPISItem = isSimples ? 0 : Math.round(baseCalc * (pPIS / 100) * 100) / 100;
+        const vCOFINSItem = isSimples ? 0 : Math.round(baseCalc * (pCOFINS / 100) * 100) / 100;
+        vBCTot += isSimples ? 0 : baseCalc;
+        vICMSTot += vICMSItem;
+        vPISTot += vPISItem;
+        vCOFINSTot += vCOFINSItem;
+
+        // Bloco de imposto conforme regime
+        const impostoBlock = isSimples
+          ? `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>
+        <PIS><PISNT><CST>07</CST></PISNT></PIS>
+        <COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`
+          : `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${baseCalc.toFixed(2)}</vBC><pICMS>${pICMS.toFixed(2)}</pICMS><vICMS>${vICMSItem.toFixed(2)}</vICMS></ICMS00></ICMS><PIS><PISAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pPIS>${pPIS.toFixed(2)}</pPIS><vPIS>${vPISItem.toFixed(2)}</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pCOFINS>${pCOFINS.toFixed(2)}</pCOFINS><vCOFINS>${vCOFINSItem.toFixed(2)}</vCOFINS></COFINSAliq></COFINS>`;
+
         return `
     <det nItem="${nItem}">
       <prod>
@@ -360,9 +403,7 @@ export class NfceService {
         <indTot>1</indTot>
       </prod>
       <imposto>
-        <ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>
-        <PIS><PISNT><CST>07</CST></PISNT></PIS>
-        <COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>
+        ${impostoBlock}
       </imposto>
     </det>`.trim();
       })
@@ -476,19 +517,19 @@ export class NfceService {
     ${detLines}
     <total>
       <ICMSTot>
-        <vBC>0.00</vBC><vICMS>0.00</vICMS><vICMSDeson>0.00</vICMSDeson>
+        <vBC>${vBCTot.toFixed(2)}</vBC><vICMS>${vICMSTot.toFixed(2)}</vICMS><vICMSDeson>0.00</vICMSDeson>
         <vFCP>0.00</vFCP><vBCST>0.00</vBCST><vST>0.00</vST><vFCPST>0.00</vFCPST><vFCPSTRet>0.00</vFCPSTRet>
         <vProd>${vTotProd}</vProd>
         <vFrete>0.00</vFrete><vSeg>0.00</vSeg>
         <vDesc>${vDescTot}</vDesc>
         <vII>0.00</vII><vIPI>0.00</vIPI><vIPIDevol>0.00</vIPIDevol>
-        <vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro>
+        <vPIS>${vPISTot.toFixed(2)}</vPIS><vCOFINS>${vCOFINSTot.toFixed(2)}</vCOFINS><vOutro>0.00</vOutro>
         <vNF>${vNF}</vNF>
       </ICMSTot>
     </total>
     <transp><modFrete>9</modFrete></transp>
     <pag>${pagLines}</pag>
-    <infAdic><infCpl>Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.</infCpl></infAdic>
+    <infAdic><infCpl>${isSimples ? 'Documento emitido por ME ou EPP optante pelo Simples Nacional. NAO GERA DIREITO A CREDITO FISCAL DE IPI.' : 'Valor aproximado dos tributos Federais/Estaduais/Municipais conforme Lei 12.741/2012.'}</infCpl></infAdic>
     <infRespTec><CNPJ>20104813000139</CNPJ><xContato>THIAGO RISSUTTO</xContato><email>atendimento@lurds.com.br</email><fone>1132331004</fone></infRespTec>
   </infNFe><infNFeSupl><qrCode><![CDATA[${buildQrCodeUrlNfce({chave,ambiente:ambiente as '1'|'2',idCSC:config.cscId||'1',cscToken:config.cscToken||''})}]]></qrCode><urlChave>${buildUrlConsultaNfce(ambiente as '1'|'2')}</urlChave></infNFeSupl></NFe>`.trim();
     this.logger.log(`[NFCe-V3-SUPL] XML gerado tamanho=${xml.length} contemSupl=${xml.includes('infNFeSupl')}`);
