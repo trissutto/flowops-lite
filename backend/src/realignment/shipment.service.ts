@@ -1054,6 +1054,34 @@ export class RealignmentShipmentService {
       }
     }
 
+    // E4: match por REF BASE + COR + TAM — cobre o caso clássico Lurd's:
+    // Remessa tem REF "12608" (base), mas peça no Wincred tem REF "12608V" (sufixo da cor).
+    // Usa info.ref retornado pelo resolveSkuInfo (que já buscou o SKU bipado no Wincred)
+    // e compara strip-sufixo-letras com cada item da remessa.
+    if (!matchedItemId && info && info.ref) {
+      const stripSufixoLetras = (s: string) => norm(s).replace(/[A-Z]+$/, '');
+      const skuRefBase = stripSufixoLetras(info.ref);
+      const skuCor = norm(info.cor);
+      const skuTam = norm(info.tamanho);
+      if (skuRefBase && skuCor && skuTam) {
+        for (const it of pendingItems) {
+          const itRefBase = stripSufixoLetras(it.refCode);
+          if (
+            itRefBase === skuRefBase &&
+            norm(it.cor) === skuCor &&
+            norm(it.tamanho) === skuTam
+          ) {
+            matchedItemId = it.id;
+            matchedRefCode = it.refCode;
+            this.logger.log(
+              `[scanItem] E4 match por REF base: ${skuBipado} (${info.ref}/${info.cor}/${info.tamanho}) bateu com item ${it.refCode}/${it.cor}/${it.tamanho}`,
+            );
+            break;
+          }
+        }
+      }
+    }
+
     if (!matchedItemId) {
       // LOG DETALHADO pra debug — quando bipe não acha, manda TUDO pro Railway log
       this.logger.error(
