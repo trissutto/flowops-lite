@@ -933,9 +933,27 @@ export class RealignmentShipmentService {
     }
 
     if (!matchedItemId) {
+      // LOG DETALHADO pra debug — quando bipe não acha, manda TUDO pro Railway log
+      this.logger.error(
+        `[scanItem] FALHA shipment=${shipment.code} skuBipado=${skuBipado} skuNormalizado=${skuNormalizado} skuStripped=${skuBipadoStripped}`,
+      );
+      this.logger.error(
+        `[scanItem] info Wincred: ${info ? JSON.stringify({ref: info.ref, cor: info.cor, tamanho: info.tamanho, codigo: info.codigo}) : 'NULL'}`,
+      );
+      this.logger.error(
+        `[scanItem] items pendentes (${pendingItems.length}): ${pendingItems.map((it) => `${it.refCode}/${it.cor}/${it.tamanho}[codBip=${it.codigoBipado || '-'}]`).join('; ')}`,
+      );
+      const cached = this.skuCache.get(shipment.id);
+      if (cached) {
+        this.logger.error(
+          `[scanItem] cache (${cached.skuMap.size} chaves): ${Array.from(cached.skuMap.entries()).slice(0, 10).map(([k, v]) => `${k}=>[${v}]`).join(' | ')}`,
+        );
+      } else {
+        this.logger.error(`[scanItem] cache VAZIO`);
+      }
       throw new BadRequestException(
         `SKU ${skuBipado} nao pertence a essa remessa (ou ja foi bipado). ` +
-          (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : ''),
+          (info?.ref ? `Resolvido como ${info.ref}/${info.cor || ''}/${info.tamanho || ''}.` : 'SKU nao encontrado no Wincred.'),
       );
     }
 
