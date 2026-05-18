@@ -188,6 +188,25 @@ export class CashController {
   }
 
   /**
+   * POST /pdv/caixa/admin/auto-close-expired
+   *
+   * Fecha TODAS as sessões abertas desde dia anterior (lojas que esqueceram
+   * de fechar o caixa). Apenas admin pode chamar. Usado pra arrumar quando
+   * vendedora esquece de fechar e o dia seguinte começa.
+   *
+   * Idealmente esse método é chamado por um cron diário ~23:55, mas
+   * enquanto não tem cron, admin clica pra rodar manualmente.
+   */
+  @Post('admin/auto-close-expired')
+  async adminAutoCloseExpired(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.svc.autoCloseExpiredSessions();
+  }
+
+  /**
    * GET /pdv/caixa/pendencias — lista vendas em aberto da sessão atual.
    * Útil pra debugar quando o fechamento bloqueia.
    */
