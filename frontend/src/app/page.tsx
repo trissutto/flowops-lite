@@ -17,7 +17,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Globe2, Store, BarChart3, Settings,
+  LayoutDashboard, Globe2, Store, BarChart3, Settings, Instagram,
   RefreshCw, Zap, Bot, ArrowUpRight, type LucideIcon,
   ShoppingBag, Shuffle, Package2, AlertTriangle, Truck, CreditCard, Bell,
 } from 'lucide-react';
@@ -254,12 +254,13 @@ export default function DashboardHome() {
       {/* === ALERTAS · só mostra o que tem ação pendente === */}
       <AlertsSection alerts={alerts} />
 
-      {/* === Atalhos pros 4 hubs (cores combinadas com KPIs) === */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-5">
-        <HubCard href="/site"       label="Site"   subtitle="E-commerce"     description="Pedidos · Marketing · Vitrine" tone="teal" icon={Globe2} />
-        <HubCard href="/loja"       label="Loja"   subtitle="Operação física" description="Estoque · Crediário · Materiais" tone="green" icon={Store} />
-        <HubCard href="/retaguarda" label="Gestão" subtitle="Estratégico"    description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
-        <HubCard href="/config"     label="Config" subtitle="Setup técnico"  description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
+      {/* === Atalhos pros 5 hubs (cores combinadas com KPIs) === */}
+      <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-5">
+        <HubCard href="/site"               label="Site"      subtitle="E-commerce"      description="Pedidos · Marketing · Vitrine" tone="teal"   icon={Globe2} />
+        <HubCard href="/loja"               label="Loja"      subtitle="Operação física" description="Estoque · Crediário · Materiais" tone="green"  icon={Store} />
+        <HubCard href="/retaguarda/instagram-hub" label="Instagram" subtitle="Redes & Live"  description="Inbox · Live · Conta @lurdsplussize" tone="rose" icon={Instagram} />
+        <HubCard href="/retaguarda"         label="Gestão"    subtitle="Estratégico"     description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
+        <HubCard href="/config"             label="Config"    subtitle="Setup técnico"   description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
       </section>
 
     </AdminShell>
@@ -274,6 +275,7 @@ const HUB_TONES = {
   green:  { from: '#5b9b3e', to: '#3f7029' },
   orange: { from: '#d68a3c', to: '#b66a1f' },
   purple: { from: '#8a5cb6', to: '#5f3e8a' },
+  rose:   { from: '#e11d6c', to: '#b91754' },
 } as const;
 
 function HubCard({
