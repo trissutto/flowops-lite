@@ -1039,25 +1039,10 @@ export class RealignmentShipmentService {
       }
     }
 
-    // E3: fallback LIKE/REF+TAM (cobre REF "12852" vs "12852V", cor "BEGE" vs "XADREZ BEGE").
-    // Só roda pros items que sobraram (raro).
-    if (!matchedItemId) {
-      for (const it of pendingItems) {
-        try {
-          const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
-          if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
-            matchedItemId = it.id;
-            matchedRefCode = it.refCode;
-            break;
-          }
-        } catch { /* segue */ }
-      }
-    }
-
-    // E4: match por REF BASE + COR + TAM — cobre o caso clássico Lurd's:
-    // Remessa tem REF "12608" (base), mas peça no Wincred tem REF "12608V" (sufixo da cor).
-    // Usa info.ref retornado pelo resolveSkuInfo (que já buscou o SKU bipado no Wincred)
-    // e compara strip-sufixo-letras com cada item da remessa.
+    // E3 (antes da E4): match por REF BASE + COR + TAM — INSTANTÂNEO (sem query MySQL).
+    // Usa o `info` já resolvido no Promise.all inicial. Cobre o caso clássico Lurd's:
+    // Remessa tem REF "12608" (base), peça Wincred tem REF "12608V" (sufixo da cor).
+    // Strip sufixo de letras em ambas REFs antes de comparar.
     if (!matchedItemId && info && info.ref) {
       const stripSufixoLetras = (s: string) => norm(s).replace(/[A-Z]+$/, '');
       const skuRefBase = stripSufixoLetras(info.ref);
@@ -1074,11 +1059,27 @@ export class RealignmentShipmentService {
             matchedItemId = it.id;
             matchedRefCode = it.refCode;
             this.logger.log(
-              `[scanItem] E4 match por REF base: ${skuBipado} (${info.ref}/${info.cor}/${info.tamanho}) bateu com item ${it.refCode}/${it.cor}/${it.tamanho}`,
+              `[scanItem] E3 match por REF base: ${skuBipado} (${info.ref}/${info.cor}/${info.tamanho}) bateu com item ${it.refCode}/${it.cor}/${it.tamanho}`,
             );
             break;
           }
         }
+      }
+    }
+
+    // E4: ÚLTIMO recurso — fallback LIKE/REF+TAM (cobre caso raro de cor com
+    // grafia diferente, ex: "BEGE" vs "XADREZ BEGE"). LENTO porque faz 1 query
+    // MySQL por item pendente — só roda se TODAS as outras 3 estratégias falharam.
+    if (!matchedItemId) {
+      for (const it of pendingItems) {
+        try {
+          const itemSku = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
+            matchedItemId = it.id;
+            matchedRefCode = it.refCode;
+            break;
+          }
+        } catch { /* segue */ }
       }
     }
 
