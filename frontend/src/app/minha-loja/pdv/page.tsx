@@ -1032,43 +1032,55 @@ function PdvPageInner() {
             <ArrowLeft className="w-5 h-5" />
           </Link>
 
-          {/* LOGO compacta */}
+          {/* LOGO Lurd's — maior (56px) pra dar identidade */}
           <Link
             href="/minha-loja"
             className="flex items-center gap-2 shrink-0 group"
             title="Início"
           >
-            <div className="relative w-11 h-11 bg-white/95 rounded-full p-1 shadow-md">
+            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-amber-300/40">
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
                 fill
-                sizes="44px"
+                sizes="56px"
                 className="object-contain"
                 priority
               />
             </div>
           </Link>
 
-          {/* Título + venda */}
+          {/* Header reformulado — PROPOSTA A: cidade em destaque dourado */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-xl sm:text-2xl font-black text-white leading-none tracking-tight drop-shadow">
-                PDV
-              </h1>
+              <span className="text-[10px] font-bold text-white/70 tracking-[0.15em] uppercase leading-none">
+                PDV · LOJA
+              </span>
               {sale?.storeCode && (
-                <span className="text-[11px] font-mono font-bold text-violet-900 bg-amber-300 px-2 py-0.5 rounded-md shadow-sm">
+                <span className="text-[10px] font-mono font-bold text-violet-900 bg-amber-300 px-1.5 py-0.5 rounded shadow-sm leading-none">
                   {sale.storeCode}
                 </span>
               )}
             </div>
-            <p className="text-[11px] text-white/85 truncate font-medium mt-0.5">
+            <h1
+              className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
+              style={{
+                background: 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%)',
+                WebkitBackgroundClip: 'text',
+                backgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+              }}
+              title={sale?.storeName || ''}
+            >
+              {sale?.storeName || 'Carregando…'}
+            </h1>
+            <p className="text-[11px] text-white/85 truncate font-medium mt-1">
               {sale
                 ? (() => {
                     const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
                     return `Venda #${sale.id.slice(-6).toUpperCase()} · ${totalQty} ${totalQty === 1 ? 'peça' : 'peças'} no carrinho`;
                   })()
-                : 'Carregando…'}
+                : ''}
             </p>
           </div>
 
