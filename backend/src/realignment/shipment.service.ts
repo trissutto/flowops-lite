@@ -881,22 +881,35 @@ export class RealignmentShipmentService {
     }
 
     // E2: BATCH lookup Wincred COM CACHE — 1 query no 1º bipe, próximos batem na memória.
-    // Reduz tempo total de 60 peças de ~9s pra ~2s.
+    // Usa batchFindAllCodigos (não o que filtra por estoque) — bipagem precisa
+    // comparar com TODOS os CODIGOs candidatos. Wincred costuma ter cadastro
+    // duplicado (mesma REF+COR+TAM em 2 CODIGOs); a peça física pode ser
+    // QUALQUER UM deles, não só o de maior estoque.
     if (!matchedItemId && pendingItems.length > 0) {
       let cached = this.skuCache.get(shipment.id);
       const nowMs = Date.now();
       if (!cached || cached.expiresAt < nowMs) {
-        const codigoMap = await this.erp.batchFindCodigosByRefCorTam(
+        const allCodigosMap = await this.erp.batchFindAllCodigosByRefCorTam(
           (items as any[]).map((it) => ({ refCode: it.refCode, cor: it.cor, tamanho: it.tamanho })),
         );
-        cached = { skuMap: codigoMap, expiresAt: nowMs + this.CACHE_TTL_MS };
+        // Mantém compatibilidade do skuCache (Map<string, string>) gravando
+        // todos os CODIGOs separados por vírgula. Match abaixo trata como Set.
+        const flatMap = new Map<string, string>();
+        for (const [k, set] of allCodigosMap.entries()) {
+          flatMap.set(k, Array.from(set).join(','));
+        }
+        cached = { skuMap: flatMap, expiresAt: nowMs + this.CACHE_TTL_MS };
         this.skuCache.set(shipment.id, cached);
-        this.logger.log(`[shipment] cache SKU populado pra ${shipment.code} (${codigoMap.size} entradas)`);
+        this.logger.log(`[shipment] cache SKU populado pra ${shipment.code} (${flatMap.size} chaves, ${Array.from(allCodigosMap.values()).reduce((s, set) => s + set.size, 0)} CODIGOs totais)`);
       }
       for (const it of pendingItems) {
         const key = `${norm(it.refCode)}|${norm(it.cor)}|${norm(it.tamanho)}`;
-        const itemSku = cached.skuMap.get(key);
-        if (itemSku && stripZeros(itemSku) === skuBipadoStripped) {
+        const allCodigosStr = cached.skuMap.get(key);
+        if (!allCodigosStr) continue;
+        // Compara com TODOS os CODIGOs candidatos (split por vírgula)
+        const candidatos = allCodigosStr.split(',');
+        const hit = candidatos.some((c) => stripZeros(c) === skuBipadoStripped);
+        if (hit) {
           matchedItemId = it.id;
           matchedRefCode = it.refCode;
           break;

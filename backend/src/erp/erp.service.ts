@@ -4910,6 +4910,100 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Variante do batchFindCodigosByRefCorTam que retorna TODOS os CODIGOs
+   * candidatos pra cada (REF+COR+TAM) — não só o "melhor" com mais estoque.
+   *
+   * USADO ESPECIFICAMENTE NO BIPE DE REMESSA: quando vendedora bipa o código
+   * de barras da peça física que chegou, esse código pode ser QUALQUER um
+   * dos cadastros duplicados no Wincred — não necessariamente o que tem mais
+   * estoque. Por isso precisamos comparar com TODOS os candidatos.
+   *
+   * Retorna Map onde a chave é `${ref}|${cor}|${tam}` (norm) e o valor é
+   * um Set de CODIGOs (todos os cadastros pra essa combinação).
+   */
+  async batchFindAllCodigosByRefCorTam(
+    items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
+  ): Promise<Map<string, Set<string>>> {
+    const out = new Map<string, Set<string>>();
+    if (!this.pool || !items.length) return out;
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => s.replace(/^0+/, '') || '0';
+    const keyOf = (ref: string, cor: any, tam: any) => `${norm(ref)}|${norm(cor)}|${norm(tam)}`;
+
+    const refVariants = (ref: string): string[] => {
+      const core = stripZeros(ref);
+      const vs = new Set<string>();
+      vs.add(ref);
+      vs.add(core);
+      for (let i = 1; i <= 3; i++) vs.add('0'.repeat(i) + core);
+      return Array.from(vs);
+    };
+
+    const seen = new Set<string>();
+    const uniq: Array<{ ref: string; refCore: string; cor: string; tam: string }> = [];
+    for (const it of items) {
+      const ref = norm(it.refCode);
+      if (!ref) continue;
+      const cor = norm(it.cor);
+      const tam = norm(it.tamanho);
+      const k = `${ref}|${cor}|${tam}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push({ ref, refCore: stripZeros(ref), cor, tam });
+    }
+    if (!uniq.length) return out;
+
+    const byRefCore = new Map<string, typeof uniq>();
+    for (const u of uniq) {
+      const arr = byRefCore.get(u.refCore) || [];
+      arr.push(u);
+      byRefCore.set(u.refCore, arr);
+    }
+
+    const chunks: typeof uniq[] = [];
+    for (let i = 0; i < uniq.length; i += 500) chunks.push(uniq.slice(i, i + 500));
+
+    for (const chunk of chunks) {
+      const conds = chunk
+        .map(() => `(TRIM(UPPER(REF)) IN (?,?,?,?,?) AND TRIM(UPPER(COALESCE(COR,''))) = ? AND TRIM(UPPER(COALESCE(TAMANHO,''))) = ?)`)
+        .join(' OR ');
+      const params: string[] = [];
+      for (const u of chunk) {
+        const vs = refVariants(u.ref);
+        const padded = [...vs];
+        while (padded.length < 5) padded.push(vs[0]);
+        params.push(padded[0], padded[1], padded[2], padded[3], padded[4], u.cor, u.tam);
+      }
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT REF, COALESCE(COR,'') AS COR, COALESCE(TAMANHO,'') AS TAMANHO, CODIGO
+            FROM produtos WHERE ${conds}`,
+          params,
+        );
+        for (const r of rows as any[]) {
+          const refGiga = norm(r.REF);
+          const refCore = stripZeros(refGiga);
+          const cor = norm(r.COR);
+          const tam = norm(r.TAMANHO);
+          const codigo = String(r.CODIGO).trim();
+          const matches = byRefCore.get(refCore) || [];
+          for (const m of matches) {
+            if (m.cor === cor && m.tam === tam) {
+              const k = keyOf(m.ref, m.cor, m.tam);
+              if (!out.has(k)) out.set(k, new Set());
+              out.get(k)!.add(codigo);
+            }
+          }
+        }
+      } catch (e: any) {
+        this.logger.warn(`batchFindAllCodigosByRefCorTam falhou em chunk: ${e?.message || e}`);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Soma estoque de TODOS os SKUs cadastrados como mesma REF+COR+TAM em UMA loja.
    *
    * Por que isso existe: o Giga frequentemente tem múltiplos cadastros pra
