@@ -84,7 +84,9 @@ export default function AuditoriaNcmPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api<AuditResult>('/admin/ncm-audit?limit=200000');
+      // Cache-busting com timestamp pra evitar 304 do navegador
+      // (após apply, queremos sempre dados frescos do banco)
+      const res = await api<AuditResult>(`/admin/ncm-audit?limit=200000&_t=${Date.now()}`);
       setData(res);
       setSelected(new Set());
     } catch (e: any) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnlyGuard } from '../auth/admin-only.guard';
 import { NcmAuditService } from './ncm-audit.service';
@@ -18,6 +18,9 @@ export class NcmAuditController {
   constructor(private readonly ncmAudit: NcmAuditService) {}
 
   @Get()
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
+  @Header('Pragma', 'no-cache')
+  @Header('Expires', '0')
   async audit(
     @Query('limit') limit?: string,
     @Query('includeOk') includeOk?: string,
