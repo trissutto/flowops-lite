@@ -454,7 +454,7 @@ export class NfceService {
       <indFinal>1</indFinal>
       <indPres>1</indPres>
       <procEmi>0</procEmi>
-      <verProc>LURDS-V3-SUPL</verProc>
+      <verProc>LurdsV3</verProc>
     </ide>
     <emit>
       <CNPJ>${cnpjFinal}</CNPJ>
