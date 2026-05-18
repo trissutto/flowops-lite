@@ -284,12 +284,19 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Aplica fixes em lote (UPDATE batch por REF).
+   * Aplica fixes em lote (UPDATE individual por REF, autocommit).
    * Cada item: { ref, ncm } — atualiza TODOS os produtos daquela REF.
    * Respeita ERP_WRITE_ENABLED.
    *
-   * Processa em CHUNKS de 500 com transação por chunk pra evitar
-   * lock timeout no MySQL com grandes volumes (6k+ items).
+   * ESTRATÉGIA SEM TRANSAÇÃO:
+   *  • Cada UPDATE é autocommit individual
+   *  • Se uma linha estiver lockada por PDV/outro processo, falha SÓ esse REF
+   *    (não invalida os demais)
+   *  • Lock timeout reduzido pra 5s na sessão (default é 50s) — fail-fast
+   *  • Retry automático até 3x com backoff de 500ms pra locks transitórios
+   *
+   * Isso resolve "Lock wait timeout exceeded" que acontece quando o PDV
+   * das lojas tá com transação aberta em algum produto.
    */
   async applyFixes(items: Array<{ ref: string; ncm: string }>): Promise<NcmApplyResult> {
     if (!this.isWriteEnabled) {
@@ -307,65 +314,78 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
     const { ncm: ncmCol } = await this.detectCols();
     const errors: Array<{ ref: string; error: string }> = [];
     let applied = 0;
-    let chunksDone = 0;
+    let processed = 0;
 
-    const CHUNK_SIZE = 500;
-    const totalChunks = Math.ceil(items.length / CHUNK_SIZE);
+    this.logger.log(`applyFixes: ${items.length} itens (autocommit, sem transação)`);
 
-    this.logger.log(
-      `applyFixes: ${items.length} itens em ${totalChunks} chunks de ${CHUNK_SIZE}`,
-    );
-
-    for (let start = 0; start < items.length; start += CHUNK_SIZE) {
-      const chunk = items.slice(start, start + CHUNK_SIZE);
-      const conn = await this.pool.getConnection();
+    const conn = await this.pool.getConnection();
+    try {
+      // Lock timeout curto — falha em 5s se a linha tá lockada por outro
+      // (default do MySQL é 50s, o que trava o batch inteiro).
       try {
-        await conn.beginTransaction();
+        await conn.query('SET SESSION innodb_lock_wait_timeout = 5');
+      } catch {}
+      // Garante autocommit (não estamos em transação manual).
+      try {
+        await conn.query('SET autocommit = 1');
+      } catch {}
 
-        for (const it of chunk) {
-          const ncmClean = String(it.ncm || '').replace(/\D/g, '');
-          if (ncmClean.length !== 8) {
-            errors.push({ ref: it.ref, error: `NCM "${it.ncm}" não tem 8 dígitos` });
-            continue;
-          }
-          if (!it.ref || !it.ref.trim()) {
-            errors.push({ ref: it.ref, error: 'REF vazia' });
-            continue;
-          }
+      for (const it of items) {
+        const ncmClean = String(it.ncm || '').replace(/\D/g, '');
+        if (ncmClean.length !== 8) {
+          errors.push({ ref: it.ref, error: `NCM "${it.ncm}" não tem 8 dígitos` });
+          continue;
+        }
+        if (!it.ref || !it.ref.trim()) {
+          errors.push({ ref: it.ref, error: 'REF vazia' });
+          continue;
+        }
+
+        // Retry até 3x pra locks transitórios
+        let lastError: string | null = null;
+        let success = false;
+        for (let attempt = 1; attempt <= 3; attempt++) {
           try {
             const [result] = await conn.query<mysql.ResultSetHeader>(
               `UPDATE produtos SET \`${ncmCol}\` = ? WHERE REF = ?`,
               [ncmClean, it.ref.trim()],
             );
             applied += result.affectedRows || 0;
+            success = true;
+            break;
           } catch (e: any) {
-            errors.push({ ref: it.ref, error: e.message });
+            lastError = e.message || String(e);
+            // Lock timeout — retry com delay; outros erros — desiste
+            if (lastError.includes('Lock wait timeout')) {
+              await new Promise((r) => setTimeout(r, 500 * attempt));
+              continue;
+            }
+            break;
           }
         }
-
-        await conn.commit();
-        chunksDone++;
-        this.logger.log(
-          `Chunk ${chunksDone}/${totalChunks} OK · applied=${applied} · errors=${errors.length}`,
-        );
-      } catch (e: any) {
-        try {
-          await conn.rollback();
-        } catch {}
-        errors.push({
-          ref: `chunk_${chunksDone}`,
-          error: `Transação falhou: ${e.message}`,
-        });
-      } finally {
-        conn.release();
+        if (!success && lastError) {
+          errors.push({ ref: it.ref, error: lastError });
+        }
+        processed++;
+        if (processed % 100 === 0) {
+          this.logger.log(
+            `progress: ${processed}/${items.length} · applied=${applied} · errors=${errors.length}`,
+          );
+        }
       }
+    } finally {
+      conn.release();
     }
+
+    this.logger.log(
+      `applyFixes done: applied=${applied}, errors=${errors.length}, total=${items.length}`,
+    );
 
     return {
       applied,
       skipped: items.length - applied - errors.length,
       errors,
-      message: `Processado em ${chunksDone}/${totalChunks} chunks`,
+      message: `Processado ${processed}/${items.length} · ${errors.length} bloqueado(s) por lock`,
     };
   }
 }
