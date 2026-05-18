@@ -1093,6 +1093,47 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Coloca PAGO='N', limpa DATA_PAGAMENTO, VALOR_PAGO, JUROS, MULTA.
    * Usado quando o usuário precisa desfazer uma baixa feita por engano.
    */
+  /**
+   * Deleta uma linha da tabela `caixa` no Wincred — usado quando uma peça MARCADA
+   * é devolvida ao estoque (cliente trouxe de volta). Remove a "reserva" que
+   * estava no nome do cliente.
+   *
+   * Por segurança, SÓ deleta se a linha tiver MARCADO='SIM' — evita apagar
+   * vendas reais por engano.
+   */
+  async deleteCaixaMarcadoRow(input: {
+    registro: number | string;
+  }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
+    if (!this.isWriteEnabled) {
+      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+    }
+    if (!this.pool) {
+      return { success: false, error: 'Pool ERP não inicializado' };
+    }
+    const reg = Number(input.registro);
+    if (!reg || isNaN(reg)) {
+      return { success: false, error: 'REGISTRO inválido' };
+    }
+    try {
+      // SQL defensivo: só deleta se for marcado mesmo (MARCADO='SIM' UPPER).
+      // Tradeoff aceito: se a coluna MARCADO não existir (improvável em
+      // schema Wincred), o WHERE explode com error de coluna desconhecida.
+      const [result] = await this.pool.query<mysql.OkPacket>(
+        `DELETE FROM caixa WHERE REGISTRO = ? AND UPPER(COALESCE(MARCADO, '')) = 'SIM' LIMIT 1`,
+        [reg],
+      );
+      const affected = (result as any)?.affectedRows ?? 0;
+      this.logger.log(`[deleteCaixaMarcado] REGISTRO=${reg} affected=${affected}`);
+      if (affected === 0) {
+        return { success: false, error: `Nenhuma linha caixa encontrada com REGISTRO=${reg} e MARCADO='SIM'`, affectedRows: 0 };
+      }
+      return { success: true, affectedRows: affected };
+    } catch (e: any) {
+      this.logger.error(`[deleteCaixaMarcado] falhou REGISTRO=${reg}: ${e?.message || e}`);
+      return { success: false, error: e?.message || String(e) };
+    }
+  }
+
   async markCrediarioParcelaUnpaid(input: {
     registro: string | number;
     controle: string | number;
