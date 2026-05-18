@@ -287,6 +287,9 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
    * Aplica fixes em lote (UPDATE batch por REF).
    * Cada item: { ref, ncm } — atualiza TODOS os produtos daquela REF.
    * Respeita ERP_WRITE_ENABLED.
+   *
+   * Processa em CHUNKS de 500 com transação por chunk pra evitar
+   * lock timeout no MySQL com grandes volumes (6k+ items).
    */
   async applyFixes(items: Array<{ ref: string; ncm: string }>): Promise<NcmApplyResult> {
     if (!this.isWriteEnabled) {
@@ -304,52 +307,66 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
     const { ncm: ncmCol } = await this.detectCols();
     const errors: Array<{ ref: string; error: string }> = [];
     let applied = 0;
+    let chunksDone = 0;
 
-    const conn = await this.pool.getConnection();
-    try {
-      await conn.beginTransaction();
+    const CHUNK_SIZE = 500;
+    const totalChunks = Math.ceil(items.length / CHUNK_SIZE);
 
-      for (const it of items) {
-        const ncmClean = String(it.ncm || '').replace(/\D/g, '');
-        if (ncmClean.length !== 8) {
-          errors.push({ ref: it.ref, error: `NCM "${it.ncm}" não tem 8 dígitos` });
-          continue;
-        }
-        if (!it.ref || !it.ref.trim()) {
-          errors.push({ ref: it.ref, error: 'REF vazia' });
-          continue;
-        }
-        try {
-          const [result] = await conn.query<mysql.ResultSetHeader>(
-            `UPDATE produtos SET \`${ncmCol}\` = ? WHERE REF = ?`,
-            [ncmClean, it.ref.trim()],
-          );
-          applied += result.affectedRows || 0;
-        } catch (e: any) {
-          errors.push({ ref: it.ref, error: e.message });
-        }
-      }
+    this.logger.log(
+      `applyFixes: ${items.length} itens em ${totalChunks} chunks de ${CHUNK_SIZE}`,
+    );
 
-      if (errors.length > 0 && errors.length === items.length) {
-        await conn.rollback();
-        return { applied: 0, skipped: items.length, errors, message: 'Tudo falhou — rollback' };
-      }
-
-      await conn.commit();
-      return { applied, skipped: 0, errors };
-    } catch (e: any) {
+    for (let start = 0; start < items.length; start += CHUNK_SIZE) {
+      const chunk = items.slice(start, start + CHUNK_SIZE);
+      const conn = await this.pool.getConnection();
       try {
-        await conn.rollback();
-      } catch {}
-      return {
-        applied: 0,
-        skipped: items.length,
-        errors: [{ ref: '*', error: e.message }],
-        message: 'Transação revertida',
-      };
-    } finally {
-      conn.release();
+        await conn.beginTransaction();
+
+        for (const it of chunk) {
+          const ncmClean = String(it.ncm || '').replace(/\D/g, '');
+          if (ncmClean.length !== 8) {
+            errors.push({ ref: it.ref, error: `NCM "${it.ncm}" não tem 8 dígitos` });
+            continue;
+          }
+          if (!it.ref || !it.ref.trim()) {
+            errors.push({ ref: it.ref, error: 'REF vazia' });
+            continue;
+          }
+          try {
+            const [result] = await conn.query<mysql.ResultSetHeader>(
+              `UPDATE produtos SET \`${ncmCol}\` = ? WHERE REF = ?`,
+              [ncmClean, it.ref.trim()],
+            );
+            applied += result.affectedRows || 0;
+          } catch (e: any) {
+            errors.push({ ref: it.ref, error: e.message });
+          }
+        }
+
+        await conn.commit();
+        chunksDone++;
+        this.logger.log(
+          `Chunk ${chunksDone}/${totalChunks} OK · applied=${applied} · errors=${errors.length}`,
+        );
+      } catch (e: any) {
+        try {
+          await conn.rollback();
+        } catch {}
+        errors.push({
+          ref: `chunk_${chunksDone}`,
+          error: `Transação falhou: ${e.message}`,
+        });
+      } finally {
+        conn.release();
+      }
     }
+
+    return {
+      applied,
+      skipped: items.length - applied - errors.length,
+      errors,
+      message: `Processado em ${chunksDone}/${totalChunks} chunks`,
+    };
   }
 }
 

@@ -35,11 +35,11 @@ export class NcmAuditController {
     if (!Array.isArray(body?.items) || body.items.length === 0) {
       return { applied: 0, skipped: 0, errors: [{ ref: '*', error: 'items vazio' }] };
     }
-    if (body.items.length > 5000) {
+    if (body.items.length > 50000) {
       return {
         applied: 0,
         skipped: body.items.length,
-        errors: [{ ref: '*', error: 'Máximo 5000 itens por batch' }],
+        errors: [{ ref: '*', error: 'Máximo 50.000 itens por batch' }],
       };
     }
     return this.ncmAudit.applyFixes(body.items);
