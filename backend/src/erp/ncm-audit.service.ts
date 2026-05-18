@@ -132,7 +132,9 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
     // ORDEM IMPORTA — específicos antes de genéricos
     { match: /\b(sutia|sutiã|sutian)\b/i, ncm: '62121000', desc: 'Sutiãs' },
     { match: /\b(calcinha)\b/i, ncm: '62083100', desc: 'Calcinhas algodão' },
+    { match: /\b(body)\b/i, ncm: '61082100', desc: 'Body feminino (malha algodão)' },
     { match: /\b(lingerie)\b/i, ncm: '62121000', desc: 'Lingerie' },
+    { match: /\b(roupao|roupão|robe|hobby)\b/i, ncm: '62083100', desc: 'Roupões femininos' },
     { match: /\b(pijama)\b/i, ncm: '62083100', desc: 'Pijamas femininos' },
     { match: /\b(camisola)\b/i, ncm: '62083100', desc: 'Camisolas' },
     { match: /\b(maio|maiô|biquini|biquíni)\b/i, ncm: '61124100', desc: 'Maiôs e biquínis' },
@@ -152,7 +154,10 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
     { match: /\b(casaco|jaqueta|blazer|cardigan|colete)\b/i, ncm: '62043200', desc: 'Casacos/blazers' },
     { match: /\b(kimono)\b/i, ncm: '62114300', desc: 'Kimonos' },
 
-    { match: /\b(bolsa|carteira)\b/i, ncm: '42022200', desc: 'Bolsas e carteiras' },
+    { match: /\b(mochila|backpack)\b/i, ncm: '42029200', desc: 'Mochilas (matéria têxtil)' },
+    { match: /\b(necessaire|nec[ée]ssaire)\b/i, ncm: '42029200', desc: 'Necessaires' },
+    { match: /\b(bolsa|carteira|pochete)\b/i, ncm: '42022200', desc: 'Bolsas e carteiras' },
+    { match: /\b(boia|b[oó]ia|inflavel|inflável)\b/i, ncm: '95069900', desc: 'Artigos de praia/inflados' },
     { match: /\b(sapato|sandalia|sandália|tenis|tênis|rasteira|chinelo)\b/i, ncm: '64035100', desc: 'Calçados' },
     { match: /\b(cinto)\b/i, ncm: '42033000', desc: 'Cintos' },
     { match: /\b(brinco|colar|anel|pulseira|bijuteria)\b/i, ncm: '71171900', desc: 'Bijuterias' },
