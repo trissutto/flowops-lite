@@ -697,13 +697,20 @@ export default function TriagemPage() {
                 const subColor = isGrade ? 'text-fuchsia-700' : 'text-emerald-700';
                 const titulo = isGrade ? '🧩 Agrupa grade · Joga na caixa de' : 'Joga na caixa de';
                 return (
-                  <div className={`rounded-lg p-3 ${bg} border-2 ${border}`}>
-                    <div className={`text-xs uppercase font-bold ${titleColor}`}>{titulo}</div>
-                    <div className={`text-2xl font-bold mt-0.5 ${nameColor}`}>
+                  <div className={`rounded-xl p-5 ${bg} border-4 ${border} shadow-lg`}>
+                    <div className={`text-xs uppercase font-bold ${titleColor} tracking-wider`}>
+                      {titulo}
+                    </div>
+                    <div
+                      className={`text-5xl sm:text-6xl font-black mt-2 ${nameColor} tracking-tight uppercase leading-none`}
+                      style={{ letterSpacing: '-0.02em' }}
+                    >
                       {lastSuggestion.sugerido.storeName}
                     </div>
-                    <div className={`text-xs mt-0.5 ${subColor}`}>
-                      {lastSuggestion.sugerido.storeCode} · {lastSuggestion.sugerido.reason}
+                    <div className={`text-sm mt-3 ${subColor} font-medium`}>
+                      <span className="font-mono font-bold">{lastSuggestion.sugerido.storeCode}</span>
+                      <span className="mx-1.5 opacity-60">·</span>
+                      {lastSuggestion.sugerido.reason}
                     </div>
                   </div>
                 );
