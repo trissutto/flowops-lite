@@ -823,6 +823,128 @@ export class RealignmentShipmentService {
    *
    * Itens já marcados como `received` ou `missing` não podem ser bipados de novo.
    */
+  /**
+   * RECONCILIAÇÃO: pra remessa em trânsito, percorre cada item e tenta
+   * encontrar o CODIGO Wincred real pela DESCRIÇÃO + COR + TAMANHO.
+   * Salva como codigoBipado no TransferOrder — fazendo bipe E1 (match direto)
+   * funcionar instantaneamente, sem precisar do lookup REF+COR+TAM.
+   *
+   * Lida com zeros à esquerda via skuVariants no fallback E2.
+   *
+   * Usado quando vendedora reclama "bipe não acha" — admin roda esse e
+   * a remessa volta a aceitar bipes.
+   */
+  async refreshSkusForShipment(shipmentId: string): Promise<{
+    ok: boolean;
+    code: string;
+    total: number;
+    updated: number;
+    unresolved: number;
+    details: Array<{
+      transferOrderId: string;
+      refCode: string;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string | null;
+      codigoAntes: string | null;
+      codigoDepois: string | null;
+      via: 'descricao' | 'ref-cor-tam' | 'sku-variants' | 'nao-encontrado';
+    }>;
+  }> {
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+
+    const items = await this.prisma.transferOrder.findMany({
+      where: { shipmentId } as any,
+      select: {
+        id: true, refCode: true, cor: true, tamanho: true,
+        descricao: true, codigoBipado: true,
+      } as any,
+    });
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const stripZeros = (s: string) => String(s || '').trim().replace(/^0+/, '') || '0';
+    const details: any[] = [];
+    let updated = 0;
+    let unresolved = 0;
+
+    for (const it of items as any[]) {
+      let codigoNovo: string | null = null;
+      let via: 'descricao' | 'ref-cor-tam' | 'sku-variants' | 'nao-encontrado' = 'nao-encontrado';
+
+      // ESTRATÉGIA 1: busca por DESCRIÇÃO + COR + TAMANHO (priorizada por estoque)
+      if (it.descricao) {
+        try {
+          const rows = await this.erp.searchByDescriptionPlusCorTam(
+            it.descricao, it.cor, it.tamanho,
+          );
+          if (rows && rows.length > 0) {
+            codigoNovo = String(rows[0].CODIGO).trim();
+            via = 'descricao';
+          }
+        } catch (e) {
+          this.logger.warn(`[refresh-skus] searchByDescription falhou pra ${it.refCode}: ${(e as Error).message}`);
+        }
+      }
+
+      // ESTRATÉGIA 2: fallback REF + COR + TAM com variantes de zero-padding
+      if (!codigoNovo) {
+        try {
+          codigoNovo = await this.erp.findCodigoByRefCorTam(it.refCode, it.cor, it.tamanho);
+          if (codigoNovo) via = 'ref-cor-tam';
+        } catch {}
+      }
+
+      // ESTRATÉGIA 3: se já tinha codigoBipado salvo, mantém (não força sobrescrever)
+      if (!codigoNovo && it.codigoBipado) {
+        codigoNovo = it.codigoBipado;
+        via = 'sku-variants';
+      }
+
+      const codigoAntes = it.codigoBipado;
+      const mudou = codigoNovo && codigoNovo !== codigoAntes;
+
+      if (codigoNovo && mudou) {
+        await this.prisma.transferOrder.update({
+          where: { id: it.id },
+          data: { codigoBipado: codigoNovo } as any,
+        });
+        updated++;
+      }
+
+      if (!codigoNovo) unresolved++;
+
+      details.push({
+        transferOrderId: it.id,
+        refCode: it.refCode,
+        cor: it.cor,
+        tamanho: it.tamanho,
+        descricao: it.descricao,
+        codigoAntes,
+        codigoDepois: codigoNovo,
+        via,
+      });
+    }
+
+    // Invalida cache pra forçar refresh no próximo bipe
+    this.invalidateSkuCache(shipmentId);
+
+    this.logger.log(
+      `[refresh-skus] ${shipment.code}: ${items.length} items, ${updated} atualizados, ${unresolved} unresolved`,
+    );
+
+    return {
+      ok: true,
+      code: shipment.code,
+      total: items.length,
+      updated,
+      unresolved,
+      details,
+    };
+  }
+
   async scanItem(input: { shipmentId: string; sku: string; storeId: string; userId?: string }) {
     const store = await this.prisma.store.findUnique({
       where: { id: input.storeId },

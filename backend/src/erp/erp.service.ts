@@ -2469,6 +2469,58 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *  - Agrupa por REF (DISTINCT) e traz uma amostra da descrição.
    *  - Limite generoso (200 REFs) porque são só REFs únicas, não linhas.
    */
+  /**
+   * Busca CODIGO por DESCRIÇÃO + COR + TAMANHO, priorizando o que tem estoque.
+   * Usado pela reconciliação de remessa quando o lookup REF+COR+TAM falha
+   * (REF cadastrada com grafia diferente, zeros à esquerda, etc).
+   *
+   * Estratégia: quebra a descrição em palavras (AND LIKE), filtra por cor
+   * e tamanho exatos, ordena por estoque DESC. Retorna até 5 candidatos.
+   */
+  async searchByDescriptionPlusCorTam(
+    descricao: string,
+    cor: string | null,
+    tamanho: string | null,
+  ): Promise<Array<{ CODIGO: string; REF: string; COR: string; TAMANHO: string; DESCRICAOCOMPLETA: string; TOTAL_EST: number }>> {
+    if (!this.pool || !descricao) return [];
+    const palavras = String(descricao).trim().split(/\s+/).filter((p) => p.length > 1);
+    if (palavras.length === 0) return [];
+
+    const likeConds = palavras.map(() => 'UPPER(p.DESCRICAOCOMPLETA) LIKE UPPER(?)').join(' AND ');
+    const corNorm = (cor || '').trim();
+    const tamNorm = (tamanho || '').trim();
+
+    try {
+      const sql = `
+        SELECT p.CODIGO, p.REF, COALESCE(p.COR,'') AS COR,
+               COALESCE(p.TAMANHO,'') AS TAMANHO, p.DESCRICAOCOMPLETA,
+               COALESCE((SELECT SUM(e.ESTOQUE) FROM estoque e WHERE e.CODIGO = p.CODIGO), 0) AS TOTAL_EST
+          FROM produtos p
+          WHERE ${likeConds}
+            ${corNorm ? "AND TRIM(UPPER(COALESCE(p.COR,''))) = TRIM(UPPER(?))" : ''}
+            ${tamNorm ? "AND TRIM(UPPER(COALESCE(p.TAMANHO,''))) = TRIM(UPPER(?))" : ''}
+          ORDER BY TOTAL_EST DESC, p.CODIGO DESC
+          LIMIT 5
+      `;
+      const params: string[] = palavras.map((p) => `%${p}%`);
+      if (corNorm) params.push(corNorm);
+      if (tamNorm) params.push(tamNorm);
+
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+      return (rows as any[]).map((r) => ({
+        CODIGO: String(r.CODIGO).trim(),
+        REF: String(r.REF || '').trim(),
+        COR: String(r.COR || '').trim(),
+        TAMANHO: String(r.TAMANHO || '').trim(),
+        DESCRICAOCOMPLETA: String(r.DESCRICAOCOMPLETA || '').trim(),
+        TOTAL_EST: Number(r.TOTAL_EST) || 0,
+      }));
+    } catch (e) {
+      this.logger.warn(`searchByDescriptionPlusCorTam falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   async searchByDescriptionGrouped(
     term: string,
   ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>> {
