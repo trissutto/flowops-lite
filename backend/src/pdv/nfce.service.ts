@@ -349,10 +349,16 @@ export class NfceService {
           ambiente === '2' && idx === 0
             ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
             : it.descricao || cProd;
-        // NCM: SEFAZ rejeita 00000000 em Lucro Presumido. Usa 99999999 como
-        // fallback de teste/genérico (aceito em homologação). Pra produção,
-        // recomendado cadastrar NCM real (8 dígitos) no Wincred.
-        const ncm = (it.ncm && it.ncm !== '00000000') ? it.ncm : (isSimples ? '00000000' : '99999999');
+        // NCM: SEFAZ valida contra TIPI real em produção (cStat 778 se inválido).
+        //   Simples Nacional pode usar 00000000 (genérico aceito).
+        //   Lucro Presumido/Real PRECISA NCM real existente na TIPI — 99999999
+        //   só funciona em homologação. Em produção, SEFAZ rejeita.
+        // Fallback 61099000 = "T-shirts, camisetas interiores e similares, de
+        // malha" — NCM real válido na TIPI, comumente aceito como genérico pra
+        // vestuário. IDEAL: cadastrar NCM real por produto no Wincred.
+        const ncm = (it.ncm && it.ncm !== '00000000' && it.ncm !== '99999999')
+          ? it.ncm
+          : (isSimples ? '00000000' : '61099000');
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
