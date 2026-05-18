@@ -162,6 +162,30 @@ export default function AuditoriaNcmPage() {
     }
   };
 
+  const handleExportSql = async () => {
+    try {
+      // Pega token JWT do localStorage (mesma forma do api helper)
+      const token =
+        typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      const apiUrl =
+        process.env.NEXT_PUBLIC_API_URL ||
+        'https://flowops-lite-production.up.railway.app/api';
+      const res = await fetch(`${apiUrl}/admin/ncm-audit/export-sql`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ncm-fix-${new Date().toISOString().slice(0, 10)}.sql`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert('Falha ao gerar SQL: ' + e.message);
+    }
+  };
+
   const handleExportCsv = () => {
     if (!data) return;
     const headers = [
@@ -234,6 +258,15 @@ export default function AuditoriaNcmPage() {
           >
             <Download className="w-4 h-4" />
             CSV
+          </button>
+          <button
+            onClick={handleExportSql}
+            disabled={!data}
+            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium flex items-center gap-1 disabled:opacity-50"
+            title="Baixa arquivo .sql pra rodar direto no MySQL Workbench"
+          >
+            <Download className="w-4 h-4" />
+            SQL ⚡
           </button>
         </div>
       </header>
