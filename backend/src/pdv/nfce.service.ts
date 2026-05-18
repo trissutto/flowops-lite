@@ -349,7 +349,10 @@ export class NfceService {
           ambiente === '2' && idx === 0
             ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
             : it.descricao || cProd;
-        const ncm = it.ncm || '00000000';
+        // NCM: SEFAZ rejeita 00000000 em Lucro Presumido. Usa 99999999 como
+        // fallback de teste/genérico (aceito em homologação). Pra produção,
+        // recomendado cadastrar NCM real (8 dígitos) no Wincred.
+        const ncm = (it.ncm && it.ncm !== '00000000') ? it.ncm : (isSimples ? '00000000' : '99999999');
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
         // vProd = bruto sem descontos (qty × precoUnit). vDesc é separado.
@@ -372,9 +375,7 @@ export class NfceService {
           ? `<ICMS><ICMSSN102><orig>0</orig><CSOSN>102</CSOSN></ICMSSN102></ICMS>
         <PIS><PISNT><CST>07</CST></PISNT></PIS>
         <COFINS><COFINSNT><CST>07</CST></COFINSNT></COFINS>`
-          : `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${baseCalc.toFixed(2)}</vBC><pICMS>${pICMS.toFixed(2)}</pICMS><vICMS>${vICMSItem.toFixed(2)}</vICMS></ICMS00></ICMS>
-        <PIS><PISAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pPIS>${pPIS.toFixed(2)}</pPIS><vPIS>${vPISItem.toFixed(2)}</vPIS></PISAliq></PIS>
-        <COFINS><COFINSAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pCOFINS>${pCOFINS.toFixed(2)}</pCOFINS><vCOFINS>${vCOFINSItem.toFixed(2)}</vCOFINS></COFINSAliq></COFINS>`;
+          : `<ICMS><ICMS00><orig>0</orig><CST>00</CST><modBC>3</modBC><vBC>${baseCalc.toFixed(2)}</vBC><pICMS>${pICMS.toFixed(2)}</pICMS><vICMS>${vICMSItem.toFixed(2)}</vICMS></ICMS00></ICMS><PIS><PISAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pPIS>${pPIS.toFixed(2)}</pPIS><vPIS>${vPISItem.toFixed(2)}</vPIS></PISAliq></PIS><COFINS><COFINSAliq><CST>01</CST><vBC>${baseCalc.toFixed(2)}</vBC><pCOFINS>${pCOFINS.toFixed(2)}</pCOFINS><vCOFINS>${vCOFINSItem.toFixed(2)}</vCOFINS></COFINSAliq></COFINS>`;
 
         return `
     <det nItem="${nItem}">
