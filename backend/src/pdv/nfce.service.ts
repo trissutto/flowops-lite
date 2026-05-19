@@ -351,13 +351,22 @@ export class NfceService {
             : it.descricao || cProd;
         // NCM: SEFAZ valida contra TIPI real em produção (cStat 778 se inválido).
         //   Simples Nacional pode usar 00000000 (genérico aceito).
-        //   Lucro Presumido/Real PRECISA NCM real existente na TIPI — 99999999
-        //   só funciona em homologação. Em produção, SEFAZ rejeita.
+        //   Lucro Presumido/Real PRECISA NCM real existente na TIPI.
         // Fallback 61099000 = "T-shirts, camisetas interiores e similares, de
         // malha" — NCM real válido na TIPI, comumente aceito como genérico pra
-        // vestuário. IDEAL: cadastrar NCM real por produto no Wincred.
-        const ncm = (it.ncm && it.ncm !== '00000000' && it.ncm !== '99999999')
-          ? it.ncm
+        // vestuário. Capítulos válidos pra vestuário: 61, 62, 63.
+        const ncmFromErp = String(it.ncm || '').replace(/\D/g, '');
+        const isValidNcm = (n: string): boolean => {
+          if (n.length !== 8) return false;
+          if (n === '00000000' || n === '99999999') return false;
+          // Capítulo (2 primeiros dígitos) deve estar em 01-97 (range válido TIPI).
+          // Capítulos 98/99 são reservados/inexistentes.
+          const cap = parseInt(n.substring(0, 2), 10);
+          if (isNaN(cap) || cap < 1 || cap > 97) return false;
+          return true;
+        };
+        const ncm = isValidNcm(ncmFromErp)
+          ? ncmFromErp
           : (isSimples ? '00000000' : '61099000');
         const cfop = it.cfop || '5102';
         const vUnCom = (it.precoUnit || 0).toFixed(2);
