@@ -71,7 +71,8 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/publicar-site',   label: 'Publicar no Site', icon: Globe },
       { href: '/retaguarda/whatsapp',        label: 'WhatsApp',         icon: Smartphone },
       { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
-      { href: '/retaguarda/auditoria-ncm',   label: 'Auditoria NCM',    icon: FileSearch },
+      { href: '/retaguarda/auditoria-ncm',         label: 'Auditoria NCM',          icon: FileSearch },
+      { href: '/retaguarda/transferencias-report', label: 'Transferências (relatório)', icon: TrendingUp },
     ],
   },
   {
