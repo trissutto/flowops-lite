@@ -838,7 +838,7 @@ export class CashService {
         }
 
         // 3) Sangrias/suprimentos via cashSessions abertas no range
-        // Também pega fundoTroco da sessão.
+        // Também pega fundoTroco da sessão + checkedAt/checkedByName.
         const sessions = await (this.prisma as any).pdvCashSession.findMany({
           where: { storeCode: s.code, openedAt: { gte: fromStart, lte: toEnd } },
           select: {
@@ -846,6 +846,9 @@ export class CashService {
             fundoTroco: true,
             openedAt: true,
             closedAt: true,
+            checkedAt: true,
+            checkedByName: true,
+            checkedNote: true,
           } as any,
           orderBy: { openedAt: 'asc' },
         });
@@ -856,6 +859,10 @@ export class CashService {
           (acc, x) => acc + (Number(x.fundoTroco) || 0),
           0,
         );
+        // Última sessão do dia conferida (pra mostrar "Conferido por X em Y")
+        const ultimoCheck = (sessions as any[])
+          .filter((x) => x.checkedAt)
+          .sort((a, b) => new Date(b.checkedAt).getTime() - new Date(a.checkedAt).getTime())[0];
         if (sessions.length > 0) {
           const movs = await (this.prisma as any).pdvCashMovement.findMany({
             where: { cashSessionId: { in: sessions.map((x: any) => x.id) } },
@@ -895,6 +902,15 @@ export class CashService {
             : null,
           openedByName: null,
           fundoTroco: fundoTrocoDoDia,
+          checkedAt: ultimoCheck?.checkedAt
+            ? (ultimoCheck.checkedAt instanceof Date
+                ? ultimoCheck.checkedAt.toISOString()
+                : String(ultimoCheck.checkedAt))
+            : null,
+          checkedByName: ultimoCheck?.checkedByName || null,
+          checkedNote: ultimoCheck?.checkedNote || null,
+          // sessionsDoDia: lista de IDs pra ter o que marcar quando user clica "Conferir"
+          sessionsDoDia: (sessions as any[]).map((x) => x.id),
           totais: {
             totalVendas,
             totalDinheiro,
@@ -1179,6 +1195,65 @@ export class CashService {
    *
    * Retorna { closed: N, details: [...] }.
    */
+  /**
+   * Marca uma ou mais sessões como CONFERIDAS — admin/CEO bateu o caixa contra
+   * o Wincred no dia seguinte e confirma que tá tudo OK (ou anota a diferença).
+   * Idempotente: se chamar 2x, atualiza a data/usuário pro mais recente.
+   *
+   * @param sessionIds — IDs de PdvCashSession (geralmente 1 dia de uma loja)
+   * @param userId — ID do admin que conferiu
+   * @param userName — Nome pra mostrar no painel
+   * @param note — Observação opcional (ex: "Diferença R$ 2,00 — sangria não anotada")
+   */
+  async markSessionsAsChecked(input: {
+    sessionIds: string[];
+    userId: string | null;
+    userName: string;
+    note?: string;
+  }): Promise<{ updated: number }> {
+    const { sessionIds, userId, userName, note } = input;
+    if (!sessionIds?.length) {
+      throw new BadRequestException('Nenhuma sessão informada');
+    }
+    if (!userName?.trim()) {
+      throw new BadRequestException('Nome do conferente é obrigatório');
+    }
+    const result = await (this.prisma as any).pdvCashSession.updateMany({
+      where: { id: { in: sessionIds } },
+      data: {
+        checkedAt: new Date(),
+        checkedByUserId: userId,
+        checkedByName: userName.trim(),
+        checkedNote: note?.trim() || null,
+      },
+    });
+    this.logger.log(
+      `[caixa] CONFERIDO: ${result.count} sessao(oes) por ${userName} (sessions=${sessionIds.join(',')})`,
+    );
+    return { updated: result.count };
+  }
+
+  /**
+   * Desfaz a conferência (caso o admin tenha marcado por engano).
+   */
+  async unmarkSessionsAsChecked(input: {
+    sessionIds: string[];
+  }): Promise<{ updated: number }> {
+    if (!input.sessionIds?.length) {
+      throw new BadRequestException('Nenhuma sessão informada');
+    }
+    const result = await (this.prisma as any).pdvCashSession.updateMany({
+      where: { id: { in: input.sessionIds } },
+      data: {
+        checkedAt: null,
+        checkedByUserId: null,
+        checkedByName: null,
+        checkedNote: null,
+      },
+    });
+    return { updated: result.count };
+  }
+
   async autoCloseExpiredSessions(): Promise<{ closed: number; details: any[] }> {
     const inicioHoje = new Date();
     inicioHoje.setHours(0, 0, 0, 0);

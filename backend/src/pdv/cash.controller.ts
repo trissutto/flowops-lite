@@ -302,4 +302,47 @@ export class CashController {
     }
     return this.svc.getSuperPainelHistorico(dFrom, dTo);
   }
+
+  /**
+   * POST /pdv/caixa/admin/check-sessions
+   * Body: { sessionIds: string[], note?: string }
+   *
+   * Admin/supervisor marca uma ou mais sessões de caixa como CONFERIDAS
+   * (bateu valores contra Wincred e validou). Fica registrado quem e quando
+   * pra auditoria.
+   */
+  @Post('admin/check-sessions')
+  async checkSessions(
+    @Req() req: any,
+    @Body() body: { sessionIds: string[]; note?: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    return this.svc.markSessionsAsChecked({
+      sessionIds: body.sessionIds || [],
+      userId: req?.user?.userId || null,
+      userName: req?.user?.name || req?.user?.username || 'admin',
+      note: body.note,
+    });
+  }
+
+  /**
+   * POST /pdv/caixa/admin/uncheck-sessions
+   * Desfaz a conferência (caso marque por engano).
+   */
+  @Post('admin/uncheck-sessions')
+  async uncheckSessions(
+    @Req() req: any,
+    @Body() body: { sessionIds: string[] },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor') {
+      throw new ForbiddenException('Apenas admin ou supervisor');
+    }
+    return this.svc.unmarkSessionsAsChecked({
+      sessionIds: body.sessionIds || [],
+    });
+  }
 }

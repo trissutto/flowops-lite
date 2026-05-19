@@ -73,6 +73,11 @@ type Loja = {
   openedAt: string | null;
   openedByName: string | null;
   fundoTroco: number;
+  // ── Conferência manual de caixa (admin marca dia anterior como "conferido")
+  checkedAt?: string | null;
+  checkedByName?: string | null;
+  checkedNote?: string | null;
+  sessionsDoDia?: string[]; // IDs das sessões do dia (modo histórico)
   totais: {
     totalVendas: number;
     totalDinheiro: number;
@@ -347,7 +352,7 @@ export default function SuperPainelCaixas() {
             {/* Grid de lojas */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {data.lojas.map((l) => (
-                <LojaCard key={l.storeCode} loja={l} />
+                <LojaCard key={l.storeCode} loja={l} onReload={() => load(true)} />
               ))}
             </div>
 
@@ -373,7 +378,8 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
   );
 }
 
-function LojaCard({ loja }: { loja: Loja }) {
+function LojaCard({ loja, onReload }: { loja: Loja; onReload?: () => void }) {
+  const reload = () => { if (onReload) onReload(); };
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showSangrias, setShowSangrias] = useState(false);
@@ -447,13 +453,78 @@ function LojaCard({ loja }: { loja: Loja }) {
           </div>
         )}
 
-        {/* Fundo de troco + Sangria/Suprimento clicaveis (cascata) */}
-        {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0) && (
+        {/* Bloco financeiro do caixa: fundo, dinheiro fim de dia, conferência */}
+        {(loja.aberta || t.totalSangrias > 0 || t.totalSuprimentos > 0 || loja.fundoTroco > 0 || t.totalDinheiro > 0) && (
           <div className="pt-1 border-t border-slate-100 space-y-1">
-            {loja.fundoTroco > 0 && (
-              <div className="flex justify-between text-[11px] text-slate-700">
-                <span className="font-bold">💵 Fundo do caixa</span>
-                <span className="font-mono tabular-nums font-bold">{brl(loja.fundoTroco)}</span>
+            {/* Fundo do caixa — agora SEMPRE aparece (inclusive dias anteriores) */}
+            <div className="flex justify-between text-[11px] text-slate-700">
+              <span className="font-bold">💵 Fundo do caixa (abertura)</span>
+              <span className="font-mono tabular-nums font-bold">{brl(loja.fundoTroco)}</span>
+            </div>
+            {/* Dinheiro esperado fim de dia — pra bater caixa físico contra Wincred.
+                Esse valor é o que deveria estar no caixa ao fechar (vira fundo do dia seguinte). */}
+            {!loja.aberta && t.dinheiroEsperado !== undefined && (
+              <div className="flex justify-between text-[11px] text-emerald-800 bg-emerald-50 rounded px-1.5 py-1">
+                <span className="font-bold">💰 Dinheiro fim de dia (fundo + vendas - sangrias + suprimentos)</span>
+                <span className="font-mono tabular-nums font-bold">{brl(t.dinheiroEsperado)}</span>
+              </div>
+            )}
+            {/* Conferência: badge se já conferido OU botão pra marcar */}
+            {!loja.aberta && loja.sessionsDoDia && loja.sessionsDoDia.length > 0 && (
+              loja.checkedAt ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!confirm(`Desmarcar conferência de ${loja.storeName}?`)) return;
+                    try {
+                      await api('/pdv/caixa/admin/uncheck-sessions', {
+                        method: 'POST',
+                        body: JSON.stringify({ sessionIds: loja.sessionsDoDia }),
+                      });
+                      reload();
+                    } catch (e: any) {
+                      alert(`Erro: ${e?.message || e}`);
+                    }
+                  }}
+                  className="w-full flex justify-between items-center text-[11px] bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded px-1.5 py-1 transition"
+                  title="Clica pra desmarcar"
+                >
+                  <span className="font-bold">
+                    ✅ Conferido por <b>{loja.checkedByName}</b>
+                  </span>
+                  <span className="font-mono text-emerald-700">
+                    {loja.checkedAt ? new Date(loja.checkedAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const note = prompt(`Marcar caixa de ${loja.storeName} como CONFERIDO?\n\nObservação (opcional, ex: "diferença R$ 2,00"):`, '');
+                    if (note === null) return; // cancelou
+                    try {
+                      await api('/pdv/caixa/admin/check-sessions', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          sessionIds: loja.sessionsDoDia,
+                          note: note.trim() || undefined,
+                        }),
+                      });
+                      reload();
+                    } catch (e: any) {
+                      alert(`Erro: ${e?.message || e}`);
+                    }
+                  }}
+                  className="w-full flex justify-center items-center gap-1 text-[11px] bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded px-1.5 py-1.5 transition"
+                  title="Marca esse caixa como conferido (bate valores contra Wincred)"
+                >
+                  ✓ CONFERIR CAIXA
+                </button>
+              )
+            )}
+            {loja.checkedNote && (
+              <div className="text-[10px] text-slate-600 italic bg-slate-50 rounded px-1.5 py-0.5">
+                📝 {loja.checkedNote}
               </div>
             )}
 

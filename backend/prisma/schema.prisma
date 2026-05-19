@@ -1062,6 +1062,12 @@ model PdvCashSession {
   openedAt        DateTime @default(now()) @map("opened_at")
   closedAt        DateTime? @map("closed_at")
   closedByName    String?  @map("closed_by_name")
+  // Conferência manual: CEO/admin bate caixa do dia anterior contra Wincred
+  // e marca como conferido. Independente do fechamento operacional.
+  checkedAt       DateTime? @map("checked_at")
+  checkedByUserId String?   @map("checked_by_user_id")
+  checkedByName   String?   @map("checked_by_name")
+  checkedNote     String?   @map("checked_note") @db.Text
 
   movements       PdvCashMovement[]
 
