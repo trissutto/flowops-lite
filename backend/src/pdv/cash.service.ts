@@ -838,12 +838,24 @@ export class CashService {
         }
 
         // 3) Sangrias/suprimentos via cashSessions abertas no range
+        // Também pega fundoTroco da sessão.
         const sessions = await (this.prisma as any).pdvCashSession.findMany({
           where: { storeCode: s.code, openedAt: { gte: fromStart, lte: toEnd } },
-          select: { id: true },
+          select: {
+            id: true,
+            fundoTroco: true,
+            openedAt: true,
+            closedAt: true,
+          } as any,
+          orderBy: { openedAt: 'asc' },
         });
         let totalSangrias = 0, totalSuprimentos = 0;
         const movimentos: any[] = [];
+        // Soma fundos de TODAS as sessões do dia (caso tenha mais de uma — ex: auto-close + reabertura)
+        const fundoTrocoDoDia = (sessions as any[]).reduce(
+          (acc, x) => acc + (Number(x.fundoTroco) || 0),
+          0,
+        );
         if (sessions.length > 0) {
           const movs = await (this.prisma as any).pdvCashMovement.findMany({
             where: { cashSessionId: { in: sessions.map((x: any) => x.id) } },
@@ -862,14 +874,27 @@ export class CashService {
           }
         }
 
+        // Dinheiro esperado fim de dia = fundo + vendas dinheiro + suprimentos
+        //   + crediarios recebidos em dinheiro - sangrias.
+        // Esse é o valor que deveria estar fisicamente no caixa ao fechar
+        // (e que vira fundo do dia seguinte se a operadora deixou tudo no caixa).
+        const dinheiroEsperadoFimDia = Math.round(
+          (fundoTrocoDoDia + totalDinheiro + totalSuprimentos + recDinheiro - totalSangrias) * 100,
+        ) / 100;
+
+        // Pega primeira sessão pra referência (sessionId pra check, openedBy, etc)
+        const primeiraSessao = (sessions as any[])[0];
+
         return {
           storeCode: s.code,
           storeName: s.name,
-          sessionId: null,
+          sessionId: primeiraSessao?.id || null,
           aberta: false,
-          openedAt: null,
+          openedAt: primeiraSessao?.openedAt
+            ? (primeiraSessao.openedAt instanceof Date ? primeiraSessao.openedAt.toISOString() : String(primeiraSessao.openedAt))
+            : null,
           openedByName: null,
-          fundoTroco: 0,
+          fundoTroco: fundoTrocoDoDia,
           totais: {
             totalVendas,
             totalDinheiro,
@@ -881,7 +906,7 @@ export class CashService {
             qtdMarcados,
             totalSangrias,
             totalSuprimentos,
-            dinheiroEsperado: 0,
+            dinheiroEsperado: dinheiroEsperadoFimDia,
             qtdVendas: qtdVendasReais,
           },
           vendedoras,
