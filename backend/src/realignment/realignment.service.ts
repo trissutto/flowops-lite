@@ -243,6 +243,31 @@ export class RealignmentService {
     const minPerDest = Math.max(0, Number(input.minPerDest) || 0);
     const keepMinOrigin = Math.max(0, Number(input.keepMinOrigin ?? minPerDest));
 
+    // Se TODAS as REFs informadas foram detectadas como AMBÍGUAS, retorna
+    // resposta vazia (plan=[]) COM ambiguousRefs populado — pra UI mostrar
+    // os botões de escolha de família. Antes lançava 400, que escondia a
+    // info de ambiguidade da UI.
+    if (skus.length === 0 && ambiguousRefs.length > 0) {
+      return {
+        input: { refs: refsIn, skus, origins, dests, minPerDest, keepMinOrigin },
+        stores: [],
+        plan: [],
+        perSku: [],
+        perRef: [],
+        notFoundRefs,
+        ambiguousRefs,
+        removedByValidation: [],
+        totals: {
+          totalMoves: 0,
+          totalUnits: 0,
+          skusWithFullCoverage: 0,
+          skusPartial: 0,
+          skusUnchanged: 0,
+          refsScanned: refsIn.length,
+          skusScanned: 0,
+        },
+      } as any;
+    }
     if (skus.length === 0) throw new BadRequestException(
       notFoundRefs.length > 0
         ? `Nenhuma variação encontrada para: ${notFoundRefs.join(', ')}`
