@@ -447,7 +447,20 @@ export class RealignmentService {
       estoqueReal: number;
     }> = [];
 
-    if (plan.length > 0) {
+    // ─────────────────────────────────────────────────────────────────
+    // VALIDAÇÃO DEFENSIVA DESABILITADA (2026-05-19)
+    // ─────────────────────────────────────────────────────────────────
+    // Motivo: a validação usa `getStockByRefCorTamInStoreBatch` que tem
+    // critério MAIS RESTRITIVO que o `getStockBySkusDetailed` usado pelo
+    // algoritmo principal. Em ambientes com dados ligeiramente incon-
+    // sistentes no Wincred (LOJA="01" vs "1", CODIGOs duplicados, etc),
+    // ela reportava estoqueReal=0 mesmo quando o estoque existia, e
+    // removia TODAS as movimentações sugeridas → plano sempre vazio.
+    //
+    // Em vez de bloquear, agora deixa o plano sair como o algoritmo
+    // principal achou. Se origem na verdade não tiver a peça física,
+    // o precheck/closeAndSend pega no momento do envio (com allowNegative).
+    if (false && plan.length > 0) {
       const validationInput: Array<{
         refCode: string;
         cor: string | null;
