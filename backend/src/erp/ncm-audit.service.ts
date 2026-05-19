@@ -356,7 +356,7 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
           } catch (e: any) {
             lastError = e.message || String(e);
             // Lock timeout — retry com delay; outros erros — desiste
-            if (lastError.includes('Lock wait timeout')) {
+            if (lastError && lastError.includes('Lock wait timeout')) {
               await new Promise((r) => setTimeout(r, 500 * attempt));
               continue;
             }
