@@ -10,6 +10,9 @@ import { RealignmentShipmentService } from './shipment.service';
 import { RealignmentAutoService } from './realignment-auto.service';
 import { TriagemService } from './triage.service';
 import { ShipmentPdfService } from './shipment-pdf.service';
+import { RealignmentReportController } from './realignment-report.controller';
+import { RealignmentReportService } from './realignment-report.service';
+import { RealignmentPricingService } from './realignment-pricing.service';
 
 /**
  * Nota: dependia de WhatsappModule (disparo de WhatsApp consolidado) até o
@@ -19,8 +22,24 @@ import { ShipmentPdfService } from './shipment-pdf.service';
  */
 @Module({
   imports: [AuthModule, PrismaModule, ErpModule, WebsocketModule, WpDbModule],
-  controllers: [RealignmentController],
-  providers: [RealignmentService, RealignmentShipmentService, RealignmentAutoService, TriagemService, ShipmentPdfService],
-  exports: [RealignmentService, RealignmentShipmentService, RealignmentAutoService, TriagemService, ShipmentPdfService],
+  controllers: [RealignmentController, RealignmentReportController],
+  providers: [
+    RealignmentService,
+    RealignmentShipmentService,
+    RealignmentAutoService,
+    TriagemService,
+    ShipmentPdfService,
+    RealignmentReportService,
+    RealignmentPricingService,
+  ],
+  exports: [
+    RealignmentService,
+    RealignmentShipmentService,
+    RealignmentAutoService,
+    TriagemService,
+    ShipmentPdfService,
+    RealignmentReportService,
+    RealignmentPricingService,
+  ],
 })
 export class RealignmentModule {}

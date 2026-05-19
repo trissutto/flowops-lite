@@ -126,6 +126,10 @@ interface ReportData {
   shipments: ShipmentRow[];
   monthlyEvolution: Array<{ month: string; sent: number; received: number; value: number }>;
   matrix: Array<{ from: string; to: string; qty: number; value: number }>;
+  meta?: {
+    ordersWithoutPrice: number;
+    ordersTotal: number;
+  };
 }
 
 /* ─── Mock data — usado se o endpoint não existir ainda ─── */
@@ -316,7 +320,8 @@ const STATUS_STYLES: Record<ShipmentStatus, { label: string; bg: string; text: s
 export default function TransferenciasReportPage() {
   const [data, setData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [period, setPeriod] = useState<'7d' | '30d' | '90d' | 'ytd' | 'custom'>('90d');
+  const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<'7d' | '30d' | '90d' | 'ytd' | '12m'>('90d');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | ShipmentStatus | 'divergencias'>('all');
   const [fromFilter, setFromFilter] = useState<string>('');
@@ -326,13 +331,20 @@ export default function TransferenciasReportPage() {
   const [selectedShipment, setSelectedShipment] = useState<ShipmentRow | null>(null);
   const [showFiltersPanel, setShowFiltersPanel] = useState(false);
 
-  useEffect(() => {
+  const loadReport = () => {
     setLoading(true);
-    // Tenta backend; cai pra mock se falhar
-    api<ReportData>(`/transferencias/report?period=${period}`)
+    setError(null);
+    api<ReportData>(`/transferencias/report?period=${period}&_t=${Date.now()}`)
       .then((res) => setData(res))
-      .catch(() => setData(generateMockData()))
+      .catch((e: any) => {
+        setError(e?.message || 'Falha ao carregar relatório');
+        setData(null);
+      })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadReport();
   }, [period]);
 
   /* ─── Filtros aplicados (sintético) ─── */
@@ -385,7 +397,7 @@ export default function TransferenciasReportPage() {
 
           {/* Period selector */}
           <div className="flex items-center gap-1 bg-stone-100 rounded-lg p-1 text-sm">
-            {(['7d', '30d', '90d', 'ytd'] as const).map((p) => (
+            {(['7d', '30d', '90d', 'ytd', '12m'] as const).map((p) => (
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
@@ -395,7 +407,15 @@ export default function TransferenciasReportPage() {
                     : 'text-stone-600 hover:text-stone-900'
                 }`}
               >
-                {p === '7d' ? '7 dias' : p === '30d' ? '30 dias' : p === '90d' ? '90 dias' : 'Ano'}
+                {p === '7d'
+                  ? '7 dias'
+                  : p === '30d'
+                  ? '30 dias'
+                  : p === '90d'
+                  ? '90 dias'
+                  : p === 'ytd'
+                  ? 'Ano'
+                  : '12 meses'}
               </button>
             ))}
           </div>
@@ -417,10 +437,39 @@ export default function TransferenciasReportPage() {
         </div>
       </header>
 
-      {loading || !data ? (
+      {loading ? (
         <SkeletonReport />
+      ) : error || !data ? (
+        <div className="max-w-screen-2xl mx-auto px-6 py-12 text-center">
+          <div className="inline-flex flex-col items-center gap-3 bg-white border border-stone-200 rounded-2xl px-8 py-10 shadow-sm">
+            <AlertTriangle className="w-10 h-10 text-amber-500" />
+            <h3 className="text-lg font-bold text-stone-900">Não consegui carregar o relatório</h3>
+            <p className="text-sm text-stone-600 max-w-md">
+              {error || 'Backend retornou vazio. Verifique se há transferências no período selecionado.'}
+            </p>
+            <button
+              onClick={loadReport}
+              className="px-4 py-2 rounded-lg bg-stone-900 hover:bg-stone-800 text-white text-sm font-medium"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="max-w-screen-2xl mx-auto px-6 py-6 space-y-6">
+          {/* Aviso de produtos sem preço cadastrado */}
+          {data.meta && data.meta.ordersWithoutPrice > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 flex items-center gap-3">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <div className="flex-1 text-xs text-amber-900">
+                <strong>{data.meta.ordersWithoutPrice}</strong> de {data.meta.ordersTotal} itens (
+                {Math.round((data.meta.ordersWithoutPrice / data.meta.ordersTotal) * 100)}%) estão
+                <strong> sem preço de venda</strong> cadastrado no Giga (campo VENDAUN zerado). Esses
+                itens aparecem com R$ 0,00 no relatório.
+              </div>
+            </div>
+          )}
+
           {/* Filtros avançados (toggleable) */}
           {showFiltersPanel && (
             <section className="bg-white rounded-xl border border-stone-200 p-4">
