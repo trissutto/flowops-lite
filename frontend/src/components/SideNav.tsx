@@ -24,6 +24,7 @@ import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
+  Bot, TrendingUp,
 } from 'lucide-react';
 
 type NavItem = {
@@ -70,6 +71,8 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/publicar-site',   label: 'Publicar no Site', icon: Globe },
       { href: '/retaguarda/whatsapp',        label: 'WhatsApp',         icon: Smartphone },
       { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
+      { href: '/retaguarda/auditoria-ncm',         label: 'Auditoria NCM',          icon: FileSearch },
+      { href: '/retaguarda/transferencias-report', label: 'Transferências (relatório)', icon: TrendingUp },
     ],
   },
   {
@@ -77,9 +80,12 @@ const GROUPS: NavGroup[] = [
     label: 'Instagram / Live',
     color: 'rose',
     items: [
-      { href: '/retaguarda/inbox',     label: 'Inbox Instagram',  icon: MessageSquare },
-      { href: '/retaguarda/live',      label: 'Live Commerce',    icon: Radio },
-      { href: '/retaguarda/instagram', label: 'Conta Instagram',  icon: Instagram },
+      { href: '/retaguarda/instagram-hub',       label: 'Hub Instagram',      icon: Instagram },
+      { href: '/retaguarda/dm',                  label: 'DM Inbox Pro',       icon: MessageSquare },
+      { href: '/retaguarda/live-pro',            label: 'Live Commerce Pro',  icon: Radio },
+      { href: '/retaguarda/instagram-dashboard', label: 'Dashboard',          icon: TrendingUp },
+      { href: '/retaguarda/lu-config',           label: 'Configurar Lú IA',   icon: Bot },
+      { href: '/retaguarda/instagram',           label: 'Conta Instagram',    icon: Instagram },
     ],
   },
   {

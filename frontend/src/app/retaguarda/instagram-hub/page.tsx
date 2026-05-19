@@ -11,7 +11,16 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Instagram, MessageSquare, Radio, ArrowRight, ChevronLeft } from 'lucide-react';
+import {
+  Instagram,
+  MessageSquare,
+  Radio,
+  ArrowRight,
+  ChevronLeft,
+  Bot,
+  TrendingUp,
+  Sparkles,
+} from 'lucide-react';
 import { api } from '@/lib/api';
 
 interface AccountInfo {
@@ -116,36 +125,77 @@ export default function InstagramHubPage() {
           </div>
         </section>
 
-        {/* Cards principais */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <HubButton
-            href="/retaguarda/inbox"
-            icon={MessageSquare}
-            title="Inbox Instagram"
-            subtitle="Atendimento humano · Janela 7 dias"
-            description="Responda DMs de clientes via Instagram Direct. Filtros VIP, tag HUMAN_AGENT e histórico completo de conversas."
-            badge="Atendimento"
-            tone="rose"
-          />
-          <HubButton
-            href="/retaguarda/live"
-            icon={Radio}
-            title="Live Commerce"
-            subtitle="Reservas em tempo real"
-            description="Painel mestre da live: produtos, comentários, métricas. Lú IA reserva produtos automaticamente quando cliente comenta o código."
-            badge="Live"
-            tone="pink"
-          />
-          <HubButton
-            href="/retaguarda/instagram"
-            icon={Instagram}
-            title="Conta Instagram"
-            subtitle="Status da conexão Meta"
-            description="Dados oficiais via Graph API v19.0: seguidores, mídias, permissões ativas e ID da conta business conectada."
-            badge="Conexão"
-            tone="fuchsia"
-          />
-        </section>
+        {/* Cards principais — Operação diária */}
+        <div>
+          <h3 className="text-xs uppercase font-bold text-stone-500 tracking-wider mb-3">
+            Operação diária
+          </h3>
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <HubButton
+              href="/retaguarda/dm"
+              icon={MessageSquare}
+              title="Direct Messages Pro"
+              subtitle="Atendimento humano · Janela 7 dias"
+              description="Inbox v2: tags coloridas, templates rápidos, histórico do cliente, busca, atalhos. Resposta via Graph API com HUMAN_AGENT."
+              badge="Novo"
+              tone="rose"
+            />
+            <HubButton
+              href="/retaguarda/live-pro"
+              icon={Radio}
+              title="Live Commerce Pro"
+              subtitle="Reservas em tempo real"
+              description="Painel mestre: produto drawer, GMV potencial, controle Lú IA, resumo de encerramento. Reservas com TTL dinâmico."
+              badge="Novo"
+              tone="pink"
+            />
+            <HubButton
+              href="/retaguarda/instagram-dashboard"
+              icon={TrendingUp}
+              title="Dashboard Instagram"
+              subtitle="Métricas executivas"
+              description="KPIs operacionais: DMs/dia, lives realizadas, GMV, top clientes VIP, eficácia da Lú IA, SLA de atendimento."
+              badge="Novo"
+              tone="fuchsia"
+            />
+          </section>
+        </div>
+
+        {/* Cards secundários — Setup e Status */}
+        <div>
+          <h3 className="text-xs uppercase font-bold text-stone-500 tracking-wider mb-3">
+            Configuração & Status
+          </h3>
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            <HubButton
+              href="/retaguarda/lu-config"
+              icon={Bot}
+              title="Configuração Lú IA"
+              subtitle="Tom, palavras-chave, lojas"
+              description="Ajuste o comportamento da Lú: tom de voz, mensagens prontas, palavras-chave, CTAs e lista de lojas físicas."
+              badge="Novo"
+              tone="rose"
+            />
+            <HubButton
+              href="/retaguarda/instagram"
+              icon={Instagram}
+              title="Conta Instagram"
+              subtitle="Status da conexão Meta"
+              description="Dados oficiais via Graph API v19.0: seguidores, mídias, permissões ativas e ID da conta business conectada."
+              badge="Conexão"
+              tone="pink"
+            />
+            <HubButton
+              href="/retaguarda/inbox"
+              icon={Sparkles}
+              title="Inbox Clássico"
+              subtitle="Versão original"
+              description="Interface tradicional do Inbox (versão usada na submissão do Meta App Review). Mantida pra referência."
+              badge="Legado"
+              tone="fuchsia"
+            />
+          </section>
+        </div>
 
         {/* Permissões ativas — resumo */}
         <section className="bg-white rounded-2xl shadow p-6">
@@ -177,14 +227,10 @@ export default function InstagramHubPage() {
             Atalhos rápidos
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <QuickLink href="/retaguarda/inbox" label="📨 Abrir Inbox" />
-            <QuickLink href="/retaguarda/live" label="📻 Iniciar Live" />
-            <QuickLink href="/retaguarda/instagram" label="📊 Ver Conta" />
-            <QuickLink
-              href="https://www.instagram.com/lurdsplussize"
-              label="🔗 @lurdsplussize"
-              external
-            />
+            <QuickLink href="/retaguarda/dm" label="📨 Inbox DM Pro" />
+            <QuickLink href="/retaguarda/live-pro" label="📻 Live Pro" />
+            <QuickLink href="/retaguarda/instagram-dashboard" label="📊 Dashboard" />
+            <QuickLink href="/retaguarda/lu-config" label="🤖 Config Lú" />
           </div>
         </section>
       </div>

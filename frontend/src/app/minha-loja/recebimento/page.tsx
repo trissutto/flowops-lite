@@ -63,7 +63,9 @@ export default function RecebimentoPage() {
   const [scanning, setScanning] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const [showCelebration, setShowCelebration] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const prevPendingRef = useRef<number | null>(null);
 
   // ── Loaders ──
   const loadShipments = useCallback(async () => {
@@ -117,6 +119,26 @@ export default function RecebimentoPage() {
     const t = setTimeout(() => setFeedback(null), 2500);
     return () => clearTimeout(t);
   }, [feedback]);
+
+  // ── Celebração 100% PERFEITO ──
+  // Detecta transição de "tinha pendente" → "tudo conferido" e dispara animação
+  // de 3 segundos. Auto-some sem bloquear a próxima ação (Dar Entrada).
+  useEffect(() => {
+    if (!selected) {
+      prevPendingRef.current = null;
+      return;
+    }
+    const received = selected.items.filter((i) => i.realignmentStatus === 'received').length;
+    const missing = selected.items.filter((i) => i.realignmentStatus === 'missing').length;
+    const pending = selected.items.length - received - missing;
+    const prev = prevPendingRef.current;
+    prevPendingRef.current = pending;
+    if (pending === 0 && prev !== null && prev > 0 && selected.items.length > 0) {
+      setShowCelebration(true);
+      const t = setTimeout(() => setShowCelebration(false), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [selected]);
 
   // ── Actions ──
   const handleScan = useCallback(
@@ -375,6 +397,47 @@ export default function RecebimentoPage() {
                 : `Bipe ou marque os ${pendingCount} pendentes pra liberar`}
           </button>
         </main>
+
+        {/* ─── CELEBRAÇÃO 100% PERFEITO ─── */}
+        {showCelebration && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            onClick={() => setShowCelebration(false)}
+            role="dialog"
+            aria-label="Recebimento 100% conferido"
+          >
+            <style>{`
+              @keyframes celebrate-pop {
+                0% { transform: scale(0) rotate(-15deg); opacity: 0; }
+                60% { transform: scale(1.15) rotate(5deg); opacity: 1; }
+                100% { transform: scale(1) rotate(0); opacity: 1; }
+              }
+              @keyframes celebrate-float {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-8px); }
+              }
+              .celebrate-badge { animation: celebrate-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+              .celebrate-emoji { animation: celebrate-float 1.4s ease-in-out infinite; }
+            `}</style>
+            <div
+              className="celebrate-badge rounded-3xl px-10 py-12 text-center shadow-2xl ring-4 ring-white/30"
+              style={{
+                background: 'linear-gradient(135deg,#d4537e 0%,#993556 100%)',
+              }}
+            >
+              <div className="text-white font-black leading-none" style={{ fontSize: '6rem' }}>
+                100%
+              </div>
+              <div className="text-white text-2xl font-bold tracking-[0.3em] mt-3">
+                PERFEITO
+              </div>
+              <div className="celebrate-emoji text-5xl mt-4">🎉</div>
+              <div className="text-white/90 text-sm mt-5 font-medium">
+                Toque pra continuar · Dar entrada liberada
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
