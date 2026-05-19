@@ -519,16 +519,13 @@ export default function RealinhamentoPage() {
       setSearchError('Essas REFs já estavam na lista.');
       return;
     }
-    // Captura a descrição de cada REF selecionada pra usar como FILTRO no
-    // plano. Evita o bug de "9002" pegar pijama quando o usuário queria calça.
-    const newFilters: Record<string, string> = { ...refFilters };
-    for (const ref of toAdd) {
-      const row = searchResults.find((r) => r.REF === ref);
-      if (row?.DESCRICAOCOMPLETA) {
-        newFilters[ref] = row.DESCRICAOCOMPLETA;
-      }
-    }
-    setRefFilters(newFilters);
+    // DEFAULT: NÃO amarra filtro de descrição. Adiciona a REF "pelada" — o
+    // plano expande TODAS as variações da REF. Se houver ambiguidade (REF
+    // repetida em produtos diferentes, ex: 9002 = PIJAMA e CALÇA), o backend
+    // retorna em `ambiguousRefs` e a UI mostra botões pra escolher a família.
+    // Antes amarrava DESCRICAOCOMPLETA como filtro automaticamente — bug pq
+    // a descrição contém detalhes específicos de UMA variação (cor/tamanho),
+    // filtrando o plano pra só essa peça.
     const next = [
       ...existing,
       ...toAdd,
@@ -1530,24 +1527,69 @@ export default function RealinhamentoPage() {
           {preview.ambiguousRefs && preview.ambiguousRefs.length > 0 && (
             <div className="bg-amber-100 border-2 border-amber-400 text-amber-950 rounded-lg px-4 py-3 mb-3">
               <div className="font-bold text-sm mb-2 flex items-center gap-2">
-                ⚠️ {preview.ambiguousRefs.length} REF(s) ambíguas — peças NÃO foram incluídas no plano
+                ⚠️ {preview.ambiguousRefs.length} REF(s) ambíguas — escolhe qual produto entra no plano
               </div>
-              <div className="text-xs mb-2">
-                Cada uma dessas REFs tem mais de 1 produto cadastrado no Giga.
-                Pra resolver: vai em "Busque pela descrição" acima e selecione a versão correta.
+              <div className="text-xs mb-3">
+                Essa(s) REF(s) têm mais de 1 produto cadastrado no Giga (ex: mesma REF
+                pra PIJAMA e VESTIDO). Clica no botão da família que você quer mover.
               </div>
               <div className="space-y-2">
                 {preview.ambiguousRefs.map((a) => (
-                  <div key={a.ref} className="bg-white rounded p-2 border border-amber-300">
-                    <div className="font-mono font-bold text-amber-900 text-sm">REF: {a.ref}</div>
-                    <div className="text-[11px] text-slate-700 mt-1 space-y-0.5">
-                      {a.familias.map((f, i) => (
-                        <div key={i} className="flex items-start gap-2">
-                          <span className="text-amber-600 font-bold">•</span>
-                          <span className="flex-1">{f.desc}</span>
-                          <span className="text-slate-500">({f.count}var)</span>
-                        </div>
-                      ))}
+                  <div key={a.ref} className="bg-white rounded p-3 border border-amber-300">
+                    <div className="font-mono font-bold text-amber-900 text-sm mb-2">REF: {a.ref}</div>
+                    <div className="flex flex-col gap-1.5">
+                      {a.familias.map((f, i) => {
+                        // Extrai 1ª palavra significativa (>=4 chars) pra usar
+                        // como filtro mínimo. Ex: "PIJAMA FEMININO..." → "pijama"
+                        const palavraChave = (f.desc || '')
+                          .split(/\s+/)
+                          .find((w) => w.length >= 4) || f.desc;
+                        const isSelected = (refFilters[a.ref] || '').toLowerCase().includes(palavraChave.toLowerCase());
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              // Aplica filtro APENAS com a palavra-chave da família
+                              // escolhida (não a descrição completa, que filtraria
+                              // demais). Depois re-roda o plano automaticamente.
+                              setRefFilters((prev) => ({ ...prev, [a.ref]: palavraChave }));
+                              setTimeout(() => handlePreview(), 50);
+                            }}
+                            className={`text-left rounded border px-3 py-2 text-xs transition ${
+                              isSelected
+                                ? 'bg-emerald-500 text-white border-emerald-600 font-bold'
+                                : 'bg-amber-50 text-slate-800 border-amber-300 hover:bg-amber-200'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2">
+                              <span className={isSelected ? 'text-white' : 'text-amber-700'}>
+                                {isSelected ? '✓' : '○'}
+                              </span>
+                              <span className="flex-1">{f.desc}</span>
+                              <span className={isSelected ? 'text-emerald-100' : 'text-slate-500'}>
+                                ({f.count} var)
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                      {refFilters[a.ref] && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRefFilters((prev) => {
+                              const next = { ...prev };
+                              delete next[a.ref];
+                              return next;
+                            });
+                            setTimeout(() => handlePreview(), 50);
+                          }}
+                          className="text-[10px] text-slate-500 hover:text-slate-800 underline mt-1 self-start"
+                        >
+                          Limpar escolha
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
