@@ -470,11 +470,12 @@ export class RealignmentService {
       const validationKeys = new Set<string>();
       for (const p of plan) {
         if (!p.ref) continue;
-        const k = `${p.ref}|${p.cor || ''}|${p.tamanho || ''}|${p.fromCode}`;
+        const refSafe: string = p.ref;
+        const k = `${refSafe}|${p.cor || ''}|${p.tamanho || ''}|${p.fromCode}`;
         if (validationKeys.has(k)) continue;
         validationKeys.add(k);
         validationInput.push({
-          refCode: p.ref,
+          refCode: refSafe,
           cor: p.cor,
           tamanho: p.tamanho,
           storeCode: p.fromCode,
