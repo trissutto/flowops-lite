@@ -448,116 +448,18 @@ export class RealignmentService {
     }> = [];
 
     // ─────────────────────────────────────────────────────────────────
-    // VALIDAÇÃO DEFENSIVA DESABILITADA (2026-05-19)
+    // VALIDAÇÃO DEFENSIVA REMOVIDA (2026-05-19)
     // ─────────────────────────────────────────────────────────────────
-    // Motivo: a validação usa `getStockByRefCorTamInStoreBatch` que tem
-    // critério MAIS RESTRITIVO que o `getStockBySkusDetailed` usado pelo
-    // algoritmo principal. Em ambientes com dados ligeiramente incon-
-    // sistentes no Wincred (LOJA="01" vs "1", CODIGOs duplicados, etc),
-    // ela reportava estoqueReal=0 mesmo quando o estoque existia, e
-    // removia TODAS as movimentações sugeridas → plano sempre vazio.
+    // Motivo: usava `getStockByRefCorTamInStoreBatch` que era mais restritivo
+    // que o `getStockBySkusDetailed` do algoritmo principal — em ambientes
+    // com dados inconsistentes no Wincred (LOJA="01" vs "1", CODIGOs
+    // duplicados), reportava estoqueReal=0 mesmo com estoque existindo, e
+    // removia TODAS as movimentações → plano sempre vazio.
     //
-    // Em vez de bloquear, agora deixa o plano sair como o algoritmo
-    // principal achou. Se origem na verdade não tiver a peça física,
-    // o precheck/closeAndSend pega no momento do envio (com allowNegative).
-    if (false && plan.length > 0) {
-      const validationInput: Array<{
-        refCode: string;
-        cor: string | null;
-        tamanho: string | null;
-        storeCode: string;
-      }> = [];
-      const validationKeys = new Set<string>();
-      for (const p of plan) {
-        if (!p.ref) continue;
-        const refSafe: string = p.ref;
-        const k = `${refSafe}|${p.cor || ''}|${p.tamanho || ''}|${p.fromCode}`;
-        if (validationKeys.has(k)) continue;
-        validationKeys.add(k);
-        validationInput.push({
-          refCode: refSafe,
-          cor: p.cor,
-          tamanho: p.tamanho,
-          storeCode: p.fromCode,
-        });
-      }
-
-      let realStockMap = new Map<string, { totalQty: number; codigos: string[] }>();
-      try {
-        realStockMap = await this.erp.getStockByRefCorTamInStoreBatch(validationInput);
-      } catch (e) {
-        this.logger.warn(
-          `[preview] validacao defensiva falhou (batch estoque real): ${(e as Error).message}. ` +
-          `Plano sai sem essa validacao.`,
-        );
-      }
-
-      // Agrupa linhas por (REF+COR+TAM+ORIGEM) pra somar qty se houver multiplas
-      const groupedByOrigin = new Map<string, PlanLine[]>();
-      for (const p of plan) {
-        if (!p.ref) continue;
-        const k = `${String(p.ref).trim().toUpperCase()}::${String(p.cor || '').trim().toUpperCase()}::${String(p.tamanho || '').trim().toUpperCase()}::${String(p.fromCode).trim()}`;
-        if (!groupedByOrigin.has(k)) groupedByOrigin.set(k, []);
-        groupedByOrigin.get(k)!.push(p);
-      }
-
-      const linesToRemove = new Set<PlanLine>();
-      for (const [key, lines] of groupedByOrigin.entries()) {
-        const found = realStockMap.get(key);
-        const estoqueReal = found?.totalQty || 0;
-        const qtyTotalPedido = lines.reduce((s, l) => s + l.qty, 0);
-
-        if (estoqueReal < qtyTotalPedido) {
-          let restante = estoqueReal;
-          const sortedLines = [...lines].sort((a, b) => b.qty - a.qty);
-          for (const l of sortedLines) {
-            if (restante <= 0) {
-              linesToRemove.add(l);
-              removedByValidation.push({
-                ref: l.ref || '',
-                cor: l.cor,
-                tamanho: l.tamanho,
-                fromCode: l.fromCode,
-                qtyOriginal: l.qty,
-                estoqueReal,
-              });
-              continue;
-            }
-            if (l.qty > restante) {
-              removedByValidation.push({
-                ref: l.ref || '',
-                cor: l.cor,
-                tamanho: l.tamanho,
-                fromCode: l.fromCode,
-                qtyOriginal: l.qty - restante,
-                estoqueReal,
-              });
-              l.qty = restante;
-              l.stockFromAfter = 0;
-              restante = 0;
-            } else {
-              restante -= l.qty;
-            }
-          }
-        }
-      }
-
-      if (linesToRemove.size > 0) {
-        const before = plan.length;
-        for (let i = plan.length - 1; i >= 0; i--) {
-          if (linesToRemove.has(plan[i])) plan.splice(i, 1);
-        }
-        this.logger.warn(
-          `[preview] Validacao defensiva removeu ${linesToRemove.size}/${before} linhas — ` +
-          `origens sem estoque real Giga. Detalhes (primeiros 5): ` +
-          JSON.stringify(removedByValidation.slice(0, 5)),
-        );
-      } else if (removedByValidation.length > 0) {
-        this.logger.warn(
-          `[preview] Validacao defensiva ajustou qty em ${removedByValidation.length} linha(s).`,
-        );
-      }
-    }
+    // Se origem não tiver a peça física, o precheck/closeAndSend pega no
+    // momento do envio (com allowNegative).
+    // `removedByValidation` continua sendo retornado (sempre vazio) pra
+    // compatibilidade com o frontend que lê esse campo.
 
     const totalMoves = plan.length;
     const totalUnits = plan.reduce((a, p) => a + p.qty, 0);
