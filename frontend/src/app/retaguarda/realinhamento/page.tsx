@@ -113,8 +113,11 @@ export default function RealinhamentoPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<
-    Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>
+    Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number; FAMILIA?: string }>
   >([]);
+  // Chave da seleção = "REF::FAMILIA" (não só REF) porque a MESMA REF pode aparecer
+  // em famílias diferentes (ex: 8011 = PIJAMA E VESTIDO). Sem isso, marcar uma
+  // das linhas marcaria ambas.
   const [searchSelected, setSearchSelected] = useState<Set<string>>(new Set());
   // Mapa REF → descrição-filtro. Quando usuário seleciona REF via busca por
   // descrição, guardamos a descrição pra mandar como filtro no preview.
@@ -478,7 +481,7 @@ export default function RealinhamentoPage() {
     setSearchSelected(new Set());
     try {
       const rows = await api<
-        Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number }>
+        Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number; FAMILIA?: string }>
       >(`/realignment/search-refs?term=${encodeURIComponent(term)}`);
       setSearchResults(rows || []);
       setSearchOpen(true);
@@ -491,15 +494,20 @@ export default function RealinhamentoPage() {
     }
   }
 
-  function toggleSearchRef(ref: string) {
+  // Chave estável por linha: REF::FAMILIA. Permite que a MESMA REF (8011) com
+  // famílias diferentes (PIJAMA, VESTIDO) tenha checkbox independente.
+  const rowKey = (r: { REF: string; FAMILIA?: string }) =>
+    `${r.REF}::${r.FAMILIA || ''}`;
+
+  function toggleSearchRef(key: string) {
     const next = new Set(searchSelected);
-    if (next.has(ref)) next.delete(ref);
-    else next.add(ref);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     setSearchSelected(next);
   }
 
   function selectAllSearchResults() {
-    setSearchSelected(new Set(searchResults.map((r) => r.REF)));
+    setSearchSelected(new Set(searchResults.map(rowKey)));
   }
   function clearSearchSelection() {
     setSearchSelected(new Set());
@@ -514,21 +522,44 @@ export default function RealinhamentoPage() {
         .map((s) => s.trim())
         .filter(Boolean),
     );
-    const toAdd = [...searchSelected].filter((r) => !existing.has(r));
-    if (!toAdd.length) {
+    // Resolve cada chave (REF::FAMILIA) selecionada pra REF + familia
+    const selectedRows = searchResults.filter((r) => searchSelected.has(rowKey(r)));
+    const refsToAdd = Array.from(new Set(selectedRows.map((r) => r.REF))).filter(
+      (r) => !existing.has(r),
+    );
+    if (!refsToAdd.length) {
       setSearchError('Essas REFs já estavam na lista.');
       return;
     }
-    // DEFAULT: NÃO amarra filtro de descrição. Adiciona a REF "pelada" — o
-    // plano expande TODAS as variações da REF. Se houver ambiguidade (REF
-    // repetida em produtos diferentes, ex: 9002 = PIJAMA e CALÇA), o backend
-    // retorna em `ambiguousRefs` e a UI mostra botões pra escolher a família.
-    // Antes amarrava DESCRICAOCOMPLETA como filtro automaticamente — bug pq
-    // a descrição contém detalhes específicos de UMA variação (cor/tamanho),
-    // filtrando o plano pra só essa peça.
+    // Pra cada REF, conta quantas famílias EXISTEM no resultado da busca.
+    // Se >1 família e o usuário selecionou só algumas → amarra filtro com FAMILIA.
+    // Se =1 família OU usuário selecionou TODAS as famílias → SEM filtro (todas).
+    const newFilters: Record<string, string> = { ...refFilters };
+    for (const ref of refsToAdd) {
+      const allFamiliasOfRef = searchResults
+        .filter((r) => r.REF === ref)
+        .map((r) => r.FAMILIA || '');
+      const selectedFamiliasOfRef = selectedRows
+        .filter((r) => r.REF === ref)
+        .map((r) => r.FAMILIA || '');
+      const isAmbiguous = allFamiliasOfRef.length > 1;
+      const selectedAll = selectedFamiliasOfRef.length === allFamiliasOfRef.length;
+      if (isAmbiguous && !selectedAll && selectedFamiliasOfRef.length > 0) {
+        // Amarra filtro com TODAS as famílias selecionadas separadas por |
+        // O backend usa "todas palavras precisam estar" — pegamos só a 1ª pra
+        // funcionar como categoria. Se selecionou múltiplas, fica ambíguo de novo
+        // e o backend devolve pra escolher.
+        const familia = selectedFamiliasOfRef[0];
+        if (familia) newFilters[ref] = familia;
+      } else {
+        // Não-ambíguo OU usuário pegou todas → sem filtro
+        delete newFilters[ref];
+      }
+    }
+    setRefFilters(newFilters);
     const next = [
       ...existing,
-      ...toAdd,
+      ...refsToAdd,
     ].join('\n');
     setRefsText(next);
     setSearchError(null);
@@ -1308,10 +1339,14 @@ export default function RealinhamentoPage() {
                 </div>
                 <div className="max-h-[340px] overflow-y-auto divide-y divide-slate-100">
                   {searchResults.map((r) => {
-                    const checked = searchSelected.has(r.REF);
+                    const key = rowKey(r);
+                    const checked = searchSelected.has(key);
+                    // Conta quantas linhas têm a mesma REF (= número de famílias)
+                    // Pra REF ambígua (PIJAMA + VESTIDO), mostra badge AMBÍGUA.
+                    const familiasDoRef = searchResults.filter((x) => x.REF === r.REF).length;
                     return (
                       <label
-                        key={r.REF}
+                        key={key}
                         className={`flex items-start gap-3 px-3 py-2 cursor-pointer transition-colors ${
                           checked ? 'bg-indigo-50/70' : 'hover:bg-slate-50'
                         }`}
@@ -1319,17 +1354,27 @@ export default function RealinhamentoPage() {
                         <input
                           type="checkbox"
                           checked={checked}
-                          onChange={() => toggleSearchRef(r.REF)}
+                          onChange={() => toggleSearchRef(key)}
                           className="mt-0.5 w-4 h-4 accent-indigo-600"
                         />
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-mono text-xs font-bold text-indigo-800 bg-indigo-100 rounded px-1.5 py-0.5">
                               {r.REF}
                             </span>
                             <span className="text-xs text-slate-500">
                               {r.VARIANT_COUNT} variação(ões)
                             </span>
+                            {familiasDoRef > 1 && (
+                              <span className="text-[10px] font-bold uppercase bg-amber-200 text-amber-900 rounded px-1.5 py-0.5">
+                                ⚠️ REF AMBÍGUA · {familiasDoRef} produtos
+                              </span>
+                            )}
+                            {r.FAMILIA && r.FAMILIA !== '_outros' && (
+                              <span className="text-[10px] font-mono uppercase bg-slate-200 text-slate-700 rounded px-1.5 py-0.5">
+                                {r.FAMILIA}
+                              </span>
+                            )}
                           </div>
                           <div className="text-sm text-slate-700 truncate mt-0.5">
                             {r.DESCRICAOCOMPLETA}

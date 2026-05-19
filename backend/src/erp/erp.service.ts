@@ -2576,33 +2576,30 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
     if (isRefLike) {
       try {
-        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT REF,
-                  MAX(DESCRICAOCOMPLETA) AS DESCRICAOCOMPLETA,
-                  COUNT(*) AS VARIANT_COUNT
-             FROM produtos
-            WHERE REF = ?
-            GROUP BY REF
-            LIMIT 10`,
+        // Pega TODAS as variações da REF (sem GROUP BY) e agrupa por "família"
+        // em JS. Família = 1ª palavra significativa (>=4 chars, não stopword).
+        // Isso resolve o caso de REF ambígua (mesma REF 8011 pra PIJAMA E VESTIDO):
+        // antes retornava 1 linha só (MAX alfabético escondia uma família).
+        const [allRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT REF, DESCRICAOCOMPLETA FROM produtos WHERE REF = ?`,
           [trimmed],
         );
-        if (rows.length > 0) return rows as any[];
+        if (allRows.length > 0) {
+          return this.groupRowsByFamily(allRows as any[]);
+        }
         // Fallback: se não bateu exato, tenta prefixo (ex: usuário digitou
         // só parte da REF). Evita o LIKE %term% que confunde "9002"/"900246".
         const [prefRows] = await this.pool.query<mysql.RowDataPacket[]>(
-          `SELECT REF,
-                  MAX(DESCRICAOCOMPLETA) AS DESCRICAOCOMPLETA,
-                  COUNT(*) AS VARIANT_COUNT
+          `SELECT REF, DESCRICAOCOMPLETA
              FROM produtos
             WHERE REF LIKE ?
               AND REF IS NOT NULL
               AND REF <> ''
-            GROUP BY REF
             ORDER BY REF ASC
-            LIMIT 50`,
+            LIMIT 500`,
           [`${trimmed}%`],
         );
-        return prefRows as any[];
+        return this.groupRowsByFamily(prefRows as any[]);
       } catch (e) {
         this.logger.error(`searchByDescriptionGrouped (ref) falhou: ${(e as Error).message}`);
         return [];
@@ -2638,6 +2635,57 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`searchByDescriptionGrouped falhou: ${(e as Error).message}`);
       return [];
     }
+  }
+
+  /**
+   * Agrupa rows {REF, DESCRICAOCOMPLETA} por "família" e retorna 1 linha por
+   * (REF, família). Família = 1ª palavra significativa (>=4 chars, não stopword).
+   *
+   * Exemplo: REF 8011 com 35 variações onde algumas são "PIJAMA FEMININO..." e
+   * outras "VESTIDO LONGO...". Retorna 2 linhas:
+   *   - { REF: 8011, DESCRICAOCOMPLETA: "PIJAMA FEMININO...", VARIANT_COUNT: 12, FAMILIA: "pijama" }
+   *   - { REF: 8011, DESCRICAOCOMPLETA: "VESTIDO LONGO...", VARIANT_COUNT: 23, FAMILIA: "vestido" }
+   *
+   * Antes o MAX(DESCRICAOCOMPLETA) escondia uma família. Agora frontend pode
+   * mostrar TODAS as famílias e o usuário escolhe qual quer.
+   */
+  private groupRowsByFamily(
+    rows: Array<{ REF: string; DESCRICAOCOMPLETA: string }>,
+  ): Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number; FAMILIA?: string }> {
+    const STOPWORDS = new Set([
+      'plus', 'size', 'feminina', 'feminino', 'masculino', 'masculina',
+      'infantil', 'unissex', 'adulto', 'manga', 'curta', 'longa', 'comum',
+      'basica', 'basico', 'alfaiataria', 'modelo', 'inverno', 'verao',
+    ]);
+    const norm = (s: string) =>
+      String(s || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '');
+    const groups = new Map<string, { ref: string; desc: string; count: number; familia: string }>();
+    for (const r of rows) {
+      const ref = String(r.REF || '').trim();
+      const desc = String(r.DESCRICAOCOMPLETA || '').trim();
+      if (!ref) continue;
+      const palavras = norm(desc).split(/\s+/).filter(Boolean);
+      const familia = palavras.find((w) => w.length >= 4 && !STOPWORDS.has(w)) || '_outros';
+      const key = `${ref}::${familia}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        groups.set(key, { ref, desc, count: 1, familia });
+      }
+    }
+    return Array.from(groups.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 200)
+      .map((g) => ({
+        REF: g.ref,
+        DESCRICAOCOMPLETA: g.desc,
+        VARIANT_COUNT: g.count,
+        FAMILIA: g.familia,
+      }));
   }
 
   /**
