@@ -5782,12 +5782,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const ignoredLojas = new Set(['SITE', 'PF']);
 
     // ── 1) Monta WHERE da query principal ──
+    // CRÍTICO: Wincred tem padding/case inconsistente em TAMANHO ("48 ",
+    // "  48", " 48 ", etc). Usar TRIM(UPPER(...)) é o padrão do sistema.
+    // Sem isso, IN ('48') não bate com "48 " e a query volta 0 linhas.
     const conds: string[] = [
-      "p.REF IS NOT NULL",
-      "p.REF <> ''",
-      `UPPER(p.TAMANHO) IN (${tamanhos.map(() => '?').join(',')})`,
+      `TRIM(UPPER(COALESCE(p.TAMANHO, ''))) IN (${tamanhos.map(() => '?').join(',')})`,
     ];
     const vals: any[] = [...tamanhos];
+
+    // REF pode estar vazia em alguns produtos legados — não bloqueia, só
+    // não vai poder agrupar grade pra eles (mostra como CODIGO solto)
+    conds.push("COALESCE(p.REF, '') <> ''");
 
     if (filters.grupoCodigo) {
       conds.push('p.GRUPO = ?');
@@ -5842,7 +5847,47 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`getStockDistribution falhou: ${(e as Error).message}`);
       return { rows: [], lojas: [], totalRows: 0, truncated: false };
     }
-    this.logger.log(`[erp] getStockDistribution: ${rawRows.length} produtos em ${Date.now() - t0}ms`);
+    this.logger.log(
+      `[erp] getStockDistribution: ${rawRows.length} produtos retornados da query em ${Date.now() - t0}ms`,
+    );
+
+    // GUARDA-CHUVA: se busca específica foi feita (search) mas nada veio,
+    // tenta sem filtro de tamanho — talvez a peça buscada não esteja na
+    // lista de plus size (mas o user buscou explicitamente por ela).
+    if (rawRows.length === 0 && filters.search?.trim()) {
+      const term = `%${filters.search.trim().toUpperCase()}%`;
+      const fallbackSql = `
+        SELECT
+          p.CODIGO AS codigo,
+          p.REF AS ref,
+          p.COR AS cor,
+          p.TAMANHO AS tamanho,
+          COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '') AS descricao,
+          COALESCE(p.PRECO, 0) AS preco,
+          (
+            SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
+              FROM estoque e
+             WHERE CAST(e.CODIGO AS UNSIGNED) = CAST(p.CODIGO AS UNSIGNED)
+          ) AS estoque_str
+        FROM produtos p
+        WHERE COALESCE(p.REF, '') <> ''
+          AND (UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ? OR p.CODIGO LIKE ?)
+        ORDER BY p.REF, p.COR, p.TAMANHO
+        LIMIT ?
+      `;
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          fallbackSql,
+          [term, term, term, limit],
+        );
+        rawRows = rows as any[];
+        this.logger.warn(
+          `[erp] getStockDistribution fallback (sem filtro de tamanho) retornou ${rawRows.length} linhas`,
+        );
+      } catch (e) {
+        this.logger.error(`fallback falhou: ${(e as Error).message}`);
+      }
+    }
 
     // ── 3) Parse estoque_str → mapa por loja + descobre conjunto de lojas ──
     const lojasSet = new Set<string>();
