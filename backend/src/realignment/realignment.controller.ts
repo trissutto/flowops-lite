@@ -285,6 +285,51 @@ export class RealignmentController {
   }
 
   /**
+   * POST /realignment/cancel-pending-by-origin — admin: cancela TODAS as
+   * ordens com realignment_status=pending da loja origem informada.
+   * Body: { originCode: string }
+   * Útil pra "limpar a fila" de uma loja antes de gerar plano novo.
+   * NÃO mexe em peças já enviadas (status=sent).
+   */
+  @Post('cancel-pending-by-origin')
+  async cancelPendingByOrigin(
+    @Body() body: { originCode: string },
+    @Req() req: any,
+  ) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    return this.svc.cancelPendingByOrigin(body?.originCode);
+  }
+
+  /**
+   * POST /realignment/recheck — re-consulta estoque atual antes de confirmar
+   * o plano. Retorna linhas OK e linhas com alerta (zerado/parcial).
+   * Front usa pra mostrar modal "X peças mudaram, remover ou enviar mesmo assim?"
+   */
+  @Post('recheck')
+  recheck(
+    @Body()
+    body: {
+      plan: Array<{
+        sku: string;
+        ref?: string | null;
+        cor?: string | null;
+        tamanho?: string | null;
+        desc?: string;
+        fromCode: string;
+        toCode: string;
+        qty: number;
+        stockFromBefore?: number;
+      }>;
+    },
+    @Req() req: any,
+  ) {
+    if (!['admin', 'supervisor', 'operator'].includes(req?.user?.role))
+      throw new ForbiddenException('Sem permissão');
+    return this.svc.recheckPlan(body);
+  }
+
+  /**
    * PATCH /realignment/:id/restore-not-found — volta pra fila pendente.
    */
   @Patch(':id/restore-not-found')

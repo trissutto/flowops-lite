@@ -561,6 +561,134 @@ export class RealignmentService {
   }
 
   /**
+   * Re-check de estoque ANTES do confirm.
+   *
+   * Porquê: o plano pode ter sido gerado há minutos/horas. Entre a geração
+   * e o clique em "Enviar pras lojas", a peça pode ter sido vendida no PDV
+   * da origem, ou ter sido baixada por outra remessa. Se a gente envia
+   * mesmo assim, a vendedora recebe o pedido pra separar uma peça que não
+   * existe mais (caso real: Itanhaém REF 700907 LISTRA AZUL 48).
+   *
+   * Esse método re-consulta o Wincred AGORA, compara com o plano, e retorna:
+   *   - okLines: linhas onde origem ainda tem estoque suficiente
+   *   - warnLines: linhas onde origem zerou ou caiu abaixo da qty pedida
+   *   - committedAdjustments: peças já reservadas em outras remessas pendentes
+   *
+   * Front mostra modal: "X peças mudaram, quer remover ou enviar mesmo assim?"
+   */
+  async recheckPlan(input: {
+    plan: Array<{
+      sku: string;
+      ref?: string | null;
+      cor?: string | null;
+      tamanho?: string | null;
+      desc?: string;
+      fromCode: string;
+      toCode: string;
+      qty: number;
+      stockFromBefore?: number;
+    }>;
+  }) {
+    const lines = (input.plan || []).filter((p) => p.qty > 0);
+    if (lines.length === 0) {
+      return { okLines: [], warnLines: [], totalChecked: 0, hasWarnings: false };
+    }
+
+    const skus = Array.from(new Set(lines.map((p) => p.sku)));
+
+    // 1) Re-consulta estoque atual no Wincred
+    const stockMap = await this.erp.getStockBySkusDetailed(skus);
+
+    // 2) Desconta peças já comprometidas em remessas pendentes/em trânsito
+    //    (mesmo cálculo do preview — pega TODA peça já reservada inclusive
+    //    as criadas nesse plano se ele já foi parcialmente enviado).
+    const committedMap = new Map<string, number>(); // "sku::storeCode" → qty
+    try {
+      const pendingTransfers = await (this.prisma as any).transferOrder.findMany({
+        where: {
+          codigoBipado: { in: skus },
+          realignmentStatus: { in: ['pending', 'sent'] },
+        },
+        select: {
+          codigoBipado: true,
+          lojaOrigemCode: true,
+          qtyOrigem: true,
+        },
+      });
+      for (const t of pendingTransfers as any[]) {
+        const k = `${t.codigoBipado}::${t.lojaOrigemCode}`;
+        committedMap.set(k, (committedMap.get(k) || 0) + (Number(t.qtyOrigem) || 1));
+      }
+    } catch (e: any) {
+      this.logger.warn(`[recheck] Falha ao buscar comprometido: ${e?.message || e}`);
+    }
+
+    // 3) Monta estoque "disponível" por (sku, loja) = estoqueAtual - comprometido
+    const availableByKey = new Map<string, number>(); // "sku::storeCode" → qty disponível
+    for (const sku of skus) {
+      const linesSku = stockMap[sku] || [];
+      for (const l of linesSku) {
+        const k = `${sku}::${l.storeCode}`;
+        const current = availableByKey.get(k) || 0;
+        availableByKey.set(k, current + (l.qty || 0));
+      }
+    }
+    for (const [k, committed] of committedMap.entries()) {
+      const current = availableByKey.get(k) || 0;
+      availableByKey.set(k, Math.max(0, current - committed));
+    }
+
+    // 4) Confere linha a linha
+    type RecheckedLine = (typeof lines)[number] & {
+      stockNow: number;
+      committed: number;
+      available: number;
+      status: 'ok' | 'partial' | 'zero';
+      newQty: number; // qty ajustada (min entre original e disponível)
+    };
+
+    const okLines: RecheckedLine[] = [];
+    const warnLines: RecheckedLine[] = [];
+
+    for (const p of lines) {
+      const k = `${p.sku}::${p.fromCode}`;
+      const linesSku = stockMap[p.sku] || [];
+      const stockNow = linesSku
+        .filter((l) => l.storeCode === p.fromCode)
+        .reduce((a, l) => a + (l.qty || 0), 0);
+      const committed = committedMap.get(k) || 0;
+      const available = Math.max(0, stockNow - committed);
+
+      const enriched: RecheckedLine = {
+        ...p,
+        stockNow,
+        committed,
+        available,
+        status: available >= p.qty ? 'ok' : available <= 0 ? 'zero' : 'partial',
+        newQty: Math.min(p.qty, available),
+      };
+
+      if (enriched.status === 'ok') {
+        okLines.push(enriched);
+      } else {
+        warnLines.push(enriched);
+      }
+    }
+
+    this.logger.log(
+      `[recheck] ${lines.length} linhas verificadas · ${okLines.length} ok · ` +
+      `${warnLines.length} com alerta (zero/parcial)`,
+    );
+
+    return {
+      okLines,
+      warnLines,
+      totalChecked: lines.length,
+      hasWarnings: warnLines.length > 0,
+    };
+  }
+
+  /**
    * Persiste o plano: cria N TransferOrder (tipo=REALINHAMENTO,
    * realignmentStatus=pending) e emite socket `realignment:new` agregando
    * por loja origem. A filial (/minha-loja) recebe o alerta em tempo real.
@@ -1173,6 +1301,31 @@ export class RealignmentService {
       WHERE id = ${transferId} AND realignment_status = 'not_found'
     `;
     return { ok: true, id: transferId };
+  }
+
+  /**
+   * Cancela TODAS as TransferOrders pendentes (status = pending) onde a loja
+   * origem é a informada. Útil pra "limpar a fila" de uma loja antes de
+   * gerar um plano novo (cenário: usuário quer testar realinhamento de novo
+   * sem peças órfãs travando).
+   *
+   * NÃO cancela peças que já foram bipadas/separadas (status = sent).
+   */
+  async cancelPendingByOrigin(originCode: string) {
+    if (!originCode) {
+      throw new BadRequestException('originCode é obrigatório');
+    }
+    const result = await this.prisma.$executeRaw`
+      UPDATE transfer_orders
+      SET realignment_status = 'cancelled'
+      WHERE tipo = 'REALINHAMENTO'
+        AND realignment_status = 'pending'
+        AND loja_origem_code = ${originCode}
+    `;
+    this.logger.log(
+      `[realinhamento] CANCEL EM MASSA loja origem=${originCode} · ${result} ordens canceladas`,
+    );
+    return { ok: true, originCode, cancelled: Number(result) };
   }
 
   /**
