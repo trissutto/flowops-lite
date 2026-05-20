@@ -5815,14 +5815,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // ── 2) Query principal: pega produto + estoque por loja agregado ──
     // Performance: usa GROUP_CONCAT pra trazer todos os pares (loja, qty)
     // em UMA linha por CODIGO. Mais rápido que múltiplas joins.
+    // FIX: Wincred não tem coluna p.DESCRICAO nem p.PRECO.
+    // - descrição: usa DESCRICAOCOMPLETA (única que existe)
+    // - preço de venda: VENDAUN está em CENTAVOS, divide por 100 pra reais
     const sql = `
       SELECT
         p.CODIGO AS codigo,
         p.REF AS ref,
         p.COR AS cor,
         p.TAMANHO AS tamanho,
-        COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '') AS descricao,
-        COALESCE(p.PRECO, 0) AS preco,
+        COALESCE(p.DESCRICAOCOMPLETA, '') AS descricao,
+        ROUND(COALESCE(p.VENDAUN, 0) / 100, 2) AS preco,
         (
           SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
             FROM estoque e
@@ -5864,8 +5867,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           p.REF AS ref,
           p.COR AS cor,
           p.TAMANHO AS tamanho,
-          COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '') AS descricao,
-          COALESCE(p.PRECO, 0) AS preco,
+          COALESCE(p.DESCRICAOCOMPLETA, '') AS descricao,
+          ROUND(COALESCE(p.VENDAUN, 0) / 100, 2) AS preco,
           (
             SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
               FROM estoque e
@@ -5873,7 +5876,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           ) AS estoque_str
         FROM produtos p
         WHERE COALESCE(p.REF, '') <> ''
-          AND (UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ? OR p.CODIGO LIKE ?)
+          AND (UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)
         ORDER BY p.REF, p.COR, p.TAMANHO
         LIMIT ?
       `;
