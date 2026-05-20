@@ -108,7 +108,14 @@ export class RoutingEngine {
     );
 
     if (fullCoverage.length > 0) {
-      const best = this.pickBestStore(fullCoverage, ctx, stockMap);
+      // OVERRIDE MANUAL: se o usuário escolheu uma loja específica (via radio
+      // button no frontend) E ela cobre tudo, usa ela em vez do pickBestStore.
+      let best: StoreInput | null = null;
+      if (ctx.preferStoreCode) {
+        const preferred = fullCoverage.find((s) => s.code === ctx.preferStoreCode);
+        if (preferred) best = preferred;
+      }
+      if (!best) best = this.pickBestStore(fullCoverage, ctx, stockMap);
       return {
         success: true,
         strategy: 'single-store',

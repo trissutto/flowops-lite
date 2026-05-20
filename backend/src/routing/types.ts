@@ -74,6 +74,14 @@ export interface RoutingContext {
    * e redundância. Se não passado, routing funciona como antes.
    */
   cedeStats?: RoutingCedeStats;
+  /**
+   * Override manual: se preenchido E a loja cobre TODOS os itens do pedido,
+   * essa loja é escolhida em vez do pickBestStore automático. Permite ao
+   * usuário escolher uma loja específica via radio button no frontend.
+   * Se não cobrir tudo, o routing volta pro fluxo normal (multi-store ou
+   * single-store automático). Ignorado em estratégia pickup.
+   */
+  preferStoreCode?: string | null;
 }
 
 export interface PickAssignment {

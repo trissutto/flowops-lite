@@ -498,7 +498,10 @@ export class OrdersController {
    *  4. Retorna grupos prontos pra enviar WhatsApp
    */
   @Get('wc/:wcId/prepare-separation')
-  async prepareSeparation(@Param('wcId') wcId: string) {
+  async prepareSeparation(
+    @Param('wcId') wcId: string,
+    @Query('preferStoreCode') preferStoreCode?: string,
+  ) {
     const wcOrderId = Number(wcId);
     const o = await this.wc.getOrder(wcOrderId);
 
@@ -544,6 +547,7 @@ export class OrdersController {
       shippingMethod,
       isPickup: pickup.isPickup,
       pickupStoreCode: pickup.pickupStoreCode,
+      preferStoreCode: preferStoreCode?.trim() || null,
       address: {
         street: shipping.address_1 ?? billing.address_1 ?? null,
         number: shipping.number ?? billing.number ?? null,

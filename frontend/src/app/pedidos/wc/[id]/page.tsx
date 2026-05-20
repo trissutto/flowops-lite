@@ -77,6 +77,17 @@ interface SeparationPreview {
   groups: SeparationGroup[];
   missing: Array<{ sku: string; quantity: number; productName: string }>;
   alternativesBySku: Record<string, Array<{ storeId: string; storeCode: string; storeName: string; availableQty: number; whatsapp: string | null }>>;
+  /**
+   * Outras lojas que TAMBÉM cobrem o pedido inteiro (top 5, exceto a escolhida).
+   * Aparece como radio buttons abaixo do "1 loja atende o pedido inteiro"
+   * pra permitir o admin trocar antes de confirmar.
+   */
+  alternativeFullStores?: Array<{
+    storeCode: string;
+    storeName: string;
+    stockBuffer: number;
+    finalScore: number;
+  }>;
   isPickup?: boolean;
   pickupStoreCode?: string | null;
   pickupStoreName?: string | null;
@@ -160,6 +171,10 @@ export default function PedidoDetailPage() {
   // "ciente da divisão" antes do botão Confirmar habilitar. Zera sempre que
   // gera/recalcula preview pra forçar nova revisão.
   const [splitApproved, setSplitApproved] = useState(false);
+  // Loja preferida — override manual via radio button quando single-store.
+  // null = usa sugestão automática do routing; "XX" = força essa loja.
+  const [preferredStoreCode, setPreferredStoreCode] = useState<string | null>(null);
+  const [switchingStore, setSwitchingStore] = useState(false);
 
   // Modal de "Escolher loja manualmente" — retaguarda escolhe especificamente pra
   // qual loja o pedido vai (bypassa a decisão automática do routing). Usado
@@ -431,6 +446,7 @@ export default function PedidoDetailPage() {
       // PRIMEIRA VEZ: só preview pra mostrar grupos antes de confirmar
       const res = await api<SeparationPreview>(`/orders/wc/${wcId}/prepare-separation`);
       setSeparation(res);
+      setPreferredStoreCode(null);
       setOverrides({});
       setSplitApproved(false); // reset gate a cada novo preview
     } catch (e: any) {
@@ -500,6 +516,31 @@ export default function PedidoDetailPage() {
    * (mesmo sem estoque) e escolhe livremente. Faz swap cirúrgico via
    * pickOrderId, deixa as outras lojas intocadas.
    */
+  /**
+   * Troca a loja escolhida no preview (single-store) antes de confirmar.
+   * Refaz GET prepare-separation com ?preferStoreCode=XX — o backend força essa
+   * loja se ela cobrir tudo. Não cria pick-order ainda — só atualiza o preview
+   * pra o admin revisar antes de clicar "Confirmar e enviar pras lojas".
+   */
+  async function switchPreferredStore(newStoreCode: string | null) {
+    if (switchingStore) return;
+    setSwitchingStore(true);
+    setSepError(null);
+    try {
+      const url = newStoreCode
+        ? `/orders/wc/${wcId}/prepare-separation?preferStoreCode=${encodeURIComponent(newStoreCode)}`
+        : `/orders/wc/${wcId}/prepare-separation`;
+      const res = await api<SeparationPreview>(url);
+      setSeparation(res);
+      setPreferredStoreCode(newStoreCode);
+      setSplitApproved(false);
+    } catch (e: any) {
+      setSepError(e?.message || 'Falha ao trocar loja');
+    } finally {
+      setSwitchingStore(false);
+    }
+  }
+
   function swapStore(storeCode: string, storeName: string | null) {
     const targetPickOrder = liveStatus.find((p) => p.storeCode === storeCode);
     if (!targetPickOrder) {
@@ -1427,6 +1468,76 @@ export default function PedidoDetailPage() {
               )}
               <div className="text-xs mt-1 opacity-80">Envio: {separation.shippingMethod}</div>
             </div>
+
+            {/* ── ESCOLHER OUTRA LOJA — single-store com alternativas ────────
+                 Mostra radio buttons com a sugestão automática + até 5 outras
+                 lojas que TAMBÉM cobrem o pedido inteiro. Admin pode trocar
+                 antes de confirmar (ex: prefere consolidar todas vendas na
+                 mesma loja, ou loja sugerida está com problema operacional). */}
+            {separation.success &&
+              separation.strategy === 'single-store' &&
+              separation.alternativeFullStores &&
+              separation.alternativeFullStores.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-lg p-3 mb-4">
+                  <div className="text-xs font-bold text-slate-700 mb-2 flex items-center gap-2">
+                    🎯 Escolher loja pra separar
+                    {switchingStore && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />}
+                  </div>
+                  <div className="space-y-1.5">
+                    {/* Opção 1: sugestão automática (loja atual) */}
+                    <label className={`flex items-center gap-2.5 p-2 rounded cursor-pointer border transition ${
+                      preferredStoreCode === null
+                        ? 'bg-emerald-50 border-emerald-300'
+                        : 'border-transparent hover:bg-slate-50'
+                    }`}>
+                      <input
+                        type="radio"
+                        name="preferred-store"
+                        checked={preferredStoreCode === null}
+                        onChange={() => switchPreferredStore(null)}
+                        disabled={switchingStore}
+                        className="w-4 h-4 accent-emerald-600"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-sm text-slate-900">
+                          {separation.groups[0]?.storeName} ({separation.groups[0]?.storeCode})
+                        </div>
+                        <div className="text-[10px] text-emerald-700 font-bold">
+                          ✓ Sugestão automática (melhor score)
+                        </div>
+                      </div>
+                    </label>
+                    {/* Opções alternativas: outras lojas que cobrem tudo */}
+                    {separation.alternativeFullStores.map((alt) => (
+                      <label
+                        key={alt.storeCode}
+                        className={`flex items-center gap-2.5 p-2 rounded cursor-pointer border transition ${
+                          preferredStoreCode === alt.storeCode
+                            ? 'bg-indigo-50 border-indigo-300'
+                            : 'border-transparent hover:bg-slate-50'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="preferred-store"
+                          checked={preferredStoreCode === alt.storeCode}
+                          onChange={() => switchPreferredStore(alt.storeCode)}
+                          disabled={switchingStore}
+                          className="w-4 h-4 accent-indigo-600"
+                        />
+                        <div className="flex-1">
+                          <div className="font-semibold text-sm text-slate-900">
+                            {alt.storeName} ({alt.storeCode})
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Cobre o pedido inteiro · folga estoque: {alt.stockBuffer.toFixed(1)}
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
 
             {/* GATE DE QUEBRA — avisa retaguarda antes de emitir separação em N lojas.
                  Multi-store = pedido dividido entre lojas diferentes (quebra). Quem

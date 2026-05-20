@@ -887,6 +887,11 @@ export class RoutingService {
     /** Se preenchido, força retirada em loja nessa store (já resolvido pelo controller). */
     pickupStoreCode?: string | null;
     isPickup?: boolean;
+    /**
+     * Loja preferida (override manual via radio button). Se cobrir todos os
+     * itens, vira a loja escolhida em vez do pickBest automático.
+     */
+    preferStoreCode?: string | null;
     address: {
       street?: string | null;
       number?: string | null;
@@ -937,6 +942,7 @@ export class RoutingService {
       stock: liquidStock,
       shippingCep: input.address.postcode ?? undefined,
       pickupStoreCode: input.pickupStoreCode ?? null,
+      preferStoreCode: input.preferStoreCode ?? null,
     });
 
     // Enriquece cada grupo com dados da loja + itens completos + mensagem WhatsApp
@@ -1010,6 +1016,26 @@ export class RoutingService {
         .sort((a, b) => b.availableQty - a.availableQty);
     }
 
+    // ── Lojas alternativas que TAMBÉM cobrem o pedido inteiro ──
+    // Pega TODAS as lojas marcadas como fullCoverage=true no scoreBreakdown,
+    // remove a loja escolhida (groups[0].storeCode) e devolve as top 5 ordenadas
+    // por estoque disponível (pra UI mostrar como radio buttons "outras opções").
+    // Só faz sentido em single-store — em multi/pickup/insufficient deixa vazio.
+    const chosenStoreCode = groups[0]?.storeCode;
+    const alternativeFullStores =
+      result.strategy === 'single-store'
+        ? (result.scoreBreakdown || [])
+            .filter((sb) => sb.fullCoverage && sb.storeCode !== chosenStoreCode)
+            .sort((a, b) => b.stockBuffer - a.stockBuffer)
+            .slice(0, 5)
+            .map((sb) => ({
+              storeCode: sb.storeCode,
+              storeName: sb.storeName,
+              stockBuffer: sb.stockBuffer,
+              finalScore: sb.finalScore,
+            }))
+        : [];
+
     return {
       success: result.success,
       strategy: result.strategy,
@@ -1033,6 +1059,7 @@ export class RoutingService {
         };
       }),
       alternativesBySku,
+      alternativeFullStores,
       scoreBreakdown: result.scoreBreakdown ?? [],
     };
   }
