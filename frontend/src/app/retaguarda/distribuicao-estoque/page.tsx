@@ -792,13 +792,47 @@ function RealignDrawer({
   storeNameByCode: Map<string, string>;
   onClose: () => void;
 }) {
-  // Lojas elegíveis: ativas, sem SITE/PF, ordenadas por priorityScore desc
+  // ── Config de participação (canSendRealign + canReceiveRealign) ──
+  // Lê do Store. Default: ambos true (compatibilidade com sistema antigo).
+  // Filtra também SITE e PF que não são lojas físicas.
+  const ignoredCodes = new Set(['SITE', 'PF']);
+  const sendableStores = useMemo(
+    () =>
+      stores
+        .filter(
+          (s) =>
+            s.active &&
+            !ignoredCodes.has(s.code) &&
+            (s as any).canSendRealign !== false,
+        )
+        .sort(
+          (a, b) => ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50),
+        ),
+    [stores],
+  );
+  const receivableStores = useMemo(
+    () =>
+      stores
+        .filter(
+          (s) =>
+            s.active &&
+            !ignoredCodes.has(s.code) &&
+            (s as any).canReceiveRealign !== false,
+        )
+        .sort(
+          (a, b) => ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50),
+        ),
+    [stores],
+  );
+  // Todas as lojas que aparecem na matriz (cede OU recebe — pra ver atual + alvo)
   const eligibleStores = useMemo(() => {
-    const ignored = new Set(['SITE', 'PF']);
-    return stores
-      .filter((s) => s.active && !ignored.has(s.code))
-      .sort((a, b) => ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50));
-  }, [stores]);
+    const set = new Map<string, Store>();
+    for (const s of sendableStores) set.set(s.code, s);
+    for (const s of receivableStores) set.set(s.code, s);
+    return Array.from(set.values()).sort(
+      (a, b) => ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50),
+    );
+  }, [sendableStores, receivableStores]);
 
   // Matriz atual por tamanho × loja
   const currentMatrix = useMemo(() => {
@@ -1174,6 +1208,257 @@ function ApplyRealignment({
         </button>
       </div>
     </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RealignConfigPanel — aba de config de quem participa do realinhamento
+   Cada loja tem 2 toggles: pode CEDER · pode RECEBER
+   Salva em batch via POST /stores/realign-config/update
+   ════════════════════════════════════════════════════════════════════════ */
+
+type RealignConfigItem = {
+  code: string;
+  name: string;
+  city: string | null;
+  tipo: string;
+  priorityScore: number;
+  canSendRealign: boolean;
+  canReceiveRealign: boolean;
+};
+
+function RealignConfigPanel() {
+  const [items, setItems] = useState<RealignConfigItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api<RealignConfigItem[]>('/stores/realign-config/list');
+      setItems(data);
+      setDirty(false);
+    } catch (e: any) {
+      setSaveResult({ ok: false, msg: e?.message || 'Erro ao carregar' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const toggleSend = (code: string) => {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.code === code ? { ...it, canSendRealign: !it.canSendRealign } : it,
+      ),
+    );
+    setDirty(true);
+  };
+  const toggleReceive = (code: string) => {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.code === code ? { ...it, canReceiveRealign: !it.canReceiveRealign } : it,
+      ),
+    );
+    setDirty(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setSaveResult(null);
+    try {
+      await api('/stores/realign-config/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: items.map((it) => ({
+            code: it.code,
+            canSendRealign: it.canSendRealign,
+            canReceiveRealign: it.canReceiveRealign,
+          })),
+        }),
+      });
+      setSaveResult({ ok: true, msg: `✓ ${items.length} lojas atualizadas` });
+      setDirty(false);
+    } catch (e: any) {
+      setSaveResult({ ok: false, msg: e?.message || 'Erro ao salvar' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const stats = useMemo(() => {
+    const both = items.filter((i) => i.canSendRealign && i.canReceiveRealign).length;
+    const sendOnly = items.filter((i) => i.canSendRealign && !i.canReceiveRealign).length;
+    const receiveOnly = items.filter((i) => !i.canSendRealign && i.canReceiveRealign).length;
+    const none = items.filter((i) => !i.canSendRealign && !i.canReceiveRealign).length;
+    return { both, sendOnly, receiveOnly, none };
+  }, [items]);
+
+  if (loading) {
+    return (
+      <div className="p-12 text-center bg-white border border-slate-200 rounded-lg">
+        <Loader2 className="w-8 h-8 animate-spin text-violet-600 mx-auto" />
+        <div className="text-sm text-slate-500 mt-2">Carregando lojas…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Info card */}
+      <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm text-violet-900">
+        <div className="font-bold mb-1">⚙️ Quem participa do realinhamento automático</div>
+        <p className="text-xs text-violet-700">
+          Configure aqui quais lojas o sistema considera na sugestão de balanço de estoque
+          (botão "Sugerir realinhamento" nos cards da aba Distribuição). Lojas marcadas
+          como "não cede" não vão aparecer como ORIGEM de transferências. Lojas marcadas
+          como "não recebe" não vão aparecer como DESTINO.
+        </p>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+        <div className="bg-emerald-50 border border-emerald-200 rounded p-2">
+          <div className="text-xs font-bold text-emerald-700 uppercase">Cede + Recebe</div>
+          <div className="text-2xl font-bold text-emerald-700">{stats.both}</div>
+        </div>
+        <div className="bg-blue-50 border border-blue-200 rounded p-2">
+          <div className="text-xs font-bold text-blue-700 uppercase">Só cede</div>
+          <div className="text-2xl font-bold text-blue-700">{stats.sendOnly}</div>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded p-2">
+          <div className="text-xs font-bold text-amber-700 uppercase">Só recebe</div>
+          <div className="text-2xl font-bold text-amber-700">{stats.receiveOnly}</div>
+        </div>
+        <div className="bg-slate-100 border border-slate-300 rounded p-2">
+          <div className="text-xs font-bold text-slate-600 uppercase">Não participa</div>
+          <div className="text-2xl font-bold text-slate-600">{stats.none}</div>
+        </div>
+      </div>
+
+      {/* Tabela */}
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 border-b border-slate-200">
+            <tr>
+              <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Código</th>
+              <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Cidade / Nome</th>
+              <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Tipo</th>
+              <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Prioridade</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-emerald-700 tracking-wider">Pode CEDER</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-blue-700 tracking-wider">Pode RECEBER</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it) => {
+              const status =
+                it.canSendRealign && it.canReceiveRealign
+                  ? { label: 'Cede + Recebe', cls: 'bg-emerald-100 text-emerald-800' }
+                  : it.canSendRealign
+                  ? { label: 'Só cede', cls: 'bg-blue-100 text-blue-800' }
+                  : it.canReceiveRealign
+                  ? { label: 'Só recebe', cls: 'bg-amber-100 text-amber-800' }
+                  : { label: 'Não participa', cls: 'bg-slate-100 text-slate-600' };
+              return (
+                <tr key={it.code} className="border-b border-slate-100 hover:bg-slate-50">
+                  <td className="px-3 py-2 font-mono font-bold text-slate-700">{it.code}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-slate-900">{it.city || it.name}</div>
+                    {it.city && it.name !== it.city && (
+                      <div className="text-xs text-slate-500">{it.name}</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      it.tipo === 'FILIAL' ? 'bg-violet-100 text-violet-700' : 'bg-stone-100 text-stone-700'
+                    }`}>
+                      {it.tipo}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{it.priorityScore}</td>
+                  <td className="px-3 py-2 text-center">
+                    <ToggleSwitch checked={it.canSendRealign} onChange={() => toggleSend(it.code)} color="emerald" />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <ToggleSwitch checked={it.canReceiveRealign} onChange={() => toggleReceive(it.code)} color="blue" />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${status.cls}`}>
+                      {status.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Save bar */}
+      <div className="flex items-center gap-3 sticky bottom-2 bg-white border border-slate-200 rounded-lg p-3 shadow-md">
+        {saveResult && (
+          <div
+            className={`text-xs flex-1 ${
+              saveResult.ok ? 'text-emerald-700' : 'text-rose-700'
+            }`}
+          >
+            {saveResult.msg}
+          </div>
+        )}
+        <button
+          onClick={load}
+          disabled={saving}
+          className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-sm font-medium disabled:opacity-50"
+        >
+          Descartar
+        </button>
+        <button
+          onClick={save}
+          disabled={!dirty || saving}
+          className="px-6 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:bg-slate-300 text-white text-sm font-bold flex items-center gap-2"
+        >
+          {saving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Salvando…
+            </>
+          ) : (
+            <>💾 Salvar config ({items.length} lojas)</>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  color,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  color: 'emerald' | 'blue';
+}) {
+  const onBg = color === 'emerald' ? 'bg-emerald-500' : 'bg-blue-500';
+  return (
+    <button
+      onClick={onChange}
+      className={`relative w-11 h-6 rounded-full transition ${checked ? onBg : 'bg-slate-300'}`}
+      title={checked ? 'Ativado' : 'Desativado'}
+    >
+      <span
+        className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
   );
 }
 
