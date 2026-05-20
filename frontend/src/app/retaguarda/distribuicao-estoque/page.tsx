@@ -19,7 +19,7 @@
  * Default = só desequilibrados + plus size + estoque total >= 3.
  */
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -100,6 +100,9 @@ export default function DistribuicaoEstoque() {
   const [minTotal, setMinTotal] = useState(2);
   const [showSettings, setShowSettings] = useState(false);
 
+  // ── Drawer de realinhamento inline ──
+  const [drawerGroup, setDrawerGroup] = useState<GroupDrawer | null>(null);
+
   // ── Dados ──
   const [data, setData] = useState<Distribution | null>(null);
   const [loading, setLoading] = useState(false);
@@ -122,9 +125,9 @@ export default function DistribuicaoEstoque() {
       .catch(() => setSubgrupos([]));
   }, [grupoSelected]);
 
-  // Debounce do search (500ms)
+  // Debounce do search (800ms — query SQL é pesada, evita rodar a cada tecla)
   useEffect(() => {
-    const t = setTimeout(() => setSearchDebounce(search), 500);
+    const t = setTimeout(() => setSearchDebounce(search), 800);
     return () => clearTimeout(t);
   }, [search]);
 
@@ -192,17 +195,9 @@ export default function DistribuicaoEstoque() {
     return 'hover:bg-slate-50';
   };
 
-  // Abre realinhamento pré-preenchido com a REF
-  const realinharRef = (row: Row) => {
-    const params = new URLSearchParams();
-    params.set('refs', row.ref);
-    // sugere origem = loja com maior excedente, destinos = lojas com 0
-    const sortedLojas = Object.entries(row.estoquePorLoja).sort((a, b) => b[1] - a[1]);
-    const origens = sortedLojas.filter(([, q]) => q >= 2).map(([code]) => code);
-    const destinos = sortedLojas.filter(([, q]) => q === 0).map(([code]) => code);
-    if (origens.length > 0) params.set('origens', origens.join(','));
-    if (destinos.length > 0) params.set('destinos', destinos.join(','));
-    router.push(`/retaguarda/realinhamento?${params}`);
+  // Abre DRAWER inline de realinhamento — não redireciona, faz balanço aqui
+  const realinharGrupo = (group: GroupDrawer) => {
+    setDrawerGroup(group);
   };
 
   const limparFiltros = () => {
@@ -448,7 +443,7 @@ export default function DistribuicaoEstoque() {
               rows={data.rows}
               lojas={data.lojas}
               storeNameByCode={storeNameByCode}
-              onRealinhar={realinharRef}
+              onRealinhar={realinharGrupo}
             />
           )}
         </div>
@@ -478,6 +473,16 @@ export default function DistribuicaoEstoque() {
           </div>
         </div>
       </main>
+
+      {/* ─── Drawer de realinhamento inline ─── */}
+      {drawerGroup && (
+        <RealignDrawer
+          group={drawerGroup}
+          stores={stores}
+          storeNameByCode={storeNameByCode}
+          onClose={() => setDrawerGroup(null)}
+        />
+      )}
     </div>
   );
 }
@@ -499,6 +504,19 @@ type Row = {
   criticidade: 'ALTO' | 'MEDIO' | 'OK';
 };
 
+/* Tipo de grupo exportado pra usar no drawer */
+export type GroupDrawer = {
+  key: string;
+  ref: string;
+  cor: string;
+  descricao: string;
+  preco: number;
+  tamanhos: string[];
+  items: Row[];
+  totalRede: number;
+  criticidadeAlta: number;
+};
+
 function VariationMapView({
   rows,
   lojas,
@@ -508,23 +526,10 @@ function VariationMapView({
   rows: Row[];
   lojas: string[];
   storeNameByCode: Map<string, string>;
-  onRealinhar: (row: Row) => void;
+  onRealinhar: (group: GroupDrawer) => void;
 }) {
-  // Agrupa rows por REF + COR
-  type Group = {
-    key: string;
-    ref: string;
-    cor: string;
-    descricao: string;
-    preco: number;
-    tamanhos: string[];
-    items: Row[];
-    totalRede: number;
-    criticidadeAlta: number;
-  };
-
-  const groups = useMemo<Group[]>(() => {
-    const map = new Map<string, Group>();
+  const groups = useMemo<GroupDrawer[]>(() => {
+    const map = new Map<string, GroupDrawer>();
     for (const r of rows) {
       const cor = (r.cor || 'SEM COR').trim().toUpperCase();
       const ref = r.ref || '—';
@@ -589,20 +594,10 @@ function VariationCard({
   storeNameByCode,
   onRealinhar,
 }: {
-  group: {
-    key: string;
-    ref: string;
-    cor: string;
-    descricao: string;
-    preco: number;
-    tamanhos: string[];
-    items: Row[];
-    totalRede: number;
-    criticidadeAlta: number;
-  };
+  group: GroupDrawer;
   lojas: string[];
   storeNameByCode: Map<string, string>;
-  onRealinhar: (row: Row) => void;
+  onRealinhar: (group: GroupDrawer) => void;
 }) {
   // Constrói matriz [loja][tamanho] → quantidade
   const matrix = useMemo(() => {
@@ -627,19 +622,21 @@ function VariationCard({
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       {/* Header do card */}
-      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-baseline gap-3 flex-1 min-w-0">
+      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+        <div className="flex items-baseline gap-3 mb-1">
           <span className="font-mono font-black text-lg text-slate-800">
             REF {group.ref}
           </span>
           <span className="font-bold text-slate-600 uppercase tracking-wide text-sm">
             — {group.cor}
           </span>
-          <span className="text-xs text-slate-500 truncate hidden md:inline">
-            {group.descricao}
-          </span>
         </div>
-        <div className="flex items-center gap-2 text-xs">
+        {group.descricao && (
+          <div className="text-xs text-slate-600 mb-2 leading-relaxed">
+            {group.descricao}
+          </div>
+        )}
+        <div className="flex items-center gap-2 text-xs flex-wrap">
           {group.criticidadeAlta > 0 && (
             <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold">
               {group.criticidadeAlta} desequilíbrio{group.criticidadeAlta > 1 ? 's' : ''}
@@ -653,15 +650,15 @@ function VariationCard({
               {brl(group.preco)}
             </span>
           )}
-          {group.criticidadeAlta > 0 && (
+          <div className="ml-auto">
             <button
-              onClick={() => onRealinhar(group.items.find((it) => it.criticidade === 'ALTO') || group.items[0])}
-              className="px-3 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1"
+              onClick={() => onRealinhar(group)}
+              className="px-3 py-1 rounded-md bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold flex items-center gap-1"
             >
               <Shuffle className="w-3 h-3" />
-              Realinhar
+              Sugerir realinhamento
             </button>
-          )}
+          </div>
         </div>
       </div>
 
@@ -741,6 +738,321 @@ function VariationCard({
         </table>
       </div>
     </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RealignDrawer — sugestão automática de balanço entre lojas
+   Algoritmo por TAMANHO:
+     1. Soma o estoque total daquele tamanho na rede
+     2. Lojas elegíveis = ativas, exceto SITE/PF, ordenadas por priorityScore desc
+     3. Distribuição target:
+        - Se total >= N lojas: cada uma ganha 1 base, excedente vai pras top
+        - Se total <  N lojas: só as top recebem 1 cada
+     4. Calcula movimentos: surplus em A → deficit em B
+   ════════════════════════════════════════════════════════════════════════ */
+
+type Move = { from: string; to: string; tamanho: string; qty: number };
+
+function RealignDrawer({
+  group,
+  stores,
+  storeNameByCode,
+  onClose,
+}: {
+  group: GroupDrawer;
+  stores: Store[];
+  storeNameByCode: Map<string, string>;
+  onClose: () => void;
+}) {
+  // Lojas elegíveis: ativas, sem SITE/PF, ordenadas por priorityScore desc
+  const eligibleStores = useMemo(() => {
+    const ignored = new Set(['SITE', 'PF']);
+    return stores
+      .filter((s) => s.active && !ignored.has(s.code))
+      .sort((a, b) => ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50));
+  }, [stores]);
+
+  // Matriz atual por tamanho × loja
+  const currentMatrix = useMemo(() => {
+    const m: Record<string, Record<string, number>> = {};
+    for (const tam of group.tamanhos) m[tam] = {};
+    for (const it of group.items) {
+      const tam = (it.tamanho || '').trim();
+      for (const [lj, q] of Object.entries(it.estoquePorLoja || {})) {
+        if (!m[tam]) m[tam] = {};
+        m[tam][lj] = q;
+      }
+    }
+    return m;
+  }, [group]);
+
+  // Calcula target por tamanho usando algoritmo de balanço
+  const { targetMatrix, moves } = useMemo(() => {
+    const target: Record<string, Record<string, number>> = {};
+    const allMoves: Move[] = [];
+
+    for (const tam of group.tamanhos) {
+      target[tam] = {};
+      const currentByStore = currentMatrix[tam] || {};
+      // Considera só lojas eligíveis
+      const totalAvailable = eligibleStores.reduce(
+        (s, st) => s + (currentByStore[st.code] || 0),
+        0,
+      );
+
+      // Inicializa target = 0 pra todas
+      for (const s of eligibleStores) target[tam][s.code] = 0;
+
+      // Distribui obedecendo regras
+      if (totalAvailable === 0) {
+        // nada a fazer
+      } else if (totalAvailable >= eligibleStores.length) {
+        // 1 base pra cada, sobra distribuída por prioridade
+        let remaining = totalAvailable;
+        for (const s of eligibleStores) {
+          target[tam][s.code] = 1;
+          remaining--;
+        }
+        let i = 0;
+        while (remaining > 0) {
+          target[tam][eligibleStores[i % eligibleStores.length].code]++;
+          remaining--;
+          i++;
+        }
+      } else {
+        // Não dá pra todas: top N lojas pegam 1
+        let remaining = totalAvailable;
+        for (const s of eligibleStores) {
+          if (remaining <= 0) break;
+          target[tam][s.code] = 1;
+          remaining--;
+        }
+      }
+
+      // Calcula movimentos: surplus → deficit
+      const sources: Array<{ code: string; surplus: number }> = [];
+      const sinks: Array<{ code: string; deficit: number }> = [];
+      for (const s of eligibleStores) {
+        const cur = currentByStore[s.code] || 0;
+        const tgt = target[tam][s.code] || 0;
+        const diff = cur - tgt;
+        if (diff > 0) sources.push({ code: s.code, surplus: diff });
+        else if (diff < 0) sinks.push({ code: s.code, deficit: -diff });
+      }
+
+      // Greedy match
+      for (const sink of sinks) {
+        while (sink.deficit > 0 && sources.length > 0) {
+          const src = sources[0];
+          const transfer = Math.min(src.surplus, sink.deficit);
+          if (transfer > 0) {
+            allMoves.push({ from: src.code, to: sink.code, tamanho: tam, qty: transfer });
+            src.surplus -= transfer;
+            sink.deficit -= transfer;
+          }
+          if (src.surplus === 0) sources.shift();
+        }
+      }
+    }
+
+    return { targetMatrix: target, moves: allMoves };
+  }, [currentMatrix, eligibleStores, group.tamanhos]);
+
+  const totalMoves = moves.reduce((s, m) => s + m.qty, 0);
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[860px] bg-white shadow-2xl z-40 overflow-y-auto">
+        {/* Header */}
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between z-10">
+          <div className="flex items-baseline gap-3">
+            <Shuffle className="w-5 h-5 text-violet-600" />
+            <span className="font-mono font-black text-lg text-slate-800">
+              REF {group.ref}
+            </span>
+            <span className="font-bold text-slate-600 uppercase text-sm">
+              — {group.cor}
+            </span>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {/* Resumo */}
+          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm">
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-bold text-violet-900">
+                💡 Sugestão de realinhamento
+              </span>
+              <span className="font-mono font-bold text-violet-900 text-lg">
+                {moves.length} movimento(s) · {totalMoves} peça(s)
+              </span>
+            </div>
+            <p className="text-xs text-violet-700">
+              Regra: todas as lojas com ≥ 1 quando possível. Em caso de excesso,
+              prioridade pelas lojas com maior <code>priorityScore</code>.
+              SITE e PF ignorados.
+            </p>
+          </div>
+
+          {/* Matriz Atual × Sugerida */}
+          <div>
+            <h4 className="font-bold text-slate-800 mb-2">Estoque por tamanho</h4>
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-2 py-2 text-left font-bold text-slate-600 sticky left-0 bg-slate-50 min-w-[160px]">
+                      Loja
+                    </th>
+                    {group.tamanhos.map((t) => (
+                      <th
+                        key={t}
+                        colSpan={2}
+                        className="px-1 py-1 text-center font-bold text-slate-700 border-l border-slate-200 min-w-[80px]"
+                      >
+                        {t}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr className="text-[10px] uppercase tracking-wider bg-slate-100">
+                    <th className="px-2 py-1 sticky left-0 bg-slate-100"></th>
+                    {group.tamanhos.map((t) => (
+                      <Fragment key={t}>
+                        <th className="px-1 py-1 text-center text-slate-500 border-l border-slate-200">
+                          Atual
+                        </th>
+                        <th className="px-1 py-1 text-center text-violet-700">→ Alvo</th>
+                      </Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {eligibleStores.map((s) => {
+                    const nome = storeNameByCode.get(s.code) || s.name;
+                    return (
+                      <tr key={s.code} className="border-t border-slate-100">
+                        <td className="px-2 py-1.5 sticky left-0 bg-white font-medium text-slate-700">
+                          <span className="font-mono text-[10px] text-slate-400 mr-1">
+                            {s.code}
+                          </span>
+                          {nome.replace(/^Lurd's\s*/i, '')}
+                        </td>
+                        {group.tamanhos.map((tam) => {
+                          const cur = currentMatrix[tam]?.[s.code] ?? 0;
+                          const tgt = targetMatrix[tam]?.[s.code] ?? 0;
+                          const diff = tgt - cur;
+                          return (
+                            <Fragment key={tam}>
+                              <td className="px-1 py-1 text-center border-l border-slate-100">
+                                <span className="font-mono text-slate-600">{cur}</span>
+                              </td>
+                              <td className="px-1 py-1 text-center">
+                                <span
+                                  className={`font-mono font-bold ${
+                                    diff > 0
+                                      ? 'text-emerald-700'
+                                      : diff < 0
+                                      ? 'text-rose-700'
+                                      : 'text-slate-400'
+                                  }`}
+                                >
+                                  {tgt}
+                                  {diff !== 0 && (
+                                    <span className="text-[10px] ml-0.5">
+                                      ({diff > 0 ? '+' : ''}
+                                      {diff})
+                                    </span>
+                                  )}
+                                </span>
+                              </td>
+                            </Fragment>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Lista de movimentos sugeridos */}
+          <div>
+            <h4 className="font-bold text-slate-800 mb-2">
+              Transferências sugeridas ({moves.length})
+            </h4>
+            {moves.length === 0 ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+                ✓ Distribuição já está balanceada — nenhuma transferência necessária.
+              </div>
+            ) : (
+              <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-[300px] overflow-y-auto">
+                {moves.map((m, i) => (
+                  <div key={i} className="px-3 py-2 flex items-center gap-3 text-sm hover:bg-slate-50">
+                    <span className="font-mono font-bold text-rose-600 w-12 text-right">
+                      −{m.qty}
+                    </span>
+                    <span className="flex-1 truncate">
+                      <span className="font-mono text-[10px] text-slate-400 mr-1">
+                        {m.from}
+                      </span>
+                      <span className="font-medium">
+                        {(storeNameByCode.get(m.from) || m.from).replace(/^Lurd's\s*/i, '')}
+                      </span>
+                    </span>
+                    <span className="text-slate-400">→</span>
+                    <span className="flex-1 truncate">
+                      <span className="font-mono text-[10px] text-slate-400 mr-1">
+                        {m.to}
+                      </span>
+                      <span className="font-medium">
+                        {(storeNameByCode.get(m.to) || m.to).replace(/^Lurd's\s*/i, '')}
+                      </span>
+                    </span>
+                    <span className="font-mono font-bold text-emerald-700 w-12">
+                      +{m.qty}
+                    </span>
+                    <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded font-bold">
+                      Tam {m.tamanho}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Ações */}
+          {moves.length > 0 && (
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-200">
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-sm font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  // TODO: criar TransferOrders no backend
+                  alert(
+                    `Em breve: criar ${moves.length} transferências automaticamente.\n` +
+                      `Por enquanto, anote os movimentos e cadastre na tela de realinhamento.`,
+                  );
+                }}
+                className="flex-1 px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold flex items-center justify-center gap-2"
+              >
+                <Shuffle className="w-4 h-4" />
+                Aplicar realinhamento
+              </button>
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
   );
 }
 
