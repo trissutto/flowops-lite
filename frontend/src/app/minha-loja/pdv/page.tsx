@@ -3171,7 +3171,18 @@ function PaymentModal({
     setPixPaid(false);
     setPixFallbackReason(null);
     try {
-      const valor = pixValor && pixValor > 0 ? pixValor : total;
+      // BUG FIX: usa `restante` em vez de `total` — quando vale-troca abate
+      // parte da venda, PIX precisa cobrar SÓ o que falta, não o total da venda.
+      // Caso real: cliente devolveu peça R$ 100, total venda R$ 150, vale-troca
+      // aplicado → restante R$ 50 → PIX deve ser de R$ 50, não R$ 150.
+      // Se `restante` for 0 (totalmente pago por vale), usa total como fallback
+      // só pra evitar gerar PIX de valor zero.
+      const valor =
+        pixValor && pixValor > 0
+          ? pixValor
+          : restante > 0
+          ? restante
+          : total;
       const customerPayload = {
         saleId,
         valor,
@@ -3427,7 +3438,10 @@ function PaymentModal({
   }, [pago100, finalizing, addingPayment, payments.length]);
 
   const recebidoNum = Number((recebido || '0').replace(/\./g, '').replace(',', '.'));
-  const troco = selected === 'dinheiro' && recebidoNum > total ? recebidoNum - total : 0;
+  // BUG FIX: troco é sobre `restante` (o que falta cobrar), NÃO `total`.
+  // Cenário: total R$ 150, vale-troca R$ 100 aplicado, restante R$ 50.
+  // Cliente entrega R$ 100 em dinheiro → troco DEVE ser R$ 50, não R$ -50.
+  const troco = selected === 'dinheiro' && recebidoNum > restante ? recebidoNum - restante : 0;
 
   // Reset bandeira ao trocar de método
   const selectMethod = (id: string) => {
@@ -3445,11 +3459,13 @@ function PaymentModal({
   const canConfirm = useMemo(() => {
     if (!selected) return false;
     if (selected === 'crediario' && !customerCpf) return false;
-    if (selected === 'dinheiro' && recebidoNum < total) return false;
+    // BUG FIX: valida recebido contra `restante`, NÃO `total`. Com vale-troca
+    // aplicado, cliente só precisa cobrir o que falta — não a venda inteira.
+    if (selected === 'dinheiro' && recebidoNum < restante) return false;
     if (needsBandeira && !bandeira) return false;
     if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, total, customerCpf, vendaOnlineTipo]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, restante, customerCpf, vendaOnlineTipo]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -3471,9 +3487,13 @@ function PaymentModal({
     }
 
     const details: any = {};
+    // BUG FIX: usa `restante` em vez de `total` pra parcelas — quando vale-troca
+    // ou pagamentos parciais já abateram parte, parcelas devem ser sobre o que
+    // FALTA cobrar, não sobre a venda inteira.
+    const valorPraCobrar = restante > 0 ? restante : total;
     if (selected === 'credito' || selected === 'crediario') {
       details.parcelas = parcelas;
-      const calc = calcularParcelas(total, parcelas);
+      const calc = calcularParcelas(valorPraCobrar, parcelas);
       details.valorIguais = calc.iguais;
       details.qtdIguais = calc.qtdIguais;
       details.valorUltima = calc.ultima;
@@ -3500,7 +3520,9 @@ function PaymentModal({
     // tolera falha — aqui é fluxo direto.
     if (selected === 'crediario') {
       const entradaNum = details.entrada || 0;
-      const valorFinanciado = Math.max(0, Math.round((total - entradaNum) * 100) / 100);
+      // BUG FIX: financia sobre `restante`, NÃO `total`. Vale-troca/parciais
+      // já abatidos não devem entrar no parcelamento.
+      const valorFinanciado = Math.max(0, Math.round((valorPraCobrar - entradaNum) * 100) / 100);
       if (valorFinanciado > 0) {
         try {
           const r = await api<any>(`/pdv/sales/${saleId}/crediario`, {
