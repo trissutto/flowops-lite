@@ -18,7 +18,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Printer, Check, AlertCircle, Loader2, RefreshCw, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Printer, Check, AlertCircle, Loader2, RefreshCw, ExternalLink, Download, Monitor } from 'lucide-react';
+import { api } from '@/lib/api';
 import {
   loadPrinterConfig,
   savePrinterChoice,
@@ -38,6 +39,24 @@ export default function ConfigImpressoraPage() {
   const [savedMsg, setSavedMsg] = useState('');
   const [testing, setTesting] = useState<string | null>(null);
   const electronMode = isElectron();
+  const [desktopRelease, setDesktopRelease] = useState<{
+    available: boolean;
+    version?: string | null;
+    downloadUrl?: string | null;
+    fileName?: string | null;
+    publishedAt?: string | null;
+    sizeBytes?: number;
+  } | null>(null);
+
+  // Busca info da última release do app desktop (só quando NÃO está no Electron).
+  // Cacheia no backend (5min) — chamada barata.
+  useEffect(() => {
+    if (electronMode) return;
+    api<typeof desktopRelease>('/desktop/latest')
+      .then((r) => setDesktopRelease(r))
+      .catch(() => setDesktopRelease({ available: false }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [electronMode]);
 
   async function refresh() {
     setLoading(true);
@@ -134,17 +153,67 @@ export default function ConfigImpressoraPage() {
           </button>
         </div>
 
-        {/* Aviso modo browser */}
+        {/* Card pra instalar/atualizar o app desktop — só aparece no navegador */}
         {!electronMode && (
-          <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 text-sm text-amber-900">
-            <div className="flex items-start gap-2">
-              <AlertCircle size={20} className="mt-0.5 shrink-0" />
-              <div>
-                <div className="font-black mb-1">Modo navegador detectado</div>
-                <div className="text-amber-800">
-                  Pra impressão SILENCIOSA (sem diálogo do Chrome) e rotear automaticamente
-                  cupom→térmica e carnê→A4, instale o <b>app desktop Lurd's</b>. Sem ele, o
-                  Chrome usa o diálogo padrão e vendedora precisa escolher impressora a cada print.
+          <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border-2 border-indigo-300 rounded-xl p-5 shadow-md">
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="w-14 h-14 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-lg">
+                <Monitor size={28} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-black text-indigo-900 text-lg mb-1 flex items-center gap-2 flex-wrap">
+                  Modo navegador detectado
+                  {desktopRelease?.version && (
+                    <span className="text-xs font-mono bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded">
+                      v{desktopRelease.version} disponível
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm text-indigo-800 mb-3 leading-relaxed">
+                  Pra impressão <b>silenciosa</b> (sem diálogo do Chrome), rotear automaticamente
+                  cupom→térmica e carnê→A4, e auto-update sem precisar reinstalar:
+                  baixa e instala o <b>app desktop Lurd's</b> neste PC.
+                </div>
+                <div className="flex gap-2 flex-wrap items-center">
+                  {desktopRelease?.available && desktopRelease.downloadUrl ? (
+                    <a
+                      href={desktopRelease.downloadUrl}
+                      download={desktopRelease.fileName || 'LURDS-ORDER-ONE-Setup.exe'}
+                      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-3 rounded-xl shadow-md transition"
+                    >
+                      <Download size={20} />
+                      Baixar instalador {desktopRelease.version && `v${desktopRelease.version}`}
+                      {desktopRelease.sizeBytes ? (
+                        <span className="text-xs opacity-75 font-normal">
+                          ({(desktopRelease.sizeBytes / 1024 / 1024).toFixed(1)} MB)
+                        </span>
+                      ) : null}
+                    </a>
+                  ) : desktopRelease === null ? (
+                    <span className="text-sm text-indigo-700 italic">Buscando última versão…</span>
+                  ) : (
+                    <a
+                      href="https://github.com/trissutto/flowops-lite/releases/latest"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-3 rounded-xl shadow-md transition"
+                    >
+                      <ExternalLink size={18} />
+                      Ver releases no GitHub
+                    </a>
+                  )}
+                  <a
+                    href="/api/desktop/download"
+                    className="inline-flex items-center gap-1.5 text-xs text-indigo-700 hover:text-indigo-900 underline font-semibold"
+                    title="Link curto pra compartilhar com as lojas — sempre baixa a última versão"
+                  >
+                    <ExternalLink size={12} />
+                    /api/desktop/download (link permanente)
+                  </a>
+                </div>
+                <div className="mt-3 text-[11px] text-indigo-700 bg-indigo-100/60 rounded px-2 py-1 inline-block">
+                  💡 Após baixar, roda o instalador, digita senha <b>LURDS2026</b> quando pedir.
+                  Versões futuras atualizam automático.
                 </div>
               </div>
             </div>
