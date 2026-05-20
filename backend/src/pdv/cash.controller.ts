@@ -175,13 +175,16 @@ export class CashController {
   @Post('fechar')
   async close(
     @Req() req: any,
-    @Body() body: { dinheiroFisico: number; observacao?: string; storeCode?: string },
+    @Body() body: { dinheiroFisico?: number; observacao?: string; storeCode?: string },
   ) {
     this.requireRole(req);
     const { storeCode } = this.resolveStore(req, { storeCode: body.storeCode });
+    // dinheiroFisico agora é opcional — vendedora conta no DIA SEGUINTE quando
+    // abre o caixa. Se vier preenchido (fluxo legado), aceita.
+    const fisico = body.dinheiroFisico != null ? Number(body.dinheiroFisico) : null;
     return this.svc.closeCash({
       storeCode,
-      dinheiroFisico: Number(body.dinheiroFisico),
+      dinheiroFisico: fisico != null && !isNaN(fisico) ? fisico : null,
       closedByName: req?.user?.name || req?.user?.email || null,
       observacao: body.observacao,
     });
@@ -225,13 +228,14 @@ export class CashController {
   @Post('forcar-fechar')
   async forceClose(
     @Req() req: any,
-    @Body() body: { dinheiroFisico: number; observacao?: string; reason?: string; storeCode?: string },
+    @Body() body: { dinheiroFisico?: number; observacao?: string; reason?: string; storeCode?: string },
   ) {
     this.requireRole(req);
     const { storeCode } = this.resolveStore(req, { storeCode: body.storeCode });
+    const fisico = body.dinheiroFisico != null ? Number(body.dinheiroFisico) : null;
     return this.svc.forceCloseCash({
       storeCode,
-      dinheiroFisico: Number(body.dinheiroFisico),
+      dinheiroFisico: fisico != null && !isNaN(fisico) ? fisico : null,
       closedByName: req?.user?.name || req?.user?.email || null,
       observacao: body.observacao,
       reason: body.reason,

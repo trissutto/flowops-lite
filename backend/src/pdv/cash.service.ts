@@ -1378,7 +1378,7 @@ export class CashService {
 
   async closeCash(input: {
     storeCode: string;
-    dinheiroFisico: number;
+    dinheiroFisico?: number | null;
     closedByName?: string;
     observacao?: string;
   }) {
@@ -1399,12 +1399,17 @@ export class CashService {
       );
     }
 
-    if (dinheiroFisico == null || isNaN(Number(dinheiroFisico)) || Number(dinheiroFisico) < 0) {
-      throw new BadRequestException('Informe o dinheiro físico contado');
-    }
+    // dinheiroFisico agora é OPCIONAL — a contagem é feita pela vendedora ao
+    // ABRIR o caixa do dia seguinte (vira dinheiroFisico retroativo dessa sessão).
+    // Se foi informado mesmo assim (cenário legado), usa o valor; senão deixa null.
+    const fisicoInformado =
+      dinheiroFisico != null && !isNaN(Number(dinheiroFisico)) && Number(dinheiroFisico) >= 0
+        ? Number(dinheiroFisico)
+        : null;
 
     const totals = await this.computeSessionTotals(session.id);
-    const diferenca = Number(dinheiroFisico) - totals.dinheiroEsperado;
+    const diferenca =
+      fisicoInformado != null ? fisicoInformado - totals.dinheiroEsperado : null;
 
     const closed = await (this.prisma as any).pdvCashSession.update({
       where: { id: session.id },
@@ -1424,15 +1429,18 @@ export class CashService {
         totalSangrias: totals.totalSangrias,
         totalSuprimentos: totals.totalSuprimentos,
         dinheiroEsperado: totals.dinheiroEsperado,
-        dinheiroFisico: Number(dinheiroFisico),
+        dinheiroFisico: fisicoInformado,
         diferenca,
       },
     });
 
     this.logger.log(
       `[caixa] fechado: loja=${storeCode} vendas=R$${totals.totalVendas.toFixed(2)} ` +
-        `esperado=R$${totals.dinheiroEsperado.toFixed(2)} físico=R$${dinheiroFisico} ` +
-        `diferença=R$${diferenca.toFixed(2)} por ${closedByName || 'sistema'}`,
+        `esperado=R$${totals.dinheiroEsperado.toFixed(2)} ` +
+        (fisicoInformado != null
+          ? `físico=R$${fisicoInformado.toFixed(2)} diferença=R$${(diferenca ?? 0).toFixed(2)}`
+          : `físico=PENDENTE (será contado na abertura do dia seguinte)`) +
+        ` por ${closedByName || 'sistema'}`,
     );
 
     return { ...closed, ...totals, diferenca };
@@ -1472,7 +1480,7 @@ export class CashService {
    */
   async forceCloseCash(input: {
     storeCode: string;
-    dinheiroFisico: number;
+    dinheiroFisico?: number | null;
     closedByName?: string;
     observacao?: string;
     reason?: string;
