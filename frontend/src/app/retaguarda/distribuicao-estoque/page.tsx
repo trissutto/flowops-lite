@@ -96,7 +96,8 @@ export default function DistribuicaoEstoque() {
   const [searchDebounce, setSearchDebounce] = useState('');
   const [tamanhos, setTamanhos] = useState<string[]>(PLUS_SIZE_DEFAULT);
   const [mode, setMode] = useState<'imbalanced' | 'all'>('imbalanced');
-  const [minTotal, setMinTotal] = useState(3);
+  // minTotal=2: análise faz sentido só com 2+ peças por SKU (CODIGO)
+  const [minTotal, setMinTotal] = useState(2);
   const [showSettings, setShowSettings] = useState(false);
 
   // ── Dados ──
@@ -210,7 +211,7 @@ export default function DistribuicaoEstoque() {
     setSearch('');
     setTamanhos(PLUS_SIZE_DEFAULT);
     setMode('imbalanced');
-    setMinTotal(3);
+    setMinTotal(2);
   };
 
   return (
@@ -384,7 +385,7 @@ export default function DistribuicaoEstoque() {
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-xs font-semibold text-slate-700">
-                  📊 Mín. total na rede:
+                  📊 Mín. peças em ALGUMA loja:
                 </label>
                 <input
                   type="number"
@@ -395,7 +396,7 @@ export default function DistribuicaoEstoque() {
                   className="w-16 px-2 py-1 border rounded text-sm font-mono"
                 />
                 <span className="text-xs text-slate-500">
-                  (não mostra variações com menos que isso somando todas lojas)
+                  (default 2 — só analisa SKUs onde pelo menos uma loja tem essa qtd ou +)
                 </span>
               </div>
             </div>
@@ -443,106 +444,324 @@ export default function DistribuicaoEstoque() {
               </div>
             </div>
           ) : (
-            <div className="overflow-auto max-h-[calc(100vh-280px)]">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-700 text-white sticky top-0 z-10">
-                  <tr>
-                    <th className="px-2 py-2 text-left font-bold sticky left-0 bg-slate-700 z-20 min-w-[90px]">
-                      CODIGO
-                    </th>
-                    <th className="px-2 py-2 text-left font-bold sticky left-[90px] bg-slate-700 z-20 min-w-[320px]">
-                      DESCRIÇÃO
-                    </th>
-                    <th className="px-2 py-2 text-right font-bold min-w-[70px]">PREÇO</th>
-                    {data.lojas.map((lj) => (
-                      <th
-                        key={lj}
-                        className="px-1 py-2 text-center font-bold min-w-[44px]"
-                        title={storeNameByCode.get(lj) || lj}
-                      >
-                        {lojaLabel(lj)}
-                      </th>
-                    ))}
-                    <th className="px-2 py-2 text-center font-bold bg-violet-700 sticky right-[80px] min-w-[50px]">
-                      TOT
-                    </th>
-                    <th className="px-2 py-2 text-center font-bold bg-violet-700 sticky right-0 min-w-[80px]">
-                      ⚖️
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {data.rows.map((row) => (
-                    <tr
-                      key={row.codigo}
-                      className={`${rowBgClass(row.criticidade)} transition-colors`}
-                    >
-                      <td className="px-2 py-1.5 font-mono text-slate-700 sticky left-0 bg-inherit z-10">
-                        {row.codigo}
-                      </td>
-                      <td className="px-2 py-1.5 sticky left-[90px] bg-inherit z-10">
-                        <div className="font-semibold text-slate-800 truncate max-w-[300px]" title={row.descricao}>
-                          {row.descricao || `${row.ref} ${row.cor || ''}/${row.tamanho || ''}`}
-                        </div>
-                      </td>
-                      <td className="px-2 py-1.5 text-right font-mono text-slate-600">
-                        {row.preco > 0 ? brl(row.preco) : '—'}
-                      </td>
-                      {data.lojas.map((lj) => {
-                        const qty = row.estoquePorLoja[lj] ?? 0;
-                        return (
-                          <td
-                            key={lj}
-                            className={`px-1 py-1.5 text-center font-mono ${cellBgClass(qty)}`}
-                          >
-                            {qty}
-                          </td>
-                        );
-                      })}
-                      <td className="px-2 py-1.5 text-center font-mono font-black text-violet-700 bg-violet-50 sticky right-[80px]">
-                        {row.total}
-                      </td>
-                      <td className="px-2 py-1.5 text-center sticky right-0 bg-white">
-                        {row.criticidade === 'OK' ? (
-                          <span className="text-emerald-600">🟢</span>
-                        ) : (
-                          <button
-                            onClick={() => realinharRef(row)}
-                            className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 ${
-                              row.criticidade === 'ALTO'
-                                ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                                : 'bg-amber-500 hover:bg-amber-600 text-white'
-                            }`}
-                            title="Realinhar essa REF"
-                          >
-                            <Shuffle className="w-3 h-3" />
-                            Realinhar
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <VariationMapView
+              rows={data.rows}
+              lojas={data.lojas}
+              storeNameByCode={storeNameByCode}
+              onRealinhar={realinharRef}
+            />
           )}
         </div>
 
         {/* Legenda */}
-        <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1">
-          <div className="font-bold text-slate-700">Legenda:</div>
-          <div className="flex flex-wrap gap-4">
-            <span>🔴 <b>ALTO</b> — alguma loja com 0 E outra com 3+ (urgente)</span>
-            <span>🟡 <b>MÉDIO</b> — alguma com 0 E outra com 2</span>
-            <span>🟢 <b>OK</b> — distribuído</span>
-          </div>
-          <div className="flex flex-wrap gap-4 pt-1">
-            <span><span className="inline-block w-4 h-3 bg-emerald-200 mr-1" />Excesso (5+)</span>
-            <span><span className="inline-block w-4 h-3 bg-emerald-100 mr-1" />OK (3-4)</span>
-            <span><span className="inline-block w-4 h-3 bg-rose-200 mr-1" />Negativo</span>
+        <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1.5">
+          <div className="font-bold text-slate-700">Legenda das bolinhas (estoque por variação na loja):</div>
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5 items-center">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-red-500" /> ZERO
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-orange-500" /> apenas 1
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-yellow-400" /> 2 (baixo)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-green-500" /> 3-4 saudável
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-blue-500" /> 5-9 excesso
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full bg-purple-600" /> 10+ concentrando
+            </span>
           </div>
         </div>
       </main>
     </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   VariationMapView — visualização por REF+COR com matriz LOJA × TAMANHO
+   Cada card = 1 modelo de cor. Bolinha colorida codifica criticidade.
+   ════════════════════════════════════════════════════════════════════════ */
+
+type Row = {
+  codigo: string;
+  ref: string;
+  cor: string | null;
+  tamanho: string | null;
+  descricao: string;
+  preco: number;
+  estoquePorLoja: Record<string, number>;
+  total: number;
+  criticidade: 'ALTO' | 'MEDIO' | 'OK';
+};
+
+function VariationMapView({
+  rows,
+  lojas,
+  storeNameByCode,
+  onRealinhar,
+}: {
+  rows: Row[];
+  lojas: string[];
+  storeNameByCode: Map<string, string>;
+  onRealinhar: (row: Row) => void;
+}) {
+  // Agrupa rows por REF + COR
+  type Group = {
+    key: string;
+    ref: string;
+    cor: string;
+    descricao: string;
+    preco: number;
+    tamanhos: string[];
+    items: Row[];
+    totalRede: number;
+    criticidadeAlta: number;
+  };
+
+  const groups = useMemo<Group[]>(() => {
+    const map = new Map<string, Group>();
+    for (const r of rows) {
+      const cor = (r.cor || 'SEM COR').trim().toUpperCase();
+      const ref = r.ref || '—';
+      const key = `${ref}|${cor}`;
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          key,
+          ref,
+          cor,
+          descricao: r.descricao,
+          preco: r.preco,
+          tamanhos: [],
+          items: [],
+          totalRede: 0,
+          criticidadeAlta: 0,
+        };
+        map.set(key, g);
+      }
+      g.items.push(r);
+      g.totalRede += r.total;
+      if (r.criticidade === 'ALTO') g.criticidadeAlta++;
+      if (r.preco > g.preco) g.preco = r.preco;
+    }
+    // Ordena tamanhos numericamente dentro de cada grupo
+    for (const g of map.values()) {
+      const tamSet = new Set<string>();
+      for (const it of g.items) if (it.tamanho) tamSet.add(it.tamanho.trim());
+      g.tamanhos = Array.from(tamSet).sort((a, b) => {
+        const na = parseInt(a, 10);
+        const nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      });
+    }
+    // Ordena grupos: primeiro os com mais criticidade ALTA, depois por total
+    return Array.from(map.values()).sort((a, b) => {
+      if (b.criticidadeAlta !== a.criticidadeAlta)
+        return b.criticidadeAlta - a.criticidadeAlta;
+      return b.totalRede - a.totalRede;
+    });
+  }, [rows]);
+
+  return (
+    <div className="overflow-auto max-h-[calc(100vh-280px)] p-3 space-y-3 bg-slate-50">
+      {groups.map((g) => (
+        <VariationCard
+          key={g.key}
+          group={g}
+          lojas={lojas}
+          storeNameByCode={storeNameByCode}
+          onRealinhar={onRealinhar}
+        />
+      ))}
+    </div>
+  );
+}
+
+function VariationCard({
+  group,
+  lojas,
+  storeNameByCode,
+  onRealinhar,
+}: {
+  group: {
+    key: string;
+    ref: string;
+    cor: string;
+    descricao: string;
+    preco: number;
+    tamanhos: string[];
+    items: Row[];
+    totalRede: number;
+    criticidadeAlta: number;
+  };
+  lojas: string[];
+  storeNameByCode: Map<string, string>;
+  onRealinhar: (row: Row) => void;
+}) {
+  // Constrói matriz [loja][tamanho] → quantidade
+  const matrix = useMemo(() => {
+    const m: Record<string, Record<string, { qty: number; row: Row }>> = {};
+    for (const lj of lojas) m[lj] = {};
+    for (const it of group.items) {
+      const tam = (it.tamanho || '').trim();
+      for (const [lj, qty] of Object.entries(it.estoquePorLoja || {})) {
+        if (!m[lj]) m[lj] = {};
+        m[lj][tam] = { qty, row: it };
+      }
+    }
+    return m;
+  }, [group, lojas]);
+
+  // Lojas presentes (com alguma quantidade ou listadas no header)
+  const lojasComEstoque = lojas.filter((lj) => {
+    return group.tamanhos.some((tam) => (matrix[lj]?.[tam]?.qty ?? 0) > 0);
+  });
+  const lojasParaMostrar = lojasComEstoque.length > 0 ? lojasComEstoque : lojas.slice(0, 8);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {/* Header do card */}
+      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-baseline gap-3 flex-1 min-w-0">
+          <span className="font-mono font-black text-lg text-slate-800">
+            REF {group.ref}
+          </span>
+          <span className="font-bold text-slate-600 uppercase tracking-wide text-sm">
+            — {group.cor}
+          </span>
+          <span className="text-xs text-slate-500 truncate hidden md:inline">
+            {group.descricao}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          {group.criticidadeAlta > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold">
+              {group.criticidadeAlta} desequilíbrio{group.criticidadeAlta > 1 ? 's' : ''}
+            </span>
+          )}
+          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono font-bold">
+            {group.totalRede} pç na rede
+          </span>
+          {group.preco > 0 && (
+            <span className="font-mono text-slate-500">
+              {brl(group.preco)}
+            </span>
+          )}
+          {group.criticidadeAlta > 0 && (
+            <button
+              onClick={() => onRealinhar(group.items.find((it) => it.criticidade === 'ALTO') || group.items[0])}
+              className="px-3 py-1 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center gap-1"
+            >
+              <Shuffle className="w-3 h-3" />
+              Realinhar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Matriz LOJA × TAMANHO */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="px-3 py-2 text-left font-bold text-slate-600 sticky left-0 bg-slate-50 z-10 min-w-[140px]">
+                Loja
+              </th>
+              {group.tamanhos.map((tam) => (
+                <th
+                  key={tam}
+                  className="px-2 py-2 text-center font-bold text-slate-600 min-w-[60px]"
+                >
+                  {tam}
+                </th>
+              ))}
+              <th className="px-3 py-2 text-center font-bold text-slate-600 bg-slate-100">
+                Total
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {lojasParaMostrar.map((lj) => {
+              const nome = storeNameByCode.get(lj) || lj;
+              const linhaTotal = group.tamanhos.reduce(
+                (s, t) => s + (matrix[lj]?.[t]?.qty ?? 0),
+                0,
+              );
+              return (
+                <tr key={lj} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-3 py-2 sticky left-0 bg-white font-medium text-slate-800">
+                    <span className="font-mono text-xs text-slate-400 mr-2">{lj}</span>
+                    {nome.replace(/^Lurd's\s*/i, '')}
+                  </td>
+                  {group.tamanhos.map((tam) => {
+                    const cell = matrix[lj]?.[tam];
+                    const qty = cell?.qty ?? 0;
+                    return (
+                      <td key={tam} className="px-2 py-2 text-center">
+                        <Bolinha qty={qty} />
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-center font-mono font-black text-slate-700 bg-slate-50">
+                    {linhaTotal}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* Linha de TOTAL POR TAMANHO */}
+            <tr className="border-t-2 border-slate-200 bg-slate-50">
+              <td className="px-3 py-2 sticky left-0 bg-slate-50 font-bold text-slate-700 text-[11px] uppercase tracking-wider">
+                Total tamanho
+              </td>
+              {group.tamanhos.map((tam) => {
+                const tot = lojasParaMostrar.reduce(
+                  (s, lj) => s + (matrix[lj]?.[tam]?.qty ?? 0),
+                  0,
+                );
+                return (
+                  <td
+                    key={tam}
+                    className="px-2 py-2 text-center font-mono font-bold text-slate-700"
+                  >
+                    {tot}
+                  </td>
+                );
+              })}
+              <td className="px-3 py-2 text-center font-mono font-black text-violet-700 bg-violet-100">
+                {group.totalRede}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* Bolinha colorida — escala visual do estoque */
+function Bolinha({ qty }: { qty: number }) {
+  let bg = 'bg-red-500'; // 0
+  if (qty === 1) bg = 'bg-orange-500';
+  else if (qty === 2) bg = 'bg-yellow-400';
+  else if (qty >= 3 && qty <= 4) bg = 'bg-green-500';
+  else if (qty >= 5 && qty <= 9) bg = 'bg-blue-500';
+  else if (qty >= 10) bg = 'bg-purple-600';
+
+  // Texto branco em fundos escuros; preto em amarelo
+  const textColor = qty === 2 ? 'text-stone-900' : 'text-white';
+
+  return (
+    <span
+      className={`inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold tabular-nums ${bg} ${textColor} shadow-sm`}
+      title={`${qty} unidade${qty === 1 ? '' : 's'}`}
+    >
+      {qty}
+    </span>
   );
 }

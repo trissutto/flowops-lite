@@ -151,7 +151,7 @@ export class IntelligenceController {
    *   tamanhos: CSV de tamanhos (default: 46-60 + combos)
    *   lojas: CSV de codes (default: todas exceto SITE/PF)
    *   mode: 'imbalanced' (default) | 'all'
-   *   minTotal: int (default 3)
+   *   minTotal: int (default 2 — análise só faz sentido com 2+ peças por SKU)
    *   limit: int (default 1500)
    */
   @Get('stock-distribution')
@@ -174,7 +174,7 @@ export class IntelligenceController {
       tamanhos: tamanhos ? tamanhos.split(',').map((s) => s.trim()).filter(Boolean) : null,
       lojas: lojas ? lojas.split(',').map((s) => s.trim()).filter(Boolean) : null,
       mode: mode === 'all' ? 'all' : 'imbalanced',
-      minTotal: minTotal ? Number(minTotal) : 3,
+      minTotal: minTotal ? Number(minTotal) : 2,
       limit: limit ? Number(limit) : 1500,
     });
   }

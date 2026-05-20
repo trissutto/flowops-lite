@@ -5767,7 +5767,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const limit = Math.max(50, Math.min(5000, filters.limit || 1500));
     const mode = filters.mode || 'imbalanced';
-    const minTotal = Math.max(0, filters.minTotal ?? 3);
+    // minTotal default = 2 (antes era 3): mostra SKUs com pelo menos 2 peças
+    // somadas na rede. Ajustado a pedido — análise faz sentido só com 2+ peças.
+    const minTotal = Math.max(0, filters.minTotal ?? 2);
 
     // Default PLUS SIZE = lista atual do setting (cobre 46-60 + combos)
     const defaultPlusSize = [
@@ -5959,9 +5961,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     // ── 4) Filtra por modo + minTotal ──
+    // minTotal agora é "mínimo de peças em ALGUMA loja" (maxQty), não soma total.
+    // Faz sentido analítico: se a maior loja só tem 1 peça, não dá pra
+    // redistribuir nada. Análise útil só com SKUs onde alguma loja tem 2+.
     let filtered = parsed;
     if (minTotal > 0) {
-      filtered = filtered.filter((r) => r.total >= minTotal);
+      filtered = filtered.filter((r) => {
+        const vals = Object.values(r.estoquePorLoja || {});
+        const maxQty = vals.length > 0 ? Math.max(...vals) : 0;
+        return maxQty >= minTotal;
+      });
     }
     if (mode === 'imbalanced') {
       filtered = filtered.filter((r) => r.criticidade !== 'OK');
