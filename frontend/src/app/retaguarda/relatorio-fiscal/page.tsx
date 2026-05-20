@@ -304,6 +304,42 @@ export default function RelatorioFiscalPage() {
             </div>
           </div>
 
+          {/* Atalho rápido: filtro "Só notas efetivas" (autorizadas).
+              Limpa qualquer outro status selecionado e marca só "autorizada".
+              Mais visível que clicar no chip pequeno dentro de Status NFC-e. */}
+          <div className="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-emerald-900">
+                📊 Mostrar só notas efetivas (com imposto gerado)
+              </div>
+              <div className="text-[11px] text-emerald-700">
+                Filtra só NFC-e <b>autorizadas</b> pela SEFAZ — o que efetivamente virou imposto pro contador.
+                Esconde pendentes, canceladas, rejeitadas e vendas sem NFC-e.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const onlyAutorizada =
+                  selectedStatus.size === 1 && selectedStatus.has('autorizada');
+                if (onlyAutorizada) {
+                  setSelectedStatus(new Set()); // desativa
+                } else {
+                  setSelectedStatus(new Set(['autorizada']));
+                }
+              }}
+              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
+                selectedStatus.size === 1 && selectedStatus.has('autorizada')
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'bg-white text-emerald-700 border-2 border-emerald-300 hover:bg-emerald-50'
+              }`}
+            >
+              {selectedStatus.size === 1 && selectedStatus.has('autorizada')
+                ? '✓ ATIVO — só autorizadas'
+                : 'Ativar filtro de notas efetivas'}
+            </button>
+          </div>
+
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" checked={onlyInconsistent} onChange={(e) => setOnlyInconsistent(e.target.checked)} />
