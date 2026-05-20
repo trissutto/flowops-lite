@@ -58,6 +58,16 @@ model Store {
   // REDE↔FILIAL. Default REDE pra não quebrar lojas existentes.
   tipo          String   @default("REDE")  // REDE | FILIAL
 
+  // ── Config de Realinhamento ──
+  // Controla se a loja participa do balanço automático de estoque entre lojas.
+  // Ambos default true (participa de tudo). Casos comuns:
+  //   - CD Central: canSend=true, canReceive=false (só abastece)
+  //   - Loja nova:  canSend=false, canReceive=true (só recebe)
+  //   - Liquidando: canSend=true, canReceive=false (esvaziando)
+  //   - Pausada:    canSend=false, canReceive=false (não participa)
+  canSendRealign    Boolean  @default(true) @map("can_send_realign")
+  canReceiveRealign Boolean  @default(true) @map("can_receive_realign")
+
   // ── Auditoria fiscal (grupo com múltiplos CNPJs) ──
   // CNPJ esperado pra essa loja emitir NFC-e. Ex: SOROCABA → T.O. RISSUTTO.
   // Se a config NFC-e da loja apontar pra CNPJ diferente, o PDV bloqueia a

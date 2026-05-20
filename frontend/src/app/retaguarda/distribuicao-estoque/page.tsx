@@ -103,6 +103,9 @@ export default function DistribuicaoEstoque() {
   // ── Drawer de realinhamento inline ──
   const [drawerGroup, setDrawerGroup] = useState<GroupDrawer | null>(null);
 
+  // ── Tab atual: 'distribuicao' | 'config' ──
+  const [activeTab, setActiveTab] = useState<'distribuicao' | 'config'>('distribuicao');
+
   // ── Dados ──
   const [data, setData] = useState<Distribution | null>(null);
   const [loading, setLoading] = useState(false);
@@ -245,6 +248,34 @@ export default function DistribuicaoEstoque() {
       </header>
 
       <main className="max-w-[1800px] mx-auto p-4 space-y-4">
+        {/* Tabs */}
+        <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setActiveTab('distribuicao')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
+              activeTab === 'distribuicao'
+                ? 'bg-violet-600 text-white shadow'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            📊 Distribuição
+          </button>
+          <button
+            onClick={() => setActiveTab('config')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
+              activeTab === 'config'
+                ? 'bg-violet-600 text-white shadow'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            ⚙️ Config Realinhamento
+          </button>
+        </div>
+
+        {activeTab === 'config' ? (
+          <RealignConfigPanel />
+        ) : (
+          <>
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="bg-rose-100 border border-rose-300 rounded-lg p-3">
@@ -449,7 +480,11 @@ export default function DistribuicaoEstoque() {
           )}
         </div>
 
-        {/* Legenda */}
+          </>
+        )}
+
+        {/* Legenda — só mostra na aba de distribuição */}
+        {activeTab === 'distribuicao' && (
         <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1.5">
           <div className="font-bold text-slate-700">Legenda das bolinhas (estoque por variação na loja):</div>
           <div className="flex flex-wrap gap-x-5 gap-y-1.5 items-center">
@@ -473,6 +508,7 @@ export default function DistribuicaoEstoque() {
             </span>
           </div>
         </div>
+        )}
       </main>
 
       {/* ─── Drawer de realinhamento inline ─── */}

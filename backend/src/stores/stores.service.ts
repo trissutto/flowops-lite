@@ -35,6 +35,50 @@ export class StoresService {
     return this.prisma.store.findMany({ orderBy: { code: 'asc' } });
   }
 
+  /**
+   * Lista lojas com config de realinhamento (campos canSendRealign + canReceiveRealign).
+   * Usado pela aba Config da tela de Distribuição de Estoque.
+   */
+  async listRealignConfig() {
+    const stores = await this.prisma.store.findMany({
+      where: { active: true },
+      orderBy: { code: 'asc' },
+      select: {
+        code: true,
+        name: true,
+        city: true,
+        tipo: true,
+        priorityScore: true,
+        canSendRealign: true,
+        canReceiveRealign: true,
+      },
+    });
+    return stores;
+  }
+
+  /**
+   * Atualiza config de realinhamento em batch (vários toggles de uma vez).
+   * Atomicidade: tudo numa transaction — se um item falhar, rollback total.
+   */
+  async updateRealignConfig(
+    items: Array<{ code: string; canSendRealign: boolean; canReceiveRealign: boolean }>,
+  ) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return { updated: 0 };
+    }
+    const ops = items.map((it) =>
+      this.prisma.store.update({
+        where: { code: it.code },
+        data: {
+          canSendRealign: !!it.canSendRealign,
+          canReceiveRealign: !!it.canReceiveRealign,
+        },
+      }),
+    );
+    await this.prisma.$transaction(ops);
+    return { updated: items.length };
+  }
+
   async performance(storeId: string) {
     const [total, separating, shipped] = await this.prisma.$transaction([
       this.prisma.pickOrder.count({ where: { storeId } }),

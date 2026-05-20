@@ -61,4 +61,24 @@ export class StoresController {
   remove(@Param('id') id: string) {
     return this.stores.remove(id);
   }
+
+  /**
+   * GET /stores/realign-config — lista lojas com config de realinhamento.
+   * Retorna: [{ code, name, city, canSendRealign, canReceiveRealign }]
+   */
+  @Get('realign-config/list')
+  realignConfigList() {
+    return this.stores.listRealignConfig();
+  }
+
+  /**
+   * POST /stores/realign-config — atualiza config em batch.
+   * Body: { items: [{ code, canSendRealign, canReceiveRealign }] }
+   */
+  @Post('realign-config/update')
+  realignConfigUpdate(
+    @Body() body: { items: Array<{ code: string; canSendRealign: boolean; canReceiveRealign: boolean }> },
+  ) {
+    return this.stores.updateRealignConfig(body.items || []);
+  }
 }
