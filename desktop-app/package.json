@@ -1,6 +1,6 @@
 {
   "name": "lurds-order-one-desktop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "LURDS ORDER ONE — app de loja (tray + auto-start + impressao silenciosa)",
   "main": "src/main.js",
   "author": "LURDS",
