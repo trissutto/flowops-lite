@@ -6202,6 +6202,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       'REDE SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
       'REDESHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
       'REDE_SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
+      // VENDA ONLINE — Plus Size vende muito via WhatsApp/Instagram. Pagamento
+      // já chegou na conta (PIX direto / link externo). PDV só registra a venda
+      // pra ter histórico, comissão e baixa de estoque. Vai em FORMA dedicada
+      // pra separar no fechamento Wincred (não conta no físico de dinheiro).
+      'VENDA_ONLINE': { forma: 'VENDA_ONLINE', coluna: null },
+      'VENDA ONLINE': { forma: 'VENDA_ONLINE', coluna: null },
+      'VENDA_ONLINE_PIX': { forma: 'VENDA_ONLINE', coluna: null },
+      'VENDA_ONLINE_LINK': { forma: 'VENDA_ONLINE', coluna: null },
     };
     return map[m] || { forma: m || 'OUTROS', coluna: null };
   }

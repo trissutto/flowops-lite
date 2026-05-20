@@ -155,6 +155,10 @@ export class FiscalReportService {
       if (v === 'rejected' || v === 'rejeitada') return 'rejeitada';
       if (v === 'cancelled' || v === 'canceled' || v === 'cancelada') return 'cancelada';
       if (v === 'pending' || v === 'pendente') return 'pendente';
+      // 'skipped' = venda online (paga por fora, sem NFC-e). Tratamos como
+      // 'sem_nfce' pra não aparecer no filtro padrão (autorizadas). Quem
+      // quiser ver, filtra por 'sem_nfce'.
+      if (v === 'skipped') return 'sem_nfce';
       return v; // valor desconhecido — mantém pra debug
     };
 

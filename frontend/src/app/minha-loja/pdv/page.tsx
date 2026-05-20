@@ -118,6 +118,10 @@ const PAYMENT_METHODS = [
   { id: 'debito', label: 'Cartão Débito', icon: CreditCard },
   { id: 'credito', label: 'Cartão Crédito', icon: CreditCard },
   { id: 'crediario', label: 'Crediário', icon: User },
+  // Venda Online — WhatsApp/Instagram: pagamento já chegou na conta da loja.
+  // PDV só registra a venda (histórico + comissão + estoque). Sem geração de
+  // QR/cobrança, sem NFC-e automática. CPF obrigatório.
+  { id: 'venda_online', label: 'Venda Online', icon: Globe },
 ] as const;
 
 const BANDEIRAS_DEBITO = ['REDESHOP', 'VISA ELECTRON', 'ELO'] as const;
@@ -2931,6 +2935,10 @@ function PaymentModal({
   const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
   const [copyMsg, setCopyMsg] = useState(false);
 
+  // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
+  // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
+  const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | null>(null);
+
   // ── Adicionar pagamento (com auto-finalize quando completa) ──
   // Se o valor digitado fecha o total da venda (95% dos casos: 1 forma só),
   // automaticamente finaliza a venda na mesma ação — economiza 1 clique.
@@ -2963,6 +2971,25 @@ function PaymentModal({
     if (needsBandeira && !bandeira) {
       toast('warning', 'Escolha a bandeira', 'Visa, Master, Elo, Hipercard…');
       return;
+    }
+    // VENDA ONLINE — exige CPF do cliente + escolher PIX ou LINK
+    if (selected === 'venda_online') {
+      if (!customerCpf) {
+        toast(
+          'warning',
+          'CPF obrigatório',
+          'Venda online sempre identifica a cliente (F5).',
+        );
+        return;
+      }
+      if (!vendaOnlineTipo) {
+        toast(
+          'warning',
+          'Escolha o tipo da venda online',
+          'PIX direto ou Link externo (só pra registro).',
+        );
+        return;
+      }
     }
     // PIX: SEMPRE exige QR gerado (clique no botão "PIX"). Se for provider
     // Pagar.me/PagBank, exige TAMBÉM confirmação automática (pixPaid=true via
@@ -3020,6 +3047,11 @@ function PaymentModal({
         // (não deve cair aqui — bloqueio em adicionarPagamento garante pixCharge)
         details.pixManual = true;
       }
+    }
+    if (selected === 'venda_online') {
+      // Só pra histórico — não dispara cobrança real
+      details.tipo = vendaOnlineTipo; // 'pix' | 'link'
+      details.origem = 'whatsapp_instagram';
     }
     if (needsBandeira) details.bandeira = bandeira;
 
@@ -3404,6 +3436,7 @@ function PaymentModal({
     setParcelas(1);
     setPixCharge(null);
     setPixPaid(false);
+    setVendaOnlineTipo(null);
     if (id === 'pix') {
       generatePix();
     }
@@ -3414,8 +3447,9 @@ function PaymentModal({
     if (selected === 'crediario' && !customerCpf) return false;
     if (selected === 'dinheiro' && recebidoNum < total) return false;
     if (needsBandeira && !bandeira) return false;
+    if (selected === 'venda_online' && (!customerCpf || !vendaOnlineTipo)) return false;
     return true;
-  }, [selected, bandeira, needsBandeira, recebidoNum, total, customerCpf]);
+  }, [selected, bandeira, needsBandeira, recebidoNum, total, customerCpf, vendaOnlineTipo]);
 
   const confirm = async () => {
     if (!selected) return;
@@ -3678,7 +3712,11 @@ function PaymentModal({
                 .map((p) => {
                 const Icon = p.icon;
                 const isSelected = selected === p.id;
-                const disabled = p.id === 'crediario' && !customerCpf;
+                const disabled =
+                  (p.id === 'crediario' && !customerCpf) ||
+                  (p.id === 'venda_online' && !customerCpf);
+                // Venda online tem visual diferente (teal) pra destacar
+                const isVendaOnline = p.id === 'venda_online';
                 return (
                   <button
                     key={p.id}
@@ -3687,10 +3725,20 @@ function PaymentModal({
                     disabled={disabled}
                     className={`px-3 py-2 rounded-lg border-2 text-sm font-bold transition-colors flex items-center justify-center gap-2 disabled:opacity-30 disabled:cursor-not-allowed ${
                       isSelected
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                        ? isVendaOnline
+                          ? 'border-teal-600 bg-teal-50 text-teal-800'
+                          : 'border-emerald-600 bg-emerald-50 text-emerald-800'
+                        : isVendaOnline
+                        ? 'border-teal-300 bg-teal-50/40 text-teal-700 hover:border-teal-400'
                         : 'border-slate-200 hover:border-slate-300 text-slate-600'
                     }`}
-                    title={disabled ? 'Crediário exige CPF do cliente' : ''}
+                    title={
+                      disabled
+                        ? p.id === 'crediario'
+                          ? 'Crediário exige CPF do cliente'
+                          : 'Venda online exige CPF do cliente (F5)'
+                        : ''
+                    }
                   >
                     <Icon className="w-4 h-4" />
                     {p.label}
@@ -3747,6 +3795,64 @@ function PaymentModal({
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* VENDA ONLINE — sub-tipo PIX direto ou Link externo (só registro,
+            sem geração de cobrança real). Aviso explícito + 2 botões grandes. */}
+        {selected === 'venda_online' && (
+          <div className="space-y-3 pt-2 border-t">
+            <div className="bg-teal-50 border border-teal-300 rounded-lg p-3 text-xs text-teal-900">
+              <div className="font-bold flex items-center gap-1.5 mb-1">
+                <Globe className="w-3.5 h-3.5" />
+                Venda Online — sem gerar cobrança
+              </div>
+              <div className="text-teal-800 leading-snug">
+                Pagamento já chegou na conta da loja (WhatsApp/Instagram).
+                PDV só registra venda, vendedora e cliente. <b>Não emite NFC-e</b>.
+                Estoque é baixado normalmente.
+              </div>
+            </div>
+            <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
+              Como foi feita a venda online?
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setVendaOnlineTipo('pix')}
+                className={`py-3 px-3 rounded-lg border-2 font-bold text-sm flex flex-col items-center gap-1 transition-all ${
+                  vendaOnlineTipo === 'pix'
+                    ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
+                    : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
+                }`}
+              >
+                <QrCode className="w-5 h-5" />
+                PIX direto
+                <span className="text-[10px] font-normal text-slate-500">
+                  Cliente fez PIX p/ conta
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVendaOnlineTipo('link')}
+                className={`py-3 px-3 rounded-lg border-2 font-bold text-sm flex flex-col items-center gap-1 transition-all ${
+                  vendaOnlineTipo === 'link'
+                    ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
+                    : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
+                }`}
+              >
+                <ArrowUpRight className="w-5 h-5" />
+                Link externo
+                <span className="text-[10px] font-normal text-slate-500">
+                  Mercado Pago / outro
+                </span>
+              </button>
+            </div>
+            {!customerCpf && (
+              <div className="bg-rose-50 border border-rose-300 text-rose-800 text-xs rounded p-2 font-semibold">
+                ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.
+              </div>
+            )}
           </div>
         )}
 

@@ -161,6 +161,16 @@ export class PdvService {
       throw new BadRequestException('Crediário exige CPF do cliente');
     }
 
+    // VENDA ONLINE — pagamento já recebido por fora (PIX direto / link externo).
+    // CPF obrigatório pra rastreabilidade (cliente sempre identificado em venda
+    // online de WhatsApp/Instagram). NFC-e NÃO é emitida automaticamente —
+    // venda online geralmente não exige nota.
+    if (input.method === 'venda_online' && !sale.customerCpf) {
+      throw new BadRequestException(
+        'Venda online exige CPF do cliente. Identifique a cliente antes de fechar.',
+      );
+    }
+
     // VALE-TROCA: valida o código antes de aceitar como pagamento.
     // Confere existe, não usado, não vencido e tem saldo >= valor.
     if (input.method === 'vale_troca') {
@@ -1170,8 +1180,17 @@ export class PdvService {
             })),
           });
 
-    // Gera STUB do XML NFC-e
-    const nfceStub = this.buildNfceStub(sale, finalMethod);
+    // VENDA ONLINE — quando TODAS as payments são 'venda_online', pula NFC-e
+    // automática (cliente recebeu por fora, geralmente não pede nota). Se
+    // depois precisar emitir, basta chamar /nfce/emit manualmente.
+    const isAllVendaOnline = (payments as any[]).every(
+      (p: any) => String(p.method || '').toLowerCase() === 'venda_online',
+    );
+
+    // Gera STUB do XML NFC-e SÓ se não for venda 100% online
+    const nfceStub = isAllVendaOnline
+      ? null
+      : this.buildNfceStub(sale, finalMethod);
 
     const updated = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
@@ -1180,11 +1199,13 @@ export class PdvService {
         paymentMethod: finalMethod,
         paymentDetails: finalDetails,
         finalizedAt: new Date(),
-        nfceStatus: 'preview',
-        nfceXml: nfceStub.xml,
-        nfceNumber: nfceStub.numero,
-        nfceSerie: nfceStub.serie,
-        nfceChave: nfceStub.chave,
+        // Venda online: status 'skipped' deixa claro que NÃO foi emitida nem é
+        // pra emitir automaticamente. Relatório fiscal filtra essas vendas.
+        nfceStatus: isAllVendaOnline ? 'skipped' : 'preview',
+        nfceXml: nfceStub?.xml ?? null,
+        nfceNumber: nfceStub?.numero ?? null,
+        nfceSerie: nfceStub?.serie ?? null,
+        nfceChave: nfceStub?.chave ?? null,
       },
     });
 
