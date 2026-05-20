@@ -177,6 +177,9 @@ export class CashService {
       REDE_SHOP: mkSlot(),
       CREDITO_GENERICO: mkSlot(),
       DEBITO_GENERICO: mkSlot(),
+      // VENDA ONLINE — WhatsApp/Instagram. NÃO conta no dinheiro físico
+      // (já chegou direto na conta). Aparece numa seção separada do fechamento.
+      VENDA_ONLINE: mkSlot(),
       OUTROS: mkSlot(),
     };
     let totalVendas = 0;
@@ -227,6 +230,7 @@ export class CashService {
         if (method === 'dinheiro') pushVenda('DINHEIRO', s, p, valor);
         else if (method === 'pix') pushVenda('PIX', s, p, valor);
         else if (method === 'crediario') pushVenda('CREDIARIO', s, p, valor, parcelas);
+        else if (method === 'venda_online') pushVenda('VENDA_ONLINE', s, p, valor);
         else if (method === 'credito' || method === 'debito') {
           const key = bandeira ? bandeiraMap[bandeira] : null;
           if (key && key in totais) {

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Response } from 'express';
-import * as archiver from 'archiver';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const archiver = require('archiver');
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
