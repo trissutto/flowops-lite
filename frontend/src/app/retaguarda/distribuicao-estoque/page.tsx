@@ -494,6 +494,7 @@ export default function DistribuicaoEstoque() {
               rows={data.rows}
               lojas={data.lojas}
               storeNameByCode={storeNameByCode}
+              lojaLabel={lojaLabel}
               onRealinhar={realinharGrupo}
             />
           )}
@@ -563,19 +564,27 @@ export type GroupDrawer = {
   criticidadeAlta: number;
 };
 
+/* VariationMapView — TABELA PLANILHÃO estilo Giga.
+   1 linha = 1 variação (código de barras). Colunas = lojas + total + ações.
+   Bolinhas coloridas por célula. Botão "Realinhar" passa o GROUP (REF+COR)
+   inteiro pro drawer (que mostra a matriz tamanho × loja). */
 function VariationMapView({
   rows,
   lojas,
   storeNameByCode,
+  lojaLabel,
   onRealinhar,
 }: {
   rows: Row[];
   lojas: string[];
   storeNameByCode: Map<string, string>;
+  lojaLabel: (code: string) => string;
   onRealinhar: (group: GroupDrawer) => void;
 }) {
-  const groups = useMemo<GroupDrawer[]>(() => {
+  // Computa groups por REF+COR (necessário pra abrir o drawer com contexto)
+  const { groups, rowToGroup } = useMemo(() => {
     const map = new Map<string, GroupDrawer>();
+    const rowMap = new Map<string, GroupDrawer>(); // codigo → group
     for (const r of rows) {
       const cor = (r.cor || 'SEM COR').trim().toUpperCase();
       const ref = r.ref || '—';
@@ -599,8 +608,8 @@ function VariationMapView({
       g.totalRede += r.total;
       if (r.criticidade === 'ALTO') g.criticidadeAlta++;
       if (r.preco > g.preco) g.preco = r.preco;
+      rowMap.set(r.codigo, g);
     }
-    // Ordena tamanhos numericamente dentro de cada grupo
     for (const g of map.values()) {
       const tamSet = new Set<string>();
       for (const it of g.items) if (it.tamanho) tamSet.add(it.tamanho.trim());
@@ -611,181 +620,122 @@ function VariationMapView({
         return a.localeCompare(b);
       });
     }
-    // Ordena grupos: primeiro os com mais criticidade ALTA, depois por total
-    return Array.from(map.values()).sort((a, b) => {
-      if (b.criticidadeAlta !== a.criticidadeAlta)
-        return b.criticidadeAlta - a.criticidadeAlta;
-      return b.totalRede - a.totalRede;
+    return { groups: Array.from(map.values()), rowToGroup: rowMap };
+  }, [rows]);
+
+  // Ordena rows: ALTO → MEDIO → OK, depois por REF/COR/TAMANHO numérico
+  const sortedRows = useMemo(() => {
+    const ordWeight: Record<string, number> = { ALTO: 0, MEDIO: 1, OK: 2 };
+    return [...rows].sort((a, b) => {
+      const dw = ordWeight[a.criticidade] - ordWeight[b.criticidade];
+      if (dw !== 0) return dw;
+      if (a.ref !== b.ref) return a.ref.localeCompare(b.ref);
+      if (a.cor !== b.cor) return (a.cor || '').localeCompare(b.cor || '');
+      const na = parseInt(a.tamanho || '0', 10);
+      const nb = parseInt(b.tamanho || '0', 10);
+      return na - nb;
     });
   }, [rows]);
 
   return (
-    <div className="overflow-auto max-h-[calc(100vh-280px)] p-3 space-y-3 bg-slate-50">
-      {groups.map((g) => (
-        <VariationCard
-          key={g.key}
-          group={g}
-          lojas={lojas}
-          storeNameByCode={storeNameByCode}
-          onRealinhar={onRealinhar}
-        />
-      ))}
-    </div>
-  );
-}
-
-function VariationCard({
-  group,
-  lojas,
-  storeNameByCode,
-  onRealinhar,
-}: {
-  group: GroupDrawer;
-  lojas: string[];
-  storeNameByCode: Map<string, string>;
-  onRealinhar: (group: GroupDrawer) => void;
-}) {
-  // Constrói matriz [loja][tamanho] → quantidade
-  const matrix = useMemo(() => {
-    const m: Record<string, Record<string, { qty: number; row: Row }>> = {};
-    for (const lj of lojas) m[lj] = {};
-    for (const it of group.items) {
-      const tam = (it.tamanho || '').trim();
-      for (const [lj, qty] of Object.entries(it.estoquePorLoja || {})) {
-        if (!m[lj]) m[lj] = {};
-        m[lj][tam] = { qty, row: it };
-      }
-    }
-    return m;
-  }, [group, lojas]);
-
-  // Lojas presentes (com alguma quantidade ou listadas no header)
-  const lojasComEstoque = lojas.filter((lj) => {
-    return group.tamanhos.some((tam) => (matrix[lj]?.[tam]?.qty ?? 0) > 0);
-  });
-  const lojasParaMostrar = lojasComEstoque.length > 0 ? lojasComEstoque : lojas.slice(0, 8);
-
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-      {/* Header do card */}
-      <div className="px-4 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
-        <div className="flex items-baseline gap-3 mb-1">
-          <span className="font-mono font-black text-lg text-slate-800">
-            REF {group.ref}
-          </span>
-          <span className="font-bold text-slate-600 uppercase tracking-wide text-sm">
-            — {group.cor}
-          </span>
-        </div>
-        {group.descricao && (
-          <div className="text-xs text-slate-600 mb-2 leading-relaxed">
-            {group.descricao}
-          </div>
-        )}
-        <div className="flex items-center gap-2 text-xs flex-wrap">
-          {group.criticidadeAlta > 0 && (
-            <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-bold">
-              {group.criticidadeAlta} desequilíbrio{group.criticidadeAlta > 1 ? 's' : ''}
-            </span>
-          )}
-          <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-mono font-bold">
-            {group.totalRede} pç na rede
-          </span>
-          {group.preco > 0 && (
-            <span className="font-mono text-slate-500">
-              {brl(group.preco)}
-            </span>
-          )}
-          <div className="ml-auto">
-            <button
-              onClick={() => onRealinhar(group)}
-              className="px-3 py-1 rounded-md bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold flex items-center gap-1"
-            >
-              <Shuffle className="w-3 h-3" />
-              Sugerir realinhamento
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Matriz LOJA × TAMANHO */}
-      <div className="overflow-x-auto">
+    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div className="overflow-auto max-h-[calc(100vh-280px)]">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50">
+          <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b-2 border-slate-300">
             <tr>
-              <th className="px-3 py-2 text-left font-bold text-slate-600 sticky left-0 bg-slate-50 z-10 min-w-[140px]">
-                Loja
+              <th className="px-2 py-2 text-left font-bold sticky left-0 bg-slate-100 z-20 min-w-[90px] border-r border-slate-300">
+                CÓDIGO
               </th>
-              {group.tamanhos.map((tam) => (
+              <th className="px-2 py-2 text-left font-bold sticky left-[90px] bg-slate-100 z-20 min-w-[380px] border-r border-slate-300">
+                DESCRIÇÃO
+              </th>
+              <th className="px-2 py-2 text-right font-bold min-w-[70px] border-r border-slate-300">
+                PREÇO
+              </th>
+              {lojas.map((lj) => (
                 <th
-                  key={tam}
-                  className="px-2 py-2 text-center font-bold text-slate-600 min-w-[60px]"
+                  key={lj}
+                  className="px-1 py-2 text-center font-bold min-w-[52px]"
+                  title={storeNameByCode.get(lj) || lj}
                 >
-                  {tam}
+                  {lojaLabel(lj)}
                 </th>
               ))}
-              <th className="px-3 py-2 text-center font-bold text-slate-600 bg-slate-100">
-                Total
+              <th className="px-2 py-2 text-center font-bold bg-violet-700 text-white sticky right-[100px] min-w-[50px]">
+                TOT
+              </th>
+              <th className="px-2 py-2 text-center font-bold bg-violet-700 text-white sticky right-0 min-w-[100px]">
+                AÇÃO
               </th>
             </tr>
           </thead>
           <tbody>
-            {lojasParaMostrar.map((lj) => {
-              const nome = storeNameByCode.get(lj) || lj;
-              const linhaTotal = group.tamanhos.reduce(
-                (s, t) => s + (matrix[lj]?.[t]?.qty ?? 0),
-                0,
-              );
+            {sortedRows.map((row) => {
+              const group = rowToGroup.get(row.codigo);
+              const bgRow =
+                row.criticidade === 'ALTO'
+                  ? 'bg-rose-50 hover:bg-rose-100'
+                  : row.criticidade === 'MEDIO'
+                  ? 'bg-amber-50 hover:bg-amber-100'
+                  : 'hover:bg-slate-50';
               return (
-                <tr key={lj} className="border-t border-slate-100 hover:bg-slate-50">
-                  <td className="px-3 py-2 sticky left-0 bg-white font-medium text-slate-800">
-                    <span className="font-mono text-xs text-slate-400 mr-2">{lj}</span>
-                    {nome.replace(/^Lurd's\s*/i, '')}
+                <tr key={row.codigo} className={`${bgRow} border-b border-slate-100 transition-colors`}>
+                  <td className="px-2 py-1.5 font-mono text-slate-700 sticky left-0 bg-inherit z-10 border-r border-slate-200">
+                    {row.codigo}
                   </td>
-                  {group.tamanhos.map((tam) => {
-                    const cell = matrix[lj]?.[tam];
-                    const qty = cell?.qty ?? 0;
+                  <td className="px-2 py-1.5 sticky left-[90px] bg-inherit z-10 border-r border-slate-200">
+                    <div className="font-semibold text-slate-800" title={row.descricao}>
+                      {row.descricao || `${row.ref} ${row.cor || ''}/${row.tamanho || ''}`}
+                    </div>
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono text-slate-600 border-r border-slate-200">
+                    {row.preco > 0 ? brl(row.preco) : '—'}
+                  </td>
+                  {lojas.map((lj) => {
+                    const qty = row.estoquePorLoja[lj] ?? 0;
                     return (
-                      <td key={tam} className="px-2 py-2 text-center">
+                      <td key={lj} className="px-1 py-1.5 text-center">
                         <Bolinha qty={qty} />
                       </td>
                     );
                   })}
-                  <td className="px-3 py-2 text-center font-mono font-black text-slate-700 bg-slate-50">
-                    {linhaTotal}
+                  <td className="px-2 py-1.5 text-center font-mono font-black text-violet-700 bg-violet-50 sticky right-[100px]">
+                    {row.total}
+                  </td>
+                  <td className="px-2 py-1.5 text-center sticky right-0 bg-white">
+                    {group && row.criticidade !== 'OK' ? (
+                      <button
+                        onClick={() => onRealinhar(group)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold flex items-center gap-1 mx-auto ${
+                          row.criticidade === 'ALTO'
+                            ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                            : 'bg-amber-500 hover:bg-amber-600 text-white'
+                        }`}
+                        title="Sugerir realinhamento dessa REF+COR"
+                      >
+                        <Shuffle className="w-3 h-3" />
+                        Realinhar
+                      </button>
+                    ) : (
+                      <span className="text-emerald-600">🟢</span>
+                    )}
                   </td>
                 </tr>
               );
             })}
-            {/* Linha de TOTAL POR TAMANHO */}
-            <tr className="border-t-2 border-slate-200 bg-slate-50">
-              <td className="px-3 py-2 sticky left-0 bg-slate-50 font-bold text-slate-700 text-[11px] uppercase tracking-wider">
-                Total tamanho
-              </td>
-              {group.tamanhos.map((tam) => {
-                const tot = lojasParaMostrar.reduce(
-                  (s, lj) => s + (matrix[lj]?.[tam]?.qty ?? 0),
-                  0,
-                );
-                return (
-                  <td
-                    key={tam}
-                    className="px-2 py-2 text-center font-mono font-bold text-slate-700"
-                  >
-                    {tot}
-                  </td>
-                );
-              })}
-              <td className="px-3 py-2 text-center font-mono font-black text-violet-700 bg-violet-100">
-                {group.totalRede}
-              </td>
-            </tr>
           </tbody>
         </table>
+      </div>
+      <div className="px-3 py-2 border-t border-slate-200 text-xs text-slate-500 bg-slate-50">
+        {sortedRows.length} variação(ões) · {groups.length} REF+COR únicos
       </div>
     </div>
   );
 }
+
+/* lojaLabel está no componente principal — passado via prop pro VariationMapView.
+   VariationCard antigo (matriz LOJA × TAMANHO em card) foi removido —
+   substituído por VariationMapView (tabela planilha 1 linha = 1 variação). */
 
 /* ════════════════════════════════════════════════════════════════════════
    RealignDrawer — sugestão automática de balanço entre lojas
