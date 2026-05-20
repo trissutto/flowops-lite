@@ -294,6 +294,60 @@ export class RealignmentService {
 
     const stockMap = await this.erp.getStockBySkusDetailed(skus);
 
+    // ── DESCONTA PEÇAS JÁ COMPROMETIDAS EM REMESSAS PENDENTES ──
+    // Cenário: peça da Sorocaba já foi bipada pra ir a outra loja (status 'sent'
+    // ou 'pending'), mas Wincred ainda registra como estoque dela (só baixa
+    // quando bipa o último item e fecha a remessa). Se não descontar aqui, o
+    // mesmo SKU aparece de novo no próximo plano de realinhamento.
+    //
+    // Pega todos TransferOrders com codigoBipado nos SKUs do plano e status
+    // que indica "ainda na origem ou em trânsito" (não foi recebido):
+    //   pending → na origem, ainda não separou
+    //   sent    → separado e adicionado à remessa (em trânsito)
+    // Recebido (received), faltante (missing), cancelado (cancelled) NÃO contam.
+    try {
+      const pendingTransfers = await (this.prisma as any).transferOrder.findMany({
+        where: {
+          codigoBipado: { in: skus },
+          realignmentStatus: { in: ['pending', 'sent'] },
+        },
+        select: {
+          codigoBipado: true,
+          lojaOrigemCode: true,
+          qtyOrigem: true,
+        },
+      });
+      // Soma comprometido por (codigo, loja)
+      const committedMap = new Map<string, number>(); // "sku::storeCode" → qty
+      for (const t of pendingTransfers as any[]) {
+        const k = `${t.codigoBipado}::${t.lojaOrigemCode}`;
+        committedMap.set(k, (committedMap.get(k) || 0) + (Number(t.qtyOrigem) || 1));
+      }
+      // Aplica decremento no stockMap. Se ficar negativo, zera (não bloqueia).
+      for (const sku of skus) {
+        const lines = stockMap[sku];
+        if (!lines) continue;
+        for (const line of lines) {
+          const k = `${sku}::${line.storeCode}`;
+          const committed = committedMap.get(k) || 0;
+          if (committed > 0) {
+            line.qty = Math.max(0, line.qty - committed);
+          }
+        }
+      }
+      if (committedMap.size > 0) {
+        this.logger.log(
+          `[realinhamento] Descontado ${committedMap.size} (sku, loja) comprometidos ` +
+          `em remessas pendentes/em trânsito do plano.`,
+        );
+      }
+    } catch (e: any) {
+      // Se falhar a query, não bloqueia o plano — só loga e segue com estoque cru
+      this.logger.warn(
+        `[realinhamento] Falha ao descontar comprometido: ${e?.message || e}. Plano sai sem desconto.`,
+      );
+    }
+
     const skuMeta: Record<string, { ref: string; cor: string | null; tamanho: string | null; desc: string }> = {};
     for (const [ref, variants] of Object.entries(refMap)) {
       for (const v of variants) {
