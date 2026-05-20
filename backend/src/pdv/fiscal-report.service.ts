@@ -77,27 +77,24 @@ export class FiscalReportService {
         { vendedorName: { in: input.sellers } },
       ];
     }
-    if (input.nfceStatus?.length) {
-      // Traduz status PT (UI) → EN (banco) pra filtrar correto.
-      // 'sem_nfce' = vendas com nfceStatus null.
-      const ptToEn: Record<string, string> = {
-        autorizada: 'authorized',
-        rejeitada: 'rejected',
-        cancelada: 'cancelled',
-        pendente: 'pending',
-      };
-      const statusesEn = input.nfceStatus
-        .filter((s) => s !== 'sem_nfce')
-        .map((s) => ptToEn[s] || s); // se já vier em inglês, mantém
-      const semNfce = input.nfceStatus.includes('sem_nfce');
-      const orStatus: any[] = [];
-      if (statusesEn.length) orStatus.push({ nfceStatus: { in: statusesEn } });
-      if (semNfce) orStatus.push({ nfceStatus: null });
-      if (orStatus.length === 1) {
-        Object.assign(where, orStatus[0]);
-      } else if (orStatus.length > 1) {
-        where.AND = (where.AND || []).concat([{ OR: orStatus }]);
-      }
+    // Relatório fiscal: SEMPRE filtra por status de NFC-e (autorizada,
+    // cancelada, rejeitada). Vendas sem NFC-e não aparecem aqui pq não
+    // geraram imposto. Se o usuário não passou filtro, default = só autorizada.
+    const ptToEn: Record<string, string> = {
+      autorizada: 'authorized',
+      rejeitada: 'rejected',
+      cancelada: 'cancelled',
+      pendente: 'pending',
+    };
+    const requestedStatus =
+      input.nfceStatus && input.nfceStatus.length > 0
+        ? input.nfceStatus
+        : ['autorizada']; // default fiscal
+    const statusesEn = requestedStatus
+      .filter((s) => s !== 'sem_nfce' && s !== 'pendente')
+      .map((s) => ptToEn[s] || s);
+    if (statusesEn.length > 0) {
+      where.nfceStatus = { in: statusesEn };
     }
 
     const sales = await (this.prisma as any).pdvSale.findMany({

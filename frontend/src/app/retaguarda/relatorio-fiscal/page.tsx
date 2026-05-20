@@ -78,12 +78,12 @@ function todayYmd(): string {
   return toYmd(new Date());
 }
 
+// Relatório fiscal — só lida com notas que existem no SEFAZ.
+// "Pendente" e "Sem NFC-e" não fazem sentido aqui (vendas internas sem nota).
 const STATUS_OPTIONS = [
   { value: 'autorizada', label: 'Autorizada', color: 'bg-emerald-100 text-emerald-800' },
   { value: 'cancelada', label: 'Cancelada', color: 'bg-amber-100 text-amber-800' },
   { value: 'rejeitada', label: 'Rejeitada', color: 'bg-rose-100 text-rose-800' },
-  { value: 'pendente', label: 'Pendente', color: 'bg-slate-100 text-slate-800' },
-  { value: 'sem_nfce', label: 'Sem NFC-e', color: 'bg-slate-200 text-slate-900' },
 ];
 
 export default function RelatorioFiscalPage() {
@@ -91,7 +91,9 @@ export default function RelatorioFiscalPage() {
   const [to, setTo] = useState(todayYmd());
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStores, setSelectedStores] = useState<Set<string>>(new Set());
-  const [selectedStatus, setSelectedStatus] = useState<Set<string>>(new Set());
+  // Default = só autorizadas. Tela fiscal mostra exclusivamente NFC-e que
+  // geraram imposto. Vendas internas sem nota não fazem parte do fiscal.
+  const [selectedStatus, setSelectedStatus] = useState<Set<string>>(new Set(['autorizada']));
   const [cnpjFilter, setCnpjFilter] = useState('');
   const [serieFilter, setSerieFilter] = useState('');
   const [customerCpf, setCustomerCpf] = useState('');
@@ -306,40 +308,11 @@ export default function RelatorioFiscalPage() {
             </div>
           </div>
 
-          {/* Atalho rápido: filtro "Só notas efetivas" (autorizadas).
-              Limpa qualquer outro status selecionado e marca só "autorizada".
-              Mais visível que clicar no chip pequeno dentro de Status NFC-e. */}
-          <div className="bg-emerald-50 border-2 border-emerald-200 rounded-lg p-3 flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-emerald-900">
-                📊 Mostrar só notas efetivas (com imposto gerado)
-              </div>
-              <div className="text-[11px] text-emerald-700">
-                Filtra só NFC-e <b>autorizadas</b> pela SEFAZ — o que efetivamente virou imposto pro contador.
-                Esconde pendentes, canceladas, rejeitadas e vendas sem NFC-e.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                const onlyAutorizada =
-                  selectedStatus.size === 1 && selectedStatus.has('autorizada');
-                if (onlyAutorizada) {
-                  setSelectedStatus(new Set()); // desativa
-                } else {
-                  setSelectedStatus(new Set(['autorizada']));
-                }
-              }}
-              className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
-                selectedStatus.size === 1 && selectedStatus.has('autorizada')
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'bg-white text-emerald-700 border-2 border-emerald-300 hover:bg-emerald-50'
-              }`}
-            >
-              {selectedStatus.size === 1 && selectedStatus.has('autorizada')
-                ? '✓ ATIVO — só autorizadas'
-                : 'Ativar filtro de notas efetivas'}
-            </button>
+          {/* Aviso fixo — esse relatório é exclusivamente fiscal */}
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-900">
+            📊 <b>Relatório fiscal:</b> mostra exclusivamente NFC-e que geraram imposto
+            (autorizadas, canceladas e rejeitadas pela SEFAZ).
+            Vendas internas sem nota não aparecem aqui — consulta elas no <b>Super Painel</b>.
           </div>
 
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -351,7 +324,8 @@ export default function RelatorioFiscalPage() {
               <button
                 onClick={() => {
                   setSelectedStores(new Set());
-                  setSelectedStatus(new Set());
+                  // Reset volta pra default fiscal (só autorizadas)
+                  setSelectedStatus(new Set(['autorizada']));
                   setCnpjFilter(''); setSerieFilter('');
                   setCustomerCpf(''); setCustomerName(''); setChave('');
                   setMinValor(''); setMaxValor('');
@@ -384,13 +358,21 @@ export default function RelatorioFiscalPage() {
         {/* KPIs */}
         {data && (
           <>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
-              <KpiCard label="Vendas no período" value={data.totals.qtdGeral.toString()} color="indigo" />
-              <KpiCard label="Total faturado (todas vendas)" value={brl(data.totals.totalGeral)} color="slate" />
-              <KpiCard label="✓ NFC-e autorizadas" value={data.totals.qtdAutorizada.toString()} color="emerald" />
-              <KpiCard label="✓ Faturamento c/ imposto" value={brl(data.totals.totalAutorizado)} color="emerald" />
-              <KpiCard label="Sem NFC-e / Pendente" value={data.totals.qtdSemNfce.toString()} color="amber" alert={data.totals.qtdSemNfce > 0} />
-              <KpiCard label="Inconsistências CNPJ" value={data.totals.qtdInconsistente.toString()} color="rose" alert={data.totals.qtdInconsistente > 0} />
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiCard label="NFC-e autorizadas" value={data.totals.qtdAutorizada.toString()} color="emerald" />
+              <KpiCard label="Faturamento c/ imposto" value={brl(data.totals.totalAutorizado)} color="emerald" />
+              <KpiCard
+                label="Canceladas + Rejeitadas"
+                value={(data.totals.qtdCancelada + data.totals.qtdRejeitada).toString()}
+                color="amber"
+                alert={data.totals.qtdRejeitada > 0}
+              />
+              <KpiCard
+                label="Inconsistências CNPJ"
+                value={data.totals.qtdInconsistente.toString()}
+                color="rose"
+                alert={data.totals.qtdInconsistente > 0}
+              />
             </div>
 
             {/* Resumos */}
