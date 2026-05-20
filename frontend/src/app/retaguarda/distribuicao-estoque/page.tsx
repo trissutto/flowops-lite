@@ -158,9 +158,10 @@ export default function DistribuicaoEstoque() {
     }
   }, [grupoSelected, subgrupoSelected, searchDebounce, tamanhos, mode, minTotal]);
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  // ── Carregamento manual: NÃO carrega automaticamente em cada mudança ──
+  // Query SQL no Giga é pesada — só dispara quando user clica "Atualizar"
+  // OU dá Enter na busca. Estado inicial vazio até primeira ação.
+  // (Removido o useEffect que disparava automaticamente)
 
   // ── KPIs derivados ──
   const kpis = useMemo(() => {
@@ -336,7 +337,13 @@ export default function DistribuicaoEstoque() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar REF, descrição ou CODIGO..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setSearchDebounce(search);
+                    fetchData();
+                  }
+                }}
+                placeholder="Buscar REF, descrição ou CODIGO... (Enter pra buscar)"
                 className="w-full pl-8 pr-3 py-2 border rounded-md text-sm"
               />
             </div>
@@ -456,7 +463,19 @@ export default function DistribuicaoEstoque() {
                 Tentar novamente
               </button>
             </div>
-          ) : !data || data.rows.length === 0 ? (
+          ) : !data ? (
+            // Estado inicial — ainda não fez nenhuma busca
+            <div className="p-12 text-center">
+              <Search className="w-12 h-12 text-violet-400 mx-auto" />
+              <div className="text-base font-bold text-slate-700 mt-3">
+                Aplique os filtros desejados e clique em <span className="text-violet-700">Atualizar</span>
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                A consulta é pesada no Giga — só carrega quando você manda.
+                Pode escolher categoria, tamanhos ou buscar uma REF antes.
+              </div>
+            </div>
+          ) : data.rows.length === 0 ? (
             <div className="p-12 text-center">
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
               <div className="text-base font-bold text-slate-700 mt-3">
@@ -856,50 +875,54 @@ function RealignDrawer({
     for (const tam of group.tamanhos) {
       target[tam] = {};
       const currentByStore = currentMatrix[tam] || {};
-      // Considera só lojas eligíveis
-      const totalAvailable = eligibleStores.reduce(
-        (s, st) => s + (currentByStore[st.code] || 0),
-        0,
-      );
 
-      // Inicializa target = 0 pra todas
+      // Total disponível (soma de TODAS as lojas, mesmo as não-sendable —
+      // peças existem mas só lojas sendable podem ceder)
+      const totalAvailable = Object.values(currentByStore).reduce((s, v) => s + (v || 0), 0);
+
+      // Inicializa target = 0 pra todas que aparecem na matriz
       for (const s of eligibleStores) target[tam][s.code] = 0;
 
-      // Distribui obedecendo regras
-      if (totalAvailable === 0) {
+      // Distribui SÓ pra lojas que podem RECEBER (receivableStores)
+      if (totalAvailable === 0 || receivableStores.length === 0) {
         // nada a fazer
-      } else if (totalAvailable >= eligibleStores.length) {
-        // 1 base pra cada, sobra distribuída por prioridade
+      } else if (totalAvailable >= receivableStores.length) {
+        // 1 base pra cada loja que recebe, sobra distribuída por prioridade
         let remaining = totalAvailable;
-        for (const s of eligibleStores) {
+        for (const s of receivableStores) {
           target[tam][s.code] = 1;
           remaining--;
         }
         let i = 0;
         while (remaining > 0) {
-          target[tam][eligibleStores[i % eligibleStores.length].code]++;
+          target[tam][receivableStores[i % receivableStores.length].code]++;
           remaining--;
           i++;
         }
       } else {
-        // Não dá pra todas: top N lojas pegam 1
+        // Não dá pra todas: top N lojas (que recebem) pegam 1
         let remaining = totalAvailable;
-        for (const s of eligibleStores) {
+        for (const s of receivableStores) {
           if (remaining <= 0) break;
           target[tam][s.code] = 1;
           remaining--;
         }
       }
 
-      // Calcula movimentos: surplus → deficit
+      // Calcula movimentos: surplus de SENDABLE → deficit de RECEIVABLE
       const sources: Array<{ code: string; surplus: number }> = [];
       const sinks: Array<{ code: string; deficit: number }> = [];
+      const sendableCodes = new Set(sendableStores.map((s) => s.code));
+      const receivableCodes = new Set(receivableStores.map((s) => s.code));
       for (const s of eligibleStores) {
         const cur = currentByStore[s.code] || 0;
         const tgt = target[tam][s.code] || 0;
         const diff = cur - tgt;
-        if (diff > 0) sources.push({ code: s.code, surplus: diff });
-        else if (diff < 0) sinks.push({ code: s.code, deficit: -diff });
+        if (diff > 0 && sendableCodes.has(s.code)) {
+          sources.push({ code: s.code, surplus: diff });
+        } else if (diff < 0 && receivableCodes.has(s.code)) {
+          sinks.push({ code: s.code, deficit: -diff });
+        }
       }
 
       // Greedy match
