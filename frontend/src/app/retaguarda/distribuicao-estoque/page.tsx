@@ -493,17 +493,7 @@ export default function DistribuicaoEstoque() {
    Cada card = 1 modelo de cor. Bolinha colorida codifica criticidade.
    ════════════════════════════════════════════════════════════════════════ */
 
-type Row = {
-  codigo: string;
-  ref: string;
-  cor: string | null;
-  tamanho: string | null;
-  descricao: string;
-  preco: number;
-  estoquePorLoja: Record<string, number>;
-  total: number;
-  criticidade: 'ALTO' | 'MEDIO' | 'OK';
-};
+/* Tipo Row já está declarado no topo do arquivo (linha 32) */
 
 /* Tipo de grupo exportado pra usar no drawer */
 export type GroupDrawer = {
