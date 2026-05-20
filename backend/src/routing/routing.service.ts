@@ -26,7 +26,10 @@ export class RoutingService {
    * Calcula o roteamento SEM persistir (preview para aprovação manual).
    * Retorna também info de contato das lojas para montar mensagens WhatsApp.
    */
-  async previewRoute(orderId: string, opts?: { excludeStoreCodes?: string[] }) {
+  async previewRoute(
+    orderId: string,
+    opts?: { excludeStoreCodes?: string[]; preferStoreCode?: string | null },
+  ) {
     const order = await this.prisma.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
@@ -64,6 +67,7 @@ export class RoutingService {
       stock: liquidStock,
       shippingCep: order.shippingCep,
       pickupStoreCode: order.pickupStoreCode, // ativa lógica de retirada em loja se preenchido
+      preferStoreCode: opts?.preferStoreCode ?? null, // override manual via radio button
     });
 
     // enriquece assignments com dados da loja (whatsapp, contato)

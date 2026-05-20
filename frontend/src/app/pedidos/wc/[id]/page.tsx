@@ -762,7 +762,12 @@ export default function PedidoDetailPage() {
         pickOrders?: Array<{ id: string; status: string; storeCode: string; storeName: string }>;
         reason?: string;
         message?: string;
-      }>(`/orders/wc/${wcId}/confirm-separation`, { method: 'POST' });
+      }>(`/orders/wc/${wcId}/confirm-separation`, {
+        method: 'POST',
+        // Manda a loja escolhida no radio button (se houver) pra backend
+        // forçar essa loja em vez de re-rodar a sugestão automática.
+        body: JSON.stringify({ preferStoreCode: preferredStoreCode || null }),
+      });
       setConfirmResult(res);
       if (res.ok) {
         setFlash(

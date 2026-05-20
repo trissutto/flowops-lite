@@ -869,7 +869,10 @@ export class OrdersController {
   }
 
   @Post('wc/:wcId/confirm-separation')
-  async confirmSeparation(@Param('wcId') wcId: string) {
+  async confirmSeparation(
+    @Param('wcId') wcId: string,
+    @Body() body?: { preferStoreCode?: string | null },
+  ) {
     const wcOrderId = Number(wcId);
 
     // Idempotente: se já rodou (via PATCH→hook, botão anterior, etc), retorna o que existe.
@@ -902,7 +905,11 @@ export class OrdersController {
     const { orderId } = await this.orders.upsertFromWooCommerce(o);
 
     // 2) Roda o preview oficial (consulta estoque e roteia)
-    const preview = await this.routing.previewRoute(orderId);
+    //    Respeita `preferStoreCode` se o usuário escolheu via radio button no
+    //    frontend — a engine força essa loja se ela cobrir o pedido inteiro.
+    const preview = await this.routing.previewRoute(orderId, {
+      preferStoreCode: body?.preferStoreCode?.trim() || null,
+    });
 
     if (!preview.success) {
       return {
