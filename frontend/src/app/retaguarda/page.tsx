@@ -76,7 +76,11 @@ export default function GestaoHub() {
       return;
     }
     api<{ role: string }>('/auth/me')
-      .then((me) => { if (me.role === 'store') router.push('/minha-loja/pdv'); })
+      .then((me) => {
+        if (me.role === 'store') router.push('/minha-loja/pdv');
+        // Contador só tem acesso ao relatório fiscal — bloqueia hub geral
+        else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
+      })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

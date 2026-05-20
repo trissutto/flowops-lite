@@ -28,9 +28,12 @@ export default function LoginPage() {
       localStorage.setItem('flowops_token', res.accessToken);
       // Redireciona por papel:
       //   store    → PDV direto (vendedora vive aqui)
+      //   contador → relatório fiscal direto (acesso restrito a fiscal apenas)
       //   admin/op → home / (hub principal com Dashboard, Site, Loja, Gestão, Config)
       if (res.user?.role === 'store') {
         router.push('/minha-loja/pdv');
+      } else if (res.user?.role === 'contador') {
+        router.push('/retaguarda/relatorio-fiscal');
       } else {
         router.push('/');
       }

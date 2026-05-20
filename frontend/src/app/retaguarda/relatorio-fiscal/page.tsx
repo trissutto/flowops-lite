@@ -140,6 +140,39 @@ export default function RelatorioFiscalPage() {
     }
   }
 
+  // Baixa ZIP de XMLs do mesmo range de filtro (autorizados + canceladas).
+  // Pro contador anexar à apuração fiscal mensal.
+  async function downloadXmls() {
+    try {
+      const params = new URLSearchParams();
+      params.set('from', from);
+      params.set('to', to);
+      if (selectedStores.size) params.set('storeCodes', Array.from(selectedStores).join(','));
+      if (cnpjFilter.trim()) params.set('cnpjs', cnpjFilter.replace(/\D/g, ''));
+      const token = localStorage.getItem('flowops_token');
+      const API_URL =
+        process.env.NEXT_PUBLIC_API_URL || 'https://flowops-lite-production.up.railway.app';
+      // Faz fetch com Authorization e converte response em blob pra download
+      const res = await fetch(`${API_URL}/api/pdv/relatorio-fiscal/xmls.zip?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        alert(`Erro ao baixar XMLs: ${res.status} ${txt}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `nfces_${from}_a_${to}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(`Erro: ${e?.message || e}`);
+    }
+  }
+
   function exportCsv() {
     if (!data?.rows?.length) return;
     const header = [
@@ -343,12 +376,21 @@ export default function RelatorioFiscalPage() {
                 {loading ? 'Carregando...' : 'Aplicar filtros'}
               </button>
               {data && (
-                <button
-                  onClick={exportCsv}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-1.5"
-                >
-                  <Download className="w-4 h-4" /> Exportar CSV
-                </button>
+                <>
+                  <button
+                    onClick={exportCsv}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-1.5"
+                  >
+                    <Download className="w-4 h-4" /> Exportar CSV
+                  </button>
+                  <button
+                    onClick={downloadXmls}
+                    className="bg-violet-600 hover:bg-violet-700 text-white font-bold px-4 py-2 rounded-lg text-sm flex items-center gap-1.5"
+                    title="Baixa ZIP com todos os XMLs autorizados e cancelados do período"
+                  >
+                    <Download className="w-4 h-4" /> Baixar XMLs (.zip)
+                  </button>
+                </>
               )}
             </div>
           </div>

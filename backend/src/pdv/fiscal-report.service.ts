@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import type { Response } from 'express';
+import * as archiver from 'archiver';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -284,5 +286,129 @@ export class FiscalReportService {
       rows: filtered,
       generatedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Streama um ZIP com todos os XMLs (autorizadas + canceladas) do período.
+   * Pro contador anexar à apuração fiscal. Pasta-mãe por loja.
+   *
+   * Tamanho típico: ~5-30 MB pra 1 mês de uma loja (XML autorizado ~25KB cada).
+   */
+  async streamXmlsZip(
+    res: Response,
+    input: {
+      from: Date;
+      to: Date;
+      storeCodes?: string[] | null;
+      cnpjs?: string[] | null;
+    },
+  ): Promise<void> {
+    const fromStart = new Date(input.from);
+    fromStart.setHours(0, 0, 0, 0);
+    const toEnd = new Date(input.to);
+    toEnd.setHours(23, 59, 59, 999);
+
+    const where: any = {
+      status: 'finalized',
+      finalizedAt: { gte: fromStart, lte: toEnd },
+      // Só pega vendas que TÊM XML — autorizadas ou canceladas (cancelamento gera novo XML)
+      nfceStatus: { in: ['authorized', 'cancelled'] },
+      nfceXml: { not: null },
+    };
+    if (input.storeCodes?.length) where.storeCode = { in: input.storeCodes };
+
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where,
+      select: {
+        id: true,
+        storeCode: true,
+        storeName: true,
+        nfceChave: true,
+        nfceStatus: true,
+        nfceXml: true,
+        nfceCancelamentoXml: true,
+        finalizedAt: true,
+      },
+      orderBy: [{ storeCode: 'asc' }, { finalizedAt: 'asc' }],
+      take: 10000, // hard cap pra não explodir memória
+    });
+
+    // Filtro por CNPJ é mais complexo (precisa cruzar com NfceConfig)
+    let filtered = sales as any[];
+    if (input.cnpjs?.length) {
+      const cnpjsLimpos = input.cnpjs.map((c) => c.replace(/\D/g, ''));
+      const configs = await (this.prisma as any).nfceConfig.findMany({
+        select: { storeCode: true, cnpj: true },
+      });
+      const cnpjByStore = new Map(
+        (configs as any[]).map((c) => [c.storeCode, String(c.cnpj || '').replace(/\D/g, '')]),
+      );
+      filtered = filtered.filter((s) => {
+        const cnpj = cnpjByStore.get(s.storeCode);
+        return cnpj && cnpjsLimpos.includes(cnpj);
+      });
+    }
+
+    // Define filename do ZIP com range de datas
+    const ymd = (d: Date) =>
+      `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+    const zipName = `nfces_${ymd(fromStart)}_a_${ymd(toEnd)}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName}"`);
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err: any) => {
+      this.logger.error(`[fiscal-zip] erro: ${err?.message || err}`);
+      try {
+        res.status(500).end();
+      } catch { /* ignora */ }
+    });
+    archive.pipe(res);
+
+    // Sanitiza nome de pasta (storeName pode ter acentos/espaços/etc)
+    const sanitizeFolder = (s: string): string =>
+      String(s || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^A-Za-z0-9_-]/g, '_')
+        .replace(/_+/g, '_')
+        .toUpperCase()
+        .slice(0, 40);
+
+    let qtdXmls = 0;
+    for (const sale of filtered) {
+      const folder = `LOJA-${sale.storeCode}-${sanitizeFolder(sale.storeName)}`;
+      const chave = sale.nfceChave || sale.id;
+      if (sale.nfceXml) {
+        archive.append(sale.nfceXml, { name: `${folder}/${chave}-nfe.xml` });
+        qtdXmls++;
+      }
+      if (sale.nfceCancelamentoXml) {
+        archive.append(sale.nfceCancelamentoXml, {
+          name: `${folder}/${chave}-canc.xml`,
+        });
+        qtdXmls++;
+      }
+    }
+
+    // Manifest pra contador conferir o que tá no pacote
+    const manifest = [
+      `LURDS PLUS SIZE - XMLs NFC-e`,
+      `Período: ${fromStart.toLocaleDateString('pt-BR')} a ${toEnd.toLocaleDateString('pt-BR')}`,
+      `Gerado em: ${new Date().toLocaleString('pt-BR')}`,
+      `Total de XMLs: ${qtdXmls}`,
+      `Notas no período: ${filtered.length}`,
+      `Filtros aplicados:`,
+      `  Lojas: ${input.storeCodes?.join(', ') || 'TODAS'}`,
+      `  CNPJs: ${input.cnpjs?.join(', ') || 'TODOS'}`,
+    ].join('\n');
+    archive.append(manifest, { name: '_MANIFEST.txt' });
+
+    this.logger.log(
+      `[fiscal-zip] Gerando ZIP: ${qtdXmls} XMLs de ${filtered.length} notas (${fromStart.toISOString()} a ${toEnd.toISOString()})`,
+    );
+
+    await archive.finalize();
   }
 }

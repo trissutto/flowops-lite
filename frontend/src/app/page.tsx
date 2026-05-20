@@ -99,6 +99,7 @@ export default function DashboardHome() {
     api<{ role: string; name?: string }>('/auth/me')
       .then((me) => {
         if (me.role === 'store') router.push('/minha-loja/pdv');
+        else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
         if (me.name) setUserName(me.name);
       })
       .catch(() => {});

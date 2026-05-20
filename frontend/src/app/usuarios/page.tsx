@@ -318,6 +318,7 @@ export default function UsuariosPage() {
                   <option value="admin">Administrador — vê tudo, gerencia usuários</option>
                   <option value="operator">Operador — operação geral</option>
                   <option value="store">Loja — acesso restrito à loja vinculada</option>
+                  <option value="contador">Contador — só relatório fiscal (notas + XMLs)</option>
                 </select>
               </div>
 
