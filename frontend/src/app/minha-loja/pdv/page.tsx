@@ -1864,6 +1864,18 @@ function PdvPageInner() {
           if (m === 'pix') { setPaymentFilter('pix'); setShowPayment(true); return; }
           if (m === 'crediario') { setPaymentFilter('crediario'); setShowPayment(true); return; }
           if (m === 'dinheiro') { setPresetMethod('dinheiro'); setPaymentFilter('all'); setShowPayment(true); return; }
+          if (m === 'venda_online') {
+            // Exige CPF antes de abrir — venda online sempre identifica cliente
+            if (!sale?.customerCpf) {
+              toast('warning', 'Identifique a cliente primeiro', 'Venda online sempre exige CPF (F6)');
+              setShowCustomer(true);
+              return;
+            }
+            setPresetMethod('venda_online');
+            setPaymentFilter('all');
+            setShowPayment(true);
+            return;
+          }
         };
         const PayBtn = ({
           onClick, brand, label, hoverColor,
@@ -1953,6 +1965,19 @@ function PdvPageInner() {
                       </span>
                     }
                     hoverColor="hover:bg-fuchsia-50 hover:border-fuchsia-300"
+                  />
+                  {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
+                      fora (PIX direto ou link externo). Só registra venda +
+                      baixa estoque. Sem NFC-e automática. CPF obrigatório. */}
+                  <PayBtn
+                    onClick={() => venderOutro('venda_online')}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <Globe className="w-4 h-4 text-cyan-600" />
+                        <span className="text-xs font-black text-cyan-700 tracking-wide">V.ONLINE</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-cyan-50 hover:border-cyan-300"
                   />
                   {/* MARCAR — cliente leva pra provar em casa.
                       Exige cliente identificado (CPF) — senao abre modal de
