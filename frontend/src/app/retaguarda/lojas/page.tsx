@@ -25,6 +25,14 @@ type Store = {
   state?: string | null;
   active: boolean;
   tipo?: 'REDE' | 'FILIAL' | string | null;
+  expectedCnpj?: string | null;
+  expectedRazaoSocial?: string | null;
+};
+
+const fmtCnpj = (c?: string | null) => {
+  if (!c) return '';
+  const digits = String(c).replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+  return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
 };
 
 export default function LojasPage() {
@@ -60,6 +68,51 @@ export default function LojasPage() {
         body: JSON.stringify({ tipo: newTipo }),
       });
       setItems((prev) => prev.map((s) => (s.id === store.id ? { ...s, tipo: newTipo } : s)));
+    } catch (e: any) {
+      alert(`Erro ao salvar: ${e?.message || e}`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  // Edita CNPJ esperado da loja (auditoria fiscal — bloqueia emissão por CNPJ errado)
+  const editCnpj = async (store: Store) => {
+    const currentCnpj = fmtCnpj(store.expectedCnpj);
+    const newCnpj = window.prompt(
+      `CNPJ esperado pra loja ${store.code} ${store.name}:\n\n` +
+      `Esse CNPJ é validado quando a vendedora finaliza uma venda. Se a config NFC-e ` +
+      `da loja apontar pra outro CNPJ, o sistema BLOQUEIA a emissão.\n\n` +
+      `Deixe em branco pra desativar a validação.`,
+      currentCnpj,
+    );
+    if (newCnpj === null) return;
+    const cleanCnpj = newCnpj.replace(/\D/g, '');
+    if (cleanCnpj && cleanCnpj.length !== 14) {
+      alert('CNPJ inválido — deve ter 14 dígitos');
+      return;
+    }
+    const razaoSocial = cleanCnpj
+      ? window.prompt(
+          `Razão social do CNPJ ${fmtCnpj(cleanCnpj)} (opcional, ajuda a identificar no relatório):`,
+          store.expectedRazaoSocial || '',
+        )
+      : null;
+    setSavingId(store.id);
+    try {
+      await api(`/stores/${store.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          expectedCnpj: cleanCnpj || null,
+          expectedRazaoSocial: razaoSocial?.trim() || null,
+        }),
+      });
+      setItems((prev) =>
+        prev.map((s) =>
+          s.id === store.id
+            ? { ...s, expectedCnpj: cleanCnpj || null, expectedRazaoSocial: razaoSocial?.trim() || null }
+            : s,
+        ),
+      );
     } catch (e: any) {
       alert(`Erro ao salvar: ${e?.message || e}`);
     } finally {
@@ -155,6 +208,25 @@ export default function LojasPage() {
                         {[store.city, store.state].filter(Boolean).join(' / ')}
                       </div>
                     )}
+                    {/* CNPJ esperado pra emissão NFC-e — clique pra editar */}
+                    <button
+                      type="button"
+                      onClick={() => editCnpj(store)}
+                      className="mt-1 text-[11px] flex items-center gap-1.5 hover:underline group"
+                      title="Clica pra editar"
+                    >
+                      <span className="text-slate-500">CNPJ NFC-e esperado:</span>
+                      {store.expectedCnpj ? (
+                        <>
+                          <span className="font-mono font-bold text-emerald-700">{fmtCnpj(store.expectedCnpj)}</span>
+                          {store.expectedRazaoSocial && (
+                            <span className="text-slate-600">({store.expectedRazaoSocial})</span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-amber-700 font-semibold">— não cadastrado (clique pra definir)</span>
+                      )}
+                    </button>
                   </div>
 
                   {/* Toggle REDE / FILIAL */}

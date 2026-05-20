@@ -1061,6 +1061,51 @@ export class PdvService {
     if (!sale.items?.length) throw new BadRequestException('Carrinho vazio');
     if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
 
+    // ── AUDITORIA FISCAL: Loja deve emitir pelo CNPJ esperado ───────────
+    // Cenário do grupo Lurd's: SOROCABA emite por T.O. RISSUTTO, demais por
+    // LURDS PLUS SIZE LTDA. Se a config NFC-e da loja tiver CNPJ diferente
+    // do `expectedCnpj` cadastrado na Store, BLOQUEIA o finalize antes da
+    // emissão pra evitar nota fiscal pela empresa errada.
+    // Só valida se a Store tiver expectedCnpj setado (não quebra lojas sem
+    // mapeamento).
+    try {
+      const store = await this.prisma.store.findUnique({
+        where: { code: sale.storeCode },
+        select: { expectedCnpj: true, expectedRazaoSocial: true } as any,
+      });
+      const expected = (store as any)?.expectedCnpj
+        ? String((store as any).expectedCnpj).replace(/\D/g, '')
+        : null;
+      if (expected) {
+        const cfg = await (this.prisma as any).nfceConfig.findUnique({
+          where: { storeCode: sale.storeCode },
+          select: { cnpj: true, ativa: true, razaoSocial: true },
+        });
+        const cfgCnpj = cfg?.cnpj ? String(cfg.cnpj).replace(/\D/g, '') : null;
+        // Só bloqueia se config existir + ativa + cnpj divergente
+        if (cfg?.ativa && cfgCnpj && cfgCnpj !== expected) {
+          const expectedFmt = expected.replace(
+            /^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,
+            '$1.$2.$3/$4-$5',
+          );
+          const cfgCnpjFmt = cfgCnpj.replace(
+            /^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,
+            '$1.$2.$3/$4-$5',
+          );
+          throw new BadRequestException(
+            `BLOQUEADO: a loja ${sale.storeCode} (${sale.storeName}) deve emitir NFC-e por ` +
+            `${(store as any)?.expectedRazaoSocial || 'CNPJ ' + expectedFmt} ` +
+            `mas a config NFC-e está apontando para ${cfg.razaoSocial || 'CNPJ ' + cfgCnpjFmt}. ` +
+            `Procure o ADMIN antes de continuar (NÃO finalize esta venda).`,
+          );
+        }
+      }
+    } catch (e: any) {
+      if (e instanceof BadRequestException) throw e;
+      // Se a auditoria falhar por causa de banco/query, NÃO bloqueia — só loga
+      this.logger.warn(`[pdv] auditoria fiscal CNPJ falhou (segue venda): ${e?.message || e}`);
+    }
+
     // GATE: precisa de caixa aberto na loja pra finalizar.
     // Se a venda foi criada antes do caixa abrir, vincula agora.
     let cashSessionId = sale.cashSessionId;

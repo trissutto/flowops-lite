@@ -44,6 +44,7 @@ interface GestaoItem {
 const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/dashboard',            label: 'Dashboard',         subtitle: 'KPIs',          description: 'Visão geral em tempo real',     tone: 'teal',   icon: LayoutDashboard },
   { href: '/retaguarda/super-painel-caixas',  label: 'Super Painel',      subtitle: 'Caixas ao vivo', description: 'Vendas em tempo real (todas lojas)', tone: 'rose', icon: DollarSign      },
+  { href: '/retaguarda/relatorio-fiscal',     label: 'Relatório Fiscal',  subtitle: 'NFC-e',          description: 'Auditoria por CNPJ/série + inconsistências', tone: 'purple', icon: ClipboardList },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',      subtitle: 'Estoque',       description: 'Análise de produto + venda',    tone: 'purple', icon: BarChart3       },
   // "Financeiro" (analítico WC) movido pro hub /site — é financeiro do e-commerce.
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },

@@ -17,6 +17,14 @@ export interface StoreInput {
    * Default: REDE.
    */
   tipo?: 'REDE' | 'FILIAL';
+  /**
+   * CNPJ esperado pra essa loja emitir NFC-e. Quando o grupo tem múltiplas
+   * empresas (ex: SOROCABA emite por T.O. RISSUTTO, demais por LURDS PLUS SIZE),
+   * cadastrar aqui o CNPJ correto evita que a loja emita pela empresa errada.
+   * Validação: PDV bloqueia finalize se config.cnpj não bater.
+   */
+  expectedCnpj?: string | null;
+  expectedRazaoSocial?: string | null;
 }
 
 @Injectable()
@@ -56,8 +64,17 @@ export class StoresService {
         active: data.active ?? true,
         priorityScore: data.priorityScore ?? 50,
         tipo: data.tipo === 'FILIAL' ? 'FILIAL' : 'REDE',
+        expectedCnpj: this.cleanCnpj(data.expectedCnpj),
+        expectedRazaoSocial: data.expectedRazaoSocial?.trim() || null,
       } as any,
     });
+  }
+
+  /** Strip não-dígitos do CNPJ. Retorna null se vazio. */
+  private cleanCnpj(raw: string | null | undefined): string | null {
+    if (!raw) return null;
+    const digits = String(raw).replace(/\D/g, '');
+    return digits || null;
   }
 
   async update(id: string, data: StoreInput) {
@@ -83,6 +100,10 @@ export class StoresService {
         active: data.active ?? undefined,
         priorityScore: data.priorityScore ?? undefined,
         tipo: data.tipo ? (data.tipo === 'FILIAL' ? 'FILIAL' : 'REDE') : undefined,
+        expectedCnpj: data.expectedCnpj !== undefined ? this.cleanCnpj(data.expectedCnpj) : undefined,
+        expectedRazaoSocial: data.expectedRazaoSocial !== undefined
+          ? (data.expectedRazaoSocial?.trim() || null)
+          : undefined,
       } as any,
     });
   }

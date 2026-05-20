@@ -58,6 +58,13 @@ model Store {
   // REDE↔FILIAL. Default REDE pra não quebrar lojas existentes.
   tipo          String   @default("REDE")  // REDE | FILIAL
 
+  // ── Auditoria fiscal (grupo com múltiplos CNPJs) ──
+  // CNPJ esperado pra essa loja emitir NFC-e. Ex: SOROCABA → T.O. RISSUTTO.
+  // Se a config NFC-e da loja apontar pra CNPJ diferente, o PDV bloqueia a
+  // emissão e o relatório fiscal marca em vermelho. Só é validado se preenchido.
+  expectedCnpj      String?  @map("expected_cnpj")
+  expectedRazaoSocial String? @map("expected_razao_social")
+
   users          User[]
   pickOrders     PickOrder[]
   orderItems     OrderItem[]
