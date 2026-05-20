@@ -5722,6 +5722,229 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Distribuição de estoque por loja — tela de análise pra detectar excessos
+   * em algumas lojas e zero em outras pra mesma variação (REF+COR+TAM).
+   *
+   * Cenário típico (Lurd's): VLM-222 MARINHO 48 tem 8 em Santos, 0 em
+   * Sorocaba/Campinas/Piracicaba. Vendedora em Sorocaba não consegue vender
+   * pq não tem grade. Essa tela mostra essas distorções e linka pro
+   * realinhamento.
+   *
+   * Critério de criticidade (conforme regra de negócio):
+   *   - ALTO  → alguma loja com 0 E outra com 3+ unidades
+   *   - MEDIO → alguma com 0 E outra com 2 unidades
+   *   - OK    → distribuído (sem zero OU sem excesso)
+   *
+   * @param filters Filtros opcionais. Default: PLUS SIZE only, modo desequilibrado.
+   * @returns Lista de variações + lojas (header) + cache hint.
+   */
+  async getStockDistribution(filters: {
+    grupoCodigo?: number | null;
+    subgrupoCodigo?: number | null;
+    search?: string | null;
+    tamanhos?: string[] | null; // default = plus size
+    lojas?: string[] | null;     // default = todas exceto SITE/PF
+    mode?: 'imbalanced' | 'all';
+    minTotal?: number;
+    limit?: number;
+  } = {}): Promise<{
+    rows: Array<{
+      codigo: string;
+      ref: string;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string;
+      preco: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+      criticidade: 'ALTO' | 'MEDIO' | 'OK';
+    }>;
+    lojas: string[];
+    totalRows: number;
+    truncated: boolean;
+  }> {
+    if (!this.pool) return { rows: [], lojas: [], totalRows: 0, truncated: false };
+
+    const limit = Math.max(50, Math.min(5000, filters.limit || 1500));
+    const mode = filters.mode || 'imbalanced';
+    const minTotal = Math.max(0, filters.minTotal ?? 3);
+
+    // Default PLUS SIZE = lista atual do setting (cobre 46-60 + combos)
+    const defaultPlusSize = [
+      '46', '48', '50', '52', '54', '56', '58', '60',
+      '46/48', '48/50', '50/52', '52/54', '54/56', '56/58', '58/60',
+    ];
+    const tamanhos = (filters.tamanhos && filters.tamanhos.length > 0)
+      ? filters.tamanhos.map((t) => t.toUpperCase().trim()).filter(Boolean)
+      : defaultPlusSize;
+
+    // Lojas: ignora SITE e PF por padrão (regra do user)
+    const ignoredLojas = new Set(['SITE', 'PF']);
+
+    // ── 1) Monta WHERE da query principal ──
+    const conds: string[] = [
+      "p.REF IS NOT NULL",
+      "p.REF <> ''",
+      `UPPER(p.TAMANHO) IN (${tamanhos.map(() => '?').join(',')})`,
+    ];
+    const vals: any[] = [...tamanhos];
+
+    if (filters.grupoCodigo) {
+      conds.push('p.GRUPO = ?');
+      vals.push(filters.grupoCodigo);
+    }
+    if (filters.subgrupoCodigo) {
+      conds.push('p.SUBGRUPO = ?');
+      vals.push(filters.subgrupoCodigo);
+    }
+    if (filters.search?.trim()) {
+      const term = `%${filters.search.trim().toUpperCase()}%`;
+      conds.push(
+        `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ? OR p.CODIGO LIKE ?)`,
+      );
+      vals.push(term, term, term);
+    }
+
+    // ── 2) Query principal: pega produto + estoque por loja agregado ──
+    // Performance: usa GROUP_CONCAT pra trazer todos os pares (loja, qty)
+    // em UMA linha por CODIGO. Mais rápido que múltiplas joins.
+    const sql = `
+      SELECT
+        p.CODIGO AS codigo,
+        p.REF AS ref,
+        p.COR AS cor,
+        p.TAMANHO AS tamanho,
+        COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '') AS descricao,
+        COALESCE(p.PRECO, 0) AS preco,
+        (
+          SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
+            FROM estoque e
+           WHERE CAST(e.CODIGO AS UNSIGNED) = CAST(p.CODIGO AS UNSIGNED)
+        ) AS estoque_str
+      FROM produtos p
+      WHERE ${conds.join(' AND ')}
+      ORDER BY p.REF, p.COR, p.TAMANHO
+      LIMIT ?
+    `;
+    vals.push(limit);
+
+    this.logger.log(
+      `[erp] getStockDistribution mode=${mode} minTotal=${minTotal} tamanhos=${tamanhos.length} ` +
+      `grupo=${filters.grupoCodigo || 'all'} sub=${filters.subgrupoCodigo || 'all'} ` +
+      `search=${filters.search || '(none)'}`,
+    );
+    const t0 = Date.now();
+    let rawRows: any[] = [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
+      rawRows = rows as any[];
+    } catch (e) {
+      this.logger.error(`getStockDistribution falhou: ${(e as Error).message}`);
+      return { rows: [], lojas: [], totalRows: 0, truncated: false };
+    }
+    this.logger.log(`[erp] getStockDistribution: ${rawRows.length} produtos em ${Date.now() - t0}ms`);
+
+    // ── 3) Parse estoque_str → mapa por loja + descobre conjunto de lojas ──
+    const lojasSet = new Set<string>();
+    type Parsed = {
+      codigo: string;
+      ref: string;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string;
+      preco: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+      criticidade: 'ALTO' | 'MEDIO' | 'OK';
+    };
+    const parsed: Parsed[] = [];
+
+    for (const r of rawRows) {
+      const estoquePorLoja: Record<string, number> = {};
+      let total = 0;
+      const estoqueStr = r.estoque_str ? String(r.estoque_str) : '';
+      if (estoqueStr) {
+        for (const pair of estoqueStr.split('|')) {
+          const [loja, qtdRaw] = pair.split(':');
+          const lojaCode = String(loja || '').trim().toUpperCase();
+          if (!lojaCode || ignoredLojas.has(lojaCode)) continue;
+          const qty = Number(qtdRaw) || 0;
+          estoquePorLoja[lojaCode] = (estoquePorLoja[lojaCode] || 0) + qty;
+          lojasSet.add(lojaCode);
+          total += qty;
+        }
+      }
+
+      // Filtro de lojas (se especificado): mantém SÓ as solicitadas
+      if (filters.lojas && filters.lojas.length > 0) {
+        const filtered: Record<string, number> = {};
+        let filteredTotal = 0;
+        for (const lj of filters.lojas) {
+          const code = lj.toUpperCase().trim();
+          const v = estoquePorLoja[code] || 0;
+          filtered[code] = v;
+          filteredTotal += v;
+        }
+        Object.assign(estoquePorLoja, filtered);
+        for (const k of Object.keys(estoquePorLoja)) {
+          if (!filters.lojas.includes(k)) delete estoquePorLoja[k];
+        }
+        total = filteredTotal;
+      }
+
+      // Calcula criticidade
+      const valores = Object.values(estoquePorLoja);
+      const temZero = valores.some((v) => v <= 0);
+      const maxQty = valores.length > 0 ? Math.max(...valores) : 0;
+      let criticidade: 'ALTO' | 'MEDIO' | 'OK' = 'OK';
+      if (temZero && maxQty >= 3) criticidade = 'ALTO';
+      else if (temZero && maxQty >= 2) criticidade = 'MEDIO';
+
+      parsed.push({
+        codigo: String(r.codigo).trim(),
+        ref: String(r.ref || '').trim(),
+        cor: r.cor ? String(r.cor).trim() : null,
+        tamanho: r.tamanho ? String(r.tamanho).trim() : null,
+        descricao: String(r.descricao || '').trim(),
+        preco: Number(r.preco) || 0,
+        estoquePorLoja,
+        total,
+        criticidade,
+      });
+    }
+
+    // ── 4) Filtra por modo + minTotal ──
+    let filtered = parsed;
+    if (minTotal > 0) {
+      filtered = filtered.filter((r) => r.total >= minTotal);
+    }
+    if (mode === 'imbalanced') {
+      filtered = filtered.filter((r) => r.criticidade !== 'OK');
+    }
+
+    // ── 5) Ordena: ALTO → MEDIO → OK, dentro de cada grupo por total desc ──
+    const ordWeight: Record<string, number> = { ALTO: 0, MEDIO: 1, OK: 2 };
+    filtered.sort((a, b) => {
+      const dw = ordWeight[a.criticidade] - ordWeight[b.criticidade];
+      if (dw !== 0) return dw;
+      return b.total - a.total;
+    });
+
+    // ── 6) Header de lojas: ordena alfabeticamente pra ficar consistente ──
+    const lojas = Array.from(lojasSet)
+      .filter((l) => !ignoredLojas.has(l))
+      .filter((l) => !filters.lojas || filters.lojas.includes(l))
+      .sort();
+
+    return {
+      rows: filtered,
+      lojas,
+      totalRows: filtered.length,
+      truncated: rawRows.length >= limit,
+    };
+  }
+
+  /**
    * Cria um novo grupo no Wincred (tabela grupos).
    * Reserva próximo CODIGO via MAX+1 dentro de uma transação.
    */

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { IntelligenceService } from './intelligence.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * /intelligence — admin-only. Endpoints pra dashboard de inteligência de
@@ -20,7 +21,10 @@ import { IntelligenceService } from './intelligence.service';
 @UseGuards(JwtAuthGuard)
 @Controller('intelligence')
 export class IntelligenceController {
-  constructor(private readonly svc: IntelligenceService) {}
+  constructor(
+    private readonly svc: IntelligenceService,
+    private readonly erp: ErpService,
+  ) {}
 
   private requireAdmin(req: any) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
@@ -134,6 +138,66 @@ export class IntelligenceController {
       to,
       plusSize: this.parseBool(plusSize),
     });
+  }
+
+  /**
+   * GET /intelligence/stock-distribution
+   * Lista de variações (REF+COR+TAM) com qty por loja + indicador de
+   * desequilíbrio (ALTO/MEDIO/OK). Default = PLUS SIZE only + só desequilibrados.
+   *
+   * Query params:
+   *   grupo, subgrupo: filtro categoria (codigo do Wincred)
+   *   search: REF/descrição/codigo
+   *   tamanhos: CSV de tamanhos (default: 46-60 + combos)
+   *   lojas: CSV de codes (default: todas exceto SITE/PF)
+   *   mode: 'imbalanced' (default) | 'all'
+   *   minTotal: int (default 3)
+   *   limit: int (default 1500)
+   */
+  @Get('stock-distribution')
+  async stockDistribution(
+    @Req() req: any,
+    @Query('grupo') grupo?: string,
+    @Query('subgrupo') subgrupo?: string,
+    @Query('search') search?: string,
+    @Query('tamanhos') tamanhos?: string,
+    @Query('lojas') lojas?: string,
+    @Query('mode') mode?: string,
+    @Query('minTotal') minTotal?: string,
+    @Query('limit') limit?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.erp.getStockDistribution({
+      grupoCodigo: grupo ? Number(grupo) : null,
+      subgrupoCodigo: subgrupo ? Number(subgrupo) : null,
+      search: search || null,
+      tamanhos: tamanhos ? tamanhos.split(',').map((s) => s.trim()).filter(Boolean) : null,
+      lojas: lojas ? lojas.split(',').map((s) => s.trim()).filter(Boolean) : null,
+      mode: mode === 'all' ? 'all' : 'imbalanced',
+      minTotal: minTotal ? Number(minTotal) : 3,
+      limit: limit ? Number(limit) : 1500,
+    });
+  }
+
+  /**
+   * GET /intelligence/grupos
+   * Lista grupos do Wincred (pro filtro de categoria na tela de distribuição).
+   */
+  @Get('grupos')
+  async listGrupos(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.erp.listarGrupos();
+  }
+
+  /**
+   * GET /intelligence/subgrupos?grupo=N
+   * Lista subgrupos de um grupo (cascata no filtro).
+   */
+  @Get('subgrupos')
+  async listSubgrupos(@Req() req: any, @Query('grupo') grupo: string) {
+    this.requireAdmin(req);
+    if (!grupo) return [];
+    return this.erp.listarSubgrupos(Number(grupo));
   }
 
   /**
