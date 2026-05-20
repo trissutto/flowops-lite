@@ -55,6 +55,17 @@ let unauthorizedHandled = false;
 function handleUnauthorized() {
   if (typeof window === 'undefined') return;
   if (unauthorizedHandled) return;
+
+  // GUARD: se já estamos na tela de login, NÃO mostra alert nem redireciona.
+  // Acontece quando chamadas em background (ping, polling) disparam 401
+  // enquanto o user está digitando senha. Antes ficava em loop de alerts.
+  if (window.location.pathname === '/login') {
+    try {
+      localStorage.removeItem('flowops_token');
+    } catch {}
+    return;
+  }
+
   unauthorizedHandled = true;
 
   try {
@@ -68,6 +79,9 @@ function handleUnauthorized() {
   // Avisa o user na hora e redireciona pra login mantendo a rota atual
   // pra voltar depois do login. setTimeout pra não bloquear o throw da chamada.
   setTimeout(() => {
+    // Re-check no momento do setTimeout — se o user já foi pra /login por outro
+    // motivo (ex.: redirect concorrente), não mostra alert duplicado.
+    if (window.location.pathname === '/login') return;
     const here =
       window.location.pathname + window.location.search + window.location.hash;
     alert(
