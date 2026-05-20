@@ -79,8 +79,12 @@ function PedidosPageInner() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [dateFrom, setDateFrom] = useState(todayStr);
-  const [dateTo, setDateTo] = useState(todayStr);
+  // Filtros de data INICIAM VAZIOS — mostra todos os pedidos.
+  // Antes vinha preenchido com hoje (todayStr), o que escondia pedidos
+  // mais antigos e atrapalhava a operação. Vendedora/admin escolhe data
+  // manualmente quando quiser filtrar.
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
