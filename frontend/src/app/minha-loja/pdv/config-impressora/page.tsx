@@ -48,6 +48,63 @@ export default function ConfigImpressoraPage() {
     sizeBytes?: number;
   } | null>(null);
 
+  // ── Auto-update (só no Electron) ──
+  const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateState, setUpdateState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'no-update'; version: string }
+    | { kind: 'update-available'; newVersion: string }
+    | { kind: 'ready-to-install'; newVersion: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
+  useEffect(() => {
+    if (!electronMode) return;
+    const electron = (window as any).electronAPI;
+    electron?.getAppVersion?.().then((v: string) => setCurrentVersion(v)).catch(() => {});
+  }, [electronMode]);
+
+  async function checkForUpdate() {
+    const electron = (window as any).electronAPI;
+    if (!electron?.checkForUpdates) {
+      setUpdateState({ kind: 'error', message: 'API de update não disponível' });
+      return;
+    }
+    setUpdateChecking(true);
+    setUpdateState({ kind: 'idle' });
+    try {
+      const r = await electron.checkForUpdates();
+      if (r.error) {
+        setUpdateState({ kind: 'error', message: r.error });
+        return;
+      }
+      if (r.hasUpdate) {
+        // electron-updater já começou a baixar em background.
+        // Vai mostrar "Baixando..." e quando estiver pronto, o user clica em Reiniciar.
+        setUpdateState({ kind: 'update-available', newVersion: r.version });
+        // Após ~30s de download em background, mostra opção de instalar.
+        // (electron-updater não emite evento via IPC aqui, então só esperamos.)
+        setTimeout(() => {
+          setUpdateState({ kind: 'ready-to-install', newVersion: r.version });
+        }, 30000);
+      } else {
+        setUpdateState({ kind: 'no-update', version: r.currentVersion });
+      }
+    } catch (e: any) {
+      setUpdateState({ kind: 'error', message: e?.message || String(e) });
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function installUpdate() {
+    const electron = (window as any).electronAPI;
+    if (!electron?.quitAndInstall) return;
+    if (!confirm('O app vai fechar e instalar a nova versão. Reabrir automaticamente. Continuar?')) return;
+    await electron.quitAndInstall();
+  }
+
   // Busca info da última release do app desktop (só quando NÃO está no Electron).
   // Cacheia no backend (5min) — chamada barata.
   useEffect(() => {
@@ -152,6 +209,91 @@ export default function ConfigImpressoraPage() {
             Atualizar
           </button>
         </div>
+
+        {/* Card de auto-update — só aparece quando JÁ está no app desktop */}
+        {electronMode && (
+          <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-xl p-5 shadow-md">
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="w-14 h-14 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-lg">
+                <Monitor size={28} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-black text-emerald-900 text-lg mb-1 flex items-center gap-2 flex-wrap">
+                  ✅ App desktop instalado
+                  {currentVersion && (
+                    <span className="text-xs font-mono bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                      v{currentVersion}
+                    </span>
+                  )}
+                  {desktopRelease?.version &&
+                    currentVersion &&
+                    desktopRelease.version !== currentVersion && (
+                      <span className="text-xs font-mono bg-amber-200 text-amber-900 px-2 py-0.5 rounded animate-pulse">
+                        ⚠ Nova versão v{desktopRelease.version}
+                      </span>
+                    )}
+                </div>
+                <div className="text-sm text-emerald-800 mb-3 leading-relaxed">
+                  O app verifica updates automaticamente a cada 4h. Pra forçar uma checagem agora,
+                  clica em <b>Verificar atualização</b>.
+                </div>
+
+                {/* Estado: idle | checking | no-update | update-available | ready-to-install | error */}
+                <div className="flex gap-2 flex-wrap items-center">
+                  {updateState.kind !== 'ready-to-install' && (
+                    <button
+                      type="button"
+                      onClick={checkForUpdate}
+                      disabled={updateChecking}
+                      className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-5 py-2.5 rounded-xl shadow-md transition disabled:opacity-50"
+                    >
+                      {updateChecking ? (
+                        <>
+                          <Loader2 size={18} className="animate-spin" />
+                          Verificando...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={18} />
+                          Verificar atualização
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  {updateState.kind === 'ready-to-install' && (
+                    <button
+                      type="button"
+                      onClick={installUpdate}
+                      className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white font-bold px-5 py-3 rounded-xl shadow-md transition animate-pulse"
+                    >
+                      <Download size={20} />
+                      Reiniciar pra instalar v{updateState.newVersion}
+                    </button>
+                  )}
+                </div>
+
+                {updateState.kind === 'no-update' && (
+                  <div className="mt-3 text-sm text-emerald-700 bg-emerald-100/60 rounded px-3 py-2">
+                    ✓ App já está na última versão (v{updateState.version}).
+                  </div>
+                )}
+                {updateState.kind === 'update-available' && (
+                  <div className="mt-3 text-sm text-amber-800 bg-amber-100/60 rounded px-3 py-2 flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    Baixando v{updateState.newVersion} em background... Aguarda ~30s, depois aparece
+                    botão pra reiniciar.
+                  </div>
+                )}
+                {updateState.kind === 'error' && (
+                  <div className="mt-3 text-sm text-rose-700 bg-rose-100/60 rounded px-3 py-2">
+                    Erro: {updateState.message}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Card pra instalar/atualizar o app desktop — só aparece no navegador */}
         {!electronMode && (

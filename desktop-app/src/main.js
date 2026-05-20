@@ -539,6 +539,57 @@ ipcMain.handle('flowops:list-printers', async () => {
   }
 });
 
+// ── Auto-update manual (botão "Atualizar app" no frontend) ──
+// Permite vendedora/admin forçar check imediato sem esperar o auto-check de 4h.
+let lastUpdateInfo = null; // armazena info do último update-available pra reaproveitar
+
+ipcMain.handle('flowops:get-app-version', () => app.getVersion());
+
+ipcMain.handle('flowops:check-for-updates', async () => {
+  if (!app.isPackaged) {
+    return {
+      hasUpdate: false,
+      currentVersion: app.getVersion(),
+      version: null,
+      error: 'dev mode — auto-update só funciona no app instalado',
+    };
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    const updateInfo = result?.updateInfo;
+    const current = app.getVersion();
+    const remote = updateInfo?.version;
+    const hasUpdate = !!remote && remote !== current;
+    if (hasUpdate) lastUpdateInfo = updateInfo;
+    return {
+      hasUpdate,
+      currentVersion: current,
+      version: remote || null,
+      releaseDate: updateInfo?.releaseDate || null,
+    };
+  } catch (err) {
+    log.warn('[updater] check manual falhou:', err?.message || err);
+    return {
+      hasUpdate: false,
+      currentVersion: app.getVersion(),
+      version: null,
+      error: err?.message || String(err),
+    };
+  }
+});
+
+ipcMain.handle('flowops:quit-and-install', () => {
+  if (!app.isPackaged) {
+    return { ok: false, error: 'dev mode' };
+  }
+  // Pequeno delay pra UI mostrar "Reiniciando..." antes do app fechar
+  setTimeout(() => {
+    isQuitting = true;
+    autoUpdater.quitAndInstall(false, true); // silent=false, forceRunAfter=true
+  }, 500);
+  return { ok: true };
+});
+
 ipcMain.handle('flowops:open-external', (_evt, url) => {
   if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url);
   return { ok: true };

@@ -28,4 +28,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listPrinters: () => ipcRenderer.invoke('flowops:list-printers'),
 
   openExternal: (url) => ipcRenderer.invoke('flowops:open-external', url),
+
+  // ── Auto-update manual ──
+  // Versão atual instalada (lida do package.json bundled no app)
+  getAppVersion: () => ipcRenderer.invoke('flowops:get-app-version'),
+  // Força check imediato no GitHub Releases. Retorna { hasUpdate, version, currentVersion }.
+  // Se hasUpdate=true, electron-updater já começou a baixar em background.
+  checkForUpdates: () => ipcRenderer.invoke('flowops:check-for-updates'),
+  // Fecha o app e instala a versão baixada. Só funciona se já tem update baixado
+  // (ou seja, depois do checkForUpdates ter retornado hasUpdate=true e baixado).
+  quitAndInstall: () => ipcRenderer.invoke('flowops:quit-and-install'),
 });
