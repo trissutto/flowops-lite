@@ -78,11 +78,20 @@ export class FiscalReportService {
       ];
     }
     if (input.nfceStatus?.length) {
-      // 'sem_nfce' é caso especial — vendas com nfceStatus null
-      const statuses = input.nfceStatus.filter((s) => s !== 'sem_nfce');
+      // Traduz status PT (UI) → EN (banco) pra filtrar correto.
+      // 'sem_nfce' = vendas com nfceStatus null.
+      const ptToEn: Record<string, string> = {
+        autorizada: 'authorized',
+        rejeitada: 'rejected',
+        cancelada: 'cancelled',
+        pendente: 'pending',
+      };
+      const statusesEn = input.nfceStatus
+        .filter((s) => s !== 'sem_nfce')
+        .map((s) => ptToEn[s] || s); // se já vier em inglês, mantém
       const semNfce = input.nfceStatus.includes('sem_nfce');
       const orStatus: any[] = [];
-      if (statuses.length) orStatus.push({ nfceStatus: { in: statuses } });
+      if (statusesEn.length) orStatus.push({ nfceStatus: { in: statusesEn } });
       if (semNfce) orStatus.push({ nfceStatus: null });
       if (orStatus.length === 1) {
         Object.assign(where, orStatus[0]);
@@ -137,23 +146,44 @@ export class FiscalReportService {
       ]),
     );
 
+    // Normaliza status do banco (inglês) pra português usado nos filtros/UI.
+    // Banco grava: 'authorized' | 'rejected' | 'cancelled' | 'pending' | null
+    // UI usa: 'autorizada' | 'rejeitada' | 'cancelada' | 'pendente' | 'sem_nfce'
+    const normalizeStatus = (s: string | null | undefined): string => {
+      const v = String(s || '').toLowerCase().trim();
+      if (!v) return 'sem_nfce';
+      if (v === 'authorized' || v === 'autorizada') return 'autorizada';
+      if (v === 'rejected' || v === 'rejeitada') return 'rejeitada';
+      if (v === 'cancelled' || v === 'canceled' || v === 'cancelada') return 'cancelada';
+      if (v === 'pending' || v === 'pendente') return 'pendente';
+      return v; // valor desconhecido — mantém pra debug
+    };
+
     // Enriquece + detecta inconsistência
     const rows = (sales as any[]).map((s) => {
       const store = storeMap.get(s.storeCode);
       const cfg = cfgMap.get(s.storeCode);
+      const statusNorm = normalizeStatus(s.nfceStatus);
+      const isAuthorized = statusNorm === 'autorizada';
       const expectedCnpj = store?.expectedCnpj || null;
-      const emittedCnpj = cfg?.cnpj || null;
+      // CNPJ emitido SÓ tem valor quando NFC-e foi autorizada de fato.
+      // Pra vendas sem NFC-e/canceladas/rejeitadas, fica null (não conta nas
+      // estatísticas de "Por CNPJ emitente" — ia inflar com vendas que NÃO
+      // geraram imposto).
+      const emittedCnpj = isAuthorized ? cfg?.cnpj || null : null;
+      const emittedRazaoSocial = isAuthorized ? cfg?.razaoSocial || null : null;
       const inconsistent =
-        s.nfceStatus === 'autorizada' &&
+        isAuthorized &&
         expectedCnpj &&
         emittedCnpj &&
         expectedCnpj !== emittedCnpj;
       return {
         ...s,
+        nfceStatus: statusNorm, // sobrescreve com versão normalizada
         expectedCnpj,
         expectedRazaoSocial: store?.expectedRazaoSocial || null,
         emittedCnpj,
-        emittedRazaoSocial: cfg?.razaoSocial || null,
+        emittedRazaoSocial,
         inconsistent: !!inconsistent,
       };
     });
@@ -224,9 +254,15 @@ export class FiscalReportService {
       }
     }
 
-    // Contadores chave
+    // Contadores chave (usando nfceStatus JÁ normalizado em português)
     const qtdInconsistente = filtered.filter((r) => r.inconsistent).length;
-    const qtdSemNfce = filtered.filter((r) => !r.nfceStatus || r.nfceStatus === 'pendente').length;
+    const qtdAutorizada = filtered.filter((r) => r.nfceStatus === 'autorizada').length;
+    const totalAutorizado = filtered
+      .filter((r) => r.nfceStatus === 'autorizada')
+      .reduce((acc, r) => acc + Number(r.total || 0), 0);
+    const qtdSemNfce = filtered.filter(
+      (r) => r.nfceStatus === 'sem_nfce' || r.nfceStatus === 'pendente',
+    ).length;
     const qtdCancelada = filtered.filter((r) => r.nfceStatus === 'cancelada').length;
     const qtdRejeitada = filtered.filter((r) => r.nfceStatus === 'rejeitada').length;
 
@@ -236,6 +272,8 @@ export class FiscalReportService {
       totals: {
         totalGeral: Math.round(totalGeral * 100) / 100,
         qtdGeral,
+        qtdAutorizada,
+        totalAutorizado: Math.round(totalAutorizado * 100) / 100,
         qtdInconsistente,
         qtdSemNfce,
         qtdCancelada,

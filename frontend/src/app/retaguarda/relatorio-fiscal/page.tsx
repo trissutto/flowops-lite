@@ -47,6 +47,8 @@ type Response = {
   totals: {
     totalGeral: number;
     qtdGeral: number;
+    qtdAutorizada: number;
+    totalAutorizado: number;
     qtdInconsistente: number;
     qtdSemNfce: number;
     qtdCancelada: number;
@@ -382,12 +384,13 @@ export default function RelatorioFiscalPage() {
         {/* KPIs */}
         {data && (
           <>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
-              <KpiCard label="Notas no período" value={data.totals.qtdGeral.toString()} color="indigo" />
-              <KpiCard label="Total faturado" value={brl(data.totals.totalGeral)} color="emerald" />
-              <KpiCard label="Inconsistências CNPJ" value={data.totals.qtdInconsistente.toString()} color="rose" alert={data.totals.qtdInconsistente > 0} />
+            <div className="grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <KpiCard label="Vendas no período" value={data.totals.qtdGeral.toString()} color="indigo" />
+              <KpiCard label="Total faturado (todas vendas)" value={brl(data.totals.totalGeral)} color="slate" />
+              <KpiCard label="✓ NFC-e autorizadas" value={data.totals.qtdAutorizada.toString()} color="emerald" />
+              <KpiCard label="✓ Faturamento c/ imposto" value={brl(data.totals.totalAutorizado)} color="emerald" />
               <KpiCard label="Sem NFC-e / Pendente" value={data.totals.qtdSemNfce.toString()} color="amber" alert={data.totals.qtdSemNfce > 0} />
-              <KpiCard label="Canceladas + Rejeitadas" value={(data.totals.qtdCancelada + data.totals.qtdRejeitada).toString()} color="slate" />
+              <KpiCard label="Inconsistências CNPJ" value={data.totals.qtdInconsistente.toString()} color="rose" alert={data.totals.qtdInconsistente > 0} />
             </div>
 
             {/* Resumos */}
