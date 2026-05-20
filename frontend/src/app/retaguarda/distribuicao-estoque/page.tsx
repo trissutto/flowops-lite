@@ -378,9 +378,9 @@ export default function DistribuicaoEstoque() {
                   ))}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-xs font-semibold text-slate-700">
-                  📊 Mín. peças em ALGUMA loja:
+                  📊 Mín. peças por variação (código de barras):
                 </label>
                 <input
                   type="number"
@@ -391,7 +391,8 @@ export default function DistribuicaoEstoque() {
                   className="w-16 px-2 py-1 border rounded text-sm font-mono"
                 />
                 <span className="text-xs text-slate-500">
-                  (default 2 — só analisa SKUs onde pelo menos uma loja tem essa qtd ou +)
+                  ↳ cada REF + COR + TAMANHO = 1 código de barras (variação). Só analisa
+                  se alguma loja tiver pelo menos essa quantidade DESSA variação específica.
                 </span>
               </div>
             </div>
