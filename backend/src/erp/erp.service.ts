@@ -1471,19 +1471,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     if (input.plusSizeOnly) {
       conds.push(
-        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'",
+        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'",
       );
     }
     if (input.descricaoContains?.trim()) {
       conds.push(
-        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ?",
+        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ?",
       );
       vals.push(`%${input.descricaoContains.trim().toUpperCase()}%`);
     }
 
     const sql = `
       SELECT p.REF                                                AS ref,
-             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO))      AS descricao,
+             MAX(p.DESCRICAOCOMPLETA)      AS descricao,
              COUNT(DISTINCT p.CODIGO)                             AS variantesComSobra,
              SUM(e.ESTOQUE)                                       AS estoqueTotalSobra,
              MAX(p.CODIGO)                                        AS skuExemplo
@@ -3784,7 +3784,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const yf = await this.buildYearFilter(year, 'p');
       const needsJoin = plusSize || yf.cond;
       const conds: string[] = ['e.ESTOQUE > 0'];
-      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'`);
+      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
       if (yf.cond) conds.push(yf.cond);
 
       const sql = needsJoin
@@ -3833,7 +3833,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
       ];
       const params: any[] = [inicio, fim];
-      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'`);
+      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
       if (yf.cond) {
         conds.push(yf.cond);
         params.push(...yf.params);
@@ -3906,7 +3906,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
     }
 
     // BUG FIX padding: caixa.CODIGO e produtos.CODIGO podem ter padding
@@ -3914,7 +3914,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // pra ignorar zeros à esquerda. Mesmo problema do getStock.
     const sql = `
       SELECT p.REF AS refCode,
-             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             MAX(p.DESCRICAOCOMPLETA) AS descricao,
              SUM(agg.pecas) AS pecas,
              SUM(agg.valor) AS valor
         FROM (
@@ -4383,7 +4383,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
     }
 
     // Subquery de estoque atual por REF
@@ -4406,7 +4406,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
     const sql = `
       SELECT p.REF AS refCode,
-             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             MAX(p.DESCRICAOCOMPLETA) AS descricao,
              SUM(agg.pecas) AS pecasVendidas,
              COALESCE(MAX(est.qtd), 0) AS estoqueAtual
         FROM (
@@ -4464,7 +4464,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       stockParams.push(input.storeCode);
     }
     if (input.plusSize) {
-      stockConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      stockConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
     }
     const salesJoinFilter = input.storeCode ? 'AND c2.LOJA = ?' : '';
     const salesParams = input.storeCode ? [input.storeCode] : [];
@@ -4472,7 +4472,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // BUG FIX padding: ignora zeros à esquerda nos JOINs caixa/estoque×produtos
     const sql = `
       SELECT p.REF AS refCode,
-             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             MAX(p.DESCRICAOCOMPLETA) AS descricao,
              SUM(e.ESTOQUE) AS estoqueAtual,
              (SELECT MAX(c2.DATA) FROM caixa c2
                 INNER JOIN produtos p2 ON CAST(p2.CODIGO AS UNSIGNED) = CAST(c2.CODIGO AS UNSIGNED)
@@ -4531,11 +4531,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // 1. Pega top REFs por estoque total
     const topConds: string[] = ['e.ESTOQUE > 0'];
     if (input.plusSize) {
-      topConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE '%PLUS SIZE%'");
+      topConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
     }
     const topSql = `
       SELECT p.REF AS refCode,
-             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO)) AS descricao,
+             MAX(p.DESCRICAOCOMPLETA) AS descricao,
              SUM(e.ESTOQUE) AS totalRede
         FROM estoque e
         INNER JOIN produtos p ON p.CODIGO = e.CODIGO
@@ -5806,8 +5806,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     if (filters.search?.trim()) {
       const term = `%${filters.search.trim().toUpperCase()}%`;
+      // FIX: p.DESCRICAO não existe no Wincred — só DESCRICAOCOMPLETA
       conds.push(
-        `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAO, '')) LIKE ? OR p.CODIGO LIKE ?)`,
+        `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
       );
       vals.push(term, term, term);
     }
