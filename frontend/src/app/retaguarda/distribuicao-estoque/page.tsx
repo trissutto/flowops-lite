@@ -1028,31 +1028,125 @@ function RealignDrawer({
 
           {/* Ações */}
           {moves.length > 0 && (
-            <div className="flex items-center gap-2 pt-2 border-t border-slate-200">
-              <button
-                onClick={onClose}
-                className="flex-1 px-4 py-2.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-sm font-medium"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={() => {
-                  // TODO: criar TransferOrders no backend
-                  alert(
-                    `Em breve: criar ${moves.length} transferências automaticamente.\n` +
-                      `Por enquanto, anote os movimentos e cadastre na tela de realinhamento.`,
-                  );
-                }}
-                className="flex-1 px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold flex items-center justify-center gap-2"
-              >
-                <Shuffle className="w-4 h-4" />
-                Aplicar realinhamento
-              </button>
-            </div>
+            <ApplyRealignment
+              group={group}
+              moves={moves}
+              onClose={onClose}
+            />
           )}
         </div>
       </aside>
     </>
+  );
+}
+
+/* Envia os moves pro endpoint /realignment/confirm */
+function ApplyRealignment({
+  group,
+  moves,
+  onClose,
+}: {
+  group: GroupDrawer;
+  moves: Move[];
+  onClose: () => void;
+}) {
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const apply = async () => {
+    if (!confirm(
+      `Vai criar ${moves.length} ordens de transferência (tipo REALINHAMENTO).\n\n` +
+        `Cada loja origem vai receber um card na tela /minha-loja/realinhamento ` +
+        `com foto do produto e os tamanhos a separar.\n\nConfirma?`,
+    )) {
+      return;
+    }
+    setApplying(true);
+    setResult(null);
+    try {
+      // Monta plan[] no formato esperado por POST /realignment/confirm
+      const plan = moves.map((m) => {
+        // Acha o item correspondente (mesmo tamanho) pra pegar sku/ref/cor
+        const item = group.items.find((it) => (it.tamanho || '').trim() === m.tamanho);
+        return {
+          sku: item?.codigo || '',
+          ref: group.ref,
+          cor: group.cor === 'SEM COR' ? null : group.cor,
+          tamanho: m.tamanho,
+          desc: group.descricao,
+          fromCode: m.from,
+          toCode: m.to,
+          qty: m.qty,
+        };
+      });
+
+      const res = await api<{ created: number; errors?: any[] }>(
+        '/realignment/confirm',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            plan,
+            note: `Realinhamento automático · ${group.ref} ${group.cor} · gerado pela tela de Distribuição`,
+          }),
+        },
+      );
+
+      setResult({
+        ok: true,
+        msg: `✓ ${res.created || moves.length} ordens criadas. Lojas origem já estão sendo notificadas.`,
+      });
+      // Fecha drawer após 2s
+      setTimeout(() => onClose(), 2500);
+    } catch (e: any) {
+      setResult({
+        ok: false,
+        msg: e?.message || 'Falha ao criar transferências',
+      });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="space-y-3 pt-2 border-t border-slate-200">
+      {result && (
+        <div
+          className={`p-3 rounded-lg text-sm ${
+            result.ok
+              ? 'bg-emerald-50 border border-emerald-200 text-emerald-900'
+              : 'bg-rose-50 border border-rose-200 text-rose-900'
+          }`}
+        >
+          {result.msg}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={onClose}
+          disabled={applying}
+          className="flex-1 px-4 py-2.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-sm font-medium disabled:opacity-50"
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={apply}
+          disabled={applying || !!result?.ok}
+          className="flex-1 px-4 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:bg-violet-300 text-white text-sm font-bold flex items-center justify-center gap-2"
+        >
+          {applying ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Criando ordens...
+            </>
+          ) : (
+            <>
+              <Shuffle className="w-4 h-4" />
+              Aplicar e criar {moves.length} transferência{moves.length > 1 ? 's' : ''}
+            </>
+          )}
+        </button>
+      </div>
+    </div>
   );
 }
 
