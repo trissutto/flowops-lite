@@ -1006,17 +1006,25 @@ export class CashService {
       if (ehDeOntemOuAntes) {
         // Calcula totais da sessao antiga
         const totals = await this.computeSessionTotals(existing.id);
-        // Auto-fecha: dinheiroFisico = esperado (sem diferenca), marca como SISTEMA
+        // ── REGRA: dinheiroFisico = fundoTroco informado pela vendedora HOJE ──
+        // Lógica: quem fecha de noite só zera, quem abre de manhã conta o
+        // dinheiro do caixa. Esse valor contado é o "dinheiro físico" real
+        // que ficou ontem (e vira fundo de troco de hoje). Evita contar 2x.
+        // Diferença = físico - esperado → mostra furo/sobra real do caixa.
+        const fisicoContado = Number(fundoTroco);
+        const diferenca = Math.round((fisicoContado - totals.dinheiroEsperado) * 100) / 100;
         try {
           await (this.prisma as any).pdvCashSession.update({
             where: { id: existing.id },
             data: {
               status: 'closed',
               closedAt: new Date(),
-              closedByName: 'SISTEMA (auto-close ao abrir novo)',
+              closedByName: openedByName
+                ? `${openedByName} (contagem na abertura do dia seguinte)`
+                : 'SISTEMA (auto-close ao abrir novo)',
               observacao: existing.observacao
-                ? `${existing.observacao}\n---\nAuto-fechada em ${new Date().toLocaleString('pt-BR')} ao abrir novo caixa.`
-                : `Auto-fechada em ${new Date().toLocaleString('pt-BR')} ao abrir novo caixa.`,
+                ? `${existing.observacao}\n---\nFechada em ${new Date().toLocaleString('pt-BR')} com contagem da abertura do dia seguinte. Físico R$ ${fisicoContado.toFixed(2)} | Esperado R$ ${totals.dinheiroEsperado.toFixed(2)} | Diferença R$ ${diferenca.toFixed(2)}.`
+                : `Fechada em ${new Date().toLocaleString('pt-BR')} com contagem da abertura do dia seguinte. Físico R$ ${fisicoContado.toFixed(2)} | Esperado R$ ${totals.dinheiroEsperado.toFixed(2)} | Diferença R$ ${diferenca.toFixed(2)}.`,
               totalVendas: totals.totalVendas,
               totalDinheiro: totals.totalDinheiro,
               totalPix: totals.totalPix,
@@ -1026,8 +1034,8 @@ export class CashService {
               totalSangrias: totals.totalSangrias,
               totalSuprimentos: totals.totalSuprimentos,
               dinheiroEsperado: totals.dinheiroEsperado,
-              dinheiroFisico: totals.dinheiroEsperado,
-              diferenca: 0,
+              dinheiroFisico: fisicoContado,
+              diferenca,
             },
           });
           autoClosedInfo = {
@@ -1035,12 +1043,15 @@ export class CashService {
             openedAt: existing.openedAt,
             totalVendas: totals.totalVendas,
             dinheiroEsperado: totals.dinheiroEsperado,
+            dinheiroFisico: fisicoContado,
+            diferenca,
           };
           this.logger.log(
-            `[caixa] AUTO-CLOSE: loja=${storeCode} sessao=${existing.id} ` +
+            `[caixa] FECHA-COM-CONTAGEM: loja=${storeCode} sessao=${existing.id} ` +
             `aberta em ${new Date(existing.openedAt).toLocaleString('pt-BR')} ` +
             `vendas=R$${totals.totalVendas.toFixed(2)} esperado=R$${totals.dinheiroEsperado.toFixed(2)} ` +
-            `por SISTEMA (vendedora ${openedByName || '?'} abrindo novo caixa)`,
+            `fisico=R$${fisicoContado.toFixed(2)} diff=R$${diferenca.toFixed(2)} ` +
+            `por ${openedByName || 'SISTEMA'} (contagem na abertura)`,
           );
         } catch (e: any) {
           this.logger.error(`[caixa] auto-close FALHOU: ${e?.message || e}`);
@@ -1053,6 +1064,57 @@ export class CashService {
         throw new BadRequestException(
           `Ja existe um caixa aberto nesta loja desde ${openedAt.toLocaleString('pt-BR')}. Feche o caixa atual antes de abrir outro.`,
         );
+      }
+    }
+
+    // Se NÃO houve auto-close (sessão antiga já estava fechada), tenta
+    // atualizar a última sessão fechada SEM contagem física com o fundoTroco
+    // informado. Cenário: caixa foi fechado ontem (manual ou auto-close cron)
+    // sem ninguém contar dinheiro → hoje a vendedora conta na abertura e
+    // esse valor vira o dinheiroFisico retroativo do dia anterior.
+    let contagemRetroativa: any = null;
+    if (!autoClosedInfo) {
+      const ultimaFechada = await (this.prisma as any).pdvCashSession.findFirst({
+        where: {
+          storeCode,
+          status: 'closed',
+          dinheiroFisico: null, // só atualiza se ainda não tem contagem
+        },
+        orderBy: { closedAt: 'desc' },
+      });
+      if (ultimaFechada) {
+        const fisicoContado = Number(fundoTroco);
+        const esperado = Number(ultimaFechada.dinheiroEsperado || 0);
+        const diferenca = Math.round((fisicoContado - esperado) * 100) / 100;
+        try {
+          await (this.prisma as any).pdvCashSession.update({
+            where: { id: ultimaFechada.id },
+            data: {
+              dinheiroFisico: fisicoContado,
+              diferenca,
+              observacao: ultimaFechada.observacao
+                ? `${ultimaFechada.observacao}\n---\nContagem registrada na abertura do dia seguinte em ${new Date().toLocaleString('pt-BR')} por ${openedByName || 'sistema'}: Físico R$ ${fisicoContado.toFixed(2)} | Esperado R$ ${esperado.toFixed(2)} | Diferença R$ ${diferenca.toFixed(2)}.`
+                : `Contagem registrada na abertura do dia seguinte em ${new Date().toLocaleString('pt-BR')} por ${openedByName || 'sistema'}: Físico R$ ${fisicoContado.toFixed(2)} | Esperado R$ ${esperado.toFixed(2)} | Diferença R$ ${diferenca.toFixed(2)}.`,
+            },
+          });
+          contagemRetroativa = {
+            sessionId: ultimaFechada.id,
+            closedAt: ultimaFechada.closedAt,
+            dinheiroEsperado: esperado,
+            dinheiroFisico: fisicoContado,
+            diferenca,
+          };
+          this.logger.log(
+            `[caixa] CONTAGEM-RETROATIVA: loja=${storeCode} sessao=${ultimaFechada.id} ` +
+            `esperado=R$${esperado.toFixed(2)} fisico=R$${fisicoContado.toFixed(2)} diff=R$${diferenca.toFixed(2)} ` +
+            `por ${openedByName || 'sistema'} (na abertura do caixa novo)`,
+          );
+        } catch (e: any) {
+          // Não bloqueia abertura se o update retroativo falhar — só loga
+          this.logger.warn(
+            `[caixa] falha ao atualizar contagem retroativa do dia anterior (sessao=${ultimaFechada.id}): ${e?.message || e}`,
+          );
+        }
       }
     }
 
@@ -1070,9 +1132,10 @@ export class CashService {
 
     this.logger.log(
       `[caixa] aberto: loja=${storeCode} fundo=R$${fundoTroco} por ${openedByName || 'sistema'}` +
-      (autoClosedInfo ? ` (apos auto-close da sessao ${autoClosedInfo.sessionId})` : ''),
+      (autoClosedInfo ? ` (apos auto-close da sessao ${autoClosedInfo.sessionId})` : '') +
+      (contagemRetroativa ? ` (contagem retroativa registrada na sessao ${contagemRetroativa.sessionId})` : ''),
     );
-    return { ...session, autoClosed: autoClosedInfo };
+    return { ...session, autoClosed: autoClosedInfo, contagemRetroativa };
   }
 
   // ── Sangria/Suprimento ──────────────────────────────────────────────

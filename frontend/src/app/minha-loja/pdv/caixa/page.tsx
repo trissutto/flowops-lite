@@ -1050,8 +1050,17 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
 
   return (
     <ModalShell title="Abrir Caixa" onClose={onClose}>
+      {/* Aviso explicando que esse valor faz papel duplo:
+          1) fundo de troco de hoje
+          2) contagem retroativa do dia anterior (vira dinheiroFisico daquela sessão) */}
+      <div className="mb-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs leading-relaxed">
+        💰 <b>Conte agora o dinheiro do caixa.</b><br />
+        Esse valor será registrado como:<br />
+        • <b>Fundo de troco</b> do caixa que está abrindo<br />
+        • <b>Contagem do caixa do dia anterior</b> (não precisa contar de novo no fechamento)
+      </div>
       <label className="block text-sm font-semibold text-gray-700 mb-1">
-        Fundo de troco (R$)
+        Dinheiro contado no caixa (R$)
       </label>
       <input
         type="text"
@@ -1069,6 +1078,7 @@ function AbrirModal({ onClose, onSuccess, storeCode }: { onClose: () => void; on
         value={obs}
         onChange={(e) => setObs(e.target.value)}
         rows={2}
+        placeholder="Ex: havia R$ 10 a menos do esperado"
         className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-rose-400"
       />
       {err && <div className="mt-3 text-sm text-red-600">{err}</div>}
@@ -1229,14 +1239,11 @@ function FecharModal({
   onSuccess: () => void;
   storeCode?: string;
 }) {
-  const [fisico, setFisico] = useState('');
   const [obs, setObs] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
   const esperado = totals.dinheiroEsperado;
-  const fisicoNum = parseFloat(fisico.replace(',', '.')) || 0;
-  const diff = fisicoNum - esperado;
 
   // Detecta erro específico de venda em aberto pra mostrar botão "forçar"
   const [showForceClose, setShowForceClose] = useState(false);
@@ -1244,13 +1251,12 @@ function FecharModal({
 
   async function submit(force = false) {
     setErr('');
-    if (!fisico.trim()) {
-      setErr('Conte o dinheiro físico em caixa');
-      return;
-    }
     setBusy(true);
     try {
-      const body: any = { dinheiroFisico: fisicoNum, observacao: obs || undefined };
+      // dinheiroFisico não é mais informado no fechamento — a contagem é
+      // feita pela vendedora ao ABRIR o caixa do dia seguinte (e fica
+      // registrado retroativamente nessa sessão).
+      const body: any = { observacao: obs || undefined };
       if (storeCode) body.storeCode = storeCode;
       if (force) body.reason = 'Limpeza de pendências antes do fechamento';
       const endpoint = force ? '/pdv/caixa/forcar-fechar' : '/pdv/caixa/fechar';
@@ -1293,37 +1299,14 @@ function FecharModal({
         </div>
       </div>
 
+      {/* Aviso: a contagem física fica pra abertura do próximo caixa */}
+      <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs leading-relaxed">
+        ✅ <b>Não precisa contar dinheiro agora.</b><br />
+        A contagem do caixa será feita pela vendedora que <b>abrir o caixa amanhã</b>.
+        O valor contado vai registrar automaticamente nessa sessão.
+      </div>
+
       <label className="block text-sm font-semibold text-gray-700 mb-1">
-        Dinheiro físico em caixa (R$)
-      </label>
-      <input
-        type="text"
-        inputMode="decimal"
-        value={fisico}
-        onChange={(e) => setFisico(e.target.value)}
-        className="w-full p-3 border rounded-lg text-lg focus:ring-2 focus:ring-rose-400"
-        autoFocus
-      />
-
-      {fisico && (
-        <div
-          className={`mt-3 rounded-lg p-3 text-center font-bold ${
-            Math.abs(diff) < 0.01
-              ? 'bg-emerald-100 text-emerald-800'
-              : diff > 0
-              ? 'bg-blue-100 text-blue-800'
-              : 'bg-red-100 text-red-800'
-          }`}
-        >
-          {Math.abs(diff) < 0.01
-            ? 'Caixa fechado certinho ✓'
-            : diff > 0
-            ? `SOBRA: R$ ${fmt(diff)}`
-            : `FALTA: R$ ${fmt(Math.abs(diff))}`}
-        </div>
-      )}
-
-      <label className="block text-sm font-semibold text-gray-700 mb-1 mt-4">
         Observação (opcional)
       </label>
       <textarea
