@@ -186,6 +186,23 @@ export class TriagemService {
     const nameByCode = new Map<string, string>();
     for (const s of stores as any[]) nameByCode.set(s.code, s.name);
 
+    // 4a. CHECK CRÍTICO — todas as lojas destino já têm pelo menos 1 dessa peça?
+    //    Cenário: peça bipada existe em estoque em TODAS as candidatas. Não tem
+    //    destino útil — mandar pra qualquer uma é só empurrar peça parada pra
+    //    outra parada. A vendedora deve devolver pra grade da loja de origem.
+    //    Lança erro com marker pro front mostrar X vermelho + alerta.
+    const todasTemEstoque = comparativo.every((c) => c.estoqueAtual >= 1);
+    if (todasTemEstoque && comparativo.length > 0) {
+      const detalhe = comparativo
+        .map((c) => `${nameByCode.get(c.storeCode) || c.storeCode}: ${c.estoqueAtual}`)
+        .join(' · ');
+      throw new BadRequestException(
+        `[ALL_STORES_HAVE_STOCK] NÃO JOGUE EM CAIXA NENHUMA — todas as lojas destino já têm essa peça ` +
+          `(${info.ref} ${info.cor || ''}/${info.tamanho || ''}). Devolva pra grade da loja de origem. ` +
+          `Estoque atual: ${detalhe}.`,
+      );
+    }
+
     // 4. NOVA LÓGICA — particiona em 3 grupos:
     //    A. EXCLUÍDOS — caixa já tem esse SKU exato (não duplica)
     //    B. PREFERENCIAIS — caixa já tem outras peças da mesma REF (agrupa grade)

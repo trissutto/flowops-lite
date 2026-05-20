@@ -83,6 +83,10 @@ export default function TriagemPage() {
   const [confirmed, setConfirmed] = useState<Array<{ ts: number; sku: string; toStoreCode: string; toStoreName: string }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [errorSku, setErrorSku] = useState<string | null>(null);
+  // ── Bloqueio especial: TODAS as lojas destino já têm estoque dessa peça.
+  //    Quando ativo, renderiza overlay vermelho com X grande e mensagem
+  //    "NÃO JOGUE EM NENHUMA CAIXA". Ignora qty pra nada — peça volta pra grade.
+  const [allHaveStock, setAllHaveStock] = useState<{ sku: string; message: string } | null>(null);
   const [diagLoading, setDiagLoading] = useState(false);
   const [diagResult, setDiagResult] = useState<any | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -253,6 +257,7 @@ export default function TriagemPage() {
     setScanLoading(true);
     setError(null);
     setErrorSku(null);
+    setAllHaveStock(null);
     setDiagResult(null);
     setFinalizeResult(null);
     try {
@@ -289,8 +294,27 @@ export default function TriagemPage() {
       // Re-foca input
       inputRef.current?.focus();
     } catch (e: any) {
-      setError(e?.message || 'Erro ao bipar peça');
-      setErrorSku(sku);
+      const raw = String(e?.message || '');
+      // Marker do backend: TODAS as lojas destino já têm essa peça. NÃO confirma.
+      if (raw.includes('ALL_STORES_HAVE_STOCK')) {
+        // Tira o prefixo "400: [ALL_STORES_HAVE_STOCK] " da mensagem
+        const cleaned = raw
+          .replace(/^\d+:\s*/, '')
+          .replace(/^\[ALL_STORES_HAVE_STOCK\]\s*/, '')
+          .trim();
+        setAllHaveStock({ sku, message: cleaned });
+        setScanInput('');
+        // Beep/alerta sonoro opcional (browser audio)
+        try {
+          const audio = new Audio(
+            'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQBvT18AAAA=',
+          );
+          audio.play().catch(() => {});
+        } catch {}
+      } else {
+        setError(raw || 'Erro ao bipar peça');
+        setErrorSku(sku);
+      }
     } finally {
       setScanLoading(false);
       // Foco garantido: timeout pequeno pra deixar React aplicar o estado primeiro,
@@ -665,8 +689,45 @@ export default function TriagemPage() {
             )}
           </form>
 
+          {/* BLOQUEIO: todas as lojas destino já têm estoque dessa peça.
+              NÃO transferiu — vendedora deve devolver pra grade da loja origem. */}
+          {allHaveStock && (
+            <div className="bg-rose-600 border-4 border-rose-800 rounded-xl p-6 shadow-2xl animate-pulse-slow">
+              <div className="flex items-center justify-center mb-4">
+                <div className="w-32 h-32 bg-white rounded-full flex items-center justify-center border-8 border-rose-800">
+                  <X
+                    className="w-24 h-24 text-rose-600"
+                    strokeWidth={4}
+                  />
+                </div>
+              </div>
+              <div className="text-center space-y-2">
+                <div className="text-3xl sm:text-4xl font-black text-white uppercase tracking-tight leading-tight">
+                  NÃO JOGUE EM
+                  <br />
+                  CAIXA NENHUMA
+                </div>
+                <div className="text-base sm:text-lg font-bold text-rose-100 mt-3">
+                  Todas as lojas destino já têm essa peça.
+                  <br />
+                  Devolva pra grade da loja origem.
+                </div>
+                <div className="text-xs font-mono text-rose-200 bg-rose-800/40 rounded p-2 mt-3 text-left">
+                  SKU bipado: <b className="text-white">{allHaveStock.sku}</b>
+                  <div className="mt-1 text-rose-100 break-words">{allHaveStock.message}</div>
+                </div>
+                <button
+                  onClick={() => setAllHaveStock(null)}
+                  className="mt-3 px-4 py-2 bg-white text-rose-700 font-bold rounded-md hover:bg-rose-50"
+                >
+                  Entendi — próxima peça
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Última sugestão (card grande) */}
-          {lastSuggestion && (
+          {lastSuggestion && !allHaveStock && (
             <div className="bg-white rounded-lg border p-3 space-y-3">
               {/* Identificação peça */}
               <div className="flex items-start gap-3">
