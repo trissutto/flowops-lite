@@ -455,6 +455,25 @@ export default function DistribuicaoEstoque() {
               </div>
             </div>
           )}
+
+          {/* Banner: filtros mudaram desde a última busca */}
+          {filtersDirty && (
+            <div className="bg-amber-100 border-2 border-amber-400 rounded-lg p-3 flex items-center gap-3 animate-pulse">
+              <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+              <div className="flex-1 text-sm text-amber-900">
+                <strong>Filtros mudaram desde a última busca.</strong> Os dados abaixo são da
+                consulta anterior. Clique em <strong>"Atualizar"</strong> pra ver os novos resultados.
+              </div>
+              <button
+                onClick={fetchData}
+                disabled={loading}
+                className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold flex items-center gap-2 shrink-0"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Atualizar agora
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Aviso truncado */}
