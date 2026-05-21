@@ -113,9 +113,9 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, slice);
         for (const r of rows as any[]) {
           const codigo = String(r.CODIGO).trim();
-          const precoRaw = Number(r.preco) || 0;
-          // VENDAUN em centavos — divide por 100
-          const preco = precoRaw / 100;
+          // VENDAUN no Wincred Lurd's está em REAIS direto (decimal),
+          // não em centavos. Ex: 199.90 = R$ 199,90.
+          const preco = Number(r.preco) || 0;
           const original = variantToOriginal.get(codigo);
           if (original && !result.has(original)) {
             result.set(original, preco);
@@ -158,7 +158,8 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, slice);
         for (const r of rows as any[]) {
           const ref = String(r.REF).trim();
-          const preco = (Number(r.preco) || 0) / 100;
+          // VENDAUN em REAIS direto (decimal), não em centavos
+          const preco = Number(r.preco) || 0;
           if (preco > 0) result.set(ref, preco);
         }
       } catch (e: any) {
