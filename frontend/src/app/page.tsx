@@ -279,6 +279,8 @@ const HUB_TONES = {
   orange: { from: '#d68a3c', to: '#b66a1f' },
   purple: { from: '#8a5cb6', to: '#5f3e8a' },
   rose:   { from: '#e11d6c', to: '#b91754' },
+  // Amber/dourado pro hub Imobiliário — tom premium discreto
+  amber:  { from: '#c9a96e', to: '#8a7340' },
 } as const;
 
 function HubCard({
