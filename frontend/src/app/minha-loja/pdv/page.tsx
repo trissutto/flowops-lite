@@ -2456,10 +2456,49 @@ function PdvPageInner() {
                         {isPaid ? (
                           <button
                             onClick={async () => {
-                              // Retoma a venda → fecha modal → abre PaymentModal pronto
-                              setShowOnlinePending(false);
-                              await retomarVenda(p.saleId);
-                              setTimeout(() => setShowPayment(true), 300);
+                              // AUTO-FINALIZA: cria payment 'venda_online' + chama finalize.
+                              // Não abre PaymentModal (já tá pago — só registra e fecha).
+                              if (!confirm(
+                                `Finalizar venda #${p.saleCode} de ${p.customerName || 'cliente'} ` +
+                                `(${brl(p.total)})?\n\nO pagamento já foi confirmado pela Pagar.me.`,
+                              )) return;
+                              try {
+                                // 1) Cria PdvSalePayment como venda_online/pagarme_link
+                                await api(`/pdv/sales/${p.saleId}/payments`, {
+                                  method: 'POST',
+                                  body: JSON.stringify({
+                                    method: 'venda_online',
+                                    valor: p.total,
+                                    details: {
+                                      tipo: 'pagarme_link',
+                                      origem: 'whatsapp_instagram',
+                                      pagarmeOrderId: p.pagarmeOrderId,
+                                      paidByWebhook: true,
+                                    },
+                                  }),
+                                });
+                                // 2) Finaliza a venda (baixa estoque, grava Wincred, etc)
+                                await api(`/pdv/sales/${p.saleId}/finalize`, {
+                                  method: 'POST',
+                                  body: JSON.stringify({}),
+                                });
+                                toast(
+                                  'success',
+                                  `✅ Venda #${p.saleCode} finalizada!`,
+                                  `${brl(p.total)} · estoque baixado · Wincred OK`,
+                                );
+                                loadOnlinePending();
+                                loadOpenCount();
+                                // Fecha modal só se não tiver mais pendentes
+                                const restantes = onlinePending.filter((o) => o.saleId !== p.saleId);
+                                if (restantes.length === 0) setShowOnlinePending(false);
+                              } catch (e: any) {
+                                toast(
+                                  'error',
+                                  'Erro ao finalizar venda',
+                                  e?.message || 'Tente reabrir manualmente.',
+                                );
+                              }
                             }}
                             className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded shadow-md"
                           >
