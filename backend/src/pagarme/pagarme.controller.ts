@@ -117,6 +117,35 @@ export class PagarmeController {
   }
 
   /**
+   * POST /pagarme/admin/force-link-paid
+   * RESGATE: cria/atualiza um PagarmePayment manualmente quando o link
+   * Pagar.me foi gerado mas NÃO foi salvo no banco (bug do storeCode
+   * faltando). Admin pega o order_id do painel Pagar.me e força criação.
+   * Depois consulta ao vivo pra trazer o status real (pending/paid).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('admin/force-link-paid')
+  async forceLinkPaid(
+    @Req() req: any,
+    @Body() body: {
+      saleId: string;
+      storeCode: string;
+      pagarmeOrderId: string;
+      valor: number;
+      forceStatus?: 'paid' | 'pending';
+    },
+  ) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    if (!body?.saleId || !body?.storeCode || !body?.pagarmeOrderId || !body?.valor) {
+      throw new BadRequestException(
+        'Campos obrigatórios: saleId, storeCode, pagarmeOrderId, valor',
+      );
+    }
+    return this.svc.forceLinkPaid(body);
+  }
+
+  /**
    * GET /pagarme/online-pending?storeCode=01
    * Lista Links Pagar.me aguardando pagamento na loja (últimas 48h).
    * Usado pelo widget global do PDV pra alertar a vendedora quando o webhook

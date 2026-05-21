@@ -941,6 +941,86 @@ export class PagarmeService {
   }
 
   /**
+   * RESGATE manual de Link Pagar.me que não foi salvo no banco.
+   * Cria/atualiza PagarmePayment + consulta status real ao vivo.
+   * Usado pra recuperar vendas travadas pelo bug do storeCode faltando.
+   */
+  async forceLinkPaid(input: {
+    saleId: string;
+    storeCode: string;
+    pagarmeOrderId: string;
+    valor: number;
+    forceStatus?: 'paid' | 'pending';
+  }) {
+    // 1) Cria ou atualiza PagarmePayment
+    const existing = await (this.prisma as any).pagarmePayment.findUnique({
+      where: { pagarmeOrderId: input.pagarmeOrderId },
+    });
+    let payment: any;
+    if (existing) {
+      payment = existing;
+      this.logger.log(
+        `[pagarme] forceLinkPaid: order ${input.pagarmeOrderId} já existia no banco (status=${existing.status})`,
+      );
+    } else {
+      payment = await (this.prisma as any).pagarmePayment.create({
+        data: {
+          saleId: input.saleId,
+          storeCode: input.storeCode,
+          pagarmeOrderId: input.pagarmeOrderId,
+          method: 'checkout',
+          valor: input.valor,
+          status: 'pending',
+        },
+      });
+      this.logger.log(
+        `[pagarme] forceLinkPaid: criado PagarmePayment pra order ${input.pagarmeOrderId} (sale=${input.saleId})`,
+      );
+    }
+
+    // 2) Consulta status ao vivo na Pagar.me (fonte da verdade)
+    let liveStatus: string = 'unknown';
+    let isPaid = false;
+    try {
+      const live = await this.checkOrderStatus(input.pagarmeOrderId);
+      liveStatus = live.status;
+      isPaid = live.isPaid;
+    } catch (e: any) {
+      this.logger.warn(
+        `[pagarme] forceLinkPaid: falha ao consultar status ao vivo: ${e?.message || e}`,
+      );
+    }
+
+    // 3) Decide status final: se admin forçou paid, vale; senão, usa status ao vivo
+    const finalStatus = input.forceStatus === 'paid'
+      ? 'paid'
+      : (isPaid ? 'paid' : (liveStatus === 'unknown' ? payment.status : liveStatus));
+
+    if (finalStatus !== payment.status) {
+      await (this.prisma as any).pagarmePayment.update({
+        where: { pagarmeOrderId: input.pagarmeOrderId },
+        data: {
+          status: finalStatus,
+          paidAt: finalStatus === 'paid' ? new Date() : null,
+        },
+      });
+      this.logger.log(
+        `[pagarme] forceLinkPaid: status atualizado ${payment.status} → ${finalStatus}`,
+      );
+    }
+
+    return {
+      ok: true,
+      saleId: input.saleId,
+      pagarmeOrderId: input.pagarmeOrderId,
+      statusBefore: payment.status,
+      statusAfter: finalStatus,
+      liveStatus,
+      isPaid: finalStatus === 'paid',
+    };
+  }
+
+  /**
    * Lista Links Pagar.me PENDENTES de uma loja (vendas pausadas/abertas
    * aguardando o cliente pagar). Usado pelo widget global do PDV pra alertar
    * a vendedora quando o webhook bate paid e tem venda pronta pra finalizar.
