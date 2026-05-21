@@ -1193,6 +1193,40 @@ function PdvPageInner() {
             </button>
           )}
 
+          {/* Botão Links Online — Pagar.me aguardando/pago. Pisca em verde quando
+              tem algum PAGO pra vendedora finalizar. Sempre visível pra fácil acesso. */}
+          {(() => {
+            const totalLinks = onlinePending.length;
+            const paidCount = onlinePending.filter((p) => p.status === 'paid').length;
+            if (totalLinks === 0) return null;
+            const hasPaid = paidCount > 0;
+            return (
+              <button
+                onClick={() => setShowOnlinePending(true)}
+                className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
+                  hasPaid
+                    ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
+                    : 'bg-violet-500 hover:bg-violet-400 text-white ring-2 ring-violet-300/50'
+                }`}
+                title={
+                  hasPaid
+                    ? `${paidCount} pagamento(s) confirmado(s) — clique pra finalizar`
+                    : `${totalLinks} link(s) aguardando pagamento`
+                }
+              >
+                <span className="text-base leading-none">🔗</span>
+                <span className="hidden sm:inline">
+                  {hasPaid ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!` : 'Online'}
+                </span>
+                <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
+                  hasPaid ? 'bg-white text-emerald-700' : 'bg-violet-700 text-white'
+                }`}>
+                  {totalLinks}
+                </span>
+              </button>
+            );
+          })()}
+
           {/* Botão Vendedora — quem está atendendo · atalho F9 */}
           <button
             onClick={() => setShowVendedora(true)}
@@ -2288,6 +2322,7 @@ function PdvPageInner() {
           customerCpf={sale.customerCpf}
           customerName={sale.customerName}
           customerEmail={sale.customerEmail}
+          customerPhone={sale.customerPhone}
           finalizing={finalizing}
           initialPayments={sale.payments || []}
           methodFilter={paymentFilter}
@@ -2310,6 +2345,187 @@ function PdvPageInner() {
           onResume={retomarVenda}
           onRefresh={loadOpenCount}
         />
+      )}
+
+      {/* Modal Links Online Pendentes — vendas com Link Pagar.me aguardando
+          ou já pagas pra finalizar. Atendente decide quando finalizar. */}
+      {showOnlinePending && (
+        <div
+          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowOnlinePending(false)}
+        >
+          <div
+            className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b flex items-center justify-between">
+              <h2 className="font-black text-lg flex items-center gap-2">
+                <span>🔗</span>
+                Pedidos Online Pendentes
+                <span className="text-xs font-normal text-slate-500">
+                  ({onlinePending.length} total · {onlinePending.filter((p) => p.status === 'paid').length} pago{onlinePending.filter((p) => p.status === 'paid').length !== 1 ? 's' : ''})
+                </span>
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loadOnlinePending}
+                  className="text-xs px-2 py-1 bg-violet-100 hover:bg-violet-200 text-violet-700 font-bold rounded flex items-center gap-1"
+                  title="Atualizar lista"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Atualizar
+                </button>
+                <button onClick={() => setShowOnlinePending(false)}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-3 space-y-2">
+              {onlinePending.length === 0 ? (
+                <div className="p-8 text-center text-slate-400">
+                  Nenhum pedido online pendente nas últimas 48h.
+                </div>
+              ) : (
+                onlinePending.map((p) => {
+                  const isPaid = p.status === 'paid';
+                  const isFailed = p.status === 'failed' || p.status === 'canceled';
+                  const ageMin = Math.floor((Date.now() - new Date(p.createdAt).getTime()) / 60000);
+                  return (
+                    <div
+                      key={p.saleId}
+                      className={`border-2 rounded-lg p-3 ${
+                        isPaid
+                          ? 'border-emerald-400 bg-emerald-50 shadow-lg'
+                          : isFailed
+                          ? 'border-rose-300 bg-rose-50 opacity-60'
+                          : 'border-slate-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="font-mono text-[10px] font-bold bg-slate-100 px-1.5 py-0.5 rounded">
+                              #{p.saleCode}
+                            </span>
+                            {isPaid && (
+                              <span className="bg-emerald-500 text-white text-[10px] font-black px-2 py-0.5 rounded animate-pulse">
+                                ✓ PAGO
+                              </span>
+                            )}
+                            {!isPaid && !isFailed && (
+                              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                ⏳ Aguardando
+                              </span>
+                            )}
+                            {isFailed && (
+                              <span className="bg-rose-200 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">
+                                ✗ {p.status}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-500">
+                              {ageMin < 60 ? `${ageMin}min` : `${Math.floor(ageMin / 60)}h${ageMin % 60}min`} atrás
+                            </span>
+                          </div>
+                          <div className="font-bold text-sm text-slate-800 truncate">
+                            {p.customerName || 'Sem nome'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap">
+                            {p.customerCpf && <span>CPF {p.customerCpf}</span>}
+                            {p.customerPhone && <span>· {p.customerPhone}</span>}
+                            {p.sellerName && <span>· vend. {p.sellerName}</span>}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={`text-lg font-black tabular-nums ${
+                            isPaid ? 'text-emerald-700' : 'text-slate-700'
+                          }`}>
+                            {brl(p.total)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-1.5 flex-wrap">
+                        {isPaid ? (
+                          <button
+                            onClick={async () => {
+                              // Retoma a venda → fecha modal → abre PaymentModal pronto
+                              setShowOnlinePending(false);
+                              await retomarVenda(p.saleId);
+                              setTimeout(() => setShowPayment(true), 300);
+                            }}
+                            className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded shadow-md"
+                          >
+                            ✅ FINALIZAR VENDA
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const r = await api<{ status: string; isPaid?: boolean }>(
+                                    `/pagarme/pix/check/${p.pagarmeOrderId}`,
+                                    { method: 'POST' },
+                                  );
+                                  if (r.isPaid || r.status === 'paid') {
+                                    toast('success', 'Pago!', `${p.customerName} pagou`);
+                                    loadOnlinePending();
+                                  } else {
+                                    toast('info', `Status: ${r.status}`, 'Ainda não pago');
+                                  }
+                                } catch (e: any) {
+                                  toast('error', 'Erro', e?.message);
+                                }
+                              }}
+                              className="flex-1 py-1.5 bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-bold rounded"
+                            >
+                              🔄 Conferir
+                            </button>
+                            {p.paymentUrl && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(p.paymentUrl!);
+                                    toast('success', 'Link copiado!');
+                                  }}
+                                  className="py-1.5 px-3 bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-bold rounded"
+                                >
+                                  📋
+                                </button>
+                                <a
+                                  href={`https://wa.me/${(p.customerPhone || '').replace(/\D/g, '') ? `55${(p.customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
+                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 6x sem juros.`,
+                                  )}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="py-1.5 px-3 bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold rounded"
+                                >
+                                  📱
+                                </a>
+                              </>
+                            )}
+                            <button
+                              onClick={async () => {
+                                setShowOnlinePending(false);
+                                await retomarVenda(p.saleId);
+                              }}
+                              className="py-1.5 px-3 bg-slate-600 hover:bg-slate-700 text-white text-[11px] font-bold rounded"
+                              title="Reabrir essa venda"
+                            >
+                              Reabrir
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="p-3 border-t bg-slate-50 rounded-b-xl text-[11px] text-slate-600 text-center">
+              ℹ Lista atualiza automaticamente a cada 15s. Pagamentos confirmados emitem alerta sonoro.
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal Finalizada */}
@@ -3078,6 +3294,7 @@ function PaymentModal({
   customerCpf,
   customerName,
   customerEmail,
+  customerPhone,
   finalizing,
   initialPayments,
   methodFilter = 'all',
@@ -3095,6 +3312,7 @@ function PaymentModal({
   customerCpf: string | null;
   customerName?: string | null;
   customerEmail?: string | null;
+  customerPhone?: string | null;
   finalizing: boolean;
   initialPayments?: Array<{ id: string; method: string; valor: number; details: string | null }>;
   /** Filtra quais métodos aparecem na grid: 'all' = todos, 'pix' = só PIX,
@@ -4253,14 +4471,9 @@ function PaymentModal({
 
             {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
             {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
-              <div className="border-2 border-violet-300 rounded-lg p-3 bg-violet-50/30 space-y-2">
+              <div className="border-2 border-violet-300 rounded-lg p-2 bg-violet-50/30 space-y-2">
                 {!pagarmeLink ? (
                   <>
-                    <div className="text-xs text-violet-900 leading-snug">
-                      <b>Como funciona:</b> sistema gera URL Pagar.me. Você manda pra
-                      cliente via WhatsApp. Cliente paga PIX ou cartão (até 6x sem juros).
-                      Quando cair, a venda finaliza sozinha.
-                    </div>
                     <button
                       type="button"
                       disabled={pagarmeLinkLoading}
@@ -4309,13 +4522,18 @@ function PaymentModal({
                   </>
                 ) : (
                   <>
-                    <div className="text-xs font-bold text-violet-700 uppercase">
-                      Link gerado · expira em 24h
+                    {/* Linha 1: URL compacta + status */}
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-violet-700">
+                      <span>🔗 LINK GERADO · 24h</span>
+                      {pagarmeLinkPaid && (
+                        <span className="bg-emerald-500 text-white px-1.5 py-0.5 rounded animate-pulse">✓ PAGO</span>
+                      )}
                     </div>
-                    <div className="bg-white border border-violet-300 rounded p-2 font-mono text-[11px] text-violet-900 break-all max-h-20 overflow-auto">
+                    <div className="bg-white border border-violet-300 rounded px-2 py-1 font-mono text-[10px] text-violet-900 truncate">
                       {pagarmeLink.paymentUrl}
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Linha 2: 4 botões em grid compacto */}
+                    <div className="grid grid-cols-4 gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -4323,82 +4541,61 @@ function PaymentModal({
                           setPagarmeLinkCopied(true);
                           setTimeout(() => setPagarmeLinkCopied(false), 2000);
                         }}
-                        className="py-2 px-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5"
+                        className="py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-bold rounded flex flex-col items-center"
                       >
-                        📋 {pagarmeLinkCopied ? 'Copiado!' : 'Copiar URL'}
+                        <span>📋</span>
+                        <span>{pagarmeLinkCopied ? 'OK!' : 'Copiar'}</span>
                       </button>
                       <a
-                        href={`https://wa.me/?text=${encodeURIComponent(
-                          `Olá ${customerName?.split(' ')[0] || 'cliente'}! Segue o link pra pagamento da sua compra de ${brl(restante > 0 ? restante : total)}:\n\n${pagarmeLink.paymentUrl}\n\nVocê pode pagar com PIX ou cartão (até 6x sem juros). O link expira em 24h.`,
+                        href={`https://wa.me/${(customerPhone || '').replace(/\D/g, '') ? `55${(customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
+                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 6x sem juros. Expira em 24h.`,
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="py-2 px-3 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5"
+                        className="py-1.5 bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold rounded flex flex-col items-center"
                       >
-                        📱 WhatsApp
+                        <span>📱</span>
+                        <span>WhatsApp</span>
                       </a>
+                      <button
+                        type="button"
+                        disabled={pagarmeLinkPaid}
+                        onClick={async () => {
+                          try {
+                            const r = await api<{ status: string; isPaid?: boolean }>(
+                              `/pagarme/pix/check/${pagarmeLink.pagarmeOrderId}`,
+                              { method: 'POST' },
+                            );
+                            if (r.isPaid || r.status === 'paid') {
+                              setPagarmeLinkPaid(true);
+                              toast('success', 'Pago!', 'Aperte FINALIZAR.');
+                            } else {
+                              toast('info', `Status: ${r.status}`, 'Ainda não foi pago.');
+                            }
+                          } catch (e: any) {
+                            toast('error', 'Erro ao conferir', e?.message || 'Tente de novo');
+                          }
+                        }}
+                        className="py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-[10px] font-bold rounded flex flex-col items-center"
+                      >
+                        <span>🔄</span>
+                        <span>Conferir</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onLater()}
+                        className="py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded flex flex-col items-center"
+                      >
+                        <span>🚪</span>
+                        <span>Liberar</span>
+                      </button>
                     </div>
-                    {pagarmeLinkPaid ? (
-                      <div className="bg-emerald-100 border-2 border-emerald-500 rounded p-2 text-center text-emerald-800 font-bold animate-pulse">
-                        ✅ Cliente pagou! Aperte FINALIZAR.
+                    {/* Hint compacto */}
+                    {!pagarmeLinkPaid && (
+                      <div className="text-[10px] text-amber-700 text-center italic">
+                        Cliente demora? Aperte "Liberar" — alerta no topo qdo pagar.
                       </div>
-                    ) : (
-                      <>
-                        <div className="bg-amber-50 border border-amber-300 rounded p-2 text-[11px] text-amber-900 leading-snug">
-                          ⏳ <b>Cliente leva tempo pra pagar.</b> Você pode liberar
-                          o caixa pra atender a próxima cliente — quando o
-                          pagamento cair, o sistema avisa no topo da tela com
-                          alerta sonoro.
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              // Força consulta SÍNCRONA na Pagar.me (não espera webhook)
-                              try {
-                                const r = await api<{ status: string; isPaid?: boolean }>(
-                                  `/pagarme/pix/check/${pagarmeLink.pagarmeOrderId}`,
-                                  { method: 'POST' },
-                                );
-                                if (r.isPaid || r.status === 'paid') {
-                                  setPagarmeLinkPaid(true);
-                                  toast('success', 'Pagamento confirmado!', 'Pode finalizar a venda.');
-                                } else {
-                                  toast(
-                                    'info',
-                                    `Status atual: ${r.status}`,
-                                    'Cliente ainda não pagou ou Pagar.me não processou.',
-                                  );
-                                }
-                              } catch (e: any) {
-                                toast('error', 'Erro ao conferir', e?.message || 'Tente novamente');
-                              }
-                            }}
-                            className="py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg flex items-center justify-center gap-1.5 text-xs"
-                          >
-                            🔄 Conferir agora
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Pausa a venda — link continua válido na Pagar.me.
-                              // Widget global do header detecta pagamento via webhook.
-                              onLater();
-                            }}
-                            className="py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg flex items-center justify-center gap-1.5 text-xs"
-                          >
-                            🚪 Liberar caixa
-                          </button>
-                        </div>
-                      </>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => { setPagarmeLink(null); setPagarmeLinkPaid(false); }}
-                      className="w-full text-[10px] text-slate-500 hover:text-slate-700 underline"
-                    >
-                      gerar novo link
-                    </button>
                   </>
                 )}
               </div>
