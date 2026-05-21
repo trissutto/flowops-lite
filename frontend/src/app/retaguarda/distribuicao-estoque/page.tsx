@@ -662,17 +662,23 @@ function VariationMapView({
     return { groups: Array.from(map.values()), rowToGroup: rowMap };
   }, [rows]);
 
-  // Ordena rows: ALTO → MEDIO → OK, depois por REF/COR/TAMANHO numérico
+  // Ordenação:
+  //   1º — DESCRIÇÃO alfabética (ex: "VESTIDO ESTAMPA MARINHO" antes de "VESTIDO ESTAMPA PRETO")
+  //   2º — dentro da mesma descrição, TAMANHO numérico crescente (46, 48, 50, ...)
+  // Critérios numéricos pra combinações tipo "46/48" (parse só do primeiro número).
   const sortedRows = useMemo(() => {
-    const ordWeight: Record<string, number> = { ALTO: 0, MEDIO: 1, OK: 2 };
     return [...rows].sort((a, b) => {
-      const dw = ordWeight[a.criticidade] - ordWeight[b.criticidade];
-      if (dw !== 0) return dw;
-      if (a.ref !== b.ref) return a.ref.localeCompare(b.ref);
-      if (a.cor !== b.cor) return (a.cor || '').localeCompare(b.cor || '');
-      const na = parseInt(a.tamanho || '0', 10);
-      const nb = parseInt(b.tamanho || '0', 10);
-      return na - nb;
+      const da = (a.descricao || '').toUpperCase();
+      const db = (b.descricao || '').toUpperCase();
+      if (da !== db) return da.localeCompare(db);
+      // mesma descrição → ordena por tamanho numericamente
+      const ta = (a.tamanho || '').trim();
+      const tb = (b.tamanho || '').trim();
+      const na = parseInt(ta, 10);
+      const nb = parseInt(tb, 10);
+      if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+      // fallback alfabético se tamanho não-numérico (P, M, G, GG, etc)
+      return ta.localeCompare(tb);
     });
   }, [rows]);
 
