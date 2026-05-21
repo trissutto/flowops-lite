@@ -106,6 +106,12 @@ export default function DistribuicaoEstoque() {
   // ── Tab atual: 'distribuicao' | 'config' ──
   const [activeTab, setActiveTab] = useState<'distribuicao' | 'config'>('distribuicao');
 
+  // ── Dirty tracking: filtros mudaram desde a última busca ──
+  // Usado pra avisar visualmente "clica Atualizar pra ver os novos resultados".
+  const [lastQueryKey, setLastQueryKey] = useState<string>('');
+  const currentQueryKey = `${grupoSelected || ''}|${subgrupoSelected || ''}|${search}|${tamanhos.join(',')}|${mode}|${minTotal}`;
+  const filtersDirty = lastQueryKey !== '' && lastQueryKey !== currentQueryKey;
+
   // ── Dados ──
   const [data, setData] = useState<Distribution | null>(null);
   const [loading, setLoading] = useState(false);
@@ -150,13 +156,15 @@ export default function DistribuicaoEstoque() {
 
       const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
       setData(r);
+      // Marca o snapshot dos filtros usados nessa última busca
+      setLastQueryKey(currentQueryKey);
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar distribuição');
       setData(null);
     } finally {
       setLoading(false);
     }
-  }, [grupoSelected, subgrupoSelected, searchDebounce, tamanhos, mode, minTotal]);
+  }, [grupoSelected, subgrupoSelected, searchDebounce, tamanhos, mode, minTotal, currentQueryKey]);
 
   // ── Carregamento manual: NÃO carrega automaticamente em cada mudança ──
   // Query SQL no Giga é pesada — só dispara quando user clica "Atualizar"
@@ -236,8 +244,20 @@ export default function DistribuicaoEstoque() {
           <button
             onClick={fetchData}
             disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-md text-sm font-bold disabled:opacity-50"
+            className={`relative flex items-center gap-1.5 px-3 py-2 text-white rounded-md text-sm font-bold disabled:opacity-50 transition ${
+              filtersDirty
+                ? 'bg-amber-500 hover:bg-amber-600 ring-2 ring-amber-300 animate-pulse'
+                : 'bg-violet-600 hover:bg-violet-700'
+            }`}
+            title={
+              filtersDirty
+                ? 'Filtros mudaram desde a última busca — clique pra atualizar resultados'
+                : 'Recarregar com os filtros atuais'
+            }
           >
+            {filtersDirty && (
+              <span className="absolute -top-1.5 -right-1.5 w-2.5 h-2.5 bg-amber-300 rounded-full ring-2 ring-white"></span>
+            )}
             {loading ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (

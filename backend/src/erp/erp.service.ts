@@ -5805,12 +5805,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       vals.push(filters.subgrupoCodigo);
     }
     if (filters.search?.trim()) {
-      const term = `%${filters.search.trim().toUpperCase()}%`;
-      // FIX: p.DESCRICAO não existe no Wincred — só DESCRICAOCOMPLETA
-      conds.push(
-        `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
-      );
-      vals.push(term, term, term);
+      // Quebra busca em tokens (separados por espaço). Cada token tem que
+      // aparecer em ALGUM campo (REF, descrição ou CODIGO) — AND entre tokens,
+      // OR entre campos. Exemplo: "VLM-222 PRETO" exige que apareça
+      // "VLM-222" E "PRETO" em algum dos campos (mesmo separados).
+      const tokens = filters.search
+        .trim()
+        .toUpperCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 0);
+      for (const tok of tokens) {
+        const term = `%${tok}%`;
+        conds.push(
+          `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
+        );
+        vals.push(term, term, term);
+      }
     }
 
     // ── 2) Query principal: pega produto + estoque por loja agregado ──
