@@ -23,6 +23,7 @@ import {
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
   Clock, ChevronRight, Pause, DollarSign, ArrowRightLeft, Search, Sparkles,
   Receipt, Globe, Shuffle, Tag, Wallet, ArrowUpRight, Printer,
+  RefreshCw,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
