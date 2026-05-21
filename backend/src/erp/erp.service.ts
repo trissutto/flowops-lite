@@ -5826,9 +5826,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // ── 2) Query principal: pega produto + estoque por loja agregado ──
     // Performance: usa GROUP_CONCAT pra trazer todos os pares (loja, qty)
     // em UMA linha por CODIGO. Mais rápido que múltiplas joins.
-    // FIX: Wincred não tem coluna p.DESCRICAO nem p.PRECO.
+    // FIX: Wincred Lurd's não tem coluna p.DESCRICAO nem p.PRECO.
     // - descrição: usa DESCRICAOCOMPLETA (única que existe)
-    // - preço de venda: VENDAUN está em CENTAVOS, divide por 100 pra reais
+    // - preço de venda: VENDAUN está EM REAIS direto (formato decimal),
+    //   não em centavos. Ex: 199.90 = R$ 199,90 (sem dividir).
     const sql = `
       SELECT
         p.CODIGO AS codigo,
@@ -5836,7 +5837,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         p.COR AS cor,
         p.TAMANHO AS tamanho,
         COALESCE(p.DESCRICAOCOMPLETA, '') AS descricao,
-        ROUND(COALESCE(p.VENDAUN, 0) / 100, 2) AS preco,
+        ROUND(COALESCE(p.VENDAUN, 0), 2) AS preco,
         (
           SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
             FROM estoque e
@@ -5879,7 +5880,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           p.COR AS cor,
           p.TAMANHO AS tamanho,
           COALESCE(p.DESCRICAOCOMPLETA, '') AS descricao,
-          ROUND(COALESCE(p.VENDAUN, 0) / 100, 2) AS preco,
+          ROUND(COALESCE(p.VENDAUN, 0), 2) AS preco,
           (
             SELECT GROUP_CONCAT(CONCAT(e.LOJA, ':', e.ESTOQUE) SEPARATOR '|')
               FROM estoque e
