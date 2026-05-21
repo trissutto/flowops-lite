@@ -1178,20 +1178,27 @@ function PdvPageInner() {
             </p>
           </div>
 
-          {/* Botão Pausadas — vendas em aberto pra retomar (só aparece se tiver) */}
-          {openCount > 0 && (
-            <button
-              onClick={() => setShowOpenList(true)}
-              className="relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold bg-amber-400 hover:bg-amber-300 text-amber-950 ring-2 ring-amber-200/50 shrink-0 shadow-md transition"
-              title={`${openCount} venda(s) pausada(s)`}
-            >
-              <Pause className="w-4 h-4" />
-              <span className="hidden sm:inline">Pausadas</span>
-              <span className="bg-amber-600 text-white text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5">
-                {openCount}
-              </span>
-            </button>
-          )}
+          {/* Botão Pausadas — FIXO no header, sempre visível.
+              Quando vazio: estilo cinza claro. Com pendentes: amarelo destacado.
+              Permite vendedora abrir lista mesmo quando count=0 (caso bug ou
+              precisa procurar venda específica que sumiu da sessão). */}
+          <button
+            onClick={() => setShowOpenList(true)}
+            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
+              openCount > 0
+                ? 'bg-amber-400 hover:bg-amber-300 text-amber-950 ring-2 ring-amber-200/50'
+                : 'bg-white/80 hover:bg-white text-slate-600 ring-1 ring-slate-300'
+            }`}
+            title={openCount > 0 ? `${openCount} venda(s) pausada(s)` : 'Nenhuma venda pausada agora — clique pra ver histórico recente'}
+          >
+            <Pause className="w-4 h-4" />
+            <span className="hidden sm:inline">Pausadas</span>
+            <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
+              openCount > 0 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-600'
+            }`}>
+              {openCount}
+            </span>
+          </button>
 
           {/* Botão Links Online — Pagar.me aguardando/pago. Pisca em verde quando
               tem algum PAGO pra vendedora finalizar. Sempre visível pra fácil acesso. */}
