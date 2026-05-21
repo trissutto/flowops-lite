@@ -536,6 +536,246 @@ export class PagarmeService {
   }
 
   /**
+   * Cria CHECKOUT (Link de Pagamento) na Pagar.me.
+   *
+   * Diferença pra createPixCharge:
+   *   - payment_method = 'checkout' (vs 'pix')
+   *   - Pagar.me retorna `checkouts[0].payment_url` em vez de QR Code
+   *   - Cliente abre a URL e escolhe PIX ou cartão (parcelado)
+   *   - Quando paga, o MESMO webhook dispara `order.paid` / `charge.paid`
+   *
+   * Use case Lurd's: venda online WhatsApp/Instagram. Vendedora gera link,
+   * manda pra cliente, ela paga com qualquer método. Sistema detecta pago
+   * via webhook e finaliza a venda automaticamente (mesma lógica do PIX).
+   */
+  async createCheckoutLink(input: {
+    saleId: string;
+    valor: number;
+    storeCode: string;
+    customerName?: string;
+    customerCpf?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    /** Máximo de parcelas SEM JUROS no cartão. Default 6. */
+    maxInstallments?: number;
+    /** Validade do link em minutos. Default 24h (1440). Máx 7d (10080). */
+    expiresInMinutes?: number;
+    /** Aceitar PIX no link? Default true. */
+    acceptPix?: boolean;
+    /** Aceitar cartão de crédito? Default true. */
+    acceptCreditCard?: boolean;
+  }): Promise<{
+    pagarmeOrderId: string;
+    paymentUrl: string;
+    expiresAt: Date;
+    valor: number;
+  }> {
+    const cfg = await this.getConfigInternal();
+
+    if (!input.saleId) throw new BadRequestException('saleId obrigatório');
+    if (!input.valor || input.valor <= 0)
+      throw new BadRequestException('valor deve ser > 0');
+    if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
+
+    const valorCentavos = Math.round(input.valor * 100);
+    const expiresInMin = Math.max(15, Math.min(10080, input.expiresInMinutes || 1440));
+    const expiresAt = new Date(Date.now() + expiresInMin * 60 * 1000);
+    const maxInst = Math.max(1, Math.min(12, input.maxInstallments || 6));
+    const acceptPix = input.acceptPix !== false;
+    const acceptCard = input.acceptCreditCard !== false;
+    if (!acceptPix && !acceptCard) {
+      throw new BadRequestException('Pelo menos 1 método de pagamento aceito');
+    }
+
+    // Customer — mesma lógica do PIX (CPF fictício único por venda se não tem)
+    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    const customerEmail = input.customerEmail
+      || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
+    let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
+    if (!customerDoc || (customerDoc.length !== 11 && customerDoc.length !== 14)) {
+      customerDoc = generateValidCpfFromSeed(input.saleId);
+    }
+
+    // Phone — fallback igual ao PIX
+    const phoneRaw = (input.customerPhone || '').replace(/\D/g, '');
+    let phoneAreaCode = '13';
+    let phoneNumber = '996218277';
+    if (phoneRaw.length === 11) {
+      phoneAreaCode = phoneRaw.slice(0, 2);
+      phoneNumber = phoneRaw.slice(2);
+    } else if (phoneRaw.length === 10) {
+      phoneAreaCode = phoneRaw.slice(0, 2);
+      phoneNumber = phoneRaw.slice(2);
+    } else if (phoneRaw.length === 13 && phoneRaw.startsWith('55')) {
+      phoneAreaCode = phoneRaw.slice(2, 4);
+      phoneNumber = phoneRaw.slice(4);
+    }
+
+    // Métodos aceitos pelo checkout
+    const acceptedMethods: string[] = [];
+    if (acceptCard) acceptedMethods.push('credit_card');
+    if (acceptPix) acceptedMethods.push('pix');
+
+    // Parcelamento SEM JUROS — gera 1..maxInst parcelas todas valendo o total
+    const installments = acceptCard
+      ? Array.from({ length: maxInst }, (_, i) => ({
+          number: i + 1,
+          total: valorCentavos,
+        }))
+      : undefined;
+
+    // Split rule — mesma estrutura do PIX
+    const splitRules = cfg.recipientId
+      ? [
+          {
+            recipient_id: cfg.recipientId,
+            amount: valorCentavos,
+            type: 'flat',
+            options: {
+              charge_processing_fee: true,
+              charge_remainder_fee: true,
+              liable: true,
+            },
+          },
+        ]
+      : undefined;
+
+    const checkoutPayment: any = {
+      payment_method: 'checkout',
+      checkout: {
+        expires_in: expiresInMin,
+        default_payment_method: acceptCard ? 'credit_card' : 'pix',
+        accepted_payment_methods: acceptedMethods,
+        skip_checkout_success_page: false,
+        customer_editable: false, // cliente NÃO pode mudar dados (CPF, etc)
+        billing_address_editable: false,
+        ...(acceptCard
+          ? {
+              credit_card: {
+                installments,
+                statement_descriptor: 'LURDS',
+                capture: true,
+              },
+            }
+          : {}),
+        ...(acceptPix
+          ? {
+              pix: {
+                expires_in: 3600, // 1h pra cliente concluir após escolher PIX
+              },
+            }
+          : {}),
+      },
+    };
+    if (splitRules) checkoutPayment.split = splitRules;
+
+    const body: any = {
+      code: `LURDS-LINK-${input.saleId.slice(-8).toUpperCase()}`,
+      items: [
+        {
+          amount: valorCentavos,
+          description: `Venda Online ${input.storeCode}`,
+          quantity: 1,
+          code: input.saleId.slice(-12),
+        },
+      ],
+      customer: {
+        name: customerName,
+        email: customerEmail,
+        type: customerDoc.length === 14 ? 'company' : 'individual',
+        document: customerDoc,
+        document_type: customerDoc.length === 14 ? 'cnpj' : 'cpf',
+        phones: {
+          mobile_phone: {
+            country_code: '55',
+            area_code: phoneAreaCode,
+            number: phoneNumber,
+          },
+        },
+      },
+      payments: [checkoutPayment],
+      metadata: {
+        saleId: input.saleId,
+        storeCode: input.storeCode,
+        source: 'lurds-pdv-online',
+        kind: 'checkout-link',
+      },
+    };
+
+    let resp: any;
+    try {
+      resp = await firstValueFrom(
+        this.http.post(`${this.BASE_URL}/orders`, body, {
+          headers: {
+            Authorization: this.authHeader(cfg.apiKey),
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          timeout: 20000,
+        }),
+      );
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const data = e?.response?.data;
+      this.logger.error(
+        `[pagarme] createCheckoutLink HTTP ${status} sale=${input.saleId}: ${JSON.stringify(data || e?.message)}\nBODY: ${JSON.stringify(body)}`,
+      );
+      let msg = '';
+      if (data?.errors && typeof data.errors === 'object') {
+        msg = Object.entries(data.errors)
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join(' | ');
+      }
+      throw new BadRequestException(
+        `Pagar.me rejeitou link: ${msg || data?.message || e?.message || 'erro desconhecido'}`,
+      );
+    }
+
+    const order = resp.data;
+    const orderId = order.id;
+    const checkout = (order.checkouts || [])[0];
+    const paymentUrl = checkout?.payment_url || '';
+
+    if (!paymentUrl) {
+      this.logger.error(
+        `[pagarme] order ${orderId} criada mas SEM payment_url. Order=${JSON.stringify(order).slice(0, 1500)}`,
+      );
+      throw new BadRequestException(
+        'Pagar.me criou pedido mas não retornou URL de pagamento. Tente novamente.',
+      );
+    }
+
+    this.logger.log(
+      `[pagarme] checkout link criado: sale=${input.saleId} order=${orderId} url=${paymentUrl}`,
+    );
+
+    // Persiste igual ao PIX (mesma tabela pagarmePayment pra rastrear webhook depois)
+    try {
+      await (this.prisma as any).pagarmePayment.create({
+        data: {
+          saleId: input.saleId,
+          pagarmeOrderId: orderId,
+          method: 'checkout',
+          valor: input.valor,
+          status: 'pending',
+          qrCodeText: paymentUrl, // reusa campo pra guardar URL
+          rawResponse: JSON.stringify(order).slice(0, 8000),
+        },
+      });
+    } catch (e: any) {
+      // Se modelo não tiver campos esperados, só loga — não bloqueia retorno
+      this.logger.warn(`[pagarme] não persistiu pagarmePayment: ${e?.message || e}`);
+    }
+
+    return {
+      pagarmeOrderId: orderId,
+      paymentUrl,
+      expiresAt,
+      valor: input.valor,
+    };
+  }
+
+  /**
    * Consulta status da order na Pagar.me (polling fallback).
    */
   async checkOrderStatus(pagarmeOrderId: string) {

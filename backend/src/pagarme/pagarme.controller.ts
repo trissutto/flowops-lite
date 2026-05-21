@@ -81,6 +81,41 @@ export class PagarmeController {
     return this.svc.createPixCharge(body);
   }
 
+  /**
+   * POST /pagarme/checkout/create
+   * Cria Link de Pagamento Pagar.me (PIX + cartão parcelado SEM JUROS).
+   * Vendedora compartilha URL via WhatsApp/Instagram. Quando cliente paga,
+   * o MESMO webhook do PIX dispara order.paid e finaliza a venda.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('checkout/create')
+  async createCheckout(
+    @Req() req: any,
+    @Body()
+    body: {
+      saleId: string;
+      valor: number;
+      storeCode: string;
+      customerName?: string;
+      customerCpf?: string;
+      customerEmail?: string;
+      customerPhone?: string;
+      maxInstallments?: number;
+      expiresInMinutes?: number;
+      acceptPix?: boolean;
+      acceptCreditCard?: boolean;
+    },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    if (!body?.saleId) throw new BadRequestException('saleId obrigatório');
+    if (!body?.valor) throw new BadRequestException('valor obrigatório');
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.createCheckoutLink(body);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('pix/status/:saleId')
   async getStatusBySale(@Req() req: any, @Param('saleId') saleId: string) {
