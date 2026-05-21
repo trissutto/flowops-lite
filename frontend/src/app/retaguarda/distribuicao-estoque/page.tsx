@@ -218,6 +218,46 @@ export default function DistribuicaoEstoque() {
     setDrawerGroup(group);
   };
 
+  // Abre Drawer de realinhamento a partir da Visão Raiz (REF+COR).
+  // Busca as variações via stock-distribution, monta GroupDrawer e abre.
+  const equilibrarFromRaiz = useCallback(async (refRow: {
+    ref: string; cor: string | null; descricao: string; preco: number;
+  }) => {
+    try {
+      const params = new URLSearchParams();
+      params.set('search', refRow.ref);
+      params.set('mode', 'all');
+      params.set('minTotal', '0');
+      params.set('limit', '500');
+      const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
+      const corNorm = (refRow.cor || '').trim().toUpperCase();
+      const items = r.rows.filter(
+        (row) => (row.cor || '').trim().toUpperCase() === corNorm,
+      );
+      if (items.length === 0) {
+        alert('Não encontrei variações dessa REF+COR pra equilibrar.');
+        return;
+      }
+      const tamanhos = Array.from(new Set(items.map((i) => (i.tamanho || '').trim()).filter(Boolean)));
+      const totalRede = items.reduce((s, i) => s + i.total, 0);
+      const criticidadeAlta = items.filter((i) => i.criticidade === 'ALTO').length;
+      const group: GroupDrawer = {
+        key: `${refRow.ref}|${refRow.cor || ''}`,
+        ref: refRow.ref,
+        cor: refRow.cor || 'SEM COR',
+        descricao: refRow.descricao,
+        preco: refRow.preco,
+        tamanhos,
+        items,
+        totalRede,
+        criticidadeAlta,
+      };
+      setDrawerGroup(group);
+    } catch (e: any) {
+      alert(`Erro ao carregar variações: ${e?.message || e}`);
+    }
+  }, []);
+
   const limparFiltros = () => {
     setGrupoSelected(null);
     setSubgrupoSelected(null);
@@ -330,7 +370,11 @@ export default function DistribuicaoEstoque() {
         {activeTab === 'config' ? (
           <RealignConfigPanel />
         ) : activeTab === 'raiz' ? (
-          <RefRootView stores={stores} grupos={grupos} />
+          <RefRootView
+            stores={stores}
+            grupos={grupos}
+            onEqualize={equilibrarFromRaiz}
+          />
         ) : (
           <>
         {/* KPIs */}
@@ -2081,7 +2125,15 @@ function detectarModo(r: RefRow, totalLojasAtivas: number): ModoRecomendado {
   return 'EQUILIBRAR';
 }
 
-function RefRootView({ stores, grupos }: { stores: Store[]; grupos: GrupoItem[] }) {
+function RefRootView({
+  stores,
+  grupos,
+  onEqualize,
+}: {
+  stores: Store[];
+  grupos: GrupoItem[];
+  onEqualize: (refRow: { ref: string; cor: string | null; descricao: string; preco: number }) => void;
+}) {
   // ── Estado ──
   const [data, setData] = useState<RefDistribution | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2438,6 +2490,23 @@ function RefRootView({ stores, grupos }: { stores: Store[]; grupos: GrupoItem[] 
                         >
                           Detalhes
                         </button>
+                        {r.modo === 'EQUILIBRAR' && (
+                          <button
+                            onClick={() =>
+                              onEqualize({
+                                ref: r.ref,
+                                cor: r.cor,
+                                descricao: r.descricao,
+                                preco: r.preco,
+                              })
+                            }
+                            className="px-2 py-1 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded"
+                            title="Calcular plano de equilíbrio entre lojas (drawer com matriz tamanho×loja)"
+                          >
+                            <Shuffle className="w-3 h-3 inline -mt-0.5 mr-0.5" />
+                            Equilibrar
+                          </button>
+                        )}
                         {(r.modo === 'CONSOLIDAR' || r.modo === 'OUTLET') && (
                           <button
                             onClick={() => setConsolidateRef(r)}
