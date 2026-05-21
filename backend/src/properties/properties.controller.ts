@@ -10,10 +10,14 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PropertiesService } from './properties.service';
+import { put } from '@vercel/blob';
 
 /**
  * /properties — módulo IMOBILIÁRIO.
@@ -181,6 +185,90 @@ export class PropertiesController {
       throw new BadRequestException('fileUrl e fileName obrigatórios');
     }
     return this.svc.addAttachment(id, body, this.userInfo(req));
+  }
+
+  /**
+   * POST /properties/:id/upload
+   * Upload de arquivo via multipart/form-data → grava no Vercel Blob → cria
+   * PropertyAttachment automaticamente. Usado pelo dropzone do frontend.
+   *
+   * Body (form-data):
+   *   file: arquivo (PDF, JPG, PNG, etc) — máximo 10MB
+   *   category: string (opcional, default 'Outros')
+   *
+   * Requer env BLOB_READ_WRITE_TOKEN configurada no Railway.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/upload')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  async uploadFile(
+    @Req() req: any,
+    @Param('id') id: string,
+    @UploadedFile() file: any,
+    @Body('category') category?: string,
+    @Body('scope') scope?: string,
+  ) {
+    this.requireWrite(req);
+    if (!file) throw new BadRequestException('Arquivo obrigatório');
+
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      throw new BadRequestException(
+        'BLOB_READ_WRITE_TOKEN não configurado no servidor. Configure no Railway.',
+      );
+    }
+
+    // Sanitiza filename (Vercel Blob aceita unicode mas tira espaços/caracteres especiais)
+    const safeName = file.originalname
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const blobPath = `imobiliario/${id}/${Date.now()}-${safeName}`;
+
+    let uploaded: any;
+    try {
+      uploaded = await put(blobPath, file.buffer, {
+        access: 'public',
+        contentType: file.mimetype,
+        token: process.env.BLOB_READ_WRITE_TOKEN,
+      });
+    } catch (e: any) {
+      throw new BadRequestException(`Falha ao subir pro Vercel Blob: ${e?.message || e}`);
+    }
+
+    // Se for upload pra uma SEÇÃO específica (water, energy, iptu, etc), atualiza
+    // attachmentUrl da seção em vez de criar PropertyAttachment solto
+    if (scope && ['water', 'energy', 'iptu', 'deed', 'scripture'].includes(scope)) {
+      const u = this.userInfo(req);
+      const map: Record<string, (id: string, input: any, user: any) => Promise<any>> = {
+        water: (id, i, u) => this.svc.upsertWater(id, i, u),
+        energy: (id, i, u) => this.svc.upsertEnergy(id, i, u),
+        iptu: (id, i, u) => this.svc.upsertIptu(id, i, u),
+        deed: (id, i, u) => this.svc.upsertDeed(id, i, u),
+        scripture: (id, i, u) => this.svc.upsertScripture(id, i, u),
+      };
+      await map[scope](id, { attachmentUrl: uploaded.url }, u);
+      return {
+        ok: true,
+        url: uploaded.url,
+        fileName: file.originalname,
+        size: file.size,
+        scope,
+      };
+    }
+
+    // Anexo genérico → cria PropertyAttachment
+    const att = await this.svc.addAttachment(
+      id,
+      {
+        category: category || 'Outros',
+        fileName: file.originalname,
+        fileUrl: uploaded.url,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+      },
+      this.userInfo(req),
+    );
+    return { ok: true, attachment: att };
   }
 
   @Delete('attachments/:attachmentId')
