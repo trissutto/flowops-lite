@@ -81,6 +81,87 @@ export class PagarmeController {
     return this.svc.createPixCharge(body);
   }
 
+  /**
+   * POST /pagarme/checkout/create
+   * Cria Link de Pagamento Pagar.me (PIX + cartão parcelado SEM JUROS).
+   * Vendedora compartilha URL via WhatsApp/Instagram. Quando cliente paga,
+   * o MESMO webhook do PIX dispara order.paid e finaliza a venda.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('checkout/create')
+  async createCheckout(
+    @Req() req: any,
+    @Body()
+    body: {
+      saleId: string;
+      valor: number;
+      storeCode: string;
+      customerName?: string;
+      customerCpf?: string;
+      customerEmail?: string;
+      customerPhone?: string;
+      maxInstallments?: number;
+      expiresInMinutes?: number;
+      acceptPix?: boolean;
+      acceptCreditCard?: boolean;
+    },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store') {
+      throw new ForbiddenException('Apenas admin ou loja');
+    }
+    if (!body?.saleId) throw new BadRequestException('saleId obrigatório');
+    if (!body?.valor) throw new BadRequestException('valor obrigatório');
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.createCheckoutLink(body);
+  }
+
+  /**
+   * POST /pagarme/admin/force-link-paid
+   * RESGATE: cria/atualiza um PagarmePayment manualmente quando o link
+   * Pagar.me foi gerado mas NÃO foi salvo no banco (bug do storeCode
+   * faltando). Admin pega o order_id do painel Pagar.me e força criação.
+   * Depois consulta ao vivo pra trazer o status real (pending/paid).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('admin/force-link-paid')
+  async forceLinkPaid(
+    @Req() req: any,
+    @Body() body: {
+      saleId: string;
+      storeCode: string;
+      pagarmeOrderId: string;
+      valor: number;
+      forceStatus?: 'paid' | 'pending';
+    },
+  ) {
+    if (req?.user?.role !== 'admin')
+      throw new ForbiddenException('Apenas admin');
+    if (!body?.saleId || !body?.storeCode || !body?.pagarmeOrderId || !body?.valor) {
+      throw new BadRequestException(
+        'Campos obrigatórios: saleId, storeCode, pagarmeOrderId, valor',
+      );
+    }
+    return this.svc.forceLinkPaid(body);
+  }
+
+  /**
+   * GET /pagarme/online-pending?storeCode=01
+   * Lista Links Pagar.me aguardando pagamento na loja (últimas 48h).
+   * Usado pelo widget global do PDV pra alertar a vendedora quando o webhook
+   * bate paid — assim ela pode finalizar a venda sem ficar travada na tela
+   * esperando o cliente.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('online-pending')
+  async listOnlinePending(@Req() req: any, @Query('storeCode') storeCode: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store')
+      throw new ForbiddenException('Apenas admin ou loja');
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.listOnlinePending(storeCode);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('pix/status/:saleId')
   async getStatusBySale(@Req() req: any, @Param('saleId') saleId: string) {

@@ -362,7 +362,20 @@ export class PdvController {
   setCustomer(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { cpf?: string; name?: string; email?: string; phone?: string },
+    @Body() body: {
+      cpf?: string;
+      name?: string;
+      email?: string;
+      phone?: string;
+      // Endereço — opcional, mas essencial pra venda online (WhatsApp/Insta)
+      cep?: string;
+      endereco?: string;
+      numero?: string;
+      complemento?: string;
+      bairro?: string;
+      cidade?: string;
+      uf?: string;
+    },
   ) {
     this.requireRole(req);
     return this.svc.setCustomer({ saleId: id, ...body });
