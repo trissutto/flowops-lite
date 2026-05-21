@@ -3158,7 +3158,16 @@ function PaymentModal({
 
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
-  const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | null>(null);
+  const [vendaOnlineTipo, setVendaOnlineTipo] = useState<'pix' | 'link' | 'pagarme_link' | null>(null);
+  // Estado do Link Pagar.me gerado (URL + status)
+  const [pagarmeLink, setPagarmeLink] = useState<{
+    pagarmeOrderId: string;
+    paymentUrl: string;
+    expiresAt: string;
+  } | null>(null);
+  const [pagarmeLinkLoading, setPagarmeLinkLoading] = useState(false);
+  const [pagarmeLinkPaid, setPagarmeLinkPaid] = useState(false);
+  const [pagarmeLinkCopied, setPagarmeLinkCopied] = useState(false);
 
   // ── Adicionar pagamento (com auto-finalize quando completa) ──
   // Se o valor digitado fecha o total da venda (95% dos casos: 1 forma só),
@@ -3207,9 +3216,28 @@ function PaymentModal({
         toast(
           'warning',
           'Escolha o tipo da venda online',
-          'PIX direto ou Link externo (só pra registro).',
+          'PIX direto / Link externo / Link Pagar.me.',
         );
         return;
+      }
+      // Link Pagar.me: exige link gerado E pago confirmado pelo webhook
+      if (vendaOnlineTipo === 'pagarme_link') {
+        if (!pagarmeLink) {
+          toast(
+            'warning',
+            'Gere o link Pagar.me primeiro',
+            'Clique em "Gerar Link Pagar.me" pra criar a URL pra cliente pagar.',
+          );
+          return;
+        }
+        if (!pagarmeLinkPaid) {
+          toast(
+            'warning',
+            'Aguardando pagamento',
+            'O sistema confirma automaticamente quando o cliente pagar.',
+          );
+          return;
+        }
       }
     }
     // PIX: SEMPRE exige QR gerado (clique no botão "PIX"). Se for provider
@@ -3271,8 +3299,13 @@ function PaymentModal({
     }
     if (selected === 'venda_online') {
       // Só pra histórico — não dispara cobrança real
-      details.tipo = vendaOnlineTipo; // 'pix' | 'link'
+      details.tipo = vendaOnlineTipo; // 'pix' | 'link' | 'pagarme_link'
       details.origem = 'whatsapp_instagram';
+      if (vendaOnlineTipo === 'pagarme_link' && pagarmeLink) {
+        details.pagarmeOrderId = pagarmeLink.pagarmeOrderId;
+        details.pagarmePaymentUrl = pagarmeLink.paymentUrl;
+        details.paidByWebhook = pagarmeLinkPaid;
+      }
     }
     if (needsBandeira) details.bandeira = bandeira;
 
@@ -3559,6 +3592,42 @@ function PaymentModal({
       clearInterval(id);
     };
   }, [pixCharge, pixPaid, saleId]);
+
+  // ── Polling Link Pagar.me — confere status a cada 3s enquanto cliente
+  //    ainda não pagou. Quando webhook do Pagar.me bater "paid", marca
+  //    pagarmeLinkPaid=true e habilita o botão Finalizar. Reusa o mesmo
+  //    endpoint do PIX (status é por saleId).
+  useEffect(() => {
+    if (!pagarmeLink || pagarmeLinkPaid) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(
+          `/pagarme/pix/status/${saleId}`,
+        );
+        if (cancelled) return;
+        if (r.status === 'paid' || r.isPaid) {
+          setPagarmeLinkPaid(true);
+        } else if (r.status === 'failed' || r.status === 'canceled' || r.isFailed) {
+          toast(
+            'error',
+            'Link falhou / cancelado',
+            'Pagar.me reportou erro. Gere um novo link.',
+          );
+          setPagarmeLink(null);
+        }
+      } catch {
+        // silencioso — polling tolerante
+      }
+    };
+    tick();
+    // Intervalo maior (3s) — link é assíncrono, cliente leva minutos pra pagar
+    const id = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [pagarmeLink, pagarmeLinkPaid, saleId, toast]);
 
   const copyPix = async () => {
     if (!pixCharge) return;
@@ -4059,11 +4128,11 @@ function PaymentModal({
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
               Como foi feita a venda online?
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => setVendaOnlineTipo('pix')}
-                className={`py-3 px-3 rounded-lg border-2 font-bold text-sm flex flex-col items-center gap-1 transition-all ${
+                onClick={() => { setVendaOnlineTipo('pix'); setPagarmeLink(null); }}
+                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
                   vendaOnlineTipo === 'pix'
                     ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
                     : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
@@ -4071,14 +4140,14 @@ function PaymentModal({
               >
                 <QrCode className="w-5 h-5" />
                 PIX direto
-                <span className="text-[10px] font-normal text-slate-500">
-                  Cliente fez PIX p/ conta
+                <span className="text-[9px] font-normal text-slate-500 leading-tight">
+                  Já pago p/ conta
                 </span>
               </button>
               <button
                 type="button"
-                onClick={() => setVendaOnlineTipo('link')}
-                className={`py-3 px-3 rounded-lg border-2 font-bold text-sm flex flex-col items-center gap-1 transition-all ${
+                onClick={() => { setVendaOnlineTipo('link'); setPagarmeLink(null); }}
+                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
                   vendaOnlineTipo === 'link'
                     ? 'border-teal-600 bg-teal-100 text-teal-900 shadow-md'
                     : 'border-slate-200 hover:border-teal-300 bg-white text-slate-700'
@@ -4086,14 +4155,137 @@ function PaymentModal({
               >
                 <ArrowUpRight className="w-5 h-5" />
                 Link externo
-                <span className="text-[10px] font-normal text-slate-500">
-                  Mercado Pago / outro
+                <span className="text-[9px] font-normal text-slate-500 leading-tight">
+                  Já pago (outro)
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVendaOnlineTipo('pagarme_link')}
+                className={`py-3 px-2 rounded-lg border-2 font-bold text-xs flex flex-col items-center gap-1 transition-all ${
+                  vendaOnlineTipo === 'pagarme_link'
+                    ? 'border-violet-600 bg-violet-100 text-violet-900 shadow-md ring-2 ring-violet-300'
+                    : 'border-violet-400 hover:border-violet-500 bg-violet-50 text-violet-800'
+                }`}
+              >
+                <span className="text-base">🔗</span>
+                Link Pagar.me
+                <span className="text-[9px] font-normal text-violet-600 leading-tight font-bold">
+                  Gerar agora
                 </span>
               </button>
             </div>
             {!customerCpf && (
               <div className="bg-rose-50 border border-rose-300 text-rose-800 text-xs rounded p-2 font-semibold">
                 ⚠ CPF do cliente é obrigatório. Aperte F5 pra identificar.
+              </div>
+            )}
+
+            {/* ── PAINEL: Link Pagar.me — gera URL + cliente paga + webhook ── */}
+            {vendaOnlineTipo === 'pagarme_link' && customerCpf && (
+              <div className="border-2 border-violet-300 rounded-lg p-3 bg-violet-50/30 space-y-2">
+                {!pagarmeLink ? (
+                  <>
+                    <div className="text-xs text-violet-900 leading-snug">
+                      <b>Como funciona:</b> sistema gera URL Pagar.me. Você manda pra
+                      cliente via WhatsApp. Cliente paga PIX ou cartão (até 6x sem juros).
+                      Quando cair, a venda finaliza sozinha.
+                    </div>
+                    <button
+                      type="button"
+                      disabled={pagarmeLinkLoading}
+                      onClick={async () => {
+                        setPagarmeLinkLoading(true);
+                        try {
+                          const r = await api<{
+                            pagarmeOrderId: string;
+                            paymentUrl: string;
+                            expiresAt: string;
+                          }>('/pagarme/checkout/create', {
+                            method: 'POST',
+                            body: JSON.stringify({
+                              saleId,
+                              valor: restante > 0 ? restante : total,
+                              storeCode,
+                              customerName,
+                              customerCpf,
+                              customerEmail,
+                              maxInstallments: 6,
+                              expiresInMinutes: 1440, // 24h
+                              acceptPix: true,
+                              acceptCreditCard: true,
+                            }),
+                          });
+                          setPagarmeLink(r);
+                        } catch (e: any) {
+                          toast('error', 'Erro ao gerar link Pagar.me', e?.message || 'Tente de novo');
+                        } finally {
+                          setPagarmeLinkLoading(false);
+                        }
+                      }}
+                      className="w-full py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      {pagarmeLinkLoading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Gerando link...
+                        </>
+                      ) : (
+                        <>
+                          🔗 Gerar Link Pagar.me — {brl(restante > 0 ? restante : total)}
+                        </>
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-xs font-bold text-violet-700 uppercase">
+                      Link gerado · expira em 24h
+                    </div>
+                    <div className="bg-white border border-violet-300 rounded p-2 font-mono text-[11px] text-violet-900 break-all max-h-20 overflow-auto">
+                      {pagarmeLink.paymentUrl}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(pagarmeLink.paymentUrl);
+                          setPagarmeLinkCopied(true);
+                          setTimeout(() => setPagarmeLinkCopied(false), 2000);
+                        }}
+                        className="py-2 px-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5"
+                      >
+                        📋 {pagarmeLinkCopied ? 'Copiado!' : 'Copiar URL'}
+                      </button>
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent(
+                          `Olá ${customerName?.split(' ')[0] || 'cliente'}! Segue o link pra pagamento da sua compra de ${brl(restante > 0 ? restante : total)}:\n\n${pagarmeLink.paymentUrl}\n\nVocê pode pagar com PIX ou cartão (até 6x sem juros). O link expira em 24h.`,
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="py-2 px-3 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg flex items-center justify-center gap-1.5"
+                      >
+                        📱 WhatsApp
+                      </a>
+                    </div>
+                    {pagarmeLinkPaid ? (
+                      <div className="bg-emerald-100 border-2 border-emerald-500 rounded p-2 text-center text-emerald-800 font-bold animate-pulse">
+                        ✅ Cliente pagou! Finalizando...
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-violet-700 italic text-center">
+                        Aguardando cliente pagar... ⏳
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setPagarmeLink(null); setPagarmeLinkPaid(false); }}
+                      className="w-full text-[10px] text-slate-500 hover:text-slate-700 underline"
+                    >
+                      gerar novo link
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
