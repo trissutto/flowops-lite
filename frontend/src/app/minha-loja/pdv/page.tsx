@@ -2237,6 +2237,20 @@ function PdvPageInner() {
                 <span className="hidden sm:inline">Cancelar venda</span>
               </button>
 
+              {/* PAUSAR venda — fica na fila pra retomar depois (botão amarelo
+                  em destaque). Útil quando cliente está esperando (ex: foi
+                  pegar mais peças) e a vendedora precisa atender outra. Só
+                  habilita se já tem peça bipada. */}
+              <button
+                onClick={fecharDepois}
+                disabled={!sale?.items?.length}
+                className="px-4 py-3 bg-amber-400 hover:bg-amber-300 border-2 border-amber-500 text-amber-950 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Pausar venda (volta na lista Pausadas)"
+              >
+                <Pause className="w-4 h-4" />
+                <span className="hidden sm:inline">Pausar</span>
+              </button>
+
               {/* Desconto geral — botão branco com LABEL + atalho F2 */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
