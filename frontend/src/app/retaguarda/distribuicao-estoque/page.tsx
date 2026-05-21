@@ -103,6 +103,9 @@ export default function DistribuicaoEstoque() {
   // ── Drawer de realinhamento inline ──
   const [drawerGroup, setDrawerGroup] = useState<GroupDrawer | null>(null);
 
+  // ── Modal "Realinhar TODOS" ──
+  const [showRealignAllModal, setShowRealignAllModal] = useState(false);
+
   // ── Tab atual: 'distribuicao' | 'config' ──
   const [activeTab, setActiveTab] = useState<'distribuicao' | 'config'>('distribuicao');
 
@@ -241,6 +244,20 @@ export default function DistribuicaoEstoque() {
               Detecta desequilíbrios entre lojas · PLUS SIZE
             </p>
           </div>
+          <button
+            onClick={() => setShowRealignAllModal(true)}
+            disabled={loading || !data || data.rows.filter((r) => r.criticidade !== 'OK').length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-md text-sm font-bold"
+            title="Realinhar TODAS as variações desequilibradas com 1 clique"
+          >
+            <Shuffle className="w-4 h-4" />
+            Realinhar TODOS
+            {data && (
+              <span className="ml-1 bg-white/20 px-1.5 py-0.5 rounded text-[10px] font-mono">
+                {data.rows.filter((r) => r.criticidade !== 'OK').length}
+              </span>
+            )}
+          </button>
           <button
             onClick={fetchData}
             disabled={loading}
@@ -577,6 +594,20 @@ export default function DistribuicaoEstoque() {
           stores={stores}
           storeNameByCode={storeNameByCode}
           onClose={() => setDrawerGroup(null)}
+        />
+      )}
+
+      {/* ─── Modal "Realinhar TODOS" — batch de todas as variações desequilibradas ─── */}
+      {showRealignAllModal && data && (
+        <RealignAllModal
+          rows={data.rows}
+          stores={stores}
+          storeNameByCode={storeNameByCode}
+          onClose={() => setShowRealignAllModal(false)}
+          onSuccess={() => {
+            setShowRealignAllModal(false);
+            fetchData();
+          }}
         />
       )}
     </div>
@@ -1116,6 +1147,391 @@ function RealignDrawer({
         </div>
       </aside>
     </>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RealignAllModal — processa TODAS as variações desequilibradas de uma vez.
+   Roda o mesmo algoritmo de balanço pra cada (REF + COR + TAMANHO),
+   consolida os moves e cria todas as transferências em UMA chamada.
+   ════════════════════════════════════════════════════════════════════════ */
+
+interface AllMove {
+  ref: string;
+  cor: string;
+  tamanho: string;
+  sku: string;
+  desc: string;
+  from: string;
+  to: string;
+  qty: number;
+}
+
+function RealignAllModal({
+  rows,
+  stores,
+  storeNameByCode,
+  onClose,
+  onSuccess,
+}: {
+  rows: Row[];
+  stores: Store[];
+  storeNameByCode: Map<string, string>;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Lojas elegíveis (respeita canSendRealign/canReceiveRealign)
+  const ignoredCodes = new Set(['SITE', 'PF']);
+  const sendableStores = useMemo(
+    () =>
+      stores
+        .filter(
+          (s) =>
+            s.active && !ignoredCodes.has(s.code) && (s as any).canSendRealign !== false,
+        )
+        .sort(
+          (a, b) =>
+            ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50),
+        ),
+    [stores],
+  );
+  const receivableStores = useMemo(
+    () =>
+      stores
+        .filter(
+          (s) =>
+            s.active && !ignoredCodes.has(s.code) && (s as any).canReceiveRealign !== false,
+        )
+        .sort(
+          (a, b) =>
+            ((b as any).priorityScore ?? 50) - ((a as any).priorityScore ?? 50),
+        ),
+    [stores],
+  );
+
+  // Algoritmo: pra cada variação, calcula moves (mesmo algoritmo do drawer)
+  const allMoves: AllMove[] = useMemo(() => {
+    const result: AllMove[] = [];
+    const sendableCodes = new Set(sendableStores.map((s) => s.code));
+    const receivableCodes = new Set(receivableStores.map((s) => s.code));
+
+    for (const row of rows) {
+      if (row.criticidade === 'OK') continue;
+      const currentByStore = row.estoquePorLoja || {};
+      const totalAvailable = Object.values(currentByStore).reduce((s, v) => s + (v || 0), 0);
+      if (totalAvailable === 0 || receivableStores.length === 0) continue;
+
+      const target: Record<string, number> = {};
+      const allStores = new Set([...sendableCodes, ...receivableCodes]);
+      for (const code of allStores) target[code] = 0;
+
+      if (totalAvailable >= receivableStores.length) {
+        let remaining = totalAvailable;
+        for (const s of receivableStores) {
+          target[s.code] = 1;
+          remaining--;
+        }
+        let i = 0;
+        while (remaining > 0) {
+          target[receivableStores[i % receivableStores.length].code]++;
+          remaining--;
+          i++;
+        }
+      } else {
+        let remaining = totalAvailable;
+        for (const s of receivableStores) {
+          if (remaining <= 0) break;
+          target[s.code] = 1;
+          remaining--;
+        }
+      }
+
+      // Sources e sinks
+      const sources: Array<{ code: string; surplus: number }> = [];
+      const sinks: Array<{ code: string; deficit: number }> = [];
+      for (const code of allStores) {
+        const cur = currentByStore[code] || 0;
+        const tgt = target[code] || 0;
+        const diff = cur - tgt;
+        if (diff > 0 && sendableCodes.has(code)) {
+          sources.push({ code, surplus: diff });
+        } else if (diff < 0 && receivableCodes.has(code)) {
+          sinks.push({ code, deficit: -diff });
+        }
+      }
+
+      // Greedy match
+      for (const sink of sinks) {
+        while (sink.deficit > 0 && sources.length > 0) {
+          const src = sources[0];
+          const transfer = Math.min(src.surplus, sink.deficit);
+          if (transfer > 0) {
+            result.push({
+              ref: row.ref,
+              cor: (row.cor || '').trim() || 'SEM COR',
+              tamanho: (row.tamanho || '').trim(),
+              sku: row.codigo,
+              desc: row.descricao,
+              from: src.code,
+              to: sink.code,
+              qty: transfer,
+            });
+            src.surplus -= transfer;
+            sink.deficit -= transfer;
+          }
+          if (src.surplus === 0) sources.shift();
+        }
+      }
+    }
+
+    return result;
+  }, [rows, sendableStores, receivableStores]);
+
+  // Stats agregadas
+  const stats = useMemo(() => {
+    const totalQty = allMoves.reduce((s, m) => s + m.qty, 0);
+    const uniqueRefs = new Set(allMoves.map((m) => m.ref)).size;
+    const fromStoresSet = new Set(allMoves.map((m) => m.from));
+    const toStoresSet = new Set(allMoves.map((m) => m.to));
+
+    // Top origens e destinos
+    const byFrom: Record<string, number> = {};
+    const byTo: Record<string, number> = {};
+    for (const m of allMoves) {
+      byFrom[m.from] = (byFrom[m.from] || 0) + m.qty;
+      byTo[m.to] = (byTo[m.to] || 0) + m.qty;
+    }
+    const topFrom = Object.entries(byFrom).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const topTo = Object.entries(byTo).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    return {
+      totalMoves: allMoves.length,
+      totalQty,
+      uniqueRefs,
+      lojasOrigem: fromStoresSet.size,
+      lojasDestino: toStoresSet.size,
+      topFrom,
+      topTo,
+    };
+  }, [allMoves]);
+
+  const apply = async () => {
+    if (allMoves.length === 0) return;
+    if (
+      !confirm(
+        `Vai criar ${stats.totalMoves} ordens de transferência (${stats.totalQty} peças) ` +
+          `entre ${stats.lojasOrigem} lojas origem e ${stats.lojasDestino} lojas destino.\n\n` +
+          `Cada loja origem vai receber cards de realinhamento na tela /minha-loja/realinhamento.\n\n` +
+          `Confirma?`,
+      )
+    ) return;
+
+    setApplying(true);
+    setResult(null);
+    try {
+      const plan = allMoves.map((m) => ({
+        sku: m.sku,
+        ref: m.ref,
+        cor: m.cor === 'SEM COR' ? null : m.cor,
+        tamanho: m.tamanho,
+        desc: m.desc,
+        fromCode: m.from,
+        toCode: m.to,
+        qty: m.qty,
+      }));
+
+      const res = await api<{ created: number; errors?: any[] }>(
+        '/realignment/confirm',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            plan,
+            note: `Realinhamento em LOTE · ${stats.totalMoves} movimentos · gerado pela tela de Distribuição`,
+          }),
+        },
+      );
+
+      setResult({
+        ok: true,
+        msg: `✓ ${res.created || allMoves.length} ordens criadas com sucesso. Lojas origem já recebendo notificação.`,
+      });
+      setTimeout(() => onSuccess(), 2500);
+    } catch (e: any) {
+      setResult({
+        ok: false,
+        msg: e?.message || 'Falha ao criar transferências',
+      });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-200 bg-gradient-to-r from-rose-50 to-violet-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center">
+              <Shuffle className="w-5 h-5 text-rose-700" />
+            </div>
+            <div>
+              <h2 className="font-bold text-slate-900 text-lg">Realinhar TODOS</h2>
+              <p className="text-xs text-slate-500">
+                Balanço automático de todas as variações desequilibradas
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/60 rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {allMoves.length === 0 ? (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-6 text-center">
+              <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
+              <div className="font-bold text-emerald-900">Nada pra realinhar!</div>
+              <div className="text-xs text-emerald-700 mt-1">
+                Todas as variações filtradas estão equilibradas OU não tem peças disponíveis pra distribuir.
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Resumo */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="bg-rose-50 border border-rose-200 rounded p-3 text-center">
+                  <div className="text-2xl font-black text-rose-700">{stats.totalMoves}</div>
+                  <div className="text-[10px] uppercase font-bold text-rose-800 tracking-wider">Movimentos</div>
+                </div>
+                <div className="bg-violet-50 border border-violet-200 rounded p-3 text-center">
+                  <div className="text-2xl font-black text-violet-700">{stats.totalQty}</div>
+                  <div className="text-[10px] uppercase font-bold text-violet-800 tracking-wider">Peças</div>
+                </div>
+                <div className="bg-blue-50 border border-blue-200 rounded p-3 text-center">
+                  <div className="text-2xl font-black text-blue-700">{stats.uniqueRefs}</div>
+                  <div className="text-[10px] uppercase font-bold text-blue-800 tracking-wider">REFs</div>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded p-3 text-center">
+                  <div className="text-2xl font-black text-emerald-700">
+                    {stats.lojasOrigem}→{stats.lojasDestino}
+                  </div>
+                  <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Lojas</div>
+                </div>
+              </div>
+
+              {/* Top origens e destinos */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="border border-slate-200 rounded-lg p-3">
+                  <div className="text-[11px] uppercase font-bold text-slate-500 tracking-wider mb-2">
+                    Top 5 origens (envia)
+                  </div>
+                  <div className="space-y-1">
+                    {stats.topFrom.map(([code, qty]) => (
+                      <div key={code} className="flex items-center justify-between text-sm">
+                        <span className="text-slate-700">
+                          <span className="font-mono text-xs text-slate-400 mr-1">{code}</span>
+                          {(storeNameByCode.get(code) || code).replace(/^Lurd's\s*/i, '')}
+                        </span>
+                        <span className="font-mono font-bold text-rose-600">−{qty}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="border border-slate-200 rounded-lg p-3">
+                  <div className="text-[11px] uppercase font-bold text-slate-500 tracking-wider mb-2">
+                    Top 5 destinos (recebe)
+                  </div>
+                  <div className="space-y-1">
+                    {stats.topTo.map(([code, qty]) => (
+                      <div key={code} className="flex items-center justify-between text-sm">
+                        <span className="text-slate-700">
+                          <span className="font-mono text-xs text-slate-400 mr-1">{code}</span>
+                          {(storeNameByCode.get(code) || code).replace(/^Lurd's\s*/i, '')}
+                        </span>
+                        <span className="font-mono font-bold text-emerald-600">+{qty}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Preview de alguns moves */}
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 text-[11px] uppercase font-bold text-slate-600 tracking-wider">
+                  Pré-visualização (primeiros 20 movimentos)
+                </div>
+                <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
+                  {allMoves.slice(0, 20).map((m, i) => (
+                    <div key={i} className="px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-slate-50">
+                      <span className="font-mono text-rose-600 w-10 text-right">−{m.qty}</span>
+                      <span className="font-mono text-[10px] text-slate-400 w-8">{m.from}</span>
+                      <span className="text-slate-400">→</span>
+                      <span className="font-mono text-[10px] text-slate-400 w-8">{m.to}</span>
+                      <span className="font-bold text-emerald-600 w-10">+{m.qty}</span>
+                      <span className="flex-1 truncate text-slate-600">
+                        REF <strong>{m.ref}</strong> · {m.cor} · Tam {m.tamanho}
+                      </span>
+                    </div>
+                  ))}
+                  {allMoves.length > 20 && (
+                    <div className="px-3 py-2 text-center text-xs text-slate-500 bg-slate-50">
+                      …e mais {allMoves.length - 20} movimentos
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {result && (
+                <div
+                  className={`p-3 rounded-lg text-sm ${
+                    result.ok
+                      ? 'bg-emerald-50 border border-emerald-200 text-emerald-900'
+                      : 'bg-rose-50 border border-rose-200 text-rose-900'
+                  }`}
+                >
+                  {result.msg}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-200 flex items-center gap-2 bg-slate-50">
+          <button
+            onClick={onClose}
+            disabled={applying}
+            className="flex-1 px-4 py-2 rounded-lg bg-white border border-slate-300 hover:bg-slate-100 text-sm font-medium disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          {allMoves.length > 0 && !result?.ok && (
+            <button
+              onClick={apply}
+              disabled={applying}
+              className="flex-1 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white text-sm font-bold flex items-center justify-center gap-2"
+            >
+              {applying ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Criando {allMoves.length} ordens…
+                </>
+              ) : (
+                <>
+                  <Shuffle className="w-4 h-4" />
+                  Aplicar TODOS ({allMoves.length})
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
