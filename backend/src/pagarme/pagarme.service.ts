@@ -750,21 +750,31 @@ export class PagarmeService {
     );
 
     // Persiste igual ao PIX (mesma tabela pagarmePayment pra rastrear webhook depois)
+    // BUG FIX: schema do PagarmePayment exige storeCode e valor — sem isso o
+    // create falhava silenciosamente e o webhook depois não achava a order
+    // ("webhook pra order desconhecida"). Agora salva todos os campos required.
     try {
       await (this.prisma as any).pagarmePayment.create({
         data: {
           saleId: input.saleId,
+          storeCode: input.storeCode,
           pagarmeOrderId: orderId,
           method: 'checkout',
           valor: input.valor,
           status: 'pending',
           qrCodeText: paymentUrl, // reusa campo pra guardar URL
-          rawResponse: JSON.stringify(order).slice(0, 8000),
+          expiresAt,
         },
       });
     } catch (e: any) {
-      // Se modelo não tiver campos esperados, só loga — não bloqueia retorno
-      this.logger.warn(`[pagarme] não persistiu pagarmePayment: ${e?.message || e}`);
+      // Se modelo falhar, loga erro REAL — não silencia
+      this.logger.error(
+        `[pagarme] FALHA AO PERSISTIR pagarmePayment (sale=${input.saleId} order=${orderId}): ${e?.message || e}`,
+      );
+      // Re-lança — sem persistência o webhook nunca vai conseguir vincular
+      throw new BadRequestException(
+        `Link gerado na Pagar.me mas falhou ao salvar no banco. Cancele esse link no painel Pagar.me e tente de novo. Detalhe: ${e?.message || 'erro desconhecido'}`,
+      );
     }
 
     return {
