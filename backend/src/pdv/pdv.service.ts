@@ -996,6 +996,14 @@ export class PdvService {
     name?: string;
     email?: string;
     phone?: string;
+    // Endereço (essencial pra venda online — WhatsApp/Instagram)
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
   }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
@@ -1024,6 +1032,14 @@ export class PdvService {
     if (input.name !== undefined) data.customerName = input.name?.trim() || null;
     if (input.email !== undefined) data.customerEmail = input.email?.trim() || null;
     if (input.phone !== undefined) data.customerPhone = input.phone?.replace(/\D/g, '') || null;
+    // Endereço — só limpa máscara do CEP; resto trim
+    if (input.cep !== undefined) data.customerCep = input.cep?.replace(/\D/g, '') || null;
+    if (input.endereco !== undefined) data.customerEndereco = input.endereco?.trim() || null;
+    if (input.numero !== undefined) data.customerNumero = input.numero?.trim() || null;
+    if (input.complemento !== undefined) data.customerComplemento = input.complemento?.trim() || null;
+    if (input.bairro !== undefined) data.customerBairro = input.bairro?.trim() || null;
+    if (input.cidade !== undefined) data.customerCidade = input.cidade?.trim() || null;
+    if (input.uf !== undefined) data.customerUf = input.uf?.trim().toUpperCase().slice(0, 2) || null;
 
     return (this.prisma as any).pdvSale.update({
       where: { id: sale.id },

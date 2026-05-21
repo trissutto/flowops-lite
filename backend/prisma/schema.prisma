@@ -949,6 +949,15 @@ model PdvSale {
   customerName    String?  @map("customer_name")
   customerEmail   String?  @map("customer_email")
   customerPhone   String?  @map("customer_phone")
+  // Endereço de entrega (essencial pra vendas online: WhatsApp/Instagram).
+  // Opcional pra balcão. Preenchido manualmente ou via lookup ViaCEP no front.
+  customerCep         String?  @map("customer_cep")
+  customerEndereco    String?  @map("customer_endereco")    // logradouro
+  customerNumero      String?  @map("customer_numero")
+  customerComplemento String?  @map("customer_complemento")
+  customerBairro      String?  @map("customer_bairro")
+  customerCidade      String?  @map("customer_cidade")
+  customerUf          String?  @map("customer_uf")
   // Status + valores
   status          String   @default("open")
   subtotal        Float    @default(0)

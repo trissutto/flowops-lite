@@ -68,6 +68,14 @@ type Sale = {
   customerName: string | null;
   customerEmail: string | null;
   customerPhone: string | null;
+  // Endereço (essencial pra venda online: WhatsApp/Instagram)
+  customerCep?: string | null;
+  customerEndereco?: string | null;
+  customerNumero?: string | null;
+  customerComplemento?: string | null;
+  customerBairro?: string | null;
+  customerCidade?: string | null;
+  customerUf?: string | null;
   status: 'open' | 'finalized' | 'cancelled' | string;
   subtotal: number;
   desconto: number;
@@ -830,7 +838,19 @@ function PdvPageInner() {
   };
 
   // ── Cliente ──
-  const saveCustomer = async (data: { cpf: string; name: string; email: string; phone: string }) => {
+  const saveCustomer = async (data: {
+    cpf: string;
+    name: string;
+    email: string;
+    phone: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
+  }) => {
     if (!sale) return;
     try {
       await api(`/pdv/sales/${sale.id}/customer`, {
@@ -2166,6 +2186,13 @@ function PdvPageInner() {
             name: sale.customerName || '',
             email: sale.customerEmail || '',
             phone: sale.customerPhone || '',
+            cep: sale.customerCep || '',
+            endereco: sale.customerEndereco || '',
+            numero: sale.customerNumero || '',
+            complemento: sale.customerComplemento || '',
+            bairro: sale.customerBairro || '',
+            cidade: sale.customerCidade || '',
+            uf: sale.customerUf || '',
           }}
           onClose={() => setShowCustomer(false)}
           onSave={saveCustomer}
@@ -2639,14 +2666,82 @@ function CustomerModal({
   onClose,
   onSave,
 }: {
-  initial: { cpf: string; name: string; email: string; phone: string };
+  initial: {
+    cpf: string;
+    name: string;
+    email: string;
+    phone: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
+  };
   onClose: () => void;
-  onSave: (d: { cpf: string; name: string; email: string; phone: string }) => void;
+  onSave: (d: {
+    cpf: string;
+    name: string;
+    email: string;
+    phone: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
+  }) => void;
 }) {
   const [cpf, setCpf] = useState(initial.cpf);
   const [name, setName] = useState(initial.name);
   const [email, setEmail] = useState(initial.email);
   const [phone, setPhone] = useState(initial.phone);
+  // Endereço — essencial pra vendas online (WhatsApp/Insta). Section
+  // expansível pra não poluir balcão.
+  const [cep, setCep] = useState(initial.cep || '');
+  const [endereco, setEndereco] = useState(initial.endereco || '');
+  const [numero, setNumero] = useState(initial.numero || '');
+  const [complemento, setComplemento] = useState(initial.complemento || '');
+  const [bairro, setBairro] = useState(initial.bairro || '');
+  const [cidade, setCidade] = useState(initial.cidade || '');
+  const [uf, setUf] = useState(initial.uf || '');
+  // Auto-expande se já tem algum dado de endereço preenchido
+  const [showEndereco, setShowEndereco] = useState(
+    !!(initial.cep || initial.endereco || initial.cidade),
+  );
+  const [cepLoading, setCepLoading] = useState(false);
+  const [cepError, setCepError] = useState<string | null>(null);
+
+  // ── ViaCEP lookup ─────────────────────────────────────────────────────
+  // Chama API pública gratuita https://viacep.com.br quando CEP completo (8
+  // dígitos). Preenche logradouro/bairro/cidade/UF — vendedora só completa
+  // número e complemento.
+  const lookupCep = async (cepRaw: string) => {
+    const clean = cepRaw.replace(/\D/g, '');
+    if (clean.length !== 8) return;
+    setCepLoading(true);
+    setCepError(null);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await r.json();
+      if (data?.erro) {
+        setCepError('CEP não encontrado');
+        return;
+      }
+      // Só preenche se vendedora ainda não preencheu manualmente — não
+      // sobrescreve dado já digitado
+      if (!endereco) setEndereco(data.logradouro || '');
+      if (!bairro) setBairro(data.bairro || '');
+      if (!cidade) setCidade(data.localidade || '');
+      if (!uf) setUf((data.uf || '').toUpperCase());
+    } catch (e) {
+      setCepError('Falha ao buscar CEP — preencha manualmente');
+    } finally {
+      setCepLoading(false);
+    }
+  };
 
   // ─── Typeahead: busca por CPF OR nome no Giga ───────────────────────────
   // Aceita: dígitos parciais (CPF) ou texto (nome). Debounce de 300ms.
@@ -2794,8 +2889,109 @@ function CustomerModal({
             className="w-full border rounded px-3 py-2 text-sm"
           />
         </div>
+
+        {/* ENDEREÇO — section expansível. Essencial pra vendas online (WhatsApp/
+            Instagram) onde a loja precisa enviar pelo correio. Lookup automático
+            via ViaCEP quando CEP completo. */}
+        <div className="border-t pt-2">
+          <button
+            type="button"
+            onClick={() => setShowEndereco((v) => !v)}
+            className="w-full flex items-center justify-between px-2 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 rounded"
+          >
+            <span className="flex items-center gap-2">
+              📍 Endereço de entrega
+              {!showEndereco && (cep || endereco || cidade) && (
+                <span className="text-[10px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">PREENCHIDO</span>
+              )}
+            </span>
+            <span className="text-xs text-slate-400">
+              {showEndereco ? '▲ ocultar' : '▼ expandir'}
+            </span>
+          </button>
+
+          {showEndereco && (
+            <div className="space-y-2 mt-2">
+              <div className="bg-cyan-50 border border-cyan-200 rounded p-2 text-[11px] text-cyan-800">
+                Obrigatório pra <b>Venda Online</b> (vai pelo correio). Opcional no balcão.
+              </div>
+
+              {/* CEP + lookup ViaCEP */}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input
+                    value={cep}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 8);
+                      setCep(v);
+                      if (v.length === 8) lookupCep(v);
+                    }}
+                    placeholder="CEP (só números)"
+                    maxLength={8}
+                    inputMode="numeric"
+                    className="w-full border rounded px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+                {cepLoading && (
+                  <div className="flex items-center px-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-cyan-600" />
+                  </div>
+                )}
+              </div>
+              {cepError && (
+                <div className="text-xs text-rose-600">{cepError}</div>
+              )}
+
+              <input
+                value={endereco}
+                onChange={(e) => setEndereco(e.target.value)}
+                placeholder="Logradouro (rua/avenida)"
+                className="w-full border rounded px-3 py-2 text-sm"
+              />
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  value={numero}
+                  onChange={(e) => setNumero(e.target.value)}
+                  placeholder="Nº"
+                  className="border rounded px-3 py-2 text-sm"
+                />
+                <input
+                  value={complemento}
+                  onChange={(e) => setComplemento(e.target.value)}
+                  placeholder="Complemento"
+                  className="col-span-2 border rounded px-3 py-2 text-sm"
+                />
+              </div>
+              <input
+                value={bairro}
+                onChange={(e) => setBairro(e.target.value)}
+                placeholder="Bairro"
+                className="w-full border rounded px-3 py-2 text-sm"
+              />
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  value={cidade}
+                  onChange={(e) => setCidade(e.target.value)}
+                  placeholder="Cidade"
+                  className="col-span-2 border rounded px-3 py-2 text-sm"
+                />
+                <input
+                  value={uf}
+                  onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))}
+                  placeholder="UF"
+                  maxLength={2}
+                  className="border rounded px-3 py-2 text-sm font-mono uppercase"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         <button
-          onClick={() => onSave({ cpf, name, email, phone })}
+          onClick={() => onSave({
+            cpf, name, email, phone,
+            cep, endereco, numero, complemento, bairro, cidade, uf,
+          })}
           className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded"
         >
           Salvar
