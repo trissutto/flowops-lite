@@ -345,7 +345,7 @@ function TabGeral({ data, id, onSave }: any) {
       <FieldDark label="Nome do imóvel" value={name} onChange={setName} />
       <FieldDark label="Proprietário" value={proprietario} onChange={setProprietario} />
       <div className="grid grid-cols-2 gap-3">
-        <FieldDark label="CEP" value={cep} onChange={(v) => setCep(v.replace(/\D/g, '').slice(0, 8))} />
+        <FieldDark label="CEP" value={cep} onChange={(v: string) => setCep(v.replace(/\D/g, '').slice(0, 8))} />
         <SelectDark label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
       </div>
       <FieldDark label="Logradouro" value={endereco} onChange={setEndereco} />
@@ -360,7 +360,7 @@ function TabGeral({ data, id, onSave }: any) {
         <div className="col-span-2">
           <FieldDark label="Cidade" value={cidade} onChange={setCidade} />
         </div>
-        <FieldDark label="UF" value={estado} onChange={(v) => setEstado(v.toUpperCase().slice(0, 2))} />
+        <FieldDark label="UF" value={estado} onChange={(v: string) => setEstado(v.toUpperCase().slice(0, 2))} />
       </div>
       <FieldDark label="Observações" value={observacoes} onChange={setObservacoes} type="textarea" />
 
@@ -423,14 +423,14 @@ function UtilityForm({ title, icon: Icon, data, endpoint, fields, onSaved }: any
             <SelectDark
               label={f.label}
               value={form[f.key] || ''}
-              onChange={(v) => setForm({ ...form, [f.key]: v })}
+              onChange={(v: string) => setForm({ ...form, [f.key]: v })}
               options={f.options}
             />
           ) : (
             <FieldDark
               label={f.label}
               value={form[f.key] ?? ''}
-              onChange={(v) => setForm({ ...form, [f.key]: v })}
+              onChange={(v: string) => setForm({ ...form, [f.key]: v })}
               type={f.type}
             />
           )}
@@ -644,7 +644,12 @@ function TabHistorico({ id }: { id: string }) {
 }
 
 // ─── INPUTS REUSÁVEIS ──────────────────────────────────────────────────
-function FieldDark({ label, value, onChange, type }: any) {
+function FieldDark({ label, value, onChange, type }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+}) {
   return (
     <label className="block">
       <span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>
@@ -667,7 +672,12 @@ function FieldDark({ label, value, onChange, type }: any) {
     </label>
   );
 }
-function SelectDark({ label, value, onChange, options }: any) {
+function SelectDark({ label, value, onChange, options }: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
   return (
     <label className="block">
       <span className="text-xs font-bold text-slate-300 mb-1.5 block">{label}</span>
