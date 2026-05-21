@@ -926,9 +926,22 @@ function RealignDrawer({
           i++;
         }
       } else {
-        // Não dá pra todas: top N lojas (que recebem) pegam 1
+        // Não dá pra todas: PROTEGE quem já tem estoque (não zerar ninguém!)
+        // 1º: target=1 pras lojas que JÁ têm ≥ 1 (evita movimento desnecessário)
+        // 2º: target=1 pras restantes por priorityScore até acabar
         let remaining = totalAvailable;
-        for (const s of receivableStores) {
+        const withStock = receivableStores.filter(
+          (s) => (currentByStore[s.code] || 0) >= 1,
+        );
+        const withoutStock = receivableStores.filter(
+          (s) => (currentByStore[s.code] || 0) === 0,
+        );
+        for (const s of withStock) {
+          if (remaining <= 0) break;
+          target[tam][s.code] = 1;
+          remaining--;
+        }
+        for (const s of withoutStock) {
           if (remaining <= 0) break;
           target[tam][s.code] = 1;
           remaining--;
@@ -1241,8 +1254,20 @@ function RealignAllModal({
           i++;
         }
       } else {
+        // Não dá pra todas: PROTEGE quem já tem estoque (não zerar ninguém!)
         let remaining = totalAvailable;
-        for (const s of receivableStores) {
+        const withStock = receivableStores.filter(
+          (s) => (currentByStore[s.code] || 0) >= 1,
+        );
+        const withoutStock = receivableStores.filter(
+          (s) => (currentByStore[s.code] || 0) === 0,
+        );
+        for (const s of withStock) {
+          if (remaining <= 0) break;
+          target[s.code] = 1;
+          remaining--;
+        }
+        for (const s of withoutStock) {
           if (remaining <= 0) break;
           target[s.code] = 1;
           remaining--;
