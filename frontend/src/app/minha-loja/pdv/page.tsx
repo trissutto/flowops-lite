@@ -713,6 +713,28 @@ function PdvPageInner() {
   // ── Vendas em aberto (badge) ──
   const [openCount, setOpenCount] = useState(0);
   const [showOpenList, setShowOpenList] = useState(false);
+
+  // ── Links Pagar.me aguardando pagamento (widget global) ──
+  // Polling a cada 15s lista vendas pausadas com Link Pagar.me. Quando
+  // alguma vira paid, alerta sonoro + visual + a vendedora finaliza.
+  const [onlinePending, setOnlinePending] = useState<Array<{
+    saleId: string;
+    saleCode: string;
+    saleStatus: string;
+    customerName: string | null;
+    customerCpf: string | null;
+    customerPhone: string | null;
+    sellerName: string | null;
+    total: number;
+    pagarmeOrderId: string;
+    paymentUrl: string | null;
+    status: string;
+    paidAt: string | null;
+    createdAt: string;
+  }>>([]);
+  const [showOnlinePending, setShowOnlinePending] = useState(false);
+  // Set dos saleIds já notificados — evita tocar som 2x pro mesmo pagamento
+  const notifiedPaidRef = useRef<Set<string>>(new Set());
   const [showPixAvulso, setShowPixAvulso] = useState(false);
   const [showValeTroca, setShowValeTroca] = useState(false);
   // ── Modal de Desconto (% ou R$) — pode ser pra venda inteira ou item ──
@@ -743,6 +765,54 @@ function PdvPageInner() {
     if (storeCode) loadOpenCount();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeCode, sale?.id]);
+
+  // ── Polling Links Pagar.me pendentes (a cada 15s) ──
+  // Quando o cliente paga, o webhook do Pagar.me atualiza o status no banco.
+  // O polling pega esse status e dispara alerta sonoro + visual no header pra
+  // vendedora finalizar a venda. Roda enquanto o PDV estiver aberto.
+  const loadOnlinePending = async () => {
+    if (!storeCode) return;
+    try {
+      const list = await api<typeof onlinePending>(
+        `/pagarme/online-pending?storeCode=${storeCode}`,
+      );
+      setOnlinePending(Array.isArray(list) ? list : []);
+      // Detecta novos paid e notifica (toca som + toast)
+      for (const item of list) {
+        if (item.status === 'paid' && !notifiedPaidRef.current.has(item.saleId)) {
+          notifiedPaidRef.current.add(item.saleId);
+          // Som de alerta — usa WebAudio pra garantir que toca
+          try {
+            const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.value = 880; // Lá agudo
+            gain.gain.value = 0.3;
+            osc.start();
+            setTimeout(() => { osc.frequency.value = 1320; }, 150);
+            setTimeout(() => { osc.stop(); ctx.close(); }, 450);
+          } catch { /* sem som não bloqueia */ }
+          toast(
+            'success',
+            `💰 Cliente pagou — ${item.customerName || 'Sem nome'}`,
+            `Venda #${item.saleCode} (${brl(item.total)}) está pronta pra finalizar`,
+          );
+        }
+      }
+    } catch {
+      // silencioso
+    }
+  };
+  useEffect(() => {
+    if (!storeCode) return;
+    loadOnlinePending();
+    const id = setInterval(loadOnlinePending, 15000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storeCode]);
 
   // ── Badges de operação (pedidos site + realinhamento) ──
   // Polling leve a cada 30s pra alertar quando matriz manda algo novo.
@@ -4270,12 +4340,57 @@ function PaymentModal({
                     </div>
                     {pagarmeLinkPaid ? (
                       <div className="bg-emerald-100 border-2 border-emerald-500 rounded p-2 text-center text-emerald-800 font-bold animate-pulse">
-                        ✅ Cliente pagou! Finalizando...
+                        ✅ Cliente pagou! Aperte FINALIZAR.
                       </div>
                     ) : (
-                      <div className="text-[11px] text-violet-700 italic text-center">
-                        Aguardando cliente pagar... ⏳
-                      </div>
+                      <>
+                        <div className="bg-amber-50 border border-amber-300 rounded p-2 text-[11px] text-amber-900 leading-snug">
+                          ⏳ <b>Cliente leva tempo pra pagar.</b> Você pode liberar
+                          o caixa pra atender a próxima cliente — quando o
+                          pagamento cair, o sistema avisa no topo da tela com
+                          alerta sonoro.
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              // Força consulta SÍNCRONA na Pagar.me (não espera webhook)
+                              try {
+                                const r = await api<{ status: string; isPaid?: boolean }>(
+                                  `/pagarme/pix/check/${pagarmeLink.pagarmeOrderId}`,
+                                  { method: 'POST' },
+                                );
+                                if (r.isPaid || r.status === 'paid') {
+                                  setPagarmeLinkPaid(true);
+                                  toast('success', 'Pagamento confirmado!', 'Pode finalizar a venda.');
+                                } else {
+                                  toast(
+                                    'info',
+                                    `Status atual: ${r.status}`,
+                                    'Cliente ainda não pagou ou Pagar.me não processou.',
+                                  );
+                                }
+                              } catch (e: any) {
+                                toast('error', 'Erro ao conferir', e?.message || 'Tente novamente');
+                              }
+                            }}
+                            className="py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-lg flex items-center justify-center gap-1.5 text-xs"
+                          >
+                            🔄 Conferir agora
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Pausa a venda — link continua válido na Pagar.me.
+                              // Widget global do header detecta pagamento via webhook.
+                              onLater();
+                            }}
+                            className="py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg flex items-center justify-center gap-1.5 text-xs"
+                          >
+                            🚪 Liberar caixa
+                          </button>
+                        </div>
+                      </>
                     )}
                     <button
                       type="button"

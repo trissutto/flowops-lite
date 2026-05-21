@@ -116,6 +116,23 @@ export class PagarmeController {
     return this.svc.createCheckoutLink(body);
   }
 
+  /**
+   * GET /pagarme/online-pending?storeCode=01
+   * Lista Links Pagar.me aguardando pagamento na loja (últimas 48h).
+   * Usado pelo widget global do PDV pra alertar a vendedora quando o webhook
+   * bate paid — assim ela pode finalizar a venda sem ficar travada na tela
+   * esperando o cliente.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('online-pending')
+  async listOnlinePending(@Req() req: any, @Query('storeCode') storeCode: string) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store')
+      throw new ForbiddenException('Apenas admin ou loja');
+    if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+    return this.svc.listOnlinePending(storeCode);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('pix/status/:saleId')
   async getStatusBySale(@Req() req: any, @Param('saleId') saleId: string) {

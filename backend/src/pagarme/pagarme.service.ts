@@ -910,8 +910,11 @@ export class PagarmeService {
   // ── Helpers ─────────────────────────────────────────────────────────
 
   async getPaymentBySale(saleId: string) {
+    // BUG FIX: antes filtrava só method='pix' — assim polling do Link Pagar.me
+    // (method='checkout') não detectava pagamento. Agora pega o mais recente
+    // independente do método. Usado pelo endpoint /pagarme/pix/status/:saleId.
     return (this.prisma as any).pagarmePayment.findFirst({
-      where: { saleId, method: 'pix' },
+      where: { saleId },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -925,5 +928,75 @@ export class PagarmeService {
       orderBy: { createdAt: 'desc' },
       take: Math.min(200, input.limit || 50),
     });
+  }
+
+  /**
+   * Lista Links Pagar.me PENDENTES de uma loja (vendas pausadas/abertas
+   * aguardando o cliente pagar). Usado pelo widget global do PDV pra alertar
+   * a vendedora quando o webhook bate paid e tem venda pronta pra finalizar.
+   *
+   * Retorna pra cada item:
+   *   - dados da venda (cliente, total, código curto)
+   *   - URL do link Pagar.me
+   *   - status (pending/paid/failed) — vem do PagarmePayment atualizado via webhook
+   *
+   * Filtra:
+   *   - method = 'checkout' (só links, não PIX presencial)
+   *   - venda status open ou paused (não finalizada nem cancelada)
+   *   - PagarmePayment criado nas últimas 48h (evita lista infinita)
+   */
+  async listOnlinePending(storeCode: string) {
+    if (!storeCode) return [];
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const items = await (this.prisma as any).pagarmePayment.findMany({
+      where: {
+        method: 'checkout',
+        createdAt: { gte: cutoff },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    if (!items.length) return [];
+    const saleIds = items.map((i: any) => i.saleId);
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        id: { in: saleIds },
+        storeCode,
+        status: { in: ['open', 'paused'] },
+      },
+      select: {
+        id: true,
+        total: true,
+        status: true,
+        storeCode: true,
+        customerName: true,
+        customerCpf: true,
+        customerPhone: true,
+        sellerName: true,
+        vendedorName: true,
+        createdAt: true,
+      },
+    });
+    const saleById = new Map<string, any>(sales.map((s: any) => [s.id, s]));
+    return items
+      .filter((it: any) => saleById.has(it.saleId))
+      .map((it: any) => {
+        const s = saleById.get(it.saleId);
+        return {
+          saleId: s.id,
+          saleCode: s.id.slice(-6).toUpperCase(),
+          saleStatus: s.status,
+          customerName: s.customerName,
+          customerCpf: s.customerCpf,
+          customerPhone: s.customerPhone,
+          sellerName: s.sellerName || s.vendedorName || null,
+          total: Number(s.total) || 0,
+          pagarmeOrderId: it.pagarmeOrderId,
+          paymentUrl: it.qrCodeText || null, // URL salvo no campo qrCodeText
+          status: it.status, // pending | paid | failed | canceled
+          paidAt: it.paidAt,
+          createdAt: it.createdAt,
+        };
+      });
   }
 }
