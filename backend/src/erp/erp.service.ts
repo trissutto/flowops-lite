@@ -6728,4 +6728,392 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     Sprint 4 — Vendas históricas por REF + loja.
+     Usado pra escolher loja consolidadora (top vendedora ganha desempate).
+     Default: últimos 180 dias. JOIN caixa × produtos por REF.
+     ═══════════════════════════════════════════════════════════════════════ */
+  async getSalesByRef(ref: string, dias: number = 180): Promise<{
+    vendas: Array<{ loja: string; qty: number; valor: number }>;
+    totalQty: number;
+    totalValor: number;
+    dias: number;
+  }> {
+    const empty = { vendas: [], totalQty: 0, totalValor: 0, dias };
+    if (!this.pool || !ref?.trim()) return empty;
+    const refClean = String(ref).trim();
+    const diasClamped = Math.max(7, Math.min(730, Math.round(dias) || 180));
+
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT c.LOJA AS loja,
+                SUM(c.QUANTIDADE) AS qty,
+                SUM(c.VALORTOTAL) AS valor
+           FROM caixa c
+           INNER JOIN produtos p ON CAST(c.CODIGO AS UNSIGNED) = CAST(p.CODIGO AS UNSIGNED)
+          WHERE p.REF = ?
+            AND c.DATA >= DATE_SUB(NOW(), INTERVAL ? DAY)
+            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+          GROUP BY c.LOJA
+          ORDER BY qty DESC`,
+        [refClean, diasClamped],
+      );
+      const vendas: Array<{ loja: string; qty: number; valor: number }> = [];
+      let totalQty = 0;
+      let totalValor = 0;
+      for (const r of rows as any[]) {
+        const loja = String(r.loja || '').trim().toUpperCase();
+        if (!loja || ['SITE', 'PF'].includes(loja)) continue;
+        const qty = Number(r.qty) || 0;
+        const valor = Number(r.valor) || 0;
+        vendas.push({ loja, qty, valor });
+        totalQty += qty;
+        totalValor += valor;
+      }
+      return { vendas, totalQty, totalValor, dias: diasClamped };
+    } catch (e) {
+      this.logger.warn(`getSalesByRef falhou pra ref=${refClean}: ${(e as Error).message}`);
+      return empty;
+    }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     Sprint 1 — Visão RAIZ (REF + COR), uma linha por referência.
+     Endpoint usado pela tela /retaguarda/distribuicao-estoque (modo "raiz").
+     ═══════════════════════════════════════════════════════════════════════
+
+     Diferença pro getStockDistribution clássico (que retorna 1 linha por
+     CODIGO = REF+COR+TAMANHO):
+       - aqui agrupa por REF+COR
+       - traz DATAALT, GRUPO, SUBGRUPO pra alimentar o classificador
+       - soma estoque por loja (somando todos os tamanhos)
+       - conta variações + tamanhos distintos pra detectar fragmentação
+
+     Performance: faz 2 queries só (produtos + estoque), agrupa em memória.
+     Limite alto (default 3000 REFs) — controlável via filters.limit.
+  */
+  async getStockDistributionByRef(filters: {
+    grupoCodigo?: number | null;
+    subgrupoCodigo?: number | null;
+    search?: string | null;
+    tamanhos?: string[] | null;
+    diasMaximos?: number | null;   // DATAALT >= NOW() - X dias
+    diasMinimos?: number | null;   // DATAALT <= NOW() - X dias  (peças "velhas")
+    mode?: 'imbalanced' | 'all';
+    minTotal?: number;
+    limit?: number;
+  } = {}): Promise<{
+    refs: Array<{
+      ref: string;
+      cor: string | null;
+      descricao: string;
+      preco: number;
+      dataAlt: string | null;
+      grupoCodigo: number | null;
+      subgrupoCodigo: number | null;
+      grupoNome: string | null;
+      subgrupoNome: string | null;
+      tamanhos: string[];        // tamanhos distintos com estoque > 0 na rede
+      variacoes: number;          // qtde de CODIGOs (REF+COR+TAM) com estoque > 0
+      lojasComEstoque: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+    }>;
+    lojas: string[];
+    totalRows: number;
+    truncated: boolean;
+  }> {
+    if (!this.pool) {
+      return { refs: [], lojas: [], totalRows: 0, truncated: false };
+    }
+
+    const limit = Math.max(50, Math.min(5000, filters.limit || 3000));
+    const mode = filters.mode || 'imbalanced';
+    const minTotal = Math.max(0, filters.minTotal ?? 2);
+
+    const defaultPlusSize = [
+      '46', '48', '50', '52', '54', '56', '58', '60',
+      '46/48', '48/50', '50/52', '52/54', '54/56', '56/58', '58/60',
+    ];
+    const tamanhos = (filters.tamanhos && filters.tamanhos.length > 0)
+      ? filters.tamanhos.map((t) => t.toUpperCase().trim()).filter(Boolean)
+      : defaultPlusSize;
+    const ignoredLojas = new Set(['SITE', 'PF']);
+
+    // Detecta colunas opcionais
+    const dataCol = (await this.pickCol([
+      'DATAALT', 'DATA_ALT', 'DT_ALT', 'DATAALTERACAO', 'DATA_ALTERACAO',
+      'DATACADASTRO', 'DT_CADASTRO',
+    ])) as string | null;
+    const subgrupoCol = (await this.pickCol(['SUBGRUPO', 'SUB_GRUPO'])) as string | null;
+    const grupoCol = (await this.pickCol(['GRUPO'])) as string | null;
+
+    // ── 1) Query principal: produtos agrupados por REF+COR ──
+    const conds: string[] = [
+      `TRIM(UPPER(COALESCE(p.TAMANHO, ''))) IN (${tamanhos.map(() => '?').join(',')})`,
+      `COALESCE(p.REF, '') <> ''`,
+    ];
+    const vals: any[] = [...tamanhos];
+
+    if (filters.grupoCodigo && grupoCol) {
+      conds.push(`p.\`${grupoCol}\` = ?`);
+      vals.push(filters.grupoCodigo);
+    }
+    if (filters.subgrupoCodigo && subgrupoCol) {
+      conds.push(`p.\`${subgrupoCol}\` = ?`);
+      vals.push(filters.subgrupoCodigo);
+    }
+    if (filters.search?.trim()) {
+      const tokens = filters.search.trim().toUpperCase().split(/\s+/).filter(Boolean);
+      for (const tok of tokens) {
+        const term = `%${tok}%`;
+        conds.push(
+          `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
+        );
+        vals.push(term, term, term);
+      }
+    }
+    if (filters.diasMaximos != null && dataCol) {
+      // peças "novas": DATAALT > NOW() - diasMaximos
+      conds.push(`p.\`${dataCol}\` >= DATE_SUB(NOW(), INTERVAL ? DAY)`);
+      vals.push(Math.max(1, Math.round(filters.diasMaximos)));
+    }
+    if (filters.diasMinimos != null && dataCol) {
+      // peças "velhas": DATAALT < NOW() - diasMinimos
+      conds.push(`p.\`${dataCol}\` <= DATE_SUB(NOW(), INTERVAL ? DAY)`);
+      vals.push(Math.max(1, Math.round(filters.diasMinimos)));
+    }
+
+    // SELECTs opcionais
+    const selectExtras: string[] = [];
+    if (dataCol) selectExtras.push(`MAX(p.\`${dataCol}\`) AS data_alt`);
+    if (grupoCol) selectExtras.push(`MAX(p.\`${grupoCol}\`) AS grupo_codigo`);
+    if (subgrupoCol) selectExtras.push(`MAX(p.\`${subgrupoCol}\`) AS subgrupo_codigo`);
+
+    const sqlMain = `
+      SELECT
+        p.REF AS ref,
+        COALESCE(p.COR, '') AS cor,
+        MAX(COALESCE(p.DESCRICAOCOMPLETA, '')) AS descricao,
+        ROUND(AVG(COALESCE(p.VENDAUN, 0)), 2) AS preco,
+        GROUP_CONCAT(DISTINCT p.CODIGO ORDER BY p.TAMANHO) AS codigos,
+        GROUP_CONCAT(DISTINCT TRIM(p.TAMANHO) ORDER BY p.TAMANHO) AS tamanhos
+        ${selectExtras.length > 0 ? ',' + selectExtras.join(',') : ''}
+      FROM produtos p
+      WHERE ${conds.join(' AND ')}
+      GROUP BY p.REF, COALESCE(p.COR, '')
+      ORDER BY MAX(COALESCE(p.DESCRICAOCOMPLETA, '')) ASC
+      LIMIT ?
+    `;
+    vals.push(limit);
+
+    this.logger.log(
+      `[erp] getStockDistributionByRef mode=${mode} grupo=${filters.grupoCodigo || 'all'} ` +
+      `sub=${filters.subgrupoCodigo || 'all'} search=${filters.search || '(none)'} ` +
+      `dataCol=${dataCol || 'none'} subgrupoCol=${subgrupoCol || 'none'}`,
+    );
+
+    const t0 = Date.now();
+    let rawRefs: any[] = [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlMain, vals);
+      rawRefs = rows as any[];
+    } catch (e) {
+      this.logger.error(`getStockDistributionByRef falhou: ${(e as Error).message}`);
+      return { refs: [], lojas: [], totalRows: 0, truncated: false };
+    }
+    this.logger.log(
+      `[erp] getStockDistributionByRef: ${rawRefs.length} refs em ${Date.now() - t0}ms`,
+    );
+
+    if (rawRefs.length === 0) {
+      return { refs: [], lojas: [], totalRows: 0, truncated: false };
+    }
+
+    // ── 2) Pega estoque agregado de todos os CODIGOs envolvidos ──
+    const allCodigos = new Set<string>();
+    for (const r of rawRefs) {
+      const csv = String(r.codigos || '');
+      for (const c of csv.split(',')) {
+        const trimmed = c.trim();
+        if (trimmed) allCodigos.add(trimmed);
+      }
+    }
+    const codigosArr = Array.from(allCodigos);
+    const estoquePorCodigo = new Map<string, Record<string, number>>();
+    const lojasSet = new Set<string>();
+
+    if (codigosArr.length > 0) {
+      const CHUNK = 5000;
+      for (let i = 0; i < codigosArr.length; i += CHUNK) {
+        const slice = codigosArr.slice(i, i + CHUNK);
+        const ph = slice.map(() => '?').join(',');
+        const sqlEst = `
+          SELECT CODIGO, LOJA, SUM(ESTOQUE) AS est
+            FROM estoque
+           WHERE CAST(CODIGO AS UNSIGNED) IN (${slice.map(() => 'CAST(? AS UNSIGNED)').join(',')})
+           GROUP BY CODIGO, LOJA
+        `;
+        try {
+          const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sqlEst, slice);
+          for (const r of rows as any[]) {
+            const cod = String(r.CODIGO).trim();
+            const loja = String(r.LOJA || '').trim().toUpperCase();
+            if (!loja || ignoredLojas.has(loja)) continue;
+            const qty = Number(r.est) || 0;
+            if (qty === 0) continue;
+            if (!estoquePorCodigo.has(cod)) estoquePorCodigo.set(cod, {});
+            const mapa = estoquePorCodigo.get(cod)!;
+            mapa[loja] = (mapa[loja] || 0) + qty;
+            lojasSet.add(loja);
+          }
+        } catch (e) {
+          this.logger.warn(`getStockDistributionByRef chunk estoque falhou: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    // ── 3) Resolve nomes de grupo/subgrupo (1 query batch) ──
+    const grupoCodes = new Set<number>();
+    const subgrupoCodes = new Set<number>();
+    for (const r of rawRefs) {
+      if (r.grupo_codigo != null) grupoCodes.add(Number(r.grupo_codigo));
+      if (r.subgrupo_codigo != null) subgrupoCodes.add(Number(r.subgrupo_codigo));
+    }
+    const grupoNames = new Map<number, string>();
+    const subgrupoNames = new Map<number, string>();
+    if (grupoCodes.size > 0) {
+      try {
+        const arr = Array.from(grupoCodes);
+        const ph = arr.map(() => '?').join(',');
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, GRUPO FROM grupos WHERE CODIGO IN (${ph})`,
+          arr,
+        );
+        for (const r of rows as any[]) {
+          grupoNames.set(Number(r.CODIGO), String(r.GRUPO || '').trim());
+        }
+      } catch (e) {
+        this.logger.warn(`fetch grupos falhou: ${(e as Error).message}`);
+      }
+    }
+    if (subgrupoCodes.size > 0) {
+      try {
+        const arr = Array.from(subgrupoCodes);
+        const ph = arr.map(() => '?').join(',');
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, SUBGRUPO FROM subgrupos WHERE CODIGO IN (${ph})`,
+          arr,
+        );
+        for (const r of rows as any[]) {
+          subgrupoNames.set(Number(r.CODIGO), String(r.SUBGRUPO || '').trim());
+        }
+      } catch (e) {
+        // Subgrupo tem CODIGO composto (GRUPO+CODIGO) em alguns schemas — ignora se falhar
+        this.logger.warn(`fetch subgrupos falhou: ${(e as Error).message}`);
+      }
+    }
+
+    // ── 4) Monta a lista final ──
+    type RefRow = {
+      ref: string;
+      cor: string | null;
+      descricao: string;
+      preco: number;
+      dataAlt: string | null;
+      grupoCodigo: number | null;
+      subgrupoCodigo: number | null;
+      grupoNome: string | null;
+      subgrupoNome: string | null;
+      tamanhos: string[];
+      variacoes: number;
+      lojasComEstoque: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+    };
+    const out: RefRow[] = [];
+
+    for (const r of rawRefs) {
+      const codigos = String(r.codigos || '').split(',').map((c) => c.trim()).filter(Boolean);
+      const estoquePorLoja: Record<string, number> = {};
+      let total = 0;
+      const variacoesComEstoque = new Set<string>();
+      const tamanhosComEstoque = new Set<string>();
+
+      for (const cod of codigos) {
+        const mapa = estoquePorCodigo.get(cod);
+        if (!mapa) continue;
+        let temEstoque = false;
+        for (const [loja, qty] of Object.entries(mapa)) {
+          if (qty <= 0) continue;
+          estoquePorLoja[loja] = (estoquePorLoja[loja] || 0) + qty;
+          total += qty;
+          temEstoque = true;
+        }
+        if (temEstoque) variacoesComEstoque.add(cod);
+      }
+
+      // tamanhos com estoque = só os que aparecem em variacoesComEstoque
+      // (precisa puxar TAMANHO de cada codigo — usa a lista do GROUP_CONCAT)
+      const tamanhosCsv = String(r.tamanhos || '');
+      const todosTamanhos = tamanhosCsv.split(',').map((t) => t.trim()).filter(Boolean);
+      // Não temos mapeamento codigo→tamanho aqui sem extra query.
+      // Solução barata: marcar todos como "potenciais" e refinar no frontend
+      // se necessário. Por ora, lista os tamanhos da REF+COR (independente de estoque).
+      for (const t of todosTamanhos) tamanhosComEstoque.add(t);
+
+      const lojasComEstoque = Object.values(estoquePorLoja).filter((v) => v > 0).length;
+
+      const gCode = r.grupo_codigo != null ? Number(r.grupo_codigo) : null;
+      const sCode = r.subgrupo_codigo != null ? Number(r.subgrupo_codigo) : null;
+
+      out.push({
+        ref: String(r.ref || '').trim(),
+        cor: r.cor ? String(r.cor).trim() : null,
+        descricao: String(r.descricao || '').trim(),
+        preco: Number(r.preco) || 0,
+        dataAlt: r.data_alt ? new Date(r.data_alt).toISOString() : null,
+        grupoCodigo: gCode,
+        subgrupoCodigo: sCode,
+        grupoNome: gCode != null ? grupoNames.get(gCode) || null : null,
+        subgrupoNome: sCode != null ? subgrupoNames.get(sCode) || null : null,
+        tamanhos: Array.from(tamanhosComEstoque).sort((a, b) => {
+          const na = parseInt(a, 10);
+          const nb = parseInt(b, 10);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return a.localeCompare(b);
+        }),
+        variacoes: variacoesComEstoque.size,
+        lojasComEstoque,
+        estoquePorLoja,
+        total,
+      });
+    }
+
+    // ── 5) Filtra: REFs sem estoque (total=0) ou abaixo do minTotal ──
+    let filtered = out.filter((r) => r.total > 0);
+    if (minTotal > 0) {
+      filtered = filtered.filter((r) => r.total >= minTotal);
+    }
+    if (mode === 'imbalanced') {
+      // "desequilibrada" no nível raiz = tem alguma loja com 0 E outra com 2+
+      filtered = filtered.filter((r) => {
+        const vals = Object.values(r.estoquePorLoja);
+        if (vals.length === 0) return false;
+        const max = Math.max(...vals);
+        const min = Math.min(0, ...vals);
+        return max >= 2 && min === 0;
+      });
+    }
+
+    const lojas = Array.from(lojasSet).filter((l) => !ignoredLojas.has(l)).sort();
+
+    return {
+      refs: filtered,
+      lojas,
+      totalRows: filtered.length,
+      truncated: rawRefs.length >= limit,
+    };
+  }
+
 }

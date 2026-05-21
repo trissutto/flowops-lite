@@ -77,7 +77,16 @@ export class StoresController {
    */
   @Post('realign-config/update')
   realignConfigUpdate(
-    @Body() body: { items: Array<{ code: string; canSendRealign: boolean; canReceiveRealign: boolean }> },
+    @Body()
+    body: {
+      items: Array<{
+        code: string;
+        canSendRealign: boolean;
+        canReceiveRealign: boolean;
+        consolidationScore?: number;
+        isOutlet?: boolean;
+      }>;
+    },
   ) {
     return this.stores.updateRealignConfig(body.items || []);
   }

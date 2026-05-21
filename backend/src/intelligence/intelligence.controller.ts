@@ -180,6 +180,60 @@ export class IntelligenceController {
   }
 
   /**
+   * GET /intelligence/stock-distribution-by-ref
+   * Sprint 1 — Visão RAIZ: 1 linha por REF+COR (não quebra por tamanho).
+   * Inclui DATAALT, grupo/subgrupo nomes, fragmentação, lojas com estoque.
+   *
+   * Query params:
+   *   grupo, subgrupo, search, tamanhos, mode, minTotal, limit (igual stock-distribution)
+   *   diasMax: int — só REFs cadastradas/alteradas nos últimos X dias
+   *   diasMin: int — só REFs com mais de X dias sem alteração (peças "velhas")
+   */
+  @Get('stock-distribution-by-ref')
+  async stockDistributionByRef(
+    @Req() req: any,
+    @Query('grupo') grupo?: string,
+    @Query('subgrupo') subgrupo?: string,
+    @Query('search') search?: string,
+    @Query('tamanhos') tamanhos?: string,
+    @Query('mode') mode?: string,
+    @Query('minTotal') minTotal?: string,
+    @Query('limit') limit?: string,
+    @Query('diasMax') diasMax?: string,
+    @Query('diasMin') diasMin?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.erp.getStockDistributionByRef({
+      grupoCodigo: grupo ? Number(grupo) : null,
+      subgrupoCodigo: subgrupo ? Number(subgrupo) : null,
+      search: search || null,
+      tamanhos: tamanhos ? tamanhos.split(',').map((s) => s.trim()).filter(Boolean) : null,
+      mode: mode === 'all' ? 'all' : 'imbalanced',
+      minTotal: minTotal ? Number(minTotal) : 2,
+      limit: limit ? Number(limit) : 3000,
+      diasMaximos: diasMax ? Number(diasMax) : null,
+      diasMinimos: diasMin ? Number(diasMin) : null,
+    });
+  }
+
+  /**
+   * GET /intelligence/ref-sales?ref=X&dias=180
+   * Sprint 4 — vendas históricas por REF agrupadas por loja.
+   * Default 180 dias. Usado pra escolher loja consolidadora (top vendedora
+   * tem peso extra no ranking de destino).
+   */
+  @Get('ref-sales')
+  async refSales(
+    @Req() req: any,
+    @Query('ref') ref: string,
+    @Query('dias') dias?: string,
+  ) {
+    this.requireAdmin(req);
+    if (!ref?.trim()) return { vendas: [], totalQty: 0, totalValor: 0, dias: 0 };
+    return this.erp.getSalesByRef(ref.trim(), dias ? Number(dias) : 180);
+  }
+
+  /**
    * GET /intelligence/grupos
    * Lista grupos do Wincred (pro filtro de categoria na tela de distribuição).
    */

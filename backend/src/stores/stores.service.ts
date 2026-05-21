@@ -25,6 +25,17 @@ export interface StoreInput {
    */
   expectedCnpj?: string | null;
   expectedRazaoSocial?: string | null;
+  /**
+   * Score (0-200) que define o "peso" da loja como destino quando o sistema
+   * CONSOLIDA peças fragmentadas (Sprint 3). Maior = mais ímã pra concentrar
+   * grades. Default 50 (neutro). Use 100+ pra lojas-âncora.
+   */
+  consolidationScore?: number;
+  /**
+   * Marca a loja como destino preferencial de peças OUTLET (cadastro antigo,
+   * baixo giro). Quando true, peças velhas vão pra essa loja.
+   */
+  isOutlet?: boolean;
 }
 
 @Injectable()
@@ -51,7 +62,9 @@ export class StoresService {
         priorityScore: true,
         canSendRealign: true,
         canReceiveRealign: true,
-      },
+        consolidationScore: true,
+        isOutlet: true,
+      } as any,
     });
     return stores;
   }
@@ -61,7 +74,13 @@ export class StoresService {
    * Atomicidade: tudo numa transaction — se um item falhar, rollback total.
    */
   async updateRealignConfig(
-    items: Array<{ code: string; canSendRealign: boolean; canReceiveRealign: boolean }>,
+    items: Array<{
+      code: string;
+      canSendRealign: boolean;
+      canReceiveRealign: boolean;
+      consolidationScore?: number;
+      isOutlet?: boolean;
+    }>,
   ) {
     if (!Array.isArray(items) || items.length === 0) {
       return { updated: 0 };
@@ -72,7 +91,12 @@ export class StoresService {
         data: {
           canSendRealign: !!it.canSendRealign,
           canReceiveRealign: !!it.canReceiveRealign,
-        },
+          // Campos Sprint 0 — só atualiza se vieram no payload (undefined = não mexe)
+          ...(it.consolidationScore !== undefined
+            ? { consolidationScore: Math.max(0, Math.min(200, Number(it.consolidationScore) || 50)) }
+            : {}),
+          ...(it.isOutlet !== undefined ? { isOutlet: !!it.isOutlet } : {}),
+        } as any,
       }),
     );
     await this.prisma.$transaction(ops);
@@ -110,6 +134,10 @@ export class StoresService {
         tipo: data.tipo === 'FILIAL' ? 'FILIAL' : 'REDE',
         expectedCnpj: this.cleanCnpj(data.expectedCnpj),
         expectedRazaoSocial: data.expectedRazaoSocial?.trim() || null,
+        consolidationScore: data.consolidationScore !== undefined
+          ? Math.max(0, Math.min(200, Number(data.consolidationScore) || 50))
+          : 50,
+        isOutlet: data.isOutlet ?? false,
       } as any,
     });
   }
@@ -148,6 +176,10 @@ export class StoresService {
         expectedRazaoSocial: data.expectedRazaoSocial !== undefined
           ? (data.expectedRazaoSocial?.trim() || null)
           : undefined,
+        consolidationScore: data.consolidationScore !== undefined
+          ? Math.max(0, Math.min(200, Number(data.consolidationScore) || 50))
+          : undefined,
+        isOutlet: data.isOutlet !== undefined ? !!data.isOutlet : undefined,
       } as any,
     });
   }

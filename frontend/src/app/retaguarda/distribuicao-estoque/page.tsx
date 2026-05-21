@@ -106,8 +106,11 @@ export default function DistribuicaoEstoque() {
   // ── Modal "Realinhar TODOS" ──
   const [showRealignAllModal, setShowRealignAllModal] = useState(false);
 
-  // ── Tab atual: 'distribuicao' | 'config' ──
-  const [activeTab, setActiveTab] = useState<'distribuicao' | 'config'>('distribuicao');
+  // ── Tab atual: 'raiz' | 'distribuicao' | 'config' ──
+  // raiz       = Sprint 1, visão agrupada por REF+COR (default)
+  // distribuicao = visão antiga (1 linha por variação REF+COR+TAM)
+  // config     = lojas que participam + scores
+  const [activeTab, setActiveTab] = useState<'raiz' | 'distribuicao' | 'config'>('raiz');
 
   // ── Dirty tracking: filtros mudaram desde a última busca ──
   // Usado pra avisar visualmente "clica Atualizar pra ver os novos resultados".
@@ -244,23 +247,25 @@ export default function DistribuicaoEstoque() {
               Detecta desequilíbrios entre lojas · PLUS SIZE
             </p>
           </div>
-          <button
-            onClick={() => setShowRealignAllModal(true)}
-            disabled={loading || !data || data.rows.filter((r) => r.criticidade !== 'OK').length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-md text-sm font-bold"
-            title="Realinhar TODAS as variações desequilibradas com 1 clique"
-          >
-            <Shuffle className="w-4 h-4" />
-            Realinhar TODOS
-            {data && (
-              <span className="ml-1 bg-white/20 px-1.5 py-0.5 rounded text-[10px] font-mono">
-                {data.rows.filter((r) => r.criticidade !== 'OK').length}
-              </span>
-            )}
-          </button>
+          {activeTab === 'distribuicao' && (
+            <button
+              onClick={() => setShowRealignAllModal(true)}
+              disabled={loading || !data || data.rows.filter((r) => r.criticidade !== 'OK').length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-md text-sm font-bold"
+              title="Realinhar TODAS as variações desequilibradas com 1 clique"
+            >
+              <Shuffle className="w-4 h-4" />
+              Realinhar TODOS
+              {data && (
+                <span className="ml-1 bg-white/20 px-1.5 py-0.5 rounded text-[10px] font-mono">
+                  {data.rows.filter((r) => r.criticidade !== 'OK').length}
+                </span>
+              )}
+            </button>
+          )}
           <button
             onClick={fetchData}
-            disabled={loading}
+            disabled={loading || activeTab !== 'distribuicao'}
             className={`relative flex items-center gap-1.5 px-3 py-2 text-white rounded-md text-sm font-bold disabled:opacity-50 transition ${
               filtersDirty
                 ? 'bg-amber-500 hover:bg-amber-600 ring-2 ring-amber-300 animate-pulse'
@@ -289,14 +294,26 @@ export default function DistribuicaoEstoque() {
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 w-fit">
           <button
+            onClick={() => setActiveTab('raiz')}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
+              activeTab === 'raiz'
+                ? 'bg-fuchsia-600 text-white shadow'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+            title="Visão por REF+COR — 1 linha por referência. Clica pra ver tamanhos."
+          >
+            🌱 Visão Raiz
+          </button>
+          <button
             onClick={() => setActiveTab('distribuicao')}
             className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
               activeTab === 'distribuicao'
                 ? 'bg-violet-600 text-white shadow'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
+            title="Visão antiga por variação — 1 linha por código de barras"
           >
-            📊 Distribuição
+            📊 Por Variação
           </button>
           <button
             onClick={() => setActiveTab('config')}
@@ -312,6 +329,8 @@ export default function DistribuicaoEstoque() {
 
         {activeTab === 'config' ? (
           <RealignConfigPanel />
+        ) : activeTab === 'raiz' ? (
+          <RefRootView stores={stores} grupos={grupos} />
         ) : (
           <>
         {/* KPIs */}
@@ -1684,6 +1703,9 @@ type RealignConfigItem = {
   priorityScore: number;
   canSendRealign: boolean;
   canReceiveRealign: boolean;
+  // Sprint 0 — Consolidação de grade
+  consolidationScore?: number;
+  isOutlet?: boolean;
 };
 
 function RealignConfigPanel() {
@@ -1726,6 +1748,19 @@ function RealignConfigPanel() {
     );
     setDirty(true);
   };
+  const setConsolidationScore = (code: string, value: number) => {
+    const clamped = Math.max(0, Math.min(200, Math.round(value) || 50));
+    setItems((prev) =>
+      prev.map((it) => (it.code === code ? { ...it, consolidationScore: clamped } : it)),
+    );
+    setDirty(true);
+  };
+  const toggleOutlet = (code: string) => {
+    setItems((prev) =>
+      prev.map((it) => (it.code === code ? { ...it, isOutlet: !it.isOutlet } : it)),
+    );
+    setDirty(true);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -1738,6 +1773,8 @@ function RealignConfigPanel() {
             code: it.code,
             canSendRealign: it.canSendRealign,
             canReceiveRealign: it.canReceiveRealign,
+            consolidationScore: it.consolidationScore ?? 50,
+            isOutlet: !!it.isOutlet,
           })),
         }),
       });
@@ -1811,6 +1848,8 @@ function RealignConfigPanel() {
               <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Prioridade</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-emerald-700 tracking-wider">Pode CEDER</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-blue-700 tracking-wider">Pode RECEBER</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-fuchsia-700 tracking-wider" title="Score (0-200) usado pra escolher loja destino na CONSOLIDAÇÃO de grade. Maior = mais ímã.">Score Consol.</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-orange-700 tracking-wider" title="Loja OUTLET: recebe peças velhas (>X dias) prioritariamente.">Outlet</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Status</th>
             </tr>
           </thead>
@@ -1848,9 +1887,27 @@ function RealignConfigPanel() {
                     <ToggleSwitch checked={it.canReceiveRealign} onChange={() => toggleReceive(it.code)} color="blue" />
                   </td>
                   <td className="px-3 py-2 text-center">
+                    <input
+                      type="number"
+                      min={0}
+                      max={200}
+                      step={10}
+                      value={it.consolidationScore ?? 50}
+                      onChange={(e) => setConsolidationScore(it.code, Number(e.target.value))}
+                      className="w-16 px-2 py-1 text-center text-sm font-mono font-bold text-fuchsia-700 border border-fuchsia-200 rounded focus:border-fuchsia-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-400"
+                      title="0 a 200. Maior = loja mais 'ímã' pra concentrar grades."
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <ToggleSwitch checked={!!it.isOutlet} onChange={() => toggleOutlet(it.code)} color="orange" />
+                  </td>
+                  <td className="px-3 py-2 text-center">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${status.cls}`}>
                       {status.label}
                     </span>
+                    {it.isOutlet && (
+                      <div className="text-[9px] font-bold text-orange-700 mt-0.5">🏷️ OUTLET</div>
+                    )}
                   </td>
                 </tr>
               );
@@ -1903,9 +1960,13 @@ function ToggleSwitch({
 }: {
   checked: boolean;
   onChange: () => void;
-  color: 'emerald' | 'blue';
+  color: 'emerald' | 'blue' | 'orange' | 'fuchsia';
 }) {
-  const onBg = color === 'emerald' ? 'bg-emerald-500' : 'bg-blue-500';
+  const onBg =
+    color === 'emerald' ? 'bg-emerald-500'
+    : color === 'orange' ? 'bg-orange-500'
+    : color === 'fuchsia' ? 'bg-fuchsia-500'
+    : 'bg-blue-500';
   return (
     <button
       onClick={onChange}
@@ -1940,5 +2001,918 @@ function Bolinha({ qty }: { qty: number }) {
     >
       {qty}
     </span>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RefRootView — Sprint 1 + 2 + 3
+   Visão RAIZ: 1 linha por REF+COR. Filtros: data cadastro, categoria,
+   subgrupo, busca por token. Cada linha mostra:
+     - DESCRICAOCOMPLETA + REF · COR
+     - Grupo / Subgrupo / DATAALT (idade da peça em dias)
+     - tamanhos com estoque
+     - Lojas com estoque (X/14)
+     - Total de peças
+     - MODO recomendado (Equilibrar / Consolidar / Outlet) — Sprint 2
+     - Ação: ver detalhes (drill-down) ou consolidar (Sprint 3)
+   ════════════════════════════════════════════════════════════════════════ */
+
+type RefRow = {
+  ref: string;
+  cor: string | null;
+  descricao: string;
+  preco: number;
+  dataAlt: string | null;
+  grupoCodigo: number | null;
+  subgrupoCodigo: number | null;
+  grupoNome: string | null;
+  subgrupoNome: string | null;
+  tamanhos: string[];
+  variacoes: number;
+  lojasComEstoque: number;
+  estoquePorLoja: Record<string, number>;
+  total: number;
+};
+
+type RefDistribution = {
+  refs: RefRow[];
+  lojas: string[];
+  totalRows: number;
+  truncated: boolean;
+};
+
+type ModoRecomendado = 'EQUILIBRAR' | 'CONSOLIDAR' | 'OUTLET' | 'OK';
+
+/**
+ * Sprint 2 — Detector de modo automático.
+ * Regras simples (configuráveis no futuro):
+ *   - OUTLET:     DATAALT > 180 dias + total < 15
+ *   - CONSOLIDAR: total < 12 + fragmentado em 5+ lojas
+ *                 OU lojas com estoque = lojas-total mas todas com 1 peça
+ *   - OK:         distribuição equilibrada (ninguém com 0 + max-min <= 1)
+ *   - EQUILIBRAR: default (tem desequilíbrio)
+ */
+function detectarModo(r: RefRow, totalLojasAtivas: number): ModoRecomendado {
+  // Calcula idade em dias
+  const idadeDias = r.dataAlt
+    ? Math.floor((Date.now() - new Date(r.dataAlt).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+
+  // OUTLET: peça velha + pouco estoque restante
+  if (idadeDias > 180 && r.total < 15) return 'OUTLET';
+
+  // Estatísticas das lojas
+  const vals = Object.values(r.estoquePorLoja).filter((v) => v > 0);
+  if (vals.length === 0) return 'OK';
+
+  const max = Math.max(...vals);
+  const min = Math.min(...vals);
+  const allOnes = vals.every((v) => v === 1);
+
+  // CONSOLIDAR: muito fragmentado (5+ lojas, todas com 1 peça)
+  // OU pouca peça total espalhada em muitas lojas
+  if ((vals.length >= 5 && allOnes) || (r.total < 12 && vals.length >= 4)) {
+    return 'CONSOLIDAR';
+  }
+
+  // OK: distribuição já equilibrada (max-min <= 1 e total cobre lojas ativas)
+  if (max - min <= 1 && vals.length >= totalLojasAtivas - 2) return 'OK';
+
+  return 'EQUILIBRAR';
+}
+
+function RefRootView({ stores, grupos }: { stores: Store[]; grupos: GrupoItem[] }) {
+  // ── Estado ──
+  const [data, setData] = useState<RefDistribution | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Filtros ──
+  const [grupoSelected, setGrupoSelected] = useState<number | null>(null);
+  const [subgrupos, setSubgrupos] = useState<GrupoItem[]>([]);
+  const [subgrupoSelected, setSubgrupoSelected] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [diasMax, setDiasMax] = useState<number | ''>(''); // peças NOVAS
+  const [diasMin, setDiasMin] = useState<number | ''>(''); // peças VELHAS
+  const [modeFilter, setModeFilter] = useState<'imbalanced' | 'all'>('imbalanced');
+  const [minTotal, setMinTotal] = useState(2);
+  const [drawerRef, setDrawerRef] = useState<RefRow | null>(null);
+  const [consolidateRef, setConsolidateRef] = useState<RefRow | null>(null);
+
+  // Filter local de modo (após detectar)
+  const [filterMode, setFilterMode] = useState<'TODOS' | ModoRecomendado>('TODOS');
+
+  // Subgrupos cascata
+  useEffect(() => {
+    if (!grupoSelected) {
+      setSubgrupos([]);
+      setSubgrupoSelected(null);
+      return;
+    }
+    api<GrupoItem[]>(`/intelligence/subgrupos?grupo=${grupoSelected}`)
+      .then(setSubgrupos)
+      .catch(() => setSubgrupos([]));
+  }, [grupoSelected]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (grupoSelected) params.set('grupo', String(grupoSelected));
+      if (subgrupoSelected) params.set('subgrupo', String(subgrupoSelected));
+      if (search.trim()) params.set('search', search.trim());
+      params.set('mode', modeFilter);
+      params.set('minTotal', String(minTotal));
+      if (diasMax !== '' && diasMax > 0) params.set('diasMax', String(diasMax));
+      if (diasMin !== '' && diasMin > 0) params.set('diasMin', String(diasMin));
+      params.set('limit', '3000');
+
+      const r = await api<RefDistribution>(`/intelligence/stock-distribution-by-ref?${params}`);
+      setData(r);
+    } catch (e: any) {
+      setError(e?.message || 'Erro ao carregar visão raiz');
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [grupoSelected, subgrupoSelected, search, modeFilter, minTotal, diasMax, diasMin]);
+
+  // Classifica refs com modo recomendado
+  const totalLojasAtivas = stores.filter((s) => s.active && !['SITE', 'PF'].includes(s.code)).length;
+  const refsComModo = useMemo(() => {
+    if (!data) return [];
+    return data.refs.map((r) => ({ ...r, modo: detectarModo(r, totalLojasAtivas) }));
+  }, [data, totalLojasAtivas]);
+
+  // Filtro local por modo
+  const refsFiltradas = useMemo(() => {
+    if (filterMode === 'TODOS') return refsComModo;
+    return refsComModo.filter((r) => r.modo === filterMode);
+  }, [refsComModo, filterMode]);
+
+  // KPIs por modo
+  const kpis = useMemo(() => {
+    const out = { equilibrar: 0, consolidar: 0, outlet: 0, ok: 0, total: 0, pecas: 0 };
+    for (const r of refsComModo) {
+      if (r.modo === 'EQUILIBRAR') out.equilibrar++;
+      else if (r.modo === 'CONSOLIDAR') out.consolidar++;
+      else if (r.modo === 'OUTLET') out.outlet++;
+      else out.ok++;
+      out.pecas += r.total;
+    }
+    out.total = refsComModo.length;
+    return out;
+  }, [refsComModo]);
+
+  const idadeStr = (dataAlt: string | null) => {
+    if (!dataAlt) return '—';
+    const dias = Math.floor((Date.now() - new Date(dataAlt).getTime()) / (1000 * 60 * 60 * 24));
+    if (dias < 1) return 'hoje';
+    if (dias < 30) return `${dias}d`;
+    if (dias < 365) return `${Math.floor(dias / 30)}m`;
+    return `${(dias / 365).toFixed(1)}a`;
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Filtros */}
+      <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-2">
+          <select
+            value={grupoSelected || ''}
+            onChange={(e) => setGrupoSelected(e.target.value ? Number(e.target.value) : null)}
+            className="md:col-span-2 px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
+          >
+            <option value="">Todas categorias</option>
+            {grupos.map((g) => (
+              <option key={g.codigo} value={g.codigo}>{g.nome}</option>
+            ))}
+          </select>
+          <select
+            value={subgrupoSelected || ''}
+            onChange={(e) => setSubgrupoSelected(e.target.value ? Number(e.target.value) : null)}
+            disabled={!grupoSelected || subgrupos.length === 0}
+            className="md:col-span-2 px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">Todos subgrupos</option>
+            {subgrupos.map((s) => (
+              <option key={s.codigo} value={s.codigo}>{s.nome}</option>
+            ))}
+          </select>
+          <div className="md:col-span-3 relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Buscar (REF, descrição, cor…)"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && fetchData()}
+              className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
+            />
+          </div>
+          <div className="md:col-span-2 flex items-center gap-1">
+            <input
+              type="number"
+              min={1}
+              placeholder="Novas: ≤dias"
+              value={diasMax}
+              onChange={(e) => setDiasMax(e.target.value ? Number(e.target.value) : '')}
+              title="Filtrar peças cadastradas nos últimos X dias (DATAALT)"
+              className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
+            />
+            <input
+              type="number"
+              min={1}
+              placeholder="Velhas: ≥dias"
+              value={diasMin}
+              onChange={(e) => setDiasMin(e.target.value ? Number(e.target.value) : '')}
+              title="Filtrar peças cadastradas há mais de X dias"
+              className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
+            />
+          </div>
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="md:col-span-2 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 text-white text-sm font-bold rounded"
+          >
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            Buscar
+          </button>
+          <button
+            onClick={() => {
+              setGrupoSelected(null);
+              setSubgrupoSelected(null);
+              setSearch('');
+              setDiasMax('');
+              setDiasMin('');
+              setFilterMode('TODOS');
+            }}
+            className="md:col-span-1 px-2 py-1.5 text-sm text-slate-600 hover:text-slate-900 border border-slate-200 rounded hover:bg-slate-50"
+          >
+            Limpar
+          </button>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-slate-500 pt-1">
+          <span>Modo:</span>
+          <label className="flex items-center gap-1">
+            <input
+              type="radio"
+              checked={modeFilter === 'imbalanced'}
+              onChange={() => setModeFilter('imbalanced')}
+            />
+            Só desequilibradas
+          </label>
+          <label className="flex items-center gap-1">
+            <input
+              type="radio"
+              checked={modeFilter === 'all'}
+              onChange={() => setModeFilter('all')}
+            />
+            Todas
+          </label>
+          <span className="ml-3">Min. peças total:</span>
+          <input
+            type="number"
+            min={0}
+            value={minTotal}
+            onChange={(e) => setMinTotal(Math.max(0, Number(e.target.value) || 0))}
+            className="w-14 px-1.5 py-0.5 border border-slate-300 rounded"
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3 text-sm">
+          ❌ {error}
+        </div>
+      )}
+
+      {/* KPIs por modo */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <button
+          onClick={() => setFilterMode('TODOS')}
+          className={`text-left rounded-lg p-3 border transition ${
+            filterMode === 'TODOS'
+              ? 'bg-slate-200 border-slate-400 shadow-inner'
+              : 'bg-white border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <div className="text-xs font-bold text-slate-600 uppercase">Total REFs</div>
+          <div className="text-2xl font-bold text-slate-800">{kpis.total}</div>
+          <div className="text-[10px] text-slate-500">{kpis.pecas} peças</div>
+        </button>
+        <button
+          onClick={() => setFilterMode('EQUILIBRAR')}
+          className={`text-left rounded-lg p-3 border transition ${
+            filterMode === 'EQUILIBRAR'
+              ? 'bg-violet-200 border-violet-400 shadow-inner'
+              : 'bg-violet-50 border-violet-200 hover:bg-violet-100'
+          }`}
+          title="Distribuir entre as lojas (tem estoque suficiente)"
+        >
+          <div className="text-xs font-bold text-violet-700 uppercase">⚖️ Equilibrar</div>
+          <div className="text-2xl font-bold text-violet-800">{kpis.equilibrar}</div>
+        </button>
+        <button
+          onClick={() => setFilterMode('CONSOLIDAR')}
+          className={`text-left rounded-lg p-3 border transition ${
+            filterMode === 'CONSOLIDAR'
+              ? 'bg-orange-200 border-orange-400 shadow-inner'
+              : 'bg-orange-50 border-orange-200 hover:bg-orange-100'
+          }`}
+          title="Juntar fragmentos em 1 loja só (montar grade completa)"
+        >
+          <div className="text-xs font-bold text-orange-700 uppercase">🧲 Consolidar</div>
+          <div className="text-2xl font-bold text-orange-800">{kpis.consolidar}</div>
+        </button>
+        <button
+          onClick={() => setFilterMode('OUTLET')}
+          className={`text-left rounded-lg p-3 border transition ${
+            filterMode === 'OUTLET'
+              ? 'bg-amber-200 border-amber-400 shadow-inner'
+              : 'bg-amber-50 border-amber-200 hover:bg-amber-100'
+          }`}
+          title="Peça antiga, mandar pra loja outlet"
+        >
+          <div className="text-xs font-bold text-amber-700 uppercase">🏷️ Outlet</div>
+          <div className="text-2xl font-bold text-amber-800">{kpis.outlet}</div>
+        </button>
+        <button
+          onClick={() => setFilterMode('OK')}
+          className={`text-left rounded-lg p-3 border transition ${
+            filterMode === 'OK'
+              ? 'bg-emerald-200 border-emerald-400 shadow-inner'
+              : 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+          }`}
+          title="Já está distribuído, sem ação necessária"
+        >
+          <div className="text-xs font-bold text-emerald-700 uppercase">✅ OK</div>
+          <div className="text-2xl font-bold text-emerald-800">{kpis.ok}</div>
+        </button>
+      </div>
+
+      {/* Tabela RAIZ */}
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        {!data && !loading && (
+          <div className="p-12 text-center text-slate-500">
+            <Package className="w-12 h-12 mx-auto text-slate-300 mb-2" />
+            <div className="text-sm font-bold mb-1">Use os filtros e clique Buscar</div>
+            <div className="text-xs">Visão por REF+COR (1 linha por referência). Clique numa linha pra ver os tamanhos.</div>
+          </div>
+        )}
+        {loading && (
+          <div className="p-12 text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-fuchsia-600 mx-auto" />
+            <div className="text-sm text-slate-500 mt-2">Carregando…</div>
+          </div>
+        )}
+        {data && refsFiltradas.length > 0 && (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Descrição / REF · COR</th>
+                <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Grupo / Subgrupo</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider" title="Tempo desde DATAALT (cadastro/alteração)">Idade</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Tamanhos</th>
+                <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Total</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Lojas c/ estoque</th>
+                <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Preço</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Modo sugerido</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {refsFiltradas.map((r, idx) => {
+                const modoConfig = {
+                  EQUILIBRAR: { label: '⚖️ Equilibrar', cls: 'bg-violet-100 text-violet-800', acaoCls: 'bg-violet-600 hover:bg-violet-700' },
+                  CONSOLIDAR: { label: '🧲 Consolidar', cls: 'bg-orange-100 text-orange-800', acaoCls: 'bg-orange-600 hover:bg-orange-700' },
+                  OUTLET:     { label: '🏷️ Outlet',     cls: 'bg-amber-100 text-amber-800',  acaoCls: 'bg-amber-600 hover:bg-amber-700' },
+                  OK:         { label: '✅ OK',          cls: 'bg-emerald-100 text-emerald-800', acaoCls: 'bg-slate-300 cursor-not-allowed' },
+                };
+                const mc = modoConfig[r.modo];
+                return (
+                  <tr key={`${r.ref}-${r.cor}-${idx}`} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-900">{r.descricao}</div>
+                      <div className="text-[11px] font-mono text-slate-500">
+                        REF <span className="font-bold">{r.ref}</span>
+                        {r.cor && <span className="ml-1">· {r.cor}</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="text-xs text-slate-700 font-semibold">{r.grupoNome || '—'}</div>
+                      <div className="text-[11px] text-slate-500">{r.subgrupoNome || '—'}</div>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-xs font-mono text-slate-600" title={r.dataAlt || ''}>
+                        {idadeStr(r.dataAlt)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-center text-xs">
+                      <div className="flex flex-wrap gap-1 justify-center">
+                        {r.tamanhos.slice(0, 8).map((t) => (
+                          <span key={t} className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-bold">{t}</span>
+                        ))}
+                        {r.tamanhos.length > 8 && (
+                          <span className="text-[10px] text-slate-500">+{r.tamanhos.length - 8}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-bold tabular-nums">{r.total}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className="text-xs font-mono text-slate-700">
+                        {r.lojasComEstoque}<span className="text-slate-400">/{totalLojasAtivas}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs font-mono text-slate-700">{brl(r.preco)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${mc.cls}`}>{mc.label}</span>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <div className="flex items-center gap-1 justify-center">
+                        <button
+                          onClick={() => setDrawerRef(r)}
+                          className="px-2 py-1 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded"
+                          title="Ver tamanhos + matriz por loja"
+                        >
+                          Detalhes
+                        </button>
+                        {(r.modo === 'CONSOLIDAR' || r.modo === 'OUTLET') && (
+                          <button
+                            onClick={() => setConsolidateRef(r)}
+                            className={`px-2 py-1 text-xs font-bold text-white rounded ${mc.acaoCls}`}
+                            title={r.modo === 'OUTLET' ? 'Consolidar pra loja OUTLET' : 'Consolidar grade numa loja'}
+                          >
+                            {r.modo === 'OUTLET' ? 'Outlet' : 'Consolidar'}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        {data && refsFiltradas.length === 0 && (
+          <div className="p-12 text-center text-slate-500">
+            <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-300 mb-2" />
+            <div className="text-sm">Nenhuma REF encontrada com esse filtro.</div>
+          </div>
+        )}
+        {data && data.truncated && (
+          <div className="bg-amber-50 border-t border-amber-200 px-3 py-2 text-xs text-amber-800">
+            ⚠️ Resultado truncado (limite 3000 REFs). Refina os filtros pra ver mais.
+          </div>
+        )}
+      </div>
+
+      {/* Drawer detalhes (puxa a matriz de tamanhos da REF clicada) */}
+      {drawerRef && (
+        <RefDetailsDrawer
+          refRow={drawerRef}
+          stores={stores}
+          onClose={() => setDrawerRef(null)}
+        />
+      )}
+
+      {/* Drawer consolidação (Sprint 3) */}
+      {consolidateRef && (
+        <ConsolidateDrawer
+          refRow={consolidateRef}
+          stores={stores}
+          isOutletMode={detectarModo(consolidateRef, totalLojasAtivas) === 'OUTLET'}
+          onClose={() => setConsolidateRef(null)}
+          onSuccess={() => {
+            setConsolidateRef(null);
+            fetchData();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RefDetailsDrawer — drill-down: mostra matriz de tamanhos x lojas da REF
+   ════════════════════════════════════════════════════════════════════════ */
+function RefDetailsDrawer({
+  refRow,
+  stores,
+  onClose,
+}: {
+  refRow: RefRow;
+  stores: Store[];
+  onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<Distribution | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set('search', refRow.ref);
+    params.set('mode', 'all');
+    params.set('minTotal', '0');
+    params.set('limit', '500');
+    api<Distribution>(`/intelligence/stock-distribution?${params}`)
+      .then((r) => {
+        // filtra só os da cor solicitada
+        const filtered = {
+          ...r,
+          rows: r.rows.filter((row) =>
+            (row.cor || '').trim().toUpperCase() === (refRow.cor || '').trim().toUpperCase(),
+          ),
+        };
+        setDetail(filtered);
+      })
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false));
+  }, [refRow]);
+
+  const lojasAtivas = stores
+    .filter((s) => s.active && !['SITE', 'PF'].includes(s.code))
+    .sort((a, b) => a.code.localeCompare(b.code));
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[900px] bg-white shadow-2xl z-40 overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between z-10">
+          <div>
+            <div className="font-bold text-lg text-slate-800">{refRow.descricao}</div>
+            <div className="text-xs font-mono text-slate-500">
+              REF <span className="font-bold">{refRow.ref}</span>
+              {refRow.cor && <span className="ml-1">· {refRow.cor}</span>}
+              <span className="ml-3 text-fuchsia-600 font-bold">{brl(refRow.preco)}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded">
+            <X className="w-5 h-5 text-slate-500" />
+          </button>
+        </div>
+        <div className="p-5">
+          {loading && (
+            <div className="text-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-fuchsia-600 mx-auto" />
+            </div>
+          )}
+          {detail && detail.rows.length > 0 && (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-2 py-1.5 text-left text-[10px] uppercase font-bold text-slate-600">Tam</th>
+                  {lojasAtivas.map((s) => (
+                    <th key={s.code} className="px-1.5 py-1.5 text-center text-[10px] uppercase font-bold text-slate-600">{s.code}</th>
+                  ))}
+                  <th className="px-2 py-1.5 text-right text-[10px] uppercase font-bold text-slate-600">Tot</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.rows.map((row) => (
+                  <tr key={row.codigo} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="px-2 py-1.5 font-bold text-slate-800">{row.tamanho}</td>
+                    {lojasAtivas.map((s) => {
+                      const qty = row.estoquePorLoja[s.code] || 0;
+                      return (
+                        <td key={s.code} className="px-1 py-1.5 text-center">
+                          <Bolinha qty={qty} />
+                        </td>
+                      );
+                    })}
+                    <td className="px-2 py-1.5 text-right font-bold tabular-nums">{row.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {detail && detail.rows.length === 0 && !loading && (
+            <div className="text-center py-12 text-slate-500 text-sm">
+              Sem variações encontradas.
+            </div>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ConsolidateDrawer — Sprint 3
+   Calcula plano de consolidação: TODAS as peças dessa REF+COR vão pra
+   1 loja consolidadora. Escolha:
+     1. Modo OUTLET → loja com isOutlet=true e maior consolidationScore
+     2. Modo CONSOLIDAR → loja com maior consolidationScore (+ histórico de
+        venda como tiebreaker se disponível)
+   Gera N moves (X loja → loja consolidadora) por tamanho.
+   ════════════════════════════════════════════════════════════════════════ */
+function ConsolidateDrawer({
+  refRow,
+  stores,
+  isOutletMode,
+  onClose,
+  onSuccess,
+}: {
+  refRow: RefRow;
+  stores: Store[];
+  isOutletMode: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [detail, setDetail] = useState<Distribution | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [configLojas, setConfigLojas] = useState<RealignConfigItem[]>([]);
+  const [selectedDestino, setSelectedDestino] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [salesByStore, setSalesByStore] = useState<Map<string, number>>(new Map());
+
+  // Carrega: detalhes da REF + config lojas + vendas (Sprint 4)
+  useEffect(() => {
+    const params = new URLSearchParams();
+    params.set('search', refRow.ref);
+    params.set('mode', 'all');
+    params.set('minTotal', '0');
+    params.set('limit', '500');
+
+    Promise.all([
+      api<Distribution>(`/intelligence/stock-distribution?${params}`),
+      api<RealignConfigItem[]>('/stores/realign-config/list'),
+      api<{ vendas: Array<{ loja: string; qty: number }> }>(`/intelligence/ref-sales?ref=${encodeURIComponent(refRow.ref)}`).catch(() => ({ vendas: [] })),
+    ])
+      .then(([dist, config, sales]) => {
+        const filtered = {
+          ...dist,
+          rows: dist.rows.filter(
+            (r) => (r.cor || '').trim().toUpperCase() === (refRow.cor || '').trim().toUpperCase(),
+          ),
+        };
+        setDetail(filtered);
+        setConfigLojas(config);
+        const salesMap = new Map<string, number>();
+        for (const v of sales.vendas || []) salesMap.set(v.loja, v.qty);
+        setSalesByStore(salesMap);
+
+        // Escolhe destino padrão
+        const candidatas = config.filter((c) => c.canReceiveRealign);
+        let destinoEscolhido: string | null = null;
+        if (isOutletMode) {
+          const outlets = candidatas.filter((c) => c.isOutlet);
+          if (outlets.length > 0) {
+            outlets.sort((a, b) => (b.consolidationScore ?? 50) - (a.consolidationScore ?? 50));
+            destinoEscolhido = outlets[0].code;
+          }
+        }
+        if (!destinoEscolhido) {
+          // Sem outlet (ou modo não-outlet): score + vendas como tiebreaker
+          const ranked = candidatas
+            .map((c) => ({
+              code: c.code,
+              score: (c.consolidationScore ?? 50) + (salesMap.get(c.code) || 0) * 0.5,
+            }))
+            .sort((a, b) => b.score - a.score);
+          if (ranked.length > 0) destinoEscolhido = ranked[0].code;
+        }
+        setSelectedDestino(destinoEscolhido);
+      })
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false));
+  }, [refRow, isOutletMode]);
+
+  // Lojas elegíveis pra ceder (canSendRealign)
+  const sendableCodes = useMemo(
+    () => new Set(configLojas.filter((c) => c.canSendRealign).map((c) => c.code)),
+    [configLojas],
+  );
+
+  // Calcula moves: tudo de TODAS as lojas (sendable) → destino selecionado, por tamanho
+  const moves = useMemo(() => {
+    if (!detail || !selectedDestino) return [] as Array<{
+      sku: string; ref: string; cor: string; tamanho: string; desc: string;
+      from: string; to: string; qty: number;
+    }>;
+    const out: Array<any> = [];
+    for (const row of detail.rows) {
+      for (const [loja, qty] of Object.entries(row.estoquePorLoja)) {
+        if (qty <= 0) continue;
+        if (loja === selectedDestino) continue;
+        if (!sendableCodes.has(loja)) continue;
+        out.push({
+          sku: row.codigo,
+          ref: row.ref,
+          cor: row.cor || '',
+          tamanho: row.tamanho || '',
+          desc: row.descricao,
+          from: loja,
+          to: selectedDestino,
+          qty,
+        });
+      }
+    }
+    return out;
+  }, [detail, selectedDestino, sendableCodes]);
+
+  const totalQty = moves.reduce((s, m) => s + m.qty, 0);
+  const lojasOrigem = new Set(moves.map((m) => m.from)).size;
+
+  const apply = async () => {
+    if (moves.length === 0 || !selectedDestino) return;
+    if (
+      !confirm(
+        `Vai criar ${moves.length} transferências (${totalQty} peças) DE ${lojasOrigem} lojas PARA ${selectedDestino}.\n\n` +
+          `Toda essa REF/COR vai ser consolidada em ${selectedDestino}.\n\nConfirma?`,
+      )
+    ) return;
+
+    setApplying(true);
+    setResult(null);
+    try {
+      // Mesmo endpoint que o realinhamento normal usa: /realignment/confirm
+      // Diferença é só o note (rastreabilidade) — operacionalmente as lojas
+      // veem cards idênticos na tela /minha-loja/realinhamento.
+      const plan = moves.map((m) => ({
+        sku: m.sku,
+        ref: m.ref,
+        cor: m.cor || null,
+        tamanho: m.tamanho,
+        desc: m.desc,
+        fromCode: m.from,
+        toCode: m.to,
+        qty: m.qty,
+      }));
+      const modeLabel = isOutletMode ? 'OUTLET' : 'CONSOLIDAÇÃO';
+      const res = await api<{ created: number; errors?: any[] }>(
+        '/realignment/confirm',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            plan,
+            note: `${modeLabel} · REF ${refRow.ref} ${refRow.cor || ''} · destino ${selectedDestino}`,
+          }),
+        },
+      );
+      setResult({ ok: true, msg: `✓ ${res.created || moves.length} ordens criadas. Lojas origem já notificadas.` });
+      setTimeout(onSuccess, 2000);
+    } catch (e: any) {
+      setResult({ ok: false, msg: e?.message || 'Erro ao aplicar' });
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const lojasReceptoras = configLojas.filter((c) => c.canReceiveRealign);
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
+      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[900px] bg-white shadow-2xl z-40 overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                  isOutletMode ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800'
+                }`}>
+                  {isOutletMode ? '🏷️ MODO OUTLET' : '🧲 CONSOLIDAR GRADE'}
+                </span>
+              </div>
+              <div className="font-bold text-lg text-slate-800 mt-1">{refRow.descricao}</div>
+              <div className="text-xs font-mono text-slate-500">
+                REF <span className="font-bold">{refRow.ref}</span>
+                {refRow.cor && <span className="ml-1">· {refRow.cor}</span>}
+              </div>
+            </div>
+            <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded">
+              <X className="w-5 h-5 text-slate-500" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {loading && (
+            <div className="text-center py-12">
+              <Loader2 className="w-8 h-8 animate-spin text-orange-600 mx-auto" />
+              <div className="text-sm text-slate-500 mt-2">Calculando plano…</div>
+            </div>
+          )}
+
+          {!loading && (
+            <>
+              {/* Seleção de destino */}
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <div className="text-xs font-bold text-slate-600 uppercase mb-2">
+                  Loja de destino (consolidadora)
+                </div>
+                <select
+                  value={selectedDestino || ''}
+                  onChange={(e) => setSelectedDestino(e.target.value || null)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-orange-500 focus:outline-none"
+                >
+                  <option value="">Selecione…</option>
+                  {lojasReceptoras
+                    .map((c) => {
+                      const score = c.consolidationScore ?? 50;
+                      const vendas = salesByStore.get(c.code) || 0;
+                      const total = score + vendas * 0.5;
+                      return { ...c, _score: score, _vendas: vendas, _total: total };
+                    })
+                    .sort((a, b) => b._total - a._total)
+                    .map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.isOutlet ? '🏷️ ' : ''}
+                        {c.code} {c.name}
+                        {' · score '}{c._score}
+                        {c._vendas > 0 ? ` · vendeu ${c._vendas}` : ''}
+                      </option>
+                    ))}
+                </select>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Ranking: consolidationScore + 0.5 × vendas históricas.
+                  {isOutletMode && ' Modo OUTLET prioriza lojas com flag isOutlet=true.'}
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="bg-orange-50 border border-orange-200 rounded p-2">
+                  <div className="text-[10px] font-bold text-orange-700 uppercase">Movimentos</div>
+                  <div className="text-xl font-bold text-orange-800">{moves.length}</div>
+                </div>
+                <div className="bg-orange-50 border border-orange-200 rounded p-2">
+                  <div className="text-[10px] font-bold text-orange-700 uppercase">Peças</div>
+                  <div className="text-xl font-bold text-orange-800">{totalQty}</div>
+                </div>
+                <div className="bg-orange-50 border border-orange-200 rounded p-2">
+                  <div className="text-[10px] font-bold text-orange-700 uppercase">Origens</div>
+                  <div className="text-xl font-bold text-orange-800">{lojasOrigem}</div>
+                </div>
+              </div>
+
+              {/* Preview moves */}
+              {moves.length > 0 && (
+                <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                  <div className="bg-slate-50 px-3 py-1.5 text-[10px] font-bold uppercase text-slate-600 border-b border-slate-200">
+                    Pré-visualização ({moves.length} movimentos)
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <tbody>
+                        {moves.slice(0, 50).map((m, i) => (
+                          <tr key={i} className="border-b border-slate-100">
+                            <td className="px-2 py-1.5 font-mono text-slate-500">{m.from}</td>
+                            <td className="px-2 py-1.5 text-slate-400">→</td>
+                            <td className="px-2 py-1.5 font-mono text-orange-700 font-bold">{m.to}</td>
+                            <td className="px-2 py-1.5 text-right tabular-nums font-bold">{m.qty}</td>
+                            <td className="px-2 py-1.5 text-slate-600">Tam {m.tamanho}</td>
+                          </tr>
+                        ))}
+                        {moves.length > 50 && (
+                          <tr>
+                            <td colSpan={5} className="px-2 py-1.5 text-center text-slate-500 italic">
+                              + {moves.length - 50} movimentos…
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {moves.length === 0 && selectedDestino && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+                  ✓ Tudo já está em {selectedDestino}. Nada pra consolidar.
+                </div>
+              )}
+
+              {result && (
+                <div className={`rounded-lg p-3 text-sm ${
+                  result.ok ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}>
+                  {result.msg}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-3 flex items-center justify-between">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded">
+            Cancelar
+          </button>
+          <button
+            onClick={apply}
+            disabled={applying || moves.length === 0 || !selectedDestino}
+            className="flex items-center gap-2 px-5 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 text-white text-sm font-bold rounded"
+          >
+            {applying ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Criando ordens…</>
+            ) : (
+              <><Shuffle className="w-4 h-4" /> Consolidar {moves.length} movimento{moves.length === 1 ? '' : 's'}</>
+            )}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
