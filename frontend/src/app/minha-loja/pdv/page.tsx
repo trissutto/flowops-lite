@@ -1557,7 +1557,7 @@ function PdvPageInner() {
                   <span>🎁</span>
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
-                    {sale.activePromotion === 'YEAR_BASED' ? 'Por ano' :
+                    {sale.activePromotion === 'YEAR_BASED' ? 'Liquida antigos 50%' :
                      sale.activePromotion === 'FOUR_FOR_THREE' ? '4 LEVA 3' :
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
@@ -1594,8 +1594,8 @@ function PdvPageInner() {
                       : 'bg-white text-amber-700 border-amber-200 hover:border-amber-400'
                   }`}
                 >
-                  Por ano
-                  <div className="text-[9px] font-normal">2023:20% · 2022:30% · ≤21:50%</div>
+                  Liquida antigos
+                  <div className="text-[9px] font-normal">até 31/12/2023 = 50% off</div>
                 </button>
                 <button
                   onClick={() => setPromotion('FOUR_FOR_THREE')}

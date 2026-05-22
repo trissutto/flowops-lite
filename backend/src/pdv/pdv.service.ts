@@ -770,8 +770,8 @@ export class PdvService {
    * Aplica APENAS a campanha promocional ATIVA da venda (exclusiva).
    *
    * Campanhas disponíveis (sale.activePromotion):
-   *   - 'YEAR_BASED'    → desconto por ano de cadastro do produto
-   *                       2023=20%, 2022=30%, ≤2021=50%
+   *   - 'YEAR_BASED'    → desconto por data de cadastro do produto
+   *                       ate 31/12/2023 = 50% off (liquida produtos antigos)
    *   - 'FOUR_FOR_THREE' → carrinho com ≥4 peças, a menor sai de graça (1 un)
    *   - null/'NONE'     → SEM promoção (zera todos os descontos auto)
    *
@@ -814,13 +814,14 @@ export class PdvService {
         }
       }
     } else if (activePromotion === 'YEAR_BASED') {
+      // Regra: tudo cadastrado ATE 31/12/2023 = 50% off (liquida antigos)
       const promoByYear = (data: string | null): { pct: number; tag: string } | null => {
         if (!data) return null;
-        const year = parseInt(data.slice(0, 4), 10);
-        if (isNaN(year)) return null;
-        if (year <= 2021) return { pct: 0.50, tag: `PROMO 50% · ${year}` };
-        if (year === 2022) return { pct: 0.30, tag: 'PROMO 30% · 2022' };
-        if (year === 2023) return { pct: 0.20, tag: 'PROMO 20% · 2023' };
+        const dataStr = data.slice(0, 10);
+        if (dataStr <= '2023-12-31') {
+          const year = parseInt(dataStr.slice(0, 4), 10);
+          return { pct: 0.50, tag: `PROMO 50% · ${isNaN(year) ? 'antigo' : year}` };
+        }
         return null;
       };
       for (const it of items as any[]) {
