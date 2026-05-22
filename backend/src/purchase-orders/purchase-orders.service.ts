@@ -624,4 +624,95 @@ export class PurchaseOrdersService {
         }
       } catch {
         notFound.push(cod);
-}}}}
+      }
+    }
+    return { labels, notFound };
+  }
+
+  /**
+   * Busca produtos no Wincred por REF ou DESCRICAO (LIKE). Limit 100.
+   */
+  async reposicaoBuscar(q: string) {
+    const termo = (q || '').trim();
+    if (termo.length < 2) return [];
+    try {
+      const pool = (this.erp as any).pool;
+      if (!pool) return [];
+      const like = `%${termo.toUpperCase()}%`;
+      const [rows] = await pool.query(
+        `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
+                TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
+           FROM produtos
+          WHERE REFERENCIA LIKE ? OR DESCRICAO LIKE ? OR CODIGO = ?
+          ORDER BY REFERENCIA, COR, TAMANHO
+          LIMIT 100`,
+        [like, like, termo],
+      );
+      return (rows as any[]).map((r) => ({
+        codigo: String(r.codigo || '').trim(),
+        ref: String(r.referencia || '').trim(),
+        cor: String(r.cor || '').trim(),
+        tamanho: String(r.tamanho || '').trim(),
+        preco: Number(r.preco || 0),
+        descricao: String(r.descricao || '').trim(),
+      }));
+    } catch (e: any) {
+      this.logger.warn(`reposicaoBuscar falhou: ${e?.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Confirma reposicao: increaseStock + retorna labels pra impressao.
+   */
+  async reposicaoConfirmar(
+    items: Array<{ codigo: string; qty: number; lojaCode?: string }>,
+  ) {
+    const validos = (items || []).filter((i) => i.codigo && i.qty > 0);
+    if (validos.length === 0) {
+      return { ok: false, error: 'Nenhum item valido', labels: [] };
+    }
+    const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+    const itemsParaEstoque = validos.map((i) => ({
+      sku: i.codigo,
+      qty: i.qty,
+      storeCode: i.lojaCode || lojaMatriz,
+    }));
+
+    let stockResult: any = { success: false, applied: [] };
+    try {
+      stockResult = await (this.erp as any).increaseStock?.(itemsParaEstoque);
+    } catch (e: any) {
+      this.logger.error(`reposicao increaseStock falhou: ${e?.message}`);
+      return { ok: false, error: e?.message || 'Erro estoque', labels: [] };
+    }
+
+    const labels: any[] = [];
+    for (const i of validos) {
+      try {
+        const found = await (this.erp as any).buscarProdutoPorCodigo?.(i.codigo);
+        if (found && found.length > 0) {
+          const p = found[0];
+          for (let n = 0; n < i.qty; n++) {
+            labels.push({
+              ref: String(p.referencia || '').trim(),
+              cor: String(p.cor || '').trim(),
+              tamanho: String(p.tamanho || '').trim(),
+              codigo: String(p.codigo || '').trim(),
+              preco: Number(p.preco || 0),
+              marca: p.marca || null,
+              descricao: String(p.descricao || '').trim(),
+            });
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    return {
+      ok: stockResult?.success ?? false,
+      stockResult,
+      labels,
+      total: labels.length,
+    };
+  }
+}

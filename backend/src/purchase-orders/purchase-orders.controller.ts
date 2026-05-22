@@ -157,4 +157,27 @@ export class PurchaseOrdersController {
   async etiquetasAvulsas(@Body() body: { codigos: string[] }) {
     return this.svc.buscarEtiquetasAvulsas(body?.codigos || []);
   }
+
+  // ── Reposicao de produtos (estoque + etiquetas) ──
+  /**
+   * Busca produtos no Wincred por REF ou DESCRICAO (LIKE).
+   * GET /purchase-orders/reposicao/buscar?q=BLUSA
+   */
+  @Get('reposicao/buscar')
+  async reposicaoBuscar(@Query('q') q: string) {
+    return this.svc.reposicaoBuscar(q || '');
+  }
+
+  /**
+   * Confirma reposicao: adiciona estoque no Wincred + retorna labels pra impressao.
+   * POST body: { items: [{ codigo, qty, lojaCode? }] }
+   */
+  @Post('reposicao/confirmar')
+  async reposicaoConfirmar(
+    @Req() req: any,
+    @Body() body: { items: Array<{ codigo: string; qty: number; lojaCode?: string }> },
+  ) {
+    this.requireWrite(req);
+    return this.svc.reposicaoConfirmar(body?.items || []);
+  }
 }

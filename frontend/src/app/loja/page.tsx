@@ -40,6 +40,7 @@ interface LojaItem {
 
 const LOJA_ITEMS: LojaItem[] = [
   { href: '/loja/pedidos-compra',             label: 'Pedidos Compra', subtitle: 'Fornecedores', description: 'Pedidos + cadastro automático', tone: 'rose',   icon: ShoppingCart },
+  { href: '/loja/reposicao',                  label: 'Reposição',      subtitle: 'Estoque',      description: 'Busca REF + qty + etiquetas',   tone: 'green',  icon: Package2     },
   { href: '/loja/etiquetas-avulsas',          label: 'Etiquetas',      subtitle: 'Avulsas',      description: 'Imprimir por REF/SKU',          tone: 'amber',  icon: Tags         },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',   subtitle: 'Estoque',     description: 'Venda + estoque em tempo real', tone: 'purple', icon: BarChart3    },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',  subtitle: 'Matriz',      description: 'Rebalancear entre lojas',       tone: 'orange', icon: Shuffle      },
