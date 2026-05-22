@@ -43,6 +43,41 @@ export class PurchaseOrdersService {
     });
   }
 
+  // Diagnostico dos lookups — util quando o dropdown vem vazio
+  async diagnoseLookups() {
+    const out: any = {
+      timestamp: new Date().toISOString(),
+      grupos: null, gruposCount: 0, gruposError: null,
+      subgrupos: null, subgruposCount: 0, subgruposError: null,
+      fornecedores: null, fornecedoresCount: 0, fornecedoresError: null,
+    };
+    try {
+      const g = await this.erp.listarGrupos();
+      out.grupos = g.slice(0, 5);
+      out.gruposCount = g.length;
+    } catch (e: any) {
+      out.gruposError = e?.message || String(e);
+    }
+    try {
+      if (out.grupos && out.grupos.length > 0) {
+        const sg = await this.erp.listarSubgrupos(out.grupos[0].codigo);
+        out.subgrupos = sg.slice(0, 5);
+        out.subgruposCount = sg.length;
+        out.subgruposGrupoTestado = out.grupos[0].codigo;
+      }
+    } catch (e: any) {
+      out.subgruposError = e?.message || String(e);
+    }
+    try {
+      const f = await this.erp.listarFornecedores(10);
+      out.fornecedores = f.slice(0, 5);
+      out.fornecedoresCount = f.length;
+    } catch (e: any) {
+      out.fornecedoresError = e?.message || String(e);
+    }
+    return out;
+  }
+
   async upsertCategoria(input: {
     descricaoBase: string;
     grupoCode: number;

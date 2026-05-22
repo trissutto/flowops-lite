@@ -49,6 +49,13 @@ export class PurchaseOrdersController {
     return this.erp.listarGrupos();
   }
 
+  // Diagnostico — chame /api/purchase-orders/lookups/diagnose pra ver
+  // exatamente o que o Wincred esta retornando nos lookups.
+  @Get('lookups/diagnose')
+  async diagnose() {
+    return this.svc.diagnoseLookups();
+  }
+
   @Get('lookups/subgrupos')
   async subgrupos(@Query('grupo') grupo: string) {
     if (!grupo) return [];
