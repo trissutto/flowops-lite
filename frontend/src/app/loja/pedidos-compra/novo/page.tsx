@@ -570,6 +570,7 @@ export default function NovoPedidoPage() {
               onAddTam={(t) => adicionarTamanho(item.tempId, t)}
               onRemoveTam={(t) => removerTamanho(item.tempId, t)}
               onGrade={(c, t, v) => setGradeCell(item.tempId, c, t, v)}
+              onAdicionarNova={idx === items.length - 1 ? adicionarItem : undefined}
             />
           ))}
 
@@ -591,6 +592,7 @@ function ItemEditor({
   item, index, grupos, categorias, markup,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
+  onAdicionarNova,
 }: {
   item: ItemForm;
   index: number;
@@ -606,6 +608,7 @@ function ItemEditor({
   onAddTam: (t: string) => void;
   onRemoveTam: (t: string) => void;
   onGrade: (c: string, t: string, v: string) => void;
+  onAdicionarNova?: () => void;
 }) {
   // Flag pra saber se o preço foi mexido manualmente (não auto-sobrescrever)
   const [precoEditadoManual, setPrecoEditadoManual] = useState(false);
@@ -953,7 +956,17 @@ function ItemEditor({
                               );
                               const idx = inputs.indexOf(e.currentTarget);
                               const next = inputs[idx + 1];
-                              if (next) next.focus();
+                              if (next) {
+                                next.focus();
+                              } else if (onAdicionarNova) {
+                                // Ultimo input - cria nova REF e foca no campo REF
+                                onAdicionarNova();
+                                setTimeout(() => {
+                                  const refs = document.querySelectorAll<HTMLInputElement>('input[placeholder="7031"]');
+                                  const last = refs[refs.length - 1];
+                                  if (last) last.focus();
+                                }, 50);
+                              }
                             }
                           }}
                           data-grade={item.tempId}
