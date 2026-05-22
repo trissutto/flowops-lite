@@ -254,7 +254,7 @@ export default function EtiquetasPage() {
           letter-spacing: 1px;
           line-height: 1;
         }
-        /* Base: REF + COR na parte de baixo da etiqueta */
+        /* Base: COR (auto-ajustavel) + PRECO */
         .et-base {
           display: flex;
           justify-content: space-between;
@@ -262,16 +262,25 @@ export default function EtiquetasPage() {
           line-height: 1;
           border-top: 0.5px solid #cbd5e1;
           padding-top: 0.5mm;
+          min-width: 0;
+          gap: 1mm;
         }
         .et-base-ref {
-          font-size: 14pt;
+          font-size: 11pt;
           font-weight: 900;
-          font-family: 'Courier New', monospace;
-          letter-spacing: -0.5px;
+          letter-spacing: 0.2px;
+          text-transform: uppercase;
+          flex: 1 1 auto;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          padding-right: 1mm;
         }
         .et-base-preco {
           font-size: 11pt;
           font-weight: 900;
+          flex-shrink: 0;
         }
         @media print {
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
