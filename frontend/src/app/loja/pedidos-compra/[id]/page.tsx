@@ -236,7 +236,7 @@ export default function PedidoDetalhePage() {
             onClick={async () => {
               if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no Wincred NAO serao removidos.' : ''}`)) return;
               try {
-                await api(`/purchase-orders/${id}`, { method: 'DELETE' });
+                await api(`/purchase-orders/${id}?force=true`, { method: 'DELETE' });
                 router.push('/loja/pedidos-compra');
               } catch (err: any) {
                 alert('Erro ao excluir: ' + (err?.message || 'desconhecido'));

@@ -108,9 +108,9 @@ export class PurchaseOrdersController {
   }
 
   @Delete(':id')
-  async delete(@Req() req: any, @Param('id') id: string) {
+  async delete(@Req() req: any, @Param('id') id: string, @Query('force') force?: string) {
     this.requireWrite(req);
-    return this.svc.delete(id);
+    return this.svc.delete(id, force === 'true' || force === '1');
   }
 
   // ── Items ──

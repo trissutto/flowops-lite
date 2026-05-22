@@ -176,7 +176,7 @@ export default function PedidosComprapage() {
                       e.stopPropagation();
                       if (!confirm(`Excluir pedido #${o.numero} (${o.fornecedorNome})? Esta acao nao pode ser desfeita.`)) return;
                       try {
-                        await api(`/purchase-orders/${o.id}`, { method: 'DELETE' });
+                        await api(`/purchase-orders/${o.id}?force=true`, { method: 'DELETE' });
                         setOrders((prev) => prev.filter((p) => p.id !== o.id));
                       } catch (err: any) {
                         alert('Erro ao excluir: ' + (err?.message || 'desconhecido'));

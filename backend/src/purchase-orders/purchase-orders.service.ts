@@ -232,10 +232,10 @@ export class PurchaseOrdersService {
     return this.getById(id);
   }
 
-  async delete(id: string) {
+  async delete(id: string, force = false) {
     const o = await this.getById(id);
-    if (o.status === 'recebido') {
-      throw new BadRequestException('Não dá pra excluir pedido já recebido. Cancele em vez disso.');
+    if (o.status === 'recebido' && !force) {
+      throw new BadRequestException('Não dá pra excluir pedido já recebido. Cancele em vez disso, ou passe ?force=true.');
     }
     await (this.prisma as any).purchaseOrder.delete({ where: { id } });
     return { ok: true };
@@ -610,8 +610,4 @@ export class PurchaseOrdersService {
         }
       } catch {
         notFound.push(cod);
-      }
-    }
-    return { labels, notFound };
-  }
-}
+}}}}
