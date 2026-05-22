@@ -57,8 +57,8 @@ export default function EtiquetasPage() {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 2.6,
-            height: 44,
+            width: 2.8,
+            height: 50,
             displayValue: true,
             fontSize: 26,
             fontOptions: 'bold',
@@ -73,8 +73,8 @@ export default function EtiquetasPage() {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 2.6,
-              height: 44,
+              width: 2.8,
+              height: 50,
               displayValue: true,
               fontSize: 26,
               fontOptions: 'bold',
@@ -260,7 +260,7 @@ export default function EtiquetasPage() {
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
           width: 100%;
-          height: 15mm;
+          height: 16mm;
           display: block;
         }
         .et-codigo {
