@@ -224,6 +224,14 @@ export default function PedidoDetalhePage() {
               Imprimir etiquetas
             </button>
           )}
+          <Link
+            href={`/loja/pedidos-compra/${id}/imprimir`}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold text-sm rounded-lg"
+            title="Gerar PDF do pedido (conferência)"
+          >
+            <FileText className="w-4 h-4" />
+            PDF
+          </Link>
           <button
             onClick={async () => {
               if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no Wincred NAO serao removidos.' : ''}`)) return;
@@ -431,7 +439,7 @@ export default function PedidoDetalhePage() {
                   <div className="flex flex-wrap gap-1">
                     {refItems.flatMap((it) => it.skusGerados || []).map((sku, i) => (
                       <span key={`${sku.codigo}-${i}`} className="bg-white border border-emerald-300 px-2 py-0.5 rounded text-[10px] font-mono">
-                        {sku.codigo} · {sku.cor}/{sku.tamanho} · {sku.qty}x
+                        {sku.codigo} - {sku.cor}/{sku.tamanho} - {sku.qty}x
                       </span>
                     ))}
                   </div>
@@ -440,12 +448,6 @@ export default function PedidoDetalhePage() {
             </div>
           );
         })}
-
-        {data.items.length === 0 && (
-          <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-slate-500">
-            Pedido sem itens.
-          </div>
-        )}
       </main>
     </div>
   );
