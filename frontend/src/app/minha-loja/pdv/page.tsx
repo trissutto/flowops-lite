@@ -30,6 +30,7 @@ import { api } from '@/lib/api';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
+import StorePickOrderAlert from '@/components/StorePickOrderAlert';
 
 /**
  * Helper pro backdrop dos modais:
@@ -222,6 +223,12 @@ function calcularParcelas(total: number, n: number): {
 export default function PdvPage() {
   return (
     <PdvToastProvider>
+      {/*
+        Alerta de novo pedido do site (substitui notificação WhatsApp).
+        Modal proeminente + som em loop + persistência localStorage.
+        Funciona via WebSocket pick-order:new + polling fallback 20s.
+      */}
+      <StorePickOrderAlert />
       <PdvPageInner />
     </PdvToastProvider>
   );
