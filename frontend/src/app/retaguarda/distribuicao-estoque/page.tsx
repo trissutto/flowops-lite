@@ -1047,165 +1047,303 @@ function RealignDrawer({
 
   const totalMoves = moves.reduce((s, m) => s + m.qty, 0);
 
+  // Stats agregadas por loja: saldo total (positivo=recebe, negativo=cede)
+  const lojaStats = useMemo(() => {
+    const m = new Map<string, { cur: number; tgt: number; diff: number }>();
+    for (const s of eligibleStores) {
+      let cur = 0;
+      let tgt = 0;
+      for (const tam of group.tamanhos) {
+        cur += currentMatrix[tam]?.[s.code] ?? 0;
+        tgt += targetMatrix[tam]?.[s.code] ?? 0;
+      }
+      m.set(s.code, { cur, tgt, diff: tgt - cur });
+    }
+    return m;
+  }, [eligibleStores, group.tamanhos, currentMatrix, targetMatrix]);
+
+  // Total por tamanho (linha rodapé)
+  const totalPorTamanho = useMemo(() => {
+    const m: Record<string, { cur: number; tgt: number }> = {};
+    for (const tam of group.tamanhos) {
+      let cur = 0;
+      let tgt = 0;
+      for (const s of eligibleStores) {
+        cur += currentMatrix[tam]?.[s.code] ?? 0;
+        tgt += targetMatrix[tam]?.[s.code] ?? 0;
+      }
+      m[tam] = { cur, tgt };
+    }
+    return m;
+  }, [eligibleStores, group.tamanhos, currentMatrix, targetMatrix]);
+
+  // Ordena lojas: CEDE primeiro (vermelho), RECEBE depois (verde), OK por último
+  const lojasOrdenadas = useMemo(() => {
+    return [...eligibleStores].sort((a, b) => {
+      const da = lojaStats.get(a.code)?.diff ?? 0;
+      const db = lojaStats.get(b.code)?.diff ?? 0;
+      // negativo (cede) primeiro, depois positivo (recebe), depois 0 (ok)
+      const wa = da < 0 ? 0 : da > 0 ? 1 : 2;
+      const wb = db < 0 ? 0 : db > 0 ? 1 : 2;
+      if (wa !== wb) return wa - wb;
+      return Math.abs(db) - Math.abs(da); // dentro do grupo, maior |diff| primeiro
+    });
+  }, [eligibleStores, lojaStats]);
+
+  // Total de cidades envolvidas
+  const lojasEnvolvidas = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of moves) {
+      set.add(m.from);
+      set.add(m.to);
+    }
+    return set.size;
+  }, [moves]);
+
+  const totalRedeCur = useMemo(
+    () => Object.values(totalPorTamanho).reduce((s, v) => s + v.cur, 0),
+    [totalPorTamanho],
+  );
+
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[860px] bg-white shadow-2xl z-40 overflow-y-auto">
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between z-10">
-          <div className="flex items-baseline gap-3">
-            <Shuffle className="w-5 h-5 text-violet-600" />
-            <span className="font-mono font-black text-lg text-slate-800">
-              REF {group.ref}
+      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[1200px] bg-slate-50 shadow-2xl z-40 overflow-y-auto">
+        {/* Header — fixo no topo */}
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-20">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-3">
+              <Shuffle className="w-6 h-6 text-violet-600" />
+              <div>
+                <div className="font-bold text-lg text-slate-800 leading-tight">
+                  {group.descricao}
+                </div>
+                <div className="font-mono text-xs text-slate-500 mt-0.5">
+                  REF <span className="font-bold text-slate-800">{group.ref}</span>
+                  {group.cor && <span className="ml-1">· {group.cor}</span>}
+                  <span className="ml-3 text-violet-700 font-bold">{brl(group.preco)}</span>
+                </div>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
+              <X className="w-5 h-5 text-slate-500" />
+            </button>
+          </div>
+          {/* Resumo em pill bar */}
+          <div className="flex items-center gap-2 text-xs flex-wrap">
+            <span className="px-2 py-1 bg-violet-100 text-violet-800 rounded font-bold">
+              {moves.length} movimento{moves.length === 1 ? '' : 's'}
             </span>
-            <span className="font-bold text-slate-600 uppercase text-sm">
-              — {group.cor}
+            <span className="px-2 py-1 bg-rose-100 text-rose-800 rounded font-bold">
+              {totalMoves} peça{totalMoves === 1 ? '' : 's'} a mover
+            </span>
+            <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-bold">
+              {lojasEnvolvidas} loja{lojasEnvolvidas === 1 ? '' : 's'} envolvida{lojasEnvolvidas === 1 ? '' : 's'}
+            </span>
+            <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded font-bold">
+              Total rede: {totalRedeCur} peças
+            </span>
+            <span className="text-[11px] text-slate-500 ml-auto">
+              🟥 Cede &nbsp;·&nbsp; 🟩 Recebe &nbsp;·&nbsp; ⚪ OK
             </span>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg">
-            <X className="w-5 h-5" />
-          </button>
         </div>
 
-        <div className="p-5 space-y-5">
-          {/* Resumo */}
-          <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm">
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold text-violet-900">
-                💡 Sugestão de realinhamento
-              </span>
-              <span className="font-mono font-bold text-violet-900 text-lg">
-                {moves.length} movimento(s) · {totalMoves} peça(s)
+        <div className="p-5 space-y-4">
+          {/* Matriz Atual × Sugerida — formato compacto */}
+          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <div className="bg-slate-100 px-3 py-2 border-b border-slate-200">
+              <span className="font-bold text-slate-700 text-sm">📊 Plano por loja × tamanho</span>
+              <span className="text-[11px] text-slate-500 ml-2">
+                (clique nas células pra entender — ⬇ envia · ⬆ recebe)
               </span>
             </div>
-            <p className="text-xs text-violet-700">
-              Regra: todas as lojas com ≥ 1 quando possível. Em caso de excesso,
-              prioridade pelas lojas com maior <code>priorityScore</code>.
-              SITE e PF ignorados.
-            </p>
-          </div>
-
-          {/* Matriz Atual × Sugerida */}
-          <div>
-            <h4 className="font-bold text-slate-800 mb-2">Estoque por tamanho</h4>
-            <div className="overflow-x-auto border border-slate-200 rounded-lg">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-2 py-2 text-left font-bold text-slate-600 sticky left-0 bg-slate-50 min-w-[160px]">
+                    <th className="px-3 py-2 text-left font-bold text-slate-600 sticky left-0 bg-slate-50 min-w-[170px] text-[11px] uppercase tracking-wider">
                       Loja
+                    </th>
+                    <th className="px-3 py-2 text-center font-bold text-slate-600 min-w-[110px] text-[11px] uppercase tracking-wider border-l border-slate-200">
+                      Status
                     </th>
                     {group.tamanhos.map((t) => (
                       <th
                         key={t}
-                        colSpan={2}
-                        className="px-1 py-1 text-center font-bold text-slate-700 border-l border-slate-200 min-w-[80px]"
+                        className="px-2 py-2 text-center font-bold text-slate-700 border-l border-slate-200 min-w-[85px] text-xs"
                       >
                         {t}
                       </th>
                     ))}
-                  </tr>
-                  <tr className="text-[10px] uppercase tracking-wider bg-slate-100">
-                    <th className="px-2 py-1 sticky left-0 bg-slate-100"></th>
-                    {group.tamanhos.map((t) => (
-                      <Fragment key={t}>
-                        <th className="px-1 py-1 text-center text-slate-500 border-l border-slate-200">
-                          Atual
-                        </th>
-                        <th className="px-1 py-1 text-center text-violet-700">→ Alvo</th>
-                      </Fragment>
-                    ))}
+                    <th className="px-3 py-2 text-center font-bold text-slate-700 border-l-2 border-slate-300 bg-slate-100 min-w-[85px] text-[11px] uppercase tracking-wider">
+                      Total
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {eligibleStores.map((s) => {
+                  {lojasOrdenadas.map((s) => {
                     const nome = storeNameByCode.get(s.code) || s.name;
+                    const stats = lojaStats.get(s.code)!;
+                    const isSender = stats.diff < 0;
+                    const isReceiver = stats.diff > 0;
+                    const rowBg = isSender
+                      ? 'bg-rose-50/60 hover:bg-rose-100/60'
+                      : isReceiver
+                      ? 'bg-emerald-50/60 hover:bg-emerald-100/60'
+                      : 'hover:bg-slate-50';
                     return (
-                      <tr key={s.code} className="border-t border-slate-100">
-                        <td className="px-2 py-1.5 sticky left-0 bg-white font-medium text-slate-700">
-                          <span className="font-mono text-[10px] text-slate-400 mr-1">
-                            {s.code}
-                          </span>
-                          {nome.replace(/^Lurd's\s*/i, '')}
+                      <tr key={s.code} className={`border-t border-slate-100 ${rowBg}`}>
+                        <td className={`px-3 py-2 sticky left-0 ${rowBg.replace('hover:', '')} font-medium`}>
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="font-mono text-[10px] text-slate-400 font-bold">
+                              {s.code}
+                            </span>
+                            <span className="text-slate-800 font-bold">
+                              {nome.replace(/^Lurd's\s*/i, '')}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-center border-l border-slate-100">
+                          {isSender && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-200 text-rose-900 rounded font-bold text-xs">
+                              <span className="font-mono">{stats.diff}</span>
+                              <span className="text-[10px]">CEDE</span>
+                            </span>
+                          )}
+                          {isReceiver && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-200 text-emerald-900 rounded font-bold text-xs">
+                              <span className="font-mono">+{stats.diff}</span>
+                              <span className="text-[10px]">RECEBE</span>
+                            </span>
+                          )}
+                          {stats.diff === 0 && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-200 text-slate-600 rounded font-bold text-xs">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span className="text-[10px]">OK</span>
+                            </span>
+                          )}
                         </td>
                         {group.tamanhos.map((tam) => {
                           const cur = currentMatrix[tam]?.[s.code] ?? 0;
                           const tgt = targetMatrix[tam]?.[s.code] ?? 0;
                           const diff = tgt - cur;
+                          let cellBg = '';
+                          let arrowEl = null;
+                          if (diff > 0) {
+                            cellBg = 'bg-emerald-100/80';
+                            arrowEl = <span className="text-emerald-700 font-bold">↑{diff}</span>;
+                          } else if (diff < 0) {
+                            cellBg = 'bg-rose-100/80';
+                            arrowEl = <span className="text-rose-700 font-bold">↓{Math.abs(diff)}</span>;
+                          }
                           return (
-                            <Fragment key={tam}>
-                              <td className="px-1 py-1 text-center border-l border-slate-100">
-                                <span className="font-mono text-slate-600">{cur}</span>
-                              </td>
-                              <td className="px-1 py-1 text-center">
-                                <span
-                                  className={`font-mono font-bold ${
-                                    diff > 0
-                                      ? 'text-emerald-700'
-                                      : diff < 0
-                                      ? 'text-rose-700'
-                                      : 'text-slate-400'
-                                  }`}
-                                >
-                                  {tgt}
-                                  {diff !== 0 && (
-                                    <span className="text-[10px] ml-0.5">
-                                      ({diff > 0 ? '+' : ''}
-                                      {diff})
-                                    </span>
-                                  )}
+                            <td key={tam} className={`px-2 py-2 text-center border-l border-slate-100 ${cellBg}`}>
+                              {diff === 0 ? (
+                                <span className="font-mono text-slate-400">
+                                  {cur === 0 ? '—' : <span className="text-slate-700 font-bold">{cur}</span>}
                                 </span>
-                              </td>
-                            </Fragment>
+                              ) : (
+                                <div className="flex items-center justify-center gap-1">
+                                  <span className={`font-mono font-bold ${diff < 0 ? 'text-rose-800' : 'text-slate-700'}`}>{cur}</span>
+                                  <span className="text-slate-400 text-[10px]">→</span>
+                                  <span className={`font-mono font-bold ${diff > 0 ? 'text-emerald-800' : 'text-slate-700'}`}>{tgt}</span>
+                                </div>
+                              )}
+                              {arrowEl && (
+                                <div className="text-[9px] mt-0.5 leading-none">{arrowEl}</div>
+                              )}
+                            </td>
                           );
                         })}
+                        <td className={`px-3 py-2 text-center border-l-2 border-slate-300 bg-slate-50 font-bold ${isSender ? 'text-rose-800' : isReceiver ? 'text-emerald-800' : 'text-slate-700'}`}>
+                          {stats.cur === stats.tgt ? (
+                            <span className="font-mono">{stats.cur}</span>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1">
+                              <span className="font-mono">{stats.cur}</span>
+                              <span className="text-slate-400 text-[10px]">→</span>
+                              <span className="font-mono">{stats.tgt}</span>
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-300 bg-slate-100">
+                    <td className="px-3 py-2 sticky left-0 bg-slate-100 font-bold text-slate-700 text-[11px] uppercase tracking-wider">
+                      Total rede
+                    </td>
+                    <td className="px-3 py-2 text-center border-l border-slate-200"></td>
+                    {group.tamanhos.map((tam) => {
+                      const t = totalPorTamanho[tam];
+                      return (
+                        <td key={tam} className="px-2 py-2 text-center border-l border-slate-200 font-bold text-slate-700 font-mono">
+                          {t.cur}
+                        </td>
+                      );
+                    })}
+                    <td className="px-3 py-2 text-center border-l-2 border-slate-300 font-bold text-slate-800 font-mono">
+                      {totalRedeCur}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
 
-          {/* Lista de movimentos sugeridos */}
-          <div>
-            <h4 className="font-bold text-slate-800 mb-2">
-              Transferências sugeridas ({moves.length})
-            </h4>
+          {/* Lista de movimentos sugeridos — cards visuais */}
+          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex items-center justify-between">
+              <span className="font-bold text-slate-700 text-sm">
+                📦 Transferências sugeridas
+              </span>
+              <span className="text-xs font-mono font-bold text-slate-600 bg-white px-2 py-0.5 rounded">
+                {moves.length} movimento{moves.length === 1 ? '' : 's'}
+              </span>
+            </div>
             {moves.length === 0 ? (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
-                ✓ Distribuição já está balanceada — nenhuma transferência necessária.
+              <div className="bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5" />
+                Distribuição já está balanceada — nenhuma transferência necessária.
               </div>
             ) : (
-              <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-[300px] overflow-y-auto">
+              <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
                 {moves.map((m, i) => (
-                  <div key={i} className="px-3 py-2 flex items-center gap-3 text-sm hover:bg-slate-50">
-                    <span className="font-mono font-bold text-rose-600 w-12 text-right">
-                      −{m.qty}
-                    </span>
-                    <span className="flex-1 truncate">
-                      <span className="font-mono text-[10px] text-slate-400 mr-1">
-                        {m.from}
+                  <div key={i} className="px-3 py-2.5 flex items-center gap-2 text-sm hover:bg-slate-50">
+                    {/* FROM (rosa) */}
+                    <div className="flex-1 flex items-center gap-2 min-w-0">
+                      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-rose-100 text-rose-700 font-mono font-bold text-sm flex-shrink-0">
+                        −{m.qty}
                       </span>
-                      <span className="font-medium">
-                        {(storeNameByCode.get(m.from) || m.from).replace(/^Lurd's\s*/i, '')}
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-mono text-slate-400 leading-none">{m.from}</div>
+                        <div className="font-bold text-slate-800 truncate text-sm leading-tight">
+                          {(storeNameByCode.get(m.from) || m.from).replace(/^Lurd's\s*/i, '')}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Seta + tamanho */}
+                    <div className="flex flex-col items-center gap-0.5 flex-shrink-0 px-2">
+                      <span className="font-mono text-[10px] bg-violet-100 text-violet-800 px-2 py-0.5 rounded font-bold">
+                        Tam {m.tamanho}
                       </span>
-                    </span>
-                    <span className="text-slate-400">→</span>
-                    <span className="flex-1 truncate">
-                      <span className="font-mono text-[10px] text-slate-400 mr-1">
-                        {m.to}
+                      <span className="text-slate-400 text-lg leading-none">→</span>
+                    </div>
+                    {/* TO (verde) */}
+                    <div className="flex-1 flex items-center gap-2 min-w-0 justify-end">
+                      <div className="min-w-0 text-right">
+                        <div className="text-[10px] font-mono text-slate-400 leading-none">{m.to}</div>
+                        <div className="font-bold text-slate-800 truncate text-sm leading-tight">
+                          {(storeNameByCode.get(m.to) || m.to).replace(/^Lurd's\s*/i, '')}
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 font-mono font-bold text-sm flex-shrink-0">
+                        +{m.qty}
                       </span>
-                      <span className="font-medium">
-                        {(storeNameByCode.get(m.to) || m.to).replace(/^Lurd's\s*/i, '')}
-                      </span>
-                    </span>
-                    <span className="font-mono font-bold text-emerald-700 w-12">
-                      +{m.qty}
-                    </span>
-                    <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded font-bold">
-                      Tam {m.tamanho}
-                    </span>
+                    </div>
                   </div>
                 ))}
               </div>
