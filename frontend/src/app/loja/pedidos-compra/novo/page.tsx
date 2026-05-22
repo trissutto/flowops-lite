@@ -945,6 +945,18 @@ function ItemEditor({
                         <input
                           value={item.grade[`${c}|${t}`] || ''}
                           onChange={(e) => onGrade(c, t, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const inputs = Array.from(
+                                document.querySelectorAll<HTMLInputElement>(`[data-grade="${item.tempId}"]`),
+                              );
+                              const idx = inputs.indexOf(e.currentTarget);
+                              const next = inputs[idx + 1];
+                              if (next) next.focus();
+                            }
+                          }}
+                          data-grade={item.tempId}
                           placeholder="0"
                           inputMode="numeric"
                           className="w-12 px-1 py-1 border rounded text-center font-mono text-sm"

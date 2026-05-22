@@ -468,10 +468,24 @@ export class PurchaseOrdersService {
           });
         }
 
-        // Aumenta estoque no Wincred (loja matriz = '00' ou primeira loja)
-        // OBS: por enquanto NÃO aumenta automático — pedido entra como "lote
-        // disponível pra triagem" e quem distribui é a tela de remessas
-        // futura. Estoque vai a uma "loja virtual" inicial ou pendente.
+        // Aumenta estoque no Wincred — loja matriz (definida em env PRIMARY_STORE_CODE
+        // ou 01 como default). As pecas entram diretamente nessa loja.
+        const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+        const itemsParaEstoque = skusGerados
+          .filter((s) => s.qty > 0)
+          .map((s) => ({ sku: s.codigo, qty: s.qty, storeCode: lojaMatriz }));
+        if (itemsParaEstoque.length > 0) {
+          try {
+            const inc = await (this.erp as any).increaseStock?.(itemsParaEstoque);
+            if (inc && !inc.success) {
+              this.logger.warn(`[purchase-orders] estoque inicial nao aplicado: ${inc.error}`);
+            } else {
+              this.logger.log(`[purchase-orders] estoque inicial: ${itemsParaEstoque.length} SKUs na loja ${lojaMatriz}`);
+            }
+          } catch (e: any) {
+            this.logger.warn(`[purchase-orders] increaseStock falhou: ${e?.message}`);
+          }
+        }
 
         totalSkusInseridos += r.inseridos;
         totalSkusJaExistiam += r.ignorados;
