@@ -169,6 +169,15 @@ export class PurchaseOrdersController {
   }
 
   /**
+   * Diagnostico: mostra estrutura da tabela produtos + amostras de busca.
+   * GET /purchase-orders/reposicao/diagnose?q=VLM
+   */
+  @Get('reposicao/diagnose')
+  async reposicaoDiagnose(@Query('q') q: string) {
+    return this.svc.reposicaoDiagnose(q || '');
+  }
+
+  /**
    * Confirma reposicao: adiciona estoque no Wincred + retorna labels pra impressao.
    * POST body: { items: [{ codigo, qty, lojaCode? }] }
    */

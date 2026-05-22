@@ -718,7 +718,6 @@ export class PurchaseOrdersService {
       qty: i.qty,
       storeCode: i.lojaCode || lojaMatriz,
     }));
-
     let stockResult: any = { success: false, applied: [] };
     try {
       stockResult = await (this.erp as any).increaseStock?.(itemsParaEstoque);
@@ -726,7 +725,6 @@ export class PurchaseOrdersService {
       this.logger.error(`reposicao increaseStock falhou: ${e?.message}`);
       return { ok: false, error: e?.message || 'Erro estoque', labels: [] };
     }
-
     const labels: any[] = [];
     for (const i of validos) {
       try {
@@ -747,12 +745,63 @@ export class PurchaseOrdersService {
         }
       } catch { /* skip */ }
     }
-
     return {
       ok: stockResult?.success ?? false,
       stockResult,
       labels,
       total: labels.length,
     };
+  }
+
+  /**
+   * Diagnostico: mostra colunas da tabela produtos + amostras de busca pra termo.
+   */
+  async reposicaoDiagnose(q: string) {
+    const out: any = {
+      timestamp: new Date().toISOString(),
+      termo: q || '',
+      colunas: null,
+      colunasError: null,
+      amostraVLM: null,
+      amostraVLMError: null,
+      buscaResultado: 0,
+      buscaError: null,
+    };
+    const pool = (this.erp as any).pool;
+    if (!pool) {
+      out.colunasError = 'Pool ERP nao inicializado';
+      return out;
+    }
+    try {
+      const [cols] = await pool.query(`SHOW COLUMNS FROM produtos`);
+      out.colunas = (cols as any[]).map((c) => c.Field);
+    } catch (e: any) {
+      out.colunasError = e?.message;
+    }
+    if (q) {
+      const termoUp = q.toUpperCase();
+      const norm = termoUp.replace(/[\s\-]/g, '');
+      try {
+        const [rows] = await pool.query(
+          `SELECT * FROM produtos
+            WHERE REFERENCIA LIKE ?
+               OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
+               OR DESCRICAO LIKE ?
+               OR CODIGO LIKE ?
+            LIMIT 5`,
+          [`%${termoUp}%`, `%${norm}%`, `%${termoUp}%`, `%${termoUp}%`],
+        );
+        out.amostraVLM = rows;
+      } catch (e: any) {
+        out.amostraVLMError = e?.message;
+      }
+      try {
+        const r = await this.reposicaoBuscar(q);
+        out.buscaResultado = r.length;
+      } catch (e: any) {
+        out.buscaError = e?.message;
+      }
+    }
+    return out;
   }
 }
