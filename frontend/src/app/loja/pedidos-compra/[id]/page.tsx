@@ -430,21 +430,7 @@ export default function PedidoDetalhePage() {
                 </table>
               </div>
 
-              {/* SKUs gerados (só após recebimento) */}
-              {isRecebido && refItems.some((it) => it.skusGerados && it.skusGerados.length > 0) && (
-                <div className="bg-emerald-50 border-t border-emerald-200 px-4 py-2">
-                  <div className="text-[10px] font-bold text-emerald-700 uppercase mb-1">
-                    SKUs gerados no Wincred:
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {refItems.flatMap((it) => it.skusGerados || []).map((sku, i) => (
-                      <span key={`${sku.codigo}-${i}`} className="bg-white border border-emerald-300 px-2 py-0.5 rounded text-[10px] font-mono">
-                        {sku.codigo} - {sku.cor}/{sku.tamanho} - {sku.qty}x
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+
             </div>
           );
         })}
