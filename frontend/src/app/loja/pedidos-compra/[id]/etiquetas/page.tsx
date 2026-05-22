@@ -152,7 +152,14 @@ export default function EtiquetasPage() {
           <div className="etiquetas-grid">
             {filtered.map((l, i) => (
               <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-descricao">{l.descricao}</div>
+                <div className="et-descricao">{
+                  l.descricao
+                    .replace(new RegExp(`\\b${l.ref}\\b`, 'g'), '')
+                    .replace(new RegExp(`\\b${l.cor}\\b`, 'g'), '')
+                    .replace(new RegExp(`\\b${l.tamanho}\\b`, 'g'), '')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                }</div>
                 <div className="et-destaque">
                   <span className="et-tam">{l.tamanho}</span>
                   <span className="et-cor-destaque">{l.cor}</span>
@@ -173,15 +180,15 @@ export default function EtiquetasPage() {
         /* Grid de etiquetas: 2 colunas de 50mm em rolo de 108mm */
         .etiquetas-grid {
           display: grid;
-          grid-template-columns: 46mm 46mm;
+          grid-template-columns: 48mm 48mm;
           gap: 0 3mm;
-          padding: 9mm 0 0 12mm;
+          padding: 9mm 0 0 9mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
         }
         .etiqueta {
-          width: 46mm;
+          width: 48mm;
           height: 30mm;
           box-sizing: border-box;
           padding: 3mm 1.5mm 1mm 1.5mm;
@@ -194,18 +201,18 @@ export default function EtiquetasPage() {
           color: #000;
           overflow: hidden;
         }
-        /* Descricao completa em cima (2 linhas) */
+        /* Descricao (sem REF/COR/TAM) - GRUPO + SUBGRUPO + PLUS SIZE + MARCA */
         .et-descricao {
-          font-size: 5pt;
+          font-size: 7pt;
           font-weight: 700;
           text-transform: uppercase;
-          line-height: 1.05;
+          line-height: 1.1;
           letter-spacing: 0.1px;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-          max-height: 4mm;
+          max-height: 6mm;
         }
         /* DESTAQUE: TAM + COR numa linha */
         .et-destaque {
@@ -268,7 +275,7 @@ export default function EtiquetasPage() {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 9mm 0 0 12mm;
+            padding: 9mm 0 0 9mm;
             page-break-inside: auto;
           }
           .etiqueta {
