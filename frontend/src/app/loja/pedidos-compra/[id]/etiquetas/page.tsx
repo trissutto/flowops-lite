@@ -172,7 +172,17 @@ export default function EtiquetasPage() {
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-base">
-                  <span className="et-base-ref">{l.cor}</span>
+                  <span
+                    className="et-base-ref"
+                    style={{
+                      fontSize:
+                        l.cor.length <= 8 ? '11pt'
+                        : l.cor.length <= 12 ? '9pt'
+                        : l.cor.length <= 16 ? '7.5pt'
+                        : l.cor.length <= 22 ? '6.5pt'
+                        : '5.5pt',
+                    }}
+                  >{l.cor}</span>
                   <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
               </div>
@@ -268,16 +278,14 @@ export default function EtiquetasPage() {
           gap: 1mm;
         }
         .et-base-ref {
-          font-size: 11pt;
           font-weight: 900;
           letter-spacing: 0.2px;
           text-transform: uppercase;
           flex: 1 1 auto;
           min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
           white-space: nowrap;
           padding-right: 1mm;
+          line-height: 1.1;
         }
         .et-base-preco {
           font-size: 11pt;
