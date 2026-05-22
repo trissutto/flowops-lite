@@ -638,24 +638,56 @@ export class PurchaseOrdersService {
     try {
       const pool = (this.erp as any).pool;
       if (!pool) return [];
-      // Normaliza: remove hifens, espacos e UPPERCASE pra busca tolerante
-      const normalizado = termo.toUpperCase().replace(/[\s\-]/g, '');
-      const likeOrig = `%${termo.toUpperCase()}%`;
+      const termoUp = termo.toUpperCase();
+      const normalizado = termoUp.replace(/[\s\-]/g, '');
+      const likeOrig = `%${termoUp}%`;
       const likeNorm = `%${normalizado}%`;
-      // Tenta variacoes: campo original (com hifen) E campo normalizado (sem hifen)
-      const [rows] = await pool.query(
-        `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
-                TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
-           FROM produtos
-          WHERE REFERENCIA LIKE ?
-             OR DESCRICAO LIKE ?
-             OR CODIGO = ?
-             OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
-             OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
-          ORDER BY REFERENCIA, COR, TAMANHO
-          LIMIT 100`,
-        [likeOrig, likeOrig, termo, likeNorm, likeNorm],
-      );
+      // Divide por chars e tenta '%V%L%M%2%2%2%' tolerante a qualquer separador
+      const tolerante = '%' + normalizado.split('').join('%') + '%';
+
+      // Tenta com REFERENCIA primeiro (Lurd's). Se nao achar, fallback REF.
+      let rows: any[] = [];
+      try {
+        const [r1] = await pool.query(
+          `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
+                  TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
+             FROM produtos
+            WHERE REFERENCIA LIKE ?
+               OR DESCRICAO LIKE ?
+               OR CODIGO = ?
+               OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
+               OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
+               OR REFERENCIA LIKE ?
+            ORDER BY REFERENCIA, COR, TAMANHO
+            LIMIT 100`,
+          [likeOrig, likeOrig, termo, likeNorm, likeNorm, tolerante],
+        );
+        rows = r1 as any[];
+        this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (REFERENCIA)`);
+      } catch (eRef: any) {
+        // Coluna REFERENCIA pode nao existir — tenta REF
+        this.logger.warn(`reposicaoBuscar REFERENCIA falhou: ${eRef?.message}, tentando REF`);
+        try {
+          const [r2] = await pool.query(
+            `SELECT CODIGO AS codigo, REF AS referencia, COR AS cor,
+                    TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
+               FROM produtos
+              WHERE REF LIKE ?
+                 OR DESCRICAO LIKE ?
+                 OR CODIGO = ?
+                 OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
+                 OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
+              ORDER BY REF, COR, TAMANHO
+              LIMIT 100`,
+            [likeOrig, likeOrig, termo, likeNorm, likeNorm],
+          );
+          rows = r2 as any[];
+          this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (REF)`);
+        } catch (eRef2: any) {
+          this.logger.error(`reposicaoBuscar REF tambem falhou: ${eRef2?.message}`);
+          return [];
+        }
+      }
       return (rows as any[]).map((r) => ({
         codigo: String(r.codigo || '').trim(),
         ref: String(r.referencia || '').trim(),
