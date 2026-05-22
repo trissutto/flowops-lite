@@ -42,6 +42,7 @@ import { StoneModule } from './stone/stone.module';
 import { LiveModule } from './live/live.module';
 import { DesktopModule } from './desktop/desktop.module';
 import { PropertiesModule } from './properties/properties.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { PropertiesModule } from './properties/properties.module';
     LiveModule,
     DesktopModule,
     PropertiesModule,
+    PurchaseOrdersModule,
   ],
 })
 export class AppModule {}

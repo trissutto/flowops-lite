@@ -1845,6 +1845,109 @@ model PropertyAttachment {
   @@map("property_attachments")
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// PURCHASE ORDERS — pedidos de compra do fornecedor.
+// Fluxo: Cria pedido (header + items REF×COR×TAMs com QTYs) → Status pending →
+// Mercadoria chega → Confere/ajusta → Marca recebido → Sistema AUTO-CADASTRA
+// SKUs no Wincred (gera EAN-13 prefixo 8) + atualiza estoque + fila de etiquetas.
+// ════════════════════════════════════════════════════════════════════════
+
+model PurchaseOrder {
+  id              String   @id @default(uuid())
+  numero          Int      @unique @default(autoincrement())          // sequencial #1, #2...
+  fornecedorNome  String   @map("fornecedor_nome")                   // ex: "MARRIE ARIMATH"
+  fornecedorCnpj  String?  @map("fornecedor_cnpj")
+  marca           String?                                              // fantasia do fornecedor (= MARCA na descrição)
+  dataPedido      DateTime @default(now()) @map("data_pedido")
+  dataPrevista    DateTime? @map("data_prevista")                     // SLA de chegada
+  nfNumero        String?  @map("nf_numero")
+  observacoes     String?  @db.Text
+  // Status: rascunho | enviado | aguardando | recebido | cancelado
+  status          String   @default("rascunho")
+  // Calculados (atualizados quando salva items)
+  totalPecas      Int      @default(0) @map("total_pecas")
+  totalCusto      Float    @default(0) @map("total_custo")            // sem desconto/imposto
+  totalLiquido    Float    @default(0) @map("total_liquido")
+  totalVenda      Float    @default(0) @map("total_venda")            // soma preço venda × qty
+  // Audit
+  createdByUserId String?  @map("created_by_user_id")
+  recebidoAt      DateTime? @map("recebido_at")
+  recebidoByUserId String? @map("recebido_by_user_id")
+  cadastroLog     String?  @map("cadastro_log") @db.Text               // JSON com resumo do auto-cadastro
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  items           PurchaseOrderItem[]
+
+  @@index([status])
+  @@index([fornecedorNome])
+  @@index([dataPedido(sort: Desc)])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  // 1 linha = 1 REF + 1 COR + grade de tamanhos com qtd em cada.
+  // Ex: REF 7031, COR PRETO, tamanhosQty = {"46": 21, "48": 21, "56": 18}
+  id              String   @id @default(uuid())
+  orderId         String   @map("order_id")
+  order           PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  // Identificação do produto
+  ref             String                                               // REF do fornecedor
+  descricaoBase   String   @map("descricao_base")                     // "CASACO SOFT" (do pedido)
+  cor             String
+  // Categoria (vem do CategoriaProduto OU preenchido manualmente)
+  grupoCode       Int?     @map("grupo_code")
+  grupoNome       String?  @map("grupo_nome")                         // "BLUSA FEMININA"
+  subgrupoCode    Int?     @map("subgrupo_code")
+  subgrupoNome    String?  @map("subgrupo_nome")                      // "ACADEMIA"
+  ncm             String?
+  cfop            String?  @default("5102")
+  plusSize        Boolean  @default(true) @map("plus_size")
+  // Valores comerciais
+  custoUnit       Float    @map("custo_unit")
+  precoUnit       Float    @map("preco_unit")
+  tributoPct      Float    @default(0) @map("tributo_pct")            // % de imposto (independente do NCM)
+  descontoPct     Float    @default(0) @map("desconto_pct")
+  // Grades — armazena qty por tamanho como JSON pra flexibilidade
+  // formato: {"46": 21, "48": 21, "50": 21, ...}
+  tamanhosQty     String   @map("tamanhos_qty") @db.Text              // JSON
+  // Quando recebido, guarda qty REAL (pode ser menor que pedido)
+  tamanhosQtyRecebida String? @map("tamanhos_qty_recebida") @db.Text  // JSON
+  // SKUs gerados no Wincred após auto-cadastro (rastreabilidade)
+  // formato: [{tam, codigoWincred, ean, qtdInserida}, ...]
+  skusGerados     String?  @map("skus_gerados") @db.Text              // JSON
+  // Status do ITEM (não confundir com status do pedido)
+  // pendente | recebido | parcial | cancelado
+  itemStatus      String   @default("pendente") @map("item_status")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@index([ref])
+  @@map("purchase_order_items")
+}
+
+model CategoriaProduto {
+  // Mapeamento "descrição da planilha" → Grupo+Subgrupo+NCM+CFOP.
+  // Cadastrado 1x quando vem REF nova, reusa pra sempre.
+  // Ex: descricaoBase="CASACO SOFT" → BLUSA FEMININA / ACADEMIA / NCM 61102000
+  // NOTA: tributo NÃO está aqui — é por item (pode variar por fornecedor).
+  id              String   @id @default(uuid())
+  descricaoBase   String   @unique @map("descricao_base")             // PK lógica
+  grupoCode       Int      @map("grupo_code")
+  grupoNome       String   @map("grupo_nome")
+  subgrupoCode   Int      @map("subgrupo_code")
+  subgrupoNome   String   @map("subgrupo_nome")
+  ncmDefault      String?  @map("ncm_default")
+  cfopDefault     String?  @default("5102") @map("cfop_default")
+  plusSizeDefault Boolean  @default(true) @map("plus_size_default")
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("categoria_produtos")
+}
+
 model PropertyLog {
   // audit trail granular: 1 linha por mudança (campo, before/after, user, ts).
   // Usado pra timeline do imóvel + investigar quem mexeu no quê.
