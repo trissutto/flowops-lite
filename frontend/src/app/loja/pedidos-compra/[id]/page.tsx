@@ -232,6 +232,60 @@ export default function PedidoDetalhePage() {
           </div>
         )}
 
+        {/* FINANCEIRO DO PEDIDO */}
+        {(() => {
+          let totalPecas = 0;
+          let precoBruto = 0;
+          let descontoTotal = 0;
+          let impostoTotal = 0;
+          for (const it of data.items as any[]) {
+            const qtyMap = (isRecebido && it.tamanhosQtyRecebida) ? it.tamanhosQtyRecebida : it.tamanhosQty;
+            let qty = 0;
+            for (const k of Object.keys(qtyMap || {})) qty += Number(qtyMap[k] || 0);
+            totalPecas += qty;
+            const custoUnit = Number(it.custoUnit || 0);
+            const bruto = custoUnit * qty;
+            precoBruto += bruto;
+            const descPct = Number(it.descontoPct || 0);
+            const tribPct = Number(it.tributoPct || 0);
+            descontoTotal += bruto * (descPct / 100);
+            impostoTotal += bruto * (1 - descPct / 100) * (tribPct / 100);
+          }
+          const precoLiquido = precoBruto - descontoTotal;
+          const totalPedido = precoLiquido + impostoTotal;
+          return (
+            <section className="bg-white border border-slate-200 rounded-2xl p-4">
+              <h2 className="text-sm font-black text-violet-700 uppercase tracking-wider mb-3">Financeiro do pedido</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div className="bg-slate-50 rounded-lg p-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Total peças</div>
+                  <div className="text-2xl font-black text-slate-800 tabular-nums mt-1">{totalPecas}</div>
+                </div>
+                <div className="bg-slate-50 rounded-lg p-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Preço bruto</div>
+                  <div className="text-lg font-black text-slate-800 tabular-nums mt-1">{brl(precoBruto)}</div>
+                </div>
+                <div className="bg-rose-50 rounded-lg p-3">
+                  <div className="text-[10px] uppercase font-bold text-rose-700 tracking-wider">- Desconto</div>
+                  <div className="text-lg font-black text-rose-700 tabular-nums mt-1">{brl(descontoTotal)}</div>
+                </div>
+                <div className="bg-amber-50 rounded-lg p-3">
+                  <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">+ Impostos</div>
+                  <div className="text-lg font-black text-amber-700 tabular-nums mt-1">{brl(impostoTotal)}</div>
+                </div>
+                <div className="bg-emerald-50 rounded-lg p-3 border-2 border-emerald-200">
+                  <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Total pedido</div>
+                  <div className="text-xl font-black text-emerald-700 tabular-nums mt-1">{brl(totalPedido)}</div>
+                </div>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500 flex flex-wrap gap-3">
+                <span>Preço líquido: <b className="text-slate-700">{brl(precoLiquido)}</b></span>
+                <span>Custo médio/peça: <b className="text-slate-700">{totalPecas > 0 ? brl(totalPedido / totalPecas) : 'R$ 0,00'}</b></span>
+              </div>
+            </section>
+          );
+        })()}
+
         {/* Botão modo edição (só se NÃO recebido) */}
         {!isRecebido && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-center gap-2">

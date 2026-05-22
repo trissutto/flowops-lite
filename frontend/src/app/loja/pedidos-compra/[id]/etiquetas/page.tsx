@@ -57,10 +57,10 @@ export default function EtiquetasPage() {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 2.2,
-            height: 40,
+            width: 2.6,
+            height: 44,
             displayValue: true,
-            fontSize: 22,
+            fontSize: 26,
             fontOptions: 'bold',
             textMargin: 1,
             margin: 0,
@@ -73,10 +73,10 @@ export default function EtiquetasPage() {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 2.2,
-              height: 40,
+              width: 2.6,
+              height: 44,
               displayValue: true,
-              fontSize: 22,
+              fontSize: 26,
               fontOptions: 'bold',
               textMargin: 1,
               margin: 0,
@@ -219,8 +219,8 @@ export default function EtiquetasPage() {
         }
         /* Descricao (sem REF/COR/TAM) - GRUPO + SUBGRUPO + PLUS SIZE + MARCA */
         .et-descricao {
-          font-size: 6.5pt;
-          font-weight: 700;
+          font-size: 7pt;
+          font-weight: 900;
           text-transform: uppercase;
           line-height: 1.05;
           letter-spacing: 0;
@@ -256,7 +256,7 @@ export default function EtiquetasPage() {
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
           width: 100%;
-          height: 14mm;
+          height: 15mm;
           display: block;
         }
         .et-codigo {
