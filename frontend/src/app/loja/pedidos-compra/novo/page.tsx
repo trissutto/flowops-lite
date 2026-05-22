@@ -106,18 +106,45 @@ export default function NovoPedidoPage() {
       if (semCnpj === cnpjNum && cnpjNum.length >= 11) return false;
       return true;
     });
-    if (!fornecedorNome.trim()) return comNome.slice(0, 20);
+    if (!fornecedorNome.trim()) {
+      // Sem busca: ordena fornecedores com FANTASIA primeiro (sao os relevantes)
+      const comFant = comNome.filter((f) => (f.fantasia || '').trim());
+      const semFant = comNome.filter((f) => !(f.fantasia || '').trim());
+      return [...comFant, ...semFant].slice(0, 30);
+    }
     const q = fornecedorNome.trim().toUpperCase();
-    return comNome.filter((f) =>
-      f.nome.toUpperCase().includes(q) || (f.fantasia || '').toUpperCase().includes(q),
-    ).slice(0, 20);
+    // Busca prioritariamente em FANTASIA (= MARCA)
+    return comNome
+      .filter((f) =>
+        (f.fantasia || '').toUpperCase().includes(q) ||
+        f.nome.toUpperCase().includes(q),
+      )
+      .sort((a, b) => {
+        // Itens cuja FANTASIA bate a busca vem primeiro
+        const aFant = (a.fantasia || '').toUpperCase().includes(q) ? 0 : 1;
+        const bFant = (b.fantasia || '').toUpperCase().includes(q) ? 0 : 1;
+        return aFant - bFant;
+      })
+      .slice(0, 30);
   }, [fornecedores, fornecedorNome]);
 
   const escolherFornecedor = (f: Fornecedor) => {
-    setFornecedorNome(f.nome);
+    // FANTASIA = MARCA. Mostra fantasia no campo principal, e marca = fantasia.
+    const fant = (f.fantasia || '').trim();
+    const nomeReal = (f.nome || '').trim();
+    setFornecedorNome(fant || nomeReal);
     setFornecedorCnpj(f.cnpj);
-    setMarca(f.fantasia || f.nome);
+    setMarca(fant || nomeReal);
     setShowFornDropdown(false);
+  };
+
+  // Quando o user digita um nome que nao esta na lista, ja preenche MARCA automaticamente
+  // (porque FANTASIA = MARCA = nome do fornecedor cadastrado livremente)
+  const handleFornecedorBlur = () => {
+    const digitado = fornecedorNome.trim().toUpperCase();
+    if (digitado && !marca.trim()) {
+      setMarca(digitado);
+    }
   };
 
   const adicionarItem = () => {
@@ -415,8 +442,11 @@ export default function NovoPedidoPage() {
                   setShowFornDropdown(true);
                 }}
                 onFocus={() => setShowFornDropdown(true)}
-                onBlur={() => setTimeout(() => setShowFornDropdown(false), 200)}
-                placeholder="Digite o nome do fornecedor..."
+                onBlur={() => {
+                  setTimeout(() => setShowFornDropdown(false), 200);
+                  handleFornecedorBlur();
+                }}
+                placeholder="Digite a MARCA do fornecedor (ex: MARRIE, MALWEE)..."
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               />
               {showFornDropdown && (
@@ -429,9 +459,16 @@ export default function NovoPedidoPage() {
                         onClick={() => escolherFornecedor(f)}
                         className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0"
                       >
-                        <div className="font-bold text-sm">{f.nome}</div>
+                        <div className="font-bold text-sm text-violet-900">
+                          {f.fantasia || f.nome}
+                          {f.fantasia && (
+                            <span className="ml-2 text-[9px] font-bold uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                              MARCA
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-500">
-                          {f.fantasia && <span>Marca: <b>{f.fantasia}</b> · </span>}
+                          {f.fantasia && f.nome !== f.fantasia && <span>{f.nome} · </span>}
                           {f.cnpj && <span>CNPJ {f.cnpj}</span>}
                         </div>
                       </button>
