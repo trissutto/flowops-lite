@@ -6128,7 +6128,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponível).
    */
-  async listarFornecedores(limit = 500): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
+  async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
     if (!this.pool) return [];
     // FANTASIA = MARCA no Lurd's — preferir FANTASIA na exibicao quando houver.
     // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)

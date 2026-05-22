@@ -41,7 +41,7 @@ export class PurchaseOrdersController {
   // ── Lookups auxiliares ──
   @Get('lookups/fornecedores')
   async fornecedores(@Query('limit') limit?: string) {
-    return this.erp.listarFornecedores(limit ? Number(limit) : 500);
+    return this.erp.listarFornecedores(limit ? Number(limit) : 5000);
   }
 
   @Get('lookups/grupos')

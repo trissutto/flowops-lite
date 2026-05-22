@@ -110,7 +110,7 @@ export default function NovoPedidoPage() {
       // Sem busca: ordena fornecedores com FANTASIA primeiro (sao os relevantes)
       const comFant = comNome.filter((f) => (f.fantasia || '').trim());
       const semFant = comNome.filter((f) => !(f.fantasia || '').trim());
-      return [...comFant, ...semFant].slice(0, 30);
+      return [...comFant, ...semFant].slice(0, 100);
     }
     const q = fornecedorNome.trim().toUpperCase();
     // Busca prioritariamente em FANTASIA (= MARCA)
@@ -434,7 +434,12 @@ export default function NovoPedidoPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* Fornecedor autocomplete */}
             <div className="relative sm:col-span-2">
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Fornecedor</label>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">
+                Fornecedor
+                <span className="text-[10px] text-slate-400 font-normal ml-2">
+                  ({fornecedores.length} no Wincred, {fornecedoresFiltered.length} mostrados)
+                </span>
+              </label>
               <input
                 value={fornecedorNome}
                 onChange={(e) => {
