@@ -191,10 +191,11 @@ export default function EtiquetasPage() {
           width: 48mm;
           height: 30mm;
           box-sizing: border-box;
-          padding: 3mm 1.5mm 1mm 1.5mm;
+          padding: 2mm 1.5mm 1mm 1.5mm;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
+          gap: 0.8mm;
           border: 1px dashed #cbd5e1;
           background: #fff;
           font-family: -apple-system, system-ui, sans-serif;
@@ -203,16 +204,17 @@ export default function EtiquetasPage() {
         }
         /* Descricao (sem REF/COR/TAM) - GRUPO + SUBGRUPO + PLUS SIZE + MARCA */
         .et-descricao {
-          font-size: 7pt;
+          font-size: 6.5pt;
           font-weight: 700;
           text-transform: uppercase;
-          line-height: 1.1;
-          letter-spacing: 0.1px;
+          line-height: 1.05;
+          letter-spacing: 0;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-          max-height: 6mm;
+          max-height: 5.5mm;
+          flex-shrink: 0;
         }
         /* DESTAQUE: TAM + COR numa linha */
         .et-destaque {
@@ -222,11 +224,11 @@ export default function EtiquetasPage() {
           line-height: 1;
         }
         .et-tam {
-          font-size: 14pt;
+          font-size: 12pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
-          border: 2px solid #000;
-          padding: 0.3mm 1.5mm;
+          border: 1.5px solid #000;
+          padding: 0 1.2mm;
           line-height: 1.1;
         }
         .et-cor-destaque {
