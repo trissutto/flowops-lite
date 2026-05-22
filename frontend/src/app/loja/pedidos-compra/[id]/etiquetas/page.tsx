@@ -165,12 +165,12 @@ export default function EtiquetasPage() {
                     .trim()
                 }</div>
                 <div className="et-destaque">
-                  <span className="et-tam">{l.tamanho}</span>
-                  <span className="et-cor-destaque">{l.cor}</span>
+                  <span className="et-tam">{l.ref}</span>
+                  <span className="et-cor-destaque">{l.tamanho}</span>
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-base">
-                  <span className="et-base-ref">{l.ref}</span>
+                  <span className="et-base-ref">{l.cor}</span>
                   <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
               </div>
