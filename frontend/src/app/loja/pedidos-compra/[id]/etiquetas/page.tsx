@@ -60,8 +60,9 @@ export default function EtiquetasPage() {
             width: 2.2,
             height: 40,
             displayValue: true,
-            fontSize: 16,
-            textMargin: 0,
+            fontSize: 22,
+            fontOptions: 'bold',
+            textMargin: 1,
             margin: 0,
             background: '#fff',
             lineColor: '#000',
@@ -75,8 +76,9 @@ export default function EtiquetasPage() {
               width: 2.2,
               height: 40,
               displayValue: true,
-              fontSize: 16,
-              textMargin: 0,
+              fontSize: 22,
+              fontOptions: 'bold',
+              textMargin: 1,
               margin: 0,
             });
           } catch { /* ignora */ }
@@ -244,7 +246,7 @@ export default function EtiquetasPage() {
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
           width: 100%;
-          height: 12mm;
+          height: 14mm;
           display: block;
         }
         .et-codigo {
