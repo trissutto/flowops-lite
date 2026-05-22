@@ -53,11 +53,16 @@ export default function EtiquetasPage() {
       document.querySelectorAll<HTMLElement>('.barcode-target').forEach((el) => {
         const code = el.dataset.code || '';
         if (!code) return;
+        // Helper: apos render, forca SVG a preencher container (estica horizontal sem mexer vertical)
+        const stretchSvg = (svg: HTMLElement) => {
+          svg.setAttribute('preserveAspectRatio', 'none');
+          svg.removeAttribute('width');
+        };
         try {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 2.8,
+            width: 1.8,
             height: 50,
             displayValue: true,
             fontSize: 26,
@@ -67,13 +72,14 @@ export default function EtiquetasPage() {
             background: '#fff',
             lineColor: '#000',
           });
+          stretchSvg(el);
         } catch {
           // Se o codigo nao for EAN13 valido, usa CODE128 como fallback
           try {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 2.8,
+              width: 1.8,
               height: 50,
               displayValue: true,
               fontSize: 26,
@@ -81,6 +87,7 @@ export default function EtiquetasPage() {
               textMargin: 1,
               margin: 0,
             });
+            stretchSvg(el);
           } catch { /* ignora */ }
         }
       });
@@ -259,9 +266,10 @@ export default function EtiquetasPage() {
         }
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
-          width: 100%;
+          width: 90%;
           height: 16mm;
           display: block;
+          margin: 0 auto;
         }
         .et-codigo {
           font-size: 6pt;
