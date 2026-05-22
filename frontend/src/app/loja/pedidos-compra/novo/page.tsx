@@ -95,9 +95,20 @@ export default function NovoPedidoPage() {
   }, []);
 
   const fornecedoresFiltered = useMemo(() => {
-    if (!fornecedorNome.trim()) return fornecedores.slice(0, 20);
+    // Filtra fornecedores que tem NOME real (ignora os que so tem CNPJ)
+    const comNome = fornecedores.filter((f) => {
+      const nome = (f.nome || '').trim();
+      const cnpj = (f.cnpj || '').trim();
+      if (!nome) return false;
+      // Se nome === cnpj, e porque o banco nao tem nome cadastrado
+      const semCnpj = nome.replace(/\D/g, '');
+      const cnpjNum = cnpj.replace(/\D/g, '');
+      if (semCnpj === cnpjNum && cnpjNum.length >= 11) return false;
+      return true;
+    });
+    if (!fornecedorNome.trim()) return comNome.slice(0, 20);
     const q = fornecedorNome.trim().toUpperCase();
-    return fornecedores.filter((f) =>
+    return comNome.filter((f) =>
       f.nome.toUpperCase().includes(q) || (f.fantasia || '').toUpperCase().includes(q),
     ).slice(0, 20);
   }, [fornecedores, fornecedorNome]);
@@ -404,25 +415,33 @@ export default function NovoPedidoPage() {
                   setShowFornDropdown(true);
                 }}
                 onFocus={() => setShowFornDropdown(true)}
-                placeholder="Digite ou selecione..."
+                onBlur={() => setTimeout(() => setShowFornDropdown(false), 200)}
+                placeholder="Digite o nome do fornecedor..."
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               />
-              {showFornDropdown && fornecedoresFiltered.length > 0 && (
+              {showFornDropdown && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">
-                  {fornecedoresFiltered.map((f) => (
-                    <button
-                      key={f.cnpj + f.nome}
-                      type="button"
-                      onClick={() => escolherFornecedor(f)}
-                      className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0"
-                    >
-                      <div className="font-bold text-sm">{f.nome}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {f.fantasia && <span>Marca: <b>{f.fantasia}</b> · </span>}
-                        {f.cnpj && <span>CNPJ {f.cnpj}</span>}
-                      </div>
-                    </button>
-                  ))}
+                  {fornecedoresFiltered.length > 0 ? (
+                    fornecedoresFiltered.map((f) => (
+                      <button
+                        key={f.cnpj + f.nome}
+                        type="button"
+                        onClick={() => escolherFornecedor(f)}
+                        className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0"
+                      >
+                        <div className="font-bold text-sm">{f.nome}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {f.fantasia && <span>Marca: <b>{f.fantasia}</b> · </span>}
+                          {f.cnpj && <span>CNPJ {f.cnpj}</span>}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-3 text-xs text-slate-500">
+                      <div className="font-bold text-slate-700 mb-1">Nao achou na lista?</div>
+                      Digite o nome livremente no campo acima — vai ser salvo como o nome do fornecedor.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

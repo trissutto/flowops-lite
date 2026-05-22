@@ -6131,14 +6131,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async listarFornecedores(limit = 500): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
     if (!this.pool) return [];
     // FANTASIA = MARCA no Lurd's — preferir FANTASIA na exibicao quando houver.
-    // Tentativa 1: fornecedores com NOME + FANTASIA
+    // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)
+    // Tentativa 1: schema Lurd's (CNPJ/RAZAOSOCIAL/FANTASIA)
     try {
       const [rows] = await this.pool.query(
-        `SELECT CGC AS cnpj, NOME AS nome, FANTASIA AS fantasia
+        `SELECT CNPJ AS cnpj, RAZAOSOCIAL AS nome, FANTASIA AS fantasia
            FROM fornecedores
-          WHERE (NOME IS NOT NULL AND NOME <> '')
+          WHERE (RAZAOSOCIAL IS NOT NULL AND RAZAOSOCIAL <> '')
              OR (FANTASIA IS NOT NULL AND FANTASIA <> '')
-          ORDER BY COALESCE(NULLIF(FANTASIA,''), NOME)
+          ORDER BY COALESCE(NULLIF(FANTASIA,''), RAZAOSOCIAL)
           LIMIT ?`,
         [limit],
       );
@@ -6158,7 +6159,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e: any) {
       this.logger.warn(`listarFornecedores tent1 falhou: ${e?.message}`);
     }
-    // Tentativa 2: so NOME
+    // Tentativa 2: schema antigo (CGC/NOME)
     try {
       const [rows] = await this.pool.query(
         `SELECT CGC AS cnpj, NOME AS nome FROM fornecedores
@@ -6177,14 +6178,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e: any) {
       this.logger.warn(`listarFornecedores tent2 falhou: ${e?.message}`);
     }
-    // Tentativa 3: JOIN com produtos
+    // Tentativa 3: JOIN com produtos (schema Lurd's)
     try {
       const [rows] = await this.pool.query(
         `SELECT DISTINCT p.FORNECEDOR AS cnpj,
-                COALESCE(NULLIF(TRIM(f.FANTASIA),''), NULLIF(TRIM(f.NOME),''), p.FORNECEDOR) AS nome,
+                COALESCE(NULLIF(TRIM(f.FANTASIA),''), NULLIF(TRIM(f.RAZAOSOCIAL),''), p.FORNECEDOR) AS nome,
                 f.FANTASIA AS fantasia
            FROM produtos p
-           LEFT JOIN fornecedores f ON f.CGC = p.FORNECEDOR
+           LEFT JOIN fornecedores f ON f.CNPJ = p.FORNECEDOR
           WHERE p.FORNECEDOR IS NOT NULL AND p.FORNECEDOR <> ''
           ORDER BY nome LIMIT ?`,
         [limit],
