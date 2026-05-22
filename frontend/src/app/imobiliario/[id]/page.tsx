@@ -208,6 +208,8 @@ export default function ImovelDetailPage() {
             icon={Droplet}
             data={data.water}
             endpoint={`/properties/${id}/water`}
+            propertyId={id}
+            scope="water"
             fields={[
               { key: 'companhia', label: 'Companhia (ex: SABESP)' },
               { key: 'titular', label: 'Titular da conta' },
@@ -224,6 +226,8 @@ export default function ImovelDetailPage() {
             icon={Zap}
             data={data.energy}
             endpoint={`/properties/${id}/energy`}
+            propertyId={id}
+            scope="energy"
             fields={[
               { key: 'companhia', label: 'Companhia (ex: ENEL, CPFL)' },
               { key: 'titular', label: 'Titular' },
@@ -240,6 +244,8 @@ export default function ImovelDetailPage() {
             icon={Receipt}
             data={data.iptu}
             endpoint={`/properties/${id}/iptu`}
+            propertyId={id}
+            scope="iptu"
             fields={[
               { key: 'proprietario', label: 'Nome do proprietário' },
               { key: 'codigoCadastro', label: 'Código do cadastro' },
@@ -262,6 +268,8 @@ export default function ImovelDetailPage() {
             icon={FileText}
             data={data.deed}
             endpoint={`/properties/${id}/deed`}
+            propertyId={id}
+            scope="deed"
             fields={[
               { key: 'numero', label: 'Número da matrícula' },
               { key: 'cartorio', label: 'Cartório' },
@@ -278,6 +286,8 @@ export default function ImovelDetailPage() {
             icon={Scroll}
             data={data.scripture}
             endpoint={`/properties/${id}/scripture`}
+            propertyId={id}
+            scope="scripture"
             fields={[
               { key: 'numero', label: 'Número da escritura' },
               { key: 'data', label: 'Data', type: 'date' },
@@ -377,7 +387,7 @@ function TabGeral({ data, id, onSave }: any) {
 }
 
 // ─── UTILITY FORM GENÉRICO (água, energia, IPTU, matrícula, escritura) ──
-function UtilityForm({ title, icon: Icon, data, endpoint, fields, onSaved }: any) {
+function UtilityForm({ title, icon: Icon, data, endpoint, fields, onSaved, propertyId, scope }: any) {
   const [form, setForm] = useState<any>(() => {
     const init: any = {};
     for (const f of fields) {
@@ -436,6 +446,17 @@ function UtilityForm({ title, icon: Icon, data, endpoint, fields, onSaved }: any
           )}
         </div>
       ))}
+
+      {/* Upload do PDF/JPG da seção (carnê IPTU, conta, escritura, etc) */}
+      {propertyId && scope && (
+        <UploadSlot
+          propertyId={propertyId}
+          scope={scope}
+          currentUrl={data?.attachmentUrl}
+          onUploaded={onSaved}
+          label="📎 Anexo principal (PDF/JPG)"
+        />
+      )}
 
       <button
         onClick={salvar}
@@ -582,6 +603,147 @@ function TabTaxas({ data, id, onChange }: any) {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── UPLOAD SLOT (botão + dropzone reutilizável) ───────────────────────
+// Usado nas seções Água/Energia/IPTU/Matrícula/Escritura (1 arquivo único
+// que sobrescreve, salvo em attachmentUrl da própria seção) E na aba Anexos
+// (múltiplos, salvo em PropertyAttachment).
+function UploadSlot({
+  propertyId,
+  scope,
+  currentUrl,
+  onUploaded,
+  label,
+  accept,
+}: {
+  propertyId: string;
+  scope?: 'water' | 'energy' | 'iptu' | 'deed' | 'scripture';
+  currentUrl?: string | null;
+  onUploaded: () => void;
+  label?: string;
+  accept?: string;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const doUpload = async (file: File) => {
+    setError(null);
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Arquivo maior que 10MB');
+      return;
+    }
+    setUploading(true);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      const fd = new FormData();
+      fd.append('file', file);
+      if (scope) fd.append('scope', scope);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || `${window.location.protocol}//${window.location.hostname}:3001`;
+      const r = await fetch(`${apiUrl}/api/properties/${propertyId}/upload`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: fd,
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`${r.status}: ${t}`);
+      }
+      onUploaded();
+    } catch (e: any) {
+      setError(e?.message || 'Erro no upload');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {label && <div className="text-xs font-bold text-slate-300">{label}</div>}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f) doUpload(f);
+        }}
+        className={`border-2 border-dashed rounded-xl p-4 transition ${
+          dragOver
+            ? 'border-amber-400 bg-amber-500/10'
+            : 'border-white/20 bg-white/5 hover:bg-white/10'
+        }`}
+      >
+        {uploading ? (
+          <div className="flex items-center justify-center gap-2 py-2">
+            <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+            <span className="text-sm text-slate-300">Enviando...</span>
+          </div>
+        ) : currentUrl ? (
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
+              <FileText className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-emerald-300 font-bold">✓ Arquivo anexado</div>
+              <a
+                href={currentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[11px] text-slate-400 hover:text-white truncate block underline"
+              >
+                {currentUrl.split('/').pop()?.split('?')[0]}
+              </a>
+            </div>
+            <a
+              href={currentUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-xs font-bold"
+            >
+              Ver
+            </a>
+            <label className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-white rounded text-xs font-bold cursor-pointer">
+              Trocar
+              <input
+                type="file"
+                accept={accept || '.pdf,.jpg,.jpeg,.png'}
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) doUpload(f);
+                }}
+              />
+            </label>
+          </div>
+        ) : (
+          <label className="cursor-pointer flex flex-col items-center justify-center gap-2 py-3 text-center">
+            <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center">
+              <Plus className="w-6 h-6 text-amber-400" />
+            </div>
+            <div className="text-sm font-bold text-slate-200">Arraste o arquivo aqui</div>
+            <div className="text-[10px] text-slate-500">ou clique pra escolher · PDF / JPG / PNG · máx 10MB</div>
+            <input
+              type="file"
+              accept={accept || '.pdf,.jpg,.jpeg,.png'}
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) doUpload(f);
+              }}
+            />
+          </label>
+        )}
+        {error && (
+          <div className="mt-2 text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded p-2">
+            ⚠ {error}
           </div>
         )}
       </div>
