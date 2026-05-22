@@ -1,0 +1,787 @@
+'use client';
+
+/**
+ * /loja/pedidos-compra/novo — Criar novo pedido de compra.
+ *
+ * Estrutura:
+ *  - Header: fornecedor (autocomplete Wincred), data prevista, NF, observações
+ *  - Items: adiciona REF + descricao + categoria + grade cor×tamanho com qty
+ *
+ * Quando recebe a mercadoria depois, dispara auto-cadastro Wincred.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import {
+  ArrowLeft, Plus, Trash2, Loader2, Save, Package,
+  AlertCircle, Copy, ChevronDown, X,
+} from 'lucide-react';
+import { api } from '@/lib/api';
+
+type Fornecedor = { cnpj: string; nome: string; fantasia?: string };
+type Grupo = { codigo: number; nome: string };
+type Categoria = {
+  descricaoBase: string;
+  grupoCode: number;
+  grupoNome: string;
+  subgrupoCode: number;
+  subgrupoNome: string;
+  ncmDefault: string | null;
+  cfopDefault: string | null;
+  plusSizeDefault: boolean;
+};
+
+type ItemForm = {
+  tempId: string;
+  ref: string;
+  descricaoBase: string;
+  grupoCode: number | null;
+  grupoNome: string;
+  subgrupoCode: number | null;
+  subgrupoNome: string;
+  ncm: string;
+  cfop: string;
+  plusSize: boolean;
+  custoUnit: string;
+  precoUnit: string;
+  tributoPct: string;
+  descontoPct: string;
+  cores: string[];
+  tamanhos: string[];
+  // matriz: { "PRETO|46": 21, "PRETO|48": 21, ... }
+  grade: Record<string, string>;
+};
+
+const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
+const newTempId = () => Math.random().toString(36).slice(2, 10);
+
+export default function NovoPedidoPage() {
+  const router = useRouter();
+
+  // Lookups
+  const [fornecedores, setFornecedores] = useState<Fornecedor[]>([]);
+  const [grupos, setGrupos] = useState<Grupo[]>([]);
+  const [categorias, setCategorias] = useState<Categoria[]>([]);
+
+  // Header
+  const [fornecedorNome, setFornecedorNome] = useState('');
+  const [fornecedorCnpj, setFornecedorCnpj] = useState('');
+  const [marca, setMarca] = useState('');
+  const [dataPrevista, setDataPrevista] = useState('');
+  const [nfNumero, setNfNumero] = useState('');
+  const [observacoes, setObservacoes] = useState('');
+  const [showFornDropdown, setShowFornDropdown] = useState(false);
+
+  // Items
+  const [items, setItems] = useState<ItemForm[]>([]);
+
+  // Estado
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<Fornecedor[]>('/purchase-orders/lookups/fornecedores').then(setFornecedores).catch(() => {});
+    api<Grupo[]>('/purchase-orders/lookups/grupos').then(setGrupos).catch(() => {});
+    api<Categoria[]>('/purchase-orders/categorias').then(setCategorias).catch(() => {});
+  }, []);
+
+  const fornecedoresFiltered = useMemo(() => {
+    if (!fornecedorNome.trim()) return fornecedores.slice(0, 20);
+    const q = fornecedorNome.trim().toUpperCase();
+    return fornecedores.filter((f) =>
+      f.nome.toUpperCase().includes(q) || (f.fantasia || '').toUpperCase().includes(q),
+    ).slice(0, 20);
+  }, [fornecedores, fornecedorNome]);
+
+  const escolherFornecedor = (f: Fornecedor) => {
+    setFornecedorNome(f.nome);
+    setFornecedorCnpj(f.cnpj);
+    setMarca(f.fantasia || f.nome);
+    setShowFornDropdown(false);
+  };
+
+  const adicionarItem = () => {
+    setItems((prev) => [
+      ...prev,
+      {
+        tempId: newTempId(),
+        ref: '',
+        descricaoBase: '',
+        grupoCode: null,
+        grupoNome: '',
+        subgrupoCode: null,
+        subgrupoNome: '',
+        ncm: '',
+        cfop: '5102',
+        plusSize: true,
+        custoUnit: '',
+        precoUnit: '',
+        tributoPct: '0',
+        descontoPct: '0',
+        cores: [],
+        tamanhos: [...TAMANHOS_PLUS],
+        grade: {},
+      },
+    ]);
+  };
+
+  const removerItem = (tempId: string) => {
+    setItems((prev) => prev.filter((i) => i.tempId !== tempId));
+  };
+
+  const duplicarItem = (tempId: string) => {
+    const original = items.find((i) => i.tempId === tempId);
+    if (!original) return;
+    setItems((prev) => [...prev, { ...original, tempId: newTempId(), grade: { ...original.grade } }]);
+  };
+
+  const updateItem = (tempId: string, patch: Partial<ItemForm>) => {
+    setItems((prev) => prev.map((i) => (i.tempId === tempId ? { ...i, ...patch } : i)));
+  };
+
+  // Quando muda descricaoBase, tenta auto-preencher categoria
+  const aplicarCategoriaSeExistir = (tempId: string, descricao: string) => {
+    const desc = descricao.trim().toUpperCase();
+    if (!desc) return;
+    const cat = categorias.find((c) => c.descricaoBase === desc);
+    if (cat) {
+      updateItem(tempId, {
+        descricaoBase: desc,
+        grupoCode: cat.grupoCode,
+        grupoNome: cat.grupoNome,
+        subgrupoCode: cat.subgrupoCode,
+        subgrupoNome: cat.subgrupoNome,
+        ncm: cat.ncmDefault || '',
+        cfop: cat.cfopDefault || '5102',
+        plusSize: cat.plusSizeDefault,
+      });
+    }
+  };
+
+  const adicionarCor = (tempId: string, cor: string) => {
+    const c = cor.trim().toUpperCase();
+    if (!c) return;
+    const item = items.find((i) => i.tempId === tempId);
+    if (!item || item.cores.includes(c)) return;
+    updateItem(tempId, { cores: [...item.cores, c] });
+  };
+
+  const removerCor = (tempId: string, cor: string) => {
+    const item = items.find((i) => i.tempId === tempId);
+    if (!item) return;
+    const newGrade = { ...item.grade };
+    for (const k of Object.keys(newGrade)) {
+      if (k.startsWith(`${cor}|`)) delete newGrade[k];
+    }
+    updateItem(tempId, {
+      cores: item.cores.filter((c) => c !== cor),
+      grade: newGrade,
+    });
+  };
+
+  const adicionarTamanho = (tempId: string, tam: string) => {
+    const t = tam.trim().toUpperCase();
+    if (!t) return;
+    const item = items.find((i) => i.tempId === tempId);
+    if (!item || item.tamanhos.includes(t)) return;
+    updateItem(tempId, { tamanhos: [...item.tamanhos, t] });
+  };
+
+  const removerTamanho = (tempId: string, tam: string) => {
+    const item = items.find((i) => i.tempId === tempId);
+    if (!item) return;
+    const newGrade = { ...item.grade };
+    for (const k of Object.keys(newGrade)) {
+      if (k.endsWith(`|${tam}`)) delete newGrade[k];
+    }
+    updateItem(tempId, {
+      tamanhos: item.tamanhos.filter((t) => t !== tam),
+      grade: newGrade,
+    });
+  };
+
+  const setGradeCell = (tempId: string, cor: string, tam: string, valor: string) => {
+    const item = items.find((i) => i.tempId === tempId);
+    if (!item) return;
+    const key = `${cor}|${tam}`;
+    updateItem(tempId, {
+      grade: { ...item.grade, [key]: valor.replace(/\D/g, '') },
+    });
+  };
+
+  const calcularTotalItem = (item: ItemForm) => {
+    let qty = 0;
+    for (const c of item.cores) {
+      for (const t of item.tamanhos) {
+        qty += Number(item.grade[`${c}|${t}`] || 0);
+      }
+    }
+    return qty;
+  };
+
+  const totalPecas = useMemo(
+    () => items.reduce((s, i) => s + calcularTotalItem(i), 0),
+    [items],
+  );
+  const totalCusto = useMemo(
+    () =>
+      items.reduce(
+        (s, i) => s + calcularTotalItem(i) * (Number(i.custoUnit.replace(',', '.')) || 0),
+        0,
+      ),
+    [items],
+  );
+
+  const salvar = async () => {
+    setError(null);
+    if (!fornecedorNome.trim()) {
+      setError('Fornecedor obrigatório');
+      return;
+    }
+    if (items.length === 0) {
+      setError('Adicione ao menos 1 item');
+      return;
+    }
+    // Valida cada item
+    for (const it of items) {
+      if (!it.ref.trim()) {
+        setError(`Item sem REF`);
+        return;
+      }
+      if (!it.descricaoBase.trim()) {
+        setError(`REF ${it.ref}: descrição obrigatória`);
+        return;
+      }
+      if (!it.grupoCode || !it.subgrupoCode) {
+        setError(`REF ${it.ref}: Grupo e Subgrupo obrigatórios pra cadastrar depois`);
+        return;
+      }
+      if (!it.custoUnit || !it.precoUnit) {
+        setError(`REF ${it.ref}: Custo e Preço obrigatórios`);
+        return;
+      }
+      if (it.cores.length === 0 || it.tamanhos.length === 0) {
+        setError(`REF ${it.ref}: adicione cores e tamanhos`);
+        return;
+      }
+      if (calcularTotalItem(it) === 0) {
+        setError(`REF ${it.ref}: total = 0, informe quantidades na grade`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      // Salva novas categorias (se descrição não existir)
+      for (const it of items) {
+        const exists = categorias.find((c) => c.descricaoBase === it.descricaoBase.toUpperCase());
+        if (!exists && it.grupoCode && it.subgrupoCode) {
+          try {
+            await api('/purchase-orders/categorias', {
+              method: 'POST',
+              body: JSON.stringify({
+                descricaoBase: it.descricaoBase,
+                grupoCode: it.grupoCode,
+                grupoNome: it.grupoNome,
+                subgrupoCode: it.subgrupoCode,
+                subgrupoNome: it.subgrupoNome,
+                ncmDefault: it.ncm || null,
+                cfopDefault: it.cfop || '5102',
+                plusSizeDefault: it.plusSize,
+              }),
+            });
+          } catch {
+            // Não bloqueia salvar pedido se categoria falhar
+          }
+        }
+      }
+
+      // Monta items pro POST: 1 ItemForm pode virar VÁRIOS items (1 por cor)
+      const apiItems: any[] = [];
+      for (const it of items) {
+        for (const cor of it.cores) {
+          const tamanhosQty: Record<string, number> = {};
+          for (const t of it.tamanhos) {
+            const q = Number(it.grade[`${cor}|${t}`] || 0);
+            if (q > 0) tamanhosQty[t] = q;
+          }
+          if (Object.keys(tamanhosQty).length === 0) continue; // pula cores sem qty
+          apiItems.push({
+            ref: it.ref,
+            descricaoBase: it.descricaoBase,
+            cor,
+            grupoCode: it.grupoCode,
+            grupoNome: it.grupoNome,
+            subgrupoCode: it.subgrupoCode,
+            subgrupoNome: it.subgrupoNome,
+            ncm: it.ncm || null,
+            cfop: it.cfop || '5102',
+            plusSize: it.plusSize,
+            custoUnit: Number(it.custoUnit.replace(',', '.')),
+            precoUnit: Number(it.precoUnit.replace(',', '.')),
+            tributoPct: Number(it.tributoPct.replace(',', '.') || 0),
+            descontoPct: Number(it.descontoPct.replace(',', '.') || 0),
+            tamanhosQty,
+          });
+        }
+      }
+
+      const r = await api<{ id: string }>('/purchase-orders', {
+        method: 'POST',
+        body: JSON.stringify({
+          fornecedorNome,
+          fornecedorCnpj,
+          marca,
+          dataPrevista: dataPrevista || null,
+          nfNumero,
+          observacoes,
+          items: apiItems,
+        }),
+      });
+      router.push(`/loja/pedidos-compra/${r.id}`);
+    } catch (e: any) {
+      setError(e?.message || 'Erro ao salvar');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="max-w-[1400px] mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/loja/pedidos-compra" className="p-2 rounded-lg hover:bg-slate-100">
+            <ArrowLeft className="w-5 h-5 text-slate-600" />
+          </Link>
+          <div className="w-10 h-10 rounded-xl bg-violet-600 flex items-center justify-center">
+            <Package className="w-5 h-5 text-white" />
+          </div>
+          <div className="flex-1">
+            <h1 className="text-lg font-black text-slate-800">Novo pedido de compra</h1>
+            <p className="text-xs text-slate-500">{items.length} REF(s) · <b>{totalPecas}</b> peças · R$ {totalCusto.toFixed(2)}</p>
+          </div>
+          <button
+            onClick={salvar}
+            disabled={saving || items.length === 0}
+            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Salvar pedido
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-[1400px] mx-auto p-4 space-y-4">
+        {error && (
+          <div className="bg-rose-50 border border-rose-300 text-rose-700 rounded-lg p-3 flex items-center gap-2">
+            <AlertCircle className="w-5 h-5" />
+            <span className="text-sm font-bold">{error}</span>
+          </div>
+        )}
+
+        {/* Header do pedido */}
+        <section className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+          <h2 className="text-sm font-black text-violet-700 uppercase tracking-wider">Fornecedor & NF</h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Fornecedor autocomplete */}
+            <div className="relative sm:col-span-2">
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Fornecedor</label>
+              <input
+                value={fornecedorNome}
+                onChange={(e) => {
+                  setFornecedorNome(e.target.value);
+                  setShowFornDropdown(true);
+                }}
+                onFocus={() => setShowFornDropdown(true)}
+                placeholder="Digite ou selecione..."
+                className="w-full px-3 py-2 border rounded-lg text-sm"
+              />
+              {showFornDropdown && fornecedoresFiltered.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">
+                  {fornecedoresFiltered.map((f) => (
+                    <button
+                      key={f.cnpj + f.nome}
+                      type="button"
+                      onClick={() => escolherFornecedor(f)}
+                      className="w-full text-left px-3 py-2 hover:bg-violet-50 border-b border-slate-100 last:border-b-0"
+                    >
+                      <div className="font-bold text-sm">{f.nome}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {f.fantasia && <span>Marca: <b>{f.fantasia}</b> · </span>}
+                        {f.cnpj && <span>CNPJ {f.cnpj}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Marca (na descrição)</label>
+              <input
+                value={marca}
+                onChange={(e) => setMarca(e.target.value.toUpperCase())}
+                placeholder="Ex: MARRIE"
+                className="w-full px-3 py-2 border rounded-lg text-sm font-mono uppercase"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Data prevista</label>
+              <input
+                type="date"
+                value={dataPrevista}
+                onChange={(e) => setDataPrevista(e.target.value)}
+                className="w-full px-3 py-2 border rounded-lg text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">NF (opcional)</label>
+              <input
+                value={nfNumero}
+                onChange={(e) => setNfNumero(e.target.value)}
+                placeholder="Número da NF"
+                className="w-full px-3 py-2 border rounded-lg text-sm"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-600 mb-1 block">Observações</label>
+            <textarea
+              value={observacoes}
+              onChange={(e) => setObservacoes(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 border rounded-lg text-sm"
+            />
+          </div>
+        </section>
+
+        {/* Items */}
+        <section className="space-y-3">
+          {items.map((item, idx) => (
+            <ItemEditor
+              key={item.tempId}
+              item={item}
+              index={idx + 1}
+              grupos={grupos}
+              categorias={categorias}
+              onUpdate={(patch) => updateItem(item.tempId, patch)}
+              onRemove={() => removerItem(item.tempId)}
+              onDuplicate={() => duplicarItem(item.tempId)}
+              onAplicarCategoria={(desc) => aplicarCategoriaSeExistir(item.tempId, desc)}
+              onAddCor={(c) => adicionarCor(item.tempId, c)}
+              onRemoveCor={(c) => removerCor(item.tempId, c)}
+              onAddTam={(t) => adicionarTamanho(item.tempId, t)}
+              onRemoveTam={(t) => removerTamanho(item.tempId, t)}
+              onGrade={(c, t, v) => setGradeCell(item.tempId, c, t, v)}
+            />
+          ))}
+
+          <button
+            onClick={adicionarItem}
+            className="w-full py-4 border-2 border-dashed border-violet-300 hover:border-violet-500 hover:bg-violet-50 rounded-xl text-violet-600 font-bold flex items-center justify-center gap-2 transition"
+          >
+            <Plus className="w-5 h-5" />
+            Adicionar nova REF
+          </button>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+// ─── ItemEditor ─────────────────────────────────────────────────────────
+function ItemEditor({
+  item, index, grupos, categorias,
+  onUpdate, onRemove, onDuplicate, onAplicarCategoria,
+  onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
+}: {
+  item: ItemForm;
+  index: number;
+  grupos: Grupo[];
+  categorias: Categoria[];
+  onUpdate: (patch: Partial<ItemForm>) => void;
+  onRemove: () => void;
+  onDuplicate: () => void;
+  onAplicarCategoria: (desc: string) => void;
+  onAddCor: (c: string) => void;
+  onRemoveCor: (c: string) => void;
+  onAddTam: (t: string) => void;
+  onRemoveTam: (t: string) => void;
+  onGrade: (c: string, t: string, v: string) => void;
+}) {
+  const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
+  const [novaCor, setNovaCor] = useState('');
+  const [novoTam, setNovoTam] = useState('');
+
+  // Carrega subgrupos do grupo selecionado
+  useEffect(() => {
+    if (!item.grupoCode) {
+      setSubgrupos([]);
+      return;
+    }
+    api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${item.grupoCode}`)
+      .then(setSubgrupos)
+      .catch(() => setSubgrupos([]));
+  }, [item.grupoCode]);
+
+  // Total da linha
+  let totalLinha = 0;
+  for (const c of item.cores) {
+    for (const t of item.tamanhos) {
+      totalLinha += Number(item.grade[`${c}|${t}`] || 0);
+    }
+  }
+  const custoTotal = totalLinha * (Number(item.custoUnit.replace(',', '.')) || 0);
+
+  return (
+    <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 space-y-3">
+      {/* Header da REF */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-black text-violet-700 uppercase tracking-wider">
+          Item #{index}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">
+            <b>{totalLinha}</b> peças · R$ {custoTotal.toFixed(2)}
+          </span>
+          <button onClick={onDuplicate} className="p-1.5 hover:bg-slate-100 rounded" title="Duplicar">
+            <Copy className="w-4 h-4 text-slate-500" />
+          </button>
+          <button onClick={onRemove} className="p-1.5 hover:bg-rose-50 text-rose-500 rounded" title="Remover">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Linha 1: REF + DESCRICAO */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+        <div className="sm:col-span-1">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">REF *</label>
+          <input
+            value={item.ref}
+            onChange={(e) => onUpdate({ ref: e.target.value.toUpperCase() })}
+            placeholder="7031"
+            className="w-full px-2 py-2 border rounded text-sm font-mono uppercase font-bold"
+          />
+        </div>
+        <div className="sm:col-span-3">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Descrição base *</label>
+          <input
+            value={item.descricaoBase}
+            onChange={(e) => onUpdate({ descricaoBase: e.target.value.toUpperCase() })}
+            onBlur={(e) => onAplicarCategoria(e.target.value)}
+            list={`descs-${item.tempId}`}
+            placeholder="Ex: CASACO SOFT"
+            className="w-full px-2 py-2 border rounded text-sm uppercase"
+          />
+          <datalist id={`descs-${item.tempId}`}>
+            {categorias.map((c) => (
+              <option key={c.descricaoBase} value={c.descricaoBase} />
+            ))}
+          </datalist>
+        </div>
+      </div>
+
+      {/* Linha 2: Grupo + Subgrupo + NCM + CFOP */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-50 p-2 rounded-lg">
+        <div className="sm:col-span-2">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Grupo *</label>
+          <select
+            value={item.grupoCode || ''}
+            onChange={(e) => {
+              const code = Number(e.target.value);
+              const g = grupos.find((x) => x.codigo === code);
+              onUpdate({ grupoCode: code, grupoNome: g?.nome || '', subgrupoCode: null, subgrupoNome: '' });
+            }}
+            className="w-full px-2 py-2 border rounded text-sm bg-white"
+          >
+            <option value="">— selecione —</option>
+            {grupos.map((g) => (
+              <option key={g.codigo} value={g.codigo}>{g.nome}</option>
+            ))}
+          </select>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Subgrupo *</label>
+          <select
+            value={item.subgrupoCode || ''}
+            onChange={(e) => {
+              const code = Number(e.target.value);
+              const s = subgrupos.find((x) => x.codigo === code);
+              onUpdate({ subgrupoCode: code, subgrupoNome: s?.nome || '' });
+            }}
+            disabled={!item.grupoCode}
+            className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
+          >
+            <option value="">— selecione —</option>
+            {subgrupos.map((s) => (
+              <option key={s.codigo} value={s.codigo}>{s.nome}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-slate-600 uppercase">NCM</label>
+          <input
+            value={item.ncm}
+            onChange={(e) => onUpdate({ ncm: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+            placeholder="00000000"
+            className="w-full px-2 py-2 border rounded text-sm font-mono"
+          />
+        </div>
+      </div>
+
+      {/* Linha 3: Custo + Preço + Tributo + CFOP + PlusSize */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <div>
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Custo R$ *</label>
+          <input
+            value={item.custoUnit}
+            onChange={(e) => onUpdate({ custoUnit: e.target.value })}
+            placeholder="10,00"
+            inputMode="decimal"
+            className="w-full px-2 py-2 border rounded text-sm font-mono"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Preço R$ *</label>
+          <input
+            value={item.precoUnit}
+            onChange={(e) => onUpdate({ precoUnit: e.target.value })}
+            placeholder="25,00"
+            inputMode="decimal"
+            className="w-full px-2 py-2 border rounded text-sm font-mono"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Tributo %</label>
+          <input
+            value={item.tributoPct}
+            onChange={(e) => onUpdate({ tributoPct: e.target.value })}
+            placeholder="6"
+            inputMode="decimal"
+            className="w-full px-2 py-2 border rounded text-sm font-mono"
+          />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold text-slate-600 uppercase">CFOP</label>
+          <input
+            value={item.cfop}
+            onChange={(e) => onUpdate({ cfop: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+            placeholder="5102"
+            className="w-full px-2 py-2 border rounded text-sm font-mono"
+          />
+        </div>
+        <label className="flex items-end gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={item.plusSize}
+            onChange={(e) => onUpdate({ plusSize: e.target.checked })}
+            className="accent-violet-600 w-4 h-4 mb-2"
+          />
+          <span className="text-xs font-bold text-violet-700 mb-2">PLUS SIZE</span>
+        </label>
+      </div>
+
+      {/* Tamanhos (chips) */}
+      <div className="space-y-1">
+        <div className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</div>
+        <div className="flex flex-wrap gap-1 items-center">
+          {item.tamanhos.map((t) => (
+            <span key={t} className="bg-violet-100 text-violet-700 px-2 py-1 rounded text-xs font-bold font-mono flex items-center gap-1">
+              {t}
+              <button onClick={() => onRemoveTam(t)} className="hover:text-rose-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            value={novoTam}
+            onChange={(e) => setNovoTam(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onAddTam(novoTam);
+                setNovoTam('');
+              }
+            }}
+            placeholder="+ tam"
+            className="px-2 py-1 border rounded text-xs w-20 font-mono"
+          />
+        </div>
+      </div>
+
+      {/* Cores (chips) */}
+      <div className="space-y-1">
+        <div className="text-[10px] font-bold text-slate-600 uppercase">Cores</div>
+        <div className="flex flex-wrap gap-1 items-center">
+          {item.cores.map((c) => (
+            <span key={c} className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+              {c}
+              <button onClick={() => onRemoveCor(c)} className="hover:text-rose-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            value={novaCor}
+            onChange={(e) => setNovaCor(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                onAddCor(novaCor);
+                setNovaCor('');
+              }
+            }}
+            placeholder="+ cor"
+            className="px-2 py-1 border rounded text-xs w-32 uppercase"
+          />
+        </div>
+      </div>
+
+      {/* Grade cor × tamanho */}
+      {item.cores.length > 0 && item.tamanhos.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr>
+                <th className="text-left text-[10px] font-bold uppercase text-slate-500 p-1">Cor</th>
+                {item.tamanhos.map((t) => (
+                  <th key={t} className="p-1 text-center text-[10px] font-mono text-violet-700">{t}</th>
+                ))}
+                <th className="p-1 text-center text-[10px] text-violet-700">TOT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {item.cores.map((c) => {
+                let total = 0;
+                for (const t of item.tamanhos) total += Number(item.grade[`${c}|${t}`] || 0);
+                return (
+                  <tr key={c}>
+                    <td className="p-1 font-bold text-amber-700 text-xs">{c}</td>
+                    {item.tamanhos.map((t) => (
+                      <td key={t} className="p-0.5">
+                        <input
+                          value={item.grade[`${c}|${t}`] || ''}
+                          onChange={(e) => onGrade(c, t, e.target.value)}
+                          placeholder="0"
+                          inputMode="numeric"
+                          className="w-12 px-1 py-1 border rounded text-center font-mono text-sm"
+                        />
+                      </td>
+                    ))}
+                    <td className="p-1 text-center font-black text-violet-700 tabular-nums text-sm">{total}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
