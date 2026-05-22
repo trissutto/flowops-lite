@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3,
+  Truck, Printer, FileText, Edit3, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -224,6 +224,22 @@ export default function PedidoDetalhePage() {
               Imprimir etiquetas
             </button>
           )}
+          <button
+            onClick={async () => {
+              if (!confirm(`Excluir pedido #${data.numero} (${data.fornecedorNome})?\n\nEsta acao nao pode ser desfeita.${isRecebido ? '\n\nATENCAO: este pedido ja foi RECEBIDO. Os SKUs cadastrados no Wincred NAO serao removidos.' : ''}`)) return;
+              try {
+                await api(`/purchase-orders/${id}`, { method: 'DELETE' });
+                router.push('/loja/pedidos-compra');
+              } catch (err: any) {
+                alert('Erro ao excluir: ' + (err?.message || 'desconhecido'));
+              }
+            }}
+            title="Excluir pedido"
+            className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-rose-50 border border-rose-200 hover:border-rose-300 text-rose-600 font-bold text-sm rounded-lg"
+          >
+            <Trash2 className="w-4 h-4" />
+            Excluir
+          </button>
         </div>
       </header>
 
