@@ -72,6 +72,14 @@ export default function NovoPedidoPage() {
   const [nfNumero, setNfNumero] = useState('');
   const [observacoes, setObservacoes] = useState('');
   const [showFornDropdown, setShowFornDropdown] = useState(false);
+  // Markup global do pedido (default 2.5x = 250%) — persiste em localStorage
+  const [markup, setMarkup] = useState<string>(() => {
+    if (typeof window === 'undefined') return '2.5';
+    return localStorage.getItem('pc:markup') || '2.5';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('pc:markup', markup);
+  }, [markup]);
 
   // Items
   const [items, setItems] = useState<ItemForm[]>([]);
@@ -444,6 +452,26 @@ export default function NovoPedidoPage() {
                 placeholder="Número da NF"
                 className="w-full px-3 py-2 border rounded-lg text-sm"
               />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-emerald-700 mb-1 block">
+                Markup (multiplicador)
+              </label>
+              <div className="relative">
+                <input
+                  value={markup}
+                  onChange={(e) => setMarkup(e.target.value.replace(',', '.'))}
+                  placeholder="2.5"
+                  inputMode="decimal"
+                  className="w-full px-3 py-2 border-2 border-emerald-300 rounded-lg text-sm font-mono font-bold bg-emerald-50"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-emerald-700 font-bold pointer-events-none">
+                  ×
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">
+                Custo líquido × markup = preço sugerido
+              </div>
             </div>
           </div>
 
