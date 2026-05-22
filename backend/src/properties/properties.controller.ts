@@ -326,10 +326,27 @@ export class PropertiesController {
       );
     }
 
+    // ADAPTER: @vercel/blob/client handleUpload espera um Request do Web Standard
+    // (com método headers.get(name)), mas o NestJS com Express dá um req com
+    // headers como objeto. Sem esse adapter, o handleUpload internamente faz
+    // `request.headers.get(...)` e quebra com TypeError → vira "Failed to
+    // retrieve the client token" no frontend.
+    const adaptedRequest: any = {
+      headers: {
+        get: (name: string) => {
+          const v = req.headers[String(name).toLowerCase()];
+          if (Array.isArray(v)) return v[0] || null;
+          return (v as string) || null;
+        },
+      },
+      url: req.url,
+      method: req.method,
+    };
+
     try {
       const jsonResponse = await handleUpload({
         body,
-        request: req,
+        request: adaptedRequest as any,
         onBeforeGenerateToken: async (pathname, clientPayload) => {
           // Parse do payload mandado pelo frontend (scope, category, authToken)
           let meta: any = {};
