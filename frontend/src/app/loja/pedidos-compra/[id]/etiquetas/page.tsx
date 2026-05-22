@@ -154,15 +154,14 @@ export default function EtiquetasPage() {
               <div key={`${l.codigo}-${i}`} className="etiqueta">
                 <div className="et-descricao">{l.descricao}</div>
                 <div className="et-destaque">
-                  <span className="et-ref">{l.ref}</span>
                   <span className="et-tam">{l.tamanho}</span>
-                  <span className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
+                  <span className="et-cor-destaque">{l.cor}</span>
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-codigo">{l.codigo}</div>
                 <div className="et-base">
                   <span className="et-base-ref">{l.ref}</span>
-                  <span className="et-base-cor">{l.cor}</span>
+                  <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
               </div>
             ))}
@@ -215,23 +214,19 @@ export default function EtiquetasPage() {
           gap: 1.5mm;
           line-height: 1;
         }
-        .et-ref {
-          font-size: 11pt;
-          font-weight: 900;
-          font-family: 'Courier New', monospace;
-          letter-spacing: -0.5px;
-        }
         .et-tam {
-          font-size: 11pt;
+          font-size: 14pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
-          border: 1.5px solid #000;
-          padding: 0 1mm;
+          border: 2px solid #000;
+          padding: 0.3mm 1.5mm;
           line-height: 1.1;
         }
-        .et-preco {
-          font-size: 10pt;
+        .et-cor-destaque {
+          font-size: 11pt;
           font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
           margin-left: auto;
         }
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
@@ -257,15 +252,14 @@ export default function EtiquetasPage() {
           padding-top: 0.5mm;
         }
         .et-base-ref {
-          font-size: 8pt;
+          font-size: 14pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
+          letter-spacing: -0.5px;
         }
-        .et-base-cor {
-          font-size: 9pt;
+        .et-base-preco {
+          font-size: 11pt;
           font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
         }
         @media print {
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
