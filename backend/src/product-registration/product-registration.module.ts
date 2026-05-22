@@ -8,5 +8,6 @@ import { ProductRegistrationService } from './product-registration.service';
   imports: [PrismaModule, ErpModule],
   controllers: [ProductRegistrationController],
   providers: [ProductRegistrationService],
+  exports: [ProductRegistrationService],
 })
 export class ProductRegistrationModule {}
