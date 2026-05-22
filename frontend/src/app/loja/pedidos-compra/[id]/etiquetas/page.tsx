@@ -44,6 +44,52 @@ export default function EtiquetasPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Carrega JsBarcode via CDN e renderiza os barcodes quando as labels carregarem
+  useEffect(() => {
+    if (loading || labels.length === 0) return;
+    const renderBarcodes = () => {
+      // @ts-expect-error JsBarcode injetado via CDN
+      if (typeof window === 'undefined' || !window.JsBarcode) return;
+      document.querySelectorAll<HTMLElement>('.barcode-target').forEach((el) => {
+        const code = el.dataset.code || '';
+        if (!code) return;
+        try {
+          // @ts-expect-error JsBarcode global
+          window.JsBarcode(el, code, {
+            format: 'EAN13',
+            width: 1.2,
+            height: 28,
+            displayValue: false,
+            margin: 0,
+            background: '#fff',
+            lineColor: '#000',
+          });
+        } catch {
+          // Se o codigo nao for EAN13 valido, usa CODE128 como fallback
+          try {
+            // @ts-expect-error
+            window.JsBarcode(el, code, {
+              format: 'CODE128',
+              width: 1.2,
+              height: 28,
+              displayValue: false,
+              margin: 0,
+            });
+          } catch { /* ignora */ }
+        }
+      });
+    };
+    // @ts-expect-error
+    if (window.JsBarcode) {
+      renderBarcodes();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js';
+    script.onload = renderBarcodes;
+    document.head.appendChild(script);
+  }, [labels, loading, filterRef]);
+
   const filtered = filterRef.trim()
     ? labels.filter((l) => l.ref.includes(filterRef.trim().toUpperCase()))
     : labels;
@@ -106,22 +152,19 @@ export default function EtiquetasPage() {
           <div className="etiquetas-grid">
             {filtered.map((l, i) => (
               <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-marca">{l.marca || 'LURDS'}</div>
-                <div className="et-ref-row">
-                  <span className="et-ref">{l.ref}</span>
-                  <span className="et-cortam"><b>{l.cor}</b> · <b>{l.tamanho}</b></span>
+                <div className="et-topo">
+                  <span className="et-marca">{l.marca || 'LURDS'}</span>
+                  <span className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
-                <div className="et-barras">
-                  {l.codigo.split('').map((d, idx) => (
-                    <div
-                      key={idx}
-                      className="et-bar"
-                      style={{ width: `${(Number(d) || 1) * 0.55}px` }}
-                    />
-                  ))}
+                <div className="et-destaque">
+                  <div className="et-ref-tam">
+                    <span className="et-ref">{l.ref}</span>
+                    <span className="et-tam">{l.tamanho}</span>
+                  </div>
+                  <div className="et-cor">{l.cor}</div>
                 </div>
+                <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-codigo">{l.codigo}</div>
-                <div className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</div>
               </div>
             ))}
           </div>
@@ -134,7 +177,7 @@ export default function EtiquetasPage() {
           display: grid;
           grid-template-columns: 50mm 50mm;
           gap: 0 4mm;
-          padding: 2mm 2mm;
+          padding: 2mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -143,7 +186,7 @@ export default function EtiquetasPage() {
           width: 50mm;
           height: 30mm;
           box-sizing: border-box;
-          padding: 1.2mm 1.5mm;
+          padding: 1mm 1.5mm;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
@@ -153,50 +196,68 @@ export default function EtiquetasPage() {
           color: #000;
           overflow: hidden;
         }
+        /* Linha topo: marca + preco */
+        .et-topo {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          line-height: 1;
+        }
         .et-marca {
-          font-size: 7pt;
+          font-size: 6pt;
           font-weight: 700;
           text-transform: uppercase;
-          line-height: 1;
           letter-spacing: 0.3px;
-          text-align: center;
         }
-        .et-ref-row {
+        .et-preco {
+          font-size: 10pt;
+          font-weight: 900;
+        }
+        /* DESTAQUE: REF + TAM grandes, COR centralizada */
+        .et-destaque {
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+          line-height: 1;
+          margin: 0.5mm 0;
+        }
+        .et-ref-tam {
           display: flex;
           justify-content: space-between;
           align-items: baseline;
-          line-height: 1;
         }
         .et-ref {
-          font-size: 11pt;
+          font-size: 16pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
+          letter-spacing: -0.5px;
         }
-        .et-cortam {
-          font-size: 7pt;
+        .et-tam {
+          font-size: 18pt;
+          font-weight: 900;
+          font-family: 'Courier New', monospace;
+          border: 1.5px solid #000;
+          padding: 0 1.2mm;
+          line-height: 1;
         }
-        .et-barras {
-          display: flex;
-          align-items: flex-end;
-          gap: 0.4px;
+        .et-cor {
+          font-size: 9pt;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-top: 0.5mm;
+        }
+        /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
+        .barcode-target {
+          width: 100%;
           height: 7mm;
-          justify-content: center;
-        }
-        .et-bar {
-          background: #000;
-          height: 100%;
+          display: block;
         }
         .et-codigo {
           font-size: 6pt;
           font-family: 'Courier New', monospace;
           text-align: center;
-          letter-spacing: 0.5px;
-          line-height: 1;
-        }
-        .et-preco {
-          font-size: 10pt;
-          font-weight: 900;
-          text-align: center;
+          letter-spacing: 1px;
           line-height: 1;
         }
         @media print {
