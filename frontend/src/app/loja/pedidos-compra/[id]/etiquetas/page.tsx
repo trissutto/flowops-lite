@@ -197,7 +197,7 @@ export default function EtiquetasPage() {
           display: grid;
           grid-template-columns: 48mm 48mm;
           gap: 0 6mm;
-          padding: 9mm 0 0 6mm;
+          padding: 10mm 0 0 6mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -247,11 +247,15 @@ export default function EtiquetasPage() {
           line-height: 1.1;
         }
         .et-cor-destaque {
-          font-size: 11pt;
+          font-size: 18pt;
           font-weight: 900;
+          font-family: 'Courier New', monospace;
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0;
           margin-left: auto;
+          border: 2px solid #000;
+          padding: 0.5mm 2mm;
+          line-height: 1.05;
         }
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
@@ -299,7 +303,7 @@ export default function EtiquetasPage() {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 9mm 0 0 6mm;
+            padding: 10mm 0 0 6mm;
             page-break-inside: auto;
           }
           .etiqueta {
