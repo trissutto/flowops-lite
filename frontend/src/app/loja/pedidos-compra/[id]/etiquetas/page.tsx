@@ -57,8 +57,8 @@ export default function EtiquetasPage() {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 1.8,
-            height: 38,
+            width: 1.6,
+            height: 32,
             displayValue: false,
             margin: 0,
             background: '#fff',
@@ -70,8 +70,8 @@ export default function EtiquetasPage() {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 1.8,
-              height: 38,
+              width: 1.6,
+              height: 32,
               displayValue: false,
               margin: 0,
             });
@@ -152,6 +152,7 @@ export default function EtiquetasPage() {
           <div className="etiquetas-grid">
             {filtered.map((l, i) => (
               <div key={`${l.codigo}-${i}`} className="etiqueta">
+                <div className="et-descricao">{l.descricao}</div>
                 <div className="et-destaque">
                   <span className="et-ref">{l.ref}</span>
                   <span className="et-tam">{l.tamanho}</span>
@@ -194,7 +195,20 @@ export default function EtiquetasPage() {
           color: #000;
           overflow: hidden;
         }
-        /* DESTAQUE: REF + TAM + PRECO numa linha (topo) */
+        /* Descricao completa em cima (2 linhas) */
+        .et-descricao {
+          font-size: 5pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          line-height: 1.05;
+          letter-spacing: 0.1px;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          max-height: 4mm;
+        }
+        /* DESTAQUE: REF + TAM + PRECO numa linha */
         .et-destaque {
           display: flex;
           align-items: center;
@@ -202,13 +216,13 @@ export default function EtiquetasPage() {
           line-height: 1;
         }
         .et-ref {
-          font-size: 13pt;
+          font-size: 11pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           letter-spacing: -0.5px;
         }
         .et-tam {
-          font-size: 13pt;
+          font-size: 11pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           border: 1.5px solid #000;
@@ -216,14 +230,14 @@ export default function EtiquetasPage() {
           line-height: 1.1;
         }
         .et-preco {
-          font-size: 11pt;
+          font-size: 10pt;
           font-weight: 900;
           margin-left: auto;
         }
-        /* Codigo de barras EAN-13 (renderizado por JsBarcode) — maior horizontal */
+        /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
           width: 100%;
-          height: 11mm;
+          height: 9mm;
           display: block;
         }
         .et-codigo {
