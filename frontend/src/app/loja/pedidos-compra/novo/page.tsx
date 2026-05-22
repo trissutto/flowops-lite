@@ -495,6 +495,7 @@ export default function NovoPedidoPage() {
               index={idx + 1}
               grupos={grupos}
               categorias={categorias}
+              markup={markup}
               onUpdate={(patch) => updateItem(item.tempId, patch)}
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
@@ -522,7 +523,7 @@ export default function NovoPedidoPage() {
 
 // ─── ItemEditor ─────────────────────────────────────────────────────────
 function ItemEditor({
-  item, index, grupos, categorias,
+  item, index, grupos, categorias, markup,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
 }: {
@@ -530,6 +531,7 @@ function ItemEditor({
   index: number;
   grupos: Grupo[];
   categorias: Categoria[];
+  markup: string;
   onUpdate: (patch: Partial<ItemForm>) => void;
   onRemove: () => void;
   onDuplicate: () => void;
@@ -540,6 +542,8 @@ function ItemEditor({
   onRemoveTam: (t: string) => void;
   onGrade: (c: string, t: string, v: string) => void;
 }) {
+  // Flag pra saber se o preço foi mexido manualmente (não auto-sobrescrever)
+  const [precoEditadoManual, setPrecoEditadoManual] = useState(false);
   const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
   const [novaCor, setNovaCor] = useState('');
   const [novoTam, setNovoTam] = useState('');
@@ -562,7 +566,36 @@ function ItemEditor({
       totalLinha += Number(item.grade[`${c}|${t}`] || 0);
     }
   }
-  const custoTotal = totalLinha * (Number(item.custoUnit.replace(',', '.')) || 0);
+  const custoNum = Number((item.custoUnit || '').toString().replace(',', '.')) || 0;
+  const descNum = Number((item.descontoPct || '0').toString().replace(',', '.')) || 0;
+  const tribNum = Number((item.tributoPct || '0').toString().replace(',', '.')) || 0;
+  const markupNum = Number((markup || '0').toString().replace(',', '.')) || 0;
+
+  // Cálculo: CUSTO − DESCONTO + IMPOSTO = CUSTO LÍQUIDO
+  const custoLiquido = custoNum * (1 - descNum / 100) * (1 + tribNum / 100);
+  // Preço sugerido = custoLiquido × markup
+  const precoSugerido = custoLiquido * markupNum;
+  // Arredondar pra .90 (sugestão comercial)
+  const precoSugeridoRedondo = Math.round(precoSugerido) - 0.10 > 0
+    ? Math.round(precoSugerido) - 0.10
+    : precoSugerido;
+
+  // Auto-preenche preco se ainda não foi editado manualmente
+  useEffect(() => {
+    if (!precoEditadoManual && custoLiquido > 0 && markupNum > 0) {
+      const sugerido = precoSugeridoRedondo.toFixed(2).replace('.', ',');
+      if (sugerido !== item.precoUnit) {
+        onUpdate({ precoUnit: sugerido });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [custoNum, descNum, tribNum, markupNum]);
+
+  const custoTotal = totalLinha * custoNum;
+  const custoLiquidoTotal = totalLinha * custoLiquido;
+  const precoVendaNum = Number((item.precoUnit || '').toString().replace(',', '.')) || 0;
+  const margemReal = custoLiquido > 0 ? (precoVendaNum / custoLiquido) : 0;
+  const lucroUnit = precoVendaNum - custoLiquido;
 
   return (
     <div className="bg-white border-2 border-slate-200 rounded-2xl p-4 space-y-3">
@@ -645,38 +678,8 @@ function ItemEditor({
         </div>
       </div>
 
-      {/* Linha 3: Custo + Preço + Tributo + CFOP + PlusSize */}
+      {/* Linha 3: CFOP + PlusSize */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <div>
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Custo R$ *</label>
-          <input
-            value={item.custoUnit}
-            onChange={(e) => onUpdate({ custoUnit: e.target.value })}
-            placeholder="10,00"
-            inputMode="decimal"
-            className="w-full px-2 py-2 border rounded text-sm font-mono"
-          />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Preço R$ *</label>
-          <input
-            value={item.precoUnit}
-            onChange={(e) => onUpdate({ precoUnit: e.target.value })}
-            placeholder="25,00"
-            inputMode="decimal"
-            className="w-full px-2 py-2 border rounded text-sm font-mono"
-          />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Tributo %</label>
-          <input
-            value={item.tributoPct}
-            onChange={(e) => onUpdate({ tributoPct: e.target.value })}
-            placeholder="6"
-            inputMode="decimal"
-            className="w-full px-2 py-2 border rounded text-sm font-mono"
-          />
-        </div>
         <div>
           <label className="text-[10px] font-bold text-slate-600 uppercase">CFOP</label>
           <input
@@ -686,7 +689,7 @@ function ItemEditor({
             className="w-full px-2 py-2 border rounded text-sm font-mono"
           />
         </div>
-        <label className="flex items-end gap-1.5 cursor-pointer">
+        <label className="flex items-end gap-1.5 cursor-pointer sm:col-span-4">
           <input
             type="checkbox"
             checked={item.plusSize}
@@ -695,6 +698,105 @@ function ItemEditor({
           />
           <span className="text-xs font-bold text-violet-700 mb-2">PLUS SIZE</span>
         </label>
+      </div>
+
+      {/* PRECIFICAÇÃO — Custo → Desconto → Imposto → Líquido → Sugerido → Preço */}
+      <div className="bg-gradient-to-r from-slate-50 to-emerald-50 border border-emerald-200 rounded-lg p-3">
+        <div className="text-[10px] font-black uppercase text-emerald-700 tracking-wider mb-2">
+          Precificação
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 items-end">
+          {/* Custo */}
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Custo R$ *</label>
+            <input
+              value={item.custoUnit}
+              onChange={(e) => onUpdate({ custoUnit: e.target.value })}
+              placeholder="10,00"
+              inputMode="decimal"
+              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+            />
+          </div>
+          {/* Desconto */}
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">− Desc %</label>
+            <input
+              value={item.descontoPct}
+              onChange={(e) => onUpdate({ descontoPct: e.target.value })}
+              placeholder="0"
+              inputMode="decimal"
+              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+            />
+          </div>
+          {/* Tributo */}
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">+ Imp %</label>
+            <input
+              value={item.tributoPct}
+              onChange={(e) => onUpdate({ tributoPct: e.target.value })}
+              placeholder="0"
+              inputMode="decimal"
+              className="w-full px-2 py-2 border rounded text-sm font-mono bg-white"
+            />
+          </div>
+          {/* Custo líquido (calc) */}
+          <div>
+            <label className="text-[10px] font-bold text-emerald-700 uppercase">= Líquido</label>
+            <div className="w-full px-2 py-2 border-2 border-emerald-300 rounded text-sm font-mono font-bold bg-emerald-50 text-emerald-900 text-right tabular-nums">
+              R$ {custoLiquido.toFixed(2).replace('.', ',')}
+            </div>
+          </div>
+          {/* Sugerido */}
+          <div>
+            <label className="text-[10px] font-bold text-violet-700 uppercase">
+              × {markupNum || 0}× = Sugerido
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdate({ precoUnit: precoSugeridoRedondo.toFixed(2).replace('.', ',') });
+                setPrecoEditadoManual(false);
+              }}
+              className="w-full px-2 py-2 border-2 border-violet-300 rounded text-sm font-mono font-bold bg-violet-50 text-violet-900 text-right tabular-nums hover:bg-violet-100"
+              title="Clique pra aplicar"
+            >
+              R$ {precoSugeridoRedondo.toFixed(2).replace('.', ',')}
+            </button>
+          </div>
+          {/* Preço editável */}
+          <div>
+            <label className="text-[10px] font-bold text-emerald-800 uppercase">Preço Venda *</label>
+            <input
+              value={item.precoUnit}
+              onChange={(e) => {
+                setPrecoEditadoManual(true);
+                onUpdate({ precoUnit: e.target.value });
+              }}
+              placeholder="0,00"
+              inputMode="decimal"
+              className="w-full px-2 py-2 border-2 border-emerald-500 rounded text-sm font-mono font-black bg-white text-emerald-800 text-right tabular-nums"
+            />
+          </div>
+        </div>
+        {/* Resumo de margem */}
+        {precoVendaNum > 0 && custoLiquido > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
+            <span className="text-slate-600">
+              Markup real: <b className={margemReal >= markupNum ? 'text-emerald-700' : 'text-amber-700'}>{margemReal.toFixed(2)}×</b>
+            </span>
+            <span className="text-slate-600">
+              Lucro/peça: <b className="text-emerald-700">R$ {lucroUnit.toFixed(2).replace('.', ',')}</b>
+            </span>
+            {totalLinha > 0 && (
+              <span className="text-slate-600">
+                Lucro total: <b className="text-emerald-700">R$ {(lucroUnit * totalLinha).toFixed(2).replace('.', ',')}</b>
+              </span>
+            )}
+            <span className="text-slate-500 ml-auto">
+              Custo total: R$ {custoLiquidoTotal.toFixed(2).replace('.', ',')}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Tamanhos (chips) */}
@@ -753,7 +855,7 @@ function ItemEditor({
         </div>
       </div>
 
-      {/* Grade cor × tamanho */}
+      {/* Grade cor x tamanho */}
       {item.cores.length > 0 && item.tamanhos.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
@@ -793,17 +895,14 @@ function ItemEditor({
         </div>
       )}
 
-      {/* PREVIEW DESCRIÇÃO — auto-gerada (último campo) */}
+      {/* PREVIEW DESCRICAO - auto-gerada (ultimo campo) */}
       <DescricaoPreview item={item} />
     </div>
   );
 }
 
-// ─── Preview da descrição auto-gerada ───────────────────────────────────
+// --- Preview da descricao auto-gerada -----------------------------------
 function DescricaoPreview({ item }: { item: ItemForm }) {
-  // Pega a marca do header do pedido via prop drilling — mas como o ItemEditor não recebe,
-  // a gente lê via DOM. Mais simples: mostra placeholder "MARCA" se vazio.
-  // (A descrição final REAL é montada no backend usando order.marca)
   const marca = (typeof window !== 'undefined'
     ? (document.querySelector<HTMLInputElement>('input[placeholder="Ex: MARRIE"]')?.value || '')
     : ''
@@ -820,7 +919,6 @@ function DescricaoPreview({ item }: { item: ItemForm }) {
   const tam = item.tamanhos[0] || 'TAM';
   const descricaoExemplo = [...partes, cor, tam, marca || 'MARCA'].filter(Boolean).join(' ');
 
-  // Conta total de SKUs (combinações com qty>0)
   let combinacoes = 0;
   for (const c of item.cores) {
     for (const t of item.tamanhos) {
@@ -832,7 +930,7 @@ function DescricaoPreview({ item }: { item: ItemForm }) {
     return (
       <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg p-3 text-xs text-slate-400 italic">
         <Eye className="w-3.5 h-3.5 inline mr-1" />
-        Selecione Grupo e Subgrupo pra ver a descrição final…
+        Selecione Grupo e Subgrupo pra ver a descricao final...
       </div>
     );
   }
@@ -842,7 +940,7 @@ function DescricaoPreview({ item }: { item: ItemForm }) {
       <div className="flex items-center gap-2 mb-1">
         <Eye className="w-3.5 h-3.5 text-violet-600" />
         <span className="text-[10px] font-black uppercase text-violet-700 tracking-wider">
-          Descrição que vai pro cadastro
+          Descricao que vai pro cadastro
         </span>
         {combinacoes > 0 && (
           <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
@@ -854,7 +952,7 @@ function DescricaoPreview({ item }: { item: ItemForm }) {
         {descricaoExemplo}
       </div>
       <div className="text-[10px] text-slate-500 mt-1">
-        Cada cor × tamanho gera um SKU com sua própria descrição. Acima é só um exemplo.
+        Cada cor x tamanho gera um SKU com sua propria descricao. Acima e so um exemplo.
       </div>
     </div>
   );
