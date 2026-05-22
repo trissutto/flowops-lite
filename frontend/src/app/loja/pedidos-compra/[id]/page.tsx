@@ -169,11 +169,35 @@ export default function PedidoDetalhePage() {
             <span className="text-violet-700 font-black">#{data.numero}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg font-black truncate">{data.fornecedorNome}</h1>
               <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${st.color}`}>
                 {st.label}
               </span>
+              {data.dataPrevista && !isRecebido && data.status !== 'cancelado' && (() => {
+                const dias = Math.ceil(
+                  (new Date(data.dataPrevista).getTime() - Date.now()) / 86400000,
+                );
+                const atrasado = dias < 0;
+                const proximo = dias >= 0 && dias <= 3;
+                const cls = atrasado
+                  ? 'bg-rose-100 text-rose-800 border-rose-400'
+                  : proximo
+                    ? 'bg-amber-100 text-amber-800 border-amber-400'
+                    : 'bg-sky-100 text-sky-800 border-sky-400';
+                return (
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-lg border-2 ${cls}`}>
+                    Entrega {new Date(data.dataPrevista).toLocaleDateString('pt-BR')}
+                    {atrasado && <span className="ml-1.5">- ATRASADO {Math.abs(dias)} dia(s)</span>}
+                    {proximo && !atrasado && (
+                      <span className="ml-1.5">
+                        - {dias === 0 ? 'HOJE' : dias === 1 ? 'AMANHA' : `em ${dias} dias`}
+                      </span>
+                    )}
+                    {!atrasado && !proximo && <span className="ml-1.5">- em {dias} dias</span>}
+                  </span>
+                );
+              })()}
             </div>
             <p className="text-xs text-slate-500">
               {data.marca && <span>Marca: <b>{data.marca}</b> · </span>}

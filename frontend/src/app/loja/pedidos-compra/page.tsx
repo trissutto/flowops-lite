@@ -207,6 +207,25 @@ export default function PedidosComprapage() {
                           <Icon className="w-3 h-3" />
                           {st.label}
                         </span>
+                        {o.dataPrevista && o.status !== 'recebido' && o.status !== 'recebido_com_erro' && o.status !== 'cancelado' && (() => {
+                          const dias = Math.ceil(
+                            (new Date(o.dataPrevista).getTime() - Date.now()) / 86400000,
+                          );
+                          const atrasado = dias < 0;
+                          const proximo = dias >= 0 && dias <= 3;
+                          const cls = atrasado
+                            ? 'bg-rose-100 text-rose-800 border-rose-300'
+                            : proximo
+                              ? 'bg-amber-100 text-amber-800 border-amber-300'
+                              : 'bg-sky-100 text-sky-800 border-sky-300';
+                          return (
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border flex items-center gap-1 ${cls}`}>
+                              Entrega {new Date(o.dataPrevista).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                              {atrasado && <span className="ml-1">- ATRASADO {Math.abs(dias)}d</span>}
+                              {proximo && !atrasado && <span className="ml-1">- em {dias === 0 ? 'hoje' : dias === 1 ? 'amanha' : `${dias}d`}</span>}
+                            </span>
+                          );
+                        })()}
                       </div>
                       <div className="text-xs text-slate-500 flex items-center gap-3">
                         <span className="flex items-center gap-1">
