@@ -57,7 +57,7 @@ export default function EtiquetasPage() {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 1.6,
+            width: 2.2,
             height: 32,
             displayValue: false,
             margin: 0,
@@ -70,7 +70,7 @@ export default function EtiquetasPage() {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 1.6,
+              width: 2.2,
               height: 32,
               displayValue: false,
               margin: 0,
@@ -172,15 +172,15 @@ export default function EtiquetasPage() {
         /* Grid de etiquetas: 2 colunas de 50mm em rolo de 108mm */
         .etiquetas-grid {
           display: grid;
-          grid-template-columns: 50mm 50mm;
+          grid-template-columns: 48mm 48mm;
           gap: 0;
-          padding: 4mm 0 0 8mm;
+          padding: 9mm 0 0 12mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
         }
         .etiqueta {
-          width: 50mm;
+          width: 48mm;
           height: 30mm;
           box-sizing: border-box;
           padding: 3mm 1.5mm 1mm 1.5mm;
@@ -254,7 +254,7 @@ export default function EtiquetasPage() {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 4mm 0 0 8mm;
+            padding: 9mm 0 0 12mm;
             page-break-inside: auto;
           }
           .etiqueta {
