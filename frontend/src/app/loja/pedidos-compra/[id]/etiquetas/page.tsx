@@ -57,8 +57,8 @@ export default function EtiquetasPage() {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 1.2,
-            height: 28,
+            width: 1.8,
+            height: 38,
             displayValue: false,
             margin: 0,
             background: '#fff',
@@ -70,8 +70,8 @@ export default function EtiquetasPage() {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 1.2,
-              height: 28,
+              width: 1.8,
+              height: 38,
               displayValue: false,
               margin: 0,
             });
@@ -152,15 +152,17 @@ export default function EtiquetasPage() {
           <div className="etiquetas-grid">
             {filtered.map((l, i) => (
               <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-descricao">{l.descricao}</div>
                 <div className="et-destaque">
                   <span className="et-ref">{l.ref}</span>
                   <span className="et-tam">{l.tamanho}</span>
                   <span className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
-                <div className="et-cor">{l.cor}</div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-codigo">{l.codigo}</div>
+                <div className="et-base">
+                  <span className="et-base-ref">{l.ref}</span>
+                  <span className="et-base-cor">{l.cor}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -173,7 +175,7 @@ export default function EtiquetasPage() {
           display: grid;
           grid-template-columns: 50mm 50mm;
           gap: 0 4mm;
-          padding: 2mm;
+          padding: 2mm 2mm 2mm 5mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -192,39 +194,25 @@ export default function EtiquetasPage() {
           color: #000;
           overflow: hidden;
         }
-        /* Descricao completa no topo (2 linhas com ellipsis) */
-        .et-descricao {
-          font-size: 5.5pt;
-          font-weight: 700;
-          text-transform: uppercase;
-          line-height: 1.1;
-          letter-spacing: 0.1px;
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-          max-height: 5.5mm;
-        }
-        /* DESTAQUE: REF + TAM + PRECO numa linha */
+        /* DESTAQUE: REF + TAM + PRECO numa linha (topo) */
         .et-destaque {
           display: flex;
           align-items: center;
           gap: 1.5mm;
           line-height: 1;
-          margin: 0.3mm 0;
         }
         .et-ref {
-          font-size: 14pt;
+          font-size: 13pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           letter-spacing: -0.5px;
         }
         .et-tam {
-          font-size: 14pt;
+          font-size: 13pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           border: 1.5px solid #000;
-          padding: 0 1.2mm;
+          padding: 0 1mm;
           line-height: 1.1;
         }
         .et-preco {
@@ -232,17 +220,10 @@ export default function EtiquetasPage() {
           font-weight: 900;
           margin-left: auto;
         }
-        .et-cor {
-          font-size: 8pt;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          line-height: 1;
-        }
-        /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
+        /* Codigo de barras EAN-13 (renderizado por JsBarcode) — maior horizontal */
         .barcode-target {
           width: 100%;
-          height: 7mm;
+          height: 11mm;
           display: block;
         }
         .et-codigo {
@@ -251,6 +232,26 @@ export default function EtiquetasPage() {
           text-align: center;
           letter-spacing: 1px;
           line-height: 1;
+        }
+        /* Base: REF + COR na parte de baixo da etiqueta */
+        .et-base {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          line-height: 1;
+          border-top: 0.5px solid #cbd5e1;
+          padding-top: 0.5mm;
+        }
+        .et-base-ref {
+          font-size: 8pt;
+          font-weight: 900;
+          font-family: 'Courier New', monospace;
+        }
+        .et-base-cor {
+          font-size: 9pt;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
         @media print {
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
