@@ -638,15 +638,23 @@ export class PurchaseOrdersService {
     try {
       const pool = (this.erp as any).pool;
       if (!pool) return [];
-      const like = `%${termo.toUpperCase()}%`;
+      // Normaliza: remove hifens, espacos e UPPERCASE pra busca tolerante
+      const normalizado = termo.toUpperCase().replace(/[\s\-]/g, '');
+      const likeOrig = `%${termo.toUpperCase()}%`;
+      const likeNorm = `%${normalizado}%`;
+      // Tenta variacoes: campo original (com hifen) E campo normalizado (sem hifen)
       const [rows] = await pool.query(
         `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
                 TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
            FROM produtos
-          WHERE REFERENCIA LIKE ? OR DESCRICAO LIKE ? OR CODIGO = ?
+          WHERE REFERENCIA LIKE ?
+             OR DESCRICAO LIKE ?
+             OR CODIGO = ?
+             OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
+             OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
           ORDER BY REFERENCIA, COR, TAMANHO
           LIMIT 100`,
-        [like, like, termo],
+        [likeOrig, likeOrig, termo, likeNorm, likeNorm],
       );
       return (rows as any[]).map((r) => ({
         codigo: String(r.codigo || '').trim(),
