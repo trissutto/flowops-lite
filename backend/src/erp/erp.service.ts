@@ -6130,41 +6130,91 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async listarFornecedores(limit = 500): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
     if (!this.pool) return [];
+    // FANTASIA = MARCA no Lurd's — preferir FANTASIA na exibicao quando houver.
+    // Tentativa 1: fornecedores com NOME + FANTASIA
     try {
-      // Tenta tabela fornecedores primeiro; se falhar, vai pra produtos.
-      // FANTASIA = "MARCA" no negócio Lurd's (campo usado na descrição do produto)
-      try {
-        const [rows] = await this.pool.query(
-          `SELECT CGC AS cnpj, NOME AS nome, FANTASIA AS fantasia
-             FROM fornecedores
-            WHERE NOME IS NOT NULL AND NOME <> ''
-            ORDER BY NOME
-            LIMIT ?`,
-          [limit],
-        );
-        const result = (rows as any[]).map((r) => ({
-          cnpj: String(r.cnpj || '').trim(),
-          nome: String(r.nome || '').trim(),
-          fantasia: r.fantasia ? String(r.fantasia).trim() : undefined,
-        })).filter((f) => f.nome);
-        if (result.length) return result;
-      } catch {
-        // ignora — vai pro fallback (algumas instalações Wincred não têm coluna FANTASIA)
-      }
       const [rows] = await this.pool.query(
-        `SELECT DISTINCT FORNECEDOR AS cnpj
-           FROM produtos
-          WHERE FORNECEDOR IS NOT NULL AND FORNECEDOR <> ''
-          ORDER BY FORNECEDOR
+        `SELECT CGC AS cnpj, NOME AS nome, FANTASIA AS fantasia
+           FROM fornecedores
+          WHERE (NOME IS NOT NULL AND NOME <> '')
+             OR (FANTASIA IS NOT NULL AND FANTASIA <> '')
+          ORDER BY COALESCE(NULLIF(FANTASIA,''), NOME)
           LIMIT ?`,
+        [limit],
+      );
+      const result = (rows as any[]).map((r) => {
+        const fant = r.fantasia ? String(r.fantasia).trim() : '';
+        const nomeReal = String(r.nome || '').trim();
+        return {
+          cnpj: String(r.cnpj || '').trim(),
+          nome: fant || nomeReal,
+          fantasia: fant || undefined,
+        };
+      }).filter((f) => f.nome);
+      if (result.length) {
+        this.logger.log(`listarFornecedores NOME+FANTASIA OK (${result.length})`);
+        return result;
+      }
+    } catch (e: any) {
+      this.logger.warn(`listarFornecedores tent1 falhou: ${e?.message}`);
+    }
+    // Tentativa 2: so NOME
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT CGC AS cnpj, NOME AS nome FROM fornecedores
+          WHERE NOME IS NOT NULL AND NOME <> ''
+          ORDER BY NOME LIMIT ?`,
+        [limit],
+      );
+      const result = (rows as any[]).map((r) => ({
+        cnpj: String(r.cnpj || '').trim(),
+        nome: String(r.nome || '').trim(),
+      })).filter((f) => f.nome);
+      if (result.length) {
+        this.logger.log(`listarFornecedores NOME OK (${result.length})`);
+        return result;
+      }
+    } catch (e: any) {
+      this.logger.warn(`listarFornecedores tent2 falhou: ${e?.message}`);
+    }
+    // Tentativa 3: JOIN com produtos
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT DISTINCT p.FORNECEDOR AS cnpj,
+                COALESCE(NULLIF(TRIM(f.FANTASIA),''), NULLIF(TRIM(f.NOME),''), p.FORNECEDOR) AS nome,
+                f.FANTASIA AS fantasia
+           FROM produtos p
+           LEFT JOIN fornecedores f ON f.CGC = p.FORNECEDOR
+          WHERE p.FORNECEDOR IS NOT NULL AND p.FORNECEDOR <> ''
+          ORDER BY nome LIMIT ?`,
+        [limit],
+      );
+      const result = (rows as any[]).map((r) => ({
+        cnpj: String(r.cnpj || '').trim(),
+        nome: String(r.nome || r.cnpj || '').trim(),
+        fantasia: r.fantasia ? String(r.fantasia).trim() : undefined,
+      })).filter((f) => f.cnpj);
+      if (result.length) {
+        this.logger.log(`listarFornecedores JOIN OK (${result.length})`);
+        return result;
+      }
+    } catch (e: any) {
+      this.logger.warn(`listarFornecedores JOIN falhou: ${e?.message}`);
+    }
+    // Ultimo recurso: so CNPJ
+    try {
+      const [rows] = await this.pool.query(
+        `SELECT DISTINCT FORNECEDOR AS cnpj FROM produtos
+          WHERE FORNECEDOR IS NOT NULL AND FORNECEDOR <> ''
+          ORDER BY FORNECEDOR LIMIT ?`,
         [limit],
       );
       return (rows as any[]).map((r) => ({
         cnpj: String(r.cnpj || '').trim(),
         nome: String(r.cnpj || '').trim(),
       })).filter((f) => f.cnpj);
-    } catch (e) {
-      this.logger.error(`listarFornecedores falhou: ${(e as Error).message}`);
+    } catch (e: any) {
+      this.logger.error(`listarFornecedores TOTAL fail: ${e?.message}`);
       return [];
     }
   }
