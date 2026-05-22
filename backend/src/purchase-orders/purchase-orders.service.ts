@@ -396,10 +396,13 @@ export class PurchaseOrdersService {
       }
 
       // AUTO-CADASTRA via ProductRegistrationService.processar()
+      // OBS: interface PreviewInput tem tipos específicos:
+      //   - cfop: number (não string)
+      //   - tributo: string (alíquota como texto, ex: "6")
+      //   - NÃO tem campo descricao (a descrição é gerada por concatenação dentro do processar)
       try {
         const r = await this.productReg.processar({
           ref: it.ref,
-          descricao: it.descricaoBase,
           grupoCodigo: it.grupoCode,
           grupoNome: it.grupoNome,
           subgrupoCodigo: it.subgrupoCode,
@@ -410,10 +413,10 @@ export class PurchaseOrdersService {
           tamanhos,
           custo: it.custoUnit,
           precoVenda: it.precoUnit,
-          tributo: it.tributoPct,
+          tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
           plusSize: it.plusSize,
           ncm: it.ncm || undefined,
-          cfop: it.cfop || '5102',
+          cfop: it.cfop ? Number(it.cfop) : 5102,
           marca: order.marca || order.fornecedorNome,
         });
 
