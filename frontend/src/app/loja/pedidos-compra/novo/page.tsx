@@ -110,28 +110,32 @@ export default function NovoPedidoPage() {
   };
 
   const adicionarItem = () => {
-    setItems((prev) => [
-      ...prev,
-      {
-        tempId: newTempId(),
-        ref: '',
-        descricaoBase: '',
-        grupoCode: null,
-        grupoNome: '',
-        subgrupoCode: null,
-        subgrupoNome: '',
-        ncm: '',
-        cfop: '5102',
-        plusSize: true,
-        custoUnit: '',
-        precoUnit: '',
-        tributoPct: '0',
-        descontoPct: '0',
-        cores: [],
-        tamanhos: [...TAMANHOS_PLUS],
-        grade: {},
-      },
-    ]);
+    setItems((prev) => {
+      // Herda desconto/imposto/CFOP/plusSize do ultimo item (se houver) — editaveis
+      const last = prev[prev.length - 1];
+      return [
+        ...prev,
+        {
+          tempId: newTempId(),
+          ref: '',
+          descricaoBase: '',
+          grupoCode: null,
+          grupoNome: '',
+          subgrupoCode: null,
+          subgrupoNome: '',
+          ncm: '',
+          cfop: last?.cfop || '5102',
+          plusSize: last?.plusSize ?? true,
+          custoUnit: '',
+          precoUnit: '',
+          tributoPct: last?.tributoPct ?? '0',
+          descontoPct: last?.descontoPct ?? '0',
+          cores: [],
+          tamanhos: [...TAMANHOS_PLUS],
+          grade: {},
+        },
+      ];
+    });
   };
 
   const removerItem = (tempId: string) => {
