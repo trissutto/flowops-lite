@@ -97,44 +97,31 @@ export default function EtiquetasPage() {
         </div>
       </header>
 
-      <main className="max-w-[1400px] mx-auto p-4 print:p-0">
+      <main className="max-w-[900px] mx-auto p-4 print:p-0 print:max-w-full">
         {filtered.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-slate-500">
             Nenhuma etiqueta pra imprimir.
           </div>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-1 print:gap-0">
+          <div className="etiquetas-grid">
             {filtered.map((l, i) => (
-              <div
-                key={`${l.codigo}-${i}`}
-                className="bg-white border border-slate-300 rounded p-2 text-center print:border-slate-400 print:rounded-none"
-                style={{ minHeight: '110px' }}
-              >
-                <div className="text-[10px] font-bold uppercase text-slate-600 truncate">
-                  {l.marca || 'LURDS'}
+              <div key={`${l.codigo}-${i}`} className="etiqueta">
+                <div className="et-marca">{l.marca || 'LURDS'}</div>
+                <div className="et-ref-row">
+                  <span className="et-ref">{l.ref}</span>
+                  <span className="et-cortam"><b>{l.cor}</b> · <b>{l.tamanho}</b></span>
                 </div>
-                <div className="text-base font-black text-slate-800 font-mono mt-1">
-                  {l.ref}
-                </div>
-                <div className="text-xs text-slate-600">
-                  <b>{l.cor}</b> · <b>{l.tamanho}</b>
-                </div>
-                <div className="text-[9px] font-mono text-slate-500 mt-1 truncate">
-                  {l.codigo}
-                </div>
-                {/* Barras EAN-13 — representação visual simples (linhas verticais) */}
-                <div className="flex justify-center mt-1 gap-px h-6">
+                <div className="et-barras">
                   {l.codigo.split('').map((d, idx) => (
                     <div
                       key={idx}
-                      className="bg-black"
-                      style={{ width: `${(Number(d) || 1) * 0.8}px`, height: '100%' }}
+                      className="et-bar"
+                      style={{ width: `${(Number(d) || 1) * 0.55}px` }}
                     />
                   ))}
                 </div>
-                <div className="text-sm font-black text-emerald-700 mt-1">
-                  R$ {l.preco.toFixed(2).replace('.', ',')}
-                </div>
+                <div className="et-codigo">{l.codigo}</div>
+                <div className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</div>
               </div>
             ))}
           </div>
@@ -142,9 +129,91 @@ export default function EtiquetasPage() {
       </main>
 
       <style jsx global>{`
+        /* Grid de etiquetas: 2 colunas de 50mm em rolo de 108mm */
+        .etiquetas-grid {
+          display: grid;
+          grid-template-columns: 50mm 50mm;
+          gap: 0 4mm;
+          padding: 2mm 2mm;
+          width: 108mm;
+          margin: 0 auto;
+          background: #fff;
+        }
+        .etiqueta {
+          width: 50mm;
+          height: 30mm;
+          box-sizing: border-box;
+          padding: 1.2mm 1.5mm;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          border: 1px dashed #cbd5e1;
+          background: #fff;
+          font-family: -apple-system, system-ui, sans-serif;
+          color: #000;
+          overflow: hidden;
+        }
+        .et-marca {
+          font-size: 7pt;
+          font-weight: 700;
+          text-transform: uppercase;
+          line-height: 1;
+          letter-spacing: 0.3px;
+          text-align: center;
+        }
+        .et-ref-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          line-height: 1;
+        }
+        .et-ref {
+          font-size: 11pt;
+          font-weight: 900;
+          font-family: 'Courier New', monospace;
+        }
+        .et-cortam {
+          font-size: 7pt;
+        }
+        .et-barras {
+          display: flex;
+          align-items: flex-end;
+          gap: 0.4px;
+          height: 7mm;
+          justify-content: center;
+        }
+        .et-bar {
+          background: #000;
+          height: 100%;
+        }
+        .et-codigo {
+          font-size: 6pt;
+          font-family: 'Courier New', monospace;
+          text-align: center;
+          letter-spacing: 0.5px;
+          line-height: 1;
+        }
+        .et-preco {
+          font-size: 10pt;
+          font-weight: 900;
+          text-align: center;
+          line-height: 1;
+        }
         @media print {
-          body { background: white !important; }
-          @page { size: A4 portrait; margin: 5mm; }
+          body { background: white !important; margin: 0 !important; padding: 0 !important; }
+          @page {
+            size: 108mm auto;
+            margin: 0;
+          }
+          .etiquetas-grid {
+            padding: 2mm 2mm 0 2mm;
+            page-break-inside: auto;
+          }
+          .etiqueta {
+            border: none !important;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
         }
       `}</style>
     </div>
