@@ -152,17 +152,13 @@ export default function EtiquetasPage() {
           <div className="etiquetas-grid">
             {filtered.map((l, i) => (
               <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-topo">
-                  <span className="et-marca">{l.marca || 'LURDS'}</span>
+                <div className="et-descricao">{l.descricao}</div>
+                <div className="et-destaque">
+                  <span className="et-ref">{l.ref}</span>
+                  <span className="et-tam">{l.tamanho}</span>
                   <span className="et-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
-                <div className="et-destaque">
-                  <div className="et-ref-tam">
-                    <span className="et-ref">{l.ref}</span>
-                    <span className="et-tam">{l.tamanho}</span>
-                  </div>
-                  <div className="et-cor">{l.cor}</div>
-                </div>
+                <div className="et-cor">{l.cor}</div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-codigo">{l.codigo}</div>
               </div>
@@ -196,56 +192,52 @@ export default function EtiquetasPage() {
           color: #000;
           overflow: hidden;
         }
-        /* Linha topo: marca + preco */
-        .et-topo {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          line-height: 1;
-        }
-        .et-marca {
-          font-size: 6pt;
+        /* Descricao completa no topo (2 linhas com ellipsis) */
+        .et-descricao {
+          font-size: 5.5pt;
           font-weight: 700;
           text-transform: uppercase;
-          letter-spacing: 0.3px;
+          line-height: 1.1;
+          letter-spacing: 0.1px;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          max-height: 5.5mm;
         }
-        .et-preco {
-          font-size: 10pt;
-          font-weight: 900;
-        }
-        /* DESTAQUE: REF + TAM grandes, COR centralizada */
+        /* DESTAQUE: REF + TAM + PRECO numa linha */
         .et-destaque {
           display: flex;
-          flex-direction: column;
-          align-items: stretch;
+          align-items: center;
+          gap: 1.5mm;
           line-height: 1;
-          margin: 0.5mm 0;
-        }
-        .et-ref-tam {
-          display: flex;
-          justify-content: space-between;
-          align-items: baseline;
+          margin: 0.3mm 0;
         }
         .et-ref {
-          font-size: 16pt;
+          font-size: 14pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           letter-spacing: -0.5px;
         }
         .et-tam {
-          font-size: 18pt;
+          font-size: 14pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           border: 1.5px solid #000;
           padding: 0 1.2mm;
-          line-height: 1;
+          line-height: 1.1;
+        }
+        .et-preco {
+          font-size: 11pt;
+          font-weight: 900;
+          margin-left: auto;
         }
         .et-cor {
-          font-size: 9pt;
+          font-size: 8pt;
           font-weight: 900;
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          margin-top: 0.5mm;
+          line-height: 1;
         }
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
