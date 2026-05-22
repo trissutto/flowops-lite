@@ -10,12 +10,12 @@
  * Quando recebe a mercadoria depois, dispara auto-cadastro Wincred.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Plus, Trash2, Loader2, Save, Package,
-  AlertCircle, Copy, ChevronDown, X,
+  AlertCircle, Copy, X, Eye,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -249,12 +249,8 @@ export default function NovoPedidoPage() {
         setError(`Item sem REF`);
         return;
       }
-      if (!it.descricaoBase.trim()) {
-        setError(`REF ${it.ref}: descrição obrigatória`);
-        return;
-      }
       if (!it.grupoCode || !it.subgrupoCode) {
-        setError(`REF ${it.ref}: Grupo e Subgrupo obrigatórios pra cadastrar depois`);
+        setError(`REF ${it.ref}: Grupo e Subgrupo obrigatórios pra montar a descrição`);
         return;
       }
       if (!it.custoUnit || !it.precoUnit) {
@@ -273,15 +269,16 @@ export default function NovoPedidoPage() {
 
     setSaving(true);
     try {
-      // Salva novas categorias (se descrição não existir)
+      // Salva novas categorias (se grupo+subgrupo ainda não existirem)
       for (const it of items) {
-        const exists = categorias.find((c) => c.descricaoBase === it.descricaoBase.toUpperCase());
+        const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
+        const exists = categorias.find((c) => c.descricaoBase === descBase);
         if (!exists && it.grupoCode && it.subgrupoCode) {
           try {
             await api('/purchase-orders/categorias', {
               method: 'POST',
               body: JSON.stringify({
-                descricaoBase: it.descricaoBase,
+                descricaoBase: descBase,
                 grupoCode: it.grupoCode,
                 grupoNome: it.grupoNome,
                 subgrupoCode: it.subgrupoCode,
@@ -300,6 +297,7 @@ export default function NovoPedidoPage() {
       // Monta items pro POST: 1 ItemForm pode virar VÁRIOS items (1 por cor)
       const apiItems: any[] = [];
       for (const it of items) {
+        const descBase = `${it.grupoNome} ${it.subgrupoNome}`.trim().toUpperCase();
         for (const cor of it.cores) {
           const tamanhosQty: Record<string, number> = {};
           for (const t of it.tamanhos) {
@@ -309,7 +307,7 @@ export default function NovoPedidoPage() {
           if (Object.keys(tamanhosQty).length === 0) continue; // pula cores sem qty
           apiItems.push({
             ref: it.ref,
-            descricaoBase: it.descricaoBase,
+            descricaoBase: descBase,
             cor,
             grupoCode: it.grupoCode,
             grupoNome: it.grupoNome,
@@ -558,7 +556,7 @@ function ItemEditor({
         </div>
       </div>
 
-      {/* Linha 1: REF + DESCRICAO */}
+      {/* Linha 1: REF */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
         <div className="sm:col-span-1">
           <label className="text-[10px] font-bold text-slate-600 uppercase">REF *</label>
@@ -568,22 +566,6 @@ function ItemEditor({
             placeholder="7031"
             className="w-full px-2 py-2 border rounded text-sm font-mono uppercase font-bold"
           />
-        </div>
-        <div className="sm:col-span-3">
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Descrição base *</label>
-          <input
-            value={item.descricaoBase}
-            onChange={(e) => onUpdate({ descricaoBase: e.target.value.toUpperCase() })}
-            onBlur={(e) => onAplicarCategoria(e.target.value)}
-            list={`descs-${item.tempId}`}
-            placeholder="Ex: CASACO SOFT"
-            className="w-full px-2 py-2 border rounded text-sm uppercase"
-          />
-          <datalist id={`descs-${item.tempId}`}>
-            {categorias.map((c) => (
-              <option key={c.descricaoBase} value={c.descricaoBase} />
-            ))}
-          </datalist>
         </div>
       </div>
 
@@ -782,6 +764,70 @@ function ItemEditor({
           </table>
         </div>
       )}
+
+      {/* PREVIEW DESCRIÇÃO — auto-gerada (último campo) */}
+      <DescricaoPreview item={item} />
+    </div>
+  );
+}
+
+// ─── Preview da descrição auto-gerada ───────────────────────────────────
+function DescricaoPreview({ item }: { item: ItemForm }) {
+  // Pega a marca do header do pedido via prop drilling — mas como o ItemEditor não recebe,
+  // a gente lê via DOM. Mais simples: mostra placeholder "MARCA" se vazio.
+  // (A descrição final REAL é montada no backend usando order.marca)
+  const marca = (typeof window !== 'undefined'
+    ? (document.querySelector<HTMLInputElement>('input[placeholder="Ex: MARRIE"]')?.value || '')
+    : ''
+  ).toUpperCase();
+
+  const partes = [
+    item.grupoNome?.trim().toUpperCase(),
+    item.subgrupoNome?.trim().toUpperCase(),
+    item.plusSize ? 'PLUS SIZE' : '',
+    item.ref?.trim().toUpperCase(),
+  ].filter(Boolean);
+
+  const cor = item.cores[0] || 'COR';
+  const tam = item.tamanhos[0] || 'TAM';
+  const descricaoExemplo = [...partes, cor, tam, marca || 'MARCA'].filter(Boolean).join(' ');
+
+  // Conta total de SKUs (combinações com qty>0)
+  let combinacoes = 0;
+  for (const c of item.cores) {
+    for (const t of item.tamanhos) {
+      if (Number(item.grade[`${c}|${t}`] || 0) > 0) combinacoes++;
+    }
+  }
+
+  if (!item.grupoNome && !item.subgrupoNome) {
+    return (
+      <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-lg p-3 text-xs text-slate-400 italic">
+        <Eye className="w-3.5 h-3.5 inline mr-1" />
+        Selecione Grupo e Subgrupo pra ver a descrição final…
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gradient-to-r from-violet-50 to-emerald-50 border-2 border-violet-200 rounded-lg p-3">
+      <div className="flex items-center gap-2 mb-1">
+        <Eye className="w-3.5 h-3.5 text-violet-600" />
+        <span className="text-[10px] font-black uppercase text-violet-700 tracking-wider">
+          Descrição que vai pro cadastro
+        </span>
+        {combinacoes > 0 && (
+          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+            {combinacoes} SKU(s)
+          </span>
+        )}
+      </div>
+      <div className="font-mono text-sm font-black text-slate-800 break-all">
+        {descricaoExemplo}
+      </div>
+      <div className="text-[10px] text-slate-500 mt-1">
+        Cada cor × tamanho gera um SKU com sua própria descrição. Acima é só um exemplo.
+      </div>
     </div>
   );
 }
