@@ -148,4 +148,13 @@ export class PurchaseOrdersController {
   async labels(@Param('id') id: string) {
     return this.svc.listLabels(id);
   }
+
+  /**
+   * Etiquetas avulsas — busca produtos no Wincred por EAN, REF ou SKU.
+   * POST body: { codigos: string[] }
+   */
+  @Post('etiquetas-avulsas')
+  async etiquetasAvulsas(@Body() body: { codigos: string[] }) {
+    return this.svc.buscarEtiquetasAvulsas(body?.codigos || []);
+  }
 }

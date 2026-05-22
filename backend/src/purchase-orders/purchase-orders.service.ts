@@ -569,4 +569,49 @@ export class PurchaseOrdersService {
     }
     return { total: labels.length, labels };
   }
+
+  /**
+   * Busca produtos no Wincred por EAN/REF/SKU pra imprimir etiquetas avulsas.
+   */
+  async buscarEtiquetasAvulsas(codigos: string[]) {
+    const limpos = (codigos || [])
+      .map((c) => (c || '').trim().toUpperCase())
+      .filter(Boolean);
+    if (limpos.length === 0) {
+      return { labels: [], notFound: [] };
+    }
+    const labels: Array<{
+      ref: string;
+      cor: string;
+      tamanho: string;
+      codigo: string;
+      preco: number;
+      marca: string | null;
+      descricao: string;
+    }> = [];
+    const notFound: string[] = [];
+    for (const cod of limpos) {
+      try {
+        const found = await (this.erp as any).buscarProdutoPorCodigo?.(cod);
+        if (found && Array.isArray(found) && found.length > 0) {
+          for (const p of found) {
+            labels.push({
+              ref: String(p.referencia || '').trim(),
+              cor: String(p.cor || '').trim(),
+              tamanho: String(p.tamanho || '').trim(),
+              codigo: String(p.codigo || '').trim(),
+              preco: Number(p.preco || 0),
+              marca: p.marca || null,
+              descricao: String(p.descricao || '').trim(),
+            });
+          }
+        } else {
+          notFound.push(cod);
+        }
+      } catch {
+        notFound.push(cod);
+      }
+    }
+    return { labels, notFound };
+  }
 }

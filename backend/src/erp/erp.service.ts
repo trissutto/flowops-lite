@@ -6221,6 +6221,42 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Busca produto(s) no Wincred por codigo (EAN, REFERENCIA ou CODIGO).
+   * Usado pra imprimir etiquetas avulsas — aceita codigos misturados.
+   */
+  async buscarProdutoPorCodigo(codigo: string): Promise<Array<any>> {
+    if (!this.pool || !codigo) return [];
+    const c = codigo.trim().toUpperCase();
+    if (!c) return [];
+    try {
+      // Busca por CODIGO exato OU REFERENCIA exata OU EAN exato
+      // (em algumas instalacoes EAN e a propria coluna CODIGO)
+      const [rows] = await this.pool.query(
+        `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
+                TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao,
+                FORNECEDOR AS fornecedor
+           FROM produtos
+          WHERE CODIGO = ? OR REFERENCIA = ? OR CODIGO = LPAD(?, 13, '0')
+          LIMIT 50`,
+        [c, c, c],
+      );
+      return (rows as any[]).map((r) => ({
+        codigo: String(r.codigo || '').trim(),
+        referencia: String(r.referencia || '').trim(),
+        cor: String(r.cor || '').trim(),
+        tamanho: String(r.tamanho || '').trim(),
+        preco: Number(r.preco || 0),
+        descricao: String(r.descricao || '').trim(),
+        fornecedor: r.fornecedor ? String(r.fornecedor).trim() : null,
+        marca: null,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`buscarProdutoPorCodigo ${c} falhou: ${e?.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Pega o próximo CODIGO de grupo livre na tabela `grupos` (MAX+1).
    */
   async proximoGrupoCodigo(): Promise<number> {

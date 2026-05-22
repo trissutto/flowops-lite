@@ -15,7 +15,7 @@ import Link from 'next/link';
 import {
   Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
-  LayoutDashboard, Globe2, Settings,
+  LayoutDashboard, Globe2, Settings, ShoppingCart, Tags,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -39,6 +39,8 @@ interface LojaItem {
 }
 
 const LOJA_ITEMS: LojaItem[] = [
+  { href: '/loja/pedidos-compra',             label: 'Pedidos Compra', subtitle: 'Fornecedores', description: 'Pedidos + cadastro automático', tone: 'rose',   icon: ShoppingCart },
+  { href: '/loja/etiquetas-avulsas',          label: 'Etiquetas',      subtitle: 'Avulsas',      description: 'Imprimir por REF/SKU',          tone: 'amber',  icon: Tags         },
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',   subtitle: 'Estoque',     description: 'Venda + estoque em tempo real', tone: 'purple', icon: BarChart3    },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',  subtitle: 'Matriz',      description: 'Rebalancear entre lojas',       tone: 'orange', icon: Shuffle      },
   { href: '/retaguarda/remessas',             label: 'Remessas',       subtitle: 'Trânsito',    description: 'Caixas em rota',                tone: 'sky',    icon: Truck        },

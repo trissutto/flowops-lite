@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Plus, Search, Loader2, AlertCircle, Package,
-  Truck, CheckCircle2, Clock, FileText, Calendar,
+  Truck, CheckCircle2, Clock, FileText, Calendar, Trash2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -165,12 +165,33 @@ export default function PedidosComprapage() {
               const st = STATUS_INFO[o.status] || STATUS_INFO.rascunho;
               const Icon = st.icon;
               return (
-                <Link
+                <div
                   key={o.id}
-                  href={`/loja/pedidos-compra/${o.id}`}
-                  className="block bg-white border border-slate-200 rounded-xl p-4 hover:border-violet-300 hover:shadow-md transition"
+                  className="group relative bg-white border border-slate-200 rounded-xl hover:border-violet-300 hover:shadow-md transition"
                 >
-                  <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (!confirm(`Excluir pedido #${o.numero} (${o.fornecedorNome})? Esta acao nao pode ser desfeita.`)) return;
+                      try {
+                        await api(`/purchase-orders/${o.id}`, { method: 'DELETE' });
+                        setOrders((prev) => prev.filter((p) => p.id !== o.id));
+                      } catch (err: any) {
+                        alert('Erro ao excluir: ' + (err?.message || 'desconhecido'));
+                      }
+                    }}
+                    title="Excluir pedido"
+                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition p-1.5 rounded hover:bg-rose-50 text-rose-500 z-10"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <Link
+                    href={`/loja/pedidos-compra/${o.id}`}
+                    className="block p-4"
+                  >
+                    <div className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-xl bg-violet-100 flex items-center justify-center shrink-0">
                       <span className="text-violet-700 font-black text-sm">#{o.numero}</span>
                     </div>
@@ -202,8 +223,9 @@ export default function PedidosComprapage() {
                       <div className="text-lg font-black text-slate-800 tabular-nums">{brl(o.totalCusto)}</div>
                       <div className="text-[10px] text-emerald-600 tabular-nums">Venda {brl(o.totalVenda)}</div>
                     </div>
-                  </div>
-                </Link>
+                    </div>
+                  </Link>
+                </div>
               );
             })}
           </div>
