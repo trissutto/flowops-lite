@@ -58,8 +58,10 @@ export default function EtiquetasPage() {
           window.JsBarcode(el, code, {
             format: 'EAN13',
             width: 2.2,
-            height: 32,
-            displayValue: false,
+            height: 40,
+            displayValue: true,
+            fontSize: 16,
+            textMargin: 0,
             margin: 0,
             background: '#fff',
             lineColor: '#000',
@@ -71,8 +73,10 @@ export default function EtiquetasPage() {
             window.JsBarcode(el, code, {
               format: 'CODE128',
               width: 2.2,
-              height: 32,
-              displayValue: false,
+              height: 40,
+              displayValue: true,
+              fontSize: 16,
+              textMargin: 0,
               margin: 0,
             });
           } catch { /* ignora */ }
@@ -165,7 +169,6 @@ export default function EtiquetasPage() {
                   <span className="et-cor-destaque">{l.cor}</span>
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
-                <div className="et-codigo">{l.codigo}</div>
                 <div className="et-base">
                   <span className="et-base-ref">{l.ref}</span>
                   <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
@@ -181,8 +184,8 @@ export default function EtiquetasPage() {
         .etiquetas-grid {
           display: grid;
           grid-template-columns: 48mm 48mm;
-          gap: 0 3mm;
-          padding: 9mm 0 0 9mm;
+          gap: 0 6mm;
+          padding: 9mm 0 0 6mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -241,7 +244,7 @@ export default function EtiquetasPage() {
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
           width: 100%;
-          height: 9mm;
+          height: 12mm;
           display: block;
         }
         .et-codigo {
@@ -277,7 +280,7 @@ export default function EtiquetasPage() {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 9mm 0 0 9mm;
+            padding: 9mm 0 0 6mm;
             page-break-inside: auto;
           }
           .etiqueta {
