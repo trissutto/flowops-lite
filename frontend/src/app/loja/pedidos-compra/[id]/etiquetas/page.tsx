@@ -173,15 +173,15 @@ export default function EtiquetasPage() {
         /* Grid de etiquetas: 2 colunas de 50mm em rolo de 108mm */
         .etiquetas-grid {
           display: grid;
-          grid-template-columns: 48mm 48mm;
-          gap: 0;
+          grid-template-columns: 46mm 46mm;
+          gap: 0 3mm;
           padding: 9mm 0 0 12mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
         }
         .etiqueta {
-          width: 48mm;
+          width: 46mm;
           height: 30mm;
           box-sizing: border-box;
           padding: 3mm 1.5mm 1mm 1.5mm;
