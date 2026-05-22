@@ -1086,7 +1086,12 @@ export class PdvService {
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda já está ${sale.status}`);
     if (!sale.items?.length) throw new BadRequestException('Carrinho vazio');
-    if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
+    // Total < 0 sempre é erro de cálculo. Total === 0 é OK em TROCA PAR
+    // (cliente devolve peça igual ao valor da nova → vale_troca cobre 100%).
+    // Nesse caso a NFC-e original já cobriu o ICMS; a troca é só substituição
+    // fiscal e não tem fato gerador novo. Quem valida que existe vale_troca
+    // pra cobrir é o guard de payments + sumPaidValue logo abaixo.
+    if (sale.total < 0) throw new BadRequestException('Total da venda inválido (< 0)');
 
     // Nota: a validação de CNPJ esperado vs config NFC-e (Store.expectedCnpj
     // vs NfceConfig.cnpj) foi removida do finalize — admin gerencia esse
@@ -1203,11 +1208,21 @@ export class PdvService {
     const isAllVendaOnline = (payments as any[]).every(
       (p: any) => String(p.method || '').toLowerCase() === 'venda_online',
     );
+    // TROCA PAR — quando TODAS as payments são 'vale_troca', tb pula NFC-e.
+    // Justificativa fiscal: NFC-e original já cobriu o ICMS da peça devolvida;
+    // a troca é substituição, não venda nova com fato gerador. Pular evita
+    // rejeição SEFAZ ("tPag inválido", "vNF=0", etc).
+    const isAllValeTroca = (payments as any[]).every(
+      (p: any) => String(p.method || '').toLowerCase() === 'vale_troca',
+    );
+    // TOTAL ZERO — defesa em profundidade. Se por qualquer razão sale.total=0
+    // (troca par + ajuste, desconto integral, etc), não tem como emitir NFC-e
+    // com vNF=0 — SEFAZ rejeita. Skip.
+    const isZeroTotal = !sale.total || sale.total < 0.01;
+    const skipNfce = isAllVendaOnline || isAllValeTroca || isZeroTotal;
 
-    // Gera STUB do XML NFC-e SÓ se não for venda 100% online
-    const nfceStub = isAllVendaOnline
-      ? null
-      : this.buildNfceStub(sale, finalMethod);
+    // Gera STUB do XML NFC-e SÓ se houver fato gerador / NFC-e aplicável
+    const nfceStub = skipNfce ? null : this.buildNfceStub(sale, finalMethod);
 
     const updated = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
@@ -1216,9 +1231,9 @@ export class PdvService {
         paymentMethod: finalMethod,
         paymentDetails: finalDetails,
         finalizedAt: new Date(),
-        // Venda online: status 'skipped' deixa claro que NÃO foi emitida nem é
-        // pra emitir automaticamente. Relatório fiscal filtra essas vendas.
-        nfceStatus: isAllVendaOnline ? 'skipped' : 'preview',
+        // 'skipped' = não foi emitida nem é pra emitir automaticamente
+        // (venda online / troca par / total zero). Relatório fiscal filtra.
+        nfceStatus: skipNfce ? 'skipped' : 'preview',
         nfceXml: nfceStub?.xml ?? null,
         nfceNumber: nfceStub?.numero ?? null,
         nfceSerie: nfceStub?.serie ?? null,

@@ -2302,10 +2302,32 @@ function PdvPageInner() {
                 })()}
               </div>
 
-              {/* FINALIZAR removido — botões diretos de forma de pagamento (PIX,
-                  DINHEIRO, CARTÃO, CREDIÁRIO, VALE) já abrem o modal de
-                  pagamento com o método pré-selecionado. Botão Finalizar
-                  separado virou redundante na UX. */}
+              {/* FINALIZAR DIRETO — aparece SÓ quando a venda já está 100% paga
+                  (ex: vale-troca cobriu todo o total numa TROCA PAR). Sem esse
+                  botão, vendedora ficava travada sem saber onde clicar pra fechar.
+                  Nos outros casos (precisa receber dinheiro/cartão/PIX), a vendedora
+                  clica nos botões de forma de pagamento — esses abrem o modal. */}
+              {sale && sale.items?.length > 0 && (() => {
+                const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+                const restante = Math.round((sale.total - paid) * 100) / 100;
+                const jaCoberto = sale.total >= 0 && Math.abs(restante) < 0.01 && paid > 0;
+                if (!jaCoberto) return null;
+                return (
+                  <button
+                    onClick={() => finalizeSale('')}
+                    disabled={finalizing}
+                    className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-emerald-300/60 animate-pulse"
+                    title="Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar."
+                  >
+                    {finalizing ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Check className="w-5 h-5" />
+                    )}
+                    FINALIZAR
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </footer>
