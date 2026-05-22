@@ -266,7 +266,7 @@ export default function EtiquetasPage() {
         }
         /* Codigo de barras EAN-13 (renderizado por JsBarcode) */
         .barcode-target {
-          width: 90%;
+          width: 75%;
           height: 16mm;
           display: block;
           margin: 0 auto;
