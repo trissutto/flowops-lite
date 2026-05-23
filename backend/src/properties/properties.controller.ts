@@ -15,11 +15,51 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { JwtService } from '@nestjs/jwt';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PropertiesService } from './properties.service';
-import { put } from '@vercel/blob';
-import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+
+/**
+ * Cliente S3 apontando pro Cloudflare R2 (S3-compatible).
+ *
+ * Por que R2 em vez de Vercel Blob: o Vercel mudou a API várias vezes
+ * (OIDC, Public vs Private store, tokens confidenciais) e quebrou o
+ * upload server-side. R2 é S3 padrão, estável, gratuito até 10GB.
+ *
+ * Variáveis de ambiente necessárias no Railway:
+ *   R2_ACCOUNT_ID         — Cloudflare account ID (ex: abc123def...)
+ *   R2_ACCESS_KEY_ID      — Access Key gerada na aba R2 API Tokens
+ *   R2_SECRET_ACCESS_KEY  — Secret correspondente
+ *   R2_BUCKET_NAME        — nome do bucket (ex: lurds-imobiliario)
+ *   R2_PUBLIC_URL         — URL pública base. Pode ser:
+ *                            a) https://pub-xxxxx.r2.dev   (subdomain default
+ *                               do R2, ativado na aba Settings do bucket)
+ *                            b) https://files.lurds.com.br (custom domain via CNAME)
+ *
+ * Inicialização lazy: só cria o client quando precisa, e só se as
+ * variáveis estiverem setadas (evita crash no boot do backend).
+ */
+let r2ClientCache: S3Client | null = null;
+function getR2Client(): S3Client {
+  if (r2ClientCache) return r2ClientCache;
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKey = process.env.R2_ACCESS_KEY_ID;
+  const secret = process.env.R2_SECRET_ACCESS_KEY;
+  if (!accountId || !accessKey || !secret) {
+    throw new Error(
+      'R2 não configurado. Setar R2_ACCOUNT_ID, R2_ACCESS_KEY_ID e R2_SECRET_ACCESS_KEY no Railway.',
+    );
+  }
+  r2ClientCache = new S3Client({
+    region: 'auto',
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: accessKey,
+      secretAccessKey: secret,
+    },
+  });
+  return r2ClientCache;
+}
 
 /**
  * /properties — módulo IMOBILIÁRIO.
@@ -33,11 +73,7 @@ import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
 @UseGuards(JwtAuthGuard)
 @Controller('properties')
 export class PropertiesController {
-  constructor(
-    private readonly svc: PropertiesService,
-    // JwtService usado SÓ pelo /upload-token (validação manual, ver método).
-    private readonly jwtSvc: JwtService,
-  ) {}
+  constructor(private readonly svc: PropertiesService) {}
 
   // Niveis de acesso
   private requireRead(req: any) {
@@ -195,14 +231,17 @@ export class PropertiesController {
 
   /**
    * POST /properties/:id/upload
-   * Upload de arquivo via multipart/form-data → grava no Vercel Blob → cria
-   * PropertyAttachment automaticamente. Usado pelo dropzone do frontend.
+   * Upload de arquivo via multipart/form-data → grava no Cloudflare R2 →
+   * cria PropertyAttachment ou atualiza seção (water/energy/iptu/etc).
    *
    * Body (form-data):
-   *   file: arquivo (PDF, JPG, PNG, etc) — máximo 10MB
-   *   category: string (opcional, default 'Outros')
+   *   file: arquivo (PDF, JPG, PNG, WEBP) — máximo 10 MB
+   *   category: string opcional (default 'Outros')
+   *   scope: 'water' | 'energy' | 'iptu' | 'deed' | 'scripture' (opcional)
    *
-   * Requer env BLOB_READ_WRITE_TOKEN configurada no Railway.
+   * Variáveis Railway necessárias:
+   *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+   *   R2_BUCKET_NAME, R2_PUBLIC_URL
    */
   @UseGuards(JwtAuthGuard)
   @Post(':id/upload')
@@ -217,32 +256,45 @@ export class PropertiesController {
     this.requireWrite(req);
     if (!file) throw new BadRequestException('Arquivo obrigatório');
 
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    const bucket = process.env.R2_BUCKET_NAME;
+    const publicUrl = process.env.R2_PUBLIC_URL;
+    if (!bucket || !publicUrl) {
       throw new BadRequestException(
-        'BLOB_READ_WRITE_TOKEN não configurado no servidor. Configure no Railway.',
+        'R2_BUCKET_NAME ou R2_PUBLIC_URL não configurado. Setar no Railway.',
       );
     }
 
-    // Sanitiza filename (Vercel Blob aceita unicode mas tira espaços/caracteres especiais)
+    // Sanitiza filename (tira acentos + caracteres especiais)
     const safeName = file.originalname
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
       .replace(/[^a-zA-Z0-9.\-_]/g, '_');
-    const blobPath = `imobiliario/${id}/${Date.now()}-${safeName}`;
+    const objectKey = `imobiliario/${id}/${Date.now()}-${safeName}`;
 
-    let uploaded: any;
+    // Upload pro R2 via S3 SDK
+    let fileUrl: string;
     try {
-      uploaded = await put(blobPath, file.buffer, {
-        access: 'public',
-        contentType: file.mimetype,
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
+      const client = getR2Client();
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: objectKey,
+          Body: file.buffer,
+          ContentType: file.mimetype,
+          // Headers customizados pra preservar nome original (download)
+          ContentDisposition: `inline; filename="${file.originalname}"`,
+        }),
+      );
+      // Monta URL pública. R2_PUBLIC_URL deve terminar SEM barra.
+      const base = publicUrl.replace(/\/$/, '');
+      fileUrl = `${base}/${objectKey}`;
     } catch (e: any) {
-      throw new BadRequestException(`Falha ao subir pro Vercel Blob: ${e?.message || e}`);
+      throw new BadRequestException(
+        `Falha ao subir pro R2: ${e?.message || e}`,
+      );
     }
 
-    // Se for upload pra uma SEÇÃO específica (water, energy, iptu, etc), atualiza
-    // attachmentUrl da seção em vez de criar PropertyAttachment solto
+    // Seção específica (water/energy/iptu/deed/scripture) → atualiza attachmentUrl
     if (scope && ['water', 'energy', 'iptu', 'deed', 'scripture'].includes(scope)) {
       const u = this.userInfo(req);
       const map: Record<string, (id: string, input: any, user: any) => Promise<any>> = {
@@ -252,10 +304,10 @@ export class PropertiesController {
         deed: (id, i, u) => this.svc.upsertDeed(id, i, u),
         scripture: (id, i, u) => this.svc.upsertScripture(id, i, u),
       };
-      await map[scope](id, { attachmentUrl: uploaded.url }, u);
+      await map[scope](id, { attachmentUrl: fileUrl }, u);
       return {
         ok: true,
-        url: uploaded.url,
+        url: fileUrl,
         fileName: file.originalname,
         size: file.size,
         scope,
@@ -268,7 +320,7 @@ export class PropertiesController {
       {
         category: category || 'Outros',
         fileName: file.originalname,
-        fileUrl: uploaded.url,
+        fileUrl,
         fileSize: file.size,
         mimeType: file.mimetype,
       },
@@ -283,169 +335,4 @@ export class PropertiesController {
     return this.svc.deleteAttachment(attachmentId, this.userInfo(req));
   }
 
-  /**
-   * POST /:id/upload-token
-   *
-   * Endpoint do FLUXO MODERNO de upload (handleUpload).
-   *
-   * Por que esse endpoint existe (e não o /upload tradicional):
-   *  - O Vercel Blob mudou de modelo: stores configurados como "Private"
-   *    (necessário pra documentos sensíveis como contas, contratos, escrituras)
-   *    REJEITAM uploads server-side via put() com access: 'public'.
-   *  - O padrão oficial pra store privado é usar handleUpload:
-   *      1. Frontend pede um "token assinado" pro backend (aqui)
-   *      2. Backend valida usuário/permissões e assina uma URL temporária
-   *      3. Frontend faz upload DIRETO pro Vercel Blob com essa URL
-   *      4. Vercel chama de volta o backend (onUploadCompleted) pra registrar
-   *         o blob.url no banco
-   *
-   * Vantagens vs /upload tradicional:
-   *  - Funciona com store privado (nosso caso)
-   *  - Upload não passa pelo Railway (mais rápido, menos largura de banda)
-   *  - Não temos limite de 4.5 MB do Lambda (Vercel Functions tem; Railway não,
-   *    mas igual a gente fica liberado pra arquivos maiores)
-   *
-   * Atenção: onUploadCompleted RODA EM REQUEST SEPARADA. Não tem acesso ao
-   * `req` original — toda info que precisa pra gravar no banco vem do
-   * `tokenPayload` que assinamos no onBeforeGenerateToken.
-   */
-  @Post(':id/upload-token')
-  // OVERRIDE do guard do controller: essa rota NÃO usa JwtAuthGuard porque
-  // o helper `upload()` do @vercel/blob/client não permite passar header
-  // Authorization custom. JWT é validado MANUALMENTE no onBeforeGenerateToken,
-  // vindo no clientPayload mandado pelo frontend.
-  @UseGuards()
-  async uploadToken(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body() body: HandleUploadBody,
-  ) {
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      throw new BadRequestException(
-        'BLOB_READ_WRITE_TOKEN não configurado no servidor. Configure no Railway.',
-      );
-    }
-
-    // ADAPTER: @vercel/blob/client handleUpload espera um Request do Web Standard
-    // (com método headers.get(name)), mas o NestJS com Express dá um req com
-    // headers como objeto. Sem esse adapter, o handleUpload internamente faz
-    // `request.headers.get(...)` e quebra com TypeError → vira "Failed to
-    // retrieve the client token" no frontend.
-    const adaptedRequest: any = {
-      headers: {
-        get: (name: string) => {
-          const v = req.headers[String(name).toLowerCase()];
-          if (Array.isArray(v)) return v[0] || null;
-          return (v as string) || null;
-        },
-      },
-      url: req.url,
-      method: req.method,
-    };
-
-    try {
-      const jsonResponse = await handleUpload({
-        body,
-        request: adaptedRequest as any,
-        onBeforeGenerateToken: async (pathname, clientPayload) => {
-          // Parse do payload mandado pelo frontend (scope, category, authToken)
-          let meta: any = {};
-          try {
-            meta = clientPayload ? JSON.parse(clientPayload) : {};
-          } catch {
-            meta = {};
-          }
-
-          // ── VALIDAÇÃO MANUAL DE JWT ──
-          // O frontend manda o JWT dentro do clientPayload porque o helper
-          // upload() não suporta header Authorization. Aqui validamos.
-          const authToken = meta.authToken;
-          if (!authToken) {
-            throw new Error('Token de autenticação ausente no clientPayload');
-          }
-          let decoded: any;
-          try {
-            decoded = this.jwtSvc.verify(authToken);
-          } catch (e: any) {
-            throw new Error(`Token inválido ou expirado: ${e?.message || 'verify failed'}`);
-          }
-
-          // Confere role (mesma lógica do requireWrite)
-          const role = decoded?.role;
-          const allowed = ['admin', 'imobiliario_admin', 'imobiliario_user'];
-          if (!allowed.includes(role)) {
-            throw new Error('Sem permissão de escrita no imobiliário');
-          }
-
-          // tokenPayload é o que VOLTA pro backend no onUploadCompleted.
-          // Como onUploadCompleted roda em REQUEST SEPARADA (sem req auth),
-          // metemos aqui tudo que vamos precisar pra gravar no banco.
-          return {
-            allowedContentTypes: [
-              'application/pdf',
-              'image/png',
-              'image/jpeg',
-              'image/jpg',
-              'image/webp',
-            ],
-            maximumSizeInBytes: 10 * 1024 * 1024, // 10 MB
-            addRandomSuffix: false, // já temos timestamp no pathname
-            tokenPayload: JSON.stringify({
-              propertyId: id,
-              userId: decoded?.sub || decoded?.id || null,
-              userName: decoded?.email || decoded?.name || null,
-              scope: meta.scope || null,
-              category: meta.category || 'Outros',
-              fileName: meta.fileName || pathname.split('/').pop() || 'arquivo',
-            }),
-          };
-        },
-        onUploadCompleted: async ({ blob, tokenPayload }) => {
-          // Esse callback é chamado pelo Vercel quando o upload do client
-          // termina. Não tem acesso ao req — toda info vem do tokenPayload.
-          let meta: any = {};
-          try {
-            meta = tokenPayload ? JSON.parse(tokenPayload) : {};
-          } catch {
-            meta = {};
-          }
-          const propertyId = meta.propertyId;
-          const scope = meta.scope;
-          const userForLog = { id: meta.userId, name: meta.userName };
-
-          if (
-            scope &&
-            ['water', 'energy', 'iptu', 'deed', 'scripture'].includes(scope)
-          ) {
-            const map: Record<string, (id: string, input: any, user: any) => Promise<any>> = {
-              water: (id, i, u) => this.svc.upsertWater(id, i, u),
-              energy: (id, i, u) => this.svc.upsertEnergy(id, i, u),
-              iptu: (id, i, u) => this.svc.upsertIptu(id, i, u),
-              deed: (id, i, u) => this.svc.upsertDeed(id, i, u),
-              scripture: (id, i, u) => this.svc.upsertScripture(id, i, u),
-            };
-            await map[scope](propertyId, { attachmentUrl: blob.url }, userForLog);
-          } else {
-            // Anexo genérico — cria PropertyAttachment
-            await this.svc.addAttachment(
-              propertyId,
-              {
-                category: meta.category || 'Outros',
-                fileName: meta.fileName || 'arquivo',
-                fileUrl: blob.url,
-                fileSize: 0, // Vercel não manda size no callback
-                mimeType: blob.contentType || 'application/octet-stream',
-              },
-              userForLog,
-            );
-          }
-        },
-      });
-      return jsonResponse;
-    } catch (e: any) {
-      throw new BadRequestException(
-        `Falha ao gerar token de upload: ${e?.message || e}`,
-      );
-    }
-  }
 }

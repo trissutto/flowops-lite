@@ -641,48 +641,20 @@ function UploadSlot({
     }
     setUploading(true);
     try {
-      // FLUXO MODERNO (signed URL via handleUpload):
-      //  1. Frontend chama /upload-token (backend) pra pedir token assinado
-      //  2. Backend valida JWT (vem no clientPayload pq @vercel/blob/client
-      //     não permite passar header Authorization custom)
-      //  3. Vercel Blob faz upload DIRETO do browser pro storage
-      //  4. Vercel callback /upload-token de novo → backend grava URL no banco
-      //
-      // Funciona com store PRIVADO (necessário pra docs sensíveis do imobiliário).
-      const { upload } = await import('@vercel/blob/client');
       const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
-      if (!token) {
-        throw new Error('Sessão expirada — faz login de novo');
-      }
-      const apiUrl =
-        process.env.NEXT_PUBLIC_API_URL ||
-        `${window.location.protocol}//${window.location.hostname}:3001`;
-
-      // Sanitiza nome do arquivo (mesma regra do backend antigo)
-      const safeName = file.name
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      const blobPath = `imobiliario/${propertyId}/${Date.now()}-${safeName}`;
-
-      await upload(blobPath, file, {
-        access: 'public',
-        contentType: file.type || 'application/octet-stream',
-        handleUploadUrl: `${apiUrl}/api/properties/${propertyId}/upload-token`,
-        clientPayload: JSON.stringify({
-          scope: scope || null,
-          category: 'Outros',
-          fileName: file.name,
-          // JWT vem no payload porque o helper upload() não permite
-          // passar header Authorization. Backend valida manualmente.
-          authToken: token,
-        }),
+      const fd = new FormData();
+      fd.append('file', file);
+      if (scope) fd.append('scope', scope);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || `${window.location.protocol}//${window.location.hostname}:3001`;
+      const r = await fetch(`${apiUrl}/api/properties/${propertyId}/upload`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: fd,
       });
-
-      // onUploadCompleted no backend já gravou no banco.
-      // Aguarda 500ms pra dar tempo do callback do Vercel chegar no backend
-      // (roda em request separada) antes de recarregar a tela.
-      await new Promise((res) => setTimeout(res, 500));
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`${r.status}: ${t}`);
+      }
       onUploaded();
     } catch (e: any) {
       setError(e?.message || 'Erro no upload');
