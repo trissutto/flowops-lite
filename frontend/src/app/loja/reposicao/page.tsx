@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Search, Loader2, Plus, Trash2, CheckCircle2, Printer, Package } from 'lucide-react';
 import { api } from '@/lib/api';
+import ProductPhoto from '@/components/ProductPhoto';
 
 type Produto = {
   codigo: string;
@@ -241,6 +242,9 @@ export default function ReposicaoPage() {
                             : 'bg-white border-slate-200 hover:border-violet-400 hover:bg-violet-50'
                         }`}
                       >
+                        <div className="mb-1 flex justify-center">
+                          <ProductPhoto ref={p.ref} cor={p.cor} size={64} editable />
+                        </div>
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs font-bold text-slate-700">{p.cor}</span>
                           <span className="text-xs font-black font-mono bg-slate-100 px-1.5 py-0.5 rounded">

@@ -1998,3 +1998,24 @@ model PropertyLog {
   @@index([propertyId, createdAt(sort: Desc)])
   @@map("property_logs")
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// ProductPhoto — fotos de produtos (por REF, opcionalmente por COR)
+// Usado em Reposicao, PDV, Separacao, Realinhamento.
+// Upload via R2 (mesma infra do Imobiliario).
+// ════════════════════════════════════════════════════════════════════════
+model ProductPhoto {
+  id              String   @id @default(uuid())
+  ref             String                              // REF do produto (Wincred)
+  cor             String?                             // null = foto generica da REF
+  url             String   @db.Text                   // URL publica no R2
+  objectKey       String?  @map("object_key") @db.Text // chave no bucket pra delete
+  uploadedByUserId String? @map("uploaded_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([ref, cor], name: "ref_cor_unique")
+  @@index([ref])
+  @@map("product_photos")
+}
+
