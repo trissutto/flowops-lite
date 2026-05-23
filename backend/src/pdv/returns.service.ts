@@ -907,4 +907,245 @@ export class ReturnsService {
       finished: (itemsPendentes as any[]).length < limit,
     };
   }
+
+  /* ═════════════════════════════════════════════════════════════════════════
+     DEVOLUÇÃO MANUAL (Opção C — peça antiga vendida no Giga, sem cupom flowops)
+
+     Fluxo:
+       1. Vendedora bipa SKU em loja X
+       2. lookupManualReturnSku verifica histórico no Giga (loja X, 60 dias)
+       3. Se peça foi vendida → frontend chama createManualReturn
+       4. Repõe estoque no Giga + gera vale-troca / dinheiro
+
+     Diferenças do createReturn padrão:
+       - SEM originalSaleId (NULL) — devolução órfã
+       - source = 'giga_manual'
+       - manualSku = SKU bipado
+       - Preço vem do Giga (VENDAUN), não do item original
+       - Não emite NFC-e (registro interno)
+     ═════════════════════════════════════════════════════════════════════════ */
+
+  /**
+   * Verifica se peça pode ser devolvida na loja atual:
+   *   1. Busca SKU em pdvSale (flowops) — se achar, fluxo normal (não chega aqui)
+   *   2. Busca histórico no Giga (caixa) — loja específica, janela 60d
+   *   3. Retorna produto + histórico OU mensagem de bloqueio
+   */
+  async lookupManualReturnSku(sku: string, storeCode: string, diasJanela = 60) {
+    if (!sku?.trim()) throw new BadRequestException('SKU obrigatório');
+    if (!storeCode?.trim()) throw new BadRequestException('Loja obrigatória');
+
+    const result = await this.erp.lookupSaleHistoryByStoreAndSku(
+      storeCode,
+      sku,
+      diasJanela,
+    );
+
+    if (!result.produto) {
+      return {
+        eligible: false,
+        reason: 'sku_nao_cadastrado',
+        message: `SKU "${sku}" não cadastrado no Giga.`,
+      };
+    }
+    if (!result.found) {
+      return {
+        eligible: false,
+        reason: 'sem_historico_na_loja',
+        message:
+          `${result.produto.descricao || 'Peça'} (${result.produto.codigo}) ` +
+          `nunca foi vendida em ${storeCode} nos últimos ${diasJanela} dias. ` +
+          `A devolução deve ser feita na loja que vendeu.`,
+        produto: result.produto,
+      };
+    }
+    return {
+      eligible: true,
+      produto: result.produto,
+      vendas: result.vendas,
+      salesCount: result.salesCount,
+      diasJanela,
+    };
+  }
+
+  /**
+   * Cria devolução manual SEM cupom flowops (peça vendida no Giga antigo).
+   * Estoque volta pro Giga da loja atual. Sem NFC-e (registro interno).
+   */
+  async createManualReturn(input: {
+    sku: string;
+    storeCode: string;
+    storeName: string;
+    modo: 'dinheiro' | 'troca' | 'credito';
+    motivo?: string;
+    creditoValidadeDias?: number;
+    attachToSaleId?: string | null;
+    userId?: string;
+    userName?: string;
+  }) {
+    const { sku, storeCode, storeName, modo, motivo, userId, userName } = input;
+    const attachToSaleId = input.attachToSaleId || null;
+
+    if (!['dinheiro', 'troca', 'credito'].includes(modo)) {
+      throw new BadRequestException(`Modo inválido: ${modo}`);
+    }
+
+    // 1) Re-valida elegibilidade (anti-fraude: cliente pode passar pelo
+    //    lookup e tentar burlar via POST direto)
+    const elig = await this.lookupManualReturnSku(sku, storeCode, 60);
+    if (!elig.eligible) {
+      throw new BadRequestException(elig.message || 'Devolução não permitida');
+    }
+    const produto = elig.produto!;
+    const valorTotal = produto.preco || 0;
+    if (valorTotal <= 0) {
+      throw new BadRequestException(
+        `Peça ${produto.codigo} sem preço VENDAUN no Giga — admin precisa ajustar.`,
+      );
+    }
+
+    // 2) Repõe estoque no Giga (loja atual) — uma unidade
+    let estoqueOk = false;
+    let estoqueErr: string | null = null;
+    try {
+      const r = await this.erp.increaseStock([
+        { sku: produto.codigo, qty: 1, storeCode },
+      ]);
+      estoqueOk = r.success;
+      if (!r.success) estoqueErr = r.error || 'falha increaseStock';
+    } catch (e: any) {
+      estoqueErr = e?.message || String(e);
+    }
+    if (!estoqueOk) {
+      this.logger.warn(
+        `[devolucao/manual] estoque NÃO reposto pra ${produto.codigo}@${storeCode}: ${estoqueErr}`,
+      );
+      // Não bloqueia — admin reverte manualmente se precisar. Devolução
+      // financeira (vale-troca/dinheiro) continua válida.
+    }
+
+    // 3) Pega cashSession da loja (mesmo padrão do createReturn normal)
+    let cashSessionId: string | null = null;
+    try {
+      const s = await (this.prisma as any).pdvCashSession.findFirst({
+        where: { storeCode, status: 'open' },
+        select: { id: true },
+      });
+      cashSessionId = s?.id ?? null;
+    } catch {}
+
+    // 4) Cria PdvReturn órfão
+    let creditoCode: string | null = null;
+    let creditoValidade: Date | null = null;
+    if (modo === 'troca' || modo === 'credito') {
+      creditoCode = this.genCreditoCode();
+      const dias = modo === 'troca' ? 1 : Math.max(1, input.creditoValidadeDias || 90);
+      creditoValidade = new Date();
+      creditoValidade.setDate(creditoValidade.getDate() + dias);
+    }
+
+    const ret = await (this.prisma as any).pdvReturn.create({
+      data: {
+        originalSaleId: null, // ← órfã
+        originalSaleNumber: null,
+        source: 'giga_manual',
+        manualSku: produto.codigo,
+        storeCode,
+        storeName,
+        cashSessionId,
+        modo,
+        valorTotal,
+        status: 'completed',
+        customerCpf: null,
+        customerName: null,
+        creditoCode,
+        creditoValidade,
+        userId: userId || null,
+        userName: userName || null,
+        motivo: motivo || 'Sem cupom (Giga)',
+        items: {
+          create: [
+            {
+              originalItemId: null,
+              sku: produto.codigo,
+              ref: produto.codigo,
+              cor: produto.cor,
+              tamanho: produto.tamanho,
+              descricao: produto.descricao,
+              qty: 1,
+              precoUnit: produto.preco,
+              total: produto.preco,
+            },
+          ],
+        },
+      } as any,
+      include: { items: true },
+    });
+
+    // 5) Modo dinheiro → sangria automática
+    if (modo === 'dinheiro' && cashSessionId) {
+      try {
+        await this.cash.addEntry({
+          sessionId: cashSessionId,
+          type: 'sangria',
+          valor: valorTotal,
+          description: `Devolução manual ${ret.id.slice(0, 8)} (${produto.codigo} sem cupom)`,
+        });
+      } catch (e: any) {
+        this.logger.warn(`Sangria automática falhou: ${e?.message || e}`);
+      }
+    }
+
+    // 6) Se modo=troca + attachToSaleId → anexa vale na venda em andamento
+    let attachedToExistingSale = false;
+    if (modo === 'troca' && creditoCode && attachToSaleId) {
+      try {
+        const target = await (this.prisma as any).pdvSale.findUnique({
+          where: { id: attachToSaleId },
+          select: { id: true, status: true, storeCode: true },
+        });
+        if (target && target.status === 'open' && target.storeCode === storeCode) {
+          await (this.prisma as any).pdvSalePayment.create({
+            data: {
+              saleId: target.id,
+              method: 'vale_troca',
+              valor: valorTotal,
+              details: JSON.stringify({
+                creditoCode,
+                fromReturnId: ret.id,
+                modo: 'troca-anexada-manual',
+                source: 'giga_manual',
+                itemDevolvido: { sku: produto.codigo, descricao: produto.descricao },
+              }),
+            },
+          });
+          attachedToExistingSale = true;
+          this.logger.log(
+            `[devolucao/manual] Vale ${creditoCode} R$${valorTotal.toFixed(2)} ` +
+              `anexado à venda ${target.id.slice(0, 8)} (origem=giga_manual)`,
+          );
+        }
+      } catch (e: any) {
+        this.logger.warn(`Anexar vale na venda em andamento falhou: ${e?.message || e}`);
+      }
+    }
+
+    this.logger.log(
+      `[devolução manual] ${ret.id} loja=${storeCode} sku=${produto.codigo} ` +
+        `modo=${modo} valor=R$${valorTotal.toFixed(2)} estoqueOk=${estoqueOk}`,
+    );
+
+    return {
+      id: ret.id,
+      modo,
+      creditoCode,
+      creditoValidade: creditoValidade?.toISOString() ?? null,
+      valorTotal,
+      source: 'giga_manual',
+      produto,
+      estoqueReposto: estoqueOk,
+      estoqueErro: estoqueErr,
+      attachedToExistingSale,
+    };
+  }
 }

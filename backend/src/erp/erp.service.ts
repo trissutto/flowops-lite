@@ -7205,4 +7205,94 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     Devolução manual Giga (opção C).
+     Verifica se uma peça (SKU) foi vendida numa loja específica nos últimos
+     N dias. Usado pra autorizar devolução de venda antiga sem cupom flowops.
+
+     Regra: vendedora SÓ pode aceitar devolução de peça que foi vendida
+     naquela loja (anti-fraude). Se SKU nunca passou pelo caixa daquela
+     loja na janela, bloqueia.
+     ═══════════════════════════════════════════════════════════════════════ */
+  async lookupSaleHistoryByStoreAndSku(
+    storeCode: string,
+    sku: string,
+    dias: number = 60,
+  ): Promise<{
+    found: boolean;
+    salesCount: number;
+    vendas: Array<{ data: string; numero: string; valor: number; quantidade: number }>;
+    produto: { codigo: string; descricao: string; cor: string | null; tamanho: string | null; preco: number } | null;
+  }> {
+    const empty = { found: false, salesCount: 0, vendas: [], produto: null };
+    if (!this.pool || !storeCode?.trim() || !sku?.trim()) return empty;
+    const lojaClean = String(storeCode).trim().toUpperCase();
+    const diasClamped = Math.max(1, Math.min(3650, Math.round(dias) || 60));
+
+    // Gera variantes de zero-padding (igual ao resto do sistema)
+    const variants = this.skuVariants(sku.trim());
+    if (variants.length === 0) return empty;
+
+    try {
+      // 1) Busca produto + preço atual no Giga
+      const ph = variants.map(() => '?').join(',');
+      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO, COALESCE(DESCRICAOCOMPLETA, '') AS descricao,
+                COR, TAMANHO,
+                ROUND(COALESCE(VENDAUN, 0), 2) AS preco
+         FROM produtos
+         WHERE CODIGO IN (${ph})
+         LIMIT 1`,
+        variants,
+      );
+      const prodRow = (prodRows as any[])[0];
+      const produto = prodRow
+        ? {
+            codigo: String(prodRow.CODIGO).trim(),
+            descricao: String(prodRow.descricao || '').trim(),
+            cor: prodRow.COR ? String(prodRow.COR).trim() : null,
+            tamanho: prodRow.TAMANHO ? String(prodRow.TAMANHO).trim() : null,
+            preco: Number(prodRow.preco) || 0,
+          }
+        : null;
+
+      // 2) Busca histórico de vendas dessa peça nessa loja na janela
+      const [salesRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT
+            DATE_FORMAT(c.DATA, '%Y-%m-%d') AS data,
+            c.NUMERO AS numero,
+            c.QUANTIDADE AS quantidade,
+            c.VALORTOTAL AS valor
+         FROM caixa c
+         WHERE c.LOJA = ?
+           AND c.CODIGO IN (${ph})
+           AND c.DATA >= DATE_SUB(NOW(), INTERVAL ? DAY)
+           AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+           AND c.QUANTIDADE > 0
+         ORDER BY c.DATA DESC
+         LIMIT 20`,
+        [lojaClean, ...variants, diasClamped],
+      );
+
+      const vendas = (salesRows as any[]).map((r) => ({
+        data: String(r.data || ''),
+        numero: String(r.numero || ''),
+        quantidade: Number(r.quantidade) || 0,
+        valor: Number(r.valor) || 0,
+      }));
+
+      return {
+        found: vendas.length > 0,
+        salesCount: vendas.length,
+        vendas,
+        produto,
+      };
+    } catch (e: any) {
+      this.logger.warn(
+        `lookupSaleHistoryByStoreAndSku falhou (loja=${lojaClean}, sku=${sku}): ${e?.message || e}`,
+      );
+      return empty;
+    }
+  }
+
 }

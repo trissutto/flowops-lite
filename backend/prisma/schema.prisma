@@ -1176,9 +1176,15 @@ model PdvCashMovement {
 // Sempre estorna estoque no Giga (increaseStock) das peças retornadas.
 model PdvReturn {
   id              String   @id @default(uuid())
-  // Venda original
-  originalSaleId  String   @map("original_sale_id")
+  // Venda original — NULL pra devoluções manuais (peça vendida no Giga
+  // antigo, sem cupom flowops). Source identifica a origem.
+  originalSaleId  String?  @map("original_sale_id")
   originalSaleNumber String? @map("original_sale_number")
+  // Origem: 'flowops' (venda do PDV novo, com originalSaleId) ou
+  // 'giga_manual' (peça do Giga sem cupom). Default flowops.
+  source          String   @default("flowops")
+  // SKU bipado direto (preenchido pra devoluções manuais — não tem item original)
+  manualSku       String?  @map("manual_sku")
   // Loja onde foi feita a devolução
   storeCode       String   @map("store_code")
   storeName       String   @map("store_name")

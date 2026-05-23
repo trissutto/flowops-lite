@@ -75,6 +75,16 @@ export default function DevolucaoPage() {
   // botão Trocar). O crédito da troca será ANEXADO nessa venda, sem
   // reiniciar o carrinho. Mostra banner pra confirmar visualmente.
   const [attachInfo, setAttachInfo] = useState<{ id: string; items: number } | null>(null);
+  // DEVOLUÇÃO MANUAL (Giga) — quando não achou venda flowops mas peça
+  // foi vendida na loja em algum momento (caixa antigo).
+  const [manualEligible, setManualEligible] = useState<{
+    produto: { codigo: string; descricao: string; cor: string | null; tamanho: string | null; preco: number };
+    vendas: Array<{ data: string; numero: string; valor: number; quantidade: number }>;
+    salesCount: number;
+    diasJanela: number;
+  } | null>(null);
+  const [manualBlocked, setManualBlocked] = useState<string | null>(null);
+  const [manualBusy, setManualBusy] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -117,6 +127,8 @@ export default function DevolucaoPage() {
     setSelected({});
     setSuccess(null);
     setSalesBySku(null);
+    setManualEligible(null);
+    setManualBlocked(null);
     const q = query.trim();
     if (!q) return;
     setBusy(true);
@@ -160,13 +172,74 @@ export default function DevolucaoPage() {
             return;
           }
         }
-        // Input curto e nao achou por SKU
-        setErr(`Nenhuma venda encontrada nos ultimos 60 dias com SKU/REF "${q}"`);
+        // 3a tentativa: DEVOLUÇÃO MANUAL GIGA — peça antiga, sem cupom flowops.
+        // Verifica se foi vendida na loja atual nos últimos 60d (caixa Giga).
+        try {
+          const r = await api<{
+            eligible: boolean;
+            reason?: string;
+            message?: string;
+            produto?: any;
+            vendas?: any[];
+            salesCount?: number;
+            diasJanela?: number;
+          }>(`/pdv/devolucao/lookup-manual?sku=${encodeURIComponent(q)}`);
+          if (r.eligible && r.produto) {
+            setManualEligible({
+              produto: r.produto,
+              vendas: r.vendas || [],
+              salesCount: r.salesCount || 0,
+              diasJanela: r.diasJanela || 60,
+            });
+            return;
+          }
+          // não elegível: SKU não existe OU sem histórico na loja
+          setManualBlocked(r.message || 'Devolução não permitida');
+        } catch {
+          setErr(`Nenhuma venda encontrada com SKU/REF "${q}"`);
+        }
       }
     } catch (e: any) {
       setErr(e?.message || 'Falha na busca');
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Cria devolução manual (sem cupom — peça do Giga)
+  async function confirmManual(modoEscolhido: 'dinheiro' | 'troca' | 'credito') {
+    if (!manualEligible) return;
+    setManualBusy(true);
+    setErr('');
+    try {
+      // Recupera attachToSaleId se vier de venda em andamento
+      let attachToSaleId: string | null = null;
+      try {
+        const raw = localStorage.getItem('lurds_pdv_attach_to_sale_id');
+        if (raw && raw.startsWith('{')) {
+          const p = JSON.parse(raw);
+          const ageMs = Date.now() - (p.ts || 0);
+          if (ageMs < 30 * 60 * 1000 && p.id) attachToSaleId = String(p.id);
+        }
+      } catch {}
+
+      const r = await api<any>('/pdv/devolucao/manual', {
+        method: 'POST',
+        body: JSON.stringify({
+          sku: manualEligible.produto.codigo,
+          modo: modoEscolhido,
+          motivo: motivo || 'Sem cupom (Giga)',
+          creditoValidadeDias: modoEscolhido === 'credito' ? validade : undefined,
+          attachToSaleId: modoEscolhido === 'troca' ? attachToSaleId : null,
+        }),
+      });
+      try { localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {}
+      setSuccess(r);
+      setManualEligible(null);
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao criar devolução manual');
+    } finally {
+      setManualBusy(false);
     }
   }
 
@@ -459,6 +532,132 @@ export default function DevolucaoPage() {
             >
               ← Buscar outra peça
             </button>
+          </div>
+        )}
+
+        {/* ─── DEVOLUÇÃO MANUAL GIGA ─── */}
+        {/* Bloqueada: peça não tem histórico de venda nesta loja */}
+        {manualBlocked && !manualEligible && !success && (
+          <div className="bg-rose-50 border-2 border-rose-300 rounded-xl p-4 mb-3">
+            <div className="font-bold text-rose-900 text-lg flex items-center gap-2">
+              🚫 Devolução bloqueada
+            </div>
+            <p className="text-sm text-rose-800 mt-1.5 leading-snug">{manualBlocked}</p>
+            <button
+              onClick={() => {
+                setManualBlocked(null);
+                setQuery('');
+                inputRef.current?.focus();
+              }}
+              className="mt-3 text-sm text-rose-700 hover:underline font-medium"
+            >
+              ← Buscar outra peça
+            </button>
+          </div>
+        )}
+
+        {/* Elegível: peça do Giga, foi vendida na loja → libera devolução manual */}
+        {manualEligible && !success && (
+          <div className="space-y-3 mb-3">
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-amber-900 font-bold text-sm uppercase tracking-wide mb-2">
+                ⚠ Devolução manual · sem cupom flowops
+              </div>
+              <div className="bg-white rounded-lg p-3 border border-amber-200">
+                <div className="font-bold text-slate-900 text-base leading-tight">
+                  {manualEligible.produto.descricao || 'Peça sem descrição'}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-1.5 text-xs">
+                  <span className="px-2 py-0.5 bg-violet-100 text-violet-800 rounded font-mono font-bold">
+                    {manualEligible.produto.codigo}
+                  </span>
+                  {manualEligible.produto.cor && (
+                    <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded font-bold">
+                      {manualEligible.produto.cor}
+                    </span>
+                  )}
+                  {manualEligible.produto.tamanho && (
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-900 rounded font-bold">
+                      TAM {manualEligible.produto.tamanho}
+                    </span>
+                  )}
+                  <span className="ml-auto text-base font-black text-emerald-700">
+                    R$ {fmt(manualEligible.produto.preco)}
+                  </span>
+                </div>
+              </div>
+
+              {manualEligible.vendas.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-[10px] font-bold uppercase text-amber-800 tracking-wide mb-1.5">
+                    📜 Histórico desta peça nesta loja (últimos {manualEligible.diasJanela} dias)
+                  </div>
+                  <div className="bg-white rounded-lg border border-amber-200 divide-y divide-amber-100 max-h-32 overflow-y-auto">
+                    {manualEligible.vendas.slice(0, 6).map((v, i) => (
+                      <div key={i} className="flex items-center justify-between px-2.5 py-1.5 text-xs">
+                        <span className="text-slate-700">
+                          {v.data} · cupom {v.numero}
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          R$ {fmt(v.valor)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3 text-xs text-amber-900 bg-amber-100 rounded px-2 py-1.5 leading-snug">
+                ℹ Devolução interna · estoque volta pro Giga · sem NFC-e ·
+                motivo: <b>Sem cupom (Giga)</b>
+              </div>
+            </div>
+
+            {/* Botões de modo */}
+            <div className="bg-white rounded-xl shadow-sm p-3">
+              <div className="text-xs font-bold uppercase text-slate-600 tracking-wide mb-2">
+                Como vai resolver?
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  onClick={() => confirmManual('troca')}
+                  disabled={manualBusy}
+                  className="px-3 py-3 bg-fuchsia-600 hover:bg-fuchsia-700 disabled:opacity-50 text-white rounded-lg font-bold flex flex-col items-center gap-0.5"
+                >
+                  <ArrowRightLeft className="w-5 h-5" />
+                  <span className="text-sm">Troca</span>
+                  <span className="text-[10px] opacity-90">leva outra peça agora</span>
+                </button>
+                <button
+                  onClick={() => confirmManual('credito')}
+                  disabled={manualBusy}
+                  className="px-3 py-3 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-lg font-bold flex flex-col items-center gap-0.5"
+                >
+                  <CreditCard className="w-5 h-5" />
+                  <span className="text-sm">Vale-troca</span>
+                  <span className="text-[10px] opacity-90">{validade} dias</span>
+                </button>
+                <button
+                  onClick={() => confirmManual('dinheiro')}
+                  disabled={manualBusy}
+                  className="px-3 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg font-bold flex flex-col items-center gap-0.5"
+                >
+                  <Banknote className="w-5 h-5" />
+                  <span className="text-sm">Dinheiro</span>
+                  <span className="text-[10px] opacity-90">sangria automática</span>
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  setManualEligible(null);
+                  setQuery('');
+                  inputRef.current?.focus();
+                }}
+                className="mt-3 text-xs text-slate-600 hover:underline"
+              >
+                ← Cancelar
+              </button>
+            </div>
           </div>
         )}
 

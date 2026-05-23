@@ -80,6 +80,71 @@ export class ReturnsController {
   }
 
   /**
+   * GET /pdv/devolucao/lookup-manual?sku=XXX
+   *
+   * DEVOLUÇÃO MANUAL (opção C — peça antiga sem cupom flowops).
+   * Verifica se peça foi vendida na loja atual nos últimos 60 dias (Giga).
+   * Anti-fraude: vendedora SÓ pode devolver peça que passou pelo caixa
+   * daquela loja na janela.
+   *
+   * Retorna:
+   *   { eligible: true, produto, vendas, salesCount } → pode devolver
+   *   { eligible: false, reason, message }            → bloqueia com motivo
+   */
+  @Get('lookup-manual')
+  async lookupManual(
+    @Req() req: any,
+    @Query('sku') sku: string,
+    @Query('dias') dias?: string,
+  ) {
+    this.requireRole(req);
+    const { storeCode } = this.resolveStore(req);
+    const diasJanela = dias ? Math.max(1, Math.min(3650, Number(dias) || 60)) : 60;
+    return this.svc.lookupManualReturnSku(sku, storeCode, diasJanela);
+  }
+
+  /**
+   * POST /pdv/devolucao/manual
+   * Body: {
+   *   sku: string,                            // SKU bipado
+   *   modo: 'dinheiro'|'troca'|'credito',
+   *   motivo?: string,
+   *   creditoValidadeDias?: number,
+   *   storeCode?, storeName?,                 // admin pode forçar
+   *   attachToSaleId?: string | null,
+   * }
+   */
+  @Post('manual')
+  async createManual(
+    @Req() req: any,
+    @Body()
+    body: {
+      sku: string;
+      modo: 'dinheiro' | 'troca' | 'credito';
+      motivo?: string;
+      creditoValidadeDias?: number;
+      storeCode?: string;
+      storeName?: string;
+      attachToSaleId?: string | null;
+    },
+  ) {
+    this.requireRole(req);
+    const { storeCode, storeName } = this.resolveStore(req, body);
+    const u = req?.user || {};
+    return this.svc.createManualReturn({
+      sku: body.sku,
+      storeCode,
+      storeName,
+      modo: body.modo,
+      motivo: body.motivo,
+      creditoValidadeDias: body.creditoValidadeDias,
+      attachToSaleId: body.attachToSaleId ?? null,
+      userId: u.id || u.sub,
+      userName: u.name || u.email,
+    });
+  }
+
+  /**
    * POST /pdv/devolucao
    * Body: {
    *   originalSaleId, modo: 'dinheiro'|'troca'|'credito',
