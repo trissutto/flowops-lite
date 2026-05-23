@@ -233,15 +233,18 @@ export class RoutingService {
           (s: number, it: any) => s + (Number(it.quantity) || 0),
           0,
         );
-        const valorFmt = order.totalAmount
+        // Defensivo: order pode ser null (strictNullChecks)
+        const valorFmt = order?.totalAmount
           ? `R$ ${Number(order.totalAmount).toFixed(2).replace('.', ',')}`
           : '';
-        const numeroPedido = order.wcOrderNumber || order.wcOrderId || po.id.slice(0, 8);
+        const numeroPedido =
+          order?.wcOrderNumber || order?.wcOrderId || po.id.slice(0, 8);
+        const cliente = order?.customerName || 'Cliente';
         this.push
           .sendToStore(po.storeId, {
             title: `🛒 Pedido novo #${numeroPedido}`,
             body:
-              `${order.customerName || 'Cliente'} · ${totalItens} ${totalItens === 1 ? 'peça' : 'peças'}` +
+              `${cliente} · ${totalItens} ${totalItens === 1 ? 'peça' : 'peças'}` +
               (valorFmt ? ` · ${valorFmt}` : ''),
             tag: `pickorder-${po.id}`,
             icon: '/icon-192.png',
