@@ -5,6 +5,7 @@ import TopBreadcrumb from '@/components/TopBreadcrumb';
 import NewOrderAlert from '@/components/NewOrderAlert';
 import PwaInstallBanner from '@/components/PwaInstallBanner';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
+import PushSubscriptionManager from '@/components/PushSubscriptionManager';
 
 // Cormorant Garamond — serif fina e sofisticada (300/400 disponíveis).
 // Trocamos Playfair porque ela pedia peso maior pra ficar legível; Cormorant
@@ -72,6 +73,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {children}
         <NewOrderAlert />
         <PwaInstallBanner />
+        <PushSubscriptionManager />
         <ServiceWorkerRegister />
       </body>
     </html>

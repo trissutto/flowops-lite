@@ -43,6 +43,7 @@ import { LiveModule } from './live/live.module';
 import { DesktopModule } from './desktop/desktop.module';
 import { PropertiesModule } from './properties/properties.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { PushModule } from './push/push.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
     DesktopModule,
     PropertiesModule,
     PurchaseOrdersModule,
+    PushModule,
   ],
 })
 export class AppModule {}

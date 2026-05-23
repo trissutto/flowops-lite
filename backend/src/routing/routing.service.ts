@@ -8,6 +8,7 @@ import { RoutingCedeStats, RoutingResult, StockEntry } from './types';
 import { buildWhatsappMessage, buildWhatsappUrl } from './whatsapp-message.util';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { ErpService } from '../erp/erp.service';
+import { PushService } from '../push/push.service';
 
 @Injectable()
 export class RoutingService {
@@ -20,6 +21,7 @@ export class RoutingService {
     private readonly gateway: RealtimeGateway,
     private readonly salesStats: SalesStatsService,
     private readonly erp: ErpService,
+    private readonly push: PushService,
   ) {}
 
   /**
@@ -222,6 +224,33 @@ export class RoutingService {
           pickupStoreCode: result.pickupStoreCode ?? null,
           pickupStoreName: result.pickupStoreName ?? null,
         });
+
+        // ── PUSH NOTIFICATION ──
+        // Dispara push pra TODAS vendedoras da loja (mesmo com app fechado).
+        // Substitui o WhatsApp banido — notificação nativa Android/iOS.
+        // Não bloqueia o fluxo se falhar.
+        const totalItens = items.reduce(
+          (s: number, it: any) => s + (Number(it.quantity) || 0),
+          0,
+        );
+        const valorFmt = order.totalAmount
+          ? `R$ ${Number(order.totalAmount).toFixed(2).replace('.', ',')}`
+          : '';
+        const numeroPedido = order.wcOrderNumber || order.wcOrderId || po.id.slice(0, 8);
+        this.push
+          .sendToStore(po.storeId, {
+            title: `🛒 Pedido novo #${numeroPedido}`,
+            body:
+              `${order.customerName || 'Cliente'} · ${totalItens} ${totalItens === 1 ? 'peça' : 'peças'}` +
+              (valorFmt ? ` · ${valorFmt}` : ''),
+            tag: `pickorder-${po.id}`,
+            icon: '/icon-192.png',
+            requireInteraction: true,
+            data: { url: '/minha-loja', pickOrderId: po.id, orderId },
+          })
+          .catch((e) =>
+            this.logger.warn(`Falha ao enviar push do pedido novo: ${e?.message ?? e}`),
+          );
       }
     } catch (err: any) {
       this.logger.warn(`Falha ao emitir socket de pick-order novo: ${err?.message ?? err}`);

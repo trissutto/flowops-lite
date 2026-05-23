@@ -5,9 +5,10 @@ import { SalesStatsService } from './sales-stats.service';
 import { StockModule } from '../stock/stock.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { ErpModule } from '../erp/erp.module';
+import { PushModule } from '../push/push.module';
 
 @Module({
-  imports: [StockModule, WebsocketModule, ErpModule],
+  imports: [StockModule, WebsocketModule, ErpModule, PushModule],
   providers: [RoutingEngine, RoutingService, SalesStatsService],
   exports: [RoutingEngine, RoutingService, SalesStatsService],
 })

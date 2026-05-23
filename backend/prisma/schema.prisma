@@ -33,9 +33,37 @@ model User {
   active       Boolean  @default(true)
   createdAt    DateTime @default(now()) @map("created_at")
 
-  history OrderHistory[]
+  history       OrderHistory[]
+  pushSubscriptions PushSubscription[]
 
   @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Push Notifications (Web Push API).
+// Cada celular/browser/PWA que o usuário usa gera UMA subscription única.
+// Vendedora pode ter várias (celular + PC + tablet) — todas recebem o push.
+// ═══════════════════════════════════════════════════════════════════════════
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // endpoint é o URL único do servidor de push (Google FCM/Mozilla/Apple).
+  // É a "identidade" da subscription — chave única para evitar duplicatas.
+  endpoint  String   @unique
+  // p256dh + auth são as chaves de criptografia da subscription.
+  // Web Push exige cripto end-to-end: backend criptografa payload com p256dh,
+  // browser do user descriptografa com chave privada local.
+  p256dh    String   // chave pública ECDH base64
+  auth      String   // segredo de autenticação base64
+  // User-Agent do device pra identificar nas configs (ex: "Chrome Android")
+  userAgent String?  @map("user_agent")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  lastUsed  DateTime @default(now()) @map("last_used")
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }
 
 model Store {
