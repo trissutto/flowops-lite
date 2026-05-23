@@ -1085,11 +1085,13 @@ export class ReturnsService {
     // 5) Modo dinheiro → sangria automática
     if (modo === 'dinheiro' && cashSessionId) {
       try {
-        await this.cash.addEntry({
-          sessionId: cashSessionId,
-          type: 'sangria',
+        await this.cash.addMovement({
+          storeCode,
+          tipo: 'sangria',
           valor: valorTotal,
-          description: `Devolução manual ${ret.id.slice(0, 8)} (${produto.codigo} sem cupom)`,
+          motivo: `Devolução manual ${ret.id.slice(0, 8)} (${produto.codigo} sem cupom)`,
+          userId,
+          userName,
         });
       } catch (e: any) {
         this.logger.warn(`Sangria automática falhou: ${e?.message || e}`);
