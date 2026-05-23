@@ -28,6 +28,7 @@ import { classifyShipping } from '@/lib/shipping-method';
 import Logo from '@/components/Logo';
 import TrackingTimeline from '@/components/TrackingTimeline';
 import ProductThumb from '@/components/ProductThumb';
+import PushActivateButton from '@/components/PushActivateButton';
 import BipModal from './BipModal';
 import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
@@ -627,6 +628,9 @@ export default function MinhaLojaPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Botão de Push: mostra status ('Notificações ativas' verde / 'Ativar
+                notificações' violeta). Some quando browser não suporta. */}
+            <PushActivateButton variant="sm" />
             <span
               className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-full font-medium"
               style={
