@@ -122,7 +122,9 @@ export default function PushSubscriptionManager() {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true, // exigido pelo Chrome — push tem que mostrar UI
-        applicationServerKey: urlBase64ToUint8Array(r.publicKey),
+        // Cast pra BufferSource: TS 5.6+ ficou estrito sobre Uint8Array<ArrayBufferLike>
+        // vs ArrayBuffer. Em runtime funciona normal — só TS reclama. cast resolve.
+        applicationServerKey: urlBase64ToUint8Array(r.publicKey) as BufferSource,
       });
 
       // Manda pro backend gravar
