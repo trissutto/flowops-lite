@@ -25,7 +25,7 @@ type Photo = {
 };
 
 type Props = {
-  ref?: string;
+  refSku?: string;          // REF do produto (renomeado de "ref" — palavra reservada do React)
   cor?: string;
   size?: number;            // px
   editable?: boolean;
@@ -46,14 +46,14 @@ function notifySubscribers(key: string, photo: Photo | null) {
 }
 
 export default function ProductPhoto({
-  ref: refProp,
+  refSku,
   cor,
   size = 64,
   editable = false,
   className = '',
   onChange,
 }: Props) {
-  const refUp = (refProp || '').trim().toUpperCase();
+  const refUp = (refSku || '').trim().toUpperCase();
   const corUp = (cor || '').trim().toUpperCase() || undefined;
   const key = cacheKey(refUp, corUp);
 

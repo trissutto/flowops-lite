@@ -243,7 +243,7 @@ export default function ReposicaoPage() {
                         }`}
                       >
                         <div className="mb-1 flex justify-center">
-                          <ProductPhoto ref={p.ref} cor={p.cor} size={64} editable />
+                          <ProductPhoto refSku={p.ref} cor={p.cor} size={64} editable />
                         </div>
                         <div className="flex items-center justify-between gap-1">
                           <span className="text-xs font-bold text-slate-700">{p.cor}</span>
