@@ -630,7 +630,9 @@ export class PurchaseOrdersService {
   }
 
   /**
-   * Busca produtos no Wincred por REF ou DESCRICAO (LIKE). Limit 100.
+   * Busca produtos no Wincred por REF, DESCRICAOCOMPLETA ou DESCRICAOPDV (LIKE). Limit 100.
+   * Colunas reais da tabela `produtos` no Wincred:
+   *   REF, DESCRICAOCOMPLETA, DESCRICAOPDV, VENDAUN, COR, TAMANHO, CODIGO, MARCA
    */
   async reposicaoBuscar(q: string) {
     const termo = (q || '').trim();
@@ -642,62 +644,43 @@ export class PurchaseOrdersService {
       const normalizado = termoUp.replace(/[\s\-]/g, '');
       const likeOrig = `%${termoUp}%`;
       const likeNorm = `%${normalizado}%`;
-      // Divide por chars e tenta '%V%L%M%2%2%2%' tolerante a qualquer separador
+      // Tolerante a qualquer separador: '%V%L%M%2%2%2%'
       const tolerante = '%' + normalizado.split('').join('%') + '%';
 
-      // Tenta com REFERENCIA primeiro (Lurd's). Se nao achar, fallback REF.
-      let rows: any[] = [];
-      try {
-        const [r1] = await pool.query(
-          `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
-                  TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
-             FROM produtos
-            WHERE REFERENCIA LIKE ?
-               OR DESCRICAO LIKE ?
-               OR CODIGO = ?
-               OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
-               OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
-               OR REFERENCIA LIKE ?
-            ORDER BY REFERENCIA, COR, TAMANHO
-            LIMIT 100`,
-          [likeOrig, likeOrig, termo, likeNorm, likeNorm, tolerante],
-        );
-        rows = r1 as any[];
-        this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (REFERENCIA)`);
-      } catch (eRef: any) {
-        // Coluna REFERENCIA pode nao existir — tenta REF
-        this.logger.warn(`reposicaoBuscar REFERENCIA falhou: ${eRef?.message}, tentando REF`);
-        try {
-          const [r2] = await pool.query(
-            `SELECT CODIGO AS codigo, REF AS referencia, COR AS cor,
-                    TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao
-               FROM produtos
-              WHERE REF LIKE ?
-                 OR DESCRICAO LIKE ?
-                 OR CODIGO = ?
-                 OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
-                 OR REPLACE(REPLACE(DESCRICAO, '-', ''), ' ', '') LIKE ?
-              ORDER BY REF, COR, TAMANHO
-              LIMIT 100`,
-            [likeOrig, likeOrig, termo, likeNorm, likeNorm],
-          );
-          rows = r2 as any[];
-          this.logger.log(`reposicaoBuscar "${termo}" → ${rows.length} resultados (REF)`);
-        } catch (eRef2: any) {
-          this.logger.error(`reposicaoBuscar REF tambem falhou: ${eRef2?.message}`);
-          return [];
-        }
-      }
-      return (rows as any[]).map((r) => ({
+      const [rows] = await pool.query(
+        `SELECT CODIGO AS codigo,
+                REF AS referencia,
+                COR AS cor,
+                TAMANHO AS tamanho,
+                VENDAUN AS preco,
+                DESCRICAOCOMPLETA AS descricao,
+                MARCA AS marca
+           FROM produtos
+          WHERE REF LIKE ?
+             OR DESCRICAOCOMPLETA LIKE ?
+             OR DESCRICAOPDV LIKE ?
+             OR CODIGO = ?
+             OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
+             OR REPLACE(REPLACE(DESCRICAOCOMPLETA, '-', ''), ' ', '') LIKE ?
+             OR REF LIKE ?
+          ORDER BY REF, COR, TAMANHO
+          LIMIT 100`,
+        [likeOrig, likeOrig, likeOrig, termo, likeNorm, likeNorm, tolerante],
+      );
+      const list = rows as any[];
+      this.logger.log(`reposicaoBuscar "${termo}" → ${list.length} resultados`);
+
+      return list.map((r) => ({
         codigo: String(r.codigo || '').trim(),
         ref: String(r.referencia || '').trim(),
         cor: String(r.cor || '').trim(),
         tamanho: String(r.tamanho || '').trim(),
         preco: Number(r.preco || 0),
         descricao: String(r.descricao || '').trim(),
+        marca: r.marca ? String(r.marca).trim() : null,
       }));
     } catch (e: any) {
-      this.logger.warn(`reposicaoBuscar falhou: ${e?.message}`);
+      this.logger.error(`reposicaoBuscar falhou: ${e?.message}`);
       return [];
     }
   }
@@ -783,13 +766,15 @@ export class PurchaseOrdersService {
       const norm = termoUp.replace(/[\s\-]/g, '');
       try {
         const [rows] = await pool.query(
-          `SELECT * FROM produtos
-            WHERE REFERENCIA LIKE ?
-               OR REPLACE(REPLACE(REFERENCIA, '-', ''), ' ', '') LIKE ?
-               OR DESCRICAO LIKE ?
+          `SELECT CODIGO, REF, COR, TAMANHO, VENDAUN, DESCRICAOCOMPLETA, DESCRICAOPDV, MARCA
+             FROM produtos
+            WHERE REF LIKE ?
+               OR REPLACE(REPLACE(REF, '-', ''), ' ', '') LIKE ?
+               OR DESCRICAOCOMPLETA LIKE ?
+               OR DESCRICAOPDV LIKE ?
                OR CODIGO LIKE ?
             LIMIT 5`,
-          [`%${termoUp}%`, `%${norm}%`, `%${termoUp}%`, `%${termoUp}%`],
+          [`%${termoUp}%`, `%${norm}%`, `%${termoUp}%`, `%${termoUp}%`, `%${termoUp}%`],
         );
         out.amostraVLM = rows;
       } catch (e: any) {
