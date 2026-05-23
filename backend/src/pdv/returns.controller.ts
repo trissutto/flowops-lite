@@ -48,15 +48,35 @@ export class ReturnsController {
   }
 
   /**
-   * GET /pdv/devolucao/lookup-by-sku?sku=XXX
-   * Lista as vendas finalizadas que contêm esse SKU, ordenadas da mais
-   * recente pra mais antiga. Permite vendedora bipar a peça que voltou
-   * (em vez de pedir o cupom da venda original).
+   * GET /pdv/devolucao/lookup-by-sku?sku=XXX&crossStore=1
+   *
+   * Lista vendas finalizadas que contêm esse SKU, ordenadas da mais recente
+   * pra mais antiga. Permite vendedora bipar a peça que voltou (em vez de
+   * pedir o cupom da venda original).
+   *
+   * Modo A2 — FILTRO POR LOJA + OVERRIDE ADMIN:
+   *   - Vendedora (role=store): SÓ vê vendas da loja dela (storeCode do JWT)
+   *   - Admin/operator: por padrão também filtra (operando uma loja física).
+   *     Mas se mandar ?crossStore=1, vê vendas de TODAS as lojas.
+   *
+   * Regra de negócio: devolução deve ser feita na loja que emitiu a NF
+   * original (mesmo CNPJ). Override só pra casos especiais (cliente em
+   * trânsito, suporte ao consumidor, etc).
    */
   @Get('lookup-by-sku')
-  async lookupBySku(@Req() req: any, @Query('sku') sku: string) {
+  async lookupBySku(
+    @Req() req: any,
+    @Query('sku') sku: string,
+    @Query('crossStore') crossStore?: string,
+  ) {
     this.requireRole(req);
-    return this.svc.lookupSalesBySku(sku);
+    const role = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode || null;
+    // crossStore=1 só funciona se for admin/operator. Vendedora comum sempre filtra.
+    const isAdmin = role === 'admin' || role === 'operator';
+    const wantsCross = crossStore === '1' || crossStore === 'true';
+    const storeCodeFilter = isAdmin && wantsCross ? null : userStoreCode;
+    return this.svc.lookupSalesBySku(sku, storeCodeFilter);
   }
 
   /**

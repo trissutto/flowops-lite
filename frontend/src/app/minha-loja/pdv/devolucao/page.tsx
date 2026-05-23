@@ -60,6 +60,11 @@ export default function DevolucaoPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Record<string, number>>({});
+  // Role do user logado — decide se aparece o toggle "outras lojas"
+  // (modo A2: vendedora SÓ vê vendas da loja dela; admin pode quebrar regra)
+  const [userRole, setUserRole] = useState<string>('store');
+  // Toggle de override admin — só aparece se userRole === 'admin'/'operator'
+  const [crossStore, setCrossStore] = useState(false);
   // Modo default = TROCA (caso mais comum: cliente leva outra peça no
   // mesmo dia). Vendedora pode trocar pra Dinheiro/Crédito se precisar.
   const [modo, setModo] = useState<'dinheiro' | 'troca' | 'credito'>('troca');
@@ -75,6 +80,10 @@ export default function DevolucaoPage() {
 
   useEffect(() => {
     inputRef.current?.focus();
+    // Carrega role do user logado pra decidir se mostra toggle cross-loja
+    api<{ role?: string }>('/auth/me')
+      .then((me) => setUserRole(me?.role || 'store'))
+      .catch(() => {});
     // Lê info do attach (venda em andamento) só pra display.
     try {
       const raw = localStorage.getItem('lurds_pdv_attach_to_sale_id');
@@ -119,12 +128,16 @@ export default function DevolucaoPage() {
       const looksLikeSaleNumber = isUuid || /^\d{9,}$/.test(q); // NFC-e tem 9+ digitos
 
       // 1a tentativa: busca por SKU/REF (lista vendas com essa peca)
+      // crossStore só é respeitado pelo backend se o user for admin/operator.
+      // Pra vendedora comum, é ignorado (segurança no servidor).
       let foundBySku = false;
       try {
+        const qs = new URLSearchParams({ sku: q });
+        if (crossStore) qs.set('crossStore', '1');
         const r = await api<{
           sku: string;
           sales: Array<any>;
-        }>(`/pdv/devolucao/lookup-by-sku?sku=${encodeURIComponent(q)}`);
+        }>(`/pdv/devolucao/lookup-by-sku?${qs.toString()}`);
         if (r.sales?.length) {
           setSalesBySku(r.sales);
           foundBySku = true;

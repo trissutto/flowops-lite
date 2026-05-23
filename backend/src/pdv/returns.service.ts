@@ -128,7 +128,17 @@ export class ReturnsService {
    * devolvido em devoluções anteriores (pra desabilitar essa venda
    * na UI se já foi devolvida).
    */
-  async lookupSalesBySku(sku: string) {
+  /**
+   * Busca vendas finalizadas com determinado SKU.
+   *
+   * @param sku       SKU/REF bipado pela vendedora
+   * @param storeCode (opcional) FILTRO POR LOJA — modo A2 (estrito por loja
+   *                  com override admin). Vendedora comum só vê vendas
+   *                  da loja dela. Admin que precisa ver vendas de outra
+   *                  loja passa storeCode=null (controller só permite
+   *                  isso se role=admin/operator E ?crossStore=1).
+   */
+  async lookupSalesBySku(sku: string, storeCode?: string | null) {
     const cleanSku = String(sku || '').trim();
     if (!cleanSku) throw new BadRequestException('Informe o SKU/REF da peça');
 
@@ -136,6 +146,11 @@ export class ReturnsService {
     // Janela 90 dias — cobre devolução de venda do mês passado +.
     const dataLimite = new Date();
     dataLimite.setDate(dataLimite.getDate() - 90);
+
+    // ── Filtro por loja (modo A2) ──
+    // Se storeCode vier setado, restringe ao PDV daquela loja.
+    // Se vier null/undefined, vê vendas de TODAS as lojas (override admin).
+    const storeFilter: any = storeCode ? { storeCode } : {};
 
     // VARIANTES: gera todas variacoes do SKU com/sem zeros a esquerda
     // (ex: '5210367', '0005210367', '00000005210367', ...). Sem isso, peca
@@ -166,6 +181,7 @@ export class ReturnsService {
         status: 'finalized',
         finalizedAt: { gte: dataLimite },
         items: { some: itemFilter },
+        ...storeFilter, // modo A2 — filtra por loja se vier definido
       },
       orderBy: { finalizedAt: 'desc' },
       take: 20,
@@ -184,6 +200,7 @@ export class ReturnsService {
         where: {
           createdAt: { gte: dataRecente },
           items: { some: itemFilter },
+          ...storeFilter, // mesmo filtro no fallback
         },
         orderBy: { createdAt: 'desc' },
         take: 5,
