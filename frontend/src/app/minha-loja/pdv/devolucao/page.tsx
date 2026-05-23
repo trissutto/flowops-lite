@@ -364,6 +364,27 @@ export default function DevolucaoPage() {
                 <Search size={16} /> Buscar
               </button>
             </div>
+            {/*
+              Toggle "Outras lojas" — SÓ pra admin/operator.
+              Vendedora comum (role=store) nunca vê esse checkbox; backend
+              ignora `crossStore` no JWT dela mesmo se enviado.
+            */}
+            {(userRole === 'admin' || userRole === 'operator') && (
+              <label className="mt-2 flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={crossStore}
+                  onChange={(e) => setCrossStore(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <span className="font-medium">
+                  🔓 Buscar vendas de <b>todas as lojas</b>
+                </span>
+                <span className="text-slate-500">
+                  (modo admin — devolução fora da loja vendedora gera NF cross-CNPJ; use com cuidado)
+                </span>
+              </label>
+            )}
             {err && <div className="mt-1.5 text-xs text-red-600">{err}</div>}
           </div>
         )}
