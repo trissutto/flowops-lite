@@ -124,6 +124,8 @@ export default function MinhaLojaPage() {
   const [showShippedModal, setShowShippedModal] = useState<PickOrderRow | null>(null);
   const [showBipModal, setShowBipModal] = useState<PickOrderRow | null>(null);
   const [showIssueModal, setShowIssueModal] = useState<PickOrderRow | null>(null);
+  // Filtro de aba: null = todos | 'new' | 'separating' | 'ready' (separados+ready)
+  const [filterTab, setFilterTab] = useState<'new' | 'separating' | 'ready' | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: string; msg: string }>>([]);
   // Badge de realinhamento: qtd de ordens pendentes (filial origem). Atualiza
   // via load inicial + socket 'realignment:new' e 'realignment:sent'.
@@ -579,6 +581,28 @@ export default function MinhaLojaPage() {
     return c;
   }, [rows]);
 
+  // Lista filtrada pela aba ativa (clique nos cards do topo).
+  // null = mostra todos os ativos (default).
+  const visibleRows = useMemo(() => {
+    if (!filterTab) return activeRows;
+    if (filterTab === 'new') return activeRows.filter((r) => r.status === 'new');
+    if (filterTab === 'separating') return activeRows.filter((r) => r.status === 'separating');
+    if (filterTab === 'ready') return activeRows.filter((r) => r.status === 'separated' || r.status === 'ready');
+    return activeRows;
+  }, [activeRows, filterTab]);
+
+  // Imprime todos os pedidos visíveis (batch). Usa delay de 600ms entre janelas
+  // pra evitar pop-up blocker e dar tempo do navegador renderizar.
+  const printAllVisible = async () => {
+    const targets = visibleRows.filter((r) => r.status === 'new' || r.status === 'separating');
+    if (targets.length === 0) return;
+    if (targets.length > 1 && !confirm(`Imprimir ${targets.length} pedidos de uma vez?`)) return;
+    for (let i = 0; i < targets.length; i++) {
+      openPrintWindow(targets[i].id);
+      if (i < targets.length - 1) await new Promise((res) => setTimeout(res, 600));
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -673,12 +697,33 @@ export default function MinhaLojaPage() {
             </button>
           </div>
         </div>
-        {/* Contadores pastel — 3 mini-pílulas */}
+        {/* Contadores pastel — 3 mini-pílulas (clicáveis pra filtrar a lista) */}
         <div className="px-4 pb-3 max-w-3xl mx-auto grid grid-cols-3 gap-2">
-          <Counter label="Novos"            count={countByStatus.new}                                  tone="rose"  />
-          <Counter label="Separando"        count={countByStatus.separating}                           tone="sky"   />
-          <Counter label="Pronto p/ postar" count={countByStatus.separated + countByStatus.ready}      tone="mint"  />
+          <Counter label="Novos"            count={countByStatus.new}                              tone="rose"
+            active={filterTab === 'new'}
+            onClick={() => setFilterTab(filterTab === 'new' ? null : 'new')} />
+          <Counter label="Separando"        count={countByStatus.separating}                       tone="sky"
+            active={filterTab === 'separating'}
+            onClick={() => setFilterTab(filterTab === 'separating' ? null : 'separating')} />
+          <Counter label="Pronto p/ postar" count={countByStatus.separated + countByStatus.ready}  tone="mint"
+            active={filterTab === 'ready'}
+            onClick={() => setFilterTab(filterTab === 'ready' ? null : 'ready')} />
         </div>
+        {filterTab && (
+          <div className="px-4 pb-2 max-w-3xl mx-auto flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500">
+              Filtrando: <strong>{filterTab === 'new' ? 'Novos' : filterTab === 'separating' ? 'Separando' : 'Pronto p/ postar'}</strong>
+              {' · '}{visibleRows.length} {visibleRows.length === 1 ? 'pedido' : 'pedidos'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setFilterTab(null)}
+              className="text-[11px] text-slate-600 underline hover:text-slate-900"
+            >
+              ver todos
+            </button>
+          </div>
+        )}
       </header>
 
       {/* Quick-action grid — acesso rápido às funções da filial */}
@@ -688,10 +733,21 @@ export default function MinhaLojaPage() {
 
       {/* Lista */}
       <main className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
-        {activeRows.length === 0 ? (
+        {/* Botão "Imprimir TODOS" — aparece quando filtrando Novos ou Separando */}
+        {(filterTab === 'new' || filterTab === 'separating') && visibleRows.length > 0 && (
+          <button
+            type="button"
+            onClick={printAllVisible}
+            className="w-full px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
+          >
+            <Printer className="w-5 h-5" />
+            Imprimir TODOS ({visibleRows.length} {visibleRows.length === 1 ? 'pedido' : 'pedidos'})
+          </button>
+        )}
+        {visibleRows.length === 0 ? (
           <EmptyState />
         ) : (
-          activeRows.map((row) => (
+          visibleRows.map((row) => (
             <PickOrderCard
               key={row.id}
               row={row}
@@ -868,24 +924,36 @@ function Counter({
   label,
   count,
   tone,
+  active,
+  onClick,
 }: {
   label: string;
   count: number;
   tone: 'rose' | 'sky' | 'mint' | 'peach';
+  active?: boolean;
+  onClick?: () => void;
 }) {
   // Boutique sofisticado — alinhado com TONE_MAP do PastelShell
-  const TONES: Record<string, { ring: string; bg: string; text: string }> = {
-    rose:  { ring: '#c08081', bg: '#f5e6e3', text: '#6e3a40' },
-    sky:   { ring: '#6b8a92', bg: '#dde7ea', text: '#2e4750' },
-    mint:  { ring: '#9caf88', bg: '#e3ebd9', text: '#475636' },
-    peach: { ring: '#c87f5e', bg: '#f3e2d6', text: '#6f3b25' },
+  const TONES: Record<string, { ring: string; bg: string; text: string; bgActive: string }> = {
+    rose:  { ring: '#c08081', bg: '#f5e6e3', text: '#6e3a40', bgActive: '#e8c5c0' },
+    sky:   { ring: '#6b8a92', bg: '#dde7ea', text: '#2e4750', bgActive: '#b8ccd2' },
+    mint:  { ring: '#9caf88', bg: '#e3ebd9', text: '#475636', bgActive: '#c4d4a8' },
+    peach: { ring: '#c87f5e', bg: '#f3e2d6', text: '#6f3b25', bgActive: '#e3c0a3' },
   };
   const t = TONES[tone];
   const hasCount = count > 0;
+  const clickable = !!onClick;
   return (
-    <div
-      className={`flex-1 rounded-2xl px-3 py-2 transition-all ${hasCount ? '' : 'opacity-60'}`}
-      style={{ background: t.bg, border: `1.5px solid ${t.ring}` }}
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!clickable}
+      className={`flex-1 rounded-2xl px-3 py-2 transition-all text-left ${hasCount ? '' : 'opacity-60'} ${clickable ? 'cursor-pointer hover:shadow-md active:scale-95' : 'cursor-default'} ${active ? 'ring-2 ring-offset-1 shadow-md' : ''}`}
+      style={{
+        background: active ? t.bgActive : t.bg,
+        border: `${active ? '2.5' : '1.5'}px solid ${t.ring}`,
+        outlineColor: t.ring,
+      }}
     >
       <div className="font-display text-2xl tabular-nums leading-none" style={{ color: t.text }}>
         {count}
@@ -893,7 +961,7 @@ function Counter({
       <div className="text-[10px] uppercase tracking-wider mt-1 font-semibold" style={{ color: t.text }}>
         {label}
       </div>
-    </div>
+    </button>
   );
 }
 
