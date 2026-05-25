@@ -62,6 +62,31 @@ export class PurchaseOrdersController {
     return this.erp.listarSubgrupos(Number(grupo));
   }
 
+  // ── Criacao inline de grupo/subgrupo (durante pedido de compra) ──
+  @Post('lookups/grupo')
+  async criarGrupo(@Req() req: any, @Body() body: { nome: string }) {
+    const role = req?.user?.role;
+    if (!['admin', 'supervisor', 'operator'].includes(role)) {
+      throw new ForbiddenException('Sem permissao');
+    }
+    const nome = String(body?.nome || '').trim();
+    if (!nome) throw new BadRequestException('Nome obrigatorio');
+    return (this.erp as any).inserirGrupo(nome);
+  }
+
+  @Post('lookups/subgrupo')
+  async criarSubgrupo(@Req() req: any, @Body() body: { grupo: number; nome: string }) {
+    const role = req?.user?.role;
+    if (!['admin', 'supervisor', 'operator'].includes(role)) {
+      throw new ForbiddenException('Sem permissao');
+    }
+    const grupo = Number(body?.grupo);
+    const nome = String(body?.nome || '').trim();
+    if (!grupo) throw new BadRequestException('Grupo obrigatorio');
+    if (!nome) throw new BadRequestException('Nome obrigatorio');
+    return (this.erp as any).inserirSubgrupo(grupo, nome);
+  }
+
   // ── Categorias (mapeamento descrição → grupo) ──
   @Get('categorias')
   async listCategorias() {

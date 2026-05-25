@@ -94,6 +94,17 @@ export default function NovoPedidoPage() {
     api<Categoria[]>('/purchase-orders/categorias').then(setCategorias).catch(() => {});
   }, []);
 
+  // Refetch da lista de grupos (chamado após criar grupo novo inline)
+  const refetchGrupos = async () => {
+    try {
+      const r = await api<Grupo[]>('/purchase-orders/lookups/grupos');
+      setGrupos(r);
+      return r;
+    } catch {
+      return [];
+    }
+  };
+
   const fornecedoresFiltered = useMemo(() => {
     // Filtra fornecedores que tem NOME real (ignora os que so tem CNPJ)
     const comNome = fornecedores.filter((f) => {
@@ -561,6 +572,7 @@ export default function NovoPedidoPage() {
               grupos={grupos}
               categorias={categorias}
               markup={markup}
+              onRefreshGrupos={refetchGrupos}
               onUpdate={(patch) => updateItem(item.tempId, patch)}
               onRemove={() => removerItem(item.tempId)}
               onDuplicate={() => duplicarItem(item.tempId)}
@@ -592,7 +604,7 @@ function ItemEditor({
   item, index, grupos, categorias, markup,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
-  onAdicionarNova,
+  onAdicionarNova, onRefreshGrupos,
 }: {
   item: ItemForm;
   index: number;
@@ -609,12 +621,53 @@ function ItemEditor({
   onRemoveTam: (t: string) => void;
   onGrade: (c: string, t: string, v: string) => void;
   onAdicionarNova?: () => void;
+  onRefreshGrupos?: () => Promise<Grupo[]>;
 }) {
   // Flag pra saber se o preço foi mexido manualmente (não auto-sobrescrever)
   const [precoEditadoManual, setPrecoEditadoManual] = useState(false);
   const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
   const [novaCor, setNovaCor] = useState('');
   const [novoTam, setNovoTam] = useState('');
+  const [criandoGrupo, setCriandoGrupo] = useState(false);
+  const [criandoSubgrupo, setCriandoSubgrupo] = useState(false);
+
+  const handleCriarGrupo = async () => {
+    const nome = prompt('Nome do novo grupo:')?.trim();
+    if (!nome) return;
+    setCriandoGrupo(true);
+    try {
+      const novo = await api<Grupo>('/purchase-orders/lookups/grupo', {
+        method: 'POST',
+        body: JSON.stringify({ nome }),
+      });
+      if (onRefreshGrupos) await onRefreshGrupos();
+      onUpdate({ grupoCode: novo.codigo, grupoNome: novo.nome, subgrupoCode: null, subgrupoNome: '' });
+    } catch (e: any) {
+      alert('Erro ao criar grupo: ' + (e?.message || ''));
+    } finally {
+      setCriandoGrupo(false);
+    }
+  };
+
+  const handleCriarSubgrupo = async () => {
+    if (!item.grupoCode) { alert('Escolha um grupo antes'); return; }
+    const nome = prompt('Nome do novo subgrupo:')?.trim();
+    if (!nome) return;
+    setCriandoSubgrupo(true);
+    try {
+      const novo = await api<Grupo>('/purchase-orders/lookups/subgrupo', {
+        method: 'POST',
+        body: JSON.stringify({ grupo: item.grupoCode, nome }),
+      });
+      const lista = await api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${item.grupoCode}`);
+      setSubgrupos(lista);
+      onUpdate({ subgrupoCode: novo.codigo, subgrupoNome: novo.nome });
+    } catch (e: any) {
+      alert('Erro ao criar subgrupo: ' + (e?.message || ''));
+    } finally {
+      setCriandoSubgrupo(false);
+    }
+  };
 
   // Carrega subgrupos do grupo selecionado
   useEffect(() => {
@@ -701,7 +754,14 @@ function ItemEditor({
       {/* Linha 2: Grupo + Subgrupo + NCM + CFOP */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 bg-slate-50 p-2 rounded-lg">
         <div className="sm:col-span-2">
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Grupo *</label>
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Grupo *</label>
+            <button type="button" onClick={handleCriarGrupo} disabled={criandoGrupo}
+              title="Criar novo grupo no Wincred"
+              className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+              {criandoGrupo ? '...' : '+ novo'}
+            </button>
+          </div>
           <select
             value={item.grupoCode || ''}
             onChange={(e) => {
@@ -718,7 +778,14 @@ function ItemEditor({
           </select>
         </div>
         <div className="sm:col-span-2">
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Subgrupo *</label>
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Subgrupo *</label>
+            <button type="button" onClick={handleCriarSubgrupo} disabled={criandoSubgrupo || !item.grupoCode}
+              title="Criar novo subgrupo no grupo atual"
+              className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+              {criandoSubgrupo ? '...' : '+ novo'}
+            </button>
+          </div>
           <select
             value={item.subgrupoCode || ''}
             onChange={(e) => {
