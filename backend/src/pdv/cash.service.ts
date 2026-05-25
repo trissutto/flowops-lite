@@ -1,5 +1,6 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * Caixa diário do PDV — abertura, sangria/suprimento, fechamento.
@@ -14,7 +15,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class CashService {
   private readonly logger = new Logger(CashService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+  ) {}
 
   // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1543,5 +1547,98 @@ export class CashService {
       orderBy: { createdAt: 'asc' },
     });
     return { ...totals, movements };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  Edição de bandeira de pagamento (admin only)
+  // ─────────────────────────────────────────────────────────────────────
+
+  private readonly BANDEIRAS_VALIDAS = new Set([
+    'MASTERCARD', 'VISANET', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD',
+    'VISA_ELECTRON', 'REDE_SHOP',
+    'CREDITO_GENERICO', 'DEBITO_GENERICO', 'OUTROS',
+  ]);
+
+  /**
+   * Admin troca bandeira de um pagamento (ex: operadora errou MASTERCARD em vez de VISANET).
+   * Atualiza Postgres + audit + Wincred (fechamento) — Wincred é best effort.
+   */
+  async updatePaymentBandeira(
+    paymentId: string,
+    novaBandeira: string,
+    reason: string | undefined,
+    user: { id?: string; sub?: string; name?: string; role?: string } | undefined,
+  ) {
+    if (!paymentId) throw new BadRequestException('paymentId obrigatório');
+    if (user?.role !== 'admin') throw new ForbiddenException('Apenas admin pode editar bandeira');
+
+    const nova = String(novaBandeira || '').trim().toUpperCase();
+    if (!this.BANDEIRAS_VALIDAS.has(nova)) {
+      throw new BadRequestException(`Bandeira inválida: "${nova}"`);
+    }
+
+    const payment = await (this.prisma as any).pdvSalePayment.findUnique({
+      where: { id: paymentId },
+      include: { sale: { select: { id: true, storeCode: true, total: true } } },
+    });
+    if (!payment) throw new NotFoundException('Pagamento não encontrado');
+
+    let details: any = {};
+    try { details = payment.details ? JSON.parse(payment.details) : {}; } catch { details = {}; }
+    const bandeiraAntiga = String(details?.bandeira || '').trim().toUpperCase();
+    if (bandeiraAntiga === nova) {
+      return { ok: true, alreadyApplied: true, message: 'Bandeira já está correta' };
+    }
+    const newDetails = { ...details, bandeira: nova };
+    const newDetailsJson = JSON.stringify(newDetails);
+
+    try {
+      await (this.prisma as any).pdvPaymentAudit.create({
+        data: {
+          paymentId: payment.id,
+          saleId: payment.saleId,
+          oldMethod: payment.method,
+          oldValor: payment.valor,
+          oldDetails: payment.details || null,
+          newMethod: payment.method,
+          newValor: payment.valor,
+          newDetails: newDetailsJson,
+          changedByUserId: user?.id || user?.sub || null,
+          changedByUserName: user?.name || null,
+          changedByRole: user?.role || null,
+          reason: reason || `Troca de bandeira: ${bandeiraAntiga || '(vazio)'} → ${nova}`,
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`audit falhou (não bloqueia): ${e?.message}`);
+    }
+
+    await (this.prisma as any).pdvSalePayment.update({
+      where: { id: paymentId },
+      data: { details: newDetailsJson },
+    });
+
+    let wincredResult: any = { ok: false, skipped: true };
+    try {
+      wincredResult = await this.erp.atualizarBandeiraFechamento({
+        saleId: payment.saleId,
+        storeCode: payment.sale?.storeCode || '',
+        oldBandeira: bandeiraAntiga,
+        newBandeira: nova,
+        valor: Number(payment.valor) || 0,
+      });
+    } catch (e: any) {
+      this.logger.error(`Wincred update falhou: ${e?.message}`);
+      wincredResult = { ok: false, error: e?.message };
+    }
+
+    return {
+      ok: true,
+      paymentId,
+      saleId: payment.saleId,
+      oldBandeira: bandeiraAntiga,
+      newBandeira: nova,
+      wincred: wincredResult,
+    };
   }
 }

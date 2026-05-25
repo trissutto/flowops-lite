@@ -6596,6 +6596,86 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Admin corrige bandeira de um pagamento já gravado no Wincred (operadora errou).
+   * Usa OBS_PEDIDO da tabela `caixa` (formato 'flowops-XXXXXXXX') pra achar o NUMERO
+   * da venda, e então faz UPDATE em `fechamento`:
+   *   - SET FORMA = newBandeira
+   *   - SET coluna_antiga = 0/NULL
+   *   - SET coluna_nova = valor
+   */
+  async atualizarBandeiraFechamento(input: {
+    saleId: string;
+    storeCode: string;
+    oldBandeira: string;
+    newBandeira: string;
+    valor: number;
+  }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; numero?: number; error?: string; sqlExecuted: string[] }> {
+    const sqlExecuted: string[] = [];
+    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
+
+    if (!this.pool) {
+      return { ok: false, mode, sqlExecuted, error: 'Pool ERP não inicializado' };
+    }
+    if (!input.saleId) return { ok: false, mode, sqlExecuted, error: 'saleId obrigatório' };
+    if (!input.storeCode) return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatório' };
+    if (!input.newBandeira) return { ok: false, mode, sqlExecuted, error: 'newBandeira obrigatória' };
+
+    const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
+    const saleIdShort = input.saleId.slice(0, 8);
+    const obsPedido = `flowops-${saleIdShort}`;
+    const oldMap = this.mapPagamentoFechamento(input.oldBandeira || '');
+    const newMap = this.mapPagamentoFechamento(input.newBandeira);
+    const valor = Number(input.valor) || 0;
+
+    // Acha o NUMERO da venda no Wincred via OBS_PEDIDO + LOJA
+    const sqlBusca = `SELECT NUMERO FROM caixa WHERE OBS_PEDIDO = '${obsPedido}' AND LOJA = '${lojaCode}' LIMIT 1`;
+    sqlExecuted.push(sqlBusca);
+
+    if (mode === 'shadow') {
+      this.logger.warn(`[atualizarBandeiraFechamento SHADOW] obsPedido=${obsPedido} loja=${lojaCode} ${input.oldBandeira}→${input.newBandeira} valor=${valor}`);
+      return { ok: true, mode, sqlExecuted };
+    }
+
+    try {
+      const [rows] = await this.pool.query<any[]>(sqlBusca);
+      const r = (rows as any[])[0];
+      if (!r?.NUMERO) {
+        this.logger.warn(`atualizarBandeiraFechamento: venda não achada no Wincred (${obsPedido}/${lojaCode})`);
+        return { ok: false, mode, sqlExecuted, error: `Venda não localizada no Wincred (${obsPedido})` };
+      }
+      const numero = Number(r.NUMERO);
+
+      // Monta UPDATE: zera coluna antiga (se tinha) + popula coluna nova (se tem)
+      const sets: string[] = [`FORMA = '${newMap.forma.replace(/'/g, "''")}'`];
+      if (oldMap.coluna && oldMap.coluna !== newMap.coluna) {
+        sets.push(`\`${oldMap.coluna}\` = 0`);
+      }
+      if (newMap.coluna) {
+        sets.push(`\`${newMap.coluna}\` = ${valor}`);
+      }
+      // WHERE: match estrito por VENDA + LOJA + VALOR + FORMA antiga (não pega linha errada)
+      const whereForma = oldMap.forma ? `AND FORMA = '${oldMap.forma.replace(/'/g, "''")}'` : '';
+      const sqlUpdate =
+        `UPDATE fechamento SET ${sets.join(', ')} ` +
+        `WHERE VENDA = ${numero} AND LOJA = '${lojaCode}' ` +
+        `AND ABS(VALOR - ${valor}) < 0.01 ${whereForma} LIMIT 1`;
+      sqlExecuted.push(sqlUpdate);
+
+      const [updRes] = await this.pool.query<any>(sqlUpdate);
+      const affected = (updRes as any)?.affectedRows ?? 0;
+      if (affected === 0) {
+        this.logger.warn(`UPDATE fechamento não afetou linhas (NUMERO=${numero} LOJA=${lojaCode} FORMA=${oldMap.forma})`);
+        return { ok: false, mode, numero, sqlExecuted, error: 'Linha de fechamento não encontrada (FORMA antiga não bate)' };
+      }
+      this.logger.log(`atualizarBandeiraFechamento OK: NUMERO=${numero} LOJA=${lojaCode} ${oldMap.forma}→${newMap.forma} valor=${valor} (${affected} linha)`);
+      return { ok: true, mode, numero, sqlExecuted };
+    } catch (e: any) {
+      this.logger.error(`atualizarBandeiraFechamento ERRO: ${e?.message}`);
+      return { ok: false, mode, sqlExecuted, error: e?.message };
+    }
+  }
+
+  /**
    * Grava uma venda do PDV flowops na tabela `caixa` do Wincred.
    * Também grava 1 linha em `fechamento` por pagamento (com FORMA+VALOR).
    * Idempotente por venda? NÃO — cada chamada gera novo NUMERO.

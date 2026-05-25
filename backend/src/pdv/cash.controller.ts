@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -349,4 +350,28 @@ export class CashController {
       sessionIds: body.sessionIds || [],
     });
   }
+
+  /**
+   * PATCH /pdv/caixa/payments/:paymentId/bandeira
+   * Admin troca bandeira de um pagamento (ex: operadora errou MASTERCARD em vez de VISANET).
+   * Atualiza Postgres + audit + Wincred (fechamento).
+   * Body: { bandeira: 'VISANET', reason?: 'operadora errou' }
+   */
+  @Patch('payments/:paymentId/bandeira')
+  async updatePaymentBandeira(
+    @Req() req: any,
+    @Param('paymentId') paymentId: string,
+    @Body() body: { bandeira: string; reason?: string },
+  ) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin pode editar bandeira');
+    }
+    return this.svc.updatePaymentBandeira(
+      paymentId,
+      body?.bandeira,
+      body?.reason,
+      req?.user,
+    );
+  }
 }
+

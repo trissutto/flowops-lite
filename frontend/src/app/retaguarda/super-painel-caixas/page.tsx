@@ -141,7 +141,18 @@ export default function SuperPainelCaixas() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [secsToRefresh, setSecsToRefresh] = useState(POLL_INTERVAL_MS / 1000);
+  const [isAdmin, setIsAdmin] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Detecta role do user (admin pode editar bandeira)
+  useEffect(() => {
+    (async () => {
+      try {
+        const me = await api<{ role: string }>('/auth/me');
+        setIsAdmin(me?.role === 'admin');
+      } catch { /* ignora */ }
+    })();
+  }, []);
 
   // Filtro de data — default: HOJE (modo ao vivo, sem range)
   const [filterFrom, setFilterFrom] = useState<string>(todayYmd());
@@ -352,7 +363,7 @@ export default function SuperPainelCaixas() {
             {/* Grid de lojas */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {data.lojas.map((l) => (
-                <LojaCard key={l.storeCode} loja={l} onReload={() => load(true)} />
+                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} onReload={() => load(true)} />
               ))}
             </div>
 
@@ -378,13 +389,14 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
   );
 }
 
-function LojaCard({ loja, onReload }: { loja: Loja; onReload?: () => void }) {
+function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; onReload?: () => void }) {
   const reload = () => { if (onReload) onReload(); };
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showSangrias, setShowSangrias] = useState(false);
   const [showSuprimentos, setShowSuprimentos] = useState(false);
   const [showRecebimentos, setShowRecebimentos] = useState(false);
+  const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; valor: number; saleHint: string } | null>(null);
   const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
@@ -449,8 +461,27 @@ function LojaCard({ loja, onReload }: { loja: Loja; onReload?: () => void }) {
         {/* Cascade — vendas/bandeiras quando expandido */}
         {expanded && loja.detalhado && (
           <div className="pt-2 border-t border-slate-100">
-            <CascadeModalidade detalhado={loja.detalhado} modalidade={expanded} />
+            <CascadeModalidade
+              detalhado={loja.detalhado}
+              modalidade={expanded}
+              isAdmin={isAdmin}
+              onEditBandeira={(paymentId, currentBandeira, valor, saleHint) =>
+                setEditBandeira({ paymentId, currentBandeira, valor, saleHint })
+              }
+            />
           </div>
+        )}
+
+        {/* Modal de edição de bandeira (admin only) */}
+        {editBandeira && (
+          <EditBandeiraModal
+            paymentId={editBandeira.paymentId}
+            currentBandeira={editBandeira.currentBandeira}
+            valor={editBandeira.valor}
+            saleHint={editBandeira.saleHint}
+            onClose={() => setEditBandeira(null)}
+            onSaved={() => { setEditBandeira(null); reload(); }}
+          />
         )}
 
         {/* Bloco financeiro do caixa: fundo, dinheiro fim de dia, conferência */}
@@ -741,7 +772,15 @@ function ModItem({ label, valor, cor, onClick, active }: { label: string; valor:
 const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD', 'CREDITO_GENERICO'] as const;
 const BANDEIRAS_DEBITO = ['VISA_ELECTRON', 'REDE_SHOP', 'DEBITO_GENERICO'] as const;
 
-function CascadeModalidade({ detalhado, modalidade }: { detalhado: Detalhado; modalidade: string }) {
+function CascadeModalidade({
+  detalhado, modalidade, isAdmin, onEditBandeira,
+}: {
+  detalhado: Detalhado;
+  modalidade: string;
+  isAdmin?: boolean;
+  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string) => void;
+}) {
+  const isCartao = modalidade === 'credito' || modalidade === 'debito';
   const [bandeiraOpen, setBandeiraOpen] = useState<string | null>(null);
 
   if (modalidade === 'dinheiro') {
@@ -780,7 +819,12 @@ function CascadeModalidade({ detalhado, modalidade }: { detalhado: Detalhado; mo
           </button>
           {bandeiraOpen === b.nome && (
             <div className="border-t border-slate-200 bg-white px-2 py-1.5">
-              <ListaVendas vendas={b.slot.vendas} />
+              <ListaVendas
+                vendas={b.slot.vendas}
+                bandeiraAtual={b.nome}
+                isAdmin={!!isAdmin && isCartao}
+                onEditBandeira={onEditBandeira}
+              />
             </div>
           )}
         </div>
@@ -789,7 +833,14 @@ function CascadeModalidade({ detalhado, modalidade }: { detalhado: Detalhado; mo
   );
 }
 
-function ListaVendas({ vendas }: { vendas: Slot['vendas'] }) {
+function ListaVendas({
+  vendas, bandeiraAtual, isAdmin, onEditBandeira,
+}: {
+  vendas: Slot['vendas'];
+  bandeiraAtual?: string;
+  isAdmin?: boolean;
+  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string) => void;
+}) {
   if (!vendas || vendas.length === 0) {
     return <div className="text-[11px] text-slate-400 italic text-center py-2">Sem vendas</div>;
   }
@@ -797,19 +848,154 @@ function ListaVendas({ vendas }: { vendas: Slot['vendas'] }) {
     <div className="space-y-0.5 max-h-60 overflow-y-auto">
       {vendas.map((v, i) => {
         const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-        const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
+        const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificacao');
         return (
           <div key={i} className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-slate-50 rounded">
             <div className="flex items-center gap-2 min-w-0">
               {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
               <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>{cliente}</span>
-              {v.sellerName && <span className="text-slate-500 text-[10px] shrink-0">Â· {v.sellerName.split(' ')[0]}</span>}
-              {v.parcelas && v.parcelas > 1 && <span className="text-violet-600 text-[10px] shrink-0">Â· {v.parcelas}x</span>}
+              {v.sellerName && <span className="text-slate-500 text-[10px] shrink-0">- {v.sellerName.split(' ')[0]}</span>}
+              {v.parcelas && v.parcelas > 1 && <span className="text-violet-600 text-[10px] shrink-0">- {v.parcelas}x</span>}
             </div>
-            <span className="font-mono font-bold tabular-nums shrink-0 ml-2">{brl(v.valor)}</span>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              <span className="font-mono font-bold tabular-nums">{brl(v.valor)}</span>
+              {isAdmin && onEditBandeira && bandeiraAtual && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const hint = `${cliente} - ${brl(v.valor)}`;
+                    onEditBandeira(v.paymentId, bandeiraAtual, v.valor, hint);
+                  }}
+                  title="Trocar bandeira (admin)"
+                  className="text-[10px] text-violet-600 hover:text-violet-900 font-bold underline"
+                >
+                  editar
+                </button>
+              )}
+            </div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Modal de edição de bandeira (admin only) ───
+const BANDEIRAS_DISPONIVEIS = [
+  { value: 'MASTERCARD', label: 'MASTERCARD' },
+  { value: 'VISANET', label: 'VISA (Visanet)' },
+  { value: 'CIELO', label: 'CIELO' },
+  { value: 'ELO', label: 'ELO' },
+  { value: 'AMEX', label: 'AMEX (American Express)' },
+  { value: 'HIPERCARD', label: 'HIPERCARD' },
+  { value: 'VISA_ELECTRON', label: 'VISA ELECTRON' },
+  { value: 'REDE_SHOP', label: 'REDE SHOP' },
+  { value: 'CREDITO_GENERICO', label: 'Crédito genérico' },
+  { value: 'DEBITO_GENERICO', label: 'Débito genérico' },
+  { value: 'OUTROS', label: 'OUTROS' },
+];
+
+function EditBandeiraModal({
+  paymentId, currentBandeira, valor, saleHint, onClose, onSaved,
+}: {
+  paymentId: string;
+  currentBandeira: string;
+  valor: number;
+  saleHint: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [nova, setNova] = useState(currentBandeira);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  async function save() {
+    if (!nova || nova === currentBandeira) {
+      setErrMsg('Escolha uma bandeira diferente da atual');
+      return;
+    }
+    setSaving(true);
+    setErrMsg(null);
+    try {
+      const r: any = await api(`/pdv/caixa/payments/${paymentId}/bandeira`, {
+        method: 'PATCH',
+        body: JSON.stringify({ bandeira: nova, reason: reason || undefined }),
+      });
+      if (r?.ok) {
+        const wOk = r.wincred?.ok;
+        if (!wOk) {
+          alert(`Atualizado no flowops, mas Wincred falhou: ${r.wincred?.error || 'sem detalhes'}.\nA mudança aparece no painel mas pode precisar de ajuste manual no Giga.`);
+        }
+        onSaved();
+      } else {
+        setErrMsg(r?.message || 'Falha desconhecida');
+      }
+    } catch (e: any) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-black mb-1">Trocar bandeira do cartão</h2>
+        <p className="text-xs text-slate-500 mb-3">{saleHint}</p>
+
+        <div className="bg-slate-50 rounded-lg p-3 mb-3 text-xs">
+          <div className="flex justify-between mb-1">
+            <span className="text-slate-500">Bandeira atual:</span>
+            <span className="font-bold text-rose-700">{currentBandeira || '(vazio)'}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Valor:</span>
+            <span className="font-mono font-bold">{brl(valor)}</span>
+          </div>
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Nova bandeira:</label>
+        <select
+          value={nova}
+          onChange={(e) => setNova(e.target.value)}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        >
+          {BANDEIRAS_DISPONIVEIS.map((b) => (
+            <option key={b.value} value={b.value}>{b.label}</option>
+          ))}
+        </select>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Motivo (opcional):</label>
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="ex: operadora bipou bandeira errada"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        {errMsg && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{errMsg}</div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={save}
+            disabled={saving || nova === currentBandeira}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40"
+          >
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
