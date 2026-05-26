@@ -7375,4 +7375,96 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     FATURAMENTO POR LOJA — usado pela tela /retaguarda/faturamento.
+
+     Agrega caixa.VALORTOTAL + caixa.QUANTIDADE + COUNT(DISTINCT NUMERO)
+     por loja num intervalo de datas. Ignora MARCADO='SIM' (linhas canceladas).
+
+     Resultado: lista de { storeCode, faturamento, cupons, pecas, ticketMedio }.
+
+     Não inclui composição SITE (Giga + Flowops) — quem combina é o caller
+     (controller), pra deixar service genérico.
+     ═══════════════════════════════════════════════════════════════════════ */
+  async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
+    Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
+  > {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT
+            c.LOJA AS storeCode,
+            COUNT(DISTINCT c.NUMERO) AS cupons,
+            SUM(c.QUANTIDADE) AS pecas,
+            SUM(c.VALORTOTAL) AS faturamento
+         FROM caixa c
+         WHERE c.DATA >= ?
+           AND c.DATA <  ?
+           AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+         GROUP BY c.LOJA
+         ORDER BY faturamento DESC`,
+        [inicio, fim],
+      );
+      return (rows as any[]).map((r) => {
+        const faturamento = Number(r.faturamento) || 0;
+        const cupons = Number(r.cupons) || 0;
+        const pecas = Number(r.pecas) || 0;
+        return {
+          storeCode: String(r.storeCode || '').trim().toUpperCase(),
+          faturamento,
+          cupons,
+          pecas,
+          ticketMedio: cupons > 0 ? faturamento / cupons : 0,
+        };
+      });
+    } catch (e: any) {
+      this.logger.error(`getFaturamentoPorLoja falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Time series do faturamento agregado (todas as lojas somadas) ou
+   * separado por loja. Granularidade: day | week | month.
+   *
+   * Retorno:
+   *   [{ bucket: '2026-05-01', storeCode: 'SITE', faturamento: 4200 }, ...]
+   * Frontend agrupa por bucket pra montar gráfico de linhas.
+   */
+  async getFaturamentoTimeseries(
+    inicio: Date,
+    fim: Date,
+    granularity: 'day' | 'week' | 'month' = 'day',
+  ): Promise<Array<{ bucket: string; storeCode: string; faturamento: number }>> {
+    if (!this.pool) return [];
+    // MySQL DATE_FORMAT pra agrupar
+    const fmt =
+      granularity === 'month' ? '%Y-%m-01' :
+      granularity === 'week'  ? '%x-W%v' :   // ISO week (segunda-domingo)
+                                '%Y-%m-%d';   // day
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT
+            DATE_FORMAT(c.DATA, ?) AS bucket,
+            c.LOJA AS storeCode,
+            SUM(c.VALORTOTAL) AS faturamento
+         FROM caixa c
+         WHERE c.DATA >= ?
+           AND c.DATA <  ?
+           AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+         GROUP BY bucket, c.LOJA
+         ORDER BY bucket ASC`,
+        [fmt, inicio, fim],
+      );
+      return (rows as any[]).map((r) => ({
+        bucket: String(r.bucket || ''),
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        faturamento: Number(r.faturamento) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getFaturamentoTimeseries falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
 }

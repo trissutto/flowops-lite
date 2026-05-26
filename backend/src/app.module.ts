@@ -45,6 +45,7 @@ import { PropertiesModule } from './properties/properties.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { ProductPhotosModule } from './product-photos/product-photos.module';
 import { PushModule } from './push/push.module';
+import { FaturamentoModule } from './faturamento/faturamento.module';
 
 @Module({
   imports: [
@@ -93,6 +94,7 @@ import { PushModule } from './push/push.module';
     PurchaseOrdersModule,
     ProductPhotosModule,
     PushModule,
+    FaturamentoModule,
   ],
 })
 export class AppModule {}
