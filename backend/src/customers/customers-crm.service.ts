@@ -1,0 +1,541 @@
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+
+/**
+ * CustomersCrmService — operações DIRETAS sobre a tabela `customers`.
+ *
+ * Diferença pro CustomersService antigo: aqui é o CRM real (mestre de clientes),
+ * com cadastro manual, perfil Plus Size, endereços, consentimentos LGPD,
+ * tags e cashback. O service antigo deriva clientes dos pedidos WC e
+ * continua funcionando até o ETL completo popular esta tabela.
+ *
+ * Endpoints expostos em /customers-crm (ver customers-crm.controller).
+ */
+
+// === Tiers e parâmetros de cashback ===
+// Hardcoded por enquanto. Quando o módulo de config-cashback nascer,
+// puxa de uma tabela CashbackTier+CashbackParam.
+const TIER_CONFIG: Record<string, { minSpentCents: number; percent: number; validityDays: number }> = {
+  bronze:   { minSpentCents:        0, percent: 3,  validityDays:  60 },
+  prata:    { minSpentCents:   150000, percent: 5,  validityDays:  90 },
+  ouro:     { minSpentCents:   400000, percent: 7,  validityDays: 120 },
+  diamante: { minSpentCents:  1000000, percent: 10, validityDays: 180 },
+};
+const REDEEM_MIN_CENTS = 2000;        // R$ 20
+const MAX_REDEEM_PCT   = 0.30;        // 30% da compra
+const CREDIT_GRACE_DAYS = 7;          // carência (devolução)
+
+export interface CreateCustomerDto {
+  cpf?: string;
+  registroGiga?: number;
+  name: string;
+  nameSocial?: string;
+  email?: string;
+  phone?: string;
+  whatsapp?: string;
+  birthDate?: string;                 // ISO date
+  gender?: string;
+  maritalStatus?: string;
+  sizeDefault?: string;
+  sizeSecondary?: string;
+  bodyType?: string;
+  preferredStyle?: string;
+  favoriteColors?: string;
+  avoidedPieces?: string;
+  originSource?: string;              // physical | woo | instagram | manual | giga
+  originStoreId?: string;
+  originSeller?: string;
+  referredByCpf?: string;             // se veio por indicação, busca pelo CPF
+  notes?: string;
+}
+
+export interface UpdateCustomerDto extends Partial<CreateCustomerDto> {
+  vipTier?: string;
+  active?: boolean;
+  inactiveReason?: string;
+}
+
+export interface ListQuery {
+  search?: string;
+  tier?: string;
+  rfvSegment?: string;
+  storeId?: string;
+  hasWhatsapp?: boolean;
+  hasCashbackBalance?: boolean;
+  page?: number;
+  limit?: number;
+  orderBy?: 'name' | 'lastOrderAt' | 'ltvCents' | 'createdAt';
+  order?: 'asc' | 'desc';
+}
+
+export interface CreateAddressDto {
+  type: 'residential' | 'delivery' | 'mailing' | 'work';
+  isPrimary?: boolean;
+  cep?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  district?: string;
+  city?: string;
+  state?: string;
+  reference?: string;
+}
+
+export interface ConsentDto {
+  channel: 'whatsapp' | 'email' | 'sms' | 'mail' | 'general';
+  granted: boolean;
+  termVersion?: string;
+  source?: string;
+  registeredByUserId?: string;
+}
+
+export interface CreditCashbackDto {
+  valueCents: number;                 // valor do cashback (já calculado)
+  purchaseValueCents?: number;
+  percentApplied?: number;
+  orderId?: string;
+  storeId?: string;
+  description?: string;
+  userId?: string;
+}
+
+export interface RedeemCashbackDto {
+  valueCents: number;
+  purchaseValueCents: number;         // pra validar 30% máx
+  orderId?: string;
+  storeId?: string;
+  userId?: string;
+}
+
+@Injectable()
+export class CustomersCrmService {
+  private readonly logger = new Logger(CustomersCrmService.name);
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HELPERS — normalização
+  // ─────────────────────────────────────────────────────────────────────────
+  private normalizeCpf(cpf?: string | null): string | null {
+    if (!cpf) return null;
+    const digits = cpf.replace(/\D/g, '');
+    if (digits.length !== 11) return null;
+    return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6,9)}-${digits.slice(9,11)}`;
+  }
+
+  private normalizePhone(phone?: string | null): string | null {
+    if (!phone) return null;
+    let digits = phone.replace(/\D/g, '');
+    if (digits.length > 11 && digits.startsWith('55')) digits = digits.slice(2);
+    if (digits.length !== 10 && digits.length !== 11) return null;
+    return `+55${digits}`;
+  }
+
+  private normalizeCep(cep?: string | null): string | null {
+    if (!cep) return null;
+    const d = cep.replace(/\D/g, '');
+    if (d.length !== 8) return null;
+    return `${d.slice(0,5)}-${d.slice(5,8)}`;
+  }
+
+  private percentForTier(tier: string): number {
+    return TIER_CONFIG[tier]?.percent ?? TIER_CONFIG.bronze.percent;
+  }
+
+  private validityDaysForTier(tier: string): number {
+    return TIER_CONFIG[tier]?.validityDays ?? TIER_CONFIG.bronze.validityDays;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CRIAÇÃO / EDIÇÃO
+  // ─────────────────────────────────────────────────────────────────────────
+  async create(dto: CreateCustomerDto) {
+    const cpf = this.normalizeCpf(dto.cpf);
+    const whatsapp = this.normalizePhone(dto.whatsapp);
+    const phone    = this.normalizePhone(dto.phone);
+
+    // Resolve referredBy via CPF se veio
+    let referredById: string | undefined;
+    if (dto.referredByCpf) {
+      const ref = await this.prisma.customer.findUnique({ where: { cpf: this.normalizeCpf(dto.referredByCpf) ?? '' } });
+      if (ref) referredById = ref.id;
+    }
+
+    const created = await this.prisma.customer.create({
+      data: {
+        cpf: cpf ?? undefined,
+        registroGiga: dto.registroGiga,
+        name: dto.name.trim(),
+        nameSocial: dto.nameSocial?.trim(),
+        email: dto.email?.toLowerCase().trim(),
+        phone: phone ?? undefined,
+        whatsapp: whatsapp ?? undefined,
+        birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
+        gender: dto.gender,
+        maritalStatus: dto.maritalStatus,
+        sizeDefault: dto.sizeDefault,
+        sizeSecondary: dto.sizeSecondary,
+        bodyType: dto.bodyType,
+        preferredStyle: dto.preferredStyle,
+        favoriteColors: dto.favoriteColors,
+        avoidedPieces: dto.avoidedPieces,
+        originSource: dto.originSource ?? 'manual',
+        originStoreId: dto.originStoreId,
+        originSeller: dto.originSeller,
+        referredById,
+        notes: dto.notes,
+        // saldo inicial é criado vazio (1:1)
+        cashbackBalance: { create: {} },
+      },
+      include: { cashbackBalance: true },
+    });
+
+    this.logger.log(`[CRM] cliente criado: ${created.id} (${created.name})`);
+    return created;
+  }
+
+  async update(id: string, dto: UpdateCustomerDto) {
+    const existing = await this.prisma.customer.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Cliente não encontrado');
+
+    const cpf = dto.cpf !== undefined ? this.normalizeCpf(dto.cpf) : undefined;
+    const whatsapp = dto.whatsapp !== undefined ? this.normalizePhone(dto.whatsapp) : undefined;
+    const phone    = dto.phone !== undefined    ? this.normalizePhone(dto.phone) : undefined;
+
+    return this.prisma.customer.update({
+      where: { id },
+      data: {
+        ...(cpf !== undefined ? { cpf: cpf ?? null } : {}),
+        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        ...(dto.nameSocial !== undefined ? { nameSocial: dto.nameSocial } : {}),
+        ...(dto.email !== undefined ? { email: dto.email?.toLowerCase().trim() ?? null } : {}),
+        ...(phone !== undefined ? { phone: phone ?? null } : {}),
+        ...(whatsapp !== undefined ? { whatsapp: whatsapp ?? null } : {}),
+        ...(dto.birthDate !== undefined ? { birthDate: dto.birthDate ? new Date(dto.birthDate) : null } : {}),
+        ...(dto.gender !== undefined ? { gender: dto.gender } : {}),
+        ...(dto.maritalStatus !== undefined ? { maritalStatus: dto.maritalStatus } : {}),
+        ...(dto.sizeDefault !== undefined ? { sizeDefault: dto.sizeDefault } : {}),
+        ...(dto.sizeSecondary !== undefined ? { sizeSecondary: dto.sizeSecondary } : {}),
+        ...(dto.bodyType !== undefined ? { bodyType: dto.bodyType } : {}),
+        ...(dto.preferredStyle !== undefined ? { preferredStyle: dto.preferredStyle } : {}),
+        ...(dto.favoriteColors !== undefined ? { favoriteColors: dto.favoriteColors } : {}),
+        ...(dto.avoidedPieces !== undefined ? { avoidedPieces: dto.avoidedPieces } : {}),
+        ...(dto.vipTier !== undefined ? { vipTier: dto.vipTier, tierEnteredAt: new Date() } : {}),
+        ...(dto.active !== undefined ? { active: dto.active } : {}),
+        ...(dto.inactiveReason !== undefined ? { inactiveReason: dto.inactiveReason } : {}),
+        ...(dto.notes !== undefined ? { notes: dto.notes } : {}),
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // LISTAGEM / DETALHE
+  // ─────────────────────────────────────────────────────────────────────────
+  async list(query: ListQuery = {}) {
+    const page  = Math.max(1, query.page ?? 1);
+    const limit = Math.min(500, Math.max(1, query.limit ?? 50));
+    const orderBy = query.orderBy ?? 'createdAt';
+    const order   = query.order ?? 'desc';
+
+    const where: any = {};
+    if (query.tier) where.vipTier = query.tier;
+    if (query.rfvSegment) where.rfvSegment = query.rfvSegment;
+    if (query.storeId) where.originStoreId = query.storeId;
+    if (query.hasWhatsapp) where.whatsapp = { not: null };
+    if (query.search?.trim()) {
+      const q = query.search.trim();
+      where.OR = [
+        { name: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { cpf: { contains: q.replace(/\D/g, '') } },
+        { whatsapp: { contains: q.replace(/\D/g, '') } },
+        { phone: { contains: q.replace(/\D/g, '') } },
+      ];
+    }
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.customer.count({ where }),
+      this.prisma.customer.findMany({
+        where,
+        orderBy: { [orderBy]: order },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: {
+          cashbackBalance: true,
+          originStore: { select: { id: true, code: true, name: true } },
+          _count: { select: { tags: true, addresses: true } },
+        },
+      }),
+    ]);
+
+    // Filtro post-query pra hasCashbackBalance (Prisma não filtra 1:1 facilmente)
+    let data = rows;
+    if (query.hasCashbackBalance) {
+      data = data.filter(c => (c.cashbackBalance?.balanceCents ?? 0) > 0);
+    }
+
+    return {
+      data: data.map(c => ({
+        id: c.id,
+        name: c.name,
+        nameSocial: c.nameSocial,
+        cpf: c.cpf,
+        whatsapp: c.whatsapp,
+        email: c.email,
+        birthDate: c.birthDate,
+        sizeDefault: c.sizeDefault,
+        vipTier: c.vipTier,
+        rfvSegment: c.rfvSegment,
+        cashbackBalanceCents: c.cashbackBalance?.balanceCents ?? 0,
+        cashbackNextExpiration: c.cashbackBalance?.nextExpirationAt ?? null,
+        orderCount: c.orderCount,
+        ltvCents: c.ltvCents.toString(),
+        ticketMedioCents: c.ticketMedioCents,
+        lastOrderAt: c.lastOrderAt,
+        originStore: c.originStore,
+        originSource: c.originSource,
+        tagsCount: c._count.tags,
+        addressesCount: c._count.addresses,
+        active: c.active,
+      })),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async detail(id: string) {
+    const c = await this.prisma.customer.findUnique({
+      where: { id },
+      include: {
+        cashbackBalance: true,
+        addresses: { where: { active: true }, orderBy: { isPrimary: 'desc' } },
+        tags: { include: { tag: true } },
+        originStore: { select: { id: true, code: true, name: true } },
+        referredBy: { select: { id: true, name: true, cpf: true } },
+      },
+    });
+    if (!c) throw new NotFoundException('Cliente não encontrado');
+
+    // Últimos 20 movimentos de cashback
+    const cashbackTransactions = await this.prisma.cashbackTransaction.findMany({
+      where: { customerId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { store: { select: { code: true, name: true } } },
+    });
+
+    // Consentimentos atuais por canal (último registro)
+    const consents = await this.prisma.customerConsent.findMany({
+      where: { customerId: id },
+      orderBy: { grantedAt: 'desc' },
+    });
+    const currentConsents: Record<string, boolean> = {};
+    for (const ev of consents) {
+      if (!(ev.channel in currentConsents)) currentConsents[ev.channel] = ev.granted;
+    }
+
+    return {
+      ...c,
+      ltvCents: c.ltvCents.toString(),
+      cashbackBalance: c.cashbackBalance
+        ? {
+            ...c.cashbackBalance,
+            accumulatedTotalCents: c.cashbackBalance.accumulatedTotalCents.toString(),
+            redeemedTotalCents:    c.cashbackBalance.redeemedTotalCents.toString(),
+            expiredTotalCents:     c.cashbackBalance.expiredTotalCents.toString(),
+          }
+        : null,
+      cashbackTransactions,
+      currentConsents,
+      tags: c.tags.map(ct => ct.tag),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ENDEREÇOS
+  // ─────────────────────────────────────────────────────────────────────────
+  async addAddress(customerId: string, dto: CreateAddressDto) {
+    const c = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!c) throw new NotFoundException('Cliente não encontrado');
+
+    // Se for primary, desmarca outros do mesmo tipo
+    if (dto.isPrimary) {
+      await this.prisma.customerAddress.updateMany({
+        where: { customerId, type: dto.type, isPrimary: true },
+        data: { isPrimary: false },
+      });
+    }
+
+    return this.prisma.customerAddress.create({
+      data: {
+        customerId,
+        type: dto.type,
+        isPrimary: dto.isPrimary ?? false,
+        cep: this.normalizeCep(dto.cep),
+        street: dto.street,
+        number: dto.number,
+        complement: dto.complement,
+        district: dto.district,
+        city: dto.city,
+        state: dto.state,
+        reference: dto.reference,
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CONSENTIMENTOS LGPD
+  // ─────────────────────────────────────────────────────────────────────────
+  async registerConsent(customerId: string, dto: ConsentDto) {
+    const c = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!c) throw new NotFoundException('Cliente não encontrado');
+
+    return this.prisma.customerConsent.create({
+      data: {
+        customerId,
+        channel: dto.channel,
+        granted: dto.granted,
+        termVersion: dto.termVersion,
+        source: dto.source,
+        registeredByUserId: dto.registeredByUserId,
+      },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CASHBACK — credit / redeem
+  // ─────────────────────────────────────────────────────────────────────────
+  async creditCashback(customerId: string, dto: CreditCashbackDto) {
+    const c = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { cashbackBalance: true },
+    });
+    if (!c) throw new NotFoundException('Cliente não encontrado');
+    if (dto.valueCents <= 0) throw new BadRequestException('valor deve ser positivo');
+
+    const balanceBefore = c.cashbackBalance?.balanceCents ?? 0;
+    const balanceAfter  = balanceBefore + dto.valueCents;
+
+    const creditedAt = new Date();
+    creditedAt.setDate(creditedAt.getDate() + CREDIT_GRACE_DAYS);
+    const expiresAt = new Date(creditedAt);
+    expiresAt.setDate(expiresAt.getDate() + this.validityDaysForTier(c.vipTier));
+
+    return this.prisma.$transaction(async (tx) => {
+      const txn = await tx.cashbackTransaction.create({
+        data: {
+          customerId,
+          type: 'credit',
+          valueCents: dto.valueCents,
+          balanceBeforeCents: balanceBefore,
+          balanceAfterCents:  balanceAfter,
+          orderId: dto.orderId,
+          storeId: dto.storeId,
+          purchaseValueCents: dto.purchaseValueCents,
+          percentApplied: dto.percentApplied,
+          creditedAt,
+          expiresAt,
+          description: dto.description ?? 'Crédito por compra',
+          userId: dto.userId,
+        },
+      });
+
+      await tx.cashbackBalance.upsert({
+        where: { customerId },
+        create: {
+          customerId,
+          balanceCents: dto.valueCents,
+          accumulatedTotalCents: BigInt(dto.valueCents),
+          nextExpirationAt: expiresAt,
+          nextExpirationCents: dto.valueCents,
+        },
+        update: {
+          balanceCents: balanceAfter,
+          accumulatedTotalCents: { increment: dto.valueCents },
+          // se ainda não tinha expiração agendada, agenda; senão mantém a mais próxima
+          nextExpirationAt: c.cashbackBalance?.nextExpirationAt ?? expiresAt,
+          nextExpirationCents: c.cashbackBalance?.nextExpirationCents ?? dto.valueCents,
+        },
+      });
+
+      return txn;
+    });
+  }
+
+  async redeemCashback(customerId: string, dto: RedeemCashbackDto) {
+    const c = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { cashbackBalance: true },
+    });
+    if (!c) throw new NotFoundException('Cliente não encontrado');
+
+    const balance = c.cashbackBalance?.balanceCents ?? 0;
+    if (balance < REDEEM_MIN_CENTS)
+      throw new BadRequestException(`Saldo abaixo do mínimo de R$ ${REDEEM_MIN_CENTS / 100}`);
+    if (dto.valueCents > balance)
+      throw new BadRequestException(`Saldo insuficiente. Disponível: R$ ${balance / 100}`);
+
+    const maxRedeem = Math.round(dto.purchaseValueCents * MAX_REDEEM_PCT);
+    if (dto.valueCents > maxRedeem)
+      throw new BadRequestException(
+        `Pode usar no máximo R$ ${maxRedeem / 100} nesta compra (30% do valor)`,
+      );
+
+    const balanceAfter = balance - dto.valueCents;
+
+    return this.prisma.$transaction(async (tx) => {
+      const txn = await tx.cashbackTransaction.create({
+        data: {
+          customerId,
+          type: 'redeem',
+          valueCents: dto.valueCents,
+          balanceBeforeCents: balance,
+          balanceAfterCents:  balanceAfter,
+          orderId: dto.orderId,
+          storeId: dto.storeId,
+          purchaseValueCents: dto.purchaseValueCents,
+          description: `Resgate em pedido ${dto.orderId ?? ''}`.trim(),
+          userId: dto.userId,
+        },
+      });
+
+      await tx.cashbackBalance.update({
+        where: { customerId },
+        data: {
+          balanceCents: balanceAfter,
+          redeemedTotalCents: { increment: dto.valueCents },
+        },
+      });
+
+      return txn;
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TAGS
+  // ─────────────────────────────────────────────────────────────────────────
+  async listTags() {
+    return this.prisma.tag.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  async createTag(name: string, description?: string, color?: string) {
+    return this.prisma.tag.create({
+      data: { name: name.trim(), description, color: color ?? '#888888' },
+    });
+  }
+
+  async applyTag(customerId: string, tagId: string, appliedBy?: string) {
+    return this.prisma.customerTag.upsert({
+      where: { customerId_tagId: { customerId, tagId } },
+      create: { customerId, tagId, appliedBy },
+      update: { appliedBy, appliedAt: new Date() },
+    });
+  }
+
+  async removeTag(customerId: string, tagId: string) {
+    return this.prisma.customerTag.delete({
+      where: { customerId_tagId: { customerId, tagId } },
+    });
+  }
+}

@@ -121,10 +121,6 @@ model Store {
   orderItems     OrderItem[]
   supplyRequests SupplyRequest[]
 
-  // ── CRM / Cashback (expansão 2026-05) ──
-  customersOrigin       Customer[]            @relation("CustomerOriginStore")
-  cashbackTransactions  CashbackTransaction[] @relation("StoreCashbackTransactions")
-
   @@map("stores")
 }
 
@@ -1560,260 +1556,27 @@ model EanSequence {
 // LIVE OS — Live commerce no Instagram
 // ═══════════════════════════════════════════════════════════════════════
 
-// ===========================================================================
-// Customer - MESTRE DE CLIENTES DO CRM.
-//
-// Historico: inicialmente esse model era usado SO pra Lives do Instagram.
-// Em 2026-05 expandido pra ser o cliente UNIFICADO da casa:
-//   - Loja fisica (origem Giga ou cadastro PDV novo)
-//   - E-commerce (WooCommerce / Tray / etc)
-//   - Instagram Lives
-//   - Cashback + LGPD + perfil Plus Size
-//
-// IMPORTANTE: a tela /clientes ainda agrega clientes pelos pedidos (Order),
-// porque o sync ETL pra popular Customer roda em fase posterior. Quando o ETL
-// estiver completo, customers.service passa a usar essa tabela como fonte.
-// ===========================================================================
 model Customer {
   id              String   @id @default(uuid())
-
-  // -- Identificacao fiscal / Giga --
-  cpf             String?  @unique
-  registroGiga    Int?     @unique @map("registro_giga")
-  rg              String?
-
-  // -- Dados basicos --
   name            String?
-  nameSocial      String?  @map("name_social")
   email           String?  @unique
   phone           String?
   whatsapp        String?
-  birthDate       DateTime? @map("birth_date") @db.Date
-  gender          String?
-  maritalStatus   String?  @map("marital_status")
-
-  // -- Instagram (mantido pra Lives) --
   igUserId        String?  @unique @map("ig_user_id")
   igUsername      String?  @map("ig_username")
-
-  // -- Perfil Plus Size --
   sizeDefault     String?  @map("size_default")
-  sizeSecondary   String?  @map("size_secondary")
-  bodyType        String?  @map("body_type")
-  preferredStyle  String?  @map("preferred_style")
-  favoriteColors  String?  @map("favorite_colors")
-  avoidedPieces   String?  @map("avoided_pieces")
-
-  // -- Atribuicao / origem --
-  originSource    String?  @map("origin_source")
-  originStoreId   String?  @map("origin_store_id")
-  originStore     Store?   @relation("CustomerOriginStore", fields: [originStoreId], references: [id])
-  originSeller    String?  @map("origin_seller")
-  referredById    String?  @map("referred_by_id")
-  referredBy      Customer? @relation("CustomerReferral", fields: [referredById], references: [id])
-  referrals       Customer[] @relation("CustomerReferral")
-
-  // -- Tier e segmentacao --
   vipTier         String   @default("bronze") @map("vip_tier")
-  tierEnteredAt   DateTime? @map("tier_entered_at")
-  rfvSegment      String?  @map("rfv_segment")
-  rfvEngagement   Int      @default(0) @map("rfv_engagement")
-
-  // -- Metricas calculadas (job diario) --
   livesAttended   Int      @default(0) @map("lives_attended")
   ltvCents        BigInt   @default(0) @map("ltv_cents")
-  orderCount      Int      @default(0) @map("order_count")
-  ticketMedioCents Int     @default(0) @map("ticket_medio_cents")
-  firstOrderAt    DateTime? @map("first_order_at")
-  lastOrderAt     DateTime? @map("last_order_at")
-
-  // -- Status --
-  active          Boolean  @default(true)
-  inactiveReason  String?  @map("inactive_reason")
-
-  // -- Observacoes livres --
-  notes           String?
-
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  // -- Relations --
-  comments              Comment[]
-  reservations          Reservation[]
-  liveCarts             LiveCart[]
-  dmMessages            DmMessage[]
-  addresses             CustomerAddress[]
-  consents              CustomerConsent[]
-  cashbackBalance       CashbackBalance?
-  cashbackTransactions  CashbackTransaction[]
-  tags                  CustomerTag[]
-  rfvSnapshots          CustomerRfvSnapshot[]
+  comments        Comment[]
+  reservations    Reservation[]
+  liveCarts       LiveCart[]
+  dmMessages      DmMessage[]
 
-  @@index([cpf])
-  @@index([phone])
-  @@index([whatsapp])
-  @@index([vipTier])
-  @@index([rfvSegment])
-  @@index([originStoreId])
-  @@index([lastOrderAt])
   @@map("customers")
-}
-
-// ===========================================================================
-// CustomerAddress - enderecos (N por cliente).
-// Tipos: residential / delivery / mailing / work.
-// ===========================================================================
-model CustomerAddress {
-  id              String   @id @default(uuid())
-  customerId      String   @map("customer_id")
-  type            String
-  isPrimary       Boolean  @default(false) @map("is_primary")
-
-  cep             String?
-  street          String?
-  number          String?
-  complement      String?
-  district        String?
-  city            String?
-  state           String?
-  reference       String?
-
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@index([customerId])
-  @@index([cep])
-  @@map("customer_addresses")
-}
-
-// ===========================================================================
-// CustomerConsent - historico de opt-ins/opt-outs LGPD.
-// Linha NUNCA e apagada. Cada evento vira nova linha.
-// ===========================================================================
-model CustomerConsent {
-  id                  String   @id @default(uuid())
-  customerId          String   @map("customer_id")
-  channel             String
-  granted             Boolean
-  grantedAt           DateTime @default(now()) @map("granted_at")
-  termVersion         String?  @map("term_version")
-  source              String?
-  ipAddress           String?  @map("ip_address")
-  registeredByUserId  String?  @map("registered_by_user_id")
-
-  customer            Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@index([customerId, channel, grantedAt])
-  @@map("customer_consents")
-}
-
-// ===========================================================================
-// CashbackBalance - saldo atual (1:1 com Customer).
-// Atualizado automaticamente via service apos cada CashbackTransaction.
-// Valores em centavos (Int).
-// ===========================================================================
-model CashbackBalance {
-  customerId             String    @id @map("customer_id")
-  balanceCents           Int       @default(0) @map("balance_cents")
-  accumulatedTotalCents  BigInt    @default(0) @map("accumulated_total_cents")
-  redeemedTotalCents     BigInt    @default(0) @map("redeemed_total_cents")
-  expiredTotalCents      BigInt    @default(0) @map("expired_total_cents")
-  nextExpirationAt       DateTime? @map("next_expiration_at") @db.Date
-  nextExpirationCents    Int       @default(0) @map("next_expiration_cents")
-  updatedAt              DateTime  @updatedAt @map("updated_at")
-
-  customer               Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@map("cashback_balances")
-}
-
-// ===========================================================================
-// CashbackTransaction - extrato completo de cashback (auditoria).
-// Tipos: credit | redeem | expiration | reversal | manual_adjustment
-// ===========================================================================
-model CashbackTransaction {
-  id                  String    @id @default(uuid())
-  customerId          String    @map("customer_id")
-  type                String
-  valueCents          Int       @map("value_cents")
-  balanceBeforeCents  Int?      @map("balance_before_cents")
-  balanceAfterCents   Int?      @map("balance_after_cents")
-
-  orderId             String?   @map("order_id")
-  storeId             String?   @map("store_id")
-  purchaseValueCents  Int?      @map("purchase_value_cents")
-  percentApplied      Decimal?  @db.Decimal(5, 2) @map("percent_applied")
-
-  creditedAt          DateTime? @map("credited_at") @db.Date
-  expiresAt           DateTime? @map("expires_at") @db.Date
-
-  description         String?
-  userId              String?   @map("user_id")
-  createdAt           DateTime  @default(now()) @map("created_at")
-
-  customer            Customer  @relation(fields: [customerId], references: [id])
-  store               Store?    @relation("StoreCashbackTransactions", fields: [storeId], references: [id])
-
-  @@index([customerId, createdAt])
-  @@index([expiresAt])
-  @@index([type])
-  @@map("cashback_transactions")
-}
-
-// ===========================================================================
-// Tag - catalogo de tags reutilizaveis.
-// ===========================================================================
-model Tag {
-  id           String   @id @default(uuid())
-  name         String   @unique
-  description  String?
-  color        String   @default("#888888")
-  createdAt    DateTime @default(now()) @map("created_at")
-
-  customers    CustomerTag[]
-
-  @@map("tags")
-}
-
-// ===========================================================================
-// CustomerTag - relacionamento N:N entre Customer e Tag.
-// ===========================================================================
-model CustomerTag {
-  customerId  String   @map("customer_id")
-  tagId       String   @map("tag_id")
-  appliedAt   DateTime @default(now()) @map("applied_at")
-  appliedBy   String?  @map("applied_by")
-
-  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  tag         Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
-
-  @@id([customerId, tagId])
-  @@index([tagId])
-  @@map("customer_tags")
-}
-
-// ===========================================================================
-// CustomerRfvSnapshot - snapshot mensal pra ver evolucao RFV no tempo.
-// ===========================================================================
-model CustomerRfvSnapshot {
-  id              String   @id @default(uuid())
-  customerId      String   @map("customer_id")
-  snapshotDate    DateTime @map("snapshot_date") @db.Date
-  recencyDays     Int      @map("recency_days")
-  frequency12m    Int      @map("frequency_12m")
-  value12mCents   BigInt   @map("value_12m_cents")
-  segment         String
-  tier            String
-  createdAt       DateTime @default(now()) @map("created_at")
-
-  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  @@unique([customerId, snapshotDate])
-  @@index([customerId, snapshotDate])
-  @@map("customer_rfv_snapshots")
 }
 
 model Live {
