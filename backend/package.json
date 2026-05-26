@@ -7,7 +7,7 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "prisma db push --accept-data-loss --skip-generate && node dist/main",
     "test": "jest",
     "seed": "ts-node prisma/seed.ts",
     "backfill": "ts-node scripts/backfill.ts",
