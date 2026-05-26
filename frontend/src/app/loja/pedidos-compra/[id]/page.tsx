@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3, Trash2,
+  Truck, Printer, FileText, Edit3, Trash2, Plus,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -78,6 +78,7 @@ export default function PedidoDetalhePage() {
   // Modo edição de qty (recebimento detalhado): { itemId → { tam → qty } }
   const [adjustedQty, setAdjustedQty] = useState<Record<string, Record<string, number>>>({});
   const [editMode, setEditMode] = useState(false);
+  const [addModalOpen, setAddModalOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -350,6 +351,27 @@ export default function PedidoDetalhePage() {
           </div>
         )}
 
+        {/* Botao Adicionar item — disponivel sempre (rascunho ou recebido) */}
+        <div className="flex justify-end">
+          <button
+            onClick={() => setAddModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-sm transition active:scale-95"
+            title="Adicionar nova REF ao pedido"
+          >
+            <Plus className="w-4 h-4" />
+            Adicionar item
+          </button>
+        </div>
+
+        {/* Modal de adicionar item */}
+        {addModalOpen && (
+          <AddItemModal
+            orderId={id}
+            onClose={() => setAddModalOpen(false)}
+            onSaved={() => { setAddModalOpen(false); fetchData(); }}
+          />
+        )}
+
         {/* Items agrupados por REF */}
         {Array.from(itemsPorRef.entries()).map(([ref, refItems]) => {
           const primeiro = refItems[0];
@@ -435,6 +457,277 @@ export default function PedidoDetalhePage() {
           );
         })}
       </main>
+    </div>
+  );
+}
+
+
+// ===================================================================
+// AddItemModal — adiciona uma nova REF ao pedido
+// ===================================================================
+
+type Grupo = { codigo: number; nome: string };
+
+function AddItemModal({
+  orderId, onClose, onSaved,
+}: {
+  orderId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [grupos, setGrupos] = useState<Grupo[]>([]);
+  const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
+  const [ref, setRef] = useState('');
+  const [descricaoBase, setDescricaoBase] = useState('');
+  const [cor, setCor] = useState('');
+  const [grupoCode, setGrupoCode] = useState<number | null>(null);
+  const [subgrupoCode, setSubgrupoCode] = useState<number | null>(null);
+  const [ncm, setNcm] = useState('');
+  const [cfop, setCfop] = useState('5102');
+  const [plusSize, setPlusSize] = useState(true);
+  const [custoUnit, setCustoUnit] = useState('');
+  const [descontoPct, setDescontoPct] = useState('');
+  const [tributoPct, setTributoPct] = useState('');
+  const [precoUnit, setPrecoUnit] = useState('');
+  const [tamanhosTxt, setTamanhosTxt] = useState('');
+  const [criandoG, setCriandoG] = useState(false);
+  const [criandoSg, setCriandoSg] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<Grupo[]>('/purchase-orders/lookups/grupos').then(setGrupos).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!grupoCode) { setSubgrupos([]); return; }
+    api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${grupoCode}`).then(setSubgrupos).catch(() => setSubgrupos([]));
+  }, [grupoCode]);
+
+  const refetchGrupos = async () => {
+    try { const r = await api<Grupo[]>('/purchase-orders/lookups/grupos'); setGrupos(r); } catch {}
+  };
+
+  const criarGrupo = async () => {
+    const nome = prompt('Nome do novo grupo:')?.trim();
+    if (!nome) return;
+    setCriandoG(true);
+    try {
+      const novo = await api<Grupo>('/purchase-orders/lookups/grupo', {
+        method: 'POST', body: JSON.stringify({ nome }),
+      });
+      await refetchGrupos();
+      setGrupoCode(novo.codigo);
+      setSubgrupoCode(null);
+    } catch (e: any) { alert('Erro: ' + (e?.message || '')); }
+    finally { setCriandoG(false); }
+  };
+
+  const criarSubgrupo = async () => {
+    if (!grupoCode) { alert('Escolha um grupo antes'); return; }
+    const nome = prompt('Nome do novo subgrupo:')?.trim();
+    if (!nome) return;
+    setCriandoSg(true);
+    try {
+      const novo = await api<Grupo>('/purchase-orders/lookups/subgrupo', {
+        method: 'POST', body: JSON.stringify({ grupo: grupoCode, nome }),
+      });
+      const lista = await api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${grupoCode}`);
+      setSubgrupos(lista);
+      setSubgrupoCode(novo.codigo);
+    } catch (e: any) { alert('Erro: ' + (e?.message || '')); }
+    finally { setCriandoSg(false); }
+  };
+
+  // Parse "PP:2,P:3,M:5" → { PP: 2, P: 3, M: 5 }
+  const parseTamanhos = (txt: string): Record<string, number> => {
+    const result: Record<string, number> = {};
+    for (const part of txt.split(',')) {
+      const [t, q] = part.split(':').map((s) => s.trim());
+      if (t && q && !isNaN(Number(q))) result[t.toUpperCase()] = Number(q);
+    }
+    return result;
+  };
+
+  const totalPecas = (() => {
+    const map = parseTamanhos(tamanhosTxt);
+    return Object.values(map).reduce((s, v) => s + v, 0);
+  })();
+
+  const salvar = async () => {
+    setErr(null);
+    if (!ref.trim()) { setErr('REF obrigatória'); return; }
+    if (!cor.trim()) { setErr('COR obrigatória'); return; }
+    if (!grupoCode) { setErr('Grupo obrigatório'); return; }
+    if (!subgrupoCode) { setErr('Subgrupo obrigatório'); return; }
+    const custo = Number((custoUnit || '').replace(',', '.')) || 0;
+    const preco = Number((precoUnit || '').replace(',', '.')) || 0;
+    if (!custo) { setErr('Custo obrigatório'); return; }
+    if (!preco) { setErr('Preço venda obrigatório'); return; }
+    const tamanhosQty = parseTamanhos(tamanhosTxt);
+    if (Object.keys(tamanhosQty).length === 0) {
+      setErr('Tamanhos obrigatórios (ex: P:2,M:3,G:1)');
+      return;
+    }
+    const g = grupos.find((x) => x.codigo === grupoCode);
+    const sg = subgrupos.find((x) => x.codigo === subgrupoCode);
+    setSaving(true);
+    try {
+      await api(`/purchase-orders/${orderId}/items`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ref: ref.trim().toUpperCase(),
+          descricaoBase: descricaoBase.trim().toUpperCase() || ref.trim().toUpperCase(),
+          cor: cor.trim().toUpperCase(),
+          grupoCode,
+          grupoNome: g?.nome || '',
+          subgrupoCode,
+          subgrupoNome: sg?.nome || '',
+          ncm: ncm.trim(),
+          cfop: cfop.trim() || '5102',
+          plusSize,
+          custoUnit: custo,
+          precoUnit: preco,
+          descontoPct: Number((descontoPct || '0').replace(',', '.')) || 0,
+          tributoPct: Number((tributoPct || '0').replace(',', '.')) || 0,
+          tamanhosQty,
+        }),
+      });
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-5 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-black mb-3">Adicionar item ao pedido</h2>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">REF *</label>
+            <input value={ref} onChange={(e) => setRef(e.target.value.toUpperCase())} placeholder="7031"
+              className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Descrição base</label>
+            <input value={descricaoBase} onChange={(e) => setDescricaoBase(e.target.value.toUpperCase())}
+              placeholder="BLUSA FEMININA MANGA CURTA"
+              className="w-full px-2 py-2 border rounded text-sm" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="text-[10px] font-bold text-slate-600 uppercase">COR *</label>
+            <input value={cor} onChange={(e) => setCor(e.target.value.toUpperCase())} placeholder="PRETO"
+              className="w-full px-2 py-2 border rounded text-sm" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">NCM</label>
+            <input value={ncm} onChange={(e) => setNcm(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              placeholder="00000000" className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">CFOP</label>
+            <input value={cfop} onChange={(e) => setCfop(e.target.value.replace(/\D/g, '').slice(0, 4))}
+              className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+        </div>
+
+        {/* Grupo + Subgrupo com botao + */}
+        <div className="grid grid-cols-2 gap-2 mt-3 bg-slate-50 p-2 rounded-lg">
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-bold text-slate-600 uppercase">Grupo *</label>
+              <button type="button" onClick={criarGrupo} disabled={criandoG}
+                className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+                {criandoG ? '...' : '+ novo'}
+              </button>
+            </div>
+            <select value={grupoCode || ''} onChange={(e) => { setGrupoCode(Number(e.target.value) || null); setSubgrupoCode(null); }}
+              className="w-full px-2 py-2 border rounded text-sm bg-white">
+              <option value="">— selecione —</option>
+              {grupos.map((g) => <option key={g.codigo} value={g.codigo}>{g.nome}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-bold text-slate-600 uppercase">Subgrupo *</label>
+              <button type="button" onClick={criarSubgrupo} disabled={criandoSg || !grupoCode}
+                className="text-[10px] font-bold text-violet-600 hover:text-violet-800 disabled:opacity-40">
+                {criandoSg ? '...' : '+ novo'}
+              </button>
+            </div>
+            <select value={subgrupoCode || ''} onChange={(e) => setSubgrupoCode(Number(e.target.value) || null)}
+              disabled={!grupoCode}
+              className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50">
+              <option value="">— selecione —</option>
+              {subgrupos.map((s) => <option key={s.codigo} value={s.codigo}>{s.nome}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* PlusSize */}
+        <label className="flex items-center gap-2 mt-2 cursor-pointer">
+          <input type="checkbox" checked={plusSize} onChange={(e) => setPlusSize(e.target.checked)}
+            className="accent-violet-600 w-4 h-4" />
+          <span className="text-sm font-bold text-violet-700">PLUS SIZE</span>
+        </label>
+
+        {/* Precificação */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 bg-amber-50 p-2 rounded-lg">
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Custo R$ *</label>
+            <input value={custoUnit} onChange={(e) => setCustoUnit(e.target.value)} placeholder="0,00"
+              className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Desconto %</label>
+            <input value={descontoPct} onChange={(e) => setDescontoPct(e.target.value)} placeholder="0"
+              className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Imposto %</label>
+            <input value={tributoPct} onChange={(e) => setTributoPct(e.target.value)} placeholder="0"
+              className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold text-slate-600 uppercase">Preço venda R$ *</label>
+            <input value={precoUnit} onChange={(e) => setPrecoUnit(e.target.value)} placeholder="0,00"
+              className="w-full px-2 py-2 border rounded text-sm font-mono bg-emerald-50" />
+          </div>
+        </div>
+
+        {/* Tamanhos */}
+        <div className="mt-3">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos + Quantidades *</label>
+          <input value={tamanhosTxt} onChange={(e) => setTamanhosTxt(e.target.value)}
+            placeholder="P:2, M:3, G:5, GG:2"
+            className="w-full px-2 py-2 border rounded text-sm font-mono" />
+          <div className="text-[11px] text-slate-500 mt-1">
+            Formato: <code>tamanho:qty</code> separados por vírgula. Total: <b className="text-violet-700">{totalPecas} peças</b>
+          </div>
+        </div>
+
+        {err && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mt-3">{err}</div>
+        )}
+
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40">
+            Cancelar
+          </button>
+          <button onClick={salvar} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
+            {saving ? 'Salvando...' : 'Adicionar item'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
