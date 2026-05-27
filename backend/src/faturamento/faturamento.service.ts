@@ -156,15 +156,27 @@ export class FaturamentoService {
   }
 
   /**
-   * Status do Order que contam como "venda efetivada" (saiu pro cliente).
-   * shipped   → postado / saiu da loja
-   * delivered → entregue
-   * completed → finalizado (estado terminal — pode nem ser usado no fluxo)
+   * Status do Order que contam como "VENDIDO" — cliente PAGOU.
    *
-   * NÃO inclui: pending (não pagou), routing, awaiting_stock, separating
-   * (ainda em processo), ready (pronto mas não saiu), cancelled, refunded.
+   * Critério: pagamento confirmado = venda. Não importa se já postou,
+   * está separando, ou ainda nem foi pra loja — pra fins de FATURAMENTO
+   * conta a partir do momento que o dinheiro entrou.
+   *
+   * NÃO entram:
+   *   - pending   (cliente não pagou ainda — abandonou checkout)
+   *   - cancelled (cancelado antes ou depois de pagar)
+   *   - refunded  (estornado — o dinheiro voltou pro cliente)
    */
-  private static readonly FATURAMENTO_STATUSES = ['shipped', 'delivered', 'completed'];
+  private static readonly FATURAMENTO_STATUSES = [
+    'processing',
+    'routing',
+    'awaiting_stock',
+    'separating',
+    'ready',
+    'shipped',
+    'delivered',
+    'completed',
+  ];
 
   /**
    * Soma totalAmount de Order com status que conta como venda dentro do período.
