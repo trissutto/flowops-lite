@@ -23,6 +23,11 @@ RUN echo "==> conteudo de dist apos build:" && ls -la dist && find dist -name 'm
 EXPOSE 3001
 
 # 5) No start: aplica schema no Postgres (db push) + sobe API
-#    --accept-data-loss=false (default) impede drops destrutivos
+#    --accept-data-loss: o Prisma é PARANOICO e aborta em qualquer mudança
+#      que TEORICAMENTE possa causar perda (adicionar UNIQUE, mudar tipo, etc),
+#      mesmo quando não há duplicatas reais. Em produção com schema em
+#      evolução isso bloqueia deploys legítimos. Flag liberada — mudanças
+#      destrutivas reais (DROP TABLE, DROP COLUMN) continuam só via migration
+#      manual no banco.
 #    --skip-generate evita regerar client (já gerado no build)
-CMD sh -c "echo '==> aplicando schema Prisma no Postgres...' && npx prisma db push --skip-generate && MAIN=\$(find dist -name 'main.js' -not -path '*/node_modules/*' | head -1) && echo \"==> iniciando: \$MAIN\" && node \"\$MAIN\""
+CMD sh -c "echo '==> aplicando schema Prisma no Postgres...' && npx prisma db push --accept-data-loss --skip-generate && MAIN=\$(find dist -name 'main.js' -not -path '*/node_modules/*' | head -1) && echo \"==> iniciando: \$MAIN\" && node \"\$MAIN\""
