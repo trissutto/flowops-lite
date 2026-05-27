@@ -312,6 +312,107 @@ export default function FaturamentoPage() {
           </div>
         )}
 
+        {/* TABELA RANKING 2026 vs 2025 */}
+        {data && data.lojas.length > 0 && (() => {
+          const maxFat = Math.max(...data.lojas.map((l) => Math.max(l.atual.faturamento, l.anterior.faturamento, 1)));
+          return (
+            <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                <div className="text-sm font-bold text-slate-700">
+                  📊 Ranking de Lojas — {data.from.split('-').reverse().join('/').slice(0, 5)} vs ano anterior
+                </div>
+                <div className="text-[11px] text-slate-500">Ordenado por faturamento atual</div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                    <tr>
+                      <th className="px-3 py-2 text-left w-10">#</th>
+                      <th className="px-3 py-2 text-left">Loja</th>
+                      <th className="px-3 py-2 text-right">2026</th>
+                      <th className="px-3 py-2 text-right">2025</th>
+                      <th className="px-3 py-2 text-right w-20">Δ%</th>
+                      <th className="px-3 py-2 text-left w-1/3">Visual</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {data.lojas.map((l, idx) => {
+                      const pct2026 = (l.atual.faturamento / maxFat) * 100;
+                      const pct2025 = (l.anterior.faturamento / maxFat) * 100;
+                      const variacao = l.variacaoPct;
+                      const varColor = variacao > 0 ? 'text-emerald-700' : variacao < 0 ? 'text-rose-700' : 'text-slate-500';
+                      const varBg = variacao > 0 ? 'bg-emerald-50' : variacao < 0 ? 'bg-rose-50' : 'bg-slate-50';
+                      return (
+                        <tr key={l.storeCode} className="hover:bg-slate-50 transition">
+                          <td className="px-3 py-2 text-slate-400 font-mono font-bold text-xs">
+                            {String(idx + 1).padStart(2, '0')}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono text-slate-400">{l.storeCode}</span>
+                              <span className="font-bold text-slate-800">{l.storeName}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-right font-bold text-slate-900 tabular-nums">
+                            {brl(l.atual.faturamento)}
+                          </td>
+                          <td className="px-3 py-2 text-right text-slate-500 tabular-nums">
+                            {brl(l.anterior.faturamento)}
+                          </td>
+                          <td className={`px-3 py-2 text-right font-bold tabular-nums ${varColor}`}>
+                            <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${varBg}`}>
+                              {variacao > 0 ? '▲' : variacao < 0 ? '▼' : '='}
+                              {variacao >= 0 ? '+' : ''}{variacao.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 bg-slate-100 rounded-sm h-3 overflow-hidden">
+                                  <div
+                                    className="h-full bg-emerald-500 rounded-sm transition-all"
+                                    style={{ width: `${pct2026}%` }}
+                                  />
+                                </div>
+                                <span className="text-[9px] font-bold text-emerald-700 w-8 text-right">26</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 bg-slate-100 rounded-sm h-2 overflow-hidden">
+                                  <div
+                                    className="h-full bg-slate-400 rounded-sm transition-all"
+                                    style={{ width: `${pct2025}%` }}
+                                  />
+                                </div>
+                                <span className="text-[9px] font-bold text-slate-500 w-8 text-right">25</span>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-slate-100 text-sm font-bold border-t-2 border-slate-200">
+                    <tr>
+                      <td className="px-3 py-2"></td>
+                      <td className="px-3 py-2 text-slate-700">TOTAL REDE</td>
+                      <td className="px-3 py-2 text-right text-emerald-700 tabular-nums">
+                        {brl(data.totalRede.atual)}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-600 tabular-nums">
+                        {brl(data.totalRede.anterior)}
+                      </td>
+                      <td className={`px-3 py-2 text-right tabular-nums ${data.totalRede.variacaoPct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {data.totalRede.variacaoPct >= 0 ? '+' : ''}{data.totalRede.variacaoPct.toFixed(1)}%
+                      </td>
+                      <td className="px-3 py-2"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* CARDS POR LOJA */}
         {data && data.lojas.length > 0 && (
           <div className="space-y-2">

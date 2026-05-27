@@ -105,6 +105,14 @@ export class FaturamentoService {
     // ── 6) Time series mergeada (Giga + flowops SITE) ──
     const series = this.mergeTimeseries(tsAtual, tsAnterior, flowTsAtual, flowTsAnterior, granularity);
 
+    // Debug: ajuda a identificar gráfico de ano anterior zerado
+    this.logger.log(
+      `Faturamento timeseries: ${tsAtual.length} pts atual, ${tsAnterior.length} pts anterior, ` +
+      `${flowTsAtual.length} flow atual, ${flowTsAnterior.length} flow anterior, ` +
+      `${series.length} buckets mergeados, ` +
+      `soma anterior=${series.reduce((s, p) => s + p.anterior, 0).toFixed(2)}`,
+    );
+
     const result = {
       from,
       to,
