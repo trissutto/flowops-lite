@@ -7424,6 +7424,85 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * SCHEMA DIAGNOSTIC — retorna as colunas da tabela `caixa` + soma de
+   * TODAS as colunas numéricas pra uma loja num período. Usado pra
+   * descobrir qual coluna bate com "TOTAL VENDAS R$" do Wincred.
+   *
+   * O Wincred mostra "produtos vendidos" — provavelmente é uma coluna
+   * tipo VALORUNITARIO*QUANTIDADE ou VALORLIQUIDO, não o VALORTOTAL
+   * (que pode incluir acréscimos/juros do crediário).
+   */
+  async getCaixaSchemaDiagnostic(loja: string, from: string, toExclusive: string): Promise<any> {
+    if (!this.pool) return { error: 'pool não inicializado' };
+    try {
+      // 1) Lista todas as colunas da tabela
+      const [colsRows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM caixa`);
+      const cols = (colsRows as any[]).map((r) => ({
+        nome: r.Field,
+        tipo: r.Type,
+        null: r.Null,
+        default: r.Default,
+      }));
+
+      // 2) Identifica colunas numéricas
+      const numericTypes = /^(int|tinyint|smallint|mediumint|bigint|decimal|numeric|float|double|real)/i;
+      const numericCols = cols.filter((c) => numericTypes.test(c.tipo)).map((c) => c.nome);
+
+      // 3) Soma cada coluna numérica + combinações comuns
+      const sumsParts = numericCols.map((c) => `ROUND(SUM(\`${c}\`), 2) AS \`sum_${c}\``);
+      const hasUnit = numericCols.includes('VALORUNITARIO');
+      const hasQtd = numericCols.includes('QUANTIDADE');
+      if (hasUnit && hasQtd) {
+        sumsParts.push(`ROUND(SUM(VALORUNITARIO * QUANTIDADE), 2) AS sum_unitario_x_quantidade`);
+      }
+      const hasBruto = numericCols.includes('VALORBRUTO');
+      const hasDesc = numericCols.includes('DESCONTO');
+      if (hasBruto && hasDesc) {
+        sumsParts.push(`ROUND(SUM(VALORBRUTO - DESCONTO), 2) AS sum_bruto_menos_desconto`);
+      }
+
+      const sql = `
+        SELECT
+          COUNT(*) AS total_linhas,
+          COUNT(DISTINCT NUMERO) AS cupons,
+          SUM(QUANTIDADE) AS quantidades,
+          ${sumsParts.join(',\n          ')}
+        FROM caixa
+        WHERE LOJA = ?
+          AND DATA >= ?
+          AND DATA <  ?
+          AND (MARCADO IS NULL OR MARCADO <> 'SIM')
+      `;
+      const [sumRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [loja, from, toExclusive]);
+
+      // 4) Amostra de 3 linhas pra ver dados reais
+      const [sampleRows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT * FROM caixa
+         WHERE LOJA = ?
+           AND DATA >= ?
+           AND DATA <  ?
+           AND (MARCADO IS NULL OR MARCADO <> 'SIM')
+         ORDER BY DATA DESC, NUMERO DESC
+         LIMIT 3`,
+        [loja, from, toExclusive],
+      );
+
+      return {
+        loja,
+        from,
+        toExclusive,
+        colunas: cols,
+        colunasNumericas: numericCols,
+        somas: (sumRows as any[])[0],
+        amostra: sampleRows,
+      };
+    } catch (e: any) {
+      this.logger.error(`getCaixaSchemaDiagnostic falhou: ${e?.message || e}`);
+      return { error: String(e?.message || e) };
+    }
+  }
+
+  /**
    * Diagnóstico DETALHADO de faturamento por loja — usado pra debugar
    * divergência com o Wincred. Quebra cada loja em:
    *  - total de linhas no período

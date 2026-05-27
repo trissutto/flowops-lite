@@ -45,6 +45,29 @@ export class FaturamentoController {
   }
 
   /**
+   * GET /faturamento/schema-caixa?loja=ITANHAEM&from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Lista colunas da tabela `caixa` + soma de cada coluna numérica.
+   * Usado pra descobrir qual coluna bate com "TOTAL VENDAS R$" do Wincred.
+   */
+  @Get('schema-caixa')
+  async schemaCaixa(
+    @Req() req: any,
+    @Query('loja') loja: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    this.requireAdmin(req);
+    if (!loja || !from || !to) {
+      return { error: 'loja, from e to obrigatórios (YYYY-MM-DD)' };
+    }
+    const dFim = new Date(to);
+    dFim.setDate(dFim.getDate() + 1);
+    const toExclusive = `${dFim.getFullYear()}-${String(dFim.getMonth() + 1).padStart(2, '0')}-${String(dFim.getDate()).padStart(2, '0')}`;
+    return this.erp.getCaixaSchemaDiagnostic(loja.toUpperCase(), from, toExclusive);
+  }
+
+  /**
    * GET /faturamento/diagnostico?from=YYYY-MM-DD&to=YYYY-MM-DD&lojas=ITANHAEM,SOROCABA
    *
    * Roda query diagnóstica DIRETO no Giga MySQL pra debugar divergência
