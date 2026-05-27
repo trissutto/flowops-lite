@@ -7424,6 +7424,53 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Diagnóstico DETALHADO de faturamento por loja — usado pra debugar
+   * divergência com o Wincred. Quebra cada loja em:
+   *  - total de linhas no período
+   *  - quantas com MARCADO em cada estado (null, '', 'SIM', outros)
+   *  - quantas com VALORTOTAL negativo (devoluções/estornos)
+   *  - 2 variações de soma com filtros diferentes pra ver o impacto
+   */
+  async diagnosticoFaturamento(
+    from: string,
+    toExclusive: string,
+    lojas: string[] | null,
+  ): Promise<any[]> {
+    if (!this.pool) return [];
+    const filtroLojas = lojas && lojas.length > 0 ? `AND LOJA IN (${lojas.map(() => '?').join(',')})` : '';
+    const params: any[] = [from, toExclusive];
+    if (lojas) params.push(...lojas);
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `
+        SELECT
+          LOJA,
+          COUNT(*) AS total_linhas,
+          COUNT(CASE WHEN MARCADO IS NULL THEN 1 END) AS marcado_null,
+          COUNT(CASE WHEN MARCADO = '' THEN 1 END) AS marcado_vazio,
+          COUNT(CASE WHEN MARCADO = 'SIM' THEN 1 END) AS marcado_sim,
+          COUNT(CASE WHEN MARCADO IS NOT NULL AND MARCADO NOT IN ('SIM','') THEN 1 END) AS marcado_outros,
+          COUNT(CASE WHEN VALORTOTAL < 0 THEN 1 END) AS linhas_negativas,
+          ROUND(SUM(VALORTOTAL), 2) AS sum_total,
+          ROUND(SUM(CASE WHEN MARCADO IS NULL OR MARCADO <> 'SIM' THEN VALORTOTAL ELSE 0 END), 2) AS sum_excluindo_sim,
+          ROUND(SUM(CASE WHEN MARCADO IS NULL THEN VALORTOTAL ELSE 0 END), 2) AS sum_so_null,
+          ROUND(SUM(CASE WHEN MARCADO = '' THEN VALORTOTAL ELSE 0 END), 2) AS sum_so_vazio
+        FROM caixa
+        WHERE DATA >= ? AND DATA < ?
+          ${filtroLojas}
+        GROUP BY LOJA
+        ORDER BY sum_excluindo_sim DESC
+        `,
+        params,
+      );
+      return rows as any[];
+    } catch (e: any) {
+      this.logger.error(`diagnosticoFaturamento falhou: ${e?.message || e}`);
+      return [{ error: String(e?.message || e) }];
+    }
+  }
+
+  /**
    * Time series do faturamento agregado (todas as lojas somadas) ou
    * separado por loja. Granularidade: day | week | month.
    *

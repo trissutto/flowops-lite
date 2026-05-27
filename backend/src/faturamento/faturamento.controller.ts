@@ -1,6 +1,7 @@
 import { Controller, ForbiddenException, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FaturamentoService } from './faturamento.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * /faturamento — admin only. Tela de gráfico de faturamento por loja.
@@ -8,7 +9,10 @@ import { FaturamentoService } from './faturamento.service';
 @UseGuards(JwtAuthGuard)
 @Controller('faturamento')
 export class FaturamentoController {
-  constructor(private readonly svc: FaturamentoService) {}
+  constructor(
+    private readonly svc: FaturamentoService,
+    private readonly erp: ErpService,
+  ) {}
 
   private requireAdmin(req: any) {
     if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
@@ -38,5 +42,35 @@ export class FaturamentoController {
     const t = to || fmt(today);
     const g = (granularity === 'week' || granularity === 'month') ? granularity : 'day';
     return this.svc.getResumo(f, t, g);
+  }
+
+  /**
+   * GET /faturamento/diagnostico?from=YYYY-MM-DD&to=YYYY-MM-DD&lojas=ITANHAEM,SOROCABA
+   *
+   * Roda query diagnóstica DIRETO no Giga MySQL pra debugar divergência
+   * com Wincred. Quebra por LOJA com contagens de cada categoria de MARCADO,
+   * linhas negativas, e 2 variações de soma com filtros diferentes.
+   *
+   * Uso temporário — pode remover quando alinhar as queries.
+   */
+  @Get('diagnostico')
+  async diagnostico(
+    @Req() req: any,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('lojas') lojas?: string,
+  ) {
+    this.requireAdmin(req);
+    if (!from || !to) {
+      return { error: 'from e to obrigatórios (YYYY-MM-DD)' };
+    }
+    // Soma 1 dia no `to` (fim exclusivo)
+    const dFim = new Date(to);
+    dFim.setDate(dFim.getDate() + 1);
+    const toExclusive = `${dFim.getFullYear()}-${String(dFim.getMonth() + 1).padStart(2, '0')}-${String(dFim.getDate()).padStart(2, '0')}`;
+    const lojasList = lojas
+      ? lojas.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+      : null;
+    return this.erp.diagnosticoFaturamento(from, toExclusive, lojasList);
   }
 }

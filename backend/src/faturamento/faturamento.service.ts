@@ -57,6 +57,16 @@ export class FaturamentoService {
     });
     const nomeLoja = new Map(lojasDb.map((l: any) => [l.code, l.name || l.code]));
 
+    // Detecta o code REAL da loja SITE — não hardcode 'SITE'!
+    // Ex: Lurd's tem Store code='13' name='SITE'. Sem isso o código
+    // criava DOIS cards (um real + um zerado).
+    const siteStore = lojasDb.find(
+      (l: any) =>
+        (l.name || '').toString().trim().toUpperCase() === 'SITE' ||
+        l.code === 'SITE',
+    );
+    const siteStoreCode = siteStore?.code || 'SITE';
+
     // ── 2) Giga: faturamento por loja, período atual + ano anterior em paralelo ──
     const [gigaAtual, gigaAnterior, tsAtual, tsAnterior] = await Promise.all([
       this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive),
@@ -76,7 +86,14 @@ export class FaturamentoService {
     const flowTsAnterior = await this.getFlowopsTimeseries(dInicioAnterior, dFimAnterior, granularity);
 
     // ── 4) Compõe SITE = Giga SITE + Flowops completed ──
-    const lojas = this.combinarLojas(gigaAtual, gigaAnterior, flowAtual, flowAnterior, nomeLoja);
+    const lojas = this.combinarLojas(
+      gigaAtual,
+      gigaAnterior,
+      flowAtual,
+      flowAnterior,
+      nomeLoja,
+      siteStoreCode,
+    );
 
     // ── 5) Totais ──
     const totalAtual = lojas.reduce((s, l) => s + l.atual.faturamento, 0);
@@ -113,12 +130,49 @@ export class FaturamentoService {
     return result;
   }
 
-  /** Soma totalAmount de Order com status=completed dentro do período */
+  /**
+   * Data de corte a partir da qual as vendas do SITE passaram a ser
+   * lançadas EXCLUSIVAMENTE no Flowops (WC) e PARARAM de aparecer no Giga
+   * SITE. ANTES dessa data, o Giga SITE já tinha as vendas do site — não
+   * pode somar Flowops Order pra não DUPLICAR.
+   *
+   * Default: 2026-05-11 (data que a Lurd's parou de lançar vendas do site
+   * no Wincred). Configurável via env FLOWOPS_SITE_CUTOFF_DATE=YYYY-MM-DD.
+   *
+   * Depois dessa data:
+   *   - Giga LOJA='SITE' = só vendas WhatsApp (continua lançando)
+   *   - Flowops Order.completed = vendas reais do e-commerce
+   *   - SITE total = soma dos dois
+   */
+  private getFlowopsSiteCutoff(): Date {
+    const envCutoff = this.configCutoffEnvOrDefault();
+    const [y, m, d] = envCutoff.split('-').map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  }
+  private configCutoffEnvOrDefault(): string {
+    // Usa env var se setada, senão default hardcoded.
+    const env = process.env.FLOWOPS_SITE_CUTOFF_DATE;
+    return env && /^\d{4}-\d{2}-\d{2}$/.test(env) ? env : '2026-05-11';
+  }
+
+  /**
+   * Soma totalAmount de Order com status=completed dentro do período.
+   * RESPEITA O CUTOFF: só conta vendas a partir de FLOWOPS_SITE_CUTOFF_DATE.
+   * Antes do cutoff, as vendas eram lançadas no Giga (já contadas lá).
+   */
   private async getFlowopsSiteFaturamento(inicio: Date, fimExclusive: Date) {
+    const cutoff = this.getFlowopsSiteCutoff();
+    // inicio efetivo = max(inicio do filtro, cutoff)
+    const inicioEfetivo = inicio < cutoff ? cutoff : inicio;
+    // Período inteiro antes do cutoff → não soma nada do Flowops
+    if (inicioEfetivo >= fimExclusive) {
+      return { faturamento: 0, cupons: 0, pecas: 0, ticketMedio: 0 };
+    }
+
     const rows = await this.prisma.order.findMany({
       where: {
         status: 'completed',
-        wcDateCreated: { gte: inicio, lt: fimExclusive },
+        wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
       select: {
         totalAmount: true,
@@ -145,10 +199,16 @@ export class FaturamentoService {
     fimExclusive: Date,
     granularity: 'day' | 'week' | 'month',
   ) {
+    const cutoff = this.getFlowopsSiteCutoff();
+    const inicioEfetivo = inicio < cutoff ? cutoff : inicio;
+    if (inicioEfetivo >= fimExclusive) {
+      return [];
+    }
+
     const orders = await this.prisma.order.findMany({
       where: {
         status: 'completed',
-        wcDateCreated: { gte: inicio, lt: fimExclusive },
+        wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
       select: { totalAmount: true, wcDateCreated: true },
     });
@@ -175,11 +235,14 @@ export class FaturamentoService {
     flowAtual: any,
     flowAnterior: any,
     nomeLoja: Map<string, string>,
+    siteStoreCode: string,
   ) {
     const codes = new Set<string>();
     for (const r of gigaAtual) codes.add(r.storeCode);
     for (const r of gigaAnterior) codes.add(r.storeCode);
-    codes.add('SITE'); // sempre inclui SITE (Flowops compõe)
+    // SEMPRE inclui a loja SITE — mesmo que Giga não tenha vendas no período,
+    // Flowops pode ter. Usa o código REAL da loja (não hardcoded 'SITE').
+    codes.add(siteStoreCode);
 
     const mapAtual = new Map(gigaAtual.map((r) => [r.storeCode, r]));
     const mapAnterior = new Map(gigaAnterior.map((r) => [r.storeCode, r]));
@@ -188,36 +251,36 @@ export class FaturamentoService {
       const ga = mapAtual.get(code) || { faturamento: 0, cupons: 0, pecas: 0, ticketMedio: 0 };
       const gp = mapAnterior.get(code) || { faturamento: 0, cupons: 0, pecas: 0, ticketMedio: 0 };
 
-      // Pra SITE, soma Giga + Flowops
-      const atual =
-        code === 'SITE'
-          ? {
-              faturamento: ga.faturamento + flowAtual.faturamento,
-              cupons: ga.cupons + flowAtual.cupons,
-              pecas: ga.pecas + flowAtual.pecas,
-              ticketMedio:
-                ga.cupons + flowAtual.cupons > 0
-                  ? (ga.faturamento + flowAtual.faturamento) / (ga.cupons + flowAtual.cupons)
-                  : 0,
-              breakdown: {
-                giga: { faturamento: ga.faturamento, cupons: ga.cupons },
-                flowops: { faturamento: flowAtual.faturamento, cupons: flowAtual.cupons },
-              },
-            }
-          : { ...ga, breakdown: null };
+      const isSite = code === siteStoreCode;
 
-      const anterior =
-        code === 'SITE'
-          ? {
-              faturamento: gp.faturamento + flowAnterior.faturamento,
-              cupons: gp.cupons + flowAnterior.cupons,
-              pecas: gp.pecas + flowAnterior.pecas,
-              ticketMedio:
-                gp.cupons + flowAnterior.cupons > 0
-                  ? (gp.faturamento + flowAnterior.faturamento) / (gp.cupons + flowAnterior.cupons)
-                  : 0,
-            }
-          : { ...gp };
+      // Pra SITE, soma Giga + Flowops
+      const atual = isSite
+        ? {
+            faturamento: ga.faturamento + flowAtual.faturamento,
+            cupons: ga.cupons + flowAtual.cupons,
+            pecas: ga.pecas + flowAtual.pecas,
+            ticketMedio:
+              ga.cupons + flowAtual.cupons > 0
+                ? (ga.faturamento + flowAtual.faturamento) / (ga.cupons + flowAtual.cupons)
+                : 0,
+            breakdown: {
+              giga: { faturamento: ga.faturamento, cupons: ga.cupons },
+              flowops: { faturamento: flowAtual.faturamento, cupons: flowAtual.cupons },
+            },
+          }
+        : { ...ga, breakdown: null };
+
+      const anterior = isSite
+        ? {
+            faturamento: gp.faturamento + flowAnterior.faturamento,
+            cupons: gp.cupons + flowAnterior.cupons,
+            pecas: gp.pecas + flowAnterior.pecas,
+            ticketMedio:
+              gp.cupons + flowAnterior.cupons > 0
+                ? (gp.faturamento + flowAnterior.faturamento) / (gp.cupons + flowAnterior.cupons)
+                : 0,
+          }
+        : { ...gp };
 
       const variacaoPct =
         anterior.faturamento > 0
