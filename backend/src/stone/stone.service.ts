@@ -96,14 +96,28 @@ export class StoneService {
     }
 
     const amount = Number(data.amount || 0) / 100; // Stone manda em centavos
-    const bandeira = String(data.card_brand || data.brand || '').toUpperCase() || null;
-    const last4 = String(data.last_digits || data.last4 || '').trim() || null;
+    const bandeiraRaw = String(data.card_brand || data.brand || '').toUpperCase() || null;
+    const last4Raw = String(data.last_digits || data.last4 || '').trim() || null;
     const capturedAtRaw = data.captured_at || data.created_at || new Date().toISOString();
     const capturedAt = new Date(capturedAtRaw);
     const merchantId = String(data.merchant_id || '').trim() || null;
     const nsu = String(data.nsu || data.authorization_code || '').trim() || null;
     const authorizationCode = String(data.authorization_code || '').trim() || null;
     const installments = Number(data.installments || 1);
+
+    // ── Detecta método de pagamento (cartão vs PIX) ──
+    // Stone manda 'pix' em data.payment_method ou data.type quando é PIX.
+    // Fallback: se não vier bandeira nem last4, presume PIX.
+    const rawMethod = String(data.payment_method || data.type || data.kind || '').toLowerCase();
+    const isPix = rawMethod.includes('pix') || (!bandeiraRaw && !last4Raw);
+    const paymentMethod: 'credit_card' | 'debit_card' | 'pix' =
+      isPix
+        ? 'pix'
+        : (rawMethod.includes('debit') || rawMethod.includes('debito') ? 'debit_card' : 'credit_card');
+
+    // PIX não tem bandeira nem last4 — força null pra não confundir o match
+    const bandeira = isPix ? null : bandeiraRaw;
+    const last4 = isPix ? null : last4Raw;
 
     // Resolve storeCode pelo merchantId (tabela de mapping seria ideal,
     // mas por enquanto procuramos PdvSale candidatas em TODAS as lojas)
@@ -118,6 +132,7 @@ export class StoneService {
       last4,
       capturedAt,
       storeCode,
+      paymentMethod,
     });
 
     // ─── Persiste transação Stone ───
@@ -127,6 +142,7 @@ export class StoneService {
         stoneNsu: nsu,
         authorizationCode,
         amount,
+        paymentMethod,                                    // novo: cartão vs PIX
         bandeira,
         last4,
         installments,
@@ -203,8 +219,10 @@ export class StoneService {
     last4: string | null;
     capturedAt: Date;
     storeCode: string | null;
+    paymentMethod?: 'credit_card' | 'debit_card' | 'pix';
   }): Promise<{ saleId: string; score: number; reason: string } | null> {
-    const { amount, bandeira, capturedAt, storeCode } = input;
+    const { amount, bandeira, capturedAt, storeCode, paymentMethod } = input;
+    const isPix = paymentMethod === 'pix';
     const windowMs = 5 * 60 * 1000; // ±5min
     const tFrom = new Date(capturedAt.getTime() - windowMs);
     const tTo = new Date(capturedAt.getTime() + windowMs);
@@ -215,12 +233,19 @@ export class StoneService {
     //  - paymentMethod credito ou debito
     //  - total exato (tolerância 1 centavo)
     //  - ainda não conciliada
+    // Filtra pelo método correspondente:
+    //   PIX (Stone)     → PdvSalePayment com paymentMethod 'pix' / 'PIX'
+    //   Cartão (Stone)  → 'credito' / 'debito' (comportamento atual)
+    const paymentMethodFilter = isPix
+      ? ['pix', 'PIX']
+      : ['credito', 'debito', 'CREDITO', 'DEBITO'];
+
     const where: any = {
       status: 'finalized',
       finalizedAt: { gte: tFrom, lte: tTo },
       total: { gte: amount - 0.01, lte: amount + 0.01 },
       stoneConciliatedAt: null,
-      paymentMethod: { in: ['credito', 'debito', 'CREDITO', 'DEBITO'] },
+      paymentMethod: { in: paymentMethodFilter },
     };
     if (storeCode) where.storeCode = storeCode;
 
@@ -291,6 +316,135 @@ export class StoneService {
 
     if (!bestSaleId) return null;
     return { saleId: bestSaleId, score: bestScore, reason: bestReason };
+  }
+
+
+  /**
+   * Conciliação PIX por loja pra um dia específico.
+   * Compara o que vendedora bateu no PDV (PdvSale com paymentMethod=pix)
+   * com o que efetivamente caiu via Stone (StoneTransaction paymentMethod=pix).
+   *
+   * Retorna mapa storeCode → status. Lojas sem PIX (no PDV nem na Stone)
+   * ficam de fora do mapa. Frontend exibe selo só em quem aparece.
+   *
+   * Threshold de status (em centavos):
+   *   ok          → diferença ≤ 1 centavo (bate)
+   *   atencao     → diferença ≤ R$ 10 (provável erro de digitação)
+   *   divergente  → diferença > R$ 10 (investigar — possível fraude)
+   *   sem_stone   → loja lançou PIX no PDV mas não tem nenhum StoneTransaction (pode estar usando outro recebedor)
+   */
+  async getPixConciliacaoPorLoja(date: Date): Promise<{
+    date: string;
+    porLoja: Record<string, {
+      storeCode: string;
+      pixLancadoPdv: number;
+      pixConfirmadoStone: number;
+      diferenca: number;
+      qtdLancadoPdv: number;
+      qtdConfirmadoStone: number;
+      qtdCasados: number;
+      qtdDivergentesPdv: number;   // venda PIX no PDV sem match na Stone
+      qtdOrfasStone: number;       // PIX confirmado na Stone sem venda no PDV
+      status: 'ok' | 'atencao' | 'divergente' | 'sem_stone';
+    }>;
+  }> {
+    const from = new Date(date);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(date);
+    to.setHours(23, 59, 59, 999);
+
+    // 1) Vendas PDV com PIX, do dia, agrupadas por loja
+    const salesPix = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        finalizedAt: { gte: from, lte: to },
+        paymentMethod: { in: ['pix', 'PIX'] },
+      },
+      select: {
+        id: true,
+        storeCode: true,
+        total: true,
+        stoneConciliatedAt: true,
+      },
+    });
+
+    // 2) StoneTransaction PIX do dia, agrupadas por loja
+    const stonePix = await (this.prisma as any).stoneTransaction.findMany({
+      where: {
+        capturedAt: { gte: from, lte: to },
+        paymentMethod: 'pix',
+      },
+      select: {
+        stoneTxId: true,
+        storeCode: true,
+        amount: true,
+        matchedSaleId: true,
+      },
+    });
+
+    // 3) Agrega por storeCode
+    const porLoja: Record<string, any> = {};
+
+    const initStore = (code: string | null) => {
+      const k = code || '__sem_loja__';
+      if (!porLoja[k]) {
+        porLoja[k] = {
+          storeCode: k,
+          pixLancadoPdv: 0,
+          pixConfirmadoStone: 0,
+          diferenca: 0,
+          qtdLancadoPdv: 0,
+          qtdConfirmadoStone: 0,
+          qtdCasados: 0,
+          qtdDivergentesPdv: 0,
+          qtdOrfasStone: 0,
+          status: 'ok',
+        };
+      }
+      return porLoja[k];
+    };
+
+    for (const s of salesPix as any[]) {
+      const slot = initStore(s.storeCode);
+      slot.pixLancadoPdv += Number(s.total || 0);
+      slot.qtdLancadoPdv += 1;
+      if (s.stoneConciliatedAt) {
+        slot.qtdCasados += 1;
+      } else {
+        slot.qtdDivergentesPdv += 1;
+      }
+    }
+
+    for (const t of stonePix as any[]) {
+      const slot = initStore(t.storeCode);
+      slot.pixConfirmadoStone += Number(t.amount || 0);
+      slot.qtdConfirmadoStone += 1;
+      if (!t.matchedSaleId) {
+        slot.qtdOrfasStone += 1;
+      }
+    }
+
+    // 4) Calcula status final por loja
+    for (const k of Object.keys(porLoja)) {
+      const s = porLoja[k];
+      const diff = Math.abs(s.pixLancadoPdv - s.pixConfirmadoStone);
+      s.diferenca = Number(diff.toFixed(2));
+
+      if (s.qtdConfirmadoStone === 0 && s.qtdLancadoPdv > 0) {
+        s.status = 'sem_stone';      // loja não tem Stone configurada OU webhook não chegou
+      } else if (diff <= 0.01) {
+        s.status = 'ok';
+      } else if (diff <= 10.0) {
+        s.status = 'atencao';
+      } else {
+        s.status = 'divergente';
+      }
+    }
+
+    return {
+      date: from.toISOString().slice(0, 10),
+      porLoja,
+    };
   }
 
   /**

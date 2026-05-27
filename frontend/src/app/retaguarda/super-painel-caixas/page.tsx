@@ -11,7 +11,7 @@ import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertCircle, Banknote, QrCode, CreditCard,
-  TrendingUp, Lock, Unlock, Trophy,
+  TrendingUp, Lock, Unlock, Trophy, ShieldCheck, ShieldAlert, ShieldX, HelpCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -95,6 +95,19 @@ type Loja = {
   recebimentosCrediario?: RecebimentosCrediario;
   detalhado: Detalhado | null;
 };
+type PixConcStatus = {
+  storeCode: string;
+  pixLancadoPdv: number;
+  pixConfirmadoStone: number;
+  diferenca: number;
+  qtdLancadoPdv: number;
+  qtdConfirmadoStone: number;
+  qtdCasados: number;
+  qtdDivergentesPdv: number;
+  qtdOrfasStone: number;
+  status: 'ok' | 'atencao' | 'divergente' | 'sem_stone';
+};
+
 type Painel = {
   lojas: Loja[];
   consolidado: {
@@ -115,6 +128,53 @@ type Painel = {
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Selo de conciliação PIX (mostrado ao lado do valor PIX em cada loja)
+// ─────────────────────────────────────────────────────────────────────────
+function PixBadge({ s }: { s: PixConcStatus | undefined }) {
+  if (!s) return null;
+  if (s.status === 'ok') {
+    return (
+      <span
+        title={`PIX conciliado com Stone. ${s.qtdCasados} casados.`}
+        className="inline-flex items-center gap-1 text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1 py-0"
+      >
+        <ShieldCheck size={9} /> ok
+      </span>
+    );
+  }
+  if (s.status === 'atencao') {
+    return (
+      <span
+        title={`Diferença pequena: R$ ${s.diferenca.toFixed(2)}. PDV: R$ ${s.pixLancadoPdv.toFixed(2)} · Stone: R$ ${s.pixConfirmadoStone.toFixed(2)}`}
+        className="inline-flex items-center gap-1 text-[9px] text-amber-700 bg-amber-50 border border-amber-300 rounded px-1 py-0"
+      >
+        <ShieldAlert size={9} /> ±{brl(s.diferenca)}
+      </span>
+    );
+  }
+  if (s.status === 'divergente') {
+    return (
+      <span
+        title={`DIVERGÊNCIA: PDV R$ ${s.pixLancadoPdv.toFixed(2)} vs Stone R$ ${s.pixConfirmadoStone.toFixed(2)}. ${s.qtdDivergentesPdv} venda(s) PDV sem confirmação. ${s.qtdOrfasStone} PIX Stone sem venda.`}
+        className="inline-flex items-center gap-1 text-[9px] text-red-700 bg-red-50 border border-red-300 rounded px-1 py-0 font-semibold"
+      >
+        <ShieldX size={9} /> {brl(s.diferenca)}
+      </span>
+    );
+  }
+  // sem_stone
+  return (
+    <span
+      title="PIX lançado no PDV mas a Stone não confirmou nenhum. Loja pode estar usando outro recebedor ou webhook falhou."
+      className="inline-flex items-center gap-1 text-[9px] text-slate-600 bg-slate-100 border border-slate-300 rounded px-1 py-0"
+    >
+      <HelpCircle size={9} /> sem Stone
+    </span>
+  );
+}
+
 
 const fmtTime = (iso: string | null) => {
   if (!iso) return '—';
@@ -142,6 +202,7 @@ export default function SuperPainelCaixas() {
   const [error, setError] = useState<string | null>(null);
   const [secsToRefresh, setSecsToRefresh] = useState(POLL_INTERVAL_MS / 1000);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [pixConc, setPixConc] = useState<Record<string, PixConcStatus>>({});
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Detecta role do user (admin pode editar bandeira)
@@ -153,6 +214,18 @@ export default function SuperPainelCaixas() {
       } catch { /* ignora */ }
     })();
   }, []);
+
+  // Busca conciliação PIX por loja (refresca junto com o painel)
+  const fetchPixConc = async (dateYmd: string) => {
+    try {
+      const res = await api<{ porLoja: Record<string, PixConcStatus> }>(
+        `/stone/conciliacao-pix-por-loja?date=${dateYmd}`,
+      );
+      setPixConc(res?.porLoja || {});
+    } catch {
+      setPixConc({});
+    }
+  };
 
   // Filtro de data — default: HOJE (modo ao vivo, sem range)
   const [filterFrom, setFilterFrom] = useState<string>(todayYmd());
@@ -173,6 +246,8 @@ export default function SuperPainelCaixas() {
       const r = await api<Painel>(url);
       setData(r);
       setSecsToRefresh(POLL_INTERVAL_MS / 1000);
+      // Carrega conciliação PIX em paralelo (não-bloqueante)
+      fetchPixConc(isLiveMode ? todayYmd() : filterFrom);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -446,6 +521,7 @@ function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; 
             onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
           <ModItem label="PIX" valor={t.totalPix} cor="cyan"
             active={expanded === 'pix'}
+            badge={<PixBadge s={pixConc[loja.storeCode]} />}
             onClick={loja.detalhado && t.totalPix > 0 ? () => setExpanded(expanded === 'pix' ? null : 'pix') : undefined} />
           <ModItem label="Crédito" valor={t.totalCartaoCredito} cor="blue"
             active={expanded === 'credito'}
@@ -738,7 +814,7 @@ function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; 
   );
 }
 
-function ModItem({ label, valor, cor, onClick, active }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose'; onClick?: () => void; active?: boolean }) {
+function ModItem({ label, valor, cor, onClick, active, badge }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose'; onClick?: () => void; active?: boolean; badge?: React.ReactNode }) {
   const tones = {
     emerald: 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300',
     cyan: 'bg-cyan-50 text-cyan-800 border-cyan-200 hover:bg-cyan-100 hover:border-cyan-300',
@@ -764,6 +840,7 @@ function ModItem({ label, valor, cor, onClick, active }: { label: string; valor:
     >
       <div className="text-[8px] uppercase font-bold tracking-tight">{label}</div>
       <div className="text-[11px] font-black tabular-nums leading-tight">{brl(valor)}</div>
+      {badge && <div className="mt-0.5 flex justify-center">{badge}</div>}
     </button>
   );
 }

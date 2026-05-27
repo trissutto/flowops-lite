@@ -1070,9 +1070,10 @@ model StoneTransaction {
   authorizationCode String? @map("authorization_code")
   // Valores/dados do pagamento
   amount           Float                                  // em reais (centavos / 100)
-  bandeira         String?                                // VISA, MASTER, etc
-  last4            String?  @map("last4")
-  installments     Int?     @default(1)
+  paymentMethod    String?  @map("payment_method")        // credit_card | debit_card | pix
+  bandeira         String?                                // VISA, MASTER, etc (null pra PIX)
+  last4            String?  @map("last4")                 // null pra PIX
+  installments     Int?     @default(1)                   // 1 pra PIX
   // Origem na maquininha
   merchantId       String?  @map("merchant_id")
   storeCode        String?  @map("store_code")           // resolvido via merchantId

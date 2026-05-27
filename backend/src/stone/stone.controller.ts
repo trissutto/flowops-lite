@@ -92,6 +92,24 @@ export class StoneController {
     return this.stone.getConciliacao(d);
   }
 
+
+  /**
+   * GET /stone/conciliacao-pix-por-loja?date=YYYY-MM-DD
+   *
+   * Compara PIX lançado no PDV com PIX confirmado via Stone, por loja.
+   * Usado pelo super-painel-caixas pra mostrar selo de status.
+   */
+  @Get('stone/conciliacao-pix-por-loja')
+  @UseGuards(JwtAuthGuard)
+  async getPixConciliacaoPorLoja(@Req() req: any, @Query('date') date?: string) {
+    this.requireAdmin(req);
+    const d = date ? new Date(date + 'T00:00:00') : new Date();
+    if (isNaN(d.getTime())) {
+      throw new BadRequestException('Data inválida (YYYY-MM-DD)');
+    }
+    return this.stone.getPixConciliacaoPorLoja(d);
+  }
+
   /**
    * POST /stone/conciliar-manual
    * Body: { stoneTxId, saleId }
