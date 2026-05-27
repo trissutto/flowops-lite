@@ -206,15 +206,21 @@ export class FaturamentoService {
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
       select: {
-        totalAmount: true,
-        items: { select: { quantity: true } },
+        // Só ITENS — totalAmount inclui frete (sedex/PAC) e a regra é
+        // somar APENAS produtos vendidos pra bater com o critério do
+        // Wincred ("TOTAL VENDAS R$ não inclui frete").
+        items: { select: { quantity: true, unitPrice: true } },
       },
     });
     let faturamento = 0;
     let pecas = 0;
     for (const o of rows) {
-      faturamento += Number(o.totalAmount) || 0;
-      for (const it of o.items) pecas += Number(it.quantity) || 0;
+      for (const it of o.items) {
+        const q = Number(it.quantity) || 0;
+        const p = Number(it.unitPrice) || 0;
+        pecas += q;
+        faturamento += q * p;
+      }
     }
     return {
       faturamento,
@@ -241,13 +247,21 @@ export class FaturamentoService {
         status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
-      select: { totalAmount: true, wcDateCreated: true },
+      // Mesmo critério da função acima: SUM(quantity * unitPrice) — sem frete.
+      select: {
+        wcDateCreated: true,
+        items: { select: { quantity: true, unitPrice: true } },
+      },
     });
     const buckets = new Map<string, number>();
     for (const o of orders) {
       if (!o.wcDateCreated) continue;
       const b = this.bucketKey(o.wcDateCreated, granularity);
-      buckets.set(b, (buckets.get(b) || 0) + (Number(o.totalAmount) || 0));
+      let valorProdutos = 0;
+      for (const it of o.items) {
+        valorProdutos += (Number(it.quantity) || 0) * (Number(it.unitPrice) || 0);
+      }
+      buckets.set(b, (buckets.get(b) || 0) + valorProdutos);
     }
     return Array.from(buckets.entries()).map(([bucket, faturamento]) => ({
       bucket,
