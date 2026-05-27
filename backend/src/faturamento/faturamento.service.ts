@@ -156,7 +156,18 @@ export class FaturamentoService {
   }
 
   /**
-   * Soma totalAmount de Order com status=completed dentro do período.
+   * Status do Order que contam como "venda efetivada" (saiu pro cliente).
+   * shipped   → postado / saiu da loja
+   * delivered → entregue
+   * completed → finalizado (estado terminal — pode nem ser usado no fluxo)
+   *
+   * NÃO inclui: pending (não pagou), routing, awaiting_stock, separating
+   * (ainda em processo), ready (pronto mas não saiu), cancelled, refunded.
+   */
+  private static readonly FATURAMENTO_STATUSES = ['shipped', 'delivered', 'completed'];
+
+  /**
+   * Soma totalAmount de Order com status que conta como venda dentro do período.
    * RESPEITA O CUTOFF: só conta vendas a partir de FLOWOPS_SITE_CUTOFF_DATE.
    * Antes do cutoff, as vendas eram lançadas no Giga (já contadas lá).
    */
@@ -171,7 +182,7 @@ export class FaturamentoService {
 
     const rows = await this.prisma.order.findMany({
       where: {
-        status: 'completed',
+        status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
       select: {
@@ -207,7 +218,7 @@ export class FaturamentoService {
 
     const orders = await this.prisma.order.findMany({
       where: {
-        status: 'completed',
+        status: { in: FaturamentoService.FATURAMENTO_STATUSES },
         wcDateCreated: { gte: inicioEfetivo, lt: fimExclusive },
       },
       select: { totalAmount: true, wcDateCreated: true },
