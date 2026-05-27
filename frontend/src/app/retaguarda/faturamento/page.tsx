@@ -285,7 +285,7 @@ export default function FaturamentoPage() {
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis tickFormatter={brlCompact} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    formatter={(v: number) => brl(v)}
+                    formatter={(v: any) => brl(Number(v) || 0)}
                     labelStyle={{ color: '#475569', fontWeight: 'bold' }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
