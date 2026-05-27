@@ -333,30 +333,10 @@ export default function ClientesCrmPage() {
         </div>
       </div>
 
-      {/* ── Banner de escopo ─────────────────────────────────────────── */}
-      {me && (
-        isMatrix ? (
-          <div className="mb-4 flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-lg px-4 py-3">
-            <StoreIcon className="w-5 h-5 text-purple-700" />
-            <span className="text-sm text-purple-900 font-medium">Retaguarda — visão total:</span>
-            <select
-              value={storeFilter}
-              onChange={e => { setStoreFilter(e.target.value); setPage(1); }}
-              className="flex-1 max-w-xs border rounded px-3 py-1.5 bg-white text-sm"
-            >
-              <option value="">Todas as lojas</option>
-              {stores.map(s => (
-                <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-              ))}
-            </select>
-            {storeFilter && (
-              <button onClick={() => setStoreFilter('')} className="text-xs text-purple-700 hover:underline">
-                Limpar
-              </button>
-            )}
-          </div>
-        ) : me.storeId ? (
-          <div className="mb-4 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+      {/* ── Banner informativo (só vendedora e sem-loja; admin filtra inline na busca) ── */}
+      {me && !isMatrix && (
+        me.storeId ? (
+          <div className="mb-3 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2.5">
             <StoreIcon className="w-5 h-5 text-blue-700" />
             <span className="text-sm text-blue-900">
               Você está vendo clientes da loja <strong>{me.storeName ?? me.storeCode ?? 'sua loja'}</strong>.
@@ -364,7 +344,7 @@ export default function ClientesCrmPage() {
             </span>
           </div>
         ) : (
-          <div className="mb-4 flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3">
+          <div className="mb-3 flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2.5">
             <AlertCircle className="w-5 h-5 text-yellow-700" />
             <span className="text-sm text-yellow-900">
               Seu usuário não tem loja vinculada. Fale com a retaguarda para liberar acesso.
@@ -399,14 +379,6 @@ export default function ClientesCrmPage() {
         </div>
       )}
 
-      {/* ── Stats rápidas ─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <StatCard label="Clientes na base" value={total.toLocaleString('pt-BR')} icon={<Users className="w-5 h-5" />} />
-        <StatCard label="Com WhatsApp"     value={data.filter(c => c.whatsapp).length.toLocaleString('pt-BR')} icon={<MessageCircle className="w-5 h-5" />} hint="(amostra exibida)" />
-        <StatCard label="Com saldo cashback" value={data.filter(c => c.cashbackBalanceCents > 0).length.toLocaleString('pt-BR')} icon={<Wallet className="w-5 h-5" />} hint="(amostra exibida)" />
-        <StatCard label="Tier Ouro+"       value={data.filter(c => c.vipTier === 'ouro' || c.vipTier === 'diamante').length.toLocaleString('pt-BR')} icon={<Award className="w-5 h-5" />} hint="(amostra exibida)" />
-      </div>
-
       {/* ── Barra de busca + filtros ──────────────────────────────────── */}
       <div className="bg-white border rounded-lg p-4 mb-4 shadow-sm">
         <form onSubmit={onSearchSubmit} className="flex gap-2 items-center">
@@ -415,10 +387,29 @@ export default function ClientesCrmPage() {
             <input
               value={searchInput}
               onChange={e => setSearchInput(e.target.value)}
-              placeholder="Buscar por nome, CPF, WhatsApp, e-mail..."
+              placeholder="Buscar por nome, CPF, WhatsApp..."
               className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
             />
           </div>
+
+          {/* Filtro de loja inline (só admin/operator) */}
+          {isMatrix && (
+            <div className="flex items-center gap-1.5 pl-3 border-l border-gray-200">
+              <StoreIcon className="w-4 h-4 text-purple-700" />
+              <select
+                value={storeFilter}
+                onChange={e => { setStoreFilter(e.target.value); setPage(1); }}
+                className="border rounded px-2 py-1.5 text-sm bg-purple-50 border-purple-300 text-purple-900 font-medium min-w-[180px]"
+                title="Filtrar por loja de origem do cliente"
+              >
+                <option value="">Todas as lojas</option>
+                {stores.map(s => (
+                  <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <button type="submit" className="bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg">
             Buscar
           </button>
@@ -481,16 +472,16 @@ export default function ClientesCrmPage() {
       <div className="bg-white border rounded-lg overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b">
+            <thead className="bg-slate-100 border-b">
               <tr>
-                <th className="text-left px-4 py-3 font-medium text-gray-700">Cliente</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-700">Contato</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-700">Tier</th>
-                <th className="text-right px-4 py-3 font-medium text-gray-700">Cashback</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-700">Manequim</th>
-                <th className="text-right px-4 py-3 font-medium text-gray-700">LTV</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-700">Última compra</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-700">Loja</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Cliente</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">CPF</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">WhatsApp</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Tier</th>
+                <th className="text-right px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Cashback</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Compras</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Última</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">Loja</th>
                 <th className="w-8"></th>
               </tr>
             </thead>
@@ -505,51 +496,58 @@ export default function ClientesCrmPage() {
                   Nenhum cliente encontrado. Ajuste filtros ou cadastre o primeiro.
                 </td></tr>
               )}
-              {!loading && data.map(c => (
+              {!loading && data.map(c => {
+                const dias = c.lastOrderAt ? Math.floor((Date.now() - new Date(c.lastOrderAt).getTime()) / 86400000) : null;
+                const inativaAlerta = dias !== null && dias > 90;
+                const tierPremium = c.vipTier === 'diamante';
+                return (
                 <tr
                   key={c.id}
                   onClick={() => setSelectedId(c.id)}
-                  className="border-b hover:bg-purple-50 cursor-pointer transition-colors"
+                  className={`border-b hover:bg-purple-50 cursor-pointer transition-colors ${tierPremium ? 'bg-amber-50/30' : ''}`}
                 >
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">
-                      {c.nameSocial || c.name || <span className="italic text-gray-400">sem nome</span>}
-                    </div>
-                    <div className="text-xs text-gray-500">{c.cpf ?? 'sem CPF'}</div>
+                  <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
+                    {c.nameSocial || c.name || <span className="italic text-gray-400">sem nome</span>}
                   </td>
-                  <td className="px-4 py-3 text-xs">
-                    {c.whatsapp && <div className="flex items-center gap-1"><Phone className="w-3 h-3" /> {fmtPhone(c.whatsapp)}</div>}
-                    {c.email   && <div className="flex items-center gap-1 text-gray-500"><Mail className="w-3 h-3" /> {c.email}</div>}
-                    {!c.whatsapp && !c.email && <span className="text-gray-400">—</span>}
+                  <td className="px-3 py-2 font-mono text-xs text-gray-600 whitespace-nowrap">
+                    {c.cpf ?? <span className="text-gray-400">—</span>}
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-block px-2 py-0.5 text-xs rounded-full border font-medium ${TIER_BG[c.vipTier] ?? 'bg-gray-100'}`}>
+                  <td className="px-3 py-2 text-xs whitespace-nowrap">
+                    {c.whatsapp
+                      ? <span className="inline-flex items-center gap-1"><Phone className="w-3 h-3 text-green-600" /> {fmtPhone(c.whatsapp)}</span>
+                      : <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
+                    <span className={`inline-block px-2.5 py-0.5 text-xs rounded-full border font-medium ${TIER_BG[c.vipTier] ?? 'bg-gray-100'}`}>
                       {TIER_LABEL[c.vipTier] ?? c.vipTier}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
                     {c.cashbackBalanceCents > 0
                       ? <span className="font-semibold text-green-700">{fmtMoney(c.cashbackBalanceCents)}</span>
                       : <span className="text-gray-400">—</span>}
                   </td>
-                  <td className="px-4 py-3 text-center text-xs">
-                    {c.sizeDefault ?? <span className="text-gray-400">—</span>}
+                  <td className="px-3 py-2 text-center font-mono text-xs">
+                    {c.orderCount > 0 ? c.orderCount : <span className="text-gray-400">—</span>}
                   </td>
-                  <td className="px-4 py-3 text-right font-medium">
-                    {Number(c.ltvCents) > 0 ? fmtMoney(c.ltvCents) : <span className="text-gray-400">—</span>}
+                  <td className={`px-3 py-2 text-center text-xs whitespace-nowrap ${inativaAlerta ? 'text-red-700 font-medium' : 'text-gray-600'}`}>
+                    {fmtDate(c.lastOrderAt)}
                   </td>
-                  <td className="px-4 py-3 text-center text-xs text-gray-600">{fmtDate(c.lastOrderAt)}</td>
-                  <td className="px-4 py-3 text-center text-xs text-gray-600">{c.originStore?.code ?? '—'}</td>
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
+                    {c.originStore?.code
+                      ? <span className="font-mono text-xs bg-slate-100 px-1.5 py-0.5 rounded">{c.originStore.code}</span>
+                      : <span className="text-gray-400 text-xs">—</span>}
+                  </td>
                   <td className="text-gray-400"><ChevronRight className="w-4 h-4" /></td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </div>
 
         {/* Paginação */}
         {total > 0 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50 text-sm">
+          <div className="flex items-center justify-between px-4 py-3 border-t bg-slate-100 text-sm">
             <div className="text-gray-600">
               Mostrando {((page - 1) * limit) + 1}–{Math.min(page * limit, total)} de {total.toLocaleString('pt-BR')}
             </div>
@@ -1228,143 +1226,4 @@ function Field({ label, value }: { label: string; value: string | null | undefin
     </div>
   );
 }
-                className="px-3 py-1 rounded-full text-sm flex items-center gap-2 border"
-                style={{ backgroundColor: t.color + '22', borderColor: t.color, color: t.color }}
-              >
-                <TagIcon className="w-3 h-3" /> {t.name}
-                <button onClick={() => toggle(t.id, false)} disabled={busy} className="hover:opacity-70">
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <h3 className="text-sm font-medium mb-2">Aplicar tag</h3>
-        <div className="flex flex-wrap gap-2">
-          {allTags.filter(t => !customerTagIds.has(t.id)).map(t => (
-            <button
-              key={t.id}
-              onClick={() => toggle(t.id, true)}
-              disabled={busy}
-              className="px-3 py-1 rounded-full text-sm border hover:opacity-80 flex items-center gap-1"
-              style={{ borderColor: t.color, color: t.color }}
-            >
-              <Plus className="w-3 h-3" /> {t.name}
-            </button>
-          ))}
-          {allTags.length === 0 && (
-            <span className="text-sm text-gray-400 italic">Cadastre tags primeiro pela API.</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// Modal Criar
-// ══════════════════════════════════════════════════════════════════════════
-function CreateCustomerModal({
-  onClose,
-  onCreated,
-}: { onClose: () => void; onCreated: (id: string) => void }) {
-  const [form, setForm] = useState({
-    name: '', cpf: '', whatsapp: '', email: '', birthDate: '',
-    sizeDefault: '', originSource: 'physical',
-  });
-  const [busy, setBusy] = useState(false);
-
-  async function submit() {
-    if (!form.name.trim()) { alert('Nome é obrigatório'); return; }
-    setBusy(true);
-    try {
-      const res = await api<{ id: string }>('/customers-crm', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: form.name,
-          cpf: form.cpf || undefined,
-          whatsapp: form.whatsapp || undefined,
-          email: form.email || undefined,
-          birthDate: form.birthDate || undefined,
-          sizeDefault: form.sizeDefault || undefined,
-          originSource: form.originSource,
-        }),
-      });
-      onCreated(res.id);
-    } catch (e: any) {
-      alert(`Falha: ${e.message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold">Cadastrar cliente</h2>
-          <button onClick={onClose}><X className="w-5 h-5 text-gray-500" /></button>
-        </div>
-        <div className="space-y-3">
-          <input value={form.name} onChange={e => setForm({...form, name: e.target.value})}
-            placeholder="Nome completo *" className="w-full border rounded px-3 py-2" />
-          <div className="grid grid-cols-2 gap-2">
-            <input value={form.cpf} onChange={e => setForm({...form, cpf: e.target.value})}
-              placeholder="CPF" className="border rounded px-3 py-2" />
-            <input value={form.birthDate} onChange={e => setForm({...form, birthDate: e.target.value})}
-              placeholder="Nascimento" type="date" className="border rounded px-3 py-2" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input value={form.whatsapp} onChange={e => setForm({...form, whatsapp: e.target.value})}
-              placeholder="WhatsApp" className="border rounded px-3 py-2" />
-            <input value={form.sizeDefault} onChange={e => setForm({...form, sizeDefault: e.target.value})}
-              placeholder="Manequim (44/46/48...)" className="border rounded px-3 py-2" />
-          </div>
-          <input value={form.email} onChange={e => setForm({...form, email: e.target.value})}
-            placeholder="E-mail" type="email" className="w-full border rounded px-3 py-2" />
-          <select value={form.originSource} onChange={e => setForm({...form, originSource: e.target.value})}
-            className="w-full border rounded px-3 py-2">
-            <option value="physical">Loja física</option>
-            <option value="woo">E-commerce (WooCommerce)</option>
-            <option value="instagram">Instagram</option>
-            <option value="giga">Importado do Giga</option>
-            <option value="manual">Manual</option>
-          </select>
-        </div>
-        <div className="mt-5 flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 border rounded">Cancelar</button>
-          <button onClick={submit} disabled={busy}
-            className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded font-medium disabled:opacity-50">
-            {busy ? 'Salvando...' : 'Cadastrar'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// Componentes utilitários
-// ══════════════════════════════════════════════════════════════════════════
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <h3 className="text-xs uppercase font-medium text-gray-500 mb-2 pb-1 border-b">{title}</h3>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2">{children}</div>
-    </div>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string | null | undefined }) {
-  return (
-    <div>
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="text-sm text-gray-900">
-        {value && value !== '—' ? value : <span className="text-gray-400 italic">—</span>}
-      </div>
-    </div>
-  );
-}
+        
