@@ -4,7 +4,8 @@ import { api } from '@/lib/api';
 import {
   Search, Plus, Users, Filter, X, ChevronRight, Award, Wallet,
   Calendar, Phone, Mail, MapPin, Tag as TagIcon, ShieldCheck, ShieldOff,
-  CheckCircle2, AlertCircle, Loader2, MessageCircle,
+  CheckCircle2, AlertCircle, Loader2, MessageCircle, Store as StoreIcon,
+  RefreshCw, Download,
 } from 'lucide-react';
 
 /**
@@ -110,6 +111,33 @@ interface Tag {
   color: string;
 }
 
+interface Me {
+  role: string;             // admin | operator | store
+  storeId?: string | null;
+  storeCode?: string | null;
+  storeName?: string | null;
+  name?: string;
+}
+
+interface StoreOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+interface EtlState {
+  running: boolean;
+  source: 'woo' | 'giga' | null;
+  totalEmails: number;
+  processed: number;
+  inserted: number;
+  updated: number;
+  errors: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  lastError: string | null;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────
@@ -154,6 +182,10 @@ function fmtPhone(p: string | null): string {
 // Página
 // ──────────────────────────────────────────────────────────────────────────
 export default function ClientesCrmPage() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [stores, setStores] = useState<StoreOption[]>([]);
+  const [storeFilter, setStoreFilter] = useState<string>('');   // só usado por matrix
+
   const [data, setData] = useState<CustomerListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -170,6 +202,26 @@ export default function ClientesCrmPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
+  // ETL state (só admin enxerga)
+  const [etlState, setEtlState] = useState<EtlState | null>(null);
+  const [etlSyncing, setEtlSyncing] = useState(false);
+
+  const isMatrix = me?.role === 'admin' || me?.role === 'operator';
+
+  // Carrega user atual + lojas (1x)
+  useEffect(() => {
+    api<Me>('/auth/me')
+      .then(setMe)
+      .catch(() => setMe(null));
+  }, []);
+
+  useEffect(() => {
+    if (!isMatrix) return;
+    api<StoreOption[]>('/stores')
+      .then(s => setStores(Array.isArray(s) ? s : []))
+      .catch(() => {});
+  }, [isMatrix]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -181,6 +233,8 @@ export default function ClientesCrmPage() {
       if (tier) q.set('tier', tier);
       if (hasWhatsapp) q.set('hasWhatsapp', 'true');
       if (hasCashbackBalance) q.set('hasCashbackBalance', 'true');
+      // Filtro de loja só faz sentido pra matrix; vendedora o backend força
+      if (isMatrix && storeFilter) q.set('storeId', storeFilter);
       const res = await api<ListResponse>(`/customers-crm?${q}`);
       setData(res.data);
       setTotal(res.total);
@@ -189,9 +243,43 @@ export default function ClientesCrmPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, search, tier, hasWhatsapp, hasCashbackBalance]);
+  }, [page, limit, search, tier, hasWhatsapp, hasCashbackBalance, storeFilter, isMatrix]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ETL polling
+  useEffect(() => {
+    if (!isMatrix) return;
+    api<EtlState>('/customers-crm/etl/status').then(setEtlState).catch(() => {});
+  }, [isMatrix]);
+
+  useEffect(() => {
+    if (!etlState?.running) return;
+    const t = setInterval(async () => {
+      try {
+        const s = await api<EtlState>('/customers-crm/etl/status');
+        const wasRunning = etlState?.running;
+        setEtlState(s);
+        if (wasRunning && !s.running) load(); // terminou → recarrega lista
+      } catch {}
+    }, 2500);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [etlState?.running]);
+
+  async function startWooSync() {
+    if (!confirm('Sincronizar todos os clientes do WooCommerce para o CRM?\n\nA primeira loja de cada cliente NÃO será sobrescrita.')) return;
+    setEtlSyncing(true);
+    try {
+      await api('/customers-crm/etl/woo', { method: 'POST' });
+      const s = await api<EtlState>('/customers-crm/etl/status');
+      setEtlState(s);
+    } catch (e: any) {
+      alert(`Falha: ${e.message}`);
+    } finally {
+      setEtlSyncing(false);
+    }
+  }
 
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -214,7 +302,7 @@ export default function ClientesCrmPage() {
   return (
     <div className="p-6 max-w-[1600px] mx-auto">
       {/* ── Header ───────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Users className="w-7 h-7 text-purple-700" />
@@ -224,13 +312,92 @@ export default function ClientesCrmPage() {
             Base mestra de clientes (Giga + WooCommerce + Instagram + cadastros PDV)
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm"
-        >
-          <Plus className="w-4 h-4" /> Cadastrar cliente
-        </button>
+        <div className="flex items-center gap-2">
+          {isMatrix && (
+            <button
+              onClick={startWooSync}
+              disabled={etlSyncing || etlState?.running}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+              title="Importar clientes do WooCommerce para o CRM"
+            >
+              <RefreshCw className={`w-4 h-4 ${etlState?.running ? 'animate-spin' : ''}`} />
+              {etlState?.running ? `Sync... ${etlState.processed}/${etlState.totalEmails}` : 'Sincronizar do site'}
+            </button>
+          )}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Cadastrar cliente
+          </button>
+        </div>
       </div>
+
+      {/* ── Banner de escopo ─────────────────────────────────────────── */}
+      {me && (
+        isMatrix ? (
+          <div className="mb-4 flex items-center gap-3 bg-purple-50 border border-purple-200 rounded-lg px-4 py-3">
+            <StoreIcon className="w-5 h-5 text-purple-700" />
+            <span className="text-sm text-purple-900 font-medium">Retaguarda — visão total:</span>
+            <select
+              value={storeFilter}
+              onChange={e => { setStoreFilter(e.target.value); setPage(1); }}
+              className="flex-1 max-w-xs border rounded px-3 py-1.5 bg-white text-sm"
+            >
+              <option value="">Todas as lojas</option>
+              {stores.map(s => (
+                <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+              ))}
+            </select>
+            {storeFilter && (
+              <button onClick={() => setStoreFilter('')} className="text-xs text-purple-700 hover:underline">
+                Limpar
+              </button>
+            )}
+          </div>
+        ) : me.storeId ? (
+          <div className="mb-4 flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+            <StoreIcon className="w-5 h-5 text-blue-700" />
+            <span className="text-sm text-blue-900">
+              Você está vendo clientes da loja <strong>{me.storeName ?? me.storeCode ?? 'sua loja'}</strong>.
+              Outras lojas não aparecem aqui.
+            </span>
+          </div>
+        ) : (
+          <div className="mb-4 flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3">
+            <AlertCircle className="w-5 h-5 text-yellow-700" />
+            <span className="text-sm text-yellow-900">
+              Seu usuário não tem loja vinculada. Fale com a retaguarda para liberar acesso.
+            </span>
+          </div>
+        )
+      )}
+
+      {/* ── ETL info bar (quando rodando ou recém-terminado) ───────── */}
+      {isMatrix && etlState && (etlState.running || etlState.finishedAt) && (
+        <div className={`mb-4 px-4 py-3 rounded-lg border text-sm flex items-center gap-3 ${
+          etlState.running
+            ? 'bg-blue-50 border-blue-200 text-blue-900'
+            : etlState.errors > 0
+              ? 'bg-yellow-50 border-yellow-200 text-yellow-900'
+              : 'bg-green-50 border-green-200 text-green-900'
+        }`}>
+          {etlState.running
+            ? <Loader2 className="w-4 h-4 animate-spin" />
+            : <CheckCircle2 className="w-4 h-4" />}
+          <span>
+            <strong>ETL {etlState.source}:</strong>{' '}
+            {etlState.running
+              ? `processando ${etlState.processed}/${etlState.totalEmails}...`
+              : `concluído — ${etlState.inserted} inseridos, ${etlState.updated} atualizados, ${etlState.errors} erros.`}
+          </span>
+          {!etlState.running && (
+            <button onClick={() => setEtlState({ ...etlState, finishedAt: null })} className="ml-auto">
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Stats rápidas ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -921,6 +1088,146 @@ function TagsTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void }) {
             {d.tags.map(t => (
               <span
                 key={t.id}
+                className="px-3 py-1 rounded-full text-sm flex items-center gap-2 border"
+                style={{ backgroundColor: t.color + '22', borderColor: t.color, color: t.color }}
+              >
+                <TagIcon className="w-3 h-3" /> {t.name}
+                <button onClick={() => toggle(t.id, false)} disabled={busy} className="hover:opacity-70">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h3 className="text-sm font-medium mb-2">Aplicar tag</h3>
+        <div className="flex flex-wrap gap-2">
+          {allTags.filter(t => !customerTagIds.has(t.id)).map(t => (
+            <button
+              key={t.id}
+              onClick={() => toggle(t.id, true)}
+              disabled={busy}
+              className="px-3 py-1 rounded-full text-sm border hover:opacity-80 flex items-center gap-1"
+              style={{ borderColor: t.color, color: t.color }}
+            >
+              <Plus className="w-3 h-3" /> {t.name}
+            </button>
+          ))}
+          {allTags.length === 0 && (
+            <span className="text-sm text-gray-400 italic">Cadastre tags primeiro pela API.</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Modal Criar
+// ══════════════════════════════════════════════════════════════════════════
+function CreateCustomerModal({
+  onClose,
+  onCreated,
+}: { onClose: () => void; onCreated: (id: string) => void }) {
+  const [form, setForm] = useState({
+    name: '', cpf: '', whatsapp: '', email: '', birthDate: '',
+    sizeDefault: '', originSource: 'physical',
+  });
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!form.name.trim()) { alert('Nome é obrigatório'); return; }
+    setBusy(true);
+    try {
+      const res = await api<{ id: string }>('/customers-crm', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: form.name,
+          cpf: form.cpf || undefined,
+          whatsapp: form.whatsapp || undefined,
+          email: form.email || undefined,
+          birthDate: form.birthDate || undefined,
+          sizeDefault: form.sizeDefault || undefined,
+          originSource: form.originSource,
+        }),
+      });
+      onCreated(res.id);
+    } catch (e: any) {
+      alert(`Falha: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold">Cadastrar cliente</h2>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-500" /></button>
+        </div>
+        <div className="space-y-3">
+          <input value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+            placeholder="Nome completo *" className="w-full border rounded px-3 py-2" />
+          <div className="grid grid-cols-2 gap-2">
+            <input value={form.cpf} onChange={e => setForm({...form, cpf: e.target.value})}
+              placeholder="CPF" className="border rounded px-3 py-2" />
+            <input value={form.birthDate} onChange={e => setForm({...form, birthDate: e.target.value})}
+              placeholder="Nascimento" type="date" className="border rounded px-3 py-2" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <input value={form.whatsapp} onChange={e => setForm({...form, whatsapp: e.target.value})}
+              placeholder="WhatsApp" className="border rounded px-3 py-2" />
+            <input value={form.sizeDefault} onChange={e => setForm({...form, sizeDefault: e.target.value})}
+              placeholder="Manequim (44/46/48...)" className="border rounded px-3 py-2" />
+          </div>
+          <input value={form.email} onChange={e => setForm({...form, email: e.target.value})}
+            placeholder="E-mail" type="email" className="w-full border rounded px-3 py-2" />
+          <select value={form.originSource} onChange={e => setForm({...form, originSource: e.target.value})}
+            className="w-full border rounded px-3 py-2">
+            <option value="physical">Loja física</option>
+            <option value="woo">E-commerce (WooCommerce)</option>
+            <option value="instagram">Instagram</option>
+            <option value="giga">Importado do Giga</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
+        <div className="mt-5 flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 border rounded">Cancelar</button>
+          <button onClick={submit} disabled={busy}
+            className="bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded font-medium disabled:opacity-50">
+            {busy ? 'Salvando...' : 'Cadastrar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Componentes utilitários
+// ══════════════════════════════════════════════════════════════════════════
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h3 className="text-xs uppercase font-medium text-gray-500 mb-2 pb-1 border-b">{title}</h3>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-sm text-gray-900">
+        {value && value !== '—' ? value : <span className="text-gray-400 italic">—</span>}
+      </div>
+    </div>
+  );
+}
                 className="px-3 py-1 rounded-full text-sm flex items-center gap-2 border"
                 style={{ backgroundColor: t.color + '22', borderColor: t.color, color: t.color }}
               >
