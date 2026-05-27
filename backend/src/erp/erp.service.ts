@@ -7391,6 +7391,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   > {
     if (!this.pool) return [];
     try {
+      // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), não DATA.
+      // O Wincred filtra por DATAFEC nas telas Vendas e Ranking. Vendas
+      // feitas tarde da noite (lançadas com DATA do dia X mas só fechadas
+      // no dia X+1) ficavam fora no antigo filtro por DATA. Trocando pra
+      // DATAFEC, bate exato com Wincred em todas as lojas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT
             c.LOJA AS storeCode,
@@ -7398,8 +7403,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             SUM(c.QUANTIDADE) AS pecas,
             SUM(c.VALORTOTAL) AS faturamento
          FROM caixa c
-         WHERE c.DATA >= ?
-           AND c.DATA <  ?
+         WHERE c.DATAFEC >= ?
+           AND c.DATAFEC <  ?
            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
          GROUP BY c.LOJA
          ORDER BY faturamento DESC`,
@@ -7535,7 +7540,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           ROUND(SUM(CASE WHEN MARCADO IS NULL THEN VALORTOTAL ELSE 0 END), 2) AS sum_so_null,
           ROUND(SUM(CASE WHEN MARCADO = '' THEN VALORTOTAL ELSE 0 END), 2) AS sum_so_vazio
         FROM caixa
-        WHERE DATA >= ? AND DATA < ?
+        WHERE DATAFEC >= ? AND DATAFEC < ?
           ${filtroLojas}
         GROUP BY LOJA
         ORDER BY sum_excluindo_sim DESC
@@ -7569,14 +7574,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       granularity === 'week'  ? '%x-W%v' :   // ISO week (segunda-domingo)
                                 '%Y-%m-%d';   // day
     try {
+      // Usa DATAFEC pra bater com Wincred (mesmo motivo do getFaturamentoPorLoja)
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT
-            DATE_FORMAT(c.DATA, ?) AS bucket,
+            DATE_FORMAT(c.DATAFEC, ?) AS bucket,
             c.LOJA AS storeCode,
             SUM(c.VALORTOTAL) AS faturamento
          FROM caixa c
-         WHERE c.DATA >= ?
-           AND c.DATA <  ?
+         WHERE c.DATAFEC >= ?
+           AND c.DATAFEC <  ?
            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
          GROUP BY bucket, c.LOJA
          ORDER BY bucket ASC`,
