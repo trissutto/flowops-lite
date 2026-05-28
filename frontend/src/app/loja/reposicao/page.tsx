@@ -451,40 +451,44 @@ export default function ReposicaoPage() {
         .etiqueta {
           width: 48mm; height: 30mm;
           box-sizing: border-box;
-          padding: 1.5mm 1.5mm 1mm 1.5mm;
+          padding: 2.5mm 1.5mm 1mm 1.5mm;   /* +1mm top — Argox precisa de margem */
           display: flex; flex-direction: column;
-          justify-content: flex-start;       /* empilha do topo, sem distribuir */
-          gap: 0.6mm;
+          justify-content: flex-start;
+          gap: 0.5mm;
           border: 1px dashed #cbd5e1;
           background: #fff; color: #000;
           font-family: -apple-system, system-ui, sans-serif;
           overflow: hidden;
         }
         .et-descricao {
-          font-size: 6.5pt; font-weight: 900;
+          font-size: 7pt;
+          font-weight: 700;                  /* era 900 — ascent menor, nao corta */
           text-transform: uppercase;
-          line-height: 1.2; letter-spacing: 0.1px;
+          line-height: 4.5mm;                /* line-height EXPLICITO em mm */
+          height: 4.5mm;                     /* casa com line-height */
+          letter-spacing: 0.1px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          height: 3.5mm;
+          padding-top: 0.2mm;
+          flex-shrink: 0;
         }
         .et-destaque {
           display: flex; align-items: center;
           gap: 1.5mm; line-height: 1;
         }
         .et-tam {
-          font-size: 12pt; font-weight: 900;
+          font-size: 10pt; font-weight: 900;
           font-family: 'Courier New', monospace;
           border: 1.5px solid #000;
-          padding: 0 1.2mm; line-height: 1.1;
+          padding: 0 1mm; line-height: 1.1;
         }
         .et-cor-destaque {
-          font-size: 16pt; font-weight: 900;
+          font-size: 14pt; font-weight: 900;
           font-family: 'Courier New', monospace;
           text-transform: uppercase;
           border: 2px solid #000;
-          padding: 0.3mm 1.5mm; line-height: 1.05;
+          padding: 0.2mm 1.2mm; line-height: 1;
           margin-left: auto;
         }
         .barcode-target {
