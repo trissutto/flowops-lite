@@ -303,20 +303,36 @@ export default function NewOrderAlert() {
     try { document.title = originalTitleRef.current; } catch {}
   }
 
+  // ESC fecha tudo (tecla universal de "fechar")
+  useEffect(() => {
+    if (stack.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') dismissAll();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stack.length]);
+
   if (stack.length === 0) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[9999] overflow-y-auto p-2 sm:p-4 pointer-events-none"
+      className="fixed inset-0 z-[9999] overflow-y-auto p-2 sm:p-4"
       aria-live="assertive"
       role="alert"
-      style={{ WebkitOverflowScrolling: 'touch' }}
+      onClick={(e) => {
+        // Clique no fundo (fora do card) fecha tudo
+        if (e.target === e.currentTarget) dismissAll();
+      }}
+      style={{ WebkitOverflowScrolling: 'touch', backgroundColor: 'rgba(0,0,0,0.15)' }}
     >
-      {/* Botao FECHAR FLUTUANTE — sempre visivel no canto, FORA do card,
-          garante que da pra fechar mesmo se o conteudo for gigante */}
+      {/* Botao FECHAR FLUTUANTE — sempre visivel no canto superior direito,
+          FORA do card, garante que da pra fechar mesmo se o conteudo for gigante.
+          z-index acima do card. */}
       <button
         onClick={dismissAll}
-        className="pointer-events-auto fixed top-2 right-2 z-[10000] bg-red-600 hover:bg-red-700 text-white font-black rounded-full w-12 h-12 flex items-center justify-center shadow-2xl border-2 border-white text-2xl active:scale-95"
+        className="fixed top-3 right-3 z-[10001] bg-red-600 hover:bg-red-700 text-white font-black rounded-full w-14 h-14 flex items-center justify-center shadow-2xl border-4 border-white text-3xl active:scale-95"
         aria-label="Fechar alerta"
         title="Fechar (Esc)"
       >
