@@ -292,12 +292,12 @@ export class ProdutosVendidosService {
     totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
 
     // ─── CONCILIACAO ─────────────────────────────────────────────────────
-    // Logica financeira correta:
+    // Logica financeira:
     //  - Total Vendido (Liquido) = vendas - devolucoes
-    //  - Recebido a vista       = dinheiro + pix + credito + debito (dinheiro REAL entrando)
-    //  - A receber (crediario)  = vendas no fiado (parcelas futuras, NAO eh dinheiro hoje)
-    //  - Outros                  = trocas/devolucoes que viraram pagamento (separar)
-    //  - Diferenca = vendido_liquido - (avista + crediario)
+    //  - Total Recebido         = dinheiro + pix + credito + debito + crediario
+    //                              (TUDO que gerou venda hoje, mesmo no fiado)
+    //  - NAO entra: recebimentos de parcelas de crediario antigas (estao em outra tabela)
+    //  - Diferenca = vendido_liquido - total_recebido (deve ser ~0)
     const porModalidade: Record<string, number> = {
       dinheiro: 0,
       pix: 0,
@@ -316,19 +316,19 @@ export class ProdutosVendidosService {
       porModalidade[k] = Number(porModalidade[k].toFixed(2));
     }
 
-    const totalAvista = Number(
+    const totalRecebido = Number(
       (
         porModalidade.dinheiro +
         porModalidade.pix +
         porModalidade.credito +
-        porModalidade.debito
+        porModalidade.debito +
+        porModalidade.crediario
       ).toFixed(2),
     );
-    const crediarioNovo = porModalidade.crediario;
     const totalVendidoLiquido = totais.liquidoValor;
 
     const diferenca = Number(
-      (totalVendidoLiquido - totalAvista - crediarioNovo).toFixed(2),
+      (totalVendidoLiquido - totalRecebido).toFixed(2),
     );
 
     return {
@@ -336,14 +336,12 @@ export class ProdutosVendidosService {
       totais,
       conciliacao: {
         totalVendidoLiquido,
-        totalAvista,
-        crediarioNovo,
+        totalRecebido,
         diferenca,
         ok: Math.abs(diferenca) < 0.02,    // diferenca <= 1 centavo = ok
         porModalidade,
-        // legacy (compat com tela antiga ate deploy)
+        // legacy (compat)
         totalProdutosVendidos: totalVendidoLiquido,
-        totalRecebido: totalAvista,
       },
       filtros: filters,
     };

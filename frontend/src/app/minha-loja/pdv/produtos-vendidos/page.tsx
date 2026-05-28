@@ -51,8 +51,7 @@ interface ReportResponse {
   };
   conciliacao?: {
     totalVendidoLiquido: number;
-    totalAvista: number;
-    crediarioNovo: number;
+    totalRecebido: number;
     diferenca: number;
     ok: boolean;
     porModalidade: {
@@ -65,7 +64,6 @@ interface ReportResponse {
     };
     // legacy
     totalProdutosVendidos?: number;
-    totalRecebido?: number;
   };
   filtros: any;
 }
@@ -296,28 +294,23 @@ export default function ProdutosVendidosPage() {
                 {data.conciliacao.ok ? '✓ BATE' : '⚠ DIVERGÊNCIA'}
               </span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
               <div className="bg-white border rounded p-2.5">
                 <div className="text-[10px] text-slate-500 uppercase font-bold">Vendido (líquido)</div>
                 <div className="font-mono font-black text-base">{brl(data.conciliacao.totalVendidoLiquido)}</div>
                 <div className="text-[9px] text-slate-400 mt-0.5">vendas − devoluções</div>
               </div>
               <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Recebido à vista</div>
-                <div className="font-mono font-black text-base text-emerald-700">{brl(data.conciliacao.totalAvista)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões</div>
-              </div>
-              <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">A receber (crediário)</div>
-                <div className="font-mono font-black text-base text-rose-700">{brl(data.conciliacao.crediarioNovo)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">fiado (parcelas futuras)</div>
+                <div className="text-[10px] text-slate-500 uppercase font-bold">Total recebido</div>
+                <div className="font-mono font-black text-base text-emerald-700">{brl(data.conciliacao.totalRecebido)}</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário</div>
               </div>
               <div className={`bg-white border rounded p-2.5 ${Math.abs(data.conciliacao.diferenca) > 0.01 ? 'border-amber-400' : ''}`}>
                 <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
                 <div className={`font-mono font-black text-base ${data.conciliacao.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
                   {brl(data.conciliacao.diferenca)}
                 </div>
-                <div className="text-[9px] text-slate-400 mt-0.5">líquido − (à vista + crediário)</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">líquido − recebido</div>
               </div>
             </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
