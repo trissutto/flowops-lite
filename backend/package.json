@@ -4,7 +4,7 @@
   "private": true,
   "description": "FlowOps backend Lite - NestJS + SQLite, sem Redis/BullMQ",
   "scripts": {
-    "build": "prisma generate && nest build",
+    "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "prisma db push --accept-data-loss --skip-generate && node dist/main",
@@ -17,8 +17,7 @@
     "delete-demo-stores": "ts-node scripts/delete-demo-stores.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
-    "prisma:push": "prisma db push",
-    "postinstall": "prisma generate"
+    "prisma:push": "prisma db push"
   },
   "dependencies": {
     "@nestjs/axios": "^3.0.1",
