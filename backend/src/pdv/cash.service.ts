@@ -1210,6 +1210,181 @@ export class CashService {
     return movement;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // AJUSTES MASTER (admin com senha) — fundo de caixa + sangria/suprimento
+  // Permite mexer em sessoes abertas OU na ultima fechada do dia (correcoes).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Resolve a sessao "ajustavel" da loja: aberta atual, ou a ultima fechada
+   * do dia corrente. Lanca se nao tiver nada.
+   */
+  private async getLatestAdjustableSession(storeCode: string) {
+    if (!storeCode) throw new BadRequestException('Loja obrigatoria');
+    const open = await this.getCurrentSession(storeCode);
+    if (open) return open;
+    // Tenta ultima fechada do dia
+    const inicioHoje = new Date();
+    inicioHoje.setHours(0, 0, 0, 0);
+    const closed = await (this.prisma as any).pdvCashSession.findFirst({
+      where: {
+        storeCode,
+        status: 'closed',
+        OR: [
+          { closedAt: { gte: inicioHoje } },
+          { openedAt: { gte: inicioHoje } },
+        ],
+      },
+      orderBy: { closedAt: 'desc' },
+    });
+    if (!closed) {
+      throw new BadRequestException('Nenhuma sessao de caixa do dia para ajustar');
+    }
+    return closed;
+  }
+
+  /**
+   * Sobrescreve o fundo de caixa (fundoTroco) da sessao atual/ultima do dia.
+   * Audit logado. Recalcula totais se a sessao ja estiver fechada.
+   */
+  async masterAdjustFundo(input: {
+    storeCode: string;
+    valor: number;
+    motivo: string;
+    userName?: string | null;
+  }) {
+    const { storeCode, valor, motivo, userName } = input;
+    if (valor == null || isNaN(Number(valor)) || Number(valor) < 0) {
+      throw new BadRequestException('Fundo invalido');
+    }
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe o motivo do ajuste (>=3 chars)');
+    }
+    const session = await this.getLatestAdjustableSession(storeCode);
+    const old = Number(session.fundoTroco || 0);
+    const novo = Number(valor);
+
+    await (this.prisma as any).pdvCashSession.update({
+      where: { id: session.id },
+      data: { fundoTroco: novo },
+    });
+
+    // Se sessao ja fechou, recalcula dinheiroEsperado e diferenca
+    if (session.status === 'closed') {
+      const totals = await this.computeSessionTotals(session.id);
+      const fisico = Number(session.dinheiroFisico ?? 0);
+      const novaDiff = fisico - totals.dinheiroEsperado;
+      await (this.prisma as any).pdvCashSession.update({
+        where: { id: session.id },
+        data: {
+          dinheiroEsperado: totals.dinheiroEsperado,
+          diferenca: novaDiff,
+        },
+      });
+    }
+
+    this.logger.warn(
+      `[MASTER] FUNDO ajustado: loja=${storeCode} session=${session.id} ${old} -> ${novo} motivo="${motivo}" por ${userName || 'admin'}`,
+    );
+    return { ok: true, sessionId: session.id, fundoAnterior: old, fundoNovo: novo };
+  }
+
+  /**
+   * Cria sangria/suprimento via senha master. Aceita sessao aberta OU
+   * fechada do dia (correcoes pos-fechamento).
+   */
+  async masterAddMovement(input: {
+    storeCode: string;
+    tipo: 'sangria' | 'suprimento';
+    valor: number;
+    motivo: string;
+    userName?: string | null;
+  }) {
+    const { storeCode, tipo, valor, motivo, userName } = input;
+    if (!['sangria', 'suprimento'].includes(tipo)) {
+      throw new BadRequestException(`Tipo invalido: ${tipo}`);
+    }
+    if (valor == null || isNaN(Number(valor)) || Number(valor) <= 0) {
+      throw new BadRequestException('Valor invalido');
+    }
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe o motivo (>=3 chars)');
+    }
+    const session = await this.getLatestAdjustableSession(storeCode);
+
+    const movement = await (this.prisma as any).pdvCashMovement.create({
+      data: {
+        cashSessionId: session.id,
+        tipo,
+        valor: Number(valor),
+        motivo: `[MASTER] ${motivo.trim()}`,
+        userId: null,
+        userName: `MASTER (${userName || 'admin'})`,
+      },
+    });
+
+    // Recalcula totais da sessao fechada se for o caso
+    if (session.status === 'closed') {
+      const totals = await this.computeSessionTotals(session.id);
+      const fisico = Number(session.dinheiroFisico ?? 0);
+      const novaDiff = fisico - totals.dinheiroEsperado;
+      await (this.prisma as any).pdvCashSession.update({
+        where: { id: session.id },
+        data: {
+          totalSangrias: totals.totalSangrias,
+          totalSuprimentos: totals.totalSuprimentos,
+          dinheiroEsperado: totals.dinheiroEsperado,
+          diferenca: novaDiff,
+        },
+      });
+    }
+
+    this.logger.warn(
+      `[MASTER] ${tipo.toUpperCase()}: loja=${storeCode} session=${session.id} R$${valor} motivo="${motivo}" por ${userName || 'admin'}`,
+    );
+    return { ok: true, movement };
+  }
+
+  /**
+   * Estorna (deleta) uma sangria/suprimento via senha master.
+   */
+  async masterDeleteMovement(input: {
+    movementId: string;
+    userName?: string | null;
+  }) {
+    const { movementId, userName } = input;
+    const m = await (this.prisma as any).pdvCashMovement.findUnique({
+      where: { id: movementId },
+    });
+    if (!m) throw new NotFoundException('Movimentacao nao encontrada');
+
+    const session = await (this.prisma as any).pdvCashSession.findUnique({
+      where: { id: m.cashSessionId },
+    });
+
+    await (this.prisma as any).pdvCashMovement.delete({ where: { id: movementId } });
+
+    if (session && session.status === 'closed') {
+      const totals = await this.computeSessionTotals(session.id);
+      const fisico = Number(session.dinheiroFisico ?? 0);
+      const novaDiff = fisico - totals.dinheiroEsperado;
+      await (this.prisma as any).pdvCashSession.update({
+        where: { id: session.id },
+        data: {
+          totalSangrias: totals.totalSangrias,
+          totalSuprimentos: totals.totalSuprimentos,
+          dinheiroEsperado: totals.dinheiroEsperado,
+          diferenca: novaDiff,
+        },
+      });
+    }
+
+    this.logger.warn(
+      `[MASTER] DELETE movement=${movementId} tipo=${m.tipo} R$${m.valor} por ${userName || 'admin'}`,
+    );
+    return { ok: true };
+  }
+
   /**
    * Busca 1 movimentação por ID (usado pelo impresso de sangria/suprimento).
    */

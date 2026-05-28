@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -348,6 +349,95 @@ export class CashController {
     }
     return this.svc.unmarkSessionsAsChecked({
       sessionIds: body.sessionIds || [],
+    });
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // MASTER ADJUST — admin/supervisor com SENHA MASTER
+  // Usado no super-painel pra corrigir fundo/sangria pos-fechamento.
+  // ═════════════════════════════════════════════════════════════════════
+
+  private validateMasterPassword(password?: string) {
+    const master = process.env.MASTER_PASSWORD;
+    if (!master || master.trim().length < 4) {
+      throw new ForbiddenException('MASTER_PASSWORD nao configurada no servidor');
+    }
+    if (!password || password !== master) {
+      throw new ForbiddenException('Senha master invalida');
+    }
+  }
+
+  private requireMasterRole(req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+  }
+
+  /**
+   * PATCH /pdv/caixa/master/fundo
+   * Body: { storeCode, valor, motivo, password }
+   * Sobrescreve fundoTroco da sessao do dia (aberta ou fechada).
+   */
+  @Patch('master/fundo')
+  async masterFundo(
+    @Req() req: any,
+    @Body() body: { storeCode: string; valor: number; motivo: string; password: string },
+  ) {
+    this.requireMasterRole(req);
+    this.validateMasterPassword(body?.password);
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
+    return this.svc.masterAdjustFundo({
+      storeCode: body.storeCode,
+      valor: Number(body.valor),
+      motivo: body.motivo,
+      userName: req?.user?.name || req?.user?.email || req?.user?.username || 'admin',
+    });
+  }
+
+  /**
+   * POST /pdv/caixa/master/movement
+   * Body: { storeCode, tipo: 'sangria'|'suprimento', valor, motivo, password }
+   */
+  @Post('master/movement')
+  async masterMovement(
+    @Req() req: any,
+    @Body() body: {
+      storeCode: string;
+      tipo: 'sangria' | 'suprimento';
+      valor: number;
+      motivo: string;
+      password: string;
+    },
+  ) {
+    this.requireMasterRole(req);
+    this.validateMasterPassword(body?.password);
+    if (!body?.storeCode) throw new BadRequestException('storeCode obrigatorio');
+    return this.svc.masterAddMovement({
+      storeCode: body.storeCode,
+      tipo: body.tipo,
+      valor: Number(body.valor),
+      motivo: body.motivo,
+      userName: req?.user?.name || req?.user?.email || req?.user?.username || 'admin',
+    });
+  }
+
+  /**
+   * DELETE /pdv/caixa/master/movement/:id
+   * Body: { password }
+   * Estorna (deleta) uma sangria/suprimento.
+   */
+  @Delete('master/movement/:id')
+  async masterDeleteMovement(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { password: string },
+  ) {
+    this.requireMasterRole(req);
+    this.validateMasterPassword(body?.password);
+    return this.svc.masterDeleteMovement({
+      movementId: id,
+      userName: req?.user?.name || req?.user?.email || req?.user?.username || 'admin',
     });
   }
 

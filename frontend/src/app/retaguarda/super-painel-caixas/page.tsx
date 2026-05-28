@@ -477,6 +477,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
   const [showSuprimentos, setShowSuprimentos] = useState(false);
   const [showRecebimentos, setShowRecebimentos] = useState(false);
   const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; valor: number; saleHint: string } | null>(null);
+  const [masterModal, setMasterModal] = useState(false);
   const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
   const rec = loja.recebimentosCrediario || { totalGeral: 0, totalDinheiro: 0, totalPix: 0, baixas: [] };
@@ -495,12 +496,31 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
           <span className="font-black text-sm uppercase">{loja.storeName}</span>
           <span className="text-[10px] opacity-80 font-mono">{loja.storeCode}</span>
         </div>
-        {loja.aberta ? (
-          <span className="text-[10px] opacity-90 font-bold">desde {fmtTime(loja.openedAt)}</span>
-        ) : (
-          <span className="text-[10px] opacity-90 font-bold uppercase">Fechado</span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {loja.aberta ? (
+            <span className="text-[10px] opacity-90 font-bold">desde {fmtTime(loja.openedAt)}</span>
+          ) : (
+            <span className="text-[10px] opacity-90 font-bold uppercase">Fechado</span>
+          )}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setMasterModal(true)}
+              className="ml-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/35 text-[10px] font-bold flex items-center gap-1"
+              title="Ajustes master (senha)"
+            >
+              ⚙️ MASTER
+            </button>
+          )}
+        </div>
       </div>
+      {masterModal && (
+        <MasterAdjustModal
+          loja={loja}
+          onClose={() => setMasterModal(false)}
+          onSaved={() => { setMasterModal(false); reload(); }}
+        />
+      )}
 
       {/* Aviso de sessão pendente (caixa de ontem ainda aberto) */}
       {loja.sessaoPendente && (
@@ -1105,6 +1125,176 @@ function EditBandeiraModal({
             {saving ? 'Salvando...' : 'Salvar'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MASTER ADJUST MODAL — ajusta fundo de caixa OU adiciona sangria/suprimento
+// Usa senha master (env MASTER_PASSWORD). Persiste a senha em sessionStorage
+// pra nao precisar redigitar a cada loja na mesma sessao do navegador.
+// ═══════════════════════════════════════════════════════════════════════
+function MasterAdjustModal({
+  loja, onClose, onSaved,
+}: {
+  loja: Loja;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  type Tab = 'fundo' | 'sangria' | 'suprimento';
+  const [tab, setTab] = useState<Tab>('fundo');
+  const [password, setPassword] = useState<string>(() => {
+    try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
+  });
+  const [savePwd, setSavePwd] = useState(true);
+  const [valor, setValor] = useState<string>(tab === 'fundo' ? String(loja.fundoTroco || 0) : '');
+  const [motivo, setMotivo] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  // Reset valor ao trocar de aba
+  useEffect(() => {
+    setValor(tab === 'fundo' ? String(loja.fundoTroco || 0) : '');
+    setErrMsg(null);
+    setOkMsg(null);
+  }, [tab, loja.fundoTroco]);
+
+  async function save() {
+    setErrMsg(null);
+    setOkMsg(null);
+    if (!password) { setErrMsg('Senha master obrigatoria'); return; }
+    const valorNum = Number(String(valor).replace(',', '.'));
+    if (isNaN(valorNum) || (tab !== 'fundo' && valorNum <= 0) || valorNum < 0) {
+      setErrMsg('Valor invalido');
+      return;
+    }
+    if (!motivo || motivo.trim().length < 3) {
+      setErrMsg('Informe o motivo (minimo 3 caracteres)');
+      return;
+    }
+    setSaving(true);
+    try {
+      if (tab === 'fundo') {
+        await api('/pdv/caixa/master/fundo', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            storeCode: loja.storeCode,
+            valor: valorNum,
+            motivo: motivo.trim(),
+            password,
+          }),
+        });
+      } else {
+        await api('/pdv/caixa/master/movement', {
+          method: 'POST',
+          body: JSON.stringify({
+            storeCode: loja.storeCode,
+            tipo: tab,
+            valor: valorNum,
+            motivo: motivo.trim(),
+            password,
+          }),
+        });
+      }
+      if (savePwd) {
+        try { sessionStorage.setItem('flowops.masterPwd', password); } catch {}
+      }
+      setOkMsg('Ajuste salvo. Recarregando...');
+      setTimeout(() => onSaved(), 600);
+    } catch (e: any) {
+      setErrMsg(e?.message || 'Falha no ajuste');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">⚙️ Ajustes Master</h3>
+            <p className="text-xs text-slate-500 font-bold">{loja.storeName} <span className="font-mono opacity-70">{loja.storeCode}</span></p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 mb-4 bg-slate-100 rounded-lg p-1">
+          {(['fundo','sangria','suprimento'] as Tab[]).map((tk) => (
+            <button
+              key={tk}
+              onClick={() => setTab(tk)}
+              className={`flex-1 py-2 text-xs font-bold rounded transition ${
+                tab === tk ? 'bg-white text-violet-700 shadow' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {tk === 'fundo' ? '💵 Fundo' : tk === 'sangria' ? '⬇️ Sangria' : '⬆️ Suprimento'}
+            </button>
+          ))}
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">
+          {tab === 'fundo' ? 'Novo valor do fundo (R$)' : tab === 'sangria' ? 'Valor da sangria (R$)' : 'Valor do suprimento (R$)'}
+        </label>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value={valor}
+          onChange={(e) => setValor(e.target.value)}
+          placeholder="0.00"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Motivo *</label>
+        <input
+          type="text"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          placeholder={tab === 'fundo' ? 'ex: correcao de abertura' : tab === 'sangria' ? 'ex: deposito banco' : 'ex: reforco de troco'}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Senha master *</label>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="senha"
+          autoComplete="current-password"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 mb-3 cursor-pointer">
+          <input type="checkbox" checked={savePwd} onChange={(e) => setSavePwd(e.target.checked)} />
+          Lembrar senha nesta sessao
+        </label>
+
+        {errMsg && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{errMsg}</div>}
+        {okMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded p-2 mb-3">{okMsg}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40"
+          >
+            {saving ? 'Salvando...' : 'Confirmar'}
+          </button>
+        </div>
+
+        <p className="mt-3 text-[10px] text-slate-400 leading-tight">
+          ⚠️ Acao registrada em log com seu usuario. Use somente pra correcoes legitimas — sem rastreabilidade visual no fluxo da vendedora.
+        </p>
       </div>
     </div>
   );
