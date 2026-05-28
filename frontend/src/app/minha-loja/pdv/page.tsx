@@ -1388,6 +1388,18 @@ function PdvPageInner() {
                 <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
+                href="/minha-loja/pdv/produtos-vendidos"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-emerald-600 hover:bg-emerald-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                title="Conferir vendas + trocas do turno"
+              >
+                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
+                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Vendas + trocas (conferir)</div>
+                </div>
+                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              </Link>
+              <Link
                 href="/minha-loja/pdv/notas"
                 className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Notas Fiscais emitidas"
