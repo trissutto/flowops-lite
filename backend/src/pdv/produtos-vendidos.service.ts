@@ -170,6 +170,7 @@ export class ProdutosVendidosService {
         where: retWhere,
         select: {
           id: true,
+          originalSaleId: true,
           originalSaleNumber: true,
           storeCode: true,
           storeName: true,
@@ -177,6 +178,7 @@ export class ProdutosVendidosService {
           customerName: true,
           customerCpf: true,
           modo: true,
+          valorTotal: true,
           createdAt: true,
         },
         orderBy: { createdAt: 'desc' },
@@ -412,6 +414,59 @@ export class ProdutosVendidosService {
     totalSubtotal = Number(totalSubtotal.toFixed(2));
     totalDescontosAplicados = Number(totalDescontosAplicados.toFixed(2));
 
+    // ─── DIAGNOSTICO DEVOLUCOES — origem (data da venda original) ──────────
+    // Cada devolucao do periodo tem originalSaleId. Buscamos a data da venda
+    // original pra saber se ela foi feita NO MESMO periodo (afeta vendido_liquido)
+    // ou em outro dia (eh sangria pura — nao deveria reduzir vendido_liquido).
+    const devolucoesDiagnostico: Array<{
+      returnId: string;
+      originalSaleId: string | null;
+      originalSaleDate: string | null;
+      originalSaleInPeriod: boolean;
+      modo: string;
+      valor: number;
+      data: string;
+      customerName: string | null;
+    }> = [];
+    let devolucoesDeVendaDoPeriodo = 0;     // ja foi descontado corretamente do liquido
+    let devolucoesDeVendaAntiga = 0;         // SAIDA do caixa mas nao afeta vendido
+    if (includeReturns && returns.length > 0) {
+      const origIds = (returns as any[])
+        .map((r) => r.originalSaleId)
+        .filter(Boolean);
+      const origSales = origIds.length > 0
+        ? await (this.prisma as any).pdvSale.findMany({
+            where: { id: { in: origIds } },
+            select: { id: true, finalizedAt: true, createdAt: true },
+          })
+        : [];
+      const origMap = new Map<string, any>(origSales.map((s: any) => [s.id, s]));
+      const saleIdsSet = new Set(saleIds);
+      for (const r of returns as any[]) {
+        const orig = r.originalSaleId ? origMap.get(r.originalSaleId) : null;
+        const inPeriod = r.originalSaleId ? saleIdsSet.has(r.originalSaleId) : false;
+        const valor = Number(r.valorTotal || 0);
+        if (inPeriod) devolucoesDeVendaDoPeriodo += valor;
+        else devolucoesDeVendaAntiga += valor;
+        devolucoesDiagnostico.push({
+          returnId: r.id,
+          originalSaleId: r.originalSaleId || null,
+          originalSaleDate: orig?.finalizedAt
+            ? new Date(orig.finalizedAt).toISOString()
+            : orig?.createdAt
+            ? new Date(orig.createdAt).toISOString()
+            : null,
+          originalSaleInPeriod: inPeriod,
+          modo: String(r.modo || ''),
+          valor: Number(valor.toFixed(2)),
+          data: new Date(r.createdAt).toISOString(),
+          customerName: r.customerName || null,
+        });
+      }
+    }
+    devolucoesDeVendaDoPeriodo = Number(devolucoesDeVendaDoPeriodo.toFixed(2));
+    devolucoesDeVendaAntiga = Number(devolucoesDeVendaAntiga.toFixed(2));
+
     // CONCILIACAO V3: usa sale.total (com desconto) vs payments.
     // Vale-troca payments contam como "abate" (nao dinheiro novo).
     const recebidoEmDinheiro = Number(
@@ -444,6 +499,10 @@ export class ProdutosVendidosService {
         recebidoComVale,            // + vale_troca aplicado
         diferencaV3,                // totalVendasReais - recebidoComVale (deve ser ~0)
         okV3: Math.abs(diferencaV3) < 0.02,
+        // Diagnostico devolucoes
+        devolucoesDiagnostico: devolucoesDiagnostico.slice(0, 50),
+        devolucoesDeVendaDoPeriodo,
+        devolucoesDeVendaAntiga,
 
         // V2 (mantidos pra compat — vamos descomissionar depois)
         totalVendidoLiquido,

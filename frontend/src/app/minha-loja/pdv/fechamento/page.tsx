@@ -35,20 +35,14 @@ interface RelatorioDetalhado {
     fundoTroco: number;
   };
   totais: {
-    DINHEIRO: number;
-    PIX: number;
-    CREDIARIO: number;
-    MASTERCARD: number;
-    VISANET: number;
-    CIELO: number;
-    ELO: number;
-    AMEX: number;
-    HIPERCARD: number;
-    VISA_ELECTRON: number;
-    REDE_SHOP: number;
-    CREDITO_GENERICO: number;
-    DEBITO_GENERICO: number;
-    OUTROS: number;
+    // Cada slot pode vir como { valor, qtd, vendas } (formato novo) OU number (legado).
+    // Usamos `sv()` pra extrair o valor de qualquer um dos formatos.
+    DINHEIRO: any; PIX: any; CREDIARIO: any;
+    MASTERCARD: any; VISANET: any; CIELO: any; ELO: any; AMEX: any; HIPERCARD: any;
+    VISA_ELECTRON: any; REDE_SHOP: any;
+    CREDITO_GENERICO: any; DEBITO_GENERICO: any;
+    VENDA_ONLINE?: any;
+    OUTROS: any;
   };
   resumo: {
     totalVendas: number;
@@ -74,6 +68,18 @@ interface RelatorioDetalhado {
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/**
+ * Extrai o valor numerico de um "slot" do backend.
+ * Backend mudou pra retornar { valor, qtd, vendas[] } em vez de number direto.
+ * Esse helper aceita os 2 formatos pra nao quebrar.
+ */
+const sv = (slot: any): number => {
+  if (slot == null) return 0;
+  if (typeof slot === 'number') return slot;
+  if (typeof slot === 'object' && 'valor' in slot) return Number(slot.valor) || 0;
+  return Number(slot) || 0;
+};
 
 export default function FechamentoPage() {
   const router = useRouter();
@@ -218,9 +224,9 @@ export default function FechamentoPage() {
 
         {/* Bloco: Pagamentos diretos */}
         <Card title="Pagamentos Diretos" icon={<Banknote size={18} className="text-emerald-600" />}>
-          <Linha label="Dinheiro" valor={totais.DINHEIRO} icon={<Banknote size={16} />} />
-          <Linha label="PIX" valor={totais.PIX} icon={<QrCode size={16} />} />
-          <Linha label="Crediário" valor={totais.CREDIARIO} icon={<User size={16} />} />
+          <Linha label="Dinheiro" valor={sv(totais.DINHEIRO)} icon={<Banknote size={16} />} />
+          <Linha label="PIX" valor={sv(totais.PIX)} icon={<QrCode size={16} />} />
+          <Linha label="Crediário" valor={sv(totais.CREDIARIO)} icon={<User size={16} />} />
         </Card>
 
         {/* Bloco: Cartões CRÉDITO */}
@@ -229,16 +235,16 @@ export default function FechamentoPage() {
           icon={<CreditCard size={18} className="text-blue-600" />}
           subtotal={resumo.totalCartaoCredito}
         >
-          <Linha label="Mastercard" valor={totais.MASTERCARD} />
-          <Linha label="Visa (Visanet)" valor={totais.VISANET} />
-          <Linha label="Cielo" valor={totais.CIELO} />
-          <Linha label="Elo" valor={totais.ELO} />
-          <Linha label="American Express" valor={totais.AMEX} />
-          <Linha label="Hipercard" valor={totais.HIPERCARD} />
-          {totais.CREDITO_GENERICO > 0 && (
+          <Linha label="Mastercard" valor={sv(totais.MASTERCARD)} />
+          <Linha label="Visa (Visanet)" valor={sv(totais.VISANET)} />
+          <Linha label="Cielo" valor={sv(totais.CIELO)} />
+          <Linha label="Elo" valor={sv(totais.ELO)} />
+          <Linha label="American Express" valor={sv(totais.AMEX)} />
+          <Linha label="Hipercard" valor={sv(totais.HIPERCARD)} />
+          {sv(totais.CREDITO_GENERICO) > 0 && (
             <Linha
               label="Crédito (sem bandeira)"
-              valor={totais.CREDITO_GENERICO}
+              valor={sv(totais.CREDITO_GENERICO)}
               warning="bandeira não identificada"
             />
           )}
@@ -250,21 +256,21 @@ export default function FechamentoPage() {
           icon={<CreditCard size={18} className="text-cyan-600" />}
           subtotal={resumo.totalCartaoDebito}
         >
-          <Linha label="Visa Electron" valor={totais.VISA_ELECTRON} />
-          <Linha label="Rede Shop" valor={totais.REDE_SHOP} />
-          {totais.DEBITO_GENERICO > 0 && (
+          <Linha label="Visa Electron" valor={sv(totais.VISA_ELECTRON)} />
+          <Linha label="Rede Shop" valor={sv(totais.REDE_SHOP)} />
+          {sv(totais.DEBITO_GENERICO) > 0 && (
             <Linha
               label="Débito (sem bandeira)"
-              valor={totais.DEBITO_GENERICO}
+              valor={sv(totais.DEBITO_GENERICO)}
               warning="bandeira não identificada"
             />
           )}
         </Card>
 
         {/* Outros */}
-        {totais.OUTROS > 0 && (
+        {sv(totais.OUTROS) > 0 && (
           <Card title="Outras Formas" icon={<AlertCircle size={18} className="text-amber-600" />}>
-            <Linha label="Outros" valor={totais.OUTROS} />
+            <Linha label="Outros" valor={sv(totais.OUTROS)} />
           </Card>
         )}
 
@@ -318,7 +324,7 @@ export default function FechamentoPage() {
             valor={session.fundoTroco}
             italic
           />
-          <Linha label="(+) Vendas em Dinheiro" valor={totais.DINHEIRO} italic />
+          <Linha label="(+) Vendas em Dinheiro" valor={sv(totais.DINHEIRO)} italic />
           <Linha label="(+) Suprimentos" valor={resumo.totalSuprimentos} italic />
           <Linha
             label="(−) Sangrias"

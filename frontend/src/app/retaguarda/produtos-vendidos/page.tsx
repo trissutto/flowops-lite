@@ -75,6 +75,18 @@ interface ReportResponse {
       vale_troca: number;
       outros: number;
     };
+    devolucoesDiagnostico?: Array<{
+      returnId: string;
+      originalSaleId: string | null;
+      originalSaleDate: string | null;
+      originalSaleInPeriod: boolean;
+      modo: string;
+      valor: number;
+      data: string;
+      customerName: string | null;
+    }>;
+    devolucoesDeVendaDoPeriodo?: number;
+    devolucoesDeVendaAntiga?: number;
     outrosDetalhe?: Array<{ method: string; valor: number; saleId: string }>;
     vendasComDivergencia?: Array<{
       saleId: string;
@@ -399,6 +411,50 @@ function ProdutosVendidosContent() {
               <ModBox label="Crediário" valor={data.conciliacao.porModalidade.crediario} cor="rose" />
               <ModBox label="Vale-troca" valor={data.conciliacao.porModalidade.vale_troca || 0} cor="slate" />
             </div>
+
+            {/* DIAGNOSTICO: devoluções do dia — separar venda do período vs venda antiga */}
+            {data.conciliacao.devolucoesDiagnostico && data.conciliacao.devolucoesDiagnostico.length > 0 && (
+              <div className="mt-3 bg-slate-50 border-2 border-slate-300 rounded-lg p-3">
+                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1">
+                  <TrendingDown className="w-4 h-4" /> DEVOLUÇÕES DO PERÍODO ({data.conciliacao.devolucoesDiagnostico.length}) — ORIGEM
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px] mb-2">
+                  <div className="bg-amber-50 border border-amber-300 rounded p-1.5">
+                    <span className="text-[9px] font-bold uppercase text-amber-800 block">De venda DO PERÍODO</span>
+                    <span className="font-mono font-bold text-amber-900">{brl(data.conciliacao.devolucoesDeVendaDoPeriodo || 0)}</span>
+                    <span className="text-[9px] text-amber-700 block">desconta de vendido líquido ✓</span>
+                  </div>
+                  <div className="bg-rose-50 border border-rose-300 rounded p-1.5">
+                    <span className="text-[9px] font-bold uppercase text-rose-800 block">De venda ANTIGA</span>
+                    <span className="font-mono font-bold text-rose-900">{brl(data.conciliacao.devolucoesDeVendaAntiga || 0)}</span>
+                    <span className="text-[9px] text-rose-700 block">sangria pura — não desconta vendido</span>
+                  </div>
+                </div>
+                <div className="max-h-40 overflow-y-auto bg-white rounded p-2 text-[11px] space-y-0.5">
+                  {data.conciliacao.devolucoesDiagnostico.map((d) => {
+                    const dataOrig = d.originalSaleDate
+                      ? new Date(d.originalSaleDate).toLocaleDateString('pt-BR')
+                      : '—';
+                    return (
+                      <div key={d.returnId} className={`grid grid-cols-6 gap-2 border-b border-slate-100 last:border-0 py-0.5 ${d.originalSaleInPeriod ? 'bg-amber-50' : 'bg-rose-50'}`}>
+                        <span className="font-mono text-[10px]">{d.returnId.slice(0, 8)}</span>
+                        <span className="font-bold uppercase text-[10px]">{d.modo}</span>
+                        <span className="font-mono font-bold">{brl(d.valor)}</span>
+                        <span className="text-[10px]">venda orig: <b>{dataOrig}</b></span>
+                        <span className={`text-[9px] font-bold ${d.originalSaleInPeriod ? 'text-amber-700' : 'text-rose-700'}`}>
+                          {d.originalSaleInPeriod ? '✓ no período' : '⚠ fora do período'}
+                        </span>
+                        <span className="text-[10px] truncate">{d.customerName || '—'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-[10px] text-slate-600 leading-tight">
+                  💡 Devoluções de venda <b>antiga</b> só viram sangria — não devem reduzir o vendido líquido de hoje.
+                  Se a "Diferença" da conciliação bate com esse valor, é só ajustar a fórmula.
+                </div>
+              </div>
+            )}
 
             {/* ALERTA: methods desconhecidos caíram em "Outros" */}
             {data.conciliacao.porModalidade.outros > 0 && data.conciliacao.outrosDetalhe && data.conciliacao.outrosDetalhe.length > 0 && (
