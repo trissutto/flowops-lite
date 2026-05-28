@@ -53,6 +53,15 @@ interface ReportResponse {
     liquidoValor: number;
   };
   conciliacao?: {
+    // V3 — correto
+    totalVendasReais?: number;
+    totalSubtotal?: number;
+    totalDescontosAplicados?: number;
+    recebidoEmDinheiro?: number;
+    recebidoComVale?: number;
+    diferencaV3?: number;
+    okV3?: boolean;
+    // V2 mantido
     totalVendidoLiquido: number;
     totalRecebido: number;
     diferenca: number;
@@ -70,11 +79,12 @@ interface ReportResponse {
     vendasComDivergencia?: Array<{
       saleId: string;
       saleNumber: string;
+      subtotal?: number;
+      desconto?: number;
       total: number;
       somaPagamentos: number;
       diferenca: number;
     }>;
-    // legacy
     totalProdutosVendidos?: number;
   };
   filtros: any;
@@ -322,25 +332,65 @@ function ProdutosVendidosContent() {
                 {data.conciliacao.ok ? '✓ BATE' : '⚠ DIVERGÊNCIA'}
               </span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-              <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Vendido (líquido)</div>
-                <div className="font-mono font-black text-base">{brl(data.conciliacao.totalVendidoLiquido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">peças vendidas − devolvidas</div>
-              </div>
-              <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Total recebido</div>
-                <div className="font-mono font-black text-base text-emerald-700">{brl(data.conciliacao.totalRecebido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário+vale</div>
-              </div>
-              <div className={`bg-white border rounded p-2.5 ${Math.abs(data.conciliacao.diferenca) > 0.01 ? 'border-amber-400' : ''}`}>
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
-                <div className={`font-mono font-black text-base ${data.conciliacao.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {brl(data.conciliacao.diferenca)}
-                </div>
-                <div className="text-[9px] text-slate-400 mt-0.5">vendido − recebido</div>
-              </div>
-            </div>
+            {/* CONCILIACAO V3 — base: sale.total = sum(payments) */}
+            {(() => {
+              const c = data.conciliacao as any;
+              const vendasReais = c.totalVendasReais ?? c.totalVendidoLiquido;
+              const recComVale = c.recebidoComVale ?? c.totalRecebido;
+              const recDin = c.recebidoEmDinheiro ?? c.totalRecebido;
+              const diff = c.diferencaV3 ?? c.diferenca;
+              const ok = c.okV3 ?? c.ok;
+              const descontos = c.totalDescontosAplicados || 0;
+              const subtotalBruto = c.totalSubtotal || 0;
+              return (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+                    <div className="bg-white border rounded p-2.5">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">Vendas (cobradas)</div>
+                      <div className="font-mono font-black text-base">{brl(vendasReais)}</div>
+                      <div className="text-[9px] text-slate-400 mt-0.5">sale.total (após desconto)</div>
+                    </div>
+                    <div className="bg-white border rounded p-2.5">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">Recebido em $</div>
+                      <div className="font-mono font-black text-base text-emerald-700">{brl(recDin)}</div>
+                      <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário</div>
+                    </div>
+                    <div className="bg-white border rounded p-2.5">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">+ Vale-troca aplicado</div>
+                      <div className="font-mono font-black text-base text-slate-700">{brl(data.conciliacao.porModalidade.vale_troca || 0)}</div>
+                      <div className="text-[9px] text-slate-400 mt-0.5">vale gerado de devoluções</div>
+                    </div>
+                    <div className={`bg-white border rounded p-2.5 ${Math.abs(diff) > 0.01 ? 'border-amber-400' : 'border-emerald-300'}`}>
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
+                      <div className={`font-mono font-black text-base ${ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {brl(diff)}
+                      </div>
+                      <div className="text-[9px] text-slate-400 mt-0.5">vendas − (recebido + vale)</div>
+                    </div>
+                  </div>
+
+                  {/* Stats secundarias — vendas brutas, descontos, devolucoes */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-[11px]">
+                    <div className="bg-slate-50 border border-slate-200 rounded p-2">
+                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Subtotal (peças)</span>
+                      <span className="font-mono font-bold">{brl(subtotalBruto)}</span>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded p-2">
+                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Descontos aplicados</span>
+                      <span className="font-mono font-bold text-rose-600">−{brl(descontos)}</span>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded p-2">
+                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Devoluções no período</span>
+                      <span className="font-mono font-bold text-rose-600">−{brl(data.totais.devolucoesValor)}</span>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-200 rounded p-2">
+                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Faturamento líquido</span>
+                      <span className="font-mono font-bold text-emerald-700">{brl(vendasReais - data.totais.devolucoesValor)}</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
               <ModBox label="Dinheiro" valor={data.conciliacao.porModalidade.dinheiro} cor="emerald" />
               <ModBox label="PIX" valor={data.conciliacao.porModalidade.pix} cor="cyan" />
@@ -382,9 +432,12 @@ function ProdutosVendidosContent() {
                 </div>
                 <div className="max-h-40 overflow-y-auto bg-white rounded p-2 text-[11px] font-mono space-y-0.5">
                   {data.conciliacao.vendasComDivergencia.map((v) => (
-                    <div key={v.saleId} className="flex justify-between gap-2 border-b border-amber-100 last:border-0 py-0.5">
+                    <div key={v.saleId} className="grid grid-cols-5 gap-2 border-b border-amber-100 last:border-0 py-0.5">
                       <span className="font-bold">{v.saleNumber}</span>
-                      <span>itens {brl(v.total)}</span>
+                      <span className="text-slate-500">total {brl(v.total)}</span>
+                      {v.desconto != null && v.desconto > 0 && (
+                        <span className="text-rose-600">desc −{brl(v.desconto)}</span>
+                      )}
                       <span>pgto {brl(v.somaPagamentos)}</span>
                       <span className={v.diferenca > 0 ? 'text-rose-700 font-bold' : 'text-emerald-700 font-bold'}>
                         {v.diferenca > 0 ? '+' : ''}{brl(v.diferenca)}

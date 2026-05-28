@@ -98,6 +98,11 @@ export class ProdutosVendidosService {
         customerName: true,
         customerCpf: true,
         paymentMethod: true,
+        // Valores reais da venda — usado pra conciliacao com pagamentos.
+        // sale.total = subtotal - desconto (oque cliente pagou de fato).
+        subtotal: true,
+        desconto: true,
+        total: true,
         finalizedAt: true,
         createdAt: true,
       },
@@ -362,9 +367,9 @@ export class ProdutosVendidosService {
       (totalVendidoLiquido - totalRecebido).toFixed(2),
     );
 
-    // ─── DIAGNOSTICO POR VENDA — quais vendas tem total ≠ Σpagamentos ────
-    // Util pra debug: lista vendas com mismatch (provavel desconto manual
-    // nao registrado em payment, ou bug).
+    // ─── DIAGNOSTICO POR VENDA — sale.total deve = Σpagamentos ──────────
+    // Usa sale.total (subtotal - desconto), nao a soma dos items.
+    // Se diferir, eh bug (payments parciais nao cobertos).
     const paymentsBySale = new Map<string, number>();
     for (const p of salePayments) {
       const s = paymentsBySale.get(p.saleId) || 0;
@@ -373,43 +378,82 @@ export class ProdutosVendidosService {
     const vendasComDivergencia: Array<{
       saleId: string;
       saleNumber: string;
+      subtotal: number;
+      desconto: number;
       total: number;
       somaPagamentos: number;
       diferenca: number;
     }> = [];
-    // Calcula total POR VENDA somando seus items (linhas tipo='venda' so)
-    const totalPorVenda = new Map<string, number>();
-    for (const l of linhas) {
-      if (l.tipo !== 'venda') continue;
-      totalPorVenda.set(l.saleId, (totalPorVenda.get(l.saleId) || 0) + l.total);
-    }
-    for (const [saleId, totalVenda] of totalPorVenda.entries()) {
-      const somaPag = paymentsBySale.get(saleId) || 0;
-      const diff = Number((totalVenda - somaPag).toFixed(2));
+    let totalDescontosAplicados = 0;
+    let totalVendasReais = 0;       // soma de sale.total (descontado)
+    let totalSubtotal = 0;          // soma de sale.subtotal (sem desconto)
+    for (const sale of salesFiltered) {
+      const subt = Number(sale.subtotal || 0);
+      const desc = Number(sale.desconto || 0);
+      const tot = Number(sale.total || 0);
+      totalSubtotal += subt;
+      totalVendasReais += tot;
+      totalDescontosAplicados += desc;
+      const somaPag = paymentsBySale.get(sale.id) || 0;
+      const diff = Number((tot - somaPag).toFixed(2));
       if (Math.abs(diff) > 0.02) {
         vendasComDivergencia.push({
-          saleId,
-          saleNumber: String(saleId).slice(0, 8),
-          total: Number(totalVenda.toFixed(2)),
+          saleId: sale.id,
+          saleNumber: String(sale.id).slice(0, 8),
+          subtotal: Number(subt.toFixed(2)),
+          desconto: Number(desc.toFixed(2)),
+          total: Number(tot.toFixed(2)),
           somaPagamentos: Number(somaPag.toFixed(2)),
           diferenca: diff,
         });
       }
     }
+    totalVendasReais = Number(totalVendasReais.toFixed(2));
+    totalSubtotal = Number(totalSubtotal.toFixed(2));
+    totalDescontosAplicados = Number(totalDescontosAplicados.toFixed(2));
+
+    // CONCILIACAO V3: usa sale.total (com desconto) vs payments.
+    // Vale-troca payments contam como "abate" (nao dinheiro novo).
+    const recebidoEmDinheiro = Number(
+      (
+        porModalidade.dinheiro +
+        porModalidade.pix +
+        porModalidade.credito +
+        porModalidade.debito +
+        porModalidade.crediario
+      ).toFixed(2),
+    );
+    const recebidoComVale = Number(
+      (recebidoEmDinheiro + porModalidade.vale_troca).toFixed(2),
+    );
+    // Conciliacao correta: sale.total = sum(payments) por venda.
+    // Diferenca global = totalVendasReais - recebidoComVale (deve ser 0).
+    const diferencaV3 = Number(
+      (totalVendasReais - recebidoComVale).toFixed(2),
+    );
 
     return {
       linhas,
       totais,
       conciliacao: {
+        // V3 — novos campos
+        totalVendasReais,           // sum(sale.total) — base correta de comparacao
+        totalSubtotal,              // sum(sale.subtotal) — antes do desconto
+        totalDescontosAplicados,    // sum(sale.desconto)
+        recebidoEmDinheiro,         // dinheiro + pix + cartoes + crediario (dinheiro real)
+        recebidoComVale,            // + vale_troca aplicado
+        diferencaV3,                // totalVendasReais - recebidoComVale (deve ser ~0)
+        okV3: Math.abs(diferencaV3) < 0.02,
+
+        // V2 (mantidos pra compat — vamos descomissionar depois)
         totalVendidoLiquido,
         totalRecebido,
         diferenca,
         ok: Math.abs(diferenca) < 0.02,
         porModalidade,
-        // Diagnostico — usado pelo frontend pra mostrar alertas
-        outrosDetalhe: outrosDetalhe.slice(0, 20),  // limita pra nao inchar response
+        outrosDetalhe: outrosDetalhe.slice(0, 20),
         vendasComDivergencia: vendasComDivergencia.slice(0, 30),
-        // legacy (compat)
+        // legacy
         totalProdutosVendidos: totalVendidoLiquido,
       },
       filtros: filters,
