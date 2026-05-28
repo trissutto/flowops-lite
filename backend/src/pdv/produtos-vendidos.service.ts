@@ -134,6 +134,15 @@ export class ProdutosVendidosService {
       });
     }
 
+    // ─── PAGAMENTOS (conciliacao por modalidade) ──────────────────────────
+    let salePayments: any[] = [];
+    if (saleIds.length > 0) {
+      salePayments = await (this.prisma as any).pdvSalePayment.findMany({
+        where: { saleId: { in: saleIds } },
+        select: { method: true, valor: true, saleId: true },
+      });
+    }
+
     // ─── DEVOLUÇÕES ────────────────────────────────────────────────────────
     let returns: any[] = [];
     let returnItems: any[] = [];
@@ -282,6 +291,44 @@ export class ProdutosVendidosService {
     totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
     totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
 
-    return { linhas, totais, filtros: filters };
+    // ─── CONCILIACAO: total por modalidade de pagamento ─────────────────
+    const porModalidade: Record<string, number> = {
+      dinheiro: 0,
+      pix: 0,
+      credito: 0,
+      debito: 0,
+      crediario: 0,
+      outros: 0,
+    };
+    for (const p of salePayments) {
+      const m = String(p.method || '').toLowerCase().trim();
+      const v = Number(p.valor || 0);
+      if (m in porModalidade) porModalidade[m] += v;
+      else porModalidade.outros += v;
+    }
+    for (const k of Object.keys(porModalidade)) {
+      porModalidade[k] = Number(porModalidade[k].toFixed(2));
+    }
+    const totalRecebido = Number(
+      Object.values(porModalidade).reduce((s, v) => s + v, 0).toFixed(2),
+    );
+
+    // Diferenca: vendas (sem desconto de troca) vs total recebido
+    // Trocas em dinheiro/credito viram pagamento negativo? Por enquanto NAO,
+    // entao a conciliacao usa total VENDAS (nao liquido) vs total RECEBIDO.
+    const diferenca = Number((totais.vendasValor - totalRecebido).toFixed(2));
+
+    return {
+      linhas,
+      totais,
+      conciliacao: {
+        totalProdutosVendidos: totais.vendasValor,
+        totalRecebido,
+        diferenca,
+        ok: Math.abs(diferenca) < 0.02,    // diferenca <= 1 centavo = ok
+        porModalidade,
+      },
+      filtros: filters,
+    };
   }
 }

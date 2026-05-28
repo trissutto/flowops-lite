@@ -13,7 +13,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, Filter, Download, Calendar,
-  Store as StoreIcon, AlertCircle, ShoppingCart, TrendingDown, Wallet,
+  Store as StoreIcon, AlertCircle, CheckCircle2, ShoppingCart, TrendingDown, Wallet,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -48,6 +48,20 @@ interface ReportResponse {
     devolucoesValor: number;
     liquidoQtd: number;
     liquidoValor: number;
+  };
+  conciliacao?: {
+    totalProdutosVendidos: number;
+    totalRecebido: number;
+    diferenca: number;
+    ok: boolean;
+    porModalidade: {
+      dinheiro: number;
+      pix: number;
+      credito: number;
+      debito: number;
+      crediario: number;
+      outros: number;
+    };
   };
   filtros: any;
 }
@@ -266,6 +280,47 @@ export default function ProdutosVendidosPage() {
           </section>
         )}
 
+        {/* Conciliação: produtos vendidos x modalidades de pagamento */}
+        {data && data.conciliacao && (
+          <section className={`rounded-xl border-2 p-4 ${data.conciliacao.ok ? 'bg-emerald-50 border-emerald-300' : 'bg-amber-50 border-amber-400'}`}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                {data.conciliacao.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertCircle className="w-4 h-4 text-amber-600" />}
+                Conciliação: vendas × pagamentos
+              </h3>
+              <span className={`text-xs font-bold px-2 py-1 rounded ${data.conciliacao.ok ? 'bg-emerald-200 text-emerald-800' : 'bg-amber-200 text-amber-900'}`}>
+                {data.conciliacao.ok ? '✓ BATE' : '⚠ DIVERGÊNCIA'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <div className="bg-white border rounded p-2.5">
+                <div className="text-[10px] text-slate-500 uppercase font-bold">Produtos vendidos</div>
+                <div className="font-mono font-black text-base">{brl(data.conciliacao.totalProdutosVendidos)}</div>
+              </div>
+              <div className="bg-white border rounded p-2.5">
+                <div className="text-[10px] text-slate-500 uppercase font-bold">Total recebido</div>
+                <div className="font-mono font-black text-base">{brl(data.conciliacao.totalRecebido)}</div>
+              </div>
+              <div className={`bg-white border rounded p-2.5 ${Math.abs(data.conciliacao.diferenca) > 0.01 ? 'border-amber-400' : ''}`}>
+                <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
+                <div className={`font-mono font-black text-base ${data.conciliacao.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+                  {brl(data.conciliacao.diferenca)}
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
+              <ModBox label="Dinheiro" valor={data.conciliacao.porModalidade.dinheiro} cor="emerald" />
+              <ModBox label="PIX" valor={data.conciliacao.porModalidade.pix} cor="cyan" />
+              <ModBox label="Crédito" valor={data.conciliacao.porModalidade.credito} cor="blue" />
+              <ModBox label="Débito" valor={data.conciliacao.porModalidade.debito} cor="indigo" />
+              <ModBox label="Crediário" valor={data.conciliacao.porModalidade.crediario} cor="rose" />
+              {data.conciliacao.porModalidade.outros > 0 && (
+                <ModBox label="Outros" valor={data.conciliacao.porModalidade.outros} cor="slate" />
+              )}
+            </div>
+          </section>
+        )}
+
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 p-3 rounded-lg flex items-center gap-2">
             <AlertCircle className="w-4 h-4" /> {error}
@@ -353,6 +408,23 @@ export default function ProdutosVendidosPage() {
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+function ModBox({ label, valor, cor }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose' | 'slate' }) {
+  const tones: Record<string, string> = {
+    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+    cyan: 'bg-cyan-50 border-cyan-200 text-cyan-700',
+    blue: 'bg-blue-50 border-blue-200 text-blue-700',
+    indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
+    rose: 'bg-rose-50 border-rose-200 text-rose-700',
+    slate: 'bg-slate-50 border-slate-200 text-slate-700',
+  };
+  return (
+    <div className={`border rounded p-2 ${tones[cor]}`}>
+      <div className="text-[9px] font-bold uppercase opacity-80">{label}</div>
+      <div className="font-mono font-black text-xs">R$ {valor.toFixed(2).replace('.', ',')}</div>
     </div>
   );
 }
