@@ -592,14 +592,15 @@ function ProdutosVendidosContent() {
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 {!isReturn && pmts.length > 0 ? (
                                   pmts.map((p, i) => {
-                                    const cls = {
+                                    const colors: Record<string, string> = {
                                       dinheiro: 'bg-emerald-100 text-emerald-800 border-emerald-300',
                                       pix: 'bg-cyan-100 text-cyan-800 border-cyan-300',
                                       credito: 'bg-blue-100 text-blue-800 border-blue-300',
                                       debito: 'bg-indigo-100 text-indigo-800 border-indigo-300',
                                       crediario: 'bg-rose-100 text-rose-800 border-rose-300',
                                       vale_troca: 'bg-slate-200 text-slate-800 border-slate-300',
-                                    }[p.method as keyof any] || 'bg-amber-100 text-amber-800 border-amber-300';
+                                    };
+                                    const cls = colors[p.method] || 'bg-amber-100 text-amber-800 border-amber-300';
                                     return (
                                       <span key={i} className={`text-[10px] font-bold px-2 py-0.5 rounded border ${cls}`}>
                                         {p.method.toUpperCase().replace('_', ' ')}
