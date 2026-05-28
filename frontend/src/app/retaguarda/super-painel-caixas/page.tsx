@@ -440,7 +440,7 @@ export default function SuperPainelCaixas() {
             {/* Grid de lojas */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {data.lojas.map((l) => (
-                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} onReload={() => load(true)} />
+                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} pixStatus={pixConc[l.storeCode]} onReload={() => load(true)} />
               ))}
             </div>
 
@@ -466,7 +466,7 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
   );
 }
 
-function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; onReload?: () => void }) {
+function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void }) {
   const reload = () => { if (onReload) onReload(); };
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -537,7 +537,7 @@ function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; 
             onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
           <ModItem label="PIX" valor={t.totalPix} cor="cyan"
             active={expanded === 'pix'}
-            badge={<PixBadge s={pixConc[loja.storeCode]} />}
+            badge={<PixBadge s={pixStatus} />}
             onClick={loja.detalhado && t.totalPix > 0 ? () => setExpanded(expanded === 'pix' ? null : 'pix') : undefined} />
           <ModItem label="Crédito" valor={t.totalCartaoCredito} cor="blue"
             active={expanded === 'credito'}
