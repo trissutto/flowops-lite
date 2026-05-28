@@ -451,22 +451,23 @@ export default function ReposicaoPage() {
         .etiqueta {
           width: 48mm; height: 30mm;
           box-sizing: border-box;
-          padding: 2mm 1.5mm 1mm 1.5mm;
+          padding: 1.5mm 1.5mm 1mm 1.5mm;
           display: flex; flex-direction: column;
-          justify-content: space-between;
-          gap: 0.8mm;
+          justify-content: flex-start;       /* empilha do topo, sem distribuir */
+          gap: 0.6mm;
           border: 1px dashed #cbd5e1;
           background: #fff; color: #000;
           font-family: -apple-system, system-ui, sans-serif;
           overflow: hidden;
         }
         .et-descricao {
-          font-size: 7pt; font-weight: 900;
+          font-size: 6.5pt; font-weight: 900;
           text-transform: uppercase;
-          line-height: 1.05; letter-spacing: 0.1px;
-          display: -webkit-box;
-          -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-          overflow: hidden; max-height: 6mm;
+          line-height: 1.2; letter-spacing: 0.1px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          height: 3.5mm;
         }
         .et-destaque {
           display: flex; align-items: center;
@@ -479,15 +480,15 @@ export default function ReposicaoPage() {
           padding: 0 1.2mm; line-height: 1.1;
         }
         .et-cor-destaque {
-          font-size: 18pt; font-weight: 900;
+          font-size: 16pt; font-weight: 900;
           font-family: 'Courier New', monospace;
           text-transform: uppercase;
           border: 2px solid #000;
-          padding: 0.5mm 2mm; line-height: 1.05;
+          padding: 0.3mm 1.5mm; line-height: 1.05;
           margin-left: auto;
         }
         .barcode-target {
-          width: 75%; height: 16mm;
+          width: 75%; height: 14mm;
           display: block; margin: 0 auto;
         }
         .et-base {

@@ -22,11 +22,13 @@ import { CarneCoordsService } from './carne-coords.service';
 import { CarneCoordsController } from './carne-coords.controller';
 import { FiscalReportService } from './fiscal-report.service';
 import { FiscalReportController } from './fiscal-report.controller';
+import { ProdutosVendidosService } from './produtos-vendidos.service';
+import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
   imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule],
-  controllers: [PdvController, CashController, ReturnsController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController],
-  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService],
-  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService],
+  controllers: [PdvController, CashController, ReturnsController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
+  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
+  exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
