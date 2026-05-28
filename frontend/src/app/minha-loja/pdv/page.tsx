@@ -3815,15 +3815,17 @@ function PaymentModal({
     setPixPaid(false);
     setPixFallbackReason(null);
     try {
-      // BUG FIX: usa `restante` em vez de `total` — quando vale-troca abate
-      // parte da venda, PIX precisa cobrar SÓ o que falta, não o total da venda.
-      // Caso real: cliente devolveu peça R$ 100, total venda R$ 150, vale-troca
-      // aplicado → restante R$ 50 → PIX deve ser de R$ 50, não R$ 150.
-      // Se `restante` for 0 (totalmente pago por vale), usa total como fallback
-      // só pra evitar gerar PIX de valor zero.
+      // PRIORIDADE de valor pro QR Code PIX:
+      //  1. pixValor explicito (regenerar com valor especifico)
+      //  2. valorParcial digitado pela vendedora (multi-pagamento — ex: 100 dinheiro + 400 PIX)
+      //  3. restante (fallback — ja desconta vale-troca/pagamentos anteriores)
+      //  4. total (fallback final pra nunca gerar PIX de 0)
+      const valorDigitado = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
       const valor =
         pixValor && pixValor > 0
           ? pixValor
+          : valorDigitado > 0 && valorDigitado <= restante + 0.01
+          ? valorDigitado
           : restante > 0
           ? restante
           : total;
@@ -4449,31 +4451,60 @@ function PaymentModal({
               })}
             </div>
 
-            {/* Input de valor parcial — só aparece se for SPLIT (já tem pagamentos)
-                ou se vendedora quiser cobrir parcial. No 95% dos casos = restante. */}
-            {selected && (payments.length > 0 || valorParcial !== '') && (
-              <div className="flex items-center gap-2 pt-1">
-                <label className="text-[10px] text-slate-600 uppercase font-semibold shrink-0">
-                  Valor:
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={valorParcial}
-                  onChange={(e) => setValorParcial(e.target.value)}
-                  placeholder={restante.toFixed(2).replace('.', ',')}
-                  className="flex-1 border rounded px-2 py-1 text-sm font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => setValorParcial(restante.toFixed(2).replace('.', ','))}
-                  className="px-2 py-1 text-[10px] bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
-                  title="Preencher com o restante"
-                >
-                  = restante
-                </button>
-              </div>
-            )}
+            {/* Input de valor parcial — SEMPRE visivel quando ha metodo selecionado.
+                Antes ficava oculto no 1o pagamento e gerava bug: vendedora confirmava
+                o valor TOTAL achando que era o que o cliente pagou em PIX/dinheiro. */}
+            {selected && (() => {
+              const valorAtualNum = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
+              const isParcial = valorAtualNum > 0 && valorAtualNum < restante - 0.01;
+              const restanteApos = Math.max(0, restante - valorAtualNum);
+              return (
+                <div className={`pt-2 mt-2 border-t-2 ${isParcial ? 'border-amber-300' : 'border-slate-100'}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-slate-700 uppercase font-bold">
+                      Quanto cobrar com {selected.toUpperCase()}?
+                    </label>
+                    <span className="text-[10px] text-slate-500">
+                      Restante: <b className="text-slate-800">{brl(restante)}</b>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={valorParcial}
+                      onChange={(e) => setValorParcial(e.target.value)}
+                      placeholder={restante.toFixed(2).replace('.', ',')}
+                      className={`flex-1 border-2 rounded px-3 py-2 text-base font-mono font-bold ${
+                        isParcial ? 'border-amber-400 bg-amber-50' : 'border-slate-300'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setValorParcial(restante.toFixed(2).replace('.', ','))}
+                      className="px-3 py-2 text-xs bg-emerald-100 hover:bg-emerald-200 rounded font-bold text-emerald-700 whitespace-nowrap"
+                      title="Preencher com o restante"
+                    >
+                      = TUDO
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setValorParcial((restante / 2).toFixed(2).replace('.', ','))}
+                      className="px-3 py-2 text-xs bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700 whitespace-nowrap"
+                      title="Dividir restante por 2"
+                    >
+                      ½
+                    </button>
+                  </div>
+                  {isParcial && (
+                    <div className="mt-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 flex items-center gap-1">
+                      <span>⚠️</span>
+                      <span>Pagamento parcial — vai sobrar <b>{brl(restanteApos)}</b> pra cobrar em outra forma</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
 
@@ -5097,6 +5128,31 @@ function PaymentModal({
                     <>📋 Copiar PIX Copia e Cola</>
                   )}
                 </button>
+
+                {/* Regerar QR — se vendedora mudou o valorParcial depois de gerar */}
+                {(() => {
+                  const valorDigitado = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
+                  // Backend salva como pagarmeValor / valor — comparamos com o valor digitado.
+                  // Se o QR foi gerado com um valor diferente do atual (mais ou menos), avisa.
+                  const valorEsperado = valorDigitado > 0 ? valorDigitado : (restante > 0 ? restante : total);
+                  // Sem acesso direto ao valor do QR — comparamos com o que SERIA gerado agora.
+                  // Botao sempre disponivel pra regerar com valor atual.
+                  return !pixPaid && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        autoPixTriggeredRef.current = false;
+                        setPixCharge(null);
+                        generatePix(valorEsperado);
+                      }}
+                      disabled={pixLoading}
+                      className="w-full px-3 py-2 mt-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors disabled:opacity-40"
+                      title="Gera novo QR com o valor atualmente digitado no campo Valor"
+                    >
+                      🔄 Regerar QR com {brl(valorEsperado)}
+                    </button>
+                  );
+                })()}
 
                 {pixCharge.provider === 'pagarme' || pixCharge.provider === 'pagbank' ? (
                   pixPaid ? (

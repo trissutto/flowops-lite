@@ -206,6 +206,16 @@ export class ReturnsController {
   }
 
   /**
+   * GET /pdv/devolucao/return/:id — busca dados de UMA devolucao pra imprimir comprovante.
+   * Retorna PdvReturn + items + venda original (resumida).
+   */
+  @Get('return/:id')
+  async getReturnById(@Req() req: any, @Param('id') id: string) {
+    this.requireRole(req);
+    return this.svc.getReturnById(id);
+  }
+
+  /**
    * GET /pdv/devolucao/credito/:code — consulta vale-troca SEM usar
    */
   @Get('credito/:code')

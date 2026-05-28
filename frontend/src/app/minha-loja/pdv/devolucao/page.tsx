@@ -67,7 +67,7 @@ export default function DevolucaoPage() {
   const [crossStore, setCrossStore] = useState(false);
   // Modo default = TROCA (caso mais comum: cliente leva outra peça no
   // mesmo dia). Vendedora pode trocar pra Dinheiro/Crédito se precisar.
-  const [modo, setModo] = useState<'dinheiro' | 'troca' | 'credito'>('troca');
+  const [modo, setModo] = useState<'dinheiro' | 'pix' | 'troca' | 'credito'>('troca');
   const [motivo, setMotivo] = useState('');
   const [validade, setValidade] = useState(90);
   const [success, setSuccess] = useState<any>(null);
@@ -121,16 +121,53 @@ export default function DevolucaoPage() {
     totalmenteDevolvido: boolean;
   }> | null>(null);
 
+  // Feedback visual da ultima bipa (peca recem-incrementada)
+  const [lastScanFeedback, setLastScanFeedback] = useState<string | null>(null);
+
   async function lookup() {
     setErr('');
+    const q = query.trim();
+    if (!q) return;
+
+    // ── MODO "JA TENHO VENDA CARREGADA" ──
+    // Se ja escolheu uma venda (data tem items), CADA bipada de SKU/REF dessa
+    // venda INCREMENTA a qty selecionada daquele item — em vez de fazer nova busca.
+    // Cliente devolveu 3 pecas? Vendedora bipa 3 vezes, cada bipa soma 1.
+    if (data && data.items.length > 0) {
+      const norm = q.toUpperCase().trim();
+      const match = data.items.find(
+        (it) => it.sku.toUpperCase() === norm
+              || (it.ref && it.ref.toUpperCase() === norm),
+      );
+      if (match) {
+        const atual = selected[match.id] || 0;
+        const novaQty = atual + 1;
+        if (novaQty > match.disponivel) {
+          setErr(`Maximo ${match.disponivel} pecas dessa REF ja foi atingido`);
+          setQuery('');
+          return;
+        }
+        setSelected((prev) => ({ ...prev, [match.id]: novaQty }));
+        setLastScanFeedback(`✓ ${match.ref || match.sku} ${match.cor || ''} ${match.tamanho || ''} — ${novaQty}/${match.disponivel}`);
+        setQuery('');
+        inputRef.current?.focus();
+        // Limpa feedback apos 3s
+        setTimeout(() => setLastScanFeedback(null), 3000);
+        return;
+      }
+      // Peca NAO esta nessa venda — avisa mas nao reseta
+      setErr(`SKU/REF "${q}" nao esta nessa venda. Bipe pecas dessa venda OU clique em "Nova busca".`);
+      setQuery('');
+      return;
+    }
+
+    // ── MODO BUSCA NORMAL — primeira bipa ou apos reset ──
     setData(null);
     setSelected({});
     setSuccess(null);
     setSalesBySku(null);
     setManualEligible(null);
     setManualBlocked(null);
-    const q = query.trim();
-    if (!q) return;
     setBusy(true);
     try {
       // ESTRATÉGIA: sempre tenta SKU/REF primeiro (caso 95% — vendedora bipa
@@ -255,11 +292,17 @@ export default function DevolucaoPage() {
       const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(saleId)}`);
       setData(r);
       setSalesBySku(null);
-      // Auto-marca o item correspondente pro SKU bipado (qty máxima disponível)
+      // Conta UMA peca bipada (a que a vendedora acabou de bipar pra escolher venda).
+      // Pra adicionar mais pecas da mesma venda, vendedora bipa de novo no input —
+      // cada bipa incrementa qty (ver `lookup()`).
       const item = r.items.find((it) => it.sku === autoSelectSku || it.ref === autoSelectSku);
       if (item && item.disponivel > 0) {
-        setSelected({ [item.id]: item.disponivel });
+        setSelected({ [item.id]: 1 });
+        setLastScanFeedback(`✓ ${item.ref || item.sku} ${item.cor || ''} ${item.tamanho || ''} — 1/${item.disponivel}`);
+        setTimeout(() => setLastScanFeedback(null), 3000);
       }
+      setQuery('');
+      inputRef.current?.focus();
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar venda');
     } finally {
@@ -359,6 +402,15 @@ export default function DevolucaoPage() {
           await routePrint({ kind: 'vale', url }).catch(() => openValePopup(url));
         } catch { /* segue — botão Imprimir Vale fica disponível */ }
       }
+      // Auto-imprime COMPROVANTE de devolucao pra modos DINHEIRO / PIX —
+      // assinatura da cliente confirmando que recebeu o reembolso.
+      if ((r.modo === 'dinheiro' || r.modo === 'pix') && r.id) {
+        try {
+          const url = `/minha-loja/pdv/recibo-devolucao/${encodeURIComponent(r.id)}?autoprint=1`;
+          const { routePrint } = await import('@/lib/printer-router');
+          await routePrint({ kind: 'vale', url }).catch(() => openValePopup(url));
+        } catch { /* segue — botão fica disponível se falhar */ }
+      }
     } catch (e: any) {
       setErr(e?.message || 'Falha na devolução');
     } finally {
@@ -426,17 +478,31 @@ export default function DevolucaoPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') lookup(); }}
-                placeholder="Bipe o SKU/REF da peça ou número da NFC-e"
-                className="flex-1 p-2 border rounded text-base focus:ring-2 focus:ring-rose-400 focus:outline-none"
+                placeholder={data ? "Bipe MAIS peças dessa venda (cada bipa soma 1)" : "Bipe o SKU/REF da peça ou número da NFC-e"}
+                className={`flex-1 p-2 border-2 rounded text-base focus:ring-2 focus:ring-rose-400 focus:outline-none ${data ? 'border-emerald-400 bg-emerald-50' : ''}`}
               />
               <button
                 onClick={lookup}
                 disabled={busy}
                 className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded font-semibold disabled:opacity-50 flex items-center gap-1.5 text-sm"
               >
-                <Search size={16} /> Buscar
+                <Search size={16} /> {data ? 'Bipar' : 'Buscar'}
               </button>
+              {data && (
+                <button
+                  onClick={reset}
+                  className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-2 rounded font-semibold text-sm"
+                  title="Limpa e começa nova devolução"
+                >
+                  Nova
+                </button>
+              )}
             </div>
+            {lastScanFeedback && (
+              <div className="mt-2 bg-emerald-100 border-2 border-emerald-400 rounded px-3 py-1.5 text-sm font-bold text-emerald-900 flex items-center gap-2 animate-pulse">
+                {lastScanFeedback}
+              </div>
+            )}
             {/*
               Toggle "Outras lojas" — SÓ pra admin/operator.
               Vendedora comum (role=store) nunca vê esse checkbox; backend
@@ -760,12 +826,19 @@ export default function DevolucaoPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <div className="text-xs font-bold text-rose-900 uppercase tracking-wide mb-1.5">Modo</div>
-                    <div className="grid grid-cols-3 gap-1.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       <ModoBtn
                         active={modo === 'dinheiro'}
                         onClick={() => setModo('dinheiro')}
                         icon={<Banknote size={16} />}
                         title="Dinheiro"
+                        sub="Sangria"
+                      />
+                      <ModoBtn
+                        active={modo === 'pix'}
+                        onClick={() => setModo('pix')}
+                        icon={<span className="text-base font-black">📲</span>}
+                        title="PIX"
                         sub="Sangria"
                       />
                       <ModoBtn
@@ -853,6 +926,35 @@ export default function DevolucaoPage() {
                 <strong>Sangria automática</strong> registrada no caixa.
                 <br />
                 Entregue R$ {fmt(success.valorTotal)} em dinheiro pra cliente.
+                <div className="mt-2">
+                  <a
+                    href={`/minha-loja/pdv/recibo-devolucao/${encodeURIComponent(success.id)}?autoprint=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-bold"
+                  >
+                    🖨️ Reimprimir comprovante
+                  </a>
+                </div>
+              </div>
+            )}
+            {success.modo === 'pix' && (
+              <div className="bg-cyan-50 rounded-lg p-4 mb-4 text-cyan-900">
+                <strong>Sangria PIX</strong> registrada no caixa.
+                <br />
+                Envie R$ {fmt(success.valorTotal)} via PIX para a cliente.
+                <br />
+                <span className="text-xs text-cyan-700">⚠️ Comprovante impresso — colete assinatura após confirmação do PIX.</span>
+                <div className="mt-2">
+                  <a
+                    href={`/minha-loja/pdv/recibo-devolucao/${encodeURIComponent(success.id)}?autoprint=1`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-bold"
+                  >
+                    🖨️ Reimprimir comprovante
+                  </a>
+                </div>
               </div>
             )}
             {(success.modo === 'troca' || success.modo === 'credito') && (

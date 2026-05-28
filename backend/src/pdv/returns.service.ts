@@ -301,7 +301,7 @@ export class ReturnsService {
     originalSaleId: string;
     storeCode: string;
     storeName: string;
-    modo: 'dinheiro' | 'troca' | 'credito';
+    modo: 'dinheiro' | 'pix' | 'troca' | 'credito';
     items: Array<{ originalItemId: string; qty: number }>;
     motivo?: string;
     creditoValidadeDias?: number;
@@ -377,9 +377,9 @@ export class ReturnsService {
 
     // Sessão de caixa atual (necessária pra dinheiro → sangria)
     const cashSession = await this.cash.getCurrentSession(storeCode);
-    if (modo === 'dinheiro' && !cashSession) {
+    if ((modo === 'dinheiro' || modo === 'pix') && !cashSession) {
       throw new BadRequestException(
-        'Modo dinheiro exige caixa aberto pra registrar a sangria.',
+        'Modo dinheiro/PIX exige caixa aberto pra registrar a sangria.',
       );
     }
 
@@ -454,13 +454,14 @@ export class ReturnsService {
       include: { items: true },
     });
 
-    // Sangria automática se for em dinheiro
-    if (modo === 'dinheiro' && cashSession) {
+    // Sangria automatica se for em dinheiro OU pix (saiu valor do caixa)
+    if ((modo === 'dinheiro' || modo === 'pix') && cashSession) {
+      const tipoLabel = modo === 'pix' ? 'PIX devolucao' : 'Devolucao dinheiro';
       await this.cash.addMovement({
         storeCode,
         tipo: 'sangria',
         valor: valorTotal,
-        motivo: `Devolução venda ${sale.nfceNumber || sale.id.slice(0, 8)} — ${motivo || 'sem motivo'}`,
+        motivo: `${tipoLabel} — venda ${sale.nfceNumber || sale.id.slice(0, 8)}${motivo ? ' · ' + motivo : ''}`,
         userId,
         userName,
       });
@@ -696,6 +697,29 @@ export class ReturnsService {
   // erro caso tenha falhado. Estes endpoints listam o status e permitem
   // retry idempotente (so processa os com stockReturnedAt=null).
   // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Busca 1 devolucao por ID — usado pra imprimir comprovante de devolucao.
+   */
+  async getReturnById(returnId: string) {
+    if (!returnId) throw new BadRequestException('returnId obrigatorio');
+    const ret = await (this.prisma as any).pdvReturn.findUnique({
+      where: { id: returnId },
+      include: { items: true },
+    });
+    if (!ret) throw new NotFoundException('Devolucao nao encontrada');
+    let originalSale: any = null;
+    if (ret.originalSaleId) {
+      originalSale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: ret.originalSaleId },
+        select: {
+          id: true, nfceNumber: true, total: true, finalizedAt: true,
+          paymentMethod: true, customerName: true, customerCpf: true,
+        },
+      });
+    }
+    return { ret, originalSale };
+  }
 
   async getReturnsStockStatus(input: {
     sinceIso?: string;
@@ -976,7 +1000,7 @@ export class ReturnsService {
     sku: string;
     storeCode: string;
     storeName: string;
-    modo: 'dinheiro' | 'troca' | 'credito';
+    modo: 'dinheiro' | 'pix' | 'troca' | 'credito';
     motivo?: string;
     creditoValidadeDias?: number;
     attachToSaleId?: string | null;
@@ -1083,13 +1107,14 @@ export class ReturnsService {
     });
 
     // 5) Modo dinheiro → sangria automática
-    if (modo === 'dinheiro' && cashSessionId) {
+    if ((modo === 'dinheiro' || modo === 'pix') && cashSessionId) {
       try {
+        const tipoLabel = modo === 'pix' ? 'PIX devolucao manual' : 'Devolucao manual';
         await this.cash.addMovement({
           storeCode,
           tipo: 'sangria',
           valor: valorTotal,
-          motivo: `Devolução manual ${ret.id.slice(0, 8)} (${produto.codigo} sem cupom)`,
+          motivo: `${tipoLabel} ${ret.id.slice(0, 8)} (${produto.codigo} sem cupom)`,
           userId,
           userName,
         });
