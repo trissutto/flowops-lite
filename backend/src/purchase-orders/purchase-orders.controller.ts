@@ -209,9 +209,21 @@ export class PurchaseOrdersController {
   @Post('reposicao/confirmar')
   async reposicaoConfirmar(
     @Req() req: any,
-    @Body() body: { items: Array<{ codigo: string; qty: number; lojaCode?: string }> },
+    @Body() body: {
+      items: Array<{
+        codigo: string;
+        qty: number;
+        lojaCode?: string;
+        ref?: string;
+        cor?: string;
+        tamanho?: string;
+        preco?: number;
+        descricao?: string;
+      }>;
+      apenasEtiqueta?: boolean;
+    },
   ) {
     this.requireWrite(req);
-    return this.svc.reposicaoConfirmar(body?.items || []);
+    return this.svc.reposicaoConfirmar(body?.items || [], !!body?.apenasEtiqueta);
   }
 }
