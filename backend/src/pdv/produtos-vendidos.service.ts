@@ -48,6 +48,17 @@ export class ProdutosVendidosService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getReport(filters: ProdutosVendidosFilters = {}) {
+    try {
+      return await this._getReportImpl(filters);
+    } catch (e: any) {
+      this.logger.error(
+        `getReport falhou: ${e?.message}\nFilters: ${JSON.stringify(filters)}\nStack: ${e?.stack}`,
+      );
+      throw e;
+    }
+  }
+
+  private async _getReportImpl(filters: ProdutosVendidosFilters = {}) {
     const includeReturns = filters.includeReturns !== false;
     const fromDate = filters.from
       ? new Date(filters.from + 'T00:00:00')
@@ -259,22 +270,6 @@ export class ProdutosVendidosService {
       if (l.tipo === 'venda') {
         totais.vendasQtd += l.qty;
         totais.vendasValor += l.total;
-      } else {
-        totais.devolucoesQtd += Math.abs(l.qty);
-        totais.devolucoesValor += Math.abs(l.total);
-      }
-    }
-    totais.liquidoQtd = totais.vendasQtd - totais.devolucoesQtd;
-    totais.liquidoValor = totais.vendasValor - totais.devolucoesValor;
-
-    totais.vendasValor = Number(totais.vendasValor.toFixed(2));
-    totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
-    totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
-
-    return { linhas, totais, filtros: filters };
-  }
-}
-is.vendasValor += l.total;
       } else {
         totais.devolucoesQtd += Math.abs(l.qty);
         totais.devolucoesValor += Math.abs(l.total);
