@@ -18,6 +18,7 @@ import { WebsocketModule } from './websocket/websocket.module';
 import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { HealthModule } from './health/health.module';
+import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
 import { PickOrdersModule } from './pick-orders/pick-orders.module';
 import { MarketingRecoveryModule } from './marketing-recovery/marketing-recovery.module';
@@ -95,6 +96,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     ProductPhotosModule,
     PushModule,
     FaturamentoModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
