@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { ArrowLeft, Search, Loader2, Plus, Trash2, CheckCircle2, Printer, Package } from 'lucide-react';
 import { api } from '@/lib/api';
 import ProductPhoto from '@/components/ProductPhoto';
+import EtiquetaPrint from '@/components/EtiquetaPrint';
 
 type Produto = {
   codigo: string;
@@ -67,84 +68,6 @@ export default function ReposicaoPage() {
     }, 300);
     return () => clearTimeout(t);
   }, [busca]);
-
-  // Ajusta o tamanho do nome da cor: se passar do espaco disponivel,
-  // aplica transform:scale() pra comprimir PROPORCIONALMENTE (sem esticar
-  // letras individuais). Curto = font normal; longo = encolhe inteiro.
-  useEffect(() => {
-    if (!resultado || resultado.labels.length === 0) return;
-
-    const adjust = () => {
-      document.querySelectorAll<HTMLElement>('.et-base-ref-wrap').forEach((wrap) => {
-        const text = wrap.querySelector<HTMLElement>('.et-base-ref-text');
-        if (!text) return;
-        // Reseta transform antes de medir
-        text.style.transform = 'none';
-        const available = wrap.clientWidth;
-        const natural = text.scrollWidth;
-        if (natural <= 0 || available <= 0) return;
-        // Se cabe naturalmente, mantem font normal (sem esticar)
-        if (natural <= available) {
-          text.style.transform = 'none';
-        } else {
-          // Se nao cabe, comprime proporcionalmente (min 0.5 = 50%)
-          const scale = Math.max(0.5, available / natural);
-          text.style.transform = `scaleX(${scale.toFixed(3)})`;
-        }
-      });
-    };
-
-    // Roda apos renderizar
-    const t = setTimeout(adjust, 80);
-    // Roda antes de imprimir (layout pode diferir do preview)
-    window.addEventListener('beforeprint', adjust);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener('beforeprint', adjust);
-    };
-  }, [resultado]);
-
-  // Carrega JsBarcode pra labels (mesmo padrao das outras telas)
-  useEffect(() => {
-    if (!resultado || resultado.labels.length === 0) return;
-    const render = () => {
-      // @ts-expect-error
-      if (!window.JsBarcode) return;
-      document.querySelectorAll<HTMLElement>('.barcode-target').forEach((el) => {
-        const code = el.dataset.code || '';
-        if (!code) return;
-        try {
-          // @ts-expect-error
-          window.JsBarcode(el, code, {
-            format: 'EAN13', width: 2.6, height: 50, displayValue: true,
-            fontSize: 26, fontOptions: 'bold', textMargin: 1, margin: 0,
-            background: '#fff', lineColor: '#000',
-          });
-          el.setAttribute('preserveAspectRatio', 'none');
-          el.removeAttribute('width');
-        } catch {
-          try {
-            // @ts-expect-error
-            window.JsBarcode(el, code, {
-              format: 'CODE128', width: 2.6, height: 50, displayValue: true,
-              fontSize: 26, fontOptions: 'bold', textMargin: 1, margin: 0,
-            });
-            el.setAttribute('preserveAspectRatio', 'none');
-            el.removeAttribute('width');
-          } catch { /* skip */ }
-        }
-      });
-    };
-    // @ts-expect-error
-    if (window.JsBarcode) {
-      render();
-      return;
-    }
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js';
-    s.onload = render;
-    document.head.appendChild(s);
-  }, [resultado]);
 
   const selecionar = (p: Produto) => {
     if (selecionados.find((s) => s.codigo === p.codigo)) return;
@@ -404,134 +327,11 @@ export default function ReposicaoPage() {
         )}
       </main>
 
-      {/* Etiquetas (visiveis na impressao) */}
-      {resultado && resultado.labels.length > 0 && (
-        <main className="hidden print:block">
-          <div className="etiquetas-grid">
-            {resultado.labels.map((l, i) => (
-              <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-descricao">{
-                  l.descricao
-                    .replace(new RegExp(`\\b${l.ref}\\b`, 'g'), '')
-                    .replace(new RegExp(`\\b${l.cor}\\b`, 'g'), '')
-                    .replace(new RegExp(`\\b${l.tamanho}\\b`, 'g'), '')
-                    .replace(/\s+/g, ' ')
-                    .trim()
-                }</div>
-                <div className="et-destaque">
-                  <span className="et-tam">{l.ref}</span>
-                  <span className="et-cor-destaque">{l.tamanho}</span>
-                </div>
-                <svg className="barcode-target" data-code={l.codigo} />
-                <div className="et-base">
-                  {/* Wrapper limita largura; o span interno tem font fixa e
-                      JS aplica transform:scale() apenas se passar do limite.
-                      Curto = font normal; longo = comprime proporcionalmente. */}
-                  <div className="et-base-ref-wrap">
-                    <span className="et-base-ref-text">{(l.cor || '').toUpperCase()}</span>
-                  </div>
-                  <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </main>
+      {/* Etiquetas (visiveis na impressao) — componente compartilhado */}
+      {resultado && resultado.labels && (
+        <EtiquetaPrint labels={resultado.labels} />
       )}
 
-      <style jsx global>{`
-        .etiquetas-grid {
-          display: grid;
-          grid-template-columns: 48mm 48mm;
-          gap: 0 6mm;
-          padding: 10mm 0 0 6mm;
-          width: 108mm;
-          margin: 0 auto;
-          background: #fff;
-        }
-        .etiqueta {
-          width: 48mm; height: 30mm;
-          box-sizing: border-box;
-          padding: 2.5mm 1.5mm 1mm 1.5mm;   /* +1mm top — Argox precisa de margem */
-          display: flex; flex-direction: column;
-          justify-content: flex-start;
-          gap: 0.5mm;
-          border: 1px dashed #cbd5e1;
-          background: #fff; color: #000;
-          font-family: -apple-system, system-ui, sans-serif;
-          overflow: hidden;
-        }
-        .et-descricao {
-          font-size: 7pt;
-          font-weight: 700;                  /* era 900 — ascent menor, nao corta */
-          text-transform: uppercase;
-          line-height: 4.5mm;                /* line-height EXPLICITO em mm */
-          height: 4.5mm;                     /* casa com line-height */
-          letter-spacing: 0.1px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          padding-top: 0.2mm;
-          flex-shrink: 0;
-        }
-        .et-destaque {
-          display: flex; align-items: center;
-          gap: 1.5mm; line-height: 1;
-        }
-        .et-tam {
-          font-size: 10pt; font-weight: 900;
-          font-family: 'Courier New', monospace;
-          border: 1.5px solid #000;
-          padding: 0 1mm; line-height: 1.1;
-        }
-        .et-cor-destaque {
-          font-size: 14pt; font-weight: 900;
-          font-family: 'Courier New', monospace;
-          text-transform: uppercase;
-          border: 2px solid #000;
-          padding: 0.2mm 1.2mm; line-height: 1;
-          margin-left: auto;
-        }
-        .barcode-target {
-          width: 75%; height: 14mm;
-          display: block; margin: 0 auto;
-        }
-        .et-base {
-          display: flex; justify-content: space-between;
-          align-items: baseline; line-height: 1;
-          border-top: 0.5px solid #cbd5e1;
-          padding-top: 0.5mm; min-width: 0; gap: 1mm;
-        }
-        /* Wrapper limita largura. JS aplica transform:scale() so se passar. */
-        .et-base-ref-wrap {
-          flex: 1 1 auto;
-          min-width: 0;
-          margin-right: 1.5mm;
-          overflow: hidden;
-          line-height: 1.1;
-          display: flex;
-          align-items: center;
-        }
-        .et-base-ref-text {
-          font-size: 11pt;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          text-transform: uppercase;
-          white-space: nowrap;
-          display: inline-block;
-          transform-origin: left center;
-          /* transform aplicado dinamicamente via JS quando texto eh longo */
-        }
-        .et-base-preco {
-          font-size: 11pt; font-weight: 900;
-          flex-shrink: 0;
-          white-space: nowrap;
-        }
-        @media print {
-          body { background: white !important; margin: 0 !important; padding: 0 !important; }
-          @page { size: 108mm auto; margin: 0; }
-          .etiqueta { border: none !important; page-break-inside: avoid; }
-        }
-      `}</style>
     </div>
   );
 }

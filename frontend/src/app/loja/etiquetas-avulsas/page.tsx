@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Printer, Search, Loader2, AlertCircle, Tags, Plus, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
+import EtiquetaPrint from '@/components/EtiquetaPrint';
 
 type Label = {
   ref: string;
@@ -209,127 +210,10 @@ export default function EtiquetasAvulsasPage() {
             <div className="text-sm">Os produtos encontrados aparecerão aqui</div>
           </div>
         ) : (
-          <div className="etiquetas-grid">
-            {labels.map((l, i) => (
-              <div key={`${l.codigo}-${i}`} className="etiqueta">
-                <div className="et-destaque">
-                  <span className="et-tam">{l.ref}</span>
-                  <span className="et-cor-destaque">{l.tamanho}</span>
-                </div>
-                <svg className="barcode-target" data-code={l.codigo} />
-                <div className="et-base">
-                  <span
-                    className="et-base-ref"
-                    style={{
-                      fontSize:
-                        l.cor.length <= 8 ? '11pt'
-                        : l.cor.length <= 12 ? '9pt'
-                        : l.cor.length <= 16 ? '7.5pt'
-                        : l.cor.length <= 22 ? '6.5pt'
-                        : '5.5pt',
-                    }}
-                  >{l.cor}</span>
-                  <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+          <EtiquetaPrint labels={labels.map(l => ({ ...l, descricao: l.descricao || '' }))} />
         )}
       </main>
 
-      <style jsx global>{`
-        .etiquetas-grid {
-          display: grid;
-          grid-template-columns: 48mm 48mm;
-          gap: 0 6mm;
-          padding: 9mm 0 0 6mm;
-          width: 108mm;
-          margin: 0 auto;
-          background: #fff;
-        }
-        .etiqueta {
-          width: 48mm;
-          height: 30mm;
-          box-sizing: border-box;
-          padding: 2mm 1.5mm 1mm 1.5mm;
-          display: flex;
-          flex-direction: column;
-          justify-content: space-between;
-          gap: 0.8mm;
-          border: 1px dashed #cbd5e1;
-          background: #fff;
-          font-family: -apple-system, system-ui, sans-serif;
-          color: #000;
-          overflow: hidden;
-        }
-        .et-destaque {
-          display: flex;
-          align-items: center;
-          gap: 1.5mm;
-          line-height: 1;
-        }
-        .et-tam {
-          font-size: 12pt;
-          font-weight: 900;
-          font-family: 'Courier New', monospace;
-          border: 1.5px solid #000;
-          padding: 0 1.2mm;
-          line-height: 1.1;
-        }
-        .et-cor-destaque {
-          font-size: 11pt;
-          font-weight: 900;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          margin-left: auto;
-        }
-        .barcode-target {
-          width: 100%;
-          height: 14mm;
-          display: block;
-        }
-        .et-base {
-          display: flex;
-          justify-content: space-between;
-          align-items: baseline;
-          line-height: 1;
-          border-top: 0.5px solid #cbd5e1;
-          padding-top: 0.5mm;
-          min-width: 0;
-          gap: 1mm;
-        }
-        .et-base-ref {
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          text-transform: uppercase;
-          flex: 1 1 auto;
-          min-width: 0;
-          white-space: nowrap;
-          padding-right: 1mm;
-          line-height: 1.1;
-        }
-        .et-base-preco {
-          font-size: 11pt;
-          font-weight: 900;
-          flex-shrink: 0;
-        }
-        @media print {
-          body { background: white !important; margin: 0 !important; padding: 0 !important; }
-          @page {
-            size: 108mm auto;
-            margin: 0;
-          }
-          .etiquetas-grid {
-            padding: 9mm 0 0 6mm;
-            page-break-inside: auto;
-          }
-          .etiqueta {
-            border: none !important;
-            page-break-inside: avoid;
-            break-inside: avoid;
-          }
-        }
-      `}</style>
     </div>
   );
 }
