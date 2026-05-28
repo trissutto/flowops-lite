@@ -70,6 +70,8 @@ type Loja = {
   storeName: string;
   sessionId: string | null;
   aberta: boolean;
+  sessaoPendente?: boolean;            // sessão de outro dia ainda não fechada
+  sessaoPendenteAbertaEm?: string | null;
   openedAt: string | null;
   openedByName: string | null;
   fundoTroco: number;
@@ -496,6 +498,20 @@ function LojaCard({ loja, isAdmin, onReload }: { loja: Loja; isAdmin?: boolean; 
           <span className="text-[10px] opacity-90 font-bold uppercase">Fechado</span>
         )}
       </div>
+
+      {/* Aviso de sessão pendente (caixa de ontem ainda aberto) */}
+      {loja.sessaoPendente && (
+        <div className="bg-amber-100 border-b border-amber-300 px-3 py-2 text-[11px] text-amber-900 flex items-center gap-1.5">
+          <AlertCircle size={13} className="flex-shrink-0" />
+          <span>
+            <strong>Sessão pendente</strong> aberta em{' '}
+            {loja.sessaoPendenteAbertaEm
+              ? new Date(loja.sessaoPendenteAbertaEm).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+              : '—'}
+            {' '}— feche o caixa pra contabilizar.
+          </span>
+        </div>
+      )}
 
       {/* Total grande */}
       <div className="p-3 space-y-2">

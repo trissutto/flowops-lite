@@ -516,13 +516,30 @@ export class CashService {
     // Pra cada loja, busca sessão aberta + RELATORIO DETALHADO (paralelo)
     const lojas = await Promise.all(
       (stores as any[]).map(async (s) => {
-        const session = await this.getCurrentSession(s.code);
+        const rawSession = await this.getCurrentSession(s.code);
+        // Sessão só conta como "atual" se foi aberta HOJE (após 00:00 local).
+        // Se for de ontem (esqueceram de fechar), trata como SEM sessão e marca
+        // sessaoPendente=true pro frontend exibir alerta.
+        const today00 = new Date();
+        today00.setHours(0, 0, 0, 0);
+        const sessionFromToday =
+          rawSession && rawSession.openedAt && new Date(rawSession.openedAt) >= today00;
+        const session: any = sessionFromToday ? rawSession : null;
+        const sessaoPendente = !!(rawSession && !sessionFromToday);
+        const sessaoPendenteAbertaEm = sessaoPendente
+          ? (rawSession?.openedAt instanceof Date
+              ? rawSession.openedAt.toISOString()
+              : (rawSession?.openedAt as any))
+          : null;
+
         if (!session) {
           return {
             storeCode: s.code,
             storeName: s.name,
-            sessionId: null,
+            sessionId: rawSession?.id || null,
             aberta: false,
+            sessaoPendente,
+            sessaoPendenteAbertaEm,
             openedAt: null,
             openedByName: null,
             fundoTroco: 0,
