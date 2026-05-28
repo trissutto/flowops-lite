@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, Search, Loader2, Filter, Download, Calendar,
@@ -93,9 +94,14 @@ export default function ProdutosVendidosPage() {
   const [stores, setStores] = useState<StoreOption[]>([]);
 
   // Filtros
-  const [from, setFrom] = useState(ymd(hoje));
-  const [to, setTo] = useState(ymd(hoje));
-  const [storeCode, setStoreCode] = useState('');
+  // Pre-fill via query params (?storeCode=&from=&to=) quando vem do super-painel
+  const searchParams = useSearchParams();
+  const initFrom = searchParams?.get('from') || ymd(hoje);
+  const initTo = searchParams?.get('to') || ymd(hoje);
+  const initStore = searchParams?.get('storeCode') || '';
+  const [from, setFrom] = useState(initFrom);
+  const [to, setTo] = useState(initTo);
+  const [storeCode, setStoreCode] = useState(initStore);
   const [sellerName, setSellerName] = useState('');
   const [sku, setSku] = useState('');
   const [customerName, setCustomerName] = useState('');

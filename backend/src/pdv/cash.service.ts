@@ -1211,6 +1211,99 @@ export class CashService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // AUDIT MASTER — grava toda alteracao master em MasterAudit (imutavel)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Registra 1 entrada de auditoria. Nunca lanca — se falhar, so loga warn.
+   * userName eh esperado no formato "[LEVEL] nome" (vem do controller).
+   */
+  private async recordAudit(input: {
+    action: string;
+    entityType: string;
+    entityId: string;
+    storeCode?: string | null;
+    storeName?: string | null;
+    userName?: string | null;
+    oldValue?: any;
+    newValue?: any;
+    motivo: string;
+  }) {
+    try {
+      const userNameStr = String(input.userName || 'unknown');
+      // Extrai level do prefixo "[LEVEL] nome"
+      const levelMatch = userNameStr.match(/^\[(\w+)\]/);
+      const level = levelMatch ? levelMatch[1] : 'UNKNOWN';
+      const cleanUserName = userNameStr.replace(/^\[\w+\]\s*/, '');
+
+      await (this.prisma as any).masterAudit.create({
+        data: {
+          action: input.action,
+          entityType: input.entityType,
+          entityId: input.entityId,
+          storeCode: input.storeCode || null,
+          storeName: input.storeName || null,
+          level,
+          userName: cleanUserName,
+          oldValue: input.oldValue != null ? JSON.stringify(input.oldValue) : null,
+          newValue: input.newValue != null ? JSON.stringify(input.newValue) : null,
+          motivo: input.motivo,
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`audit grava falhou (nao bloqueia): ${e?.message}`);
+    }
+  }
+
+  /**
+   * Lista entradas de auditoria com filtros. Paginado por page+size.
+   */
+  async listMasterAudit(filters: {
+    storeCode?: string;
+    action?: string;
+    fromDate?: string;
+    toDate?: string;
+    userName?: string;
+    page?: number;
+    size?: number;
+  }) {
+    const page = Math.max(1, Number(filters.page || 1));
+    const size = Math.min(200, Math.max(10, Number(filters.size || 50)));
+    const where: any = {};
+    if (filters.storeCode) where.storeCode = filters.storeCode;
+    if (filters.action) where.action = filters.action;
+    if (filters.userName) where.userName = { contains: filters.userName };
+    if (filters.fromDate || filters.toDate) {
+      where.createdAt = {};
+      if (filters.fromDate) where.createdAt.gte = new Date(filters.fromDate + 'T00:00:00');
+      if (filters.toDate) where.createdAt.lte = new Date(filters.toDate + 'T23:59:59');
+    }
+    const [total, items] = await Promise.all([
+      (this.prisma as any).masterAudit.count({ where }),
+      (this.prisma as any).masterAudit.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * size,
+        take: size,
+      }),
+    ]);
+    return {
+      total,
+      page,
+      size,
+      items: items.map((it: any) => ({
+        ...it,
+        oldValue: it.oldValue ? this._safeParse(it.oldValue) : null,
+        newValue: it.newValue ? this._safeParse(it.newValue) : null,
+      })),
+    };
+  }
+
+  private _safeParse(s: string) {
+    try { return JSON.parse(s); } catch { return s; }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // AJUSTES MASTER (admin com senha) — fundo de caixa + sangria/suprimento
   // Permite mexer em sessoes abertas OU na ultima fechada do dia (correcoes).
   // ═══════════════════════════════════════════════════════════════════════
@@ -1286,6 +1379,17 @@ export class CashService {
     this.logger.warn(
       `[MASTER] FUNDO ajustado: loja=${storeCode} session=${session.id} ${old} -> ${novo} motivo="${motivo}" por ${userName || 'admin'}`,
     );
+    await this.recordAudit({
+      action: 'fundo',
+      entityType: 'session',
+      entityId: session.id,
+      storeCode,
+      storeName: session.storeName,
+      userName,
+      oldValue: { fundoTroco: old },
+      newValue: { fundoTroco: novo },
+      motivo: motivo.trim(),
+    });
     return { ok: true, sessionId: session.id, fundoAnterior: old, fundoNovo: novo };
   }
 
@@ -1342,6 +1446,17 @@ export class CashService {
     this.logger.warn(
       `[MASTER] ${tipo.toUpperCase()}: loja=${storeCode} session=${session.id} R$${valor} motivo="${motivo}" por ${userName || 'admin'}`,
     );
+    await this.recordAudit({
+      action: 'movement_create',
+      entityType: 'movement',
+      entityId: movement.id,
+      storeCode,
+      storeName: session.storeName,
+      userName,
+      oldValue: null,
+      newValue: { tipo, valor: Number(valor) },
+      motivo: motivo.trim(),
+    });
     return { ok: true, movement };
   }
 
@@ -1382,6 +1497,17 @@ export class CashService {
     this.logger.warn(
       `[MASTER] DELETE movement=${movementId} tipo=${m.tipo} R$${m.valor} por ${userName || 'admin'}`,
     );
+    await this.recordAudit({
+      action: 'movement_delete',
+      entityType: 'movement',
+      entityId: movementId,
+      storeCode: session?.storeCode,
+      storeName: session?.storeName,
+      userName,
+      oldValue: { tipo: m.tipo, valor: Number(m.valor), motivo: m.motivo },
+      newValue: null,
+      motivo: 'Estorno via master',
+    });
     return { ok: true };
   }
 
@@ -1516,6 +1642,17 @@ export class CashService {
       `[MASTER] EDIT payment=${paymentId} method:${oldMethod}->${finalMethod} valor:${oldValor}->${finalValor} bandeira:${oldBandeira}->${finalBandeira} por ${userName || 'admin'} motivo="${motivo}"`,
     );
 
+    await this.recordAudit({
+      action: 'payment_edit',
+      entityType: 'payment',
+      entityId: paymentId,
+      storeCode: payment.sale?.storeCode,
+      userName,
+      oldValue: { method: oldMethod, valor: oldValor, bandeira: oldBandeira },
+      newValue: { method: finalMethod, valor: finalValor, bandeira: finalBandeira },
+      motivo: motivo.trim(),
+    });
+
     return {
       ok: true,
       paymentId,
@@ -1573,6 +1710,16 @@ export class CashService {
     this.logger.warn(
       `[MASTER] SELLER (sale) saleId=${saleId} "${old}" -> "${novo}" por ${userName || 'admin'} motivo="${motivo}"`,
     );
+    await this.recordAudit({
+      action: 'sale_seller',
+      entityType: 'sale',
+      entityId: saleId,
+      storeCode: sale.storeCode,
+      userName,
+      oldValue: { sellerName: old },
+      newValue: { sellerName: novo },
+      motivo: motivo.trim(),
+    });
     return { ok: true, saleId, old, new: novo };
   }
 
@@ -1617,6 +1764,15 @@ export class CashService {
     this.logger.warn(
       `[MASTER] SELLER (item) itemId=${itemId} ref=${item.ref || '-'} "${old}" -> "${novo || '(limpo)'}" por ${userName || 'admin'} motivo="${motivo}"`,
     );
+    await this.recordAudit({
+      action: 'item_seller',
+      entityType: 'sale_item',
+      entityId: itemId,
+      userName,
+      oldValue: { sellerName: old, ref: item.ref },
+      newValue: { sellerName: novo },
+      motivo: motivo.trim(),
+    });
     return { ok: true, itemId, old, new: novo };
   }
 

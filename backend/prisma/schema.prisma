@@ -1546,6 +1546,37 @@ model PdvSaleItem {
 }
 
 // ════════════════════════════════════════════════════════════════
+// MasterAudit — log de toda acao master (ajustes pos-fato pelo painel).
+// Registra QUEM (level + userName), O QUE mudou (action + entity + ids),
+// VALORES (old/new em JSON) e MOTIVO. Imutavel apos criacao.
+// ════════════════════════════════════════════════════════════════
+model MasterAudit {
+  id          String   @id @default(uuid())
+  // 'sale_seller' | 'item_seller' | 'fundo' | 'movement_create' | 'movement_delete' | 'payment_edit'
+  action      String
+  // 'sale' | 'sale_item' | 'session' | 'movement' | 'payment'
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  storeCode   String?  @map("store_code")
+  storeName   String?  @map("store_name")
+  // Nivel da senha digitada: SUPREMA | MASTER | GERENTE | SUPERVISOR | CAIXA
+  level       String
+  // Quem estava logado (do JWT)
+  userName    String   @map("user_name")
+  // Snapshot do ANTES e DEPOIS (JSON serializado)
+  oldValue    String?  @map("old_value") @db.Text
+  newValue    String?  @map("new_value") @db.Text
+  motivo      String   @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([storeCode])
+  @@index([createdAt])
+  @@map("master_audits")
+}
+
+// ════════════════════════════════════════════════════════════════
 // Product Registration — sequência de EAN-13 (prefixo 8) usada pelo
 // Cadastro Dinâmico de Produtos (/retaguarda/cadastro-produtos).
 // Cada novo produto pega o próximo seq, monta EAN-13 com check digit

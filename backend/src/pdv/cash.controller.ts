@@ -445,6 +445,37 @@ export class CashController {
   }
 
   /**
+   * GET /pdv/caixa/master/audit
+   * Query: ?storeCode=&action=&from=YYYY-MM-DD&to=YYYY-MM-DD&userName=&page=1&size=50
+   * Lista log de auditoria master. Apenas admin/supervisor.
+   */
+  @Get('master/audit')
+  async listAudit(
+    @Req() req: any,
+    @Query('storeCode') storeCode?: string,
+    @Query('action') action?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('userName') userName?: string,
+    @Query('page') page?: string,
+    @Query('size') size?: string,
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    return this.svc.listMasterAudit({
+      storeCode,
+      action,
+      fromDate: from,
+      toDate: to,
+      userName,
+      page: page ? parseInt(page, 10) : 1,
+      size: size ? parseInt(size, 10) : 50,
+    });
+  }
+
+  /**
    * PATCH /pdv/caixa/master/sale/:id/seller
    * Body: { sellerName, motivo, password, keepItemOverrides? }
    * Troca a vendedora da venda inteira (e por padrao limpa overrides nos items).

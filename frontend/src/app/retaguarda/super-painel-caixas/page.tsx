@@ -317,6 +317,13 @@ export default function SuperPainelCaixas() {
                 {isLiveMode
                   ? `Ao vivo · todas as lojas · refresh a cada ${POLL_INTERVAL_MS / 1000}s`
                   : `Histórico · ${filterFrom === filterTo ? filterFrom : `${filterFrom} → ${filterTo}`}`}
+                <Link
+                  href="/retaguarda/auditoria-master"
+                  className="ml-3 inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 hover:text-violet-900 bg-violet-100 hover:bg-violet-200 px-2 py-0.5 rounded"
+                  title="Ver log de alterações master"
+                >
+                  🛡️ AUDITORIA
+                </Link>
               </p>
             </div>
           </div>
@@ -441,7 +448,7 @@ export default function SuperPainelCaixas() {
             {/* Grid de lojas */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {data.lojas.map((l) => (
-                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} pixStatus={pixConc[l.storeCode]} onReload={() => load(true)} />
+                <LojaCard key={l.storeCode} loja={l} isAdmin={isAdmin} pixStatus={pixConc[l.storeCode]} onReload={() => load(true)} dateFrom={filterFrom} dateTo={filterTo} />
               ))}
             </div>
 
@@ -467,7 +474,7 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
   );
 }
 
-function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void }) {
+function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void; dateFrom?: string; dateTo?: string }) {
   // Ranking colapsado por padrão pra economizar espaço (default false = fechado)
   const [rankingOpen, setRankingOpen] = useState(false);
   const reload = () => { if (onReload) onReload(); };
@@ -502,6 +509,13 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
           ) : (
             <span className="text-[10px] opacity-90 font-bold uppercase">Fechado</span>
           )}
+          <a
+            href={`/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`}
+            className="ml-1 px-1.5 py-0.5 rounded bg-white/20 hover:bg-white/35 text-[10px] font-bold flex items-center gap-1"
+            title="Ver produtos vendidos desta loja"
+          >
+            📋 PRODUTOS
+          </a>
           {isAdmin && (
             <button
               type="button"
