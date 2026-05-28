@@ -476,7 +476,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
   const [showSangrias, setShowSangrias] = useState(false);
   const [showSuprimentos, setShowSuprimentos] = useState(false);
   const [showRecebimentos, setShowRecebimentos] = useState(false);
-  const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; valor: number; saleHint: string } | null>(null);
+  const [editBandeira, setEditBandeira] = useState<{ paymentId: string; currentBandeira: string; currentMethod: string; valor: number; saleHint: string } | null>(null);
   const [masterModal, setMasterModal] = useState(false);
   const sangriasList = (loja.movimentos || []).filter((m) => m.tipo === 'sangria');
   const suprimentosList = (loja.movimentos || []).filter((m) => m.tipo === 'suprimento');
@@ -580,19 +580,20 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
               detalhado={loja.detalhado}
               modalidade={expanded}
               isAdmin={isAdmin}
-              onEditBandeira={(paymentId, currentBandeira, valor, saleHint) =>
-                setEditBandeira({ paymentId, currentBandeira, valor, saleHint })
+              onEditBandeira={(paymentId, currentBandeira, valor, saleHint, currentMethod) =>
+                setEditBandeira({ paymentId, currentBandeira, currentMethod: currentMethod || expanded || 'credito', valor, saleHint })
               }
             />
           </div>
         )}
 
-        {/* Modal de edição de bandeira (admin only) */}
+        {/* Modal de edição de pagamento (master+) */}
         {editBandeira && (
-          <EditBandeiraModal
+          <MasterEditPaymentModal
             paymentId={editBandeira.paymentId}
             currentBandeira={editBandeira.currentBandeira}
-            valor={editBandeira.valor}
+            currentMethod={editBandeira.currentMethod}
+            currentValor={editBandeira.valor}
             saleHint={editBandeira.saleHint}
             onClose={() => setEditBandeira(null)}
             onSaved={() => { setEditBandeira(null); reload(); }}
@@ -908,19 +909,19 @@ function CascadeModalidade({
   detalhado: Detalhado;
   modalidade: string;
   isAdmin?: boolean;
-  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string) => void;
+  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string, currentMethod?: string) => void;
 }) {
   const isCartao = modalidade === 'credito' || modalidade === 'debito';
   const [bandeiraOpen, setBandeiraOpen] = useState<string | null>(null);
 
   if (modalidade === 'dinheiro') {
-    return <ListaVendas vendas={detalhado.totais.DINHEIRO.vendas} />;
+    return <ListaVendas vendas={detalhado.totais.DINHEIRO.vendas} modalidadeAtual="dinheiro" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
   if (modalidade === 'pix') {
-    return <ListaVendas vendas={detalhado.totais.PIX.vendas} />;
+    return <ListaVendas vendas={detalhado.totais.PIX.vendas} modalidadeAtual="pix" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
   if (modalidade === 'crediario') {
-    return <ListaVendas vendas={detalhado.totais.CREDIARIO.vendas} />;
+    return <ListaVendas vendas={detalhado.totais.CREDIARIO.vendas} modalidadeAtual="crediario" isAdmin={isAdmin} onEditBandeira={onEditBandeira} />;
   }
 
   // Cartão crédito ou débito — agrupa por bandeira
@@ -952,7 +953,8 @@ function CascadeModalidade({
               <ListaVendas
                 vendas={b.slot.vendas}
                 bandeiraAtual={b.nome}
-                isAdmin={!!isAdmin && isCartao}
+                modalidadeAtual={modalidade}
+                isAdmin={isAdmin}
                 onEditBandeira={onEditBandeira}
               />
             </div>
@@ -964,12 +966,13 @@ function CascadeModalidade({
 }
 
 function ListaVendas({
-  vendas, bandeiraAtual, isAdmin, onEditBandeira,
+  vendas, bandeiraAtual, modalidadeAtual, isAdmin, onEditBandeira,
 }: {
   vendas: Slot['vendas'];
   bandeiraAtual?: string;
+  modalidadeAtual?: string;
   isAdmin?: boolean;
-  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string) => void;
+  onEditBandeira?: (paymentId: string, currentBandeira: string, valor: number, saleHint: string, currentMethod?: string) => void;
 }) {
   if (!vendas || vendas.length === 0) {
     return <div className="text-[11px] text-slate-400 italic text-center py-2">Sem vendas</div>;
@@ -989,14 +992,14 @@ function ListaVendas({
             </div>
             <div className="flex items-center gap-2 shrink-0 ml-2">
               <span className="font-mono font-bold tabular-nums">{brl(v.valor)}</span>
-              {isAdmin && onEditBandeira && bandeiraAtual && (
+              {isAdmin && onEditBandeira && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     const hint = `${cliente} - ${brl(v.valor)}`;
-                    onEditBandeira(v.paymentId, bandeiraAtual, v.valor, hint);
+                    onEditBandeira(v.paymentId, bandeiraAtual || '', v.valor, hint, modalidadeAtual);
                   }}
-                  title="Trocar bandeira (admin)"
+                  title="Editar pagamento (master)"
                   className="text-[10px] text-violet-600 hover:text-violet-900 font-bold underline"
                 >
                   editar
@@ -1294,6 +1297,174 @@ function MasterAdjustModal({
 
         <p className="mt-3 text-[10px] text-slate-400 leading-tight">
           ⚠️ Acao registrada em log com seu usuario. Use somente pra correcoes legitimas — sem rastreabilidade visual no fluxo da vendedora.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MASTER EDIT PAYMENT MODAL — edita method/valor/bandeira de um pagamento
+// Usado pra corrigir vendas registradas com modalidade errada (ex: dinheiro
+// que era PIX). Senha por nivel (MASTER+).
+// ═══════════════════════════════════════════════════════════════════════
+const METHOD_OPTIONS = [
+  { value: 'dinheiro', label: '💵 Dinheiro' },
+  { value: 'pix', label: '📲 PIX' },
+  { value: 'credito', label: '💳 Cartão Crédito' },
+  { value: 'debito', label: '💳 Cartão Débito' },
+  { value: 'crediario', label: '📝 Crediário' },
+];
+
+function MasterEditPaymentModal({
+  paymentId, currentBandeira, currentMethod, currentValor, saleHint, onClose, onSaved,
+}: {
+  paymentId: string;
+  currentBandeira: string;
+  currentMethod: string;
+  currentValor: number;
+  saleHint: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [method, setMethod] = useState(currentMethod || 'credito');
+  const [valor, setValor] = useState<string>(String(currentValor));
+  const [bandeira, setBandeira] = useState(currentBandeira || '');
+  const [motivo, setMotivo] = useState('');
+  const [password, setPassword] = useState<string>(() => {
+    try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
+  });
+  const [savePwd, setSavePwd] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  const isCartao = method === 'credito' || method === 'debito';
+
+  async function save() {
+    setErrMsg(null);
+    if (!password) { setErrMsg('Senha obrigatoria'); return; }
+    if (!motivo || motivo.trim().length < 3) { setErrMsg('Motivo obrigatorio (>=3 chars)'); return; }
+    const valorNum = Number(String(valor).replace(',', '.'));
+    if (isNaN(valorNum) || valorNum <= 0) { setErrMsg('Valor invalido'); return; }
+
+    const payload: any = {
+      motivo: motivo.trim(),
+      password,
+    };
+    if (method !== currentMethod) payload.method = method;
+    if (valorNum !== currentValor) payload.valor = valorNum;
+    if (isCartao && bandeira && bandeira !== currentBandeira) {
+      payload.bandeira = bandeira.toUpperCase();
+    }
+
+    if (!payload.method && !payload.valor && !payload.bandeira) {
+      setErrMsg('Nada foi alterado');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await api(`/pdv/caixa/master/payment/${paymentId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      });
+      if (savePwd) {
+        try { sessionStorage.setItem('flowops.masterPwd', password); } catch {}
+      }
+      onSaved();
+    } catch (e: any) {
+      setErrMsg(e?.message || 'Falha ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">✏️ Editar Pagamento</h3>
+            <p className="text-xs text-slate-500 truncate max-w-[280px]">{saleHint}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Modalidade *</label>
+        <select
+          value={method}
+          onChange={(e) => setMethod(e.target.value)}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        >
+          {METHOD_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Valor (R$) *</label>
+        <input
+          type="number"
+          step="0.01"
+          min="0.01"
+          value={valor}
+          onChange={(e) => setValor(e.target.value)}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        {isCartao && (
+          <>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Bandeira</label>
+            <select
+              value={bandeira}
+              onChange={(e) => setBandeira(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+            >
+              <option value="">— manter atual —</option>
+              {BANDEIRAS_DISPONIVEIS.map((b) => (
+                <option key={b.value} value={b.value}>{b.label}</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Motivo *</label>
+        <input
+          type="text"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          placeholder="ex: caixa marcou dinheiro mas foi pix"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Senha (MASTER ou SUPREMA)</label>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="senha"
+          autoComplete="current-password"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 mb-3 cursor-pointer">
+          <input type="checkbox" checked={savePwd} onChange={(e) => setSavePwd(e.target.checked)} />
+          Lembrar senha nesta sessao
+        </label>
+
+        {errMsg && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{errMsg}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40">
+            Cancelar
+          </button>
+          <button onClick={save} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
+            {saving ? 'Salvando...' : 'Confirmar'}
+          </button>
+        </div>
+
+        <p className="mt-3 text-[10px] text-slate-400 leading-tight">
+          ⚠️ Alteracao registrada em PdvPaymentAudit. Se sessao ja fechou, totais sao recalculados automaticamente.
         </p>
       </div>
     </div>

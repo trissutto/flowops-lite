@@ -1386,6 +1386,147 @@ export class CashService {
   }
 
   /**
+   * MASTER: edita um pagamento de venda — troca method, valor e/ou bandeira.
+   * Usado pra correcoes pos-fato (caixa marcou dinheiro mas era PIX, etc).
+   * Audit em PdvPaymentAudit. Re-validacao da sessao se ja fechou.
+   */
+  async masterEditPayment(input: {
+    paymentId: string;
+    novoMethod?: string;
+    novoValor?: number;
+    novaBandeira?: string;
+    motivo: string;
+    userName?: string | null;
+  }) {
+    const { paymentId, novoMethod, novoValor, novaBandeira, motivo, userName } = input;
+    if (!paymentId) throw new BadRequestException('paymentId obrigatorio');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe o motivo da alteracao');
+    }
+
+    const METHODS_VALIDOS = new Set(['dinheiro', 'pix', 'credito', 'debito', 'crediario']);
+    if (novoMethod && !METHODS_VALIDOS.has(novoMethod)) {
+      throw new BadRequestException(`Metodo invalido: ${novoMethod}`);
+    }
+    if (novoValor != null && (isNaN(Number(novoValor)) || Number(novoValor) <= 0)) {
+      throw new BadRequestException('Valor invalido');
+    }
+    if (novaBandeira && !this.BANDEIRAS_VALIDAS.has(String(novaBandeira).toUpperCase())) {
+      throw new BadRequestException(`Bandeira invalida: ${novaBandeira}`);
+    }
+
+    const payment = await (this.prisma as any).pdvSalePayment.findUnique({
+      where: { id: paymentId },
+      include: { sale: { select: { id: true, storeCode: true, cashSessionId: true } } },
+    });
+    if (!payment) throw new NotFoundException('Pagamento nao encontrado');
+
+    let details: any = {};
+    try { details = payment.details ? JSON.parse(payment.details) : {}; } catch { details = {}; }
+
+    const oldMethod = payment.method;
+    const oldValor = Number(payment.valor || 0);
+    const oldBandeira = String(details?.bandeira || '').trim().toUpperCase();
+
+    const finalMethod = novoMethod || oldMethod;
+    const finalValor = novoValor != null ? Number(novoValor) : oldValor;
+    const finalBandeira = novaBandeira != null ? String(novaBandeira).toUpperCase() : oldBandeira;
+
+    // Sem mudanca real? Aborta
+    if (finalMethod === oldMethod && finalValor === oldValor && finalBandeira === oldBandeira) {
+      return { ok: true, noChange: true };
+    }
+
+    const newDetails = { ...details };
+    if (novaBandeira != null) newDetails.bandeira = finalBandeira;
+    const newDetailsJson = JSON.stringify(newDetails);
+
+    // Audit
+    try {
+      await (this.prisma as any).pdvPaymentAudit.create({
+        data: {
+          paymentId: payment.id,
+          saleId: payment.saleId,
+          oldMethod,
+          oldValor,
+          oldDetails: payment.details || null,
+          newMethod: finalMethod,
+          newValor: finalValor,
+          newDetails: newDetailsJson,
+          changedByUserId: null,
+          changedByUserName: userName || 'MASTER',
+          changedByRole: 'master',
+          reason: `[MASTER] ${motivo.trim()}`,
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`audit falhou (nao bloqueia): ${e?.message}`);
+    }
+
+    await (this.prisma as any).pdvSalePayment.update({
+      where: { id: paymentId },
+      data: {
+        method: finalMethod,
+        valor: finalValor,
+        details: newDetailsJson,
+      },
+    });
+
+    // Se a sessao ja fechou, recalcula totais
+    if (payment.sale?.cashSessionId) {
+      const session = await (this.prisma as any).pdvCashSession.findUnique({
+        where: { id: payment.sale.cashSessionId },
+      });
+      if (session && session.status === 'closed') {
+        const totals = await this.computeSessionTotals(session.id);
+        const fisico = Number(session.dinheiroFisico ?? 0);
+        await (this.prisma as any).pdvCashSession.update({
+          where: { id: session.id },
+          data: {
+            totalDinheiro: totals.byMethod?.dinheiro,
+            totalPix: totals.byMethod?.pix,
+            totalCartaoCredito: totals.byMethod?.credito,
+            totalCartaoDebito: totals.byMethod?.debito,
+            totalCrediario: totals.byMethod?.crediario,
+            dinheiroEsperado: totals.dinheiroEsperado,
+            diferenca: fisico - totals.dinheiroEsperado,
+          },
+        });
+      }
+    }
+
+    // Best-effort Wincred update se bandeira mudou
+    let wincredResult: any = null;
+    if (novaBandeira != null && oldBandeira !== finalBandeira) {
+      try {
+        wincredResult = await this.erp.atualizarBandeiraFechamento({
+          saleId: payment.saleId,
+          storeCode: payment.sale?.storeCode || '',
+          oldBandeira,
+          newBandeira: finalBandeira,
+          valor: finalValor,
+        });
+      } catch (e: any) {
+        this.logger.error(`Wincred update falhou: ${e?.message}`);
+        wincredResult = { ok: false, error: e?.message };
+      }
+    }
+
+    this.logger.warn(
+      `[MASTER] EDIT payment=${paymentId} method:${oldMethod}->${finalMethod} valor:${oldValor}->${finalValor} bandeira:${oldBandeira}->${finalBandeira} por ${userName || 'admin'} motivo="${motivo}"`,
+    );
+
+    return {
+      ok: true,
+      paymentId,
+      saleId: payment.saleId,
+      old: { method: oldMethod, valor: oldValor, bandeira: oldBandeira },
+      new: { method: finalMethod, valor: finalValor, bandeira: finalBandeira },
+      wincred: wincredResult,
+    };
+  }
+
+  /**
    * Busca 1 movimentação por ID (usado pelo impresso de sangria/suprimento).
    */
   async getMovement(id: string) {

@@ -445,6 +445,37 @@ export class CashController {
   }
 
   /**
+   * PATCH /pdv/caixa/master/payment/:id
+   * Body: { method?, valor?, bandeira?, motivo, password }
+   * Edita pagamento — troca metodo (dinheiro->pix), valor, ou bandeira.
+   * Audit + recalculo da sessao se ja fechou.
+   */
+  @Patch('master/payment/:id')
+  async masterEditPayment(
+    @Req() req: any,
+    @Param('id') paymentId: string,
+    @Body() body: {
+      method?: string;
+      valor?: number;
+      bandeira?: string;
+      motivo: string;
+      password: string;
+    },
+  ) {
+    this.requireMasterRole(req);
+    const nivel = this.validateLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterEditPayment({
+      paymentId,
+      novoMethod: body?.method,
+      novoValor: body?.valor != null ? Number(body.valor) : undefined,
+      novaBandeira: body?.bandeira,
+      motivo: body?.motivo,
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
    * PATCH /pdv/caixa/payments/:paymentId/bandeira
    * Admin troca bandeira de um pagamento (ex: operadora errou MASTERCARD em vez de VISANET).
    * Atualiza Postgres + audit + Wincred (fechamento).
