@@ -4,39 +4,35 @@ import { PrismaService } from '../prisma/prisma.service';
 /**
  * ProdutosVendidosService — Relatório de produtos vendidos no PDV.
  *
- * Une 2 fontes:
- *   • PdvSaleItem (vendas) — qty positiva, total positivo
- *   • PdvReturnItem (devoluções/trocas) — qty NEGATIVA, total NEGATIVO
- *
- * Retorna uma linha por movimentação, ordenada por data desc, pronta pra
- * conciliação visual: vendas em preto, trocas em vermelho.
+ * Une PdvSaleItem (vendas) + PdvReturnItem (devoluções/trocas em NEGATIVO).
+ * Ordenado por data desc. Pronto pra conciliação no fechamento do caixa.
  */
 
 export interface ProdutosVendidosFilters {
-  from?: string;            // ISO date YYYY-MM-DD
-  to?: string;              // ISO date YYYY-MM-DD
-  storeCode?: string;       // código da loja
-  sellerName?: string;      // nome da vendedora (LIKE)
-  sku?: string;             // SKU/REF/EAN (busca múltipla)
+  from?: string;
+  to?: string;
+  storeCode?: string;
+  sellerName?: string;
+  sku?: string;
   customerCpf?: string;
   customerName?: string;
-  includeReturns?: boolean; // default true (true = inclui trocas/devoluções)
+  includeReturns?: boolean;
 }
 
 export interface LinhaVendida {
   tipo: 'venda' | 'devolucao';
-  saleNumber: string | null;     // número da venda
-  saleId: string;                 // id da venda (ou return)
-  data: string;                   // ISO date
-  hora: string;                   // HH:MM
+  saleNumber: string | null;
+  saleId: string;
+  data: string;
+  hora: string;
   sku: string;
   ref: string | null;
   cor: string | null;
   tamanho: string | null;
   descricao: string;
-  qty: number;                    // negativo se devolução
+  qty: number;
   precoUnit: number;
-  total: number;                  // negativo se devolução
+  total: number;
   storeCode: string;
   storeName: string;
   sellerName: string | null;
@@ -51,21 +47,8 @@ export class ProdutosVendidosService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async getReport(filters: ProdutosVendidosFilters = {}): Promise<{
-    linhas: LinhaVendida[];
-    totais: {
-      vendasQtd: number;
-      vendasValor: number;
-      devolucoesQtd: number;
-      devolucoesValor: number;
-      liquidoQtd: number;
-      liquidoValor: number;
-    };
-    filtros: ProdutosVendidosFilters;
-  }> {
+  async getReport(filters: ProdutosVendidosFilters = {}) {
     const includeReturns = filters.includeReturns !== false;
-
-    // Janela de data
     const fromDate = filters.from
       ? new Date(filters.from + 'T00:00:00')
       : new Date(new Date().setHours(0, 0, 0, 0));
@@ -73,112 +56,144 @@ export class ProdutosVendidosService {
       ? new Date(filters.to + 'T23:59:59')
       : new Date(new Date().setHours(23, 59, 59, 999));
 
-    // ── 1) Vendas (PdvSaleItem joined com PdvSale finalizada) ──
-    const saleWhere: any = {
-      sale: {
-        status: 'finalized',
-        finalizedAt: { gte: fromDate, lte: toDate },
-      },
+    // ─── VENDAS ───────────────────────────────────────────────────────────
+    // Estratégia: 2 passos
+    //  1. Busca PdvSales finalizadas no período (filtro forte + simples)
+    //  2. Carrega items das sales encontradas
+    // Evita where aninhado complexo no PdvSaleItem.
+    const saleListWhere: any = {
+      status: 'finalized',
+      finalizedAt: { gte: fromDate, lte: toDate },
     };
-    if (filters.storeCode) saleWhere.sale.storeCode = filters.storeCode;
-    if (filters.sellerName) {
-      saleWhere.sale.OR = [
-        { sellerName: { contains: filters.sellerName, mode: 'insensitive' } },
-        { vendedorName: { contains: filters.sellerName, mode: 'insensitive' } },
-      ];
+    if (filters.storeCode) saleListWhere.storeCode = filters.storeCode;
+    if (filters.customerCpf) {
+      const cpf = filters.customerCpf.replace(/\D/g, '');
+      if (cpf.length === 11) saleListWhere.customerCpf = cpf;
     }
-    if (filters.customerCpf) saleWhere.sale.customerCpf = filters.customerCpf.replace(/\D/g, '');
     if (filters.customerName) {
-      saleWhere.sale.customerName = { contains: filters.customerName, mode: 'insensitive' };
-    }
-    if (filters.sku) {
-      const q = filters.sku.trim();
-      saleWhere.OR = [
-        { sku: { contains: q, mode: 'insensitive' } },
-        { ref: { contains: q, mode: 'insensitive' } },
-        { ean: { contains: q, mode: 'insensitive' } },
-      ];
+      saleListWhere.customerName = { contains: filters.customerName };
     }
 
-    const saleItems = await (this.prisma as any).pdvSaleItem.findMany({
-      where: saleWhere,
-      include: {
-        sale: {
-          select: {
-            id: true,
-            saleNumber: true,
-            storeCode: true,
-            storeName: true,
-            sellerName: true,
-            vendedorName: true,
-            customerName: true,
-            customerCpf: true,
-            paymentMethod: true,
-            finalizedAt: true,
-          },
-        },
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: saleListWhere,
+      select: {
+        id: true,
+        storeCode: true,
+        storeName: true,
+        sellerName: true,
+        vendedorName: true,
+        customerName: true,
+        customerCpf: true,
+        paymentMethod: true,
+        finalizedAt: true,
+        createdAt: true,
       },
-      orderBy: { sale: { finalizedAt: 'desc' } },
+      orderBy: { finalizedAt: 'desc' },
       take: 5000,
     });
 
-    // ── 2) Devoluções (PdvReturnItem joined com PdvReturn) ──
-    let returnItems: any[] = [];
-    if (includeReturns) {
-      const retWhere: any = {
-        return: {
-          createdAt: { gte: fromDate, lte: toDate },
-        },
-      };
-      if (filters.storeCode) retWhere.return.storeCode = filters.storeCode;
-      if (filters.sellerName) {
-        retWhere.return.userName = { contains: filters.sellerName, mode: 'insensitive' };
-      }
-      if (filters.customerCpf) {
-        retWhere.return.customerCpf = filters.customerCpf.replace(/\D/g, '');
-      }
-      if (filters.customerName) {
-        retWhere.return.customerName = { contains: filters.customerName, mode: 'insensitive' };
-      }
+    // Filtro de vendedora (em memória — mais seguro que OR aninhado no Prisma)
+    const sellerQ = filters.sellerName?.trim().toUpperCase();
+    const salesFiltered = sellerQ
+      ? (sales as any[]).filter((s) => {
+          const a = (s.sellerName || '').toUpperCase();
+          const b = (s.vendedorName || '').toUpperCase();
+          return a.includes(sellerQ) || b.includes(sellerQ);
+        })
+      : (sales as any[]);
+
+    const saleIds = salesFiltered.map((s) => s.id);
+    const saleMap = new Map<string, any>(salesFiltered.map((s) => [s.id, s]));
+
+    // Buscar items dessas sales (com filtro de SKU se aplicável)
+    let saleItems: any[] = [];
+    if (saleIds.length > 0) {
+      const itemWhere: any = { saleId: { in: saleIds } };
       if (filters.sku) {
         const q = filters.sku.trim();
-        retWhere.OR = [
-          { sku: { contains: q, mode: 'insensitive' } },
-          { ref: { contains: q, mode: 'insensitive' } },
+        itemWhere.OR = [
+          { sku: { contains: q } },
+          { ref: { contains: q } },
+          { ean: { contains: q } },
         ];
       }
-
-      returnItems = await (this.prisma as any).pdvReturnItem.findMany({
-        where: retWhere,
-        include: {
-          return: {
-            select: {
-              id: true,
-              originalSaleNumber: true,
-              storeCode: true,
-              storeName: true,
-              userName: true,
-              customerName: true,
-              customerCpf: true,
-              modo: true,
-              createdAt: true,
-            },
-          },
-        },
-        orderBy: { return: { createdAt: 'desc' } },
-        take: 5000,
+      saleItems = await (this.prisma as any).pdvSaleItem.findMany({
+        where: itemWhere,
+        take: 10000,
       });
     }
 
-    // ── 3) Normaliza pro formato LinhaVendida ──
+    // ─── DEVOLUÇÕES ────────────────────────────────────────────────────────
+    let returns: any[] = [];
+    let returnItems: any[] = [];
+    if (includeReturns) {
+      const retWhere: any = {
+        createdAt: { gte: fromDate, lte: toDate },
+      };
+      if (filters.storeCode) retWhere.storeCode = filters.storeCode;
+      if (filters.customerCpf) {
+        const cpf = filters.customerCpf.replace(/\D/g, '');
+        if (cpf.length === 11) retWhere.customerCpf = cpf;
+      }
+      if (filters.customerName) {
+        retWhere.customerName = { contains: filters.customerName };
+      }
+
+      returns = await (this.prisma as any).pdvReturn.findMany({
+        where: retWhere,
+        select: {
+          id: true,
+          originalSaleNumber: true,
+          storeCode: true,
+          storeName: true,
+          userName: true,
+          customerName: true,
+          customerCpf: true,
+          modo: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 5000,
+      });
+
+      const returnsFiltered = sellerQ
+        ? returns.filter((r: any) =>
+            ((r.userName || '').toUpperCase()).includes(sellerQ),
+          )
+        : returns;
+
+      const retIds = returnsFiltered.map((r: any) => r.id);
+      const retMap = new Map<string, any>(returnsFiltered.map((r: any) => [r.id, r]));
+
+      if (retIds.length > 0) {
+        const retItemWhere: any = { returnId: { in: retIds } };
+        if (filters.sku) {
+          const q = filters.sku.trim();
+          retItemWhere.OR = [
+            { sku: { contains: q } },
+            { ref: { contains: q } },
+          ];
+        }
+        returnItems = await (this.prisma as any).pdvReturnItem.findMany({
+          where: retItemWhere,
+          take: 10000,
+        });
+      }
+      returns = returnsFiltered;
+      (returns as any).map = retMap;
+    }
+
+    // ─── NORMALIZA pro formato final ────────────────────────────────────────
     const linhas: LinhaVendida[] = [];
 
     for (const it of saleItems) {
-      const dt = new Date(it.sale.finalizedAt);
+      const sale = saleMap.get(it.saleId);
+      if (!sale) continue;
+      const dt = new Date(sale.finalizedAt || sale.createdAt);
       linhas.push({
         tipo: 'venda',
-        saleNumber: it.sale.saleNumber || it.sale.id.slice(0, 8),
-        saleId: it.sale.id,
+        saleNumber: String(sale.id).slice(0, 8),
+        saleId: sale.id,
         data: dt.toISOString(),
         hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         sku: it.sku,
@@ -189,23 +204,26 @@ export class ProdutosVendidosService {
         qty: it.qty,
         precoUnit: it.precoUnit,
         total: it.total,
-        storeCode: it.sale.storeCode,
-        storeName: it.sale.storeName,
-        sellerName: it.sale.sellerName || it.sale.vendedorName,
-        customerName: it.sale.customerName,
-        customerCpf: it.sale.customerCpf,
-        paymentMethod: it.sale.paymentMethod,
+        storeCode: sale.storeCode,
+        storeName: sale.storeName,
+        sellerName: sale.sellerName || sale.vendedorName,
+        customerName: sale.customerName,
+        customerCpf: sale.customerCpf,
+        paymentMethod: sale.paymentMethod,
       });
     }
 
+    const retMap = (returns as any).map || new Map();
     for (const it of returnItems) {
-      const dt = new Date(it.return.createdAt);
+      const ret = retMap.get(it.returnId);
+      if (!ret) continue;
+      const dt = new Date(ret.createdAt);
       linhas.push({
         tipo: 'devolucao',
-        saleNumber: it.return.originalSaleNumber
-          ? `${it.return.originalSaleNumber} (TROCA)`
+        saleNumber: ret.originalSaleNumber
+          ? `${ret.originalSaleNumber} (TROCA)`
           : '(TROCA MANUAL)',
-        saleId: it.return.id,
+        saleId: ret.id,
         data: dt.toISOString(),
         hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         sku: it.sku,
@@ -213,23 +231,22 @@ export class ProdutosVendidosService {
         cor: it.cor,
         tamanho: it.tamanho,
         descricao: it.descricao,
-        // Devolução: qty e total NEGATIVOS
         qty: -Math.abs(it.qty),
         precoUnit: it.precoUnit,
         total: -Math.abs(it.total),
-        storeCode: it.return.storeCode,
-        storeName: it.return.storeName,
-        sellerName: it.return.userName,
-        customerName: it.return.customerName,
-        customerCpf: it.return.customerCpf,
-        paymentMethod: `troca_${it.return.modo}`,
+        storeCode: ret.storeCode,
+        storeName: ret.storeName,
+        sellerName: ret.userName,
+        customerName: ret.customerName,
+        customerCpf: ret.customerCpf,
+        paymentMethod: `troca_${ret.modo || ''}`,
       });
     }
 
-    // ── 4) Ordena por data desc ──
+    // Ordena por data desc
     linhas.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
-    // ── 5) Totais ──
+    // Totais
     const totais = {
       vendasQtd: 0,
       vendasValor: 0,
@@ -238,7 +255,6 @@ export class ProdutosVendidosService {
       liquidoQtd: 0,
       liquidoValor: 0,
     };
-
     for (const l of linhas) {
       if (l.tipo === 'venda') {
         totais.vendasQtd += l.qty;
@@ -251,7 +267,22 @@ export class ProdutosVendidosService {
     totais.liquidoQtd = totais.vendasQtd - totais.devolucoesQtd;
     totais.liquidoValor = totais.vendasValor - totais.devolucoesValor;
 
-    // Round pra 2 casas
+    totais.vendasValor = Number(totais.vendasValor.toFixed(2));
+    totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
+    totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
+
+    return { linhas, totais, filtros: filters };
+  }
+}
+is.vendasValor += l.total;
+      } else {
+        totais.devolucoesQtd += Math.abs(l.qty);
+        totais.devolucoesValor += Math.abs(l.total);
+      }
+    }
+    totais.liquidoQtd = totais.vendasQtd - totais.devolucoesQtd;
+    totais.liquidoValor = totais.vendasValor - totais.devolucoesValor;
+
     totais.vendasValor = Number(totais.vendasValor.toFixed(2));
     totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
     totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
