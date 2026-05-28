@@ -23,6 +23,7 @@ export interface LinhaVendida {
   tipo: 'venda' | 'devolucao';
   saleNumber: string | null;
   saleId: string;
+  itemId: string | null;
   data: string;
   hora: string;
   sku: string;
@@ -36,6 +37,7 @@ export interface LinhaVendida {
   storeCode: string;
   storeName: string;
   sellerName: string | null;
+  sellerOverride: boolean;       // true se item.sellerName !== null (foi editado)
   customerName: string | null;
   customerCpf: string | null;
   paymentMethod: string | null;
@@ -210,10 +212,13 @@ export class ProdutosVendidosService {
       const sale = saleMap.get(it.saleId);
       if (!sale) continue;
       const dt = new Date(sale.finalizedAt || sale.createdAt);
+      const itemSeller = it.sellerName as string | null | undefined;
+      const saleSeller = sale.sellerName || sale.vendedorName || null;
       linhas.push({
         tipo: 'venda',
         saleNumber: String(sale.id).slice(0, 8),
         saleId: sale.id,
+        itemId: it.id,
         data: dt.toISOString(),
         hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         sku: it.sku,
@@ -226,7 +231,8 @@ export class ProdutosVendidosService {
         total: it.total,
         storeCode: sale.storeCode,
         storeName: sale.storeName,
-        sellerName: sale.sellerName || sale.vendedorName,
+        sellerName: itemSeller || saleSeller,
+        sellerOverride: !!itemSeller,
         customerName: sale.customerName,
         customerCpf: sale.customerCpf,
         paymentMethod: sale.paymentMethod,
@@ -244,6 +250,8 @@ export class ProdutosVendidosService {
           ? `${ret.originalSaleNumber} (TROCA)`
           : '(TROCA MANUAL)',
         saleId: ret.id,
+        itemId: null,
+        sellerOverride: false,
         data: dt.toISOString(),
         hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         sku: it.sku,

@@ -21,6 +21,7 @@ interface Linha {
   tipo: 'venda' | 'devolucao';
   saleNumber: string | null;
   saleId: string;
+  itemId: string | null;
   data: string;
   hora: string;
   sku: string;
@@ -34,6 +35,7 @@ interface Linha {
   storeCode: string;
   storeName: string;
   sellerName: string | null;
+  sellerOverride?: boolean;
   customerName: string | null;
   customerCpf: string | null;
   paymentMethod: string | null;
@@ -102,6 +104,7 @@ export default function ProdutosVendidosPage() {
   const [data, setData] = useState<ReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editSeller, setEditSeller] = useState<{ itemId: string; saleId: string; currentName: string; produtoHint: string } | null>(null);
 
   const isMatrix = me?.role === 'admin' || me?.role === 'operator' || me?.role === 'supervisor';
 
@@ -391,7 +394,25 @@ export default function ProdutosVendidosPage() {
                       <td className="px-2 py-1.5 text-xs truncate max-w-[180px]" title={l.customerName ?? ''}>
                         {l.customerName || '—'}
                       </td>
-                      <td className="px-2 py-1.5 text-xs whitespace-nowrap">{l.sellerName ?? '—'}</td>
+                      <td className="px-2 py-1.5 text-xs whitespace-nowrap">
+                        <span className={l.sellerOverride ? 'font-bold text-violet-700' : ''}>
+                          {l.sellerName ?? '—'}
+                        </span>
+                        {!isReturn && l.itemId && isMatrix && (
+                          <button
+                            onClick={() => setEditSeller({
+                              itemId: l.itemId!,
+                              saleId: l.saleId,
+                              currentName: l.sellerName || '',
+                              produtoHint: `${l.ref || l.sku} ${l.cor || ''} ${l.tamanho || ''}`.trim(),
+                            })}
+                            className="ml-1 text-[10px] text-violet-600 hover:text-violet-900 underline font-bold"
+                            title="Editar vendedora (master)"
+                          >
+                            ✎
+                          </button>
+                        )}
+                      </td>
                       <td className="px-2 py-1.5 text-center whitespace-nowrap">
                         <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded">{l.storeCode}</span>
                       </td>
@@ -413,6 +434,149 @@ export default function ProdutosVendidosPage() {
           </div>
         </section>
       </main>
+
+      {editSeller && (
+        <EditSellerModal
+          itemId={editSeller.itemId}
+          saleId={editSeller.saleId}
+          currentName={editSeller.currentName}
+          produtoHint={editSeller.produtoHint}
+          onClose={() => setEditSeller(null)}
+          onSaved={() => { setEditSeller(null); buscar(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditSellerModal({
+  itemId, saleId, currentName, produtoHint, onClose, onSaved,
+}: {
+  itemId: string;
+  saleId: string;
+  currentName: string;
+  produtoHint: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [scope, setScope] = useState<'item' | 'sale'>('item');
+  const [novoNome, setNovoNome] = useState(currentName);
+  const [motivo, setMotivo] = useState('');
+  const [password, setPassword] = useState<string>(() => {
+    try { return sessionStorage.getItem('flowops.masterPwd') || ''; } catch { return ''; }
+  });
+  const [savePwd, setSavePwd] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  async function save() {
+    setErrMsg(null);
+    const nome = novoNome.trim().toUpperCase();
+    if (!nome || nome.length < 2) { setErrMsg('Nome invalido'); return; }
+    if (!motivo || motivo.trim().length < 3) { setErrMsg('Motivo obrigatorio'); return; }
+    if (!password) { setErrMsg('Senha obrigatoria'); return; }
+    setSaving(true);
+    try {
+      const url = scope === 'item'
+        ? `/pdv/caixa/master/sale-item/${itemId}/seller`
+        : `/pdv/caixa/master/sale/${saleId}/seller`;
+      await api(url, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          sellerName: nome,
+          motivo: motivo.trim(),
+          password,
+        }),
+      });
+      if (savePwd) {
+        try { sessionStorage.setItem('flowops.masterPwd', password); } catch {}
+      }
+      onSaved();
+    } catch (e: any) {
+      setErrMsg(e?.message || 'Falha ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="text-lg font-black text-slate-900">👤 Editar Vendedora</h3>
+            <p className="text-xs text-slate-500 truncate max-w-[280px]">{produtoHint}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+
+        {/* Escopo */}
+        <div className="flex gap-1 mb-4 bg-slate-100 rounded-lg p-1">
+          <button
+            onClick={() => setScope('item')}
+            className={`flex-1 py-2 text-xs font-bold rounded transition ${scope === 'item' ? 'bg-white text-violet-700 shadow' : 'text-slate-600'}`}
+          >
+            ✂️ Só esta peça
+          </button>
+          <button
+            onClick={() => setScope('sale')}
+            className={`flex-1 py-2 text-xs font-bold rounded transition ${scope === 'sale' ? 'bg-white text-violet-700 shadow' : 'text-slate-600'}`}
+          >
+            🧾 Venda inteira
+          </button>
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Nova vendedora *</label>
+        <input
+          type="text"
+          value={novoNome}
+          onChange={(e) => setNovoNome(e.target.value.toUpperCase())}
+          placeholder="ex: MARIA SILVA"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-medium uppercase focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Motivo *</label>
+        <input
+          type="text"
+          value={motivo}
+          onChange={(e) => setMotivo(e.target.value)}
+          placeholder="ex: dividir comissao entre duas vendedoras"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Senha (GERENTE ou superior)</label>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="senha"
+          autoComplete="current-password"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2 font-mono focus:outline-none focus:ring-2 focus:ring-violet-500"
+        />
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 mb-3 cursor-pointer">
+          <input type="checkbox" checked={savePwd} onChange={(e) => setSavePwd(e.target.checked)} />
+          Lembrar senha nesta sessao
+        </label>
+
+        {errMsg && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{errMsg}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40">
+            Cancelar
+          </button>
+          <button onClick={save} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
+            {saving ? 'Salvando...' : 'Confirmar'}
+          </button>
+        </div>
+
+        <p className="mt-3 text-[10px] text-slate-400 leading-tight">
+          {scope === 'item'
+            ? '⚠️ Override apenas nesta peça. Outras peças da mesma venda permanecem com a vendedora original.'
+            : '⚠️ Atualiza a vendedora da venda inteira e limpa overrides individuais.'}
+        </p>
+      </div>
     </div>
   );
 }

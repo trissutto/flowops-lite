@@ -1527,6 +1527,100 @@ export class CashService {
   }
 
   /**
+   * MASTER: troca a vendedora de uma venda inteira (PdvSale.sellerName).
+   * Por padrao limpa o override de items (item.sellerName = null), exceto se applyToItemsToo=false.
+   */
+  async masterUpdateSaleSeller(input: {
+    saleId: string;
+    novoSellerName: string;
+    motivo: string;
+    keepItemOverrides?: boolean;
+    userName?: string | null;
+  }) {
+    const { saleId, novoSellerName, motivo, keepItemOverrides, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatorio');
+    const novo = String(novoSellerName || '').trim();
+    if (!novo || novo.length < 2) {
+      throw new BadRequestException('Nome de vendedora invalido');
+    }
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe o motivo (>=3 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      select: { id: true, sellerName: true, vendedorName: true, storeCode: true },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+
+    const old = sale.sellerName || sale.vendedorName || '';
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: { sellerName: novo, vendedorName: novo },
+    });
+
+    // Por padrao limpa overrides nos itens — assim a venda toda volta a ter
+    // sellerName unificado. Se keepItemOverrides=true, mantem o que ja foi
+    // ajustado por item.
+    if (!keepItemOverrides) {
+      await (this.prisma as any).pdvSaleItem.updateMany({
+        where: { saleId },
+        data: { sellerName: null },
+      });
+    }
+
+    this.logger.warn(
+      `[MASTER] SELLER (sale) saleId=${saleId} "${old}" -> "${novo}" por ${userName || 'admin'} motivo="${motivo}"`,
+    );
+    return { ok: true, saleId, old, new: novo };
+  }
+
+  /**
+   * MASTER: troca a vendedora de UM item especifico (PdvSaleItem.sellerName).
+   * Usado quando 2 vendedoras atendem na mesma compra.
+   * NUll = remove override (volta a usar a vendedora da venda).
+   */
+  async masterUpdateItemSeller(input: {
+    itemId: string;
+    novoSellerName: string | null;
+    motivo: string;
+    userName?: string | null;
+  }) {
+    const { itemId, novoSellerName, motivo, userName } = input;
+    if (!itemId) throw new BadRequestException('itemId obrigatorio');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe o motivo (>=3 chars)');
+    }
+    const novo = novoSellerName == null ? null : String(novoSellerName).trim();
+    if (novo != null && novo.length < 2) {
+      throw new BadRequestException('Nome de vendedora invalido');
+    }
+
+    const item = await (this.prisma as any).pdvSaleItem.findUnique({
+      where: { id: itemId },
+      select: { id: true, saleId: true, sellerName: true, descricao: true, ref: true },
+    });
+    if (!item) throw new NotFoundException('Item nao encontrado');
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: item.saleId },
+      select: { sellerName: true, vendedorName: true },
+    });
+    const old = item.sellerName || sale?.sellerName || sale?.vendedorName || '';
+
+    await (this.prisma as any).pdvSaleItem.update({
+      where: { id: itemId },
+      data: { sellerName: novo },
+    });
+
+    this.logger.warn(
+      `[MASTER] SELLER (item) itemId=${itemId} ref=${item.ref || '-'} "${old}" -> "${novo || '(limpo)'}" por ${userName || 'admin'} motivo="${motivo}"`,
+    );
+    return { ok: true, itemId, old, new: novo };
+  }
+
+  /**
    * Busca 1 movimentação por ID (usado pelo impresso de sangria/suprimento).
    */
   async getMovement(id: string) {

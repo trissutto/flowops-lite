@@ -1530,6 +1530,10 @@ model PdvSaleItem {
   desconto    Float    @default(0)
   promoTag    String?  @map("promo_tag")         // ex: "PROMO 30% · 2022" ou "4 LEVA 3"
   total       Float
+  // Override de vendedora POR ITEM. NULL = usa sale.sellerName (padrao).
+  // Usado quando 2 vendedoras atendem na mesma compra — uma operou tudo
+  // e depois a comissao eh dividida item por item.
+  sellerName  String?  @map("seller_name")
   createdAt   DateTime @default(now()) @map("created_at")
 
   sale        PdvSale  @relation(fields: [saleId], references: [id], onDelete: Cascade)

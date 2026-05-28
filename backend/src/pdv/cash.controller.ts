@@ -445,6 +445,52 @@ export class CashController {
   }
 
   /**
+   * PATCH /pdv/caixa/master/sale/:id/seller
+   * Body: { sellerName, motivo, password, keepItemOverrides? }
+   * Troca a vendedora da venda inteira (e por padrao limpa overrides nos items).
+   * Senha minima: GERENTE (comissao nao eh financeiro, eh operacional).
+   */
+  @Patch('master/sale/:id/seller')
+  async masterUpdateSaleSeller(
+    @Req() req: any,
+    @Param('id') saleId: string,
+    @Body() body: { sellerName: string; motivo: string; password: string; keepItemOverrides?: boolean },
+  ) {
+    this.requireMasterRole(req);
+    const nivel = this.validateLevel(body?.password, 'GERENTE');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterUpdateSaleSeller({
+      saleId,
+      novoSellerName: body?.sellerName,
+      motivo: body?.motivo,
+      keepItemOverrides: !!body?.keepItemOverrides,
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
+   * PATCH /pdv/caixa/master/sale-item/:id/seller
+   * Body: { sellerName, motivo, password }
+   * Troca vendedora de UM item (override). sellerName=null limpa o override.
+   */
+  @Patch('master/sale-item/:id/seller')
+  async masterUpdateItemSeller(
+    @Req() req: any,
+    @Param('id') itemId: string,
+    @Body() body: { sellerName: string | null; motivo: string; password: string },
+  ) {
+    this.requireMasterRole(req);
+    const nivel = this.validateLevel(body?.password, 'GERENTE');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterUpdateItemSeller({
+      itemId,
+      novoSellerName: body?.sellerName ?? null,
+      motivo: body?.motivo,
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
    * PATCH /pdv/caixa/master/payment/:id
    * Body: { method?, valor?, bandeira?, motivo, password }
    * Edita pagamento — troca metodo (dinheiro->pix), valor, ou bandeira.
