@@ -291,7 +291,13 @@ export class ProdutosVendidosService {
     totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
     totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
 
-    // ─── CONCILIACAO: total por modalidade de pagamento ─────────────────
+    // ─── CONCILIACAO ─────────────────────────────────────────────────────
+    // Logica financeira correta:
+    //  - Total Vendido (Liquido) = vendas - devolucoes
+    //  - Recebido a vista       = dinheiro + pix + credito + debito (dinheiro REAL entrando)
+    //  - A receber (crediario)  = vendas no fiado (parcelas futuras, NAO eh dinheiro hoje)
+    //  - Outros                  = trocas/devolucoes que viraram pagamento (separar)
+    //  - Diferenca = vendido_liquido - (avista + crediario)
     const porModalidade: Record<string, number> = {
       dinheiro: 0,
       pix: 0,
@@ -309,24 +315,35 @@ export class ProdutosVendidosService {
     for (const k of Object.keys(porModalidade)) {
       porModalidade[k] = Number(porModalidade[k].toFixed(2));
     }
-    const totalRecebido = Number(
-      Object.values(porModalidade).reduce((s, v) => s + v, 0).toFixed(2),
-    );
 
-    // Diferenca: vendas (sem desconto de troca) vs total recebido
-    // Trocas em dinheiro/credito viram pagamento negativo? Por enquanto NAO,
-    // entao a conciliacao usa total VENDAS (nao liquido) vs total RECEBIDO.
-    const diferenca = Number((totais.vendasValor - totalRecebido).toFixed(2));
+    const totalAvista = Number(
+      (
+        porModalidade.dinheiro +
+        porModalidade.pix +
+        porModalidade.credito +
+        porModalidade.debito
+      ).toFixed(2),
+    );
+    const crediarioNovo = porModalidade.crediario;
+    const totalVendidoLiquido = totais.liquidoValor;
+
+    const diferenca = Number(
+      (totalVendidoLiquido - totalAvista - crediarioNovo).toFixed(2),
+    );
 
     return {
       linhas,
       totais,
       conciliacao: {
-        totalProdutosVendidos: totais.vendasValor,
-        totalRecebido,
+        totalVendidoLiquido,
+        totalAvista,
+        crediarioNovo,
         diferenca,
         ok: Math.abs(diferenca) < 0.02,    // diferenca <= 1 centavo = ok
         porModalidade,
+        // legacy (compat com tela antiga ate deploy)
+        totalProdutosVendidos: totalVendidoLiquido,
+        totalRecebido: totalAvista,
       },
       filtros: filters,
     };
