@@ -54,21 +54,23 @@ export default function EtiquetaPrint({ labels }: Props) {
       document.querySelectorAll<HTMLElement>('.barcode-target').forEach((el) => {
         const code = el.dataset.code || '';
         if (!code) return;
-        // Força SVG a preencher container (estica horizontal sem mexer vertical)
+        // Força SVG a preencher container e permitir números fora do viewBox
         const stretchSvg = (svg: HTMLElement) => {
           svg.setAttribute('preserveAspectRatio', 'none');
           svg.removeAttribute('width');
+          svg.removeAttribute('height');
+          svg.style.overflow = 'visible';
         };
         try {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
             width: 1.8,
-            height: 48,            // reduzido pra texto ficar relativamente maior
+            height: 42,
             displayValue: true,
-            fontSize: 28,          // aumentado pra numeros nao cortarem
+            fontSize: 22,          // menor pra nao cortar
             fontOptions: 'bold',
-            textMargin: 6,         // espaco maior entre barras e numero
+            textMargin: 4,
             margin: 0,
             background: '#fff',
             lineColor: '#000',
@@ -81,11 +83,11 @@ export default function EtiquetaPrint({ labels }: Props) {
             window.JsBarcode(el, code, {
               format: 'CODE128',
               width: 1.8,
-              height: 48,
+              height: 42,
               displayValue: true,
-              fontSize: 28,
+              fontSize: 22,
               fontOptions: 'bold',
-              textMargin: 6,
+              textMargin: 4,
               margin: 0,
             });
             stretchSvg(el);
@@ -207,9 +209,10 @@ export default function EtiquetaPrint({ labels }: Props) {
         }
         .barcode-target {
           width: 80%;
-          height: 16mm;
+          height: 14mm;
           display: block;
           margin: 0 auto;
+          overflow: visible;
         }
         .et-base {
           display: flex;
