@@ -688,48 +688,106 @@ export class PurchaseOrdersService {
   /**
    * Confirma reposicao: increaseStock + retorna labels pra impressao.
    */
+  /**
+   * Confirma reposicao + gera labels.
+   *
+   * 2026-05 — Bug fix: a 2a query buscarProdutoPorCodigo falhava silenciosamente
+   * (incompatibilidade de nomes de coluna no Giga) deixando labels: [].
+   * Agora o frontend manda os dados completos no body e o backend usa eles
+   * como fonte primaria. So refaz a query se faltar info.
+   *
+   * Permite qty=0 (modo "so reimprime") — nao mexe no estoque, so gera label.
+   */
   async reposicaoConfirmar(
-    items: Array<{ codigo: string; qty: number; lojaCode?: string }>,
+    items: Array<{
+      codigo: string;
+      qty: number;
+      lojaCode?: string;
+      // Campos opcionais — frontend manda quando tem (vem da busca anterior)
+      ref?: string;
+      cor?: string;
+      tamanho?: string;
+      preco?: number;
+      descricao?: string;
+      marca?: string | null;
+    }>,
   ) {
-    const validos = (items || []).filter((i) => i.codigo && i.qty > 0);
+    const validos = (items || []).filter((i) => i.codigo);
     if (validos.length === 0) {
       return { ok: false, error: 'Nenhum item valido', labels: [] };
     }
-    const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
-    const itemsParaEstoque = validos.map((i) => ({
-      sku: i.codigo,
-      qty: i.qty,
-      storeCode: i.lojaCode || lojaMatriz,
-    }));
-    let stockResult: any = { success: false, applied: [] };
-    try {
-      stockResult = await (this.erp as any).increaseStock?.(itemsParaEstoque);
-    } catch (e: any) {
-      this.logger.error(`reposicao increaseStock falhou: ${e?.message}`);
-      return { ok: false, error: e?.message || 'Erro estoque', labels: [] };
+
+    // Separa itens que mexem estoque (qty>0) dos que so reimprimem (qty=0)
+    const paraEstoque = validos.filter((i) => i.qty > 0);
+
+    let stockResult: any = { success: true, applied: [] };
+    if (paraEstoque.length > 0) {
+      const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+      const itemsParaEstoque = paraEstoque.map((i) => ({
+        sku: i.codigo,
+        qty: i.qty,
+        storeCode: i.lojaCode || lojaMatriz,
+      }));
+      try {
+        stockResult = await (this.erp as any).increaseStock?.(itemsParaEstoque);
+      } catch (e: any) {
+        this.logger.error(`reposicao increaseStock falhou: ${e?.message}`);
+        return { ok: false, error: e?.message || 'Erro estoque', labels: [] };
+      }
+    } else {
+      this.logger.log(`reposicao em modo SO REIMPRIME (sem mexer estoque)`);
     }
+
+    // Gera labels — usa dados do request; so faz fallback query se faltar
     const labels: any[] = [];
     for (const i of validos) {
-      try {
-        const found = await (this.erp as any).buscarProdutoPorCodigo?.(i.codigo);
-        if (found && found.length > 0) {
-          const p = found[0];
-          for (let n = 0; n < i.qty; n++) {
-            labels.push({
-              ref: String(p.referencia || '').trim(),
-              cor: String(p.cor || '').trim(),
-              tamanho: String(p.tamanho || '').trim(),
-              codigo: String(p.codigo || '').trim(),
-              preco: Number(p.preco || 0),
-              marca: p.marca || null,
-              descricao: String(p.descricao || '').trim(),
-            });
+      // Quantas etiquetas? Se qty>0 = uma por unidade. Se qty=0 = 1 etiqueta avulsa
+      const qtyLabel = i.qty > 0 ? i.qty : 1;
+
+      let ref = i.ref?.trim() || '';
+      let cor = i.cor?.trim() || '';
+      let tamanho = i.tamanho?.trim() || '';
+      let preco = Number(i.preco || 0);
+      let descricao = i.descricao?.trim() || '';
+      let marca = i.marca || null;
+
+      // Se falta info essencial, tenta buscar no ERP (best-effort)
+      if (!ref || !cor || !tamanho || preco === 0) {
+        try {
+          const found = await (this.erp as any).buscarProdutoPorCodigo?.(i.codigo);
+          if (found && found.length > 0) {
+            const p = found[0];
+            ref = ref || String(p.referencia || '').trim();
+            cor = cor || String(p.cor || '').trim();
+            tamanho = tamanho || String(p.tamanho || '').trim();
+            preco = preco || Number(p.preco || 0);
+            descricao = descricao || String(p.descricao || '').trim();
+            marca = marca || p.marca || null;
           }
+        } catch (e: any) {
+          // LOG (antes era silencioso — gerava labels:[] sem aviso)
+          this.logger.warn(
+            `reposicao: buscarProdutoPorCodigo(${i.codigo}) falhou: ${e?.message}. ` +
+            `Usando dados do request como fallback.`,
+          );
         }
-      } catch { /* skip */ }
+      }
+
+      for (let n = 0; n < qtyLabel; n++) {
+        labels.push({
+          ref,
+          cor,
+          tamanho,
+          codigo: i.codigo,
+          preco,
+          marca,
+          descricao,
+        });
+      }
     }
+
     return {
-      ok: stockResult?.success ?? false,
+      ok: stockResult?.success ?? true,
       stockResult,
       labels,
       total: labels.length,

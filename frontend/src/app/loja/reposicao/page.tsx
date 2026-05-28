@@ -139,7 +139,18 @@ export default function ReposicaoPage() {
         {
           method: 'POST',
           body: JSON.stringify({
-            items: validos.map((s) => ({ codigo: s.codigo, qty: s.qty })),
+            items: validos.map((s) => ({
+              codigo: s.codigo,
+              qty: s.qty,
+              // Manda dados completos pro backend nao precisar refazer query
+              // (a 2a query no Giga estava falhando por nomes de coluna diferentes
+              // e deixando labels: []). Esses dados ja vieram da busca anterior.
+              ref: s.ref,
+              cor: s.cor,
+              tamanho: s.tamanho,
+              preco: s.preco,
+              descricao: s.descricao,
+            })),
           }),
         },
       );
