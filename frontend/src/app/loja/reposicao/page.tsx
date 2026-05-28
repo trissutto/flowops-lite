@@ -440,12 +440,16 @@ export default function ReposicaoPage() {
           font-weight: 900; letter-spacing: 0.2px;
           text-transform: uppercase;
           flex: 1 1 auto; min-width: 0;
-          white-space: nowrap; padding-right: 1mm;
-          line-height: 1.1; font-size: 11pt;
+          white-space: nowrap;
+          overflow: hidden;          /* corta se passar do espaco */
+          text-overflow: ellipsis;   /* mostra ... no final */
+          padding-right: 1.5mm;      /* espaco mínimo do preço */
+          line-height: 1.1; font-size: 9pt;  /* reduzido de 11pt pra caber mais */
         }
         .et-base-preco {
-          font-size: 11pt; font-weight: 900;
-          flex-shrink: 0;
+          font-size: 10pt; font-weight: 900;
+          flex-shrink: 0;            /* preço NUNCA encolhe */
+          white-space: nowrap;
         }
         @media print {
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
