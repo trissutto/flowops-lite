@@ -922,7 +922,7 @@ function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vend
         </div>
       )}
       {/* Cascade das parcelas individuais */}
-      {hasItems && expanded && (
+      {hasParcelas && expanded && (
         <div className="border-t border-slate-200 bg-white px-2 py-1 space-y-0.5">
           {v.items!.map((it, i) => {
             const venc = it.vencimento ? (() => {
