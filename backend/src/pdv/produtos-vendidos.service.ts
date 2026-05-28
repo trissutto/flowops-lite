@@ -299,26 +299,48 @@ export class ProdutosVendidosService {
     totais.devolucoesValor = Number(totais.devolucoesValor.toFixed(2));
     totais.liquidoValor = Number(totais.liquidoValor.toFixed(2));
 
-    // ─── CONCILIACAO ─────────────────────────────────────────────────────
-    // Logica financeira:
-    //  - Total Vendido (Liquido) = vendas - devolucoes
-    //  - Total Recebido         = dinheiro + pix + credito + debito + crediario
-    //                              (TUDO que gerou venda hoje, mesmo no fiado)
-    //  - NAO entra: recebimentos de parcelas de crediario antigas (estao em outra tabela)
-    //  - Diferenca = vendido_liquido - total_recebido (deve ser ~0)
+    // ─── CONCILIACAO V2 ──────────────────────────────────────────────────
+    // Modelo: cada venda tem Sum(itens) = Sum(pagamentos). No dia:
+    //   Vendido (liquido) = Sum(itens vendidos) - Sum(itens devolvidos)
+    //   Recebido = dinheiro + pix + credito + debito + crediario + vale_troca
+    //   Diferenca = Vendido - Recebido  (deve ser ~0)
+    //
+    // vale_troca aplicado em venda nova NAO eh dinheiro novo entrando, mas
+    // ABATE do que falta receber — entao entra como modalidade de "recebimento".
+    //
+    // Methods desconhecidos vao pra "outros" + listados em `outrosDetalhe`
+    // pra diagnostico (deveria ser sempre VAZIO em producao limpa).
     const porModalidade: Record<string, number> = {
       dinheiro: 0,
       pix: 0,
       credito: 0,
       debito: 0,
       crediario: 0,
+      vale_troca: 0,
       outros: 0,
     };
+    // Mapa de aliases — qualquer variacao do nome cai na modalidade canonica.
+    const ALIASES: Record<string, keyof typeof porModalidade> = {
+      dinheiro: 'dinheiro', cash: 'dinheiro', money: 'dinheiro',
+      pix: 'pix',
+      credito: 'credito', 'cartao_credito': 'credito', credit: 'credito',
+      debito: 'debito', 'cartao_debito': 'debito', debit: 'debito',
+      crediario: 'crediario', fiado: 'crediario',
+      vale_troca: 'vale_troca', vale: 'vale_troca', troca: 'vale_troca',
+      'troca_credito': 'vale_troca', 'troca_dinheiro': 'vale_troca',
+    };
+    // Coleta os methods desconhecidos pra debug
+    const outrosDetalhe: Array<{ method: string; valor: number; saleId: string }> = [];
     for (const p of salePayments) {
-      const m = String(p.method || '').toLowerCase().trim();
+      const mRaw = String(p.method || '').toLowerCase().trim();
       const v = Number(p.valor || 0);
-      if (m in porModalidade) porModalidade[m] += v;
-      else porModalidade.outros += v;
+      const target = ALIASES[mRaw];
+      if (target) {
+        porModalidade[target] += v;
+      } else {
+        porModalidade.outros += v;
+        outrosDetalhe.push({ method: mRaw || '(vazio)', valor: v, saleId: p.saleId });
+      }
     }
     for (const k of Object.keys(porModalidade)) {
       porModalidade[k] = Number(porModalidade[k].toFixed(2));
@@ -330,7 +352,8 @@ export class ProdutosVendidosService {
         porModalidade.pix +
         porModalidade.credito +
         porModalidade.debito +
-        porModalidade.crediario
+        porModalidade.crediario +
+        porModalidade.vale_troca
       ).toFixed(2),
     );
     const totalVendidoLiquido = totais.liquidoValor;
@@ -339,6 +362,41 @@ export class ProdutosVendidosService {
       (totalVendidoLiquido - totalRecebido).toFixed(2),
     );
 
+    // ─── DIAGNOSTICO POR VENDA — quais vendas tem total ≠ Σpagamentos ────
+    // Util pra debug: lista vendas com mismatch (provavel desconto manual
+    // nao registrado em payment, ou bug).
+    const paymentsBySale = new Map<string, number>();
+    for (const p of salePayments) {
+      const s = paymentsBySale.get(p.saleId) || 0;
+      paymentsBySale.set(p.saleId, s + Number(p.valor || 0));
+    }
+    const vendasComDivergencia: Array<{
+      saleId: string;
+      saleNumber: string;
+      total: number;
+      somaPagamentos: number;
+      diferenca: number;
+    }> = [];
+    // Calcula total POR VENDA somando seus items (linhas tipo='venda' so)
+    const totalPorVenda = new Map<string, number>();
+    for (const l of linhas) {
+      if (l.tipo !== 'venda') continue;
+      totalPorVenda.set(l.saleId, (totalPorVenda.get(l.saleId) || 0) + l.total);
+    }
+    for (const [saleId, totalVenda] of totalPorVenda.entries()) {
+      const somaPag = paymentsBySale.get(saleId) || 0;
+      const diff = Number((totalVenda - somaPag).toFixed(2));
+      if (Math.abs(diff) > 0.02) {
+        vendasComDivergencia.push({
+          saleId,
+          saleNumber: String(saleId).slice(0, 8),
+          total: Number(totalVenda.toFixed(2)),
+          somaPagamentos: Number(somaPag.toFixed(2)),
+          diferenca: diff,
+        });
+      }
+    }
+
     return {
       linhas,
       totais,
@@ -346,8 +404,11 @@ export class ProdutosVendidosService {
         totalVendidoLiquido,
         totalRecebido,
         diferenca,
-        ok: Math.abs(diferenca) < 0.02,    // diferenca <= 1 centavo = ok
+        ok: Math.abs(diferenca) < 0.02,
         porModalidade,
+        // Diagnostico — usado pelo frontend pra mostrar alertas
+        outrosDetalhe: outrosDetalhe.slice(0, 20),  // limita pra nao inchar response
+        vendasComDivergencia: vendasComDivergencia.slice(0, 30),
         // legacy (compat)
         totalProdutosVendidos: totalVendidoLiquido,
       },

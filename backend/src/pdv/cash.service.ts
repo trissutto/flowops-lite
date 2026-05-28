@@ -782,7 +782,7 @@ export class CashService {
         let totalMarcados = 0;
         let qtdMarcados = 0;
         let qtdVendasReais = 0;
-        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0;
+        let totalDinheiro = 0, totalPix = 0, totalCartaoCredito = 0, totalCartaoDebito = 0, totalCrediario = 0, totalValeTroca = 0;
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
 
         for (const sale of sales as any[]) {
@@ -815,6 +815,10 @@ export class CashService {
             if (m === 'dinheiro') { totalDinheiro += v; pushVenda('DINHEIRO', sale, p, v); }
             else if (m === 'pix') { totalPix += v; pushVenda('PIX', sale, p, v); }
             else if (m === 'crediario') { totalCrediario += v; pushVenda('CREDIARIO', sale, p, v, parcelas); }
+            else if (m === 'vale_troca' || m === 'vale' || m === 'troca') {
+              totalValeTroca += v;
+              pushVenda('VALE_TROCA' as any, sale, p, v);
+            }
             else if (m === 'credito' || m === 'credit') {
               totalCartaoCredito += v;
               const key = bandeira ? bandeiraMap[bandeira] : null;
@@ -943,6 +947,7 @@ export class CashService {
             totalCartaoCredito,
             totalCartaoDebito,
             totalCrediario,
+            totalValeTroca,
             totalMarcados,
             qtdMarcados,
             totalSangrias,

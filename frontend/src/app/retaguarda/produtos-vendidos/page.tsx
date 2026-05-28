@@ -63,8 +63,17 @@ interface ReportResponse {
       credito: number;
       debito: number;
       crediario: number;
+      vale_troca: number;
       outros: number;
     };
+    outrosDetalhe?: Array<{ method: string; valor: number; saleId: string }>;
+    vendasComDivergencia?: Array<{
+      saleId: string;
+      saleNumber: string;
+      total: number;
+      somaPagamentos: number;
+      diferenca: number;
+    }>;
     // legacy
     totalProdutosVendidos?: number;
   };
@@ -317,19 +326,19 @@ function ProdutosVendidosContent() {
               <div className="bg-white border rounded p-2.5">
                 <div className="text-[10px] text-slate-500 uppercase font-bold">Vendido (líquido)</div>
                 <div className="font-mono font-black text-base">{brl(data.conciliacao.totalVendidoLiquido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">vendas − devoluções</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">peças vendidas − devolvidas</div>
               </div>
               <div className="bg-white border rounded p-2.5">
                 <div className="text-[10px] text-slate-500 uppercase font-bold">Total recebido</div>
                 <div className="font-mono font-black text-base text-emerald-700">{brl(data.conciliacao.totalRecebido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário+vale</div>
               </div>
               <div className={`bg-white border rounded p-2.5 ${Math.abs(data.conciliacao.diferenca) > 0.01 ? 'border-amber-400' : ''}`}>
                 <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
                 <div className={`font-mono font-black text-base ${data.conciliacao.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
                   {brl(data.conciliacao.diferenca)}
                 </div>
-                <div className="text-[9px] text-slate-400 mt-0.5">líquido − recebido</div>
+                <div className="text-[9px] text-slate-400 mt-0.5">vendido − recebido</div>
               </div>
             </div>
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
@@ -338,10 +347,53 @@ function ProdutosVendidosContent() {
               <ModBox label="Crédito" valor={data.conciliacao.porModalidade.credito} cor="blue" />
               <ModBox label="Débito" valor={data.conciliacao.porModalidade.debito} cor="indigo" />
               <ModBox label="Crediário" valor={data.conciliacao.porModalidade.crediario} cor="rose" />
-              {data.conciliacao.porModalidade.outros > 0 && (
-                <ModBox label="Outros" valor={data.conciliacao.porModalidade.outros} cor="slate" />
-              )}
+              <ModBox label="Vale-troca" valor={data.conciliacao.porModalidade.vale_troca || 0} cor="slate" />
             </div>
+
+            {/* ALERTA: methods desconhecidos caíram em "Outros" */}
+            {data.conciliacao.porModalidade.outros > 0 && data.conciliacao.outrosDetalhe && data.conciliacao.outrosDetalhe.length > 0 && (
+              <div className="mt-3 bg-rose-50 border-2 border-rose-400 rounded-lg p-3">
+                <div className="text-xs font-bold text-rose-900 mb-1 flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4" /> PAGAMENTOS COM MÉTODO DESCONHECIDO: {brl(data.conciliacao.porModalidade.outros)}
+                </div>
+                <div className="text-[11px] text-rose-800 mb-2">
+                  Estes pagamentos têm method que não está mapeado (deveria ser dinheiro/pix/credito/debito/crediario/vale_troca):
+                </div>
+                <div className="max-h-32 overflow-y-auto bg-white rounded p-2 text-[11px] font-mono space-y-0.5">
+                  {data.conciliacao.outrosDetalhe.map((o, i) => (
+                    <div key={i} className="flex justify-between gap-2 border-b border-rose-100 last:border-0 py-0.5">
+                      <span className="text-rose-700 font-bold">method: "{o.method}"</span>
+                      <span>{brl(o.valor)}</span>
+                      <span className="text-slate-400">venda {String(o.saleId).slice(0, 8)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ALERTA: vendas onde Σ(itens) ≠ Σ(pagamentos) */}
+            {data.conciliacao.vendasComDivergencia && data.conciliacao.vendasComDivergencia.length > 0 && (
+              <div className="mt-3 bg-amber-50 border-2 border-amber-400 rounded-lg p-3">
+                <div className="text-xs font-bold text-amber-900 mb-1 flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4" /> {data.conciliacao.vendasComDivergencia.length} VENDA(S) COM Σ(ITENS) ≠ Σ(PAGAMENTOS)
+                </div>
+                <div className="text-[11px] text-amber-800 mb-2">
+                  Provável desconto manual não registrado em payment, OU venda quebrada:
+                </div>
+                <div className="max-h-40 overflow-y-auto bg-white rounded p-2 text-[11px] font-mono space-y-0.5">
+                  {data.conciliacao.vendasComDivergencia.map((v) => (
+                    <div key={v.saleId} className="flex justify-between gap-2 border-b border-amber-100 last:border-0 py-0.5">
+                      <span className="font-bold">{v.saleNumber}</span>
+                      <span>itens {brl(v.total)}</span>
+                      <span>pgto {brl(v.somaPagamentos)}</span>
+                      <span className={v.diferenca > 0 ? 'text-rose-700 font-bold' : 'text-emerald-700 font-bold'}>
+                        {v.diferenca > 0 ? '+' : ''}{brl(v.diferenca)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         )}
 

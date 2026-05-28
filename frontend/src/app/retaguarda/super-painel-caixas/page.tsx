@@ -627,7 +627,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
         </div>
 
         {/* CONCILIACAO INLINE — total de vendas vs soma das modalidades.
-            Bate quando vendido_liquido ≈ dinheiro+pix+credito+debito+crediario.
+            Bate quando vendido_liquido ≈ dinheiro+pix+credito+debito+crediario+vale_troca.
             Click leva pra /produtos-vendidos com filtro de data + loja. */}
         {t.totalVendas > 0 && (() => {
           const somaModalidades =
@@ -635,7 +635,8 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             (t.totalPix || 0) +
             (t.totalCartaoCredito || 0) +
             (t.totalCartaoDebito || 0) +
-            (t.totalCrediario || 0);
+            (t.totalCrediario || 0) +
+            ((t as any).totalValeTroca || 0);
           const diff = Number((t.totalVendas - somaModalidades).toFixed(2));
           const bate = Math.abs(diff) < 0.02;
           const concUrl = `/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`;
