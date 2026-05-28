@@ -66,11 +66,11 @@ export default function EtiquetaPrint({ labels }: Props) {
           window.JsBarcode(el, code, {
             format: 'EAN13',
             width: 1.8,
-            height: 42,
+            height: 32,
             displayValue: true,
-            fontSize: 22,          // menor pra nao cortar
+            fontSize: 18,
             fontOptions: 'bold',
-            textMargin: 4,
+            textMargin: 3,
             margin: 0,
             background: '#fff',
             lineColor: '#000',
@@ -83,11 +83,11 @@ export default function EtiquetaPrint({ labels }: Props) {
             window.JsBarcode(el, code, {
               format: 'CODE128',
               width: 1.8,
-              height: 42,
+              height: 32,
               displayValue: true,
-              fontSize: 22,
+              fontSize: 18,
               fontOptions: 'bold',
-              textMargin: 4,
+              textMargin: 3,
               margin: 0,
             });
             stretchSvg(el);
@@ -111,7 +111,7 @@ export default function EtiquetaPrint({ labels }: Props) {
 
   return (
     <>
-      <main className="hidden print:block">
+      <main>
         <div className="etiquetas-grid">
           {labels.map((l, i) => (
             <div key={`${l.codigo}-${i}`} className="etiqueta">
@@ -158,11 +158,11 @@ export default function EtiquetaPrint({ labels }: Props) {
           width: 48mm;
           height: 30mm;
           box-sizing: border-box;
-          padding: 2mm 1.5mm 1mm 1.5mm;
+          padding: 1.2mm 1.5mm 0.8mm 1.5mm;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
-          gap: 0.6mm;
+          gap: 0.3mm;
           border: 1px dashed #cbd5e1;
           background: #fff;
           font-family: -apple-system, system-ui, sans-serif;
@@ -170,16 +170,16 @@ export default function EtiquetaPrint({ labels }: Props) {
           overflow: hidden;
         }
         .et-descricao {
-          font-size: 7pt;
+          font-size: 6pt;
           font-weight: 900;
           text-transform: uppercase;
-          line-height: 1.05;
+          line-height: 1.0;
           letter-spacing: 0;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-          max-height: 5.5mm;
+          max-height: 4.2mm;
           flex-shrink: 0;
         }
         .et-destaque {
@@ -187,32 +187,34 @@ export default function EtiquetaPrint({ labels }: Props) {
           align-items: center;
           gap: 1.5mm;
           line-height: 1;
+          flex-shrink: 0;
         }
         .et-tam {
-          font-size: 12pt;
+          font-size: 11pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           border: 1.5px solid #000;
-          padding: 0 1.2mm;
+          padding: 0 1mm;
           line-height: 1.1;
         }
         .et-cor-destaque {
-          font-size: 18pt;
+          font-size: 15pt;
           font-weight: 900;
           font-family: 'Courier New', monospace;
           text-transform: uppercase;
           letter-spacing: 0;
           margin-left: auto;
-          border: 2px solid #000;
-          padding: 0.5mm 2mm;
-          line-height: 1.05;
+          border: 1.5px solid #000;
+          padding: 0.2mm 1.5mm;
+          line-height: 1;
         }
         .barcode-target {
           width: 80%;
-          height: 14mm;
+          height: 10mm;
           display: block;
           margin: 0 auto;
           overflow: visible;
+          flex-shrink: 0;
         }
         .et-base {
           display: flex;
