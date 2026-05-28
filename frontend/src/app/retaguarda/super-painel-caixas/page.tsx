@@ -443,6 +443,45 @@ export default function SuperPainelCaixas() {
                 <ConsolidadoItem label="Cartão Débito" valor={data.consolidado.totalCartaoDebito} icon={<CreditCard size={14} />} />
                 <ConsolidadoItem label="Crediário" valor={data.consolidado.totalCrediario} icon={<TrendingUp size={14} />} />
               </div>
+
+              {/* CONCILIACAO GLOBAL — todas as lojas */}
+              {(() => {
+                const c = data.consolidado;
+                const somaModalidades =
+                  (c.totalDinheiro || 0) +
+                  (c.totalPix || 0) +
+                  (c.totalCartaoCredito || 0) +
+                  (c.totalCartaoDebito || 0) +
+                  (c.totalCrediario || 0);
+                const diff = Number((c.totalVendas - somaModalidades).toFixed(2));
+                const bate = Math.abs(diff) < 0.02;
+                return (
+                  <div className={`mt-2 px-3 py-2 rounded-lg border-2 flex items-center justify-between gap-3 text-sm ${
+                    bate
+                      ? 'bg-emerald-500/20 border-emerald-300 text-white'
+                      : 'bg-amber-500/30 border-amber-200 text-white'
+                  }`}>
+                    <div className="font-bold uppercase tracking-wide flex items-center gap-2">
+                      {bate ? '✓' : '⚠️'} CONCILIACAO GERAL
+                    </div>
+                    <div className="flex items-center gap-2 font-mono">
+                      <span>Vendido <b>{brl(c.totalVendas)}</b></span>
+                      <span className="opacity-70">vs</span>
+                      <span>Recebido <b>{brl(somaModalidades)}</b></span>
+                      {!bate && (
+                        <span className="ml-2 px-2 py-0.5 bg-amber-200 text-amber-900 rounded font-black">
+                          Diferenca {diff > 0 ? '+' : ''}{brl(diff)}
+                        </span>
+                      )}
+                      {bate && (
+                        <span className="ml-2 px-2 py-0.5 bg-emerald-200 text-emerald-900 rounded font-black">
+                          ✓ BATE
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Grid de lojas */}
@@ -586,6 +625,46 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             active={expanded === 'crediario'}
             onClick={loja.detalhado && t.totalCrediario > 0 ? () => setExpanded(expanded === 'crediario' ? null : 'crediario') : undefined} />
         </div>
+
+        {/* CONCILIACAO INLINE — total de vendas vs soma das modalidades.
+            Bate quando vendido_liquido ≈ dinheiro+pix+credito+debito+crediario.
+            Click leva pra /produtos-vendidos com filtro de data + loja. */}
+        {t.totalVendas > 0 && (() => {
+          const somaModalidades =
+            (t.totalDinheiro || 0) +
+            (t.totalPix || 0) +
+            (t.totalCartaoCredito || 0) +
+            (t.totalCartaoDebito || 0) +
+            (t.totalCrediario || 0);
+          const diff = Number((t.totalVendas - somaModalidades).toFixed(2));
+          const bate = Math.abs(diff) < 0.02;
+          const concUrl = `/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`;
+          return (
+            <a
+              href={concUrl}
+              className={`mt-1.5 flex items-center justify-between gap-2 px-2 py-1.5 rounded-md border text-[11px] transition hover:shadow-sm ${
+                bate
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                  : 'bg-amber-50 border-amber-400 text-amber-900 hover:bg-amber-100'
+              }`}
+              title="Click pra abrir Produtos Vendidos da loja"
+            >
+              <span className="font-bold uppercase tracking-wide">
+                {bate ? '✓' : '⚠️'} Conciliacao
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="font-mono">{brl(t.totalVendas)}</span>
+                <span className="opacity-60">vs</span>
+                <span className="font-mono">{brl(somaModalidades)}</span>
+                {!bate && (
+                  <span className="ml-1 font-mono font-black">
+                    ({diff > 0 ? '+' : ''}{brl(diff)})
+                  </span>
+                )}
+              </span>
+            </a>
+          );
+        })()}
 
         {/* Cascade — vendas/bandeiras quando expandido */}
         {expanded && loja.detalhado && (
