@@ -9,7 +9,7 @@
  * Trocas/devoluções aparecem em VERMELHO com valor NEGATIVO pra conciliação.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -88,7 +88,17 @@ function fmtDate(iso: string) {
   try { return new Date(iso).toLocaleDateString('pt-BR'); } catch { return iso; }
 }
 
+// Wrapper com Suspense — useSearchParams() exige isso no Next.js 14
+// pra evitar erro de prerender estatico no build.
 export default function ProdutosVendidosPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-slate-400"><Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...</div>}>
+      <ProdutosVendidosContent />
+    </Suspense>
+  );
+}
+
+function ProdutosVendidosContent() {
   const hoje = new Date();
   const [me, setMe] = useState<Me | null>(null);
   const [stores, setStores] = useState<StoreOption[]>([]);
