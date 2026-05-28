@@ -63,11 +63,11 @@ export default function EtiquetaPrint({ labels }: Props) {
           window.JsBarcode(el, code, {
             format: 'EAN13',
             width: 1.8,
-            height: 60,            // +10 vs antes (mais barras → texto não corta)
+            height: 48,            // reduzido pra texto ficar relativamente maior
             displayValue: true,
-            fontSize: 22,           // ajustado pra caber no espaço
+            fontSize: 28,          // aumentado pra numeros nao cortarem
             fontOptions: 'bold',
-            textMargin: 4,          // espaço entre barras e número
+            textMargin: 6,         // espaco maior entre barras e numero
             margin: 0,
             background: '#fff',
             lineColor: '#000',
@@ -80,11 +80,11 @@ export default function EtiquetaPrint({ labels }: Props) {
             window.JsBarcode(el, code, {
               format: 'CODE128',
               width: 1.8,
-              height: 60,
+              height: 48,
               displayValue: true,
-              fontSize: 22,
+              fontSize: 28,
               fontOptions: 'bold',
-              textMargin: 4,
+              textMargin: 6,
               margin: 0,
             });
             stretchSvg(el);
@@ -205,8 +205,8 @@ export default function EtiquetaPrint({ labels }: Props) {
           line-height: 1.05;
         }
         .barcode-target {
-          width: 75%;
-          height: 14mm;
+          width: 80%;
+          height: 16mm;
           display: block;
           margin: 0 auto;
         }
