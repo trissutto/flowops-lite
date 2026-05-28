@@ -307,98 +307,99 @@ export default function NewOrderAlert() {
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-start justify-center pt-4 sm:pt-10 pb-4 px-3 sm:px-4 pointer-events-none overflow-y-auto"
+      className="fixed inset-0 z-[9999] overflow-y-auto p-2 sm:p-4 pointer-events-none"
       aria-live="assertive"
       role="alert"
+      style={{ WebkitOverflowScrolling: 'touch' }}
     >
-      <div className="pointer-events-auto max-w-2xl w-full">
+      {/* Botao FECHAR FLUTUANTE — sempre visivel no canto, FORA do card,
+          garante que da pra fechar mesmo se o conteudo for gigante */}
+      <button
+        onClick={dismissAll}
+        className="pointer-events-auto fixed top-2 right-2 z-[10000] bg-red-600 hover:bg-red-700 text-white font-black rounded-full w-12 h-12 flex items-center justify-center shadow-2xl border-2 border-white text-2xl active:scale-95"
+        aria-label="Fechar alerta"
+        title="Fechar (Esc)"
+      >
+        ✕
+      </button>
+
+      <div className="pointer-events-auto max-w-2xl w-full mx-auto my-2 sm:my-4">
         <div
           key={stack[0].key}
-          className="bg-yellow-400 border-4 border-yellow-600 rounded-xl shadow-2xl flex flex-col max-h-[calc(100vh-3rem)] sm:max-h-[calc(100vh-6rem)]"
+          className="bg-yellow-400 border-4 border-yellow-600 rounded-xl shadow-2xl"
           style={{ animation: 'flowopsPopupIn 0.55s ease-out' }}
         >
-          {/* HEADER fixo no topo */}
-          <div className="p-4 sm:p-5 pb-2 flex items-start gap-3 sm:gap-4 flex-shrink-0">
+          {/* HEADER */}
+          <div className="p-3 sm:p-5 flex items-start gap-3 sm:gap-4">
             <div
-              className="text-5xl sm:text-7xl leading-none flex-shrink-0"
+              className="text-4xl sm:text-7xl leading-none flex-shrink-0"
               style={{ animation: 'flowopsWiggle 1s ease-in-out infinite' }}
             >
               ⚠️
             </div>
             <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
-              <div className="text-xl sm:text-3xl font-black text-yellow-900 tracking-tight">
+              <div className="text-lg sm:text-3xl font-black text-yellow-900 tracking-tight">
                 CHEGOU {stack.length > 1 ? `${stack.length} PEDIDOS` : 'PEDIDO'}!
               </div>
-              <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={toggleSound}
+                className="p-2 hover:bg-yellow-500 rounded-lg text-yellow-900 flex-shrink-0"
+                title={soundOn ? 'Silenciar alerta' : 'Ativar som'}
+              >
+                {soundOn ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
+              </button>
+            </div>
+          </div>
+
+          {/* LISTA — sem max-h, deixa fluir, container externo rola */}
+          <div className="px-3 sm:px-5 space-y-1.5">
+            {stack.slice(0, 5).map((o) => (
+              <div
+                key={o.key}
+                className="flex items-center justify-between gap-2 bg-yellow-300/60 rounded-lg px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="font-mono font-bold text-lg text-yellow-900">
+                    #{o.orderNumber}
+                    {o.source !== 'socket' && (
+                      <span className="ml-2 text-[10px] uppercase tracking-wide bg-yellow-900 text-yellow-100 rounded px-1.5 py-0.5">
+                        {o.source === 'poll' ? 'poll' : 'teste'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-yellow-900 text-sm truncate">
+                    {o.customerName} · <span className="font-semibold">{o.total}</span>
+                  </div>
+                </div>
                 <button
-                  onClick={toggleSound}
-                  className="p-2 hover:bg-yellow-500 rounded-lg text-yellow-900"
-                  title={soundOn ? 'Silenciar alerta' : 'Ativar som'}
+                  onClick={() => dismiss(o.key)}
+                  className="text-yellow-900 hover:text-yellow-950 text-xs underline shrink-0"
                 >
-                  {soundOn ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
-                </button>
-                <button
-                  onClick={dismissAll}
-                  className="p-2 hover:bg-yellow-500 rounded-lg text-yellow-900"
-                  title="Fechar todos"
-                >
-                  <X className="w-5 h-5" />
+                  OK
                 </button>
               </div>
-            </div>
+            ))}
+            {stack.length > 5 && (
+              <div className="text-yellow-900 font-semibold text-sm pl-1">
+                + {stack.length - 5} outro(s)
+              </div>
+            )}
           </div>
 
-          {/* LISTA scrollable (ocupa espaço entre header e botões) */}
-          <div className="px-4 sm:px-5 flex-1 min-h-0 overflow-y-auto">
-            <div className="space-y-1.5 pb-2">
-              {stack.slice(0, 5).map((o) => (
-                <div
-                  key={o.key}
-                  className="flex items-center justify-between gap-2 bg-yellow-300/60 rounded-lg px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <div className="font-mono font-bold text-lg text-yellow-900">
-                      #{o.orderNumber}
-                      {o.source !== 'socket' && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide bg-yellow-900 text-yellow-100 rounded px-1.5 py-0.5">
-                          {o.source === 'poll' ? 'poll' : 'teste'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-yellow-900 text-sm truncate">
-                      {o.customerName} · <span className="font-semibold">{o.total}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => dismiss(o.key)}
-                    className="text-yellow-900 hover:text-yellow-950 text-xs underline shrink-0"
-                  >
-                    OK
-                  </button>
-                </div>
-              ))}
-              {stack.length > 5 && (
-                <div className="text-yellow-900 font-semibold text-sm pl-1">
-                  + {stack.length - 5} outro(s)
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* FOOTER fixo no fundo — botoes SEMPRE visiveis */}
-          <div className="p-4 sm:p-5 pt-3 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end flex-shrink-0 border-t border-yellow-500/40">
+          {/* FOOTER — botoes empilhados em mobile, sempre dentro do fluxo */}
+          <div className="p-3 sm:p-5 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end border-t border-yellow-500/40 mt-2">
             <Link
               href="/separacao"
               onClick={dismissAll}
-              className="px-4 py-3 sm:py-2 bg-yellow-900 text-yellow-100 rounded-lg font-bold hover:bg-yellow-950 transition text-sm text-center"
+              className="px-4 py-3 bg-yellow-900 text-yellow-100 rounded-lg font-bold hover:bg-yellow-950 transition text-base text-center active:scale-95"
             >
               Abrir Separação →
             </Link>
             <button
               onClick={dismissAll}
-              className="px-4 py-3 sm:py-2 bg-yellow-100 text-yellow-900 rounded-lg font-semibold hover:bg-yellow-50 transition text-sm border border-yellow-600"
+              className="px-4 py-4 bg-yellow-100 text-yellow-900 rounded-lg font-black hover:bg-yellow-50 transition text-base border-2 border-yellow-700 active:scale-95"
             >
-              OK, VI
+              ✓ OK, VI
             </button>
           </div>
         </div>
