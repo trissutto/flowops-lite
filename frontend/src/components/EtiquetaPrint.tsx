@@ -35,11 +35,12 @@ interface Props {
  */
 function corFontSize(cor: string): string {
   const len = (cor || '').length;
-  if (len <= 8) return '11pt';
-  if (len <= 12) return '9pt';
-  if (len <= 16) return '7.5pt';
-  if (len <= 22) return '6.5pt';
-  return '5.5pt';
+  if (len <= 6) return '11pt';
+  if (len <= 10) return '9pt';
+  if (len <= 13) return '7pt';
+  if (len <= 18) return '6pt';
+  if (len <= 24) return '5pt';
+  return '4.5pt';
 }
 
 export default function EtiquetaPrint({ labels }: Props) {
@@ -218,7 +219,7 @@ export default function EtiquetaPrint({ labels }: Props) {
           border-top: 0.5px solid #cbd5e1;
           padding-top: 0.5mm;
           min-width: 0;
-          gap: 1mm;
+          gap: 2mm;
         }
         .et-base-ref {
           font-weight: 900;
@@ -226,7 +227,10 @@ export default function EtiquetaPrint({ labels }: Props) {
           text-transform: uppercase;
           flex: 1 1 auto;
           min-width: 0;
+          max-width: 28mm;
           white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
           padding-right: 1mm;
           line-height: 1.1;
         }
