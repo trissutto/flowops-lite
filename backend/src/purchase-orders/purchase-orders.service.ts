@@ -703,7 +703,6 @@ export class PurchaseOrdersService {
       codigo: string;
       qty: number;
       lojaCode?: string;
-      // Campos opcionais — frontend manda quando tem (vem da busca anterior)
       ref?: string;
       cor?: string;
       tamanho?: string;
@@ -711,6 +710,7 @@ export class PurchaseOrdersService {
       descricao?: string;
       marca?: string | null;
     }>,
+    apenasEtiqueta = false,
   ) {
     const validos = (items || []).filter((i) => i.codigo);
     if (validos.length === 0) {
@@ -718,9 +718,13 @@ export class PurchaseOrdersService {
     }
 
     // Separa itens que mexem estoque (qty>0) dos que so reimprimem (qty=0)
-    const paraEstoque = validos.filter((i) => i.qty > 0);
+    // E o flag apenasEtiqueta forca pular estoque mesmo com qty>0
+    const paraEstoque = apenasEtiqueta ? [] : validos.filter((i) => i.qty > 0);
 
     let stockResult: any = { success: true, applied: [] };
+    if (apenasEtiqueta) {
+      this.logger.log(`reposicao APENAS ETIQUETA (skip estoque) — ${validos.length} itens`);
+    }
     if (paraEstoque.length > 0) {
       const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
       const itemsParaEstoque = paraEstoque.map((i) => ({

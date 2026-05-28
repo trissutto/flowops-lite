@@ -125,13 +125,22 @@ export default function ReposicaoPage() {
     );
   };
 
-  const confirmar = async () => {
-    const validos = selecionados.filter((s) => s.qty > 0);
+  /**
+   * Confirma reposicao. soEtiquetas=true forca qty=0 em todos os itens —
+   * NAO mexe no estoque, apenas gera as etiquetas (reimpressao).
+   */
+  const confirmar = async (soEtiquetas = false) => {
+    // Em ambos os modos exigimos qty >= 1 (qty define quantas etiquetas serao geradas)
+    const validos = selecionados.filter((s) => s.qty >= 1);
     if (validos.length === 0) {
-      alert('Informe a qty de pelo menos um produto');
+      alert('Informe a quantidade (qty >= 1) em pelo menos um produto');
       return;
     }
-    if (!confirm(`Confirmar reposicao de ${validos.length} SKU(s)? Vai adicionar no estoque Wincred e gerar etiquetas.`)) return;
+    const totalEtq = validos.reduce((sum, s) => sum + s.qty, 0);
+    const msg = soEtiquetas
+      ? `Gerar ${totalEtq} etiqueta(s) SEM mexer no estoque?`
+      : `Confirmar reposicao de ${validos.length} SKU(s) (${totalEtq} pecas)? Vai adicionar no estoque Wincred e gerar etiquetas.`;
+    if (!confirm(msg)) return;
     setConfirmando(true);
     try {
       const r = await api<{ ok: boolean; total: number; labels: Label[] }>(
@@ -139,12 +148,10 @@ export default function ReposicaoPage() {
         {
           method: 'POST',
           body: JSON.stringify({
+            apenasEtiqueta: soEtiquetas,
             items: validos.map((s) => ({
               codigo: s.codigo,
-              qty: s.qty,
-              // Manda dados completos pro backend nao precisar refazer query
-              // (a 2a query no Giga estava falhando por nomes de coluna diferentes
-              // e deixando labels: []). Esses dados ja vieram da busca anterior.
+              qty: s.qty,                  // sempre respeita qty (gera qty etiquetas)
               ref: s.ref,
               cor: s.cor,
               tamanho: s.tamanho,
@@ -293,14 +300,26 @@ export default function ReposicaoPage() {
                 {selecionados.length} produto(s) selecionado(s) ·{' '}
                 <b>{selecionados.reduce((s, i) => s + i.qty, 0)}</b> peças total
               </h2>
-              <button
-                onClick={confirmar}
-                disabled={confirmando}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
-              >
-                {confirmando ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                Confirmar reposição
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => confirmar(true)}
+                  disabled={confirmando}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-50 border-2 border-violet-300 text-violet-700 font-bold text-sm rounded-lg shadow-sm disabled:opacity-40"
+                  title="Gera etiquetas SEM mexer no estoque (reimpressão)"
+                >
+                  <Printer className="w-4 h-4" />
+                  Só etiqueta
+                </button>
+                <button
+                  onClick={() => confirmar(false)}
+                  disabled={confirmando}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
+                  title="Adiciona ao estoque + gera etiquetas"
+                >
+                  {confirmando ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  Confirmar reposição
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {selecionados.map((s) => (
@@ -369,7 +388,27 @@ export default function ReposicaoPage() {
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-base">
-                  <span className="et-base-ref">{l.cor}</span>
+                  {/* SVG estica/encolhe texto pra caber sempre — sem cortar, sem JS */}
+                  <svg
+                    className="et-base-ref"
+                    viewBox="0 0 200 14"
+                    preserveAspectRatio="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <text
+                      x="0"
+                      y="11"
+                      textLength="200"
+                      lengthAdjust="spacingAndGlyphs"
+                      fontWeight="900"
+                      fontSize="13"
+                      fontFamily="-apple-system, system-ui, sans-serif"
+                      fill="#000"
+                      style={{ textTransform: 'uppercase' }}
+                    >
+                      {(l.cor || '').toUpperCase()}
+                    </text>
+                  </svg>
                   <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
               </div>
@@ -436,19 +475,18 @@ export default function ReposicaoPage() {
           border-top: 0.5px solid #cbd5e1;
           padding-top: 0.5mm; min-width: 0; gap: 1mm;
         }
+        /* Cor da peca em SVG: estica/encolhe pra preencher exatamente o espaco
+           disponivel sem cortar nem sobrepor o preco. Garantia matematica. */
         .et-base-ref {
-          font-weight: 900; letter-spacing: 0.2px;
-          text-transform: uppercase;
-          flex: 1 1 auto; min-width: 0;
-          white-space: nowrap;
-          overflow: hidden;          /* corta se passar do espaco */
-          text-overflow: ellipsis;   /* mostra ... no final */
-          padding-right: 1.5mm;      /* espaco mínimo do preço */
-          line-height: 1.1; font-size: 9pt;  /* reduzido de 11pt pra caber mais */
+          flex: 1 1 auto;
+          min-width: 0;
+          height: 4mm;
+          margin-right: 1.5mm;
+          display: block;
         }
         .et-base-preco {
-          font-size: 10pt; font-weight: 900;
-          flex-shrink: 0;            /* preço NUNCA encolhe */
+          font-size: 11pt; font-weight: 900;
+          flex-shrink: 0;
           white-space: nowrap;
         }
         @media print {
