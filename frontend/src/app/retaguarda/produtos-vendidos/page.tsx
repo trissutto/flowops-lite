@@ -18,6 +18,12 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
+interface PaymentBreakdown {
+  method: string;
+  valor: number;
+  bandeira?: string | null;
+}
+
 interface Linha {
   tipo: 'venda' | 'devolucao';
   saleNumber: string | null;
@@ -40,6 +46,8 @@ interface Linha {
   customerName: string | null;
   customerCpf: string | null;
   paymentMethod: string | null;
+  paymentsBreakdown?: PaymentBreakdown[];
+  saleTotal?: number;
 }
 
 interface ReportResponse {
@@ -541,61 +549,132 @@ function ProdutosVendidosContent() {
                     Nenhuma venda encontrada no período.
                   </td></tr>
                 )}
-                {!loading && data && data.linhas.map((l, idx) => {
-                  const isReturn = l.tipo === 'devolucao';
-                  const rowClass = isReturn
-                    ? 'border-b bg-red-50/40 hover:bg-red-100/60 text-red-700'
-                    : 'border-b hover:bg-emerald-50/40';
-                  return (
-                    <tr key={`${l.saleId}-${l.sku}-${idx}`} className={rowClass}>
-                      <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{l.saleNumber ?? '—'}</td>
-                      <td className="px-2 py-1.5 text-center text-xs whitespace-nowrap">{fmtDate(l.data)}</td>
-                      <td className="px-2 py-1.5 text-center text-xs whitespace-nowrap">{l.hora}</td>
-                      <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{l.sku}</td>
-                      <td className="px-2 py-1.5 text-xs">
-                        <div className="font-bold truncate max-w-[280px]" title={l.descricao}>{l.descricao}</div>
-                        {(l.ref || l.cor || l.tamanho) && (
-                          <div className="text-[10px] text-slate-500">
-                            {l.ref && <span>{l.ref}</span>}
-                            {l.cor && <span> · {l.cor}</span>}
-                            {l.tamanho && <span> · {l.tamanho}</span>}
-                          </div>
-                        )}
-                      </td>
-                      <td className={`px-2 py-1.5 text-center font-bold tabular-nums whitespace-nowrap ${isReturn ? 'text-red-700' : ''}`}>
-                        {l.qty}
-                      </td>
-                      <td className={`px-2 py-1.5 text-right font-bold tabular-nums whitespace-nowrap ${isReturn ? 'text-red-700' : 'text-emerald-700'}`}>
-                        {brl(l.total)}
-                      </td>
-                      <td className="px-2 py-1.5 text-xs truncate max-w-[180px]" title={l.customerName ?? ''}>
-                        {l.customerName || '—'}
-                      </td>
-                      <td className="px-2 py-1.5 text-xs whitespace-nowrap">
-                        <span className={l.sellerOverride ? 'font-bold text-violet-700' : ''}>
-                          {l.sellerName ?? '—'}
-                        </span>
-                        {!isReturn && l.itemId && isMatrix && (
-                          <button
-                            onClick={() => setEditSeller({
-                              itemId: l.itemId!,
-                              saleId: l.saleId,
-                              currentName: l.sellerName || '',
-                              produtoHint: `${l.ref || l.sku} ${l.cor || ''} ${l.tamanho || ''}`.trim(),
-                            })}
-                            className="ml-1 text-[10px] text-violet-600 hover:text-violet-900 underline font-bold"
-                            title="Editar vendedora (master)"
-                          >
-                            ✎
-                          </button>
-                        )}
-                      </td>
-                      <td className="px-2 py-1.5 text-center whitespace-nowrap">
-                        <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded">{l.storeCode}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {!loading && data && (() => {
+                  // Agrupa visualmente por saleId — cada vez que muda saleId,
+                  // insere um cabecalho do grupo com #venda + cliente + pagamentos.
+                  const rows: React.ReactNode[] = [];
+                  let lastSaleId: string | null = null;
+                  data.linhas.forEach((l, idx) => {
+                    const isReturn = l.tipo === 'devolucao';
+                    // Cabecalho do grupo
+                    if (l.saleId !== lastSaleId) {
+                      lastSaleId = l.saleId;
+                      const pmts = l.paymentsBreakdown || [];
+                      // Soma de items dessa venda (na ordem da lista)
+                      const itensDessaVenda = data.linhas.filter((x) => x.saleId === l.saleId && x.tipo === l.tipo);
+                      const qtdItens = itensDessaVenda.length;
+                      const totalItens = itensDessaVenda.reduce((s, x) => s + x.total, 0);
+                      rows.push(
+                        <tr key={`group-${l.saleId}-${idx}`} className={`border-t-2 ${isReturn ? 'bg-rose-100' : 'bg-slate-100'}`}>
+                          <td colSpan={10} className="px-3 py-2">
+                            <div className="flex items-center justify-between gap-3 flex-wrap text-xs">
+                              <div className="flex items-center gap-2">
+                                <span className={`font-mono font-black text-sm ${isReturn ? 'text-rose-800' : 'text-slate-800'}`}>
+                                  {isReturn ? '↩ DEVOLUÇÃO' : '🧾 VENDA'} #{l.saleNumber || String(l.saleId).slice(0, 8)}
+                                </span>
+                                <span className="text-slate-500">·</span>
+                                <span className="text-slate-700">{fmtDate(l.data)} {l.hora}</span>
+                                {l.customerName && (
+                                  <>
+                                    <span className="text-slate-500">·</span>
+                                    <span className="font-bold text-slate-700">{l.customerName}</span>
+                                  </>
+                                )}
+                                {l.sellerName && (
+                                  <>
+                                    <span className="text-slate-500">·</span>
+                                    <span className="text-slate-600">vend. <b>{l.sellerName}</b></span>
+                                  </>
+                                )}
+                                <span className="text-slate-500">·</span>
+                                <span className="text-slate-600">{qtdItens} {qtdItens === 1 ? 'item' : 'itens'} · <b>{brl(totalItens)}</b></span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {!isReturn && pmts.length > 0 ? (
+                                  pmts.map((p, i) => {
+                                    const cls = {
+                                      dinheiro: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+                                      pix: 'bg-cyan-100 text-cyan-800 border-cyan-300',
+                                      credito: 'bg-blue-100 text-blue-800 border-blue-300',
+                                      debito: 'bg-indigo-100 text-indigo-800 border-indigo-300',
+                                      crediario: 'bg-rose-100 text-rose-800 border-rose-300',
+                                      vale_troca: 'bg-slate-200 text-slate-800 border-slate-300',
+                                    }[p.method as keyof any] || 'bg-amber-100 text-amber-800 border-amber-300';
+                                    return (
+                                      <span key={i} className={`text-[10px] font-bold px-2 py-0.5 rounded border ${cls}`}>
+                                        {p.method.toUpperCase().replace('_', ' ')}
+                                        {p.bandeira && <span className="ml-1 opacity-80">{p.bandeira}</span>}
+                                        <span className="ml-1 font-mono">{brl(p.valor)}</span>
+                                      </span>
+                                    );
+                                  })
+                                ) : isReturn ? (
+                                  <span className="text-[10px] font-bold text-rose-700">SAÍDA DO ESTOQUE</span>
+                                ) : (
+                                  <span className="text-[10px] text-amber-700 font-bold">⚠ SEM PAGAMENTO REGISTRADO</span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+                    // Linha do item
+                    const rowClass = isReturn
+                      ? 'border-b border-rose-100 bg-red-50/40 hover:bg-red-100/60 text-red-700'
+                      : 'border-b border-slate-100 hover:bg-emerald-50/40';
+                    rows.push(
+                      <tr key={`${l.saleId}-${l.sku}-${idx}`} className={rowClass}>
+                        <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap pl-6 text-slate-400">↳</td>
+                        <td className="px-2 py-1.5 text-center text-xs whitespace-nowrap"></td>
+                        <td className="px-2 py-1.5 text-center text-xs whitespace-nowrap"></td>
+                        <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{l.sku}</td>
+                        <td className="px-2 py-1.5 text-xs">
+                          <div className="font-bold truncate max-w-[280px]" title={l.descricao}>{l.descricao}</div>
+                          {(l.ref || l.cor || l.tamanho) && (
+                            <div className="text-[10px] text-slate-500">
+                              {l.ref && <span>{l.ref}</span>}
+                              {l.cor && <span> · {l.cor}</span>}
+                              {l.tamanho && <span> · {l.tamanho}</span>}
+                            </div>
+                          )}
+                        </td>
+                        <td className={`px-2 py-1.5 text-center font-bold tabular-nums whitespace-nowrap ${isReturn ? 'text-red-700' : ''}`}>
+                          {l.qty}
+                        </td>
+                        <td className={`px-2 py-1.5 text-right font-bold tabular-nums whitespace-nowrap ${isReturn ? 'text-red-700' : 'text-emerald-700'}`}>
+                          {brl(l.total)}
+                        </td>
+                        <td className="px-2 py-1.5 text-xs truncate max-w-[180px]" title={l.customerName ?? ''}>
+                          <span className="text-slate-400">—</span>
+                        </td>
+                        <td className="px-2 py-1.5 text-xs whitespace-nowrap">
+                          <span className={l.sellerOverride ? 'font-bold text-violet-700' : ''}>
+                            {l.sellerOverride ? l.sellerName : '—'}
+                          </span>
+                          {!isReturn && l.itemId && isMatrix && (
+                            <button
+                              onClick={() => setEditSeller({
+                                itemId: l.itemId!,
+                                saleId: l.saleId,
+                                currentName: l.sellerName || '',
+                                produtoHint: `${l.ref || l.sku} ${l.cor || ''} ${l.tamanho || ''}`.trim(),
+                              })}
+                              className="ml-1 text-[10px] text-violet-600 hover:text-violet-900 underline font-bold"
+                              title="Editar vendedora (master)"
+                            >
+                              ✎
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                          <span className="font-mono text-[10px] bg-slate-100 px-1.5 py-0.5 rounded">{l.storeCode}</span>
+                        </td>
+                      </tr>
+                    );
+                  });
+                  return rows;
+                })()}
               </tbody>
               {!loading && data && data.linhas.length > 0 && (
                 <tfoot className="bg-slate-100 border-t-2">

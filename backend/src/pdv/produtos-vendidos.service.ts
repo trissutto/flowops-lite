@@ -41,6 +41,9 @@ export interface LinhaVendida {
   customerName: string | null;
   customerCpf: string | null;
   paymentMethod: string | null;
+  // Resumo dos pagamentos DESTA venda (mesmo pra todos os items da venda)
+  paymentsBreakdown: Array<{ method: string; valor: number; bandeira?: string | null }>;
+  saleTotal: number;             // total da venda (sale.total — com desconto)
 }
 
 @Injectable()
@@ -215,6 +218,23 @@ export class ProdutosVendidosService {
     // ─── NORMALIZA pro formato final ────────────────────────────────────────
     const linhas: LinhaVendida[] = [];
 
+    // Mapa de payments por venda — usado pra mostrar detalhe na UI
+    const paymentsBreakdownBySale = new Map<string, Array<{ method: string; valor: number; bandeira?: string | null }>>();
+    for (const p of salePayments) {
+      const arr = paymentsBreakdownBySale.get(p.saleId) || [];
+      let bandeira: string | null = null;
+      try {
+        const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+        if (det?.bandeira) bandeira = String(det.bandeira).toUpperCase();
+      } catch { /* ignora */ }
+      arr.push({
+        method: String(p.method || '').toLowerCase(),
+        valor: Number(p.valor || 0),
+        bandeira,
+      });
+      paymentsBreakdownBySale.set(p.saleId, arr);
+    }
+
     for (const it of saleItems) {
       const sale = saleMap.get(it.saleId);
       if (!sale) continue;
@@ -243,6 +263,8 @@ export class ProdutosVendidosService {
         customerName: sale.customerName,
         customerCpf: sale.customerCpf,
         paymentMethod: sale.paymentMethod,
+        paymentsBreakdown: paymentsBreakdownBySale.get(sale.id) || [],
+        saleTotal: Number(sale.total || 0),
       });
     }
 
@@ -259,6 +281,8 @@ export class ProdutosVendidosService {
         saleId: ret.id,
         itemId: null,
         sellerOverride: false,
+        paymentsBreakdown: [],
+        saleTotal: 0,
         data: dt.toISOString(),
         hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         sku: it.sku,

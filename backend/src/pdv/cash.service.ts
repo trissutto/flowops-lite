@@ -1609,16 +1609,17 @@ export class CashService {
         where: { id: payment.sale.cashSessionId },
       });
       if (session && session.status === 'closed') {
-        const totals = await this.computeSessionTotals(session.id);
+        const totals: any = await this.computeSessionTotals(session.id);
         const fisico = Number(session.dinheiroFisico ?? 0);
+        const bm = totals.byMethod || {};
         await (this.prisma as any).pdvCashSession.update({
           where: { id: session.id },
           data: {
-            totalDinheiro: totals.byMethod?.dinheiro,
-            totalPix: totals.byMethod?.pix,
-            totalCartaoCredito: totals.byMethod?.credito,
-            totalCartaoDebito: totals.byMethod?.debito,
-            totalCrediario: totals.byMethod?.crediario,
+            totalDinheiro: bm.dinheiro,
+            totalPix: bm.pix,
+            totalCartaoCredito: bm.credito,
+            totalCartaoDebito: bm.debito,
+            totalCrediario: bm.crediario,
             dinheiroEsperado: totals.dinheiroEsperado,
             diferenca: fisico - totals.dinheiroEsperado,
           },

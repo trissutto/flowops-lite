@@ -810,20 +810,38 @@ function BandeiraRow({ nome, slot, onEditPayment }: { nome: string; slot: Slot; 
 
 function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vendas'][0]) => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [saleDetail, setSaleDetail] = useState<any>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
   const hora = v.finalizedAt ? new Date(v.finalizedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
   const cliente = v.customerName || (v.customerCpf ? `CPF ${v.customerCpf}` : 'Sem identificação');
-  // Tem múltiplas parcelas detalhadas? (caso de recebimento crediário com 3 parcelas juntas)
-  const hasItems = v.items && v.items.length > 1;
+  // Tem multiplas parcelas (recebimento crediario)?
+  const hasParcelas = v.items && v.items.length > 1;
+
+  // Toggle: ao abrir, busca os items da venda (se ainda nao tem)
+  const toggle = async () => {
+    if (!expanded && !saleDetail && v.saleId && !hasParcelas) {
+      setLoadingDetail(true);
+      try {
+        const r: any = await api(`/pdv/sales/${v.saleId}`);
+        setSaleDetail(r);
+      } catch (e: any) {
+        console.error('Erro ao buscar venda', e);
+      } finally {
+        setLoadingDetail(false);
+      }
+    }
+    setExpanded(!expanded);
+  };
+
   return (
-    <div className={hasItems ? 'border border-slate-200 rounded bg-slate-50' : ''}>
+    <div className={(hasParcelas || expanded) ? 'border border-slate-200 rounded bg-slate-50' : ''}>
       <div
-        className={`flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded group ${hasItems ? 'cursor-pointer' : ''}`}
-        onClick={() => hasItems && setExpanded(!expanded)}
+        className="flex items-center justify-between text-[11px] py-0.5 px-1 hover:bg-white rounded group cursor-pointer"
+        onClick={toggle}
+        title="Click pra ver os produtos dessa venda"
       >
         <div className="flex items-center gap-2 min-w-0">
-          {hasItems && (
-            <span className={`text-slate-400 text-[10px] transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`}>▶</span>
-          )}
+          <span className={`text-slate-400 text-[10px] transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`}>▶</span>
           {hora && <span className="text-slate-400 font-mono shrink-0">{hora}</span>}
           <span className={`truncate ${v.customerName ? 'text-slate-800 font-medium' : 'text-slate-400 italic'}`}>
             {cliente}
@@ -834,7 +852,7 @@ function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vend
           {v.parcelas && v.parcelas > 1 && (
             <span className="text-violet-600 text-[10px] shrink-0">· {v.parcelas}x</span>
           )}
-          {hasItems && (
+          {hasParcelas && (
             <span className="text-amber-700 text-[10px] font-bold shrink-0 bg-amber-100 px-1 rounded">
               {v.items!.length} parc
             </span>
@@ -847,6 +865,62 @@ function VendaRow({ v, onEdit }: { v: Slot['vendas'][0]; onEdit?: (v: Slot['vend
           )}
         </div>
       </div>
+
+      {/* DETALHE DA VENDA — items + outros pagamentos (se vier de venda finalizada) */}
+      {expanded && !hasParcelas && (
+        <div className="border-t border-slate-200 bg-white px-2 py-1.5">
+          {loadingDetail ? (
+            <div className="text-[10px] text-slate-400 italic text-center py-1">Carregando produtos...</div>
+          ) : saleDetail ? (
+            <>
+              <div className="text-[10px] font-bold text-slate-700 uppercase mb-1 flex items-center justify-between">
+                <span>Produtos vendidos · {(saleDetail.items || []).length} {(saleDetail.items || []).length === 1 ? 'peça' : 'peças'}</span>
+                <span className="font-mono text-slate-500">venda #{String(saleDetail.id).slice(0, 8)}</span>
+              </div>
+              <div className="space-y-0.5">
+                {(saleDetail.items || []).map((it: any) => (
+                  <div key={it.id} className="flex items-center justify-between gap-2 text-[10px] py-0.5 border-b border-slate-100 last:border-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold truncate">{it.descricao}</div>
+                      <div className="text-[9px] text-slate-500 font-mono">
+                        {it.ref && <span>{it.ref}</span>}
+                        {it.cor && <span> · {it.cor}</span>}
+                        {it.tamanho && <span> · {it.tamanho}</span>}
+                        {it.sku && <span className="ml-1 opacity-60">SKU {it.sku}</span>}
+                      </div>
+                    </div>
+                    <div className="text-center font-bold tabular-nums shrink-0">{it.qty}x</div>
+                    <div className="text-right font-bold tabular-nums shrink-0 text-emerald-700 min-w-[60px]">R$ {fmt(it.total)}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Outras formas de pagamento dessa venda (split) */}
+              {(saleDetail.payments || []).length > 1 && (
+                <div className="mt-1.5 pt-1 border-t border-slate-200 text-[10px]">
+                  <div className="font-bold text-slate-700 mb-0.5">Pagamentos ({(saleDetail.payments || []).length}):</div>
+                  <div className="flex flex-wrap gap-1">
+                    {(saleDetail.payments || []).map((p: any) => (
+                      <span key={p.id} className="bg-slate-100 px-1.5 py-0.5 rounded font-mono">
+                        {String(p.method).toUpperCase()} R$ {fmt(p.valor)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Totais */}
+              <div className="mt-1.5 pt-1 border-t border-slate-200 flex justify-between text-[10px] font-bold">
+                <span className="text-slate-600">Subtotal: <span className="font-mono">R$ {fmt(saleDetail.subtotal || 0)}</span></span>
+                {Number(saleDetail.desconto || 0) > 0 && (
+                  <span className="text-rose-600">Desconto: <span className="font-mono">−R$ {fmt(saleDetail.desconto)}</span></span>
+                )}
+                <span className="text-emerald-700">Total: <span className="font-mono">R$ {fmt(saleDetail.total || 0)}</span></span>
+              </div>
+            </>
+          ) : (
+            <div className="text-[10px] text-rose-400 italic text-center py-1">Não foi possível carregar os produtos</div>
+          )}
+        </div>
+      )}
       {/* Cascade das parcelas individuais */}
       {hasItems && expanded && (
         <div className="border-t border-slate-200 bg-white px-2 py-1 space-y-0.5">
