@@ -12,6 +12,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertCircle, Banknote, QrCode, CreditCard,
   TrendingUp, Lock, Unlock, Trophy, ShieldCheck, ShieldAlert, ShieldX, HelpCircle,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -467,6 +468,8 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
 }
 
 function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?: boolean; pixStatus?: PixConcStatus; onReload?: () => void }) {
+  // Ranking colapsado por padrão pra economizar espaço (default false = fechado)
+  const [rankingOpen, setRankingOpen] = useState(false);
   const reload = () => { if (onReload) onReload(); };
   const t = loja.totais;
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -804,25 +807,39 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload }: { loja: Loja; isAdmin?
           </div>
         )}
 
-        {/* Ranking de vendedoras */}
+        {/* Ranking de vendedoras (colapsavel) */}
         {loja.vendedoras.length > 0 && (
           <div className="pt-2 border-t border-slate-100">
-            <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1 mb-1">
-              <Trophy size={10} className="text-amber-500" /> Ranking vendedoras
-            </div>
-            <div className="space-y-0.5">
-              {loja.vendedoras.slice(0, 5).map((v, i) => (
-                <div key={i} className="flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-700 truncate flex items-center gap-1">
-                    {i === 0 && <span className="text-amber-500">🏆</span>}
-                    {v.nome.split(' ')[0]}
-                  </span>
-                  <span className="font-mono tabular-nums text-slate-600">
-                    {v.qtd} · <span className="font-bold text-emerald-700">{brl(v.total)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
+            <button
+              type="button"
+              onClick={() => setRankingOpen(!rankingOpen)}
+              className="w-full text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1 hover:text-slate-700 transition-colors"
+              title={rankingOpen ? 'Recolher ranking' : 'Expandir ranking'}
+            >
+              <Trophy size={10} className="text-amber-500" />
+              <span>Ranking vendedoras</span>
+              <span className="ml-auto text-slate-400 font-mono tabular-nums">
+                {loja.vendedoras.length}
+              </span>
+              {rankingOpen
+                ? <ChevronUp size={12} className="text-slate-400" />
+                : <ChevronDown size={12} className="text-slate-400" />}
+            </button>
+            {rankingOpen && (
+              <div className="space-y-0.5 mt-1">
+                {loja.vendedoras.slice(0, 5).map((v, i) => (
+                  <div key={i} className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-slate-700 truncate flex items-center gap-1">
+                      {i === 0 && <span className="text-amber-500">🏆</span>}
+                      {v.nome.split(' ')[0]}
+                    </span>
+                    <span className="font-mono tabular-nums text-slate-600">
+                      {v.qtd} · <span className="font-bold text-emerald-700">{brl(v.total)}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
