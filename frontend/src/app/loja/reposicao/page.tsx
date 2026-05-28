@@ -68,6 +68,42 @@ export default function ReposicaoPage() {
     return () => clearTimeout(t);
   }, [busca]);
 
+  // Ajusta o tamanho do nome da cor: se passar do espaco disponivel,
+  // aplica transform:scale() pra comprimir PROPORCIONALMENTE (sem esticar
+  // letras individuais). Curto = font normal; longo = encolhe inteiro.
+  useEffect(() => {
+    if (!resultado || resultado.labels.length === 0) return;
+
+    const adjust = () => {
+      document.querySelectorAll<HTMLElement>('.et-base-ref-wrap').forEach((wrap) => {
+        const text = wrap.querySelector<HTMLElement>('.et-base-ref-text');
+        if (!text) return;
+        // Reseta transform antes de medir
+        text.style.transform = 'none';
+        const available = wrap.clientWidth;
+        const natural = text.scrollWidth;
+        if (natural <= 0 || available <= 0) return;
+        // Se cabe naturalmente, mantem font normal (sem esticar)
+        if (natural <= available) {
+          text.style.transform = 'none';
+        } else {
+          // Se nao cabe, comprime proporcionalmente (min 0.5 = 50%)
+          const scale = Math.max(0.5, available / natural);
+          text.style.transform = `scaleX(${scale.toFixed(3)})`;
+        }
+      });
+    };
+
+    // Roda apos renderizar
+    const t = setTimeout(adjust, 80);
+    // Roda antes de imprimir (layout pode diferir do preview)
+    window.addEventListener('beforeprint', adjust);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('beforeprint', adjust);
+    };
+  }, [resultado]);
+
   // Carrega JsBarcode pra labels (mesmo padrao das outras telas)
   useEffect(() => {
     if (!resultado || resultado.labels.length === 0) return;
@@ -388,27 +424,12 @@ export default function ReposicaoPage() {
                 </div>
                 <svg className="barcode-target" data-code={l.codigo} />
                 <div className="et-base">
-                  {/* SVG estica/encolhe texto pra caber sempre — sem cortar, sem JS */}
-                  <svg
-                    className="et-base-ref"
-                    viewBox="0 0 200 14"
-                    preserveAspectRatio="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <text
-                      x="0"
-                      y="11"
-                      textLength="200"
-                      lengthAdjust="spacingAndGlyphs"
-                      fontWeight="900"
-                      fontSize="13"
-                      fontFamily="-apple-system, system-ui, sans-serif"
-                      fill="#000"
-                      style={{ textTransform: 'uppercase' }}
-                    >
-                      {(l.cor || '').toUpperCase()}
-                    </text>
-                  </svg>
+                  {/* Wrapper limita largura; o span interno tem font fixa e
+                      JS aplica transform:scale() apenas se passar do limite.
+                      Curto = font normal; longo = comprime proporcionalmente. */}
+                  <div className="et-base-ref-wrap">
+                    <span className="et-base-ref-text">{(l.cor || '').toUpperCase()}</span>
+                  </div>
                   <span className="et-base-preco">R$ {l.preco.toFixed(2).replace('.', ',')}</span>
                 </div>
               </div>
@@ -475,14 +496,25 @@ export default function ReposicaoPage() {
           border-top: 0.5px solid #cbd5e1;
           padding-top: 0.5mm; min-width: 0; gap: 1mm;
         }
-        /* Cor da peca em SVG: estica/encolhe pra preencher exatamente o espaco
-           disponivel sem cortar nem sobrepor o preco. Garantia matematica. */
-        .et-base-ref {
+        /* Wrapper limita largura. JS aplica transform:scale() so se passar. */
+        .et-base-ref-wrap {
           flex: 1 1 auto;
           min-width: 0;
-          height: 4mm;
           margin-right: 1.5mm;
-          display: block;
+          overflow: hidden;
+          line-height: 1.1;
+          display: flex;
+          align-items: center;
+        }
+        .et-base-ref-text {
+          font-size: 11pt;
+          font-weight: 900;
+          letter-spacing: 0.2px;
+          text-transform: uppercase;
+          white-space: nowrap;
+          display: inline-block;
+          transform-origin: left center;
+          /* transform aplicado dinamicamente via JS quando texto eh longo */
         }
         .et-base-preco {
           font-size: 11pt; font-weight: 900;
