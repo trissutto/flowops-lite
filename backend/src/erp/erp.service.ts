@@ -1648,20 +1648,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const out = new Map<string, number>();
     if (!skus.length || !this.pool) return out;
 
-    // Descobre qual coluna tem o preço (cache no método pickCol)
-    const precoCol = await this.pickCol([
-      'VENDAUN',
-      'PRECO',
-      'PRECOVENDA',
-      'PRECO_VENDA',
-      'VENDA',
-    ]);
+    // Descobre qual coluna tem o preço (cache no método pickCol).
+    // ORDEM CORRIGIDA: campos de preço de venda EXPLICITO vem primeiro.
+    // VENDAUN ficava em primeiro mas em alguns Gigas eh custo/medio, nao venda
+    // — gerava obrigacoes intercompany com R$ 0,80 por peca (errado).
+    // Override por env GIGA_PRECO_COL pra forcar coluna especifica.
+    const envCol = (process.env.GIGA_PRECO_COL || '').trim().toUpperCase();
+    const candidatas = envCol
+      ? [envCol]
+      : ['PRECOVENDA', 'PRECO_VENDA', 'PRECO', 'VENDA', 'VENDAUN'];
+    const precoCol = await this.pickCol(candidatas);
     if (!precoCol) {
       this.logger.warn(
         '[erp] getProductPricesBySkus: nenhuma coluna de preço detectada na tabela produtos',
       );
       return out;
     }
+    this.logger.log(`[erp] getProductPricesBySkus: usando coluna "${precoCol}" (envOverride=${envCol || 'none'})`);
 
     // Dedup + limpa SKUs + EXPANDE variantes (zeros à esquerda)
     const unique = Array.from(new Set(skus.map((s) => String(s).trim()).filter(Boolean)));

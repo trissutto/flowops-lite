@@ -109,6 +109,69 @@ export class FinanceiroService {
   }
 
   /**
+   * Recalcula precos das obrigacoes PENDENTES de um mes — rebusca preco
+   * de venda atual no Giga e atualiza precoUnitario / precoTotal / valorObrigacao.
+   *
+   * Util quando o backend pulled preco da coluna errada (ex: VENDAUN = custo)
+   * e gerou obrigacoes com valor unitario absurdo (R$ 0,80 por peca).
+   * Apos correcao na regra de busca, este endpoint reseta todas as pending.
+   */
+  async recalcObligationsPrices(mesReferencia: string) {
+    if (!/^\d{4}-\d{2}$/.test(mesReferencia)) {
+      throw new BadRequestException('mesReferencia deve ser YYYY-MM');
+    }
+    const obligations = await (this.prisma as any).interStoreObligation.findMany({
+      where: { mesReferencia, status: 'pending' },
+    });
+    if (obligations.length === 0) {
+      return { mesReferencia, total: 0, atualizadas: 0, semSku: 0, semPreco: 0 };
+    }
+
+    // Coleta SKUs unicos pra buscar precos em batch
+    const skus = Array.from(new Set(
+      (obligations as any[]).map((o) => o.sku).filter(Boolean),
+    ));
+    const priceMap = await this.erp.getProductPricesBySkus(skus);
+
+    let atualizadas = 0;
+    let semSku = 0;
+    let semPreco = 0;
+    const divisorPadrao = 2.5;
+
+    for (const o of obligations as any[]) {
+      if (!o.sku) { semSku++; continue; }
+      const novoPreco = priceMap.get(o.sku) || 0;
+      if (novoPreco <= 0) { semPreco++; continue; }
+      // Mantem o mesmo se for igual (nao re-update sem necessidade)
+      if (Math.abs(Number(o.precoUnitario || 0) - novoPreco) < 0.01) continue;
+
+      const novoPrecoTotal = novoPreco * (Number(o.qty) || 1);
+      const novoValorObrigacao = novoPrecoTotal / (Number(o.divisor) || divisorPadrao);
+      await (this.prisma as any).interStoreObligation.update({
+        where: { id: o.id },
+        data: {
+          precoUnitario: novoPreco,
+          precoTotal: novoPrecoTotal,
+          valorObrigacao: novoValorObrigacao,
+        },
+      });
+      atualizadas++;
+    }
+
+    this.logger.log(
+      `[financeiro] recalc obligations ${mesReferencia}: total=${obligations.length} atualizadas=${atualizadas} semSku=${semSku} semPreco=${semPreco}`,
+    );
+
+    return {
+      mesReferencia,
+      total: obligations.length,
+      atualizadas,
+      semSku,
+      semPreco,
+    };
+  }
+
+  /**
    * Marca uma obrigação como paga.
    */
   async markObligationPaid(id: string, userId: string | null, note?: string) {

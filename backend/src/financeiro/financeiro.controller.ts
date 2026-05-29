@@ -71,6 +71,21 @@ export class FinanceiroController {
     return this.svc.markObligationsPaidBulk(body?.ids || [], userId, body?.note);
   }
 
+  /**
+   * POST /financeiro/obligations/recalc?mes=YYYY-MM
+   * Rebusca preco_venda no Giga e atualiza obrigacoes pendentes do mes.
+   * Util quando o backend pulled preco da coluna errada e gerou valores baixos.
+   */
+  @Post('obligations/recalc')
+  async recalcObligations(
+    @Req() req: any,
+    @Query('mes') mes: string,
+  ) {
+    this.requireAdmin(req);
+    if (!mes) throw new BadRequestException('Query param mes obrigatório (YYYY-MM)');
+    return this.svc.recalcObligationsPrices(mes);
+  }
+
   @Patch('obligations/:id/cancel')
   cancel(
     @Req() req: any,

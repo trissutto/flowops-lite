@@ -403,6 +403,23 @@ export default function FinanceiroTransferenciasPage() {
                 <RefreshCw className={`w-4 h-4 ${obligationsLoading ? 'animate-spin' : ''}`} />
                 Recarregar
               </button>
+              <button
+                onClick={async () => {
+                  if (!confirm(`Recalcular preços das obrigações PENDENTES de ${mes}?\n\nIsso vai rebuscar o preço de venda no Giga e atualizar todas as obrigações pendentes.`)) return;
+                  try {
+                    const r: any = await api(`/financeiro/obligations/recalc?mes=${encodeURIComponent(mes)}`, { method: 'POST' });
+                    alert(`Recalculo concluído!\n\nTotal: ${r.total}\nAtualizadas: ${r.atualizadas}\nSem SKU: ${r.semSku}\nSem preço no Giga: ${r.semPreco}`);
+                    await loadObligations();
+                  } catch (e: any) {
+                    alert(`Erro: ${e?.message || e}`);
+                  }
+                }}
+                disabled={obligationsLoading}
+                className="text-sm px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-lg flex items-center gap-1.5 disabled:opacity-50 font-bold"
+                title="Rebusca preço de venda atual no Giga pra todas as obrigações pendentes"
+              >
+                🔄 Recalcular preços
+              </button>
             </div>
           </div>
 
