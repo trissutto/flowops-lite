@@ -552,6 +552,132 @@ export class PurchaseOrdersService {
    * Cada (REF + COR + TAM) com qty=N vira N entradas iguais (1 etiqueta por peça).
    */
   /**
+   * CADASTRAR FALTANTES NO WINCRED — sem mexer em estoque.
+   * Pra pedidos com status='recebido_com_erro' onde alguns produtos
+   * nao foram cadastrados (auto-cadastro falhou). Faz o cadastro de novo
+   * (autoCadastro é idempotente — produtos que ja existem sao ignorados).
+   * NAO chama increaseStock pra evitar entrada de estoque duplicada.
+   * Apos sucesso, popula skusGerados e (se zero erros) marca status='recebido'.
+   */
+  async cadastrarFaltantesSemEstoque(orderId: string, userId?: string) {
+    const order = await this.getById(orderId);
+    if (order.status === 'recebido') {
+      throw new BadRequestException('Pedido ja esta totalmente recebido');
+    }
+    if (order.status === 'cancelado') {
+      throw new BadRequestException('Pedido cancelado');
+    }
+    if (order.status !== 'recebido_com_erro' && order.status !== 'rascunho') {
+      throw new BadRequestException('Status do pedido nao permite cadastrar faltantes');
+    }
+
+    let totalSkusInseridos = 0;
+    let totalSkusJaExistiam = 0;
+    const errors: string[] = [];
+    const log: any[] = [];
+
+    for (const it of order.items as any[]) {
+      // Le qty recebida (preferencia) ou pedida
+      const rawRec = it.tamanhosQtyRecebida || it.tamanhosQty || '{}';
+      let qtdRecebida: Record<string, number> = {};
+      try { qtdRecebida = typeof rawRec === 'string' ? JSON.parse(rawRec) : rawRec; } catch {}
+      const tamanhos = Object.keys(qtdRecebida).filter((t) => Number(qtdRecebida[t]) > 0);
+      const cores = [it.cor].filter(Boolean);
+
+      if (tamanhos.length === 0 || cores.length === 0) {
+        log.push({ itemId: it.id, ref: it.ref, status: 'sem_qty', skipped: true });
+        continue;
+      }
+
+      if (!it.grupoCode || !it.grupoNome || !it.subgrupoCode) {
+        const err = `Item ${it.ref} ${it.cor}: faltando Grupo/Subgrupo`;
+        errors.push(err);
+        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'erro', error: err });
+        continue;
+      }
+
+      try {
+        const r = await this.productReg.processar({
+          ref: it.ref,
+          grupoCodigo: it.grupoCode,
+          grupoNome: it.grupoNome,
+          subgrupoCodigo: it.subgrupoCode,
+          subgrupoNome: it.subgrupoNome,
+          fornecedorCnpj: order.fornecedorCnpj || '',
+          fornecedorNome: order.marca || order.fornecedorNome,
+          cores,
+          tamanhos,
+          custo: it.custoUnit,
+          precoVenda: it.precoUnit,
+          tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
+          plusSize: it.plusSize,
+          ncm: it.ncm || undefined,
+          cfop: it.cfop ? Number(it.cfop) : 5102,
+          marca: order.marca || order.fornecedorNome,
+        });
+
+        // Monta skusGerados a partir dos itens retornados pelo processar
+        const skusGerados: any[] = [];
+        for (const item of r.itens) {
+          const qty = Number(qtdRecebida[item.tamanho] || 0);
+          skusGerados.push({
+            codigo: item.codigo,
+            cor: item.cor,
+            tamanho: item.tamanho,
+            descricao: item.descricaoCompleta,
+            qty,
+          });
+        }
+
+        // ATENCAO: NAO chama increaseStock — esse eh o ponto chave dessa rota.
+        // Estoque pode ja ter sido dado no /receive anterior; nao podemos duplicar.
+
+        totalSkusInseridos += r.inseridos;
+        totalSkusJaExistiam += r.ignorados;
+
+        await (this.prisma as any).purchaseOrderItem.update({
+          where: { id: it.id },
+          data: {
+            skusGerados: JSON.stringify(skusGerados),
+            itemStatus: 'recebido',
+          },
+        });
+
+        log.push({
+          itemId: it.id, ref: it.ref, cor: it.cor, status: 'ok',
+          inseridos: r.inseridos, ignorados: r.ignorados,
+        });
+      } catch (e: any) {
+        const err = `Item ${it.ref} ${it.cor}: ${e?.message || e}`;
+        errors.push(err);
+        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'erro', error: err });
+      }
+    }
+
+    // Atualiza status do pedido
+    await (this.prisma as any).purchaseOrder.update({
+      where: { id: orderId },
+      data: {
+        status: errors.length === 0 ? 'recebido' : 'recebido_com_erro',
+        recebidoAt: order.recebidoAt || new Date(),
+        recebidoByUserId: order.recebidoByUserId || userId || null,
+      },
+    });
+
+    this.logger.log(
+      `[purchase-orders] cadastrar-faltantes ${orderId}: inseridos=${totalSkusInseridos} jaExistiam=${totalSkusJaExistiam} erros=${errors.length}`,
+    );
+
+    return {
+      ok: errors.length === 0,
+      totalSkusInseridos,
+      totalSkusJaExistiam,
+      errors,
+      log,
+    };
+  }
+
+  /**
    * REGENERATE LABELS — SEGURO, idempotente.
    * Repopula `skusGerados` no banco buscando os CODIGOs JA existentes no Wincred
    * pela combinacao REF + COR + TAM. NAO cadastra produto novo, NAO mexe em

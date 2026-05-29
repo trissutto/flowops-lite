@@ -186,6 +186,18 @@ export class PurchaseOrdersController {
   }
 
   /**
+   * POST /:id/cadastrar-faltantes
+   * Pra pedidos com status='recebido_com_erro': cadastra no Wincred os produtos
+   * que nao foram cadastrados na primeira tentativa. Autocadastro eh idempotente —
+   * produtos ja existentes sao ignorados. NAO mexe em estoque (evita duplicidade).
+   */
+  @Post(':id/cadastrar-faltantes')
+  async cadastrarFaltantes(@Req() req: any, @Param('id') id: string) {
+    this.requireWrite(req);
+    return this.svc.cadastrarFaltantesSemEstoque(id, this.userId(req));
+  }
+
+  /**
    * Etiquetas avulsas — busca produtos no Wincred por EAN, REF ou SKU.
    * POST body: { codigos: string[] }
    */

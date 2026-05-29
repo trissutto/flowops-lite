@@ -128,6 +128,35 @@ export default function PedidoDetalhePage() {
     router.push(`/loja/pedidos-compra/${id}/etiquetas`);
   };
 
+  /**
+   * Pra pedido com status='recebido_com_erro': cadastra no Wincred os produtos
+   * que falharam na 1a tentativa. Idempotente — produtos ja existentes sao
+   * ignorados. NAO mexe em estoque (evita duplicidade).
+   */
+  const cadastrarFaltantes = async () => {
+    if (!confirm(
+      'Cadastrar no Wincred os produtos faltantes deste pedido?\n\n' +
+      '✓ Produtos JÁ cadastrados serão IGNORADOS (não duplica)\n' +
+      '✓ NÃO mexe em estoque (não da entrada nova)\n' +
+      '✓ Depois você poderá imprimir as etiquetas'
+    )) return;
+    setReceiving(true);
+    try {
+      const r: any = await api(`/purchase-orders/${id}/cadastrar-faltantes`, {
+        method: 'POST',
+      });
+      const msg = r?.errors?.length > 0
+        ? `Cadastrado parcial: ${r.totalSkusInseridos} novos, ${r.totalSkusJaExistiam} já existiam, ${r.errors.length} erro(s).`
+        : `✓ Tudo certo! ${r.totalSkusInseridos} cadastrados, ${r.totalSkusJaExistiam} já existiam.`;
+      alert(msg);
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setReceiving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -214,6 +243,17 @@ export default function PedidoDetalhePage() {
             >
               {receiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               {editMode ? 'Confirmar ajustado' : '✓ Recebi tudo'}
+            </button>
+          )}
+          {data.status === 'recebido_com_erro' && (
+            <button
+              onClick={cadastrarFaltantes}
+              disabled={receiving}
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
+              title="Cadastra no Wincred os produtos faltantes — sem mexer em estoque"
+            >
+              {receiving ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🔄</span>}
+              Cadastrar faltantes
             </button>
           )}
           {isRecebido && (
