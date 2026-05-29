@@ -212,7 +212,9 @@ export class ProdutosVendidosService {
         });
       }
       returns = returnsFiltered;
-      (returns as any).map = retMap;
+      // NAO usar .map como nome de propriedade — colide com Array.prototype.map
+      // (quebra qualquer "returns.map(fn)" depois). Usamos _retMap.
+      (returns as any)._retMap = retMap;
     }
 
     // ─── NORMALIZA pro formato final ────────────────────────────────────────
@@ -268,7 +270,7 @@ export class ProdutosVendidosService {
       });
     }
 
-    const retMap = (returns as any).map || new Map();
+    const retMap = (returns as any)._retMap || new Map();
     for (const it of returnItems) {
       const ret = retMap.get(it.returnId);
       if (!ret) continue;
