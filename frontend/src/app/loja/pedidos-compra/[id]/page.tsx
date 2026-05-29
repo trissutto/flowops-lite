@@ -79,6 +79,7 @@ export default function PedidoDetalhePage() {
   const [adjustedQty, setAdjustedQty] = useState<Record<string, Record<string, number>>>({});
   const [editMode, setEditMode] = useState(false);
   const [addModalOpen, setAddModalOpen] = useState(false);
+  const [editHeader, setEditHeader] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -208,6 +209,13 @@ export default function PedidoDetalhePage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg font-black truncate">{data.fornecedorNome}</h1>
+              <button
+                onClick={() => setEditHeader(true)}
+                className="text-[11px] text-violet-700 hover:text-violet-900 font-bold underline"
+                title="Editar fornecedor, CNPJ, marca, NF"
+              >
+                ✏️ editar
+              </button>
               <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${st.color}`}>
                 {st.label}
               </span>
@@ -416,6 +424,21 @@ export default function PedidoDetalhePage() {
             orderId={id}
             onClose={() => setAddModalOpen(false)}
             onSaved={() => { setAddModalOpen(false); fetchData(); }}
+          />
+        )}
+
+        {/* Modal de editar header (fornecedor, CNPJ, marca, NF) */}
+        {editHeader && data && (
+          <EditHeaderModal
+            orderId={id}
+            initial={{
+              fornecedorNome: data.fornecedorNome || '',
+              fornecedorCnpj: (data as any).fornecedorCnpj || '',
+              marca: data.marca || '',
+              nfNumero: data.nfNumero || '',
+            }}
+            onClose={() => setEditHeader(false)}
+            onSaved={() => { setEditHeader(false); fetchData(); }}
           />
         )}
 
@@ -772,6 +795,119 @@ function AddItemModal({
           <button onClick={salvar} disabled={saving}
             className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
             {saving ? 'Salvando...' : 'Adicionar item'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// EditHeaderModal — edita Fornecedor / CNPJ / Marca / NF
+// CNPJ eh OBRIGATORIO pro autocadastro Wincred funcionar.
+// ═══════════════════════════════════════════════════════════════════════
+function EditHeaderModal({
+  orderId, initial, onClose, onSaved,
+}: {
+  orderId: string;
+  initial: { fornecedorNome: string; fornecedorCnpj: string; marca: string; nfNumero: string };
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [fornecedorNome, setFornecedorNome] = useState(initial.fornecedorNome);
+  const [fornecedorCnpj, setFornecedorCnpj] = useState(initial.fornecedorCnpj);
+  const [marca, setMarca] = useState(initial.marca);
+  const [nfNumero, setNfNumero] = useState(initial.nfNumero);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const fmtCnpj = (v: string) => {
+    const d = v.replace(/\D/g, '').slice(0, 14);
+    if (d.length <= 2) return d;
+    if (d.length <= 5) return `${d.slice(0,2)}.${d.slice(2)}`;
+    if (d.length <= 8) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5)}`;
+    if (d.length <= 12) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8)}`;
+    return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
+  };
+
+  const salvar = async () => {
+    setErr(null);
+    const cnpjNum = fornecedorCnpj.replace(/\D/g, '');
+    if (!fornecedorNome.trim()) { setErr('Nome do fornecedor é obrigatório'); return; }
+    if (cnpjNum.length !== 14) { setErr('CNPJ inválido — informe os 14 dígitos'); return; }
+    setSaving(true);
+    try {
+      await api(`/purchase-orders/${orderId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          fornecedorNome: fornecedorNome.trim(),
+          fornecedorCnpj: cnpjNum,
+          marca: marca.trim() || null,
+          nfNumero: nfNumero.trim() || null,
+        }),
+      });
+      onSaved();
+    } catch (e: any) {
+      setErr(e?.message || 'Erro ao salvar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-3">
+          <h3 className="text-lg font-black text-slate-900">Editar Fornecedor</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Nome do fornecedor *</label>
+        <input
+          type="text"
+          value={fornecedorNome}
+          onChange={(e) => setFornecedorNome(e.target.value.toUpperCase())}
+          placeholder="ex: JOIN INDUSTRIA"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 uppercase font-medium"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">CNPJ * <span className="text-rose-600">(obrigatório pra cadastrar no Wincred)</span></label>
+        <input
+          type="text"
+          value={fmtCnpj(fornecedorCnpj)}
+          onChange={(e) => setFornecedorCnpj(e.target.value.replace(/\D/g, ''))}
+          placeholder="00.000.000/0000-00"
+          className="w-full px-3 py-2 border-2 border-slate-300 rounded-lg text-sm mb-3 font-mono"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Marca</label>
+        <input
+          type="text"
+          value={marca}
+          onChange={(e) => setMarca(e.target.value.toUpperCase())}
+          placeholder="ex: JOIN"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 uppercase font-medium"
+        />
+
+        <label className="block text-xs font-bold text-slate-700 mb-1">Nº NF (opcional)</label>
+        <input
+          type="text"
+          value={nfNumero}
+          onChange={(e) => setNfNumero(e.target.value)}
+          placeholder="ex: 12345"
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-3 font-mono"
+        />
+
+        {err && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mb-3">{err}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-40">
+            Cancelar
+          </button>
+          <button onClick={salvar} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-40">
+            {saving ? 'Salvando...' : 'Salvar'}
           </button>
         </div>
       </div>
