@@ -596,25 +596,33 @@ export class PurchaseOrdersService {
         continue;
       }
 
+      const payloadProcessar = {
+        ref: it.ref,
+        grupoCodigo: it.grupoCode,
+        grupoNome: it.grupoNome,
+        subgrupoCodigo: it.subgrupoCode,
+        subgrupoNome: it.subgrupoNome,
+        fornecedorCnpj: order.fornecedorCnpj || '',
+        fornecedorNome: order.marca || order.fornecedorNome,
+        cores,
+        tamanhos,
+        custo: it.custoUnit,
+        precoVenda: it.precoUnit,
+        tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
+        plusSize: it.plusSize,
+        ncm: it.ncm || undefined,
+        cfop: it.cfop ? Number(it.cfop) : 5102,
+        marca: order.marca || order.fornecedorNome,
+      };
+      this.logger.log(
+        `[cadastrar-faltantes] processar ${it.ref}/${it.cor}: ` +
+        `cores=${JSON.stringify(cores)} tamanhos=${JSON.stringify(tamanhos)} ` +
+        `cnpj=${payloadProcessar.fornecedorCnpj} custo=${it.custoUnit} preco=${it.precoUnit} ` +
+        `grupo=${it.grupoCode}/${it.subgrupoCode} ncm=${it.ncm} cfop=${it.cfop}`
+      );
+
       try {
-        const r = await this.productReg.processar({
-          ref: it.ref,
-          grupoCodigo: it.grupoCode,
-          grupoNome: it.grupoNome,
-          subgrupoCodigo: it.subgrupoCode,
-          subgrupoNome: it.subgrupoNome,
-          fornecedorCnpj: order.fornecedorCnpj || '',
-          fornecedorNome: order.marca || order.fornecedorNome,
-          cores,
-          tamanhos,
-          custo: it.custoUnit,
-          precoVenda: it.precoUnit,
-          tributo: it.tributoPct != null ? String(it.tributoPct) : undefined,
-          plusSize: it.plusSize,
-          ncm: it.ncm || undefined,
-          cfop: it.cfop ? Number(it.cfop) : 5102,
-          marca: order.marca || order.fornecedorNome,
-        });
+        const r = await this.productReg.processar(payloadProcessar as any);
 
         // Monta skusGerados a partir dos itens retornados pelo processar
         const skusGerados: any[] = [];
@@ -647,10 +655,13 @@ export class PurchaseOrdersService {
           itemId: it.id, ref: it.ref, cor: it.cor, status: 'ok',
           inseridos: r.inseridos, ignorados: r.ignorados,
         });
+        this.logger.log(`[cadastrar-faltantes] OK ${it.ref}/${it.cor}: inseridos=${r.inseridos} ignorados=${r.ignorados}`);
       } catch (e: any) {
-        const err = `Item ${it.ref} ${it.cor}: ${e?.message || e}`;
+        const errMsg = e?.message || String(e);
+        const err = `${it.ref} ${it.cor}: ${errMsg}`;
         errors.push(err);
-        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'erro', error: err });
+        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'erro', error: errMsg });
+        this.logger.error(`[cadastrar-faltantes] ERRO ${it.ref}/${it.cor}: ${errMsg}\nstack: ${e?.stack}`);
       }
     }
 
