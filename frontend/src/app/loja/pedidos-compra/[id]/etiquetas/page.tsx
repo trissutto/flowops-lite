@@ -90,7 +90,9 @@ export default function EtiquetasPage() {
           />
           <button
             onClick={imprimir}
-            className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md"
+            disabled={filtered.length === 0}
+            className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md disabled:bg-slate-300 disabled:cursor-not-allowed"
+            title={filtered.length === 0 ? 'Não há etiquetas geradas pra este pedido' : ''}
           >
             <Printer className="w-4 h-4" />
             Imprimir
@@ -100,8 +102,23 @@ export default function EtiquetasPage() {
 
       <main className="max-w-[900px] mx-auto p-4 print:p-0 print:max-w-full">
         {filtered.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-slate-500">
-            Nenhuma etiqueta pra imprimir.
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-8 text-center print:hidden">
+            <div className="text-4xl mb-3">⚠️</div>
+            <div className="text-lg font-black text-amber-900 mb-2">
+              Nenhuma etiqueta pra imprimir
+            </div>
+            <div className="text-sm text-amber-800 mb-4">
+              Esse pedido ainda <b>não gerou os códigos individuais (SKUs)</b> no Wincred.
+              <br />
+              Volte na tela do pedido e clique em <b>"Gerar SKUs"</b> antes de imprimir etiquetas.
+            </div>
+            <Link
+              href={`/loja/pedidos-compra/${id}`}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-sm"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Voltar para o pedido
+            </Link>
           </div>
         ) : (
           <EtiquetaPrint labels={filtered} />
