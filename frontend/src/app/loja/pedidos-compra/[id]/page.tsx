@@ -145,10 +145,17 @@ export default function PedidoDetalhePage() {
       const r: any = await api(`/purchase-orders/${id}/cadastrar-faltantes`, {
         method: 'POST',
       });
-      const msg = r?.errors?.length > 0
-        ? `Cadastrado parcial: ${r.totalSkusInseridos} novos, ${r.totalSkusJaExistiam} já existiam, ${r.errors.length} erro(s).`
-        : `✓ Tudo certo! ${r.totalSkusInseridos} cadastrados, ${r.totalSkusJaExistiam} já existiam.`;
+      let msg = '';
+      if (r?.errors?.length > 0) {
+        msg = `Cadastrado parcial: ${r.totalSkusInseridos} novos, ${r.totalSkusJaExistiam} já existiam, ${r.errors.length} erro(s).\n\nERROS:\n`;
+        msg += (r.errors || []).slice(0, 10).map((e: string, i: number) => `${i + 1}. ${e}`).join('\n');
+        if (r.errors.length > 10) msg += `\n... (+${r.errors.length - 10} erro(s))`;
+      } else {
+        msg = `✓ Tudo certo! ${r.totalSkusInseridos} cadastrados, ${r.totalSkusJaExistiam} já existiam.`;
+      }
       alert(msg);
+      // Log no console pra inspecionar tudo
+      console.log('[cadastrar-faltantes] resposta completa:', r);
       await fetchData();
     } catch (e: any) {
       alert('Erro: ' + (e?.message || e));
