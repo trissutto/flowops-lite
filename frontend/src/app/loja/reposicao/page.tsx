@@ -120,7 +120,17 @@ export default function ReposicaoPage() {
           }),
         },
       );
-      setResultado(r);
+      // ACUMULA etiquetas em vez de sobrescrever — vendedora pode bipar varios
+      // produtos diferentes, ir gerando, e SO imprime no final. So zera quando
+      // clicar em "Limpar etiquetas".
+      setResultado((prev) => {
+        if (!prev) return r;
+        return {
+          ok: r.ok && prev.ok,
+          total: (prev.total || 0) + (r.total || 0),
+          labels: [...(prev.labels || []), ...(r.labels || [])],
+        };
+      });
       if (r.ok) {
         setSelecionados([]);
         setBusca('');
@@ -159,13 +169,26 @@ export default function ReposicaoPage() {
             <p className="text-xs text-slate-500">Busca por REF/descrição · qty · estoque + etiquetas</p>
           </div>
           {resultado && resultado.labels.length > 0 && (
-            <button
-              onClick={imprimir}
-              className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md"
-            >
-              <Printer className="w-4 h-4" />
-              Imprimir {resultado.labels.length} etiquetas
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  if (confirm(`Limpar ${resultado.labels.length} etiqueta(s) acumulada(s)?`)) {
+                    setResultado(null);
+                  }
+                }}
+                className="flex items-center gap-2 px-3 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-sm rounded-lg"
+                title="Zera as etiquetas acumuladas"
+              >
+                🗑️ Limpar
+              </button>
+              <button
+                onClick={imprimir}
+                className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md"
+              >
+                <Printer className="w-4 h-4" />
+                Imprimir {resultado.labels.length} etiquetas
+              </button>
+            </>
           )}
         </div>
       </header>
