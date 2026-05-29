@@ -26,14 +26,37 @@ import { api } from '@/lib/api';
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+type PecaHistorico = {
+  ref: string | null;
+  cor: string | null;
+  tamanho: string | null;
+  descricao: string;
+  qty: number;
+  precoUnit: number;
+  total: number;
+};
+
 type CreditInfo = {
   code: string;
   valor: number;
   status: string;
+  modo?: string;
   validade: string | null;
   vencido: boolean;
   usado: boolean;
-  origem: { saleId: string; store: string };
+  usadoEm?: string | null;
+  origem: { saleId: string; store: string; storeName?: string };
+  customerName?: string | null;
+  customerCpf?: string | null;
+  createdAt?: string;
+  historico?: {
+    pecasDevolvidas: PecaHistorico[];
+    valorDevolvido: number;
+    pecasLevadas: PecaHistorico[];
+    valorLevado: number;
+    saleAssociadaId: string | null;
+    saleAssociadaData: string | null;
+  };
 };
 
 export default function ValeImprimirPage() {
@@ -179,6 +202,46 @@ export default function ValeImprimirPage() {
           {info.vencido && !info.usado && (
             <div className="text-center text-rose-700 font-bold border-2 border-rose-700 rounded p-2 my-3">
               ⚠ VENCIDO
+            </div>
+          )}
+
+          {/* HISTÓRICO — mostra peças devolvidas e levadas (transparência) */}
+          {info.historico && (info.historico.pecasDevolvidas?.length > 0 || info.historico.pecasLevadas?.length > 0) && (
+            <div className="text-[9px] mt-3 pt-2 border-t-2 border-dashed border-black space-y-2">
+              <div className="font-bold uppercase text-center text-[10px]">Histórico</div>
+
+              {info.historico.pecasDevolvidas?.length > 0 && (
+                <div>
+                  <div className="font-bold uppercase opacity-80">↩ devolvido ({brl(info.historico.valorDevolvido)})</div>
+                  {info.historico.pecasDevolvidas.map((p, i) => (
+                    <div key={`d-${i}`} className="flex justify-between gap-2 text-[8.5pt]">
+                      <span className="truncate">{(p.ref || '')} {p.cor || ''} {p.tamanho || ''}</span>
+                      <span className="shrink-0">{p.qty}x · {brl(p.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {info.historico.pecasLevadas?.length > 0 && (
+                <div>
+                  <div className="font-bold uppercase opacity-80">
+                    🛍 {info.usado ? 'usado em' : 'já levou'} ({brl(info.historico.valorLevado)})
+                  </div>
+                  {info.historico.pecasLevadas.map((p, i) => (
+                    <div key={`l-${i}`} className="flex justify-between gap-2 text-[8.5pt]">
+                      <span className="truncate">{(p.ref || '')} {p.cor || ''} {p.tamanho || ''}</span>
+                      <span className="shrink-0">{p.qty}x · {brl(p.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {info.historico.valorDevolvido > 0 && info.historico.valorLevado > 0 && (
+                <div className="border-t border-dashed border-black pt-1 flex justify-between font-bold text-[9pt]">
+                  <span>Saldo restante:</span>
+                  <span>{brl(info.valor)}</span>
+                </div>
+              )}
             </div>
           )}
 

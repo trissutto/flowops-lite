@@ -239,4 +239,59 @@ export class ReturnsController {
       usedInSaleId: body.saleId,
     });
   }
+
+  /**
+   * POST /pdv/devolucao/dividir-vale-residual
+   * Body: { saleId, customerCpf?, customerName?, validadeDias? }
+   * AJUSTA o vale_troca payment da venda + CRIA novo vale com o saldo.
+   * Usar no PDV quando vale_troca > total e cliente quer guardar o restante.
+   */
+  @Post('dividir-vale-residual')
+  async dividirValeResidual(
+    @Req() req: any,
+    @Body() body: {
+      saleId: string;
+      customerCpf?: string;
+      customerName?: string;
+      validadeDias?: number;
+    },
+  ) {
+    this.requireRole(req);
+    return this.svc.dividirValeResidual({
+      saleId: body.saleId,
+      customerCpf: body.customerCpf,
+      customerName: body.customerName,
+      validadeDias: body.validadeDias,
+      userId: req?.user?.sub || req?.user?.id || null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
+  /**
+   * POST /pdv/devolucao/credito-residual
+   * Body: { originalSaleId, valorResidual, customerCpf?, customerName?, validadeDias? }
+   * Cria vale-troca residual quando sobra credito apos troca anexada.
+   */
+  @Post('credito-residual')
+  async createCreditoResidual(
+    @Req() req: any,
+    @Body() body: {
+      originalSaleId: string;
+      valorResidual: number;
+      customerCpf?: string;
+      customerName?: string;
+      validadeDias?: number;
+    },
+  ) {
+    this.requireRole(req);
+    return this.svc.createCreditoResidual({
+      originalSaleId: body.originalSaleId,
+      valorResidual: Number(body.valorResidual),
+      customerCpf: body.customerCpf,
+      customerName: body.customerName,
+      validadeDias: body.validadeDias,
+      userId: req?.user?.sub || req?.user?.id || null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
 }

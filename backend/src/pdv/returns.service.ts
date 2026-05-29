@@ -675,17 +675,242 @@ export class ReturnsService {
   async checkCredit(creditoCode: string) {
     const ret = await (this.prisma as any).pdvReturn.findUnique({
       where: { creditoCode },
+      include: { items: true },
     });
     if (!ret) throw new NotFoundException('Vale-troca não encontrado');
+
+    // ── HISTORICO ──
+    // Peças que foram DEVOLVIDAS pra gerar esse vale (PdvReturnItem)
+    const pecasDevolvidas = (ret.items || []).map((it: any) => ({
+      ref: it.ref,
+      cor: it.cor,
+      tamanho: it.tamanho,
+      descricao: it.descricao,
+      qty: it.qty,
+      precoUnit: it.precoUnit,
+      total: it.total,
+    }));
+
+    // Peças que ja foram LEVADAS — venda associada (originalSaleId pra residual
+    // ou venda em que o vale foi usado pra modo='credito')
+    let pecasLevadas: any[] = [];
+    let saleAssociadaId: string | null = null;
+    let saleAssociadaTotal = 0;
+    let saleAssociadaData: string | null = null;
+    // Caso 1: vale ja foi usado (status='used') — pega items da venda em que foi consumido
+    if (ret.creditoUsadoEm) {
+      saleAssociadaId = ret.creditoUsadoEm;
+      const saleConsumida = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: ret.creditoUsadoEm },
+        select: {
+          id: true, total: true, finalizedAt: true, createdAt: true,
+          items: { select: { ref: true, cor: true, tamanho: true, descricao: true, qty: true, precoUnit: true, total: true } },
+        },
+      });
+      if (saleConsumida) {
+        pecasLevadas = saleConsumida.items || [];
+        saleAssociadaTotal = Number(saleConsumida.total || 0);
+        saleAssociadaData = (saleConsumida.finalizedAt || saleConsumida.createdAt)?.toISOString() || null;
+      }
+    }
+    // Caso 2: residual — originalSaleId aponta pra venda anexada onde sobrou crédito
+    else if (ret.originalSaleId) {
+      const saleOriginal = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: ret.originalSaleId },
+        select: {
+          id: true, total: true, finalizedAt: true, createdAt: true,
+          items: { select: { ref: true, cor: true, tamanho: true, descricao: true, qty: true, precoUnit: true, total: true } },
+        },
+      });
+      if (saleOriginal && (saleOriginal.items || []).length > 0) {
+        saleAssociadaId = saleOriginal.id;
+        pecasLevadas = saleOriginal.items || [];
+        saleAssociadaTotal = Number(saleOriginal.total || 0);
+        saleAssociadaData = (saleOriginal.finalizedAt || saleOriginal.createdAt)?.toISOString() || null;
+      }
+    }
+
     return {
       code: ret.creditoCode,
       valor: ret.valorTotal,
       status: ret.status,
+      modo: ret.modo,
       validade: ret.creditoValidade,
       vencido: ret.creditoValidade ? new Date(ret.creditoValidade).getTime() < Date.now() : false,
       usado: ret.status === 'used',
       usadoEm: ret.creditoUsadoAt,
-      origem: { saleId: ret.originalSaleId, store: ret.storeCode },
+      origem: { saleId: ret.originalSaleId, store: ret.storeCode, storeName: ret.storeName },
+      customerName: ret.customerName,
+      customerCpf: ret.customerCpf,
+      createdAt: ret.createdAt,
+      // Historico completo pra tela de demonstracao
+      historico: {
+        pecasDevolvidas,
+        valorDevolvido: ret.valorTotal,
+        pecasLevadas,
+        valorLevado: saleAssociadaTotal,
+        saleAssociadaId,
+        saleAssociadaData,
+      },
+    };
+  }
+
+  /**
+   * AJUSTA vale_troca payment da venda + CRIA vale residual no mesmo passo.
+   * Usado no PDV quando vale_troca aplicado > total da venda e cliente nao
+   * quer levar mais peca. Reduz o payment pra cobrir SO o total, e cria um
+   * novo PdvReturn modo='credito' com o saldo + codigo TROCA-XXX (90 dias).
+   *
+   * Esse fluxo mantem a conciliacao em ordem (payment <= total da venda).
+   */
+  async dividirValeResidual(input: {
+    saleId: string;
+    customerCpf?: string;
+    customerName?: string;
+    validadeDias?: number;
+    userId?: string;
+    userName?: string;
+  }) {
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      include: { payments: true },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+    if (sale.status !== 'open') {
+      throw new BadRequestException('So pode dividir vale em venda aberta');
+    }
+
+    const valePayment = (sale.payments as any[]).find((p) => String(p.method).toLowerCase() === 'vale_troca');
+    if (!valePayment) throw new BadRequestException('Venda nao tem vale_troca aplicado');
+
+    const valePayValor = Number(valePayment.valor || 0);
+    const outrosPagamentos = (sale.payments as any[])
+      .filter((p) => p.id !== valePayment.id)
+      .reduce((s, p) => s + (Number(p.valor) || 0), 0);
+    const totalVenda = Number(sale.total || 0);
+    const valePrecisoCobrir = Math.max(0, totalVenda - outrosPagamentos);
+    const valorResidual = Number((valePayValor - valePrecisoCobrir).toFixed(2));
+
+    if (valorResidual <= 0.01) {
+      throw new BadRequestException('Nao ha saldo residual — vale-troca cobre exatamente o total');
+    }
+
+    // Reduz o vale_troca payment pra cobrir apenas o necessario
+    await (this.prisma as any).pdvSalePayment.update({
+      where: { id: valePayment.id },
+      data: { valor: Number(valePrecisoCobrir.toFixed(2)) },
+    });
+
+    // Cria novo PdvReturn modo='credito' com o saldo
+    const code = this.genCreditoCode();
+    const validadeDias = Math.max(1, input.validadeDias || 90);
+    const validade = new Date(Date.now() + validadeDias * 86400_000);
+
+    const ret = await (this.prisma as any).pdvReturn.create({
+      data: {
+        originalSaleId: sale.id,
+        originalSaleNumber: sale.nfceNumber || null,
+        storeCode: sale.storeCode,
+        storeName: sale.storeName,
+        cashSessionId: sale.cashSessionId || null,
+        modo: 'credito',
+        valorTotal: valorResidual,
+        status: 'completed',
+        customerCpf: input.customerCpf || sale.customerCpf || null,
+        customerName: input.customerName || sale.customerName || null,
+        creditoCode: code,
+        creditoValidade: validade,
+        userId: input.userId || null,
+        userName: input.userName || null,
+        motivo: 'Saldo residual — cliente nao levou mais pecas, vale guardado pra usar depois',
+      },
+    });
+
+    this.logger.log(
+      `[returns] vale RESIDUAL via divisao: saleId=${sale.id} valeAjustado=${valePrecisoCobrir.toFixed(2)} ` +
+      `residual=R$${valorResidual.toFixed(2)} code=${code}`,
+    );
+
+    return {
+      ok: true,
+      returnId: ret.id,
+      creditoCode: code,
+      valorResidual,
+      valeAjustadoPara: Number(valePrecisoCobrir.toFixed(2)),
+      validade,
+    };
+  }
+
+  /**
+   * CRIA VALE RESIDUAL — quando a venda nova tem vale_troca aplicado MAIOR
+   * que o total cobrado e o cliente nao quer levar mais peca. O saldo vira
+   * um novo PdvReturn modo='credito' com codigo TROCA-XXX (90 dias).
+   *
+   * Input:
+   *   - originalSaleId: venda do dia onde o vale_troca foi aplicado (e ficou saldo)
+   *   - valorResidual: R$ X que sobrou
+   *   - customerCpf/Name: opcional, herda da venda se nao informar
+   */
+  async createCreditoResidual(input: {
+    originalSaleId: string;
+    valorResidual: number;
+    customerCpf?: string;
+    customerName?: string;
+    validadeDias?: number;
+    userId?: string;
+    userName?: string;
+  }) {
+    const { originalSaleId, valorResidual } = input;
+    if (!originalSaleId) throw new BadRequestException('originalSaleId obrigatorio');
+    if (!valorResidual || valorResidual <= 0) {
+      throw new BadRequestException('valorResidual deve ser > 0');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: originalSaleId },
+      select: {
+        id: true, storeCode: true, storeName: true, cashSessionId: true,
+        customerCpf: true, customerName: true, nfceNumber: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+
+    const code = this.genCreditoCode();
+    const validadeDias = Math.max(1, input.validadeDias || 90);
+    const validade = new Date(Date.now() + validadeDias * 86400_000);
+
+    const ret = await (this.prisma as any).pdvReturn.create({
+      data: {
+        originalSaleId: sale.id,
+        originalSaleNumber: sale.nfceNumber || null,
+        storeCode: sale.storeCode,
+        storeName: sale.storeName,
+        cashSessionId: sale.cashSessionId || null,
+        modo: 'credito',
+        valorTotal: Number(valorResidual.toFixed(2)),
+        status: 'completed',
+        customerCpf: input.customerCpf || sale.customerCpf || null,
+        customerName: input.customerName || sale.customerName || null,
+        creditoCode: code,
+        creditoValidade: validade,
+        userId: input.userId || null,
+        userName: input.userName || null,
+        motivo: 'Saldo residual de troca anexada — cliente nao levou outra peca',
+        // NAO tem PdvReturnItem aqui — esse vale eh saldo, nao peca devolvida
+      },
+    });
+
+    this.logger.log(
+      `[returns] vale RESIDUAL criado: code=${code} valor=R$${valorResidual.toFixed(2)} ` +
+      `saleId=${originalSaleId} cliente=${ret.customerName || '-'}`,
+    );
+
+    return {
+      ok: true,
+      returnId: ret.id,
+      creditoCode: code,
+      valor: ret.valorTotal,
+      validade,
     };
   }
 

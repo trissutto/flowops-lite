@@ -2340,6 +2340,66 @@ function PdvPageInner() {
                   </button>
                 );
               })()}
+
+              {/* GERAR VALE DO SALDO — aparece quando vale_troca > total (cliente
+                  tem credito sobrando e nao quer levar outra peca). Click:
+                  ajusta o vale_troca payment pra cobrir so o necessario,
+                  cria vale residual com a diferenca (90 dias), finaliza venda
+                  e imprime o vale automatico. */}
+              {sale && sale.items?.length > 0 && (() => {
+                const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+                const valeAplicado = (sale.payments || [])
+                  .filter((p: any) => String(p.method).toLowerCase() === 'vale_troca')
+                  .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+                const liquido = Math.round((sale.total - paid) * 100) / 100;
+                const sobraCredito = liquido < -0.01 && valeAplicado > 0;
+                if (!sobraCredito) return null;
+                const valorResidual = Math.abs(liquido);
+                return (
+                  <button
+                    onClick={async () => {
+                      if (!confirm(
+                        `Gerar vale de R$ ${valorResidual.toFixed(2).replace('.', ',')} pra cliente usar depois?\n\n` +
+                        `✓ O vale-troca atual será ajustado pra cobrir só ${brl(sale.total)}\n` +
+                        `✓ O saldo R$ ${valorResidual.toFixed(2).replace('.', ',')} vira novo vale (90 dias)\n` +
+                        `✓ Venda será finalizada e o vale impresso`
+                      )) return;
+                      try {
+                        const r: any = await api('/pdv/devolucao/dividir-vale-residual', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            saleId: sale.id,
+                            customerCpf: sale.customerCpf || undefined,
+                            customerName: sale.customerName || undefined,
+                          }),
+                        });
+                        // Finaliza venda apos ajuste
+                        await finalizeSale('');
+                        // Imprime o vale
+                        if (r?.creditoCode) {
+                          const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
+                          try {
+                            const { routePrint } = await import('@/lib/printer-router');
+                            await routePrint({ kind: 'vale', url }).catch(() => {
+                              window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
+                            });
+                          } catch {
+                            window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
+                          }
+                        }
+                      } catch (e: any) {
+                        toast('error', 'Erro ao gerar vale', e?.message || String(e));
+                      }
+                    }}
+                    disabled={finalizing}
+                    className="px-5 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-rose-300/60 animate-pulse"
+                    title={`Cria vale de R$ ${valorResidual.toFixed(2)} pra cliente usar depois`}
+                  >
+                    <span>💰</span>
+                    <span>Gerar vale R$ {valorResidual.toFixed(2).replace('.', ',')}</span>
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </footer>
