@@ -181,6 +181,7 @@ export class CashService {
       REDE_SHOP: mkSlot(),
       CREDITO_GENERICO: mkSlot(),
       DEBITO_GENERICO: mkSlot(),
+      VALE_TROCA: mkSlot(),
       // VENDA ONLINE — WhatsApp/Instagram. NÃO conta no dinheiro físico
       // (já chegou direto na conta). Aparece numa seção separada do fechamento.
       VENDA_ONLINE: mkSlot(),
@@ -750,6 +751,7 @@ export class CashService {
           MASTERCARD: mkSlot(), VISANET: mkSlot(), CIELO: mkSlot(), ELO: mkSlot(),
           AMEX: mkSlot(), HIPERCARD: mkSlot(), VISA_ELECTRON: mkSlot(),
           REDE_SHOP: mkSlot(), CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
+          VALE_TROCA: mkSlot(),
           OUTROS: mkSlot(),
         };
         const bandeiraMap: Record<string, string> = {
