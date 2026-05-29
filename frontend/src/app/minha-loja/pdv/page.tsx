@@ -6093,8 +6093,13 @@ function OpenSalesModal({
     try {
       const arr = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
       // Filtra: nao mostra a venda atual nem fantasmas vazias
-      // (vendedora abriu PDV mas nao bipou nada — acumula sem necessidade)
-      setList(arr.filter((s) => s.id !== currentSaleId && (s.items?.length || 0) > 0));
+      // (vendedora abriu PDV mas nao bipou nada — acumula sem necessidade).
+      // BUG FIX: o endpoint nao retorna `items[]` — usa _count.items pra contagem real.
+      setList(arr.filter((s) => {
+        if (s.id === currentSaleId) return false;
+        const qtdItems = s?._count?.items ?? s.items?.length ?? 0;
+        return qtdItems > 0;
+      }));
     } catch {
       setList([]);
     } finally {

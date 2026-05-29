@@ -384,10 +384,16 @@ export class PdvService {
         paymentMethod: true,
         customerName: true,
         customerCpf: true,
+        sellerName: true,
+        vendedorName: true,
         nfceStatus: true,
         nfceNumber: true,
         createdAt: true,
         finalizedAt: true,
+        // Contagem de items + payments — usado pelo frontend pra distinguir
+        // vendas com peca bipada (= Pausadas REAIS) de fantasmas vazias
+        // (= vendedora abriu PDV mas nao bipou nada).
+        _count: { select: { items: true, payments: true } },
       },
     });
   }
