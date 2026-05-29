@@ -444,16 +444,20 @@ export default function SuperPainelCaixas() {
                 <ConsolidadoItem label="Crediário" valor={data.consolidado.totalCrediario} icon={<TrendingUp size={14} />} />
               </div>
 
-              {/* CONCILIACAO GLOBAL — todas as lojas */}
+              {/* CONCILIACAO GLOBAL V4 — todas as lojas
+                  Vendido liquido = totalVendas - vale_troca aplicado
+                  Recebido = dinheiro + pix + credito + debito + crediario (SEM vale) */}
               {(() => {
-                const c = data.consolidado;
-                const somaModalidades =
+                const c: any = data.consolidado;
+                const valeTroca = c.totalValeTroca || 0;
+                const recebido =
                   (c.totalDinheiro || 0) +
                   (c.totalPix || 0) +
                   (c.totalCartaoCredito || 0) +
                   (c.totalCartaoDebito || 0) +
                   (c.totalCrediario || 0);
-                const diff = Number((c.totalVendas - somaModalidades).toFixed(2));
+                const vendidoLiquido = (c.totalVendas || 0) - valeTroca;
+                const diff = Number((vendidoLiquido - recebido).toFixed(2));
                 const bate = Math.abs(diff) < 0.02;
                 return (
                   <div className={`mt-2 px-3 py-2 rounded-lg border-2 flex items-center justify-between gap-3 text-sm ${
@@ -465,9 +469,12 @@ export default function SuperPainelCaixas() {
                       {bate ? '✓' : '⚠️'} CONCILIACAO GERAL
                     </div>
                     <div className="flex items-center gap-2 font-mono">
-                      <span>Vendido <b>{brl(c.totalVendas)}</b></span>
+                      <span>Vendido <b>{brl(vendidoLiquido)}</b></span>
+                      {valeTroca > 0 && (
+                        <span className="text-[10px] opacity-80">({brl(c.totalVendas)} − vale {brl(valeTroca)})</span>
+                      )}
                       <span className="opacity-70">vs</span>
-                      <span>Recebido <b>{brl(somaModalidades)}</b></span>
+                      <span>Recebido <b>{brl(recebido)}</b></span>
                       {!bate && (
                         <span className="ml-2 px-2 py-0.5 bg-amber-200 text-amber-900 rounded font-black">
                           Diferenca {diff > 0 ? '+' : ''}{brl(diff)}
@@ -626,18 +633,20 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
             onClick={loja.detalhado && t.totalCrediario > 0 ? () => setExpanded(expanded === 'crediario' ? null : 'crediario') : undefined} />
         </div>
 
-        {/* CONCILIACAO INLINE — total de vendas vs soma das modalidades.
-            Bate quando vendido_liquido ≈ dinheiro+pix+credito+debito+crediario+vale_troca.
+        {/* CONCILIACAO INLINE V4 — Vendido liquido vs Recebido (sem vale_troca).
+            Vendido liquido = totalVendas - vale_troca aplicado
+            Recebido = dinheiro + pix + credito + debito + crediario
             Click leva pra /produtos-vendidos com filtro de data + loja. */}
         {t.totalVendas > 0 && (() => {
+          const valeTroca = (t as any).totalValeTroca || 0;
           const somaModalidades =
             (t.totalDinheiro || 0) +
             (t.totalPix || 0) +
             (t.totalCartaoCredito || 0) +
             (t.totalCartaoDebito || 0) +
-            (t.totalCrediario || 0) +
-            ((t as any).totalValeTroca || 0);
-          const diff = Number((t.totalVendas - somaModalidades).toFixed(2));
+            (t.totalCrediario || 0);
+          const vendidoLiquido = (t.totalVendas || 0) - valeTroca;
+          const diff = Number((vendidoLiquido - somaModalidades).toFixed(2));
           const bate = Math.abs(diff) < 0.02;
           const concUrl = `/retaguarda/produtos-vendidos?storeCode=${encodeURIComponent(loja.storeCode)}${dateFrom ? `&from=${dateFrom}` : ''}${dateTo ? `&to=${dateTo}` : ''}`;
           return (
@@ -654,7 +663,10 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
                 {bate ? '✓' : '⚠️'} Conciliacao
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="font-mono">{brl(t.totalVendas)}</span>
+                <span className="font-mono">{brl(vendidoLiquido)}</span>
+                {valeTroca > 0 && (
+                  <span className="opacity-60 text-[10px]">(vale −{brl(valeTroca)})</span>
+                )}
                 <span className="opacity-60">vs</span>
                 <span className="font-mono">{brl(somaModalidades)}</span>
                 {!bate && (
