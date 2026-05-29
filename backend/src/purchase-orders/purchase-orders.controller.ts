@@ -175,6 +175,17 @@ export class PurchaseOrdersController {
   }
 
   /**
+   * POST /:id/regenerate-labels
+   * Repopula skusGerados consultando os CODIGOs ja existentes no Wincred.
+   * NAO cadastra produto novo, NAO mexe em estoque. Seguro pra rodar varias vezes.
+   */
+  @Post(':id/regenerate-labels')
+  async regenerateLabels(@Req() req: any, @Param('id') id: string) {
+    this.requireWrite(req);
+    return this.svc.regenerateLabels(id);
+  }
+
+  /**
    * Etiquetas avulsas — busca produtos no Wincred por EAN, REF ou SKU.
    * POST body: { codigos: string[] }
    */

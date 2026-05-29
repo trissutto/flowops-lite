@@ -551,6 +551,76 @@ export class PurchaseOrdersService {
    * Gera lista de etiquetas pra imprimir.
    * Cada (REF + COR + TAM) com qty=N vira N entradas iguais (1 etiqueta por peça).
    */
+  /**
+   * REGENERATE LABELS — SEGURO, idempotente.
+   * Repopula `skusGerados` no banco buscando os CODIGOs JA existentes no Wincred
+   * pela combinacao REF + COR + TAM. NAO cadastra produto novo, NAO mexe em
+   * estoque. Usado quando o /receive falhou parcialmente e os labels ficaram
+   * vazios, mas o cadastro Wincred ja existe.
+   */
+  async regenerateLabels(orderId: string) {
+    const order = await this.getById(orderId);
+    if (order.status !== 'recebido' && order.status !== 'recebido_com_erro') {
+      throw new BadRequestException('Pedido precisa estar recebido primeiro');
+    }
+    let totalEncontrados = 0;
+    let totalNaoEncontrados = 0;
+    const naoEncontrados: string[] = [];
+
+    for (const it of order.items as any[]) {
+      // Prefere qty recebida; fallback qty pedida
+      const raw = it.tamanhosQtyRecebida || it.tamanhosQty || '{}';
+      let tamanhosQty: Record<string, number> = {};
+      try {
+        tamanhosQty = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch { tamanhosQty = {}; }
+
+      const tamanhos = Object.keys(tamanhosQty).filter((t) => Number(tamanhosQty[t]) > 0);
+      if (!tamanhos.length) continue;
+
+      const skusGerados: any[] = [];
+      for (const tam of tamanhos) {
+        const qty = Number(tamanhosQty[tam]) || 0;
+        try {
+          const codigo = await (this.erp as any).findCodigoByRefCorTam(it.ref, it.cor, tam);
+          if (codigo) {
+            skusGerados.push({
+              codigo,
+              cor: it.cor,
+              tamanho: tam,
+              descricao: `${(it.descricao || it.ref) as string} ${it.cor || ''} ${tam}`.replace(/\s+/g, ' ').trim(),
+              qty,
+            });
+            totalEncontrados++;
+          } else {
+            naoEncontrados.push(`${it.ref} ${it.cor || '-'} ${tam}`);
+            totalNaoEncontrados++;
+          }
+        } catch (e: any) {
+          naoEncontrados.push(`${it.ref} ${it.cor || '-'} ${tam} (${e?.message || 'erro'})`);
+          totalNaoEncontrados++;
+        }
+      }
+
+      if (skusGerados.length > 0) {
+        await (this.prisma as any).purchaseOrderItem.update({
+          where: { id: it.id },
+          data: { skusGerados: JSON.stringify(skusGerados) },
+        });
+      }
+    }
+
+    this.logger.log(
+      `[purchase-orders] regenerate labels order=${orderId}: encontrados=${totalEncontrados} naoEncontrados=${totalNaoEncontrados}`,
+    );
+    return {
+      ok: totalNaoEncontrados === 0,
+      totalEncontrados,
+      totalNaoEncontrados,
+      naoEncontrados: naoEncontrados.slice(0, 30),
+    };
+  }
+
   async listLabels(orderId: string) {
     const order = await this.getById(orderId);
     if (order.status !== 'recebido' && order.status !== 'recebido_com_erro') {

@@ -108,9 +108,9 @@ export default function EtiquetasPage() {
               Nenhuma etiqueta pra imprimir
             </div>
             <div className="text-sm text-amber-800 mb-4">
-              Esse pedido ainda <b>não gerou os códigos individuais (SKUs)</b> no Wincred.
+              Esse pedido teve <b>erros no cadastro do Wincred</b> e os códigos das peças não foram salvos aqui.
               <br />
-              Volte na tela do pedido e clique em <b>"Gerar SKUs"</b> antes de imprimir etiquetas.
+              Volte na tela do pedido e resolva os erros antes de imprimir.
             </div>
             <Link
               href={`/loja/pedidos-compra/${id}`}
