@@ -249,7 +249,7 @@ export class ProdutosVendidosService {
         saleId: sale.id,
         itemId: it.id,
         data: dt.toISOString(),
-        hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
         sku: it.sku,
         ref: it.ref,
         cor: it.cor,
@@ -286,7 +286,7 @@ export class ProdutosVendidosService {
         paymentsBreakdown: [],
         saleTotal: 0,
         data: dt.toISOString(),
-        hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        hora: dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
         sku: it.sku,
         ref: it.ref,
         cor: it.cor,
@@ -413,12 +413,20 @@ export class ProdutosVendidosService {
       diferenca: number;
     }> = [];
     let totalDescontosAplicados = 0;
-    let totalVendasReais = 0;       // soma de sale.total (descontado)
+    let totalVendasReais = 0;       // soma de sale.total (descontado, sem MARCADO)
     let totalSubtotal = 0;          // soma de sale.subtotal (sem desconto)
+    let totalMarcados = 0;          // vendas com paymentMethod=MARCADO (coluna separada)
+    let qtdMarcados = 0;
     for (const sale of salesFiltered) {
       const subt = Number(sale.subtotal || 0);
       const desc = Number(sale.desconto || 0);
       const tot = Number(sale.total || 0);
+      const isMarcado = String(sale.paymentMethod || '').toUpperCase() === 'MARCADO';
+      if (isMarcado) {
+        totalMarcados += tot;
+        qtdMarcados += 1;
+        continue;  // MARCADO nao eh venda — pula da conciliacao
+      }
       totalSubtotal += subt;
       totalVendasReais += tot;
       totalDescontosAplicados += desc;
@@ -439,6 +447,7 @@ export class ProdutosVendidosService {
     totalVendasReais = Number(totalVendasReais.toFixed(2));
     totalSubtotal = Number(totalSubtotal.toFixed(2));
     totalDescontosAplicados = Number(totalDescontosAplicados.toFixed(2));
+    totalMarcados = Number(totalMarcados.toFixed(2));
 
     // ─── DIAGNOSTICO DEVOLUCOES — origem (data da venda original) ──────────
     // Cada devolucao do periodo tem originalSaleId. Buscamos a data da venda
@@ -493,9 +502,21 @@ export class ProdutosVendidosService {
     devolucoesDeVendaDoPeriodo = Number(devolucoesDeVendaDoPeriodo.toFixed(2));
     devolucoesDeVendaAntiga = Number(devolucoesDeVendaAntiga.toFixed(2));
 
-    // CONCILIACAO V3: usa sale.total (com desconto) vs payments.
-    // Vale-troca payments contam como "abate" (nao dinheiro novo).
-    const recebidoEmDinheiro = Number(
+    // ─── CONCILIACAO V4 (FINAL — modelo aprovado pelo CEO) ───────────────
+    // Modelo simplificado:
+    //   VENDIDO LIQUIDO = sum(sale.total NAO MARCADO) - sum(vale_troca payments)
+    //   RECEBIDO         = dinheiro + pix + credito + debito + crediario
+    //                       (NAO inclui vale_troca, NAO inclui MARCADO)
+    //   DIFERENCA        = VENDIDO LIQUIDO - RECEBIDO  →  deve ser 0
+    //
+    // Vale-troca aplicado em venda nova ABATE do vendido (e nao soma no recebido).
+    // MARCADO eh separado em coluna propria (peca pra provar — nao eh venda).
+    // Devolucoes em dinheiro/PIX nao entram aqui (geram sangria separada no caixa).
+    // Vales gerados pra futuro (modo=credito) tambem nao entram aqui.
+    const vendidoLiquidoV4 = Number(
+      (totalVendasReais - porModalidade.vale_troca).toFixed(2),
+    );
+    const recebidoV4 = Number(
       (
         porModalidade.dinheiro +
         porModalidade.pix +
@@ -504,42 +525,43 @@ export class ProdutosVendidosService {
         porModalidade.crediario
       ).toFixed(2),
     );
-    const recebidoComVale = Number(
-      (recebidoEmDinheiro + porModalidade.vale_troca).toFixed(2),
-    );
-    // Conciliacao correta: sale.total = sum(payments) por venda.
-    // Diferenca global = totalVendasReais - recebidoComVale (deve ser 0).
-    const diferencaV3 = Number(
-      (totalVendasReais - recebidoComVale).toFixed(2),
-    );
+    const diferencaV4 = Number((vendidoLiquidoV4 - recebidoV4).toFixed(2));
 
     return {
       linhas,
       totais,
       conciliacao: {
-        // V3 — novos campos
-        totalVendasReais,           // sum(sale.total) — base correta de comparacao
+        // V4 — modelo final aprovado
+        vendidoLiquidoV4,           // sum(sale.total nao MARCADO) - vale_troca
+        recebidoV4,                 // dinheiro + pix + cartoes + crediario
+        diferencaV4,                // vendido - recebido (deve ser 0)
+        okV4: Math.abs(diferencaV4) < 0.02,
+        totalMarcados,              // coluna separada (nao entra na conciliacao)
+        qtdMarcados,
+        totalDescontosAplicados,    // info: quanto foi de desconto
         totalSubtotal,              // sum(sale.subtotal) — antes do desconto
-        totalDescontosAplicados,    // sum(sale.desconto)
-        recebidoEmDinheiro,         // dinheiro + pix + cartoes + crediario (dinheiro real)
-        recebidoComVale,            // + vale_troca aplicado
-        diferencaV3,                // totalVendasReais - recebidoComVale (deve ser ~0)
-        okV3: Math.abs(diferencaV3) < 0.02,
+
+        // V3 (mantidos pra compat)
+        totalVendasReais,
+        recebidoEmDinheiro: recebidoV4,
+        recebidoComVale: Number((recebidoV4 + porModalidade.vale_troca).toFixed(2)),
+        diferencaV3: diferencaV4,
+        okV3: Math.abs(diferencaV4) < 0.02,
+
         // Diagnostico devolucoes
         devolucoesDiagnostico: devolucoesDiagnostico.slice(0, 50),
         devolucoesDeVendaDoPeriodo,
         devolucoesDeVendaAntiga,
 
-        // V2 (mantidos pra compat — vamos descomissionar depois)
-        totalVendidoLiquido,
-        totalRecebido,
-        diferenca,
-        ok: Math.abs(diferenca) < 0.02,
+        // V2 (legacy)
+        totalVendidoLiquido: vendidoLiquidoV4,
+        totalRecebido: recebidoV4,
+        diferenca: diferencaV4,
+        ok: Math.abs(diferencaV4) < 0.02,
         porModalidade,
         outrosDetalhe: outrosDetalhe.slice(0, 20),
         vendasComDivergencia: vendasComDivergencia.slice(0, 30),
-        // legacy
-        totalProdutosVendidos: totalVendidoLiquido,
+        totalProdutosVendidos: vendidoLiquidoV4,
       },
       filtros: filters,
     };

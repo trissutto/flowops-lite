@@ -314,25 +314,39 @@ export default function ProdutosVendidosPage() {
                 {data.conciliacao.ok ? '✓ BATE' : '⚠ DIVERGÊNCIA'}
               </span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-              <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Vendido (líquido)</div>
-                <div className="font-mono font-black text-base">{brl(data.conciliacao.totalVendidoLiquido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">vendas − devoluções</div>
-              </div>
-              <div className="bg-white border rounded p-2.5">
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Total recebido</div>
-                <div className="font-mono font-black text-base text-emerald-700">{brl(data.conciliacao.totalRecebido)}</div>
-                <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário</div>
-              </div>
-              <div className={`bg-white border rounded p-2.5 ${Math.abs(data.conciliacao.diferenca) > 0.01 ? 'border-amber-400' : ''}`}>
-                <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
-                <div className={`font-mono font-black text-base ${data.conciliacao.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
-                  {brl(data.conciliacao.diferenca)}
+            {/* CONCILIACAO V4 — modelo final aprovado */}
+            {(() => {
+              const c = data.conciliacao as any;
+              const vendido = c.vendidoLiquidoV4 ?? c.totalVendidoLiquido ?? 0;
+              const recebido = c.recebidoV4 ?? c.totalRecebido ?? 0;
+              const diff = c.diferencaV4 ?? c.diferenca ?? 0;
+              const ok = c.okV4 ?? c.ok ?? false;
+              const valeTroca = c.porModalidade?.vale_troca || 0;
+              const totalVendas = c.totalVendasReais ?? 0;
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                  <div className="bg-white border-2 border-slate-300 rounded p-3">
+                    <div className="text-[10px] text-slate-500 uppercase font-bold">VENDIDO LÍQUIDO</div>
+                    <div className="font-mono font-black text-lg">{brl(vendido)}</div>
+                    <div className="text-[9px] text-slate-500 mt-1 leading-tight">
+                      {brl(totalVendas)} − {brl(valeTroca)} (vale)
+                    </div>
+                  </div>
+                  <div className="bg-white border-2 border-emerald-300 rounded p-3">
+                    <div className="text-[10px] text-slate-500 uppercase font-bold">RECEBIDO</div>
+                    <div className="font-mono font-black text-lg text-emerald-700">{brl(recebido)}</div>
+                    <div className="text-[9px] text-slate-500 mt-1 leading-tight">dinheiro+pix+cartões+crediário</div>
+                  </div>
+                  <div className={`bg-white border-2 rounded p-3 ${ok ? 'border-emerald-400' : 'border-amber-400'}`}>
+                    <div className="text-[10px] text-slate-500 uppercase font-bold">DIFERENÇA</div>
+                    <div className={`font-mono font-black text-lg ${ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {brl(diff)}
+                    </div>
+                    <div className="text-[9px] text-slate-500 mt-1">{ok ? '✓ Bate' : '⚠ Investigar'}</div>
+                  </div>
                 </div>
-                <div className="text-[9px] text-slate-400 mt-0.5">líquido − recebido</div>
-              </div>
-            </div>
+              );
+            })()}
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
               <ModBox label="Dinheiro" valor={data.conciliacao.porModalidade.dinheiro} cor="emerald" />
               <ModBox label="PIX" valor={data.conciliacao.porModalidade.pix} cor="cyan" />

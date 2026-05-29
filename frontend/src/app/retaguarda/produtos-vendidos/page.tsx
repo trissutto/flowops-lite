@@ -352,60 +352,68 @@ function ProdutosVendidosContent() {
                 {data.conciliacao.ok ? '✓ BATE' : '⚠ DIVERGÊNCIA'}
               </span>
             </div>
-            {/* CONCILIACAO V3 — base: sale.total = sum(payments) */}
+            {/* CONCILIACAO V4 — modelo final aprovado pelo CEO */}
             {(() => {
               const c = data.conciliacao as any;
-              const vendasReais = c.totalVendasReais ?? c.totalVendidoLiquido;
-              const recComVale = c.recebidoComVale ?? c.totalRecebido;
-              const recDin = c.recebidoEmDinheiro ?? c.totalRecebido;
-              const diff = c.diferencaV3 ?? c.diferenca;
-              const ok = c.okV3 ?? c.ok;
+              const vendido = c.vendidoLiquidoV4 ?? c.totalVendidoLiquido ?? 0;
+              const recebido = c.recebidoV4 ?? c.totalRecebido ?? 0;
+              const diff = c.diferencaV4 ?? c.diferenca ?? 0;
+              const ok = c.okV4 ?? c.ok ?? false;
+              const valeTroca = c.porModalidade?.vale_troca || 0;
+              const totalVendas = c.totalVendasReais ?? 0;
+              const totalMarcados = c.totalMarcados || 0;
+              const qtdMarcados = c.qtdMarcados || 0;
               const descontos = c.totalDescontosAplicados || 0;
               const subtotalBruto = c.totalSubtotal || 0;
               return (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
-                    <div className="bg-white border rounded p-2.5">
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Vendas (cobradas)</div>
-                      <div className="font-mono font-black text-base">{brl(vendasReais)}</div>
-                      <div className="text-[9px] text-slate-400 mt-0.5">sale.total (após desconto)</div>
+                  {/* CARDS PRINCIPAIS — Vendido vs Recebido */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                    <div className="bg-white border-2 border-slate-300 rounded p-3">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">VENDIDO LÍQUIDO</div>
+                      <div className="font-mono font-black text-lg">{brl(vendido)}</div>
+                      <div className="text-[9px] text-slate-500 mt-1 leading-tight">
+                        {brl(totalVendas)} (vendas)<br />
+                        − {brl(valeTroca)} (vale-troca aplicado)
+                      </div>
                     </div>
-                    <div className="bg-white border rounded p-2.5">
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Recebido em $</div>
-                      <div className="font-mono font-black text-base text-emerald-700">{brl(recDin)}</div>
-                      <div className="text-[9px] text-slate-400 mt-0.5">dinheiro+pix+cartões+crediário</div>
+                    <div className="bg-white border-2 border-emerald-300 rounded p-3">
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">RECEBIDO</div>
+                      <div className="font-mono font-black text-lg text-emerald-700">{brl(recebido)}</div>
+                      <div className="text-[9px] text-slate-500 mt-1 leading-tight">
+                        dinheiro + pix + crédito<br />
+                        + débito + crediário novo
+                      </div>
                     </div>
-                    <div className="bg-white border rounded p-2.5">
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">+ Vale-troca aplicado</div>
-                      <div className="font-mono font-black text-base text-slate-700">{brl(data.conciliacao.porModalidade.vale_troca || 0)}</div>
-                      <div className="text-[9px] text-slate-400 mt-0.5">vale gerado de devoluções</div>
-                    </div>
-                    <div className={`bg-white border rounded p-2.5 ${Math.abs(diff) > 0.01 ? 'border-amber-400' : 'border-emerald-300'}`}>
-                      <div className="text-[10px] text-slate-500 uppercase font-bold">Diferença</div>
-                      <div className={`font-mono font-black text-base ${ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    <div className={`bg-white border-2 rounded p-3 ${ok ? 'border-emerald-400' : 'border-amber-400'}`}>
+                      <div className="text-[10px] text-slate-500 uppercase font-bold">DIFERENÇA</div>
+                      <div className={`font-mono font-black text-lg ${ok ? 'text-emerald-700' : 'text-amber-700'}`}>
                         {brl(diff)}
                       </div>
-                      <div className="text-[9px] text-slate-400 mt-0.5">vendas − (recebido + vale)</div>
+                      <div className="text-[9px] text-slate-500 mt-1 leading-tight">
+                        {ok ? '✓ Conciliação fechada' : '⚠ Investigar divergência'}
+                      </div>
                     </div>
                   </div>
 
-                  {/* Stats secundarias — vendas brutas, descontos, devolucoes */}
+                  {/* INFO SECUNDÁRIA — coisas que NÃO entram na conta */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-[11px]">
                     <div className="bg-slate-50 border border-slate-200 rounded p-2">
                       <span className="text-slate-500 font-bold uppercase text-[9px] block">Subtotal (peças)</span>
                       <span className="font-mono font-bold">{brl(subtotalBruto)}</span>
                     </div>
                     <div className="bg-slate-50 border border-slate-200 rounded p-2">
-                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Descontos aplicados</span>
+                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Descontos dados</span>
                       <span className="font-mono font-bold text-rose-600">−{brl(descontos)}</span>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-300 rounded p-2" title="Peças que cliente levou pra provar — não conta como venda">
+                      <span className="text-amber-700 font-bold uppercase text-[9px] block">Marcados (provar)</span>
+                      <span className="font-mono font-bold text-amber-800">{brl(totalMarcados)}</span>
+                      {qtdMarcados > 0 && <span className="text-[9px] text-amber-600 block">{qtdMarcados} peça(s)</span>}
                     </div>
                     <div className="bg-slate-50 border border-slate-200 rounded p-2">
                       <span className="text-slate-500 font-bold uppercase text-[9px] block">Devoluções no período</span>
                       <span className="font-mono font-bold text-rose-600">−{brl(data.totais.devolucoesValor)}</span>
-                    </div>
-                    <div className="bg-slate-50 border border-slate-200 rounded p-2">
-                      <span className="text-slate-500 font-bold uppercase text-[9px] block">Faturamento líquido</span>
-                      <span className="font-mono font-bold text-emerald-700">{brl(vendasReais - data.totais.devolucoesValor)}</span>
                     </div>
                   </div>
                 </>
