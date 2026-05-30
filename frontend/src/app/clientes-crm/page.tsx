@@ -626,7 +626,7 @@ function CustomerDetailDrawer({
   onClose: () => void;
   onMutated: () => void;
 }) {
-  const [tab, setTab] = useState<'perfil' | 'cashback' | 'enderecos' | 'lgpd' | 'tags'>('perfil');
+  const [tab, setTab] = useState<'perfil' | 'historico' | 'cashback' | 'enderecos' | 'lgpd' | 'tags'>('perfil');
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -675,7 +675,7 @@ function CustomerDetailDrawer({
         {/* Tabs */}
         <div className="border-b sticky top-[73px] bg-white z-10">
           <nav className="flex gap-1 px-4">
-            {(['perfil','cashback','enderecos','lgpd','tags'] as const).map(t => (
+            {(['perfil','historico','cashback','enderecos','lgpd','tags'] as const).map(t => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -699,6 +699,7 @@ function CustomerDetailDrawer({
         ) : (
           <div className="p-6">
             {tab === 'perfil'    && <PerfilTab d={detail} onUpdate={refresh} />}
+            {tab === 'historico' && <HistoricoTab customerId={detail.id} />}
             {tab === 'cashback'  && <CashbackTab d={detail} onUpdate={refresh} />}
             {tab === 'enderecos' && <EnderecosTab d={detail} onUpdate={refresh} />}
             {tab === 'lgpd'      && <LgpdTab d={detail} onUpdate={refresh} />}
@@ -761,6 +762,300 @@ function PerfilTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void })
         <Section title="Observações">
           <div className="col-span-2 text-gray-700 whitespace-pre-line">{d.notes}</div>
         </Section>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ABA Histórico — compras + devoluções + vales + marcados Giga
+// ══════════════════════════════════════════════════════════════════════════
+interface HistoricoData {
+  customer: { id: string; name: string | null; cpf: string | null };
+  compras: Array<{
+    id: string; saleNumber: string; nfceNumber: string | null;
+    storeCode: string; storeName: string;
+    total: number; subtotal: number; desconto: number;
+    paymentMethod: string; sellerName: string | null;
+    qtdItens: number; qtdPayments: number;
+    payments: Array<{ method: string; valor: number }>;
+    data: string;
+  }>;
+  devolucoes: Array<{
+    id: string; returnNumber: string;
+    storeCode: string; storeName: string;
+    modo: string; valor: number; status: string;
+    creditoCode: string | null;
+    creditoValidade: string | null;
+    creditoUsado: boolean;
+    creditoUsadoAt: string | null;
+    originalSaleNumber: string | null;
+    userName: string | null;
+    qtdItens: number;
+    data: string;
+  }>;
+  vales: {
+    ativos: Array<{ code: string; valor: number; validade: string | null; emitidoEm: string; loja: string; vencido: boolean }>;
+    usados: Array<{ code: string; valor: number; usadoEm: string | null; usadoSaleId: string | null; emitidoEm: string; loja: string }>;
+    saldoAtivo: number;
+  };
+  marcadosGiga: {
+    items: Array<{ registro: number; sku: string; descricao: string; qtd: number; valor: number; total: number; data: string; loja: string }>;
+    total: number;
+    qtd: number;
+  };
+  warning?: string;
+}
+
+function HistoricoTab({ customerId }: { customerId: string }) {
+  const [data, setData] = useState<HistoricoData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await api<HistoricoData>(`/customers-crm/${customerId}/historico`);
+        if (!cancelled) setData(res);
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || 'Erro ao carregar histórico');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [customerId]);
+
+  if (loading) {
+    return (
+      <div className="p-12 text-center text-gray-400">
+        <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+        <div className="mt-2 text-xs">Carregando histórico...</div>
+      </div>
+    );
+  }
+
+  if (err) {
+    return (
+      <div className="p-6 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+        Erro: {err}
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const fmtDT = (iso: string | null) => {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch { return iso; }
+  };
+
+  const totalCompras = data.compras.reduce((s, c) => s + Number(c.total || 0), 0);
+  const totalDevolucoes = data.devolucoes.reduce((s, r) => s + Number(r.valor || 0), 0);
+
+  return (
+    <div className="space-y-6">
+      {data.warning && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-800 text-xs flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>{data.warning}</span>
+        </div>
+      )}
+
+      {/* Resumo */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-emerald-50 border border-emerald-200 rounded p-3">
+          <div className="text-[10px] uppercase text-emerald-700 font-bold">Compras</div>
+          <div className="text-lg font-bold text-emerald-900">{data.compras.length}</div>
+          <div className="text-[11px] text-emerald-700">R$ {totalCompras.toFixed(2).replace('.', ',')}</div>
+        </div>
+        <div className="bg-rose-50 border border-rose-200 rounded p-3">
+          <div className="text-[10px] uppercase text-rose-700 font-bold">Devoluções</div>
+          <div className="text-lg font-bold text-rose-900">{data.devolucoes.length}</div>
+          <div className="text-[11px] text-rose-700">R$ {totalDevolucoes.toFixed(2).replace('.', ',')}</div>
+        </div>
+        <div className="bg-amber-50 border border-amber-200 rounded p-3">
+          <div className="text-[10px] uppercase text-amber-700 font-bold">Vales ativos</div>
+          <div className="text-lg font-bold text-amber-900">{data.vales.ativos.length}</div>
+          <div className="text-[11px] text-amber-700">R$ {data.vales.saldoAtivo.toFixed(2).replace('.', ',')}</div>
+        </div>
+        <div className="bg-purple-50 border border-purple-200 rounded p-3">
+          <div className="text-[10px] uppercase text-purple-700 font-bold">Marcados</div>
+          <div className="text-lg font-bold text-purple-900">{data.marcadosGiga.qtd}</div>
+          <div className="text-[11px] text-purple-700">R$ {data.marcadosGiga.total.toFixed(2).replace('.', ',')}</div>
+        </div>
+      </div>
+
+      {/* Compras */}
+      <section>
+        <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          Compras ({data.compras.length})
+        </h3>
+        {data.compras.length === 0 ? (
+          <div className="text-xs text-gray-400 italic p-3 border border-dashed rounded">Nenhuma compra registrada</div>
+        ) : (
+          <div className="space-y-2">
+            {data.compras.map((c) => (
+              <div key={c.id} className="border rounded p-3 hover:bg-gray-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">#{c.saleNumber}</span>
+                      {c.nfceNumber && <span className="text-[10px] text-gray-500">NFC-e {c.nfceNumber}</span>}
+                      <span className="text-[10px] uppercase font-bold text-purple-700">{c.storeName}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {fmtDT(c.data)} · {c.qtdItens} {c.qtdItens === 1 ? 'peça' : 'peças'}
+                      {c.sellerName && ` · ${c.sellerName}`}
+                    </div>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {c.payments.map((p, i) => (
+                        <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">
+                          {p.method} R$ {Number(p.valor).toFixed(2).replace('.', ',')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-emerald-700">
+                      R$ {Number(c.total).toFixed(2).replace('.', ',')}
+                    </div>
+                    {Number(c.desconto || 0) > 0 && (
+                      <div className="text-[10px] text-red-500">−R$ {Number(c.desconto).toFixed(2).replace('.', ',')} desc</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Devoluções */}
+      <section>
+        <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-rose-500" />
+          Devoluções ({data.devolucoes.length})
+        </h3>
+        {data.devolucoes.length === 0 ? (
+          <div className="text-xs text-gray-400 italic p-3 border border-dashed rounded">Nenhuma devolução</div>
+        ) : (
+          <div className="space-y-2">
+            {data.devolucoes.map((r) => (
+              <div key={r.id} className="border rounded p-3 hover:bg-gray-50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">#{r.returnNumber}</span>
+                      <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                        r.modo === 'troca' ? 'bg-amber-100 text-amber-800' :
+                        r.modo === 'credito' ? 'bg-purple-100 text-purple-800' :
+                        r.modo === 'pix' ? 'bg-blue-100 text-blue-800' :
+                        'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {r.modo}
+                      </span>
+                      <span className="text-[10px] text-gray-500">{r.storeName}</span>
+                      {r.originalSaleNumber && (
+                        <span className="text-[10px] text-gray-500">venda orig: #{r.originalSaleNumber}</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {fmtDT(r.data)} · {r.qtdItens} {r.qtdItens === 1 ? 'peça' : 'peças'}
+                      {r.userName && ` · ${r.userName}`}
+                    </div>
+                    {r.creditoCode && (
+                      <div className="mt-2 text-[11px]">
+                        <span className="font-mono bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded border border-amber-300">
+                          Vale {r.creditoCode}
+                        </span>
+                        {r.creditoUsado ? (
+                          <span className="ml-2 text-emerald-700">✓ usado {fmtDT(r.creditoUsadoAt)}</span>
+                        ) : r.creditoValidade && new Date(r.creditoValidade).getTime() < Date.now() ? (
+                          <span className="ml-2 text-red-600">⚠ vencido em {fmtDT(r.creditoValidade)}</span>
+                        ) : (
+                          <span className="ml-2 text-amber-700">ativo até {fmtDT(r.creditoValidade)}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="font-bold text-rose-700">
+                      R$ {Number(r.valor).toFixed(2).replace('.', ',')}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Vales ativos */}
+      {data.vales.ativos.length > 0 && (
+        <section>
+          <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            Vales-troca ativos ({data.vales.ativos.length}) — R$ {data.vales.saldoAtivo.toFixed(2).replace('.', ',')}
+          </h3>
+          <div className="space-y-1">
+            {data.vales.ativos.map((v) => (
+              <div key={v.code} className="border border-amber-200 bg-amber-50 rounded p-2 flex items-center justify-between text-xs">
+                <div>
+                  <span className="font-mono font-bold text-amber-900">{v.code}</span>
+                  <span className="ml-2 text-gray-600">{v.loja}</span>
+                  <span className="ml-2 text-gray-500">emitido {fmtDT(v.emitidoEm)}</span>
+                  {v.validade && <span className="ml-2 text-amber-700">até {fmtDT(v.validade)}</span>}
+                </div>
+                <div className="font-bold text-amber-900">R$ {Number(v.valor).toFixed(2).replace('.', ',')}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Marcados Giga */}
+      {data.marcadosGiga.items.length > 0 && (
+        <section>
+          <h3 className="text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-purple-500" />
+            Marcados ativos no Giga ({data.marcadosGiga.qtd}) — R$ {data.marcadosGiga.total.toFixed(2).replace('.', ',')}
+          </h3>
+          <div className="border rounded overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-purple-50">
+                <tr>
+                  <th className="px-2 py-1 text-left">Data</th>
+                  <th className="px-2 py-1 text-left">SKU</th>
+                  <th className="px-2 py-1 text-left">Descrição</th>
+                  <th className="px-2 py-1 text-center">Qtd</th>
+                  <th className="px-2 py-1 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.marcadosGiga.items.map((m) => (
+                  <tr key={m.registro} className="border-t hover:bg-purple-50/50">
+                    <td className="px-2 py-1 text-gray-500">{fmtDT(m.data)}</td>
+                    <td className="px-2 py-1 font-mono">{m.sku}</td>
+                    <td className="px-2 py-1 truncate max-w-[180px]" title={m.descricao}>{m.descricao}</td>
+                    <td className="px-2 py-1 text-center">{m.qtd}</td>
+                    <td className="px-2 py-1 text-right font-medium">R$ {Number(m.total).toFixed(2).replace('.', ',')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
     </div>
   );

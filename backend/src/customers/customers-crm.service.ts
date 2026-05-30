@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * CustomersCrmService — operações DIRETAS sobre a tabela `customers`.
@@ -129,7 +130,10 @@ export interface RedeemCashbackDto {
 export class CustomersCrmService {
   private readonly logger = new Logger(CustomersCrmService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+  ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
   // HELPERS — normalização
@@ -413,6 +417,174 @@ export class CustomersCrmService {
       cashbackTransactions,
       currentConsents,
       tags: c.tags.map(ct => ct.tag),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HISTÓRICO DE MOVIMENTAÇÃO
+  // ─────────────────────────────────────────────────────────────────────────
+  /**
+   * Timeline cronológica das interações do cliente:
+   *  - Compras (PdvSale finalizadas com customerCpf)
+   *  - Devoluções (PdvReturn com customerCpf)
+   *  - Vales-troca emitidos (PdvReturn com creditoCode)
+   *  - Marcados ativos no Giga (caixa com MARCADO='SIM' no nome do cliente)
+   */
+  async historico(id: string, actor?: RequestActor) {
+    const customer = await this.loadScoped(id, actor);
+    const cpf = (customer.cpf || '').replace(/\D/g, '');
+    if (!cpf || cpf.length !== 11) {
+      return {
+        customer: { id: customer.id, name: customer.name, cpf: customer.cpf },
+        compras: [],
+        devolucoes: [],
+        vales: { ativos: [], usados: [] },
+        marcadosGiga: { items: [], total: 0, qtd: 0 },
+        warning: 'Cliente sem CPF cadastrado — busca limitada',
+      };
+    }
+
+    // 1. Compras (PdvSale finalizadas, exclui MARCADO e cancelled)
+    const compras = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        customerCpf: cpf,
+        status: 'finalized',
+        NOT: { paymentMethod: 'MARCADO' },
+      },
+      orderBy: { finalizedAt: 'desc' },
+      take: 100,
+      select: {
+        id: true, storeCode: true, storeName: true,
+        total: true, subtotal: true, desconto: true,
+        paymentMethod: true, sellerName: true, vendedorName: true,
+        finalizedAt: true, createdAt: true, nfceNumber: true,
+        _count: { select: { items: true, payments: true } },
+        payments: { select: { method: true, valor: true } },
+      },
+    });
+
+    // 2. Devoluções (PdvReturn)
+    const devolucoes = await (this.prisma as any).pdvReturn.findMany({
+      where: { customerCpf: cpf },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      select: {
+        id: true, storeCode: true, storeName: true,
+        modo: true, valorTotal: true, status: true,
+        creditoCode: true, creditoValidade: true,
+        creditoUsadoEm: true, creditoUsadoAt: true,
+        originalSaleNumber: true, originalSaleId: true,
+        userName: true, createdAt: true,
+        _count: { select: { items: true } },
+      },
+    });
+
+    // 3. Vales-troca emitidos no nome dele (subset das devoluções com código)
+    const valesAtivos: any[] = [];
+    const valesUsados: any[] = [];
+    const agora = Date.now();
+    for (const r of devolucoes as any[]) {
+      if (!r.creditoCode) continue;
+      const venc = r.creditoValidade ? new Date(r.creditoValidade).getTime() : Infinity;
+      const isUsed = r.status === 'used';
+      const isVencido = !isUsed && venc < agora;
+      const info = {
+        code: r.creditoCode,
+        valor: r.valorTotal,
+        validade: r.creditoValidade,
+        usadoEm: r.creditoUsadoAt,
+        usadoSaleId: r.creditoUsadoEm,
+        emitidoEm: r.createdAt,
+        loja: r.storeName,
+        vencido: isVencido,
+      };
+      if (isUsed) valesUsados.push(info);
+      else if (!isVencido) valesAtivos.push(info);
+    }
+
+    // 4. Marcados ATIVOS no Giga (consulta direta caixa por nome ou CPF)
+    let marcadosGiga = { items: [] as any[], total: 0, qtd: 0 };
+    try {
+      const cpfFormat = cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+      const safeCpf = cpf.replace(/'/g, "''");
+      const safeCpfFormat = cpfFormat.replace(/'/g, "''");
+      // Tenta buscar pela TABELA clientes do Giga via codCliente JOIN caixa
+      const sql = `
+        SELECT cx.REGISTRO, cx.CODIGO, cx.DESCRICAO, cx.QUANTIDADE,
+               cx.VALOR, cx.VALORTOTAL, cx.DATA, cx.LOJA, cx.CLIENTE
+        FROM caixa cx
+        INNER JOIN clientes c ON cx.CLIENTE = c.CODIGO
+        WHERE UPPER(cx.MARCADO) = 'SIM'
+          AND (
+            REPLACE(REPLACE(REPLACE(c.CPF,'.',''),'-',''),'/','') = '${safeCpf}'
+            OR c.CPF = '${safeCpfFormat}'
+          )
+        ORDER BY cx.DATA DESC
+        LIMIT 100
+      `;
+      const r = await (this as any).erp?.runReadOnly?.(sql, { maxRows: 100, timeoutMs: 10000 });
+      const rows = r?.rows || [];
+      marcadosGiga.items = rows.map((row: any) => ({
+        registro: Number(row.REGISTRO),
+        sku: String(row.CODIGO || '').trim(),
+        descricao: String(row.DESCRICAO || '').trim(),
+        qtd: Number(row.QUANTIDADE) || 1,
+        valor: Number(row.VALOR) || 0,
+        total: Number(row.VALORTOTAL) || 0,
+        data: row.DATA,
+        loja: String(row.LOJA || '').trim(),
+      }));
+      marcadosGiga.qtd = marcadosGiga.items.reduce((s: number, m: any) => s + m.qtd, 0);
+      marcadosGiga.total = marcadosGiga.items.reduce((s: number, m: any) => s + m.total, 0);
+    } catch (e: any) {
+      this.logger.warn(`[historico] marcados Giga falhou: ${e?.message}`);
+    }
+
+    return {
+      customer: {
+        id: customer.id,
+        name: customer.name,
+        cpf: customer.cpf,
+      },
+      compras: (compras as any[]).map((s) => ({
+        id: s.id,
+        saleNumber: String(s.id).slice(0, 8),
+        nfceNumber: s.nfceNumber,
+        storeCode: s.storeCode,
+        storeName: s.storeName,
+        total: s.total,
+        subtotal: s.subtotal,
+        desconto: s.desconto,
+        paymentMethod: s.paymentMethod,
+        sellerName: s.sellerName || s.vendedorName,
+        qtdItens: s._count?.items || 0,
+        qtdPayments: s._count?.payments || 0,
+        payments: s.payments,
+        data: s.finalizedAt || s.createdAt,
+      })),
+      devolucoes: (devolucoes as any[]).map((r) => ({
+        id: r.id,
+        returnNumber: String(r.id).slice(0, 8),
+        storeCode: r.storeCode,
+        storeName: r.storeName,
+        modo: r.modo,
+        valor: r.valorTotal,
+        status: r.status,
+        creditoCode: r.creditoCode,
+        creditoValidade: r.creditoValidade,
+        creditoUsado: r.status === 'used',
+        creditoUsadoAt: r.creditoUsadoAt,
+        originalSaleNumber: r.originalSaleNumber,
+        userName: r.userName,
+        qtdItens: r._count?.items || 0,
+        data: r.createdAt,
+      })),
+      vales: {
+        ativos: valesAtivos,
+        usados: valesUsados,
+        saldoAtivo: valesAtivos.reduce((s: number, v: any) => s + Number(v.valor || 0), 0),
+      },
+      marcadosGiga,
     };
   }
 

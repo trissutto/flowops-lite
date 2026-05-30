@@ -120,6 +120,12 @@ export class CustomersCrmController {
     return this.svc.detail(id, this.actor(req));
   }
 
+  /** Histórico cronológico do cliente: compras + devoluções + vales + marcados Giga */
+  @Get(':id/historico')
+  historico(@Req() req: any, @Param('id') id: string) {
+    return this.svc.historico(id, this.actor(req));
+  }
+
   @Patch(':id')
   update(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateCustomerDto) {
     return this.svc.update(id, dto, this.actor(req));
