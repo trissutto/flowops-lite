@@ -322,6 +322,29 @@ function ProdutosVendidosContent() {
               </div>
               <div className="text-2xl font-black tabular-nums text-emerald-700">{brl(data.totais.vendasValor)}</div>
               <div className="text-xs text-emerald-600 mt-0.5">{data.totais.vendasQtd} peças</div>
+              {/* Split: quanto é venda real vs marcado (não conta como venda) */}
+              {(() => {
+                const c = data.conciliacao as any;
+                const marcados = c?.totalMarcados || 0;
+                const qtdMarc = c?.qtdMarcados || 0;
+                if (marcados <= 0) return null;
+                const vendasReais = (data.totais.vendasValor || 0) - marcados;
+                const qtdReais = (data.totais.vendasQtd || 0) - qtdMarc;
+                return (
+                  <div className="mt-2 pt-2 border-t border-emerald-200 space-y-1">
+                    <div className="flex justify-between items-center text-[11px]">
+                      <span className="text-emerald-800 font-bold">Vendas reais:</span>
+                      <span className="font-mono font-bold text-emerald-800">{brl(vendasReais)}</span>
+                    </div>
+                    <div className="text-[9px] text-emerald-600 -mt-0.5">{qtdReais} peças (sem marcado)</div>
+                    <div className="flex justify-between items-center text-[11px] mt-1">
+                      <span className="text-amber-700 font-bold">⚠ Marcados (provar):</span>
+                      <span className="font-mono font-bold text-amber-700">{brl(marcados)}</span>
+                    </div>
+                    <div className="text-[9px] text-amber-600 -mt-0.5">{qtdMarc} {qtdMarc === 1 ? 'peça' : 'peças'} — não é venda</div>
+                  </div>
+                );
+              })()}
             </div>
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <div className="text-xs font-bold uppercase text-red-700 mb-1 flex items-center gap-1">
