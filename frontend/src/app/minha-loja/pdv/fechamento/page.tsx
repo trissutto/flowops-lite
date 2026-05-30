@@ -39,7 +39,7 @@ interface RelatorioDetalhado {
     // Usamos `sv()` pra extrair o valor de qualquer um dos formatos.
     DINHEIRO: any; PIX: any; CREDIARIO: any;
     MASTERCARD: any; VISANET: any; CIELO: any; ELO: any; AMEX: any; HIPERCARD: any;
-    VISA_ELECTRON: any; REDE_SHOP: any;
+    VISA_ELECTRON: any; REDE_SHOP: any; ELO_DEBITO?: any;
     CREDITO_GENERICO: any; DEBITO_GENERICO: any;
     VENDA_ONLINE?: any;
     OUTROS: any;
@@ -258,6 +258,9 @@ export default function FechamentoPage() {
         >
           <Linha label="Visa Electron" valor={sv(totais.VISA_ELECTRON)} />
           <Linha label="Rede Shop" valor={sv(totais.REDE_SHOP)} />
+          {sv(totais.ELO_DEBITO) > 0 && (
+            <Linha label="Elo" valor={sv(totais.ELO_DEBITO)} />
+          )}
           {sv(totais.DEBITO_GENERICO) > 0 && (
             <Linha
               label="Débito (sem bandeira)"

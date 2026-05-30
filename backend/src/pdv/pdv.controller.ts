@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { validateMinLevel } from '../auth/auth-levels.util';
 import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
 import { PixService } from './pix.service';
@@ -254,6 +255,31 @@ export class PdvController {
   getSale(@Req() req: any, @Param('id') id: string) {
     this.requireRole(req);
     return this.svc.getSale(id);
+  }
+
+  /**
+   * POST /pdv/sales/:id/master/cancel-zumbi
+   * Body: { motivo, password }
+   * Cancela uma venda finalizada SEM payment (zumbi). NAO mexe em estoque.
+   * Exige senha master (nivel MASTER+).
+   */
+  @Post('sales/:id/master/cancel-zumbi')
+  async masterCancelZumbi(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { motivo: string; password: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterCancelZumbi({
+      saleId: id,
+      motivo: body?.motivo || '',
+      userName: `[${nivel}] ${userName}`,
+    });
   }
 
   /**

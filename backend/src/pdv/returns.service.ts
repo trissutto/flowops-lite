@@ -670,6 +670,101 @@ export class ReturnsService {
   }
 
   /**
+   * Lista vales-troca emitidos com filtros — pra auditoria/conferencia.
+   * Status calculado: 'ativo' (nao usado, dentro da validade) | 'usado' | 'vencido'.
+   */
+  async listCreditos(filters: {
+    from?: string;
+    to?: string;
+    storeCode?: string;
+    status?: 'ativo' | 'usado' | 'vencido' | 'todos';
+    code?: string;
+    customerQ?: string;
+    page?: number;
+    size?: number;
+  } = {}) {
+    const where: any = {
+      // Pega tudo que TEM creditoCode (modo=credito ou troca anexada com vale)
+      creditoCode: { not: null },
+    };
+    if (filters.from || filters.to) {
+      where.createdAt = {};
+      if (filters.from) where.createdAt.gte = new Date(filters.from + 'T00:00:00');
+      if (filters.to) where.createdAt.lte = new Date(filters.to + 'T23:59:59');
+    }
+    if (filters.storeCode) where.storeCode = filters.storeCode;
+    if (filters.code) where.creditoCode = { contains: filters.code.toUpperCase().trim() };
+    if (filters.customerQ) {
+      const q = filters.customerQ.trim();
+      where.OR = [
+        { customerName: { contains: q } },
+        { customerCpf: { contains: q.replace(/\D/g, '') } },
+      ];
+    }
+    if (filters.status === 'ativo') {
+      where.status = { not: 'used' };
+      where.creditoValidade = { gte: new Date() };
+    } else if (filters.status === 'usado') {
+      where.status = 'used';
+    } else if (filters.status === 'vencido') {
+      where.status = { not: 'used' };
+      where.creditoValidade = { lt: new Date() };
+    }
+
+    const page = Math.max(1, Number(filters.page || 1));
+    const size = Math.min(200, Math.max(10, Number(filters.size || 50)));
+
+    const [total, items] = await Promise.all([
+      (this.prisma as any).pdvReturn.count({ where }),
+      (this.prisma as any).pdvReturn.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * size,
+        take: size,
+        select: {
+          id: true,
+          creditoCode: true,
+          modo: true,
+          valorTotal: true,
+          status: true,
+          creditoValidade: true,
+          creditoUsadoEm: true,
+          creditoUsadoAt: true,
+          storeCode: true,
+          storeName: true,
+          customerName: true,
+          customerCpf: true,
+          userName: true,
+          motivo: true,
+          createdAt: true,
+          originalSaleNumber: true,
+          originalSaleId: true,
+        },
+      }),
+    ]);
+
+    const now = Date.now();
+    const totalAtivos = items.reduce((s: number, it: any) => {
+      if (it.status === 'used') return s;
+      const venc = it.creditoValidade ? new Date(it.creditoValidade).getTime() : Infinity;
+      if (venc < now) return s;
+      return s + Number(it.valorTotal || 0);
+    }, 0);
+
+    return {
+      total,
+      page,
+      size,
+      totalAtivos: Number(totalAtivos.toFixed(2)),
+      items: items.map((it: any) => {
+        const vencido = it.creditoValidade ? new Date(it.creditoValidade).getTime() < now : false;
+        const status = it.status === 'used' ? 'usado' : vencido ? 'vencido' : 'ativo';
+        return { ...it, statusCalculado: status };
+      }),
+    };
+  }
+
+  /**
    * Consulta saldo/validade de um vale-troca SEM marcar como usado.
    */
   async checkCredit(creditoCode: string) {

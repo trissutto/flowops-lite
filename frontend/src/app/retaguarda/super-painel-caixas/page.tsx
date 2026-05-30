@@ -37,7 +37,7 @@ type Detalhado = {
   totais: {
     DINHEIRO: Slot; PIX: Slot; CREDIARIO: Slot;
     MASTERCARD: Slot; VISANET: Slot; CIELO: Slot; ELO: Slot; AMEX: Slot; HIPERCARD: Slot;
-    VISA_ELECTRON: Slot; REDE_SHOP: Slot;
+    VISA_ELECTRON: Slot; REDE_SHOP: Slot; ELO_DEBITO?: Slot;
     CREDITO_GENERICO: Slot; DEBITO_GENERICO: Slot; OUTROS: Slot;
   };
 };
@@ -1007,7 +1007,7 @@ function ModItem({ label, valor, cor, onClick, active, badge }: { label: string;
 
 // ── Cascade detalhada por modalidade ──
 const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'ELO', 'AMEX', 'HIPERCARD', 'CREDITO_GENERICO'] as const;
-const BANDEIRAS_DEBITO = ['VISA_ELECTRON', 'REDE_SHOP', 'DEBITO_GENERICO'] as const;
+const BANDEIRAS_DEBITO = ['VISA_ELECTRON', 'REDE_SHOP', 'ELO_DEBITO', 'DEBITO_GENERICO'] as const;
 
 function CascadeModalidade({
   detalhado, modalidade, isAdmin, onEditBandeira,

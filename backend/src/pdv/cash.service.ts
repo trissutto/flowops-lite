@@ -179,6 +179,7 @@ export class CashService {
       HIPERCARD: mkSlot(),
       VISA_ELECTRON: mkSlot(),
       REDE_SHOP: mkSlot(),
+      ELO_DEBITO: mkSlot(),                    // ELO no debito (separa do ELO credito)
       CREDITO_GENERICO: mkSlot(),
       DEBITO_GENERICO: mkSlot(),
       VALE_TROCA: mkSlot(),
@@ -237,7 +238,9 @@ export class CashService {
         else if (method === 'crediario') pushVenda('CREDIARIO', s, p, valor, parcelas);
         else if (method === 'venda_online') pushVenda('VENDA_ONLINE', s, p, valor);
         else if (method === 'credito' || method === 'debito') {
-          const key = bandeira ? bandeiraMap[bandeira] : null;
+          let key = bandeira ? bandeiraMap[bandeira] : null;
+          // Quando method=debito + bandeira=ELO, vai pro slot proprio ELO_DEBITO
+          if (key === 'ELO' && method === 'debito') key = 'ELO_DEBITO';
           if (key && key in totais) {
             pushVenda(key, s, p, valor, parcelas, bandeira);
           } else {
@@ -370,7 +373,7 @@ export class CashService {
       totais.MASTERCARD, totais.VISANET, totais.CIELO, totais.ELO,
       totais.AMEX, totais.HIPERCARD, totais.CREDITO_GENERICO,
     );
-    const debito = sumSlots(totais.VISA_ELECTRON, totais.REDE_SHOP, totais.DEBITO_GENERICO);
+    const debito = sumSlots(totais.VISA_ELECTRON, totais.REDE_SHOP, totais.ELO_DEBITO, totais.DEBITO_GENERICO);
 
     // Inclui recebimentos no dinheiroEsperado (entram no caixa físico)
     const dinheiroEsperadoComRecebimentos = dinheiroEsperado + recebimentosDinheiro.valor;
@@ -750,7 +753,9 @@ export class CashService {
           DINHEIRO: mkSlot(), PIX: mkSlot(), CREDIARIO: mkSlot(),
           MASTERCARD: mkSlot(), VISANET: mkSlot(), CIELO: mkSlot(), ELO: mkSlot(),
           AMEX: mkSlot(), HIPERCARD: mkSlot(), VISA_ELECTRON: mkSlot(),
-          REDE_SHOP: mkSlot(), CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
+          REDE_SHOP: mkSlot(),
+          ELO_DEBITO: mkSlot(),                // ELO no debito (slot proprio)
+          CREDITO_GENERICO: mkSlot(), DEBITO_GENERICO: mkSlot(),
           VALE_TROCA: mkSlot(),
           OUTROS: mkSlot(),
         };
@@ -828,7 +833,10 @@ export class CashService {
               else pushVenda('CREDITO_GENERICO', sale, p, v, parcelas, bandeira);
             } else if (m === 'debito' || m === 'debit') {
               totalCartaoDebito += v;
-              const key = bandeira ? bandeiraMap[bandeira] : null;
+              // Quando bandeira eh ELO no DEBITO, vai pro slot proprio
+              // (ELO_DEBITO) — evita misturar com ELO_CREDITO.
+              const keyBandeira = bandeira ? bandeiraMap[bandeira] : null;
+              const key = keyBandeira === 'ELO' ? 'ELO_DEBITO' : keyBandeira;
               if (key && key in totaisDet) pushVenda(key, sale, p, v, parcelas, bandeira);
               else pushVenda('DEBITO_GENERICO', sale, p, v, parcelas, bandeira);
             } else {

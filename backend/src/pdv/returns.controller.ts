@@ -216,6 +216,30 @@ export class ReturnsController {
   }
 
   /**
+   * GET /pdv/devolucao/creditos — lista vales emitidos com filtros.
+   * Query: from, to, storeCode, status (ativo|usado|vencido), code, customerQ, page, size
+   */
+  @Get('creditos')
+  async listCreditos(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('status') status?: 'ativo' | 'usado' | 'vencido' | 'todos',
+    @Query('code') code?: string,
+    @Query('customerQ') customerQ?: string,
+    @Query('page') page?: string,
+    @Query('size') size?: string,
+  ) {
+    this.requireRole(req);
+    return this.svc.listCreditos({
+      from, to, storeCode, status, code, customerQ,
+      page: page ? parseInt(page, 10) : 1,
+      size: size ? parseInt(size, 10) : 50,
+    });
+  }
+
+  /**
    * GET /pdv/devolucao/credito/:code — consulta vale-troca SEM usar
    */
   @Get('credito/:code')

@@ -106,6 +106,74 @@ export class PdvService {
   }
 
   /**
+   * MASTER: cancela uma venda zumbi (finalizada SEM payment) — fluxo de
+   * limpeza pos-bug. Apenas muda status pra 'cancelled' + audit log.
+   *
+   * NAO mexe em estoque (peca ja saiu na compra real "irma" — re-incrementar
+   * causaria estoque inflado).
+   * NAO mexe em payments (nao tem).
+   * NAO mexe em marcado.
+   *
+   * Pre-requisitos validados:
+   *  - venda existe
+   *  - status atual = 'finalized'
+   *  - payments.length === 0 (so cancela zumbi de verdade)
+   *
+   * Idempotente: se ja cancelada, retorna OK sem fazer nada.
+   */
+  async masterCancelZumbi(input: {
+    saleId: string;
+    motivo: string;
+    userName: string;
+  }) {
+    const { saleId, motivo, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatorio');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe motivo (>=3 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: { payments: true, items: { select: { id: true, sku: true, total: true } } },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+
+    if (sale.status === 'cancelled') {
+      return { ok: true, alreadyDone: true, saleId, message: 'Venda ja estava cancelada' };
+    }
+    if (sale.status !== 'finalized') {
+      throw new BadRequestException(
+        `So pode cancelar venda finalizada. Status atual: ${sale.status}. ` +
+        `Pra venda aberta, use cancelar normal.`,
+      );
+    }
+    if ((sale.payments || []).length > 0) {
+      throw new BadRequestException(
+        `Venda tem ${sale.payments.length} pagamento(s) registrado(s) — NAO eh zumbi. ` +
+        `Cancelar afetaria a conciliacao. Operacao bloqueada por seguranca.`,
+      );
+    }
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: { status: 'cancelled' },
+    });
+
+    this.logger.warn(
+      `[MASTER] CANCEL-ZUMBI saleId=${saleId} total=R$${sale.total} ` +
+      `items=${(sale.items || []).length} motivo="${motivo}" por ${userName}`,
+    );
+
+    return {
+      ok: true,
+      saleId,
+      totalCancelado: Number(sale.total || 0),
+      qtdItens: (sale.items || []).length,
+      message: 'Venda cancelada. Estoque NAO foi mexido (peca ja saiu na compra real).',
+    };
+  }
+
+  /**
    * Lê venda + itens + pagamentos parciais (com totais sempre atualizados).
    */
   async getSale(id: string) {

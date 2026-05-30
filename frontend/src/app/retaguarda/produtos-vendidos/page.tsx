@@ -620,7 +620,36 @@ function ProdutosVendidosContent() {
                                 ) : isReturn ? (
                                   <span className="text-[10px] font-bold text-rose-700">SAÍDA DO ESTOQUE</span>
                                 ) : (
-                                  <span className="text-[10px] text-amber-700 font-bold">⚠ SEM PAGAMENTO REGISTRADO</span>
+                                  <>
+                                    <span className="text-[10px] text-amber-700 font-bold">⚠ SEM PAGAMENTO REGISTRADO</span>
+                                    {isMatrix && (
+                                      <button
+                                        onClick={async () => {
+                                          const motivo = prompt(`Cancelar venda #${l.saleNumber} (R$ ${(itensDessaVenda.reduce((s,x)=>s+x.total,0)).toFixed(2).replace('.', ',')}) - venda ZUMBI sem pagamento?\n\n` +
+                                            `✓ Marca como cancelada (some do relatório)\n` +
+                                            `✓ NÃO mexe em estoque (peças já saíram na venda real)\n\n` +
+                                            `Motivo (>=3 chars):`);
+                                          if (!motivo || motivo.trim().length < 3) return;
+                                          const password = prompt('Senha MASTER:');
+                                          if (!password) return;
+                                          try {
+                                            await api(`/pdv/sales/${l.saleId}/master/cancel-zumbi`, {
+                                              method: 'POST',
+                                              body: JSON.stringify({ motivo: motivo.trim(), password }),
+                                            });
+                                            alert('✓ Venda zumbi cancelada com sucesso!');
+                                            buscar();
+                                          } catch (e: any) {
+                                            alert(`Erro: ${e?.message || e}`);
+                                          }
+                                        }}
+                                        className="ml-2 text-[10px] font-bold bg-rose-600 hover:bg-rose-700 text-white px-2 py-0.5 rounded"
+                                        title="Cancelar essa venda zumbi (master)"
+                                      >
+                                        🗑️ Cancelar zumbi
+                                      </button>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </div>
