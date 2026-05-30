@@ -415,8 +415,15 @@ export class ProdutosVendidosService {
     let totalDescontosAplicados = 0;
     let totalVendasReais = 0;       // soma de sale.total (descontado, sem MARCADO)
     let totalSubtotal = 0;          // soma de sale.subtotal (sem desconto)
-    let totalMarcados = 0;          // vendas com paymentMethod=MARCADO (coluna separada)
-    let qtdMarcados = 0;
+    let totalMarcados = 0;          // valor R$ das vendas com paymentMethod=MARCADO
+    let qtdMarcados = 0;            // QTD DE PECAS (soma items.qty), nao numero de vendas
+    let qtdVendasMarcado = 0;       // numero de vendas marcadas (info extra)
+    // Mapa saleId → qtd total de pecas (soma items.qty) — usado pra contar
+    // pecas das vendas MARCADO. Como saleItems ja foi carregado, agrupamos.
+    const qtdItemsBySale = new Map<string, number>();
+    for (const it of saleItems) {
+      qtdItemsBySale.set(it.saleId, (qtdItemsBySale.get(it.saleId) || 0) + (Number(it.qty) || 0));
+    }
     for (const sale of salesFiltered) {
       const subt = Number(sale.subtotal || 0);
       const desc = Number(sale.desconto || 0);
@@ -424,7 +431,8 @@ export class ProdutosVendidosService {
       const isMarcado = String(sale.paymentMethod || '').toUpperCase() === 'MARCADO';
       if (isMarcado) {
         totalMarcados += tot;
-        qtdMarcados += 1;
+        qtdMarcados += qtdItemsBySale.get(sale.id) || 0;  // soma PECAS
+        qtdVendasMarcado += 1;
         continue;  // MARCADO nao eh venda — pula da conciliacao
       }
       totalSubtotal += subt;
@@ -537,7 +545,8 @@ export class ProdutosVendidosService {
         diferencaV4,                // vendido - recebido (deve ser 0)
         okV4: Math.abs(diferencaV4) < 0.02,
         totalMarcados,              // coluna separada (nao entra na conciliacao)
-        qtdMarcados,
+        qtdMarcados,                // QTD DE PECAS (soma items.qty)
+        qtdVendasMarcado,           // numero de vendas marcadas (info)
         totalDescontosAplicados,    // info: quanto foi de desconto
         totalSubtotal,              // sum(sale.subtotal) — antes do desconto
 
