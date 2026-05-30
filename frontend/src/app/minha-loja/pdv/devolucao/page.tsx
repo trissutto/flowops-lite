@@ -129,6 +129,16 @@ export default function DevolucaoPage() {
     const q = query.trim();
     if (!q) return;
 
+    // ── DETECÇÃO DE VALE-TROCA bipado por engano ──
+    // Vale-troca NÃO é peça — é meio de pagamento. Se vier código TROCA-XXXX,
+    // redireciona pra tela do vale (consulta) ou orienta pra usar no PDV.
+    if (/^TROCA-/i.test(q)) {
+      const code = q.toUpperCase();
+      // Abre tela do vale (consulta histórico + saldo)
+      window.location.href = `/minha-loja/pdv/vale-troca/${encodeURIComponent(code)}`;
+      return;
+    }
+
     // ── MODO "JA TENHO VENDA CARREGADA" ──
     // Se ja escolheu uma venda (data tem items), CADA bipada de SKU/REF dessa
     // venda INCREMENTA a qty selecionada daquele item — em vez de fazer nova busca.
