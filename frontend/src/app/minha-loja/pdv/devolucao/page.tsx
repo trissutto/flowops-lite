@@ -936,14 +936,16 @@ export default function DevolucaoPage() {
                 <strong>Sangria automática</strong> registrada no caixa.
                 <br />
                 Entregue R$ {fmt(success.valorTotal)} em dinheiro pra cliente.
-                <div className="mt-2">
+                <br />
+                <span className="text-xs text-amber-700">⚠️ Imprime 2 vias (CAIXA + CLIENTE).</span>
+                <div className="mt-3">
                   <a
                     href={`/minha-loja/pdv/recibo-devolucao/${encodeURIComponent(success.id)}?autoprint=1`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-block px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-bold"
+                    className="inline-block px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded text-sm font-bold shadow"
                   >
-                    🖨️ Reimprimir comprovante
+                    🖨️ Imprimir 2 vias (CAIXA + CLIENTE)
                   </a>
                 </div>
               </div>
@@ -954,15 +956,15 @@ export default function DevolucaoPage() {
                 <br />
                 Envie R$ {fmt(success.valorTotal)} via PIX para a cliente.
                 <br />
-                <span className="text-xs text-cyan-700">⚠️ Comprovante impresso — colete assinatura após confirmação do PIX.</span>
-                <div className="mt-2">
+                <span className="text-xs text-cyan-700">⚠️ Imprime 2 vias (CAIXA + CLIENTE). Colete assinatura na via CAIXA após confirmação do PIX.</span>
+                <div className="mt-3">
                   <a
                     href={`/minha-loja/pdv/recibo-devolucao/${encodeURIComponent(success.id)}?autoprint=1`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-block px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-bold"
+                    className="inline-block px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded text-sm font-bold shadow"
                   >
-                    🖨️ Reimprimir comprovante
+                    🖨️ Imprimir 2 vias (CAIXA + CLIENTE)
                   </a>
                 </div>
               </div>
