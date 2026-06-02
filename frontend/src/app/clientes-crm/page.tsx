@@ -1332,6 +1332,51 @@ function EnderecosTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void
     complement: '', district: '', city: '', state: '',
   });
   const [busy, setBusy] = useState(false);
+  const [cepLoading, setCepLoading] = useState(false);
+  const [cepError, setCepError] = useState<string | null>(null);
+
+  /**
+   * Lookup ViaCEP (API pública gratuita). Quando CEP tem 8 dígitos completos,
+   * busca rua/bairro/cidade/UF e preenche AUTO. Não sobrescreve o que o usuário
+   * já digitou manualmente — só preenche campos vazios.
+   */
+  async function lookupCep(cepRaw: string) {
+    const clean = cepRaw.replace(/\D/g, '');
+    if (clean.length !== 8) return;
+    setCepLoading(true);
+    setCepError(null);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await r.json();
+      if (data?.erro) {
+        setCepError('CEP não encontrado');
+        return;
+      }
+      setForm((prev) => ({
+        ...prev,
+        // Só preenche se o user não digitou nada — preserva edição manual
+        street: prev.street || data.logradouro || '',
+        district: prev.district || data.bairro || '',
+        city: prev.city || data.localidade || '',
+        state: prev.state || (data.uf || '').toUpperCase(),
+      }));
+    } catch {
+      setCepError('Falha ao buscar CEP — preencha manualmente');
+    } finally {
+      setCepLoading(false);
+    }
+  }
+
+  /** Onchange do campo CEP — formata e dispara lookup ao completar 8 dígitos */
+  function onCepChange(value: string) {
+    const digits = value.replace(/\D/g, '').slice(0, 8);
+    // Formata 12345-678 enquanto digita
+    const formatted = digits.length > 5
+      ? `${digits.slice(0, 5)}-${digits.slice(5)}`
+      : digits;
+    setForm((prev) => ({ ...prev, cep: formatted }));
+    if (digits.length === 8) lookupCep(digits);
+  }
 
   async function submit() {
     setBusy(true);
@@ -1339,6 +1384,7 @@ function EnderecosTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void
       await api(`/customers-crm/${d.id}/addresses`, { method: 'POST', body: JSON.stringify(form) });
       setShowForm(false);
       setForm({ type: 'residential', isPrimary: false, cep: '', street: '', number: '', complement: '', district: '', city: '', state: '' });
+      setCepError(null);
       onUpdate();
     } catch (e: any) {
       alert(`Falha: ${e.message}`);
@@ -1390,8 +1436,24 @@ function EnderecosTab({ d, onUpdate }: { d: CustomerDetail; onUpdate: () => void
               <input type="checkbox" checked={form.isPrimary} onChange={e => setForm({...form, isPrimary: e.target.checked})} />
               Endereço principal
             </label>
-            <input value={form.cep} onChange={e => setForm({...form, cep: e.target.value})} placeholder="CEP" className="border rounded px-2 py-1.5" />
-            <input value={form.state} onChange={e => setForm({...form, state: e.target.value})} placeholder="UF" maxLength={2} className="border rounded px-2 py-1.5 uppercase" />
+            <div className="relative">
+              <input
+                value={form.cep}
+                onChange={(e) => onCepChange(e.target.value)}
+                placeholder="CEP"
+                inputMode="numeric"
+                className={`border rounded px-2 py-1.5 w-full font-mono ${
+                  cepError ? 'border-rose-400 bg-rose-50' : ''
+                }`}
+              />
+              {cepLoading && (
+                <Loader2 className="w-4 h-4 animate-spin text-purple-600 absolute right-2 top-2.5" />
+              )}
+            </div>
+            <input value={form.state} onChange={e => setForm({...form, state: e.target.value.toUpperCase()})} placeholder="UF" maxLength={2} className="border rounded px-2 py-1.5 uppercase" />
+            {cepError && (
+              <div className="col-span-2 text-xs text-rose-600">⚠ {cepError}</div>
+            )}
             <input value={form.street} onChange={e => setForm({...form, street: e.target.value})} placeholder="Rua" className="border rounded px-2 py-1.5 col-span-2" />
             <input value={form.number} onChange={e => setForm({...form, number: e.target.value})} placeholder="Número" className="border rounded px-2 py-1.5" />
             <input value={form.complement} onChange={e => setForm({...form, complement: e.target.value})} placeholder="Complemento" className="border rounded px-2 py-1.5" />
