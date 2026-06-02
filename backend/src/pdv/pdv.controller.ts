@@ -919,7 +919,7 @@ export class PdvController {
     //    Prioriza Customer DA LOJA ATUAL do PDV; se não tem, qualquer um.
     const prisma = (this.svc as any).prisma;
     const storeIdResolved = userRole === 'store' ? req?.user?.storeId : null;
-    let existing = null;
+    let existing: any = null;
     if (storeIdResolved) {
       existing = await prisma.customer.findFirst({
         where: {
