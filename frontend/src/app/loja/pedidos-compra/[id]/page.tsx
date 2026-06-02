@@ -57,6 +57,7 @@ const STATUS_INFO: Record<string, { label: string; color: string }> = {
   enviado: { label: 'Enviado', color: 'bg-sky-100 text-sky-800' },
   aguardando: { label: 'Aguardando', color: 'bg-amber-100 text-amber-800' },
   recebido: { label: 'Recebido', color: 'bg-emerald-100 text-emerald-800' },
+  recebido_parcial: { label: 'Recebido parcial', color: 'bg-amber-100 text-amber-900' },
   recebido_com_erro: { label: 'Recebido c/ erro', color: 'bg-rose-100 text-rose-800' },
   cancelado: { label: 'Cancelado', color: 'bg-slate-100 text-slate-500' },
 };
@@ -123,6 +124,51 @@ export default function PedidoDetalhePage() {
     } finally {
       setReceiving(false);
     }
+  };
+
+  /**
+   * RECEBIMENTO PARCIAL: aceita só a REF clicada. Backend processa apenas
+   * esses itemIds, marca eles como recebido e mantém o pedido em
+   * 'recebido_parcial' até todas as REFs serem recebidas.
+   */
+  const receberRef = async (ref: string, refItems: any[]) => {
+    if (!data) return;
+    const totalRef = refItems.reduce(
+      (s, it) => s + Object.values(it.tamanhosQty || {}).reduce(
+        (a: number, b: any) => a + (Number(b) || 0), 0
+      ),
+      0
+    );
+    if (!confirm(
+      `Confirmar recebimento da REF ${ref} (${totalRef} peças)?\n\n` +
+      `As outras REFs continuam pendentes. Você pode receber elas depois.`,
+    )) return;
+
+    setReceiving(true);
+    try {
+      const itemIds = refItems.map((it) => it.id);
+      const itemsRecebidos = editMode
+        ? refItems.map((it) => ({
+            itemId: it.id,
+            tamanhosQty: adjustedQty[it.id] || it.tamanhosQty,
+          }))
+        : [];
+      const r = await api<any>(`/purchase-orders/${id}/receive`, {
+        method: 'POST',
+        body: JSON.stringify({ itemIds, itemsRecebidos }),
+      });
+      setReceiveResult(r);
+      await fetchData();
+    } catch (e: any) {
+      alert('Erro ao receber REF: ' + e?.message);
+    } finally {
+      setReceiving(false);
+    }
+  };
+
+  /** Abre tela de etiquetas filtrada por REF — só imprime as desta ref */
+  const imprimirEtiquetasDaRef = (ref: string) => {
+    router.push(`/loja/pedidos-compra/${id}/etiquetas?ref=${encodeURIComponent(ref)}`);
   };
 
   const irPraEtiquetas = () => {
@@ -452,10 +498,32 @@ export default function PedidoDetalhePage() {
           }
           const tamanhosOrdenados = Array.from(todosTamanhos).sort((a, b) => Number(a) - Number(b));
 
+          // Status desta REF: 'recebido' se TODOS os items dela foram recebidos
+          const refRecebida = refItems.every((it: any) => it.itemStatus === 'recebido');
+          const refTemSkus = refItems.some((it: any) => {
+            try {
+              const skus = typeof it.skusGerados === 'string'
+                ? JSON.parse(it.skusGerados)
+                : it.skusGerados;
+              return Array.isArray(skus) && skus.length > 0;
+            } catch { return false; }
+          });
+
           return (
-            <div key={ref} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-              <div className="bg-violet-50 px-4 py-2 border-b border-violet-100 flex items-center gap-3">
-                <div className="font-black text-violet-700 font-mono">{ref}</div>
+            <div key={ref} className={`bg-white border rounded-xl overflow-hidden ${
+              refRecebida ? 'border-emerald-300 ring-1 ring-emerald-200' : 'border-slate-200'
+            }`}>
+              <div className={`px-4 py-2 border-b flex items-center gap-3 flex-wrap ${
+                refRecebida ? 'bg-emerald-50 border-emerald-100' : 'bg-violet-50 border-violet-100'
+              }`}>
+                <div className={`font-black font-mono ${refRecebida ? 'text-emerald-700' : 'text-violet-700'}`}>
+                  {ref}
+                </div>
+                {refRecebida && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900">
+                    ✓ RECEBIDO
+                  </span>
+                )}
                 <div className="font-bold text-slate-700">{primeiro.descricaoBase}</div>
                 <div className="text-[11px] text-slate-500">
                   {primeiro.grupoNome} / {primeiro.subgrupoNome}
@@ -465,6 +533,31 @@ export default function PedidoDetalhePage() {
                 <div className="text-xs text-slate-600">
                   Custo {brl(primeiro.custoUnit)} · Venda <b className="text-emerald-700">{brl(primeiro.precoUnit)}</b>
                 </div>
+
+                {/* Botão RECEBER ESTA REF — só aparece se ainda não recebida */}
+                {!refRecebida && !isRecebido && (
+                  <button
+                    onClick={() => receberRef(ref, refItems)}
+                    disabled={receiving}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-md shadow disabled:opacity-50"
+                    title={`Receber só a REF ${ref} agora — outras REFs continuam pendentes`}
+                  >
+                    {receiving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    Receber REF
+                  </button>
+                )}
+
+                {/* Botão ETIQUETAS — só faz sentido se a REF já foi cadastrada no Wincred (refTemSkus) */}
+                {refTemSkus && (
+                  <button
+                    onClick={() => imprimirEtiquetasDaRef(ref)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-xs rounded-md shadow"
+                    title={`Imprimir etiquetas SÓ desta REF (${ref})`}
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    Etiquetas
+                  </button>
+                )}
               </div>
 
               <div className="overflow-x-auto p-2">

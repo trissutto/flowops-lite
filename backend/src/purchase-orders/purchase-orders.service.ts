@@ -375,6 +375,13 @@ export class PurchaseOrdersService {
         itemId: string;
         tamanhosQty: Record<string, number>;
       }>;
+      /**
+       * RECEBIMENTO PARCIAL — IDs dos PurchaseOrderItem que estão sendo
+       * recebidos agora. Se omitido/vazio = recebe TUDO (comportamento legado).
+       * Items não inclusos ficam com status='pendente' e podem ser recebidos
+       * em chamadas futuras.
+       */
+      itemIds?: string[];
     },
     userId?: string,
   ) {
@@ -391,6 +398,12 @@ export class PurchaseOrdersService {
       itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
     }
 
+    // PARCIAL: se itemIds informado, processa SÓ esses. Caso contrário, processa tudo.
+    const itemIdsFilter = (input.itemIds && input.itemIds.length > 0)
+      ? new Set(input.itemIds)
+      : null;
+    const isParcial = !!itemIdsFilter;
+
     // Atualiza qty recebida em cada item (fallback: qty pedida)
     const log: any[] = [];
     let totalSkusInseridos = 0;
@@ -399,6 +412,16 @@ export class PurchaseOrdersService {
     const errors: string[] = [];
 
     for (const it of order.items as any[]) {
+      // PARCIAL: pula items que não estão na lista (ficam pendentes pra próximo recebimento)
+      if (itemIdsFilter && !itemIdsFilter.has(it.id)) {
+        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'pendente', skipped: true });
+        continue;
+      }
+      // Items já recebidos em chamada anterior também pulam (idempotência)
+      if (it.itemStatus === 'recebido') {
+        log.push({ itemId: it.id, ref: it.ref, cor: it.cor, status: 'ja_recebido', skipped: true });
+        continue;
+      }
       const qtdRecebida = itemsRecebidosMap.get(it.id) || it.tamanhosQty;
       const cores = [it.cor];
       const tamanhos = Object.keys(qtdRecebida).filter((t) => Number(qtdRecebida[t]) > 0);
@@ -512,14 +535,38 @@ export class PurchaseOrdersService {
       }
     }
 
-    // Atualiza pedido como recebido
+    // Decide status final do pedido após este recebimento:
+    //  - Se ainda há item com itemStatus != 'recebido' → status='recebido_parcial'
+    //  - Se todos recebidos sem erro → status='recebido'
+    //  - Se todos recebidos com erro → status='recebido_com_erro'
+    const allItems = await (this.prisma as any).purchaseOrderItem.findMany({
+      where: { orderId },
+      select: { id: true, itemStatus: true },
+    });
+    const pendentes = (allItems as any[]).filter((x) => x.itemStatus !== 'recebido').length;
+    let statusFinal: string;
+    if (pendentes > 0) {
+      statusFinal = 'recebido_parcial';
+    } else if (errors.length > 0) {
+      statusFinal = 'recebido_com_erro';
+    } else {
+      statusFinal = 'recebido';
+    }
+
+    // Atualiza pedido
     await (this.prisma as any).purchaseOrder.update({
       where: { id: orderId },
       data: {
-        status: errors.length === 0 ? 'recebido' : 'recebido_com_erro',
-        recebidoAt: new Date(),
+        status: statusFinal,
+        // recebidoAt: só seta quando todas as refs estiverem recebidas
+        recebidoAt: statusFinal === 'recebido' || statusFinal === 'recebido_com_erro'
+          ? new Date()
+          : (order as any).recebidoAt || null,
         recebidoByUserId: userId || null,
         cadastroLog: JSON.stringify({
+          isParcial,
+          itemsAtuais: itemIdsFilter ? Array.from(itemIdsFilter) : 'todos',
+          pendentesAposEsteRecebimento: pendentes,
           totalPecas,
           totalSkusInseridos,
           totalSkusJaExistiam,
@@ -537,6 +584,9 @@ export class PurchaseOrdersService {
 
     return {
       ok: errors.length === 0,
+      isParcial,
+      statusFinal,
+      pendentesRestantes: pendentes,
       totalPecas,
       totalSkusInseridos,
       totalSkusJaExistiam,

@@ -158,12 +158,16 @@ export class PurchaseOrdersController {
   }
 
   // ── Recebimento + Auto-cadastro ──
+  // body.itemIds (opcional) = recebimento parcial de refs específicas
   @Post(':id/receive')
   async receive(@Req() req: any, @Param('id') id: string, @Body() body: any) {
     this.requireWrite(req);
     return this.svc.receive(
       id,
-      { itemsRecebidos: body?.itemsRecebidos || [] },
+      {
+        itemsRecebidos: body?.itemsRecebidos || [],
+        itemIds: Array.isArray(body?.itemIds) ? body.itemIds : undefined,
+      },
       this.userId(req),
     );
   }

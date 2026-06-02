@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Printer, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import EtiquetaPrint from '@/components/EtiquetaPrint';
@@ -30,12 +30,16 @@ const brl = (n: number) =>
 
 export default function EtiquetasPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params?.id as string;
+  // ?ref=C0353 — pré-filtra etiquetas só dessa REF (vem do botão "Etiquetas"
+  // de cada bloco de REF na tela do pedido).
+  const refFromUrl = searchParams?.get('ref') || '';
 
   const [labels, setLabels] = useState<Label[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filterRef, setFilterRef] = useState('');
+  const [filterRef, setFilterRef] = useState(refFromUrl);
 
   useEffect(() => {
     if (!id) return;
@@ -45,8 +49,13 @@ export default function EtiquetasPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Sincroniza filterRef se a URL mudar (caso usuário clique em outra REF)
+  useEffect(() => {
+    if (refFromUrl) setFilterRef(refFromUrl);
+  }, [refFromUrl]);
+
   const filtered = filterRef.trim()
-    ? labels.filter((l) => l.ref.includes(filterRef.trim().toUpperCase()))
+    ? labels.filter((l) => l.ref.toUpperCase() === filterRef.trim().toUpperCase())
     : labels;
 
   const imprimir = () => window.print();
@@ -77,7 +86,14 @@ export default function EtiquetasPage() {
             <ArrowLeft className="w-5 h-5" />
           </Link>
           <div className="flex-1">
-            <h1 className="text-lg font-black">Etiquetas</h1>
+            <h1 className="text-lg font-black">
+              Etiquetas
+              {refFromUrl && (
+                <span className="ml-2 text-sm font-mono bg-violet-100 text-violet-800 px-2 py-0.5 rounded">
+                  REF {refFromUrl}
+                </span>
+              )}
+            </h1>
             <p className="text-xs text-slate-500">
               <b>{filtered.length}</b> etiquetas {filterRef && `(filtrado de ${labels.length})`}
             </p>
