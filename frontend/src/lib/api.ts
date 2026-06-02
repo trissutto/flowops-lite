@@ -97,17 +97,42 @@ function handleUnauthorized() {
   }, 50);
 }
 
+/**
+ * MODO TREINAMENTO — quando ativo via sessionStorage 'flowops_training',
+ * adiciona header `x-training-mode: 1` em TODAS as chamadas. Backend
+ * detecta esse header e pula integrações reais (estoque, Giga, NFC-e, caixa).
+ */
+function isTrainingMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return sessionStorage.getItem('flowops_training') === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setTrainingMode(on: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (on) sessionStorage.setItem('flowops_training', '1');
+    else sessionStorage.removeItem('flowops_training');
+    window.dispatchEvent(new CustomEvent('flowops:training-mode', { detail: { on } }));
+  } catch {}
+}
+
 export async function api<T = any>(
   path: string,
   opts: RequestInit = {},
 ): Promise<T> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+  const training = isTrainingMode();
   try {
     const res = await fetch(`${API_URL}/api${path}`, {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(training ? { 'x-training-mode': '1' } : {}),
         ...(opts.headers || {}),
       },
     });

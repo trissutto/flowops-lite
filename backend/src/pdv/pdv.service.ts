@@ -48,6 +48,8 @@ export class PdvService {
     vendedorName?: string;
     sellerId?: string;
     sellerName?: string;
+    /** MODO TREINAMENTO — quando true, venda inteira é "fake" pra prática */
+    isTraining?: boolean;
   }) {
     if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
     const store = await this.prisma.store.findUnique({
@@ -70,6 +72,7 @@ export class PdvService {
         sellerId: input.sellerId || null,
         sellerName: input.sellerName || null,
         status: 'open',
+        isTraining: !!input.isTraining,
       },
     });
     return sale;
@@ -1318,6 +1321,15 @@ export class PdvService {
     this.logger.log(
       `[pdv] Venda ${sale.id} finalizada: R$${sale.total.toFixed(2)} via ${finalMethod} (${(payments as any[]).length} pagamento(s))`,
     );
+
+    // ── SKIP MODO TREINAMENTO ──
+    // Venda marcada como treinamento NÃO grava no Wincred nem decrementa estoque
+    // nem emite NFC-e nem mexe em marcado/Giga. Só vive no Postgres do FlowOps
+    // como histórico do treino — não conta em relatórios financeiros.
+    if ((sale as any).isTraining) {
+      this.logger.log(`[pdv→TREINO] Venda ${sale.id} é treinamento — pulando Wincred, estoque, Giga, NFC-e.`);
+      return { ok: true, sale: updated, nfcePreview: null, training: true };
+    }
 
     // GRAVAÇÃO NO WINCRED — replica venda na tabela `caixa` do gigasistemas21
     // pra contabilidade/relatórios. Em modo SHADOW por padrão (PDV_ERP_WRITE_ENABLED=false)

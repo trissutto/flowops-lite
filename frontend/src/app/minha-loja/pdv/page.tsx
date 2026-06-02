@@ -31,6 +31,8 @@ import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvTo
 import ValeTrocaModal from './ValeTrocaModal';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
 import StorePickOrderAlert from '@/components/StorePickOrderAlert';
+import TrainingModeBanner from '@/components/TrainingModeBanner';
+import TrainingModeButton from '@/components/TrainingModeButton';
 
 /**
  * Helper pro backdrop dos modais:
@@ -1119,6 +1121,7 @@ function PdvPageInner() {
       className="min-h-screen flex flex-col"
       style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
     >
+      <TrainingModeBanner />
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
           /minha-loja/realinhamento pra unificar identidade visual. */}
       <header
@@ -1277,6 +1280,10 @@ function PdvPageInner() {
             </span>
             <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F6</kbd>
           </button>
+
+          {/* Botão Modo Treinamento — só aparece quando NÃO está em treino.
+              Quando está em treino, o banner global cobre. */}
+          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-orange-400 hover:bg-orange-300 text-orange-950 ring-2 ring-orange-200/50" />
         </div>
       </header>
 

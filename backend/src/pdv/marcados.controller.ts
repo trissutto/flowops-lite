@@ -1,6 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { MarcadosService } from './marcados.service';
+import { isTrainingRequest } from './training.util';
 
 /**
  * /pdv/marcados — sistema de "leva pra provar em casa".
@@ -133,6 +134,7 @@ export class MarcadosController {
       customerPhone: body?.customerPhone,
       vendedorUserId,
       vendedorName,
+      isTraining: isTrainingRequest(req),
     });
   }
 }

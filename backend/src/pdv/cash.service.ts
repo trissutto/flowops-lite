@@ -46,7 +46,7 @@ export class CashService {
 
     // Vendas finalizadas dessa sessão
     const sales = await (this.prisma as any).pdvSale.findMany({
-      where: { cashSessionId: sessionId, status: 'finalized' },
+      where: { cashSessionId: sessionId, status: 'finalized', isTraining: false },
       include: { payments: true },
     });
 
@@ -136,7 +136,7 @@ export class CashService {
 
     // Vendas finalizadas dessa sessão
     const sales = await (this.prisma as any).pdvSale.findMany({
-      where: { cashSessionId: session.id, status: 'finalized' },
+      where: { cashSessionId: session.id, status: 'finalized', isTraining: false },
       include: { payments: true },
     });
 
@@ -564,7 +564,7 @@ export class CashService {
 
         // Ranking de vendedoras (qtd vendas + total) — só vendas finalizadas
         const sales = await (this.prisma as any).pdvSale.findMany({
-          where: { cashSessionId: session.id, status: 'finalized' },
+          where: { cashSessionId: session.id, status: 'finalized', isTraining: false },
           select: { sellerName: true, vendedorName: true, total: true },
         });
         const ranking: Record<string, { nome: string; qtd: number; total: number }> = {};
@@ -734,6 +734,7 @@ export class CashService {
           where: {
             storeCode: s.code,
             status: 'finalized',
+            isTraining: false,
             finalizedAt: { gte: fromStart, lte: toEnd },
           },
           select: {
@@ -1190,8 +1191,10 @@ export class CashService {
     motivo: string;
     userId?: string;
     userName?: string;
+    /** MODO TREINAMENTO — não conta no caixa real, mesma sessão mas filtrado */
+    isTraining?: boolean;
   }) {
-    const { storeCode, tipo, valor, motivo, userId, userName } = input;
+    const { storeCode, tipo, valor, motivo, userId, userName, isTraining } = input;
 
     if (!['sangria', 'suprimento'].includes(tipo)) {
       throw new BadRequestException(`Tipo inválido: ${tipo}`);
@@ -1216,6 +1219,7 @@ export class CashService {
         motivo: motivo.trim(),
         userId: userId || null,
         userName: userName || null,
+        isTraining: !!isTraining,
       },
     });
 

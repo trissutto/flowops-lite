@@ -1045,6 +1045,12 @@ model PdvSale {
   cancelledAt     DateTime? @map("cancelled_at")
   cancelReason    String?  @map("cancel_reason")
 
+  // ── MODO TREINAMENTO ──
+  // Quando true: venda não decrementou estoque, não chamou Giga, não emitiu NFC-e.
+  // Não conta em relatórios financeiros nem conciliação. Existe só pra histórico
+  // do treinamento (quem praticou, quando, o quê).
+  isTraining      Boolean  @default(false) @map("is_training")
+
   items           PdvSaleItem[]
   payments        PdvSalePayment[]
 
@@ -1054,6 +1060,7 @@ model PdvSale {
   @@index([cashSessionId])
   @@index([sellerId])
   @@index([stoneTxId])
+  @@index([isTraining])
   @@map("pdv_sales")
 }
 
@@ -1141,10 +1148,14 @@ model PdvCashSession {
   checkedByName   String?   @map("checked_by_name")
   checkedNote     String?   @map("checked_note") @db.Text
 
+  // ── MODO TREINAMENTO ──
+  isTraining      Boolean  @default(false) @map("is_training")
+
   movements       PdvCashMovement[]
 
   @@index([storeCode, status])
   @@index([storeCode, openedAt(sort: Desc)])
+  @@index([isTraining])
   @@map("pdv_cash_sessions")
 }
 
@@ -1162,10 +1173,14 @@ model PdvCashMovement {
   userName      String?  @map("user_name")
   createdAt     DateTime @default(now()) @map("created_at")
 
+  // ── MODO TREINAMENTO ──
+  isTraining    Boolean  @default(false) @map("is_training")
+
   session       PdvCashSession @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
 
   @@index([cashSessionId])
   @@index([tipo])
+  @@index([isTraining])
   @@map("pdv_cash_movements")
 }
 
@@ -1213,12 +1228,16 @@ model PdvReturn {
   motivo          String?  @db.Text
   createdAt       DateTime @default(now()) @map("created_at")
 
+  // ── MODO TREINAMENTO ──
+  isTraining     Boolean  @default(false) @map("is_training")
+
   items           PdvReturnItem[]
 
   @@index([originalSaleId])
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([customerCpf])
   @@index([status])
+  @@index([isTraining])
   @@map("pdv_returns")
 }
 
@@ -1569,10 +1588,14 @@ model MasterAudit {
   motivo      String   @db.Text
   createdAt   DateTime @default(now()) @map("created_at")
 
+  // ── MODO TREINAMENTO ──
+  isTraining  Boolean  @default(false) @map("is_training")
+
   @@index([action])
   @@index([entityType, entityId])
   @@index([storeCode])
   @@index([createdAt])
+  @@index([isTraining])
   @@map("master_audits")
 }
 

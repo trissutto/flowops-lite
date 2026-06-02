@@ -80,6 +80,8 @@ export class ProdutosVendidosService {
     const saleListWhere: any = {
       status: 'finalized',
       finalizedAt: { gte: fromDate, lte: toDate },
+      // ── EXCLUI VENDAS DE TREINAMENTO dos relatórios financeiros ──
+      isTraining: false,
     };
     if (filters.storeCode) saleListWhere.storeCode = filters.storeCode;
     if (filters.customerCpf) {
@@ -159,6 +161,8 @@ export class ProdutosVendidosService {
     if (includeReturns) {
       const retWhere: any = {
         createdAt: { gte: fromDate, lte: toDate },
+        // ── EXCLUI DEVOLUÇÕES DE TREINAMENTO ──
+        isTraining: false,
       };
       if (filters.storeCode) retWhere.storeCode = filters.storeCode;
       if (filters.customerCpf) {

@@ -375,16 +375,26 @@ export class ReturnsService {
 
     valorTotal = Math.round(valorTotal * 100) / 100;
 
+    // ── HERDA MODO TREINAMENTO da venda original ──
+    // Devolução de venda de treino é também treino: NÃO estorna estoque,
+    // NÃO gera sangria/caixa, NÃO conta em relatórios.
+    const isTraining = !!(sale as any).isTraining;
+
     // Sessão de caixa atual (necessária pra dinheiro → sangria)
     const cashSession = await this.cash.getCurrentSession(storeCode);
-    if ((modo === 'dinheiro' || modo === 'pix') && !cashSession) {
+    if ((modo === 'dinheiro' || modo === 'pix') && !cashSession && !isTraining) {
       throw new BadRequestException(
         'Modo dinheiro/PIX exige caixa aberto pra registrar a sangria.',
       );
     }
 
     // Tenta estornar estoque Giga (não bloqueia se falhar — registra erro)
+    // PULA se for treinamento — não mexer em estoque real.
     const stockAttempts: Array<{ sku: string; ok: boolean; error?: string }> = [];
+    if (isTraining) {
+      for (const it of itemsToCreate) stockAttempts.push({ sku: it.sku, ok: true });
+      this.logger.log(`[returns→TREINO] devolução simulada — skip increaseStock`);
+    } else
     try {
       const erpResult = await this.erp.increaseStock(
         itemsToCreate.map((it) => ({
@@ -435,6 +445,7 @@ export class ReturnsService {
         userId: userId || null,
         userName: userName || null,
         motivo: motivo || null,
+        isTraining,
         items: {
           create: itemsToCreate.map((it, idx) => ({
             originalItemId: it.originalItemId,
@@ -454,8 +465,9 @@ export class ReturnsService {
       include: { items: true },
     });
 
-    // Sangria automatica se for em dinheiro OU pix (saiu valor do caixa)
-    if ((modo === 'dinheiro' || modo === 'pix') && cashSession) {
+    // Sangria automatica se for em dinheiro OU pix (saiu valor do caixa).
+    // PULA se treinamento (não mexe no caixa real).
+    if ((modo === 'dinheiro' || modo === 'pix') && cashSession && !isTraining) {
       const tipoLabel = modo === 'pix' ? 'PIX devolucao' : 'Devolucao dinheiro';
       await this.cash.addMovement({
         storeCode,

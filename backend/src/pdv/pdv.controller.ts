@@ -17,6 +17,7 @@ import {
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { validateMinLevel } from '../auth/auth-levels.util';
+import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
 import { ErpService } from '../erp/erp.service';
 import { PixService } from './pix.service';
@@ -68,6 +69,20 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/training/validate
+   * Valida senha de treinamento. Frontend chama uma vez no clique do botão
+   * "🎓 Modo Treinamento" — se ok, salva flag no sessionStorage e passa a
+   * mandar header `x-training-mode: 1` em todas as requests subsequentes.
+   * Senha vem do env TREINAMENTO_PASSWORD.
+   */
+  @Post('training/validate')
+  validateTraining(@Body() body: { password: string }) {
+    const ok = isValidTrainingPassword(body?.password || '');
+    if (!ok) throw new ForbiddenException('Senha de treinamento inválida');
+    return { ok: true, mode: 'training' };
+  }
+
+  /**
    * GET /pdv/product?sku=5358427
    * Busca produto Giga pra pré-visualização (sem adicionar ao carrinho).
    * Útil pra consulta de preço.
@@ -101,6 +116,7 @@ export class PdvController {
       vendedorName: req?.user?.name || null,
       sellerId: body?.sellerId,
       sellerName: body?.sellerName,
+      isTraining: isTrainingRequest(req),
     });
   }
 

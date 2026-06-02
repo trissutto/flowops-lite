@@ -475,6 +475,8 @@ export class MarcadosService {
     customerPhone?: string;
     vendedorUserId?: string;
     vendedorName?: string;
+    /** MODO TREINAMENTO — venda criada não é "vendida de verdade" */
+    isTraining?: boolean;
   }): Promise<{ saleId: string; itemsAdded: number; total: number }> {
     if (!input.registros || input.registros.length === 0) {
       throw new BadRequestException('Nenhum REGISTRO informado');
@@ -513,6 +515,9 @@ export class MarcadosService {
       cashSessionId = s?.id || null;
     } catch { /* segue sem caixa */ }
 
+    // ── MODO TREINAMENTO ──
+    // Em treino NÃO grava marcadosRegistros (senão finalize/cancel tentaria
+    // tocar nos REGISTROs reais do Giga). Venda fica como treino e não impacta.
     const sale = await (this.prisma as any).pdvSale.create({
       data: {
         storeCode: store.code,
@@ -524,7 +529,8 @@ export class MarcadosService {
         customerName: input.customerName || null,
         customerPhone: input.customerPhone || null,
         status: 'open',
-        marcadosRegistros: rows.map((x) => Number(x.REGISTRO)).join(','),
+        isTraining: !!input.isTraining,
+        marcadosRegistros: input.isTraining ? null : rows.map((x) => Number(x.REGISTRO)).join(','),
       },
     });
 
