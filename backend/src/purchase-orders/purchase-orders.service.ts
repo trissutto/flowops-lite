@@ -286,9 +286,31 @@ export class PurchaseOrdersService {
         tributoPct: Number(input.tributoPct || 0),
         descontoPct: Number(input.descontoPct || 0),
         tamanhosQty: JSON.stringify(input.tamanhosQty),
+        // itemStatus default = 'pendente' (do schema) — não precisa setar aqui
       },
     });
     await this.recalcOrderTotals(orderId);
+
+    // SE o pedido já estava recebido e acabamos de adicionar um item novo
+    // (pendente), baixa o status pra 'recebido_parcial' pra liberar o botão
+    // "Receber REF" no frontend. Sem isso o usuário ficava sem como receber
+    // o item adicionado depois.
+    try {
+      const order = await (this.prisma as any).purchaseOrder.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      if (order && (order.status === 'recebido' || order.status === 'recebido_com_erro')) {
+        await (this.prisma as any).purchaseOrder.update({
+          where: { id: orderId },
+          data: { status: 'recebido_parcial' },
+        });
+        this.logger.log(`[purchase-orders] Pedido ${orderId} voltou pra 'recebido_parcial' (item novo adicionado)`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[purchase-orders] addItem: falha ao ajustar status do pedido: ${e?.message}`);
+    }
+
     return it;
   }
 
@@ -386,23 +408,25 @@ export class PurchaseOrdersService {
     userId?: string,
   ) {
     const order = await this.getById(orderId);
-    if (order.status === 'recebido') {
-      throw new BadRequestException('Pedido já foi recebido');
-    }
     if (order.status === 'cancelado') {
       throw new BadRequestException('Pedido cancelado — não pode receber');
+    }
+    // PARCIAL: se itemIds informado, processa SÓ esses. Caso contrário, processa tudo.
+    const itemIdsFilter = (input.itemIds && input.itemIds.length > 0)
+      ? new Set(input.itemIds)
+      : null;
+    const isParcial = !!itemIdsFilter;
+
+    // Pedido já 'recebido' pode receber MAIS itens apenas em modo parcial
+    // (vendedora adicionou item novo num pedido fechado). Sem itemIds, bloqueia.
+    if (order.status === 'recebido' && !isParcial) {
+      throw new BadRequestException('Pedido já foi recebido. Pra receber itens adicionados depois, use "Receber REF".');
     }
 
     const itemsRecebidosMap = new Map<string, Record<string, number>>();
     for (const ir of input.itemsRecebidos || []) {
       itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
     }
-
-    // PARCIAL: se itemIds informado, processa SÓ esses. Caso contrário, processa tudo.
-    const itemIdsFilter = (input.itemIds && input.itemIds.length > 0)
-      ? new Set(input.itemIds)
-      : null;
-    const isParcial = !!itemIdsFilter;
 
     // Atualiza qty recebida em cada item (fallback: qty pedida)
     const log: any[] = [];

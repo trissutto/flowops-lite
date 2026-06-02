@@ -534,8 +534,12 @@ export default function PedidoDetalhePage() {
                   Custo {brl(primeiro.custoUnit)} · Venda <b className="text-emerald-700">{brl(primeiro.precoUnit)}</b>
                 </div>
 
-                {/* Botão RECEBER ESTA REF — só aparece se ainda não recebida */}
-                {!refRecebida && !isRecebido && (
+                {/* Botão RECEBER ESTA REF — aparece sempre que a REF ainda
+                    não foi recebida (independente do status geral do pedido).
+                    Cobre o caso de item adicionado DEPOIS de o pedido já
+                    estar 'recebido' — vendedora precisa poder dar entrada
+                    nesse item novo. */}
+                {!refRecebida && (
                   <button
                     onClick={() => receberRef(ref, refItems)}
                     disabled={receiving}
