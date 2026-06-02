@@ -120,6 +120,17 @@ export class CustomersCrmController {
   }
 
   /**
+   * POST /customers-crm/etl/giga/reset
+   * APAGA TODOS os Customers Giga + links. Usar antes do Sincronizar pra
+   * começar do zero. WC/PDV/manual preservados.
+   */
+  @Post('etl/giga/reset')
+  @AdminOnly()
+  async gigaReset() {
+    return this.gigaEtl.resetClientesGiga();
+  }
+
+  /**
    * POST /customers-crm/etl/giga/cancelar
    * Solicita cancelamento do sync Giga em andamento. Os loops checam essa
    * flag em cada iteração e param graciosamente. Os dados já gravados ficam.

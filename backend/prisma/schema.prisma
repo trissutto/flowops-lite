@@ -1707,6 +1707,7 @@ model Customer {
   cashbackTransactions  CashbackTransaction[]
   tags                  CustomerTag[]
   rfvSnapshots          CustomerRfvSnapshot[]
+  gigaLinks             CustomerGigaLink[]
 
   @@index([cpf])
   @@index([phone])
@@ -1716,6 +1717,35 @@ model Customer {
   @@index([originStoreId])
   @@index([lastOrderAt])
   @@map("customers")
+}
+
+// ===========================================================================
+// CustomerGigaLink — chave composta (loja, codigo) do Giga Wincred.
+//
+// Resolve bug crítico descoberto em jun/2026: o Giga usa contador de
+// cadastros POR LOJA, então codigo=1 existe em CADA uma das 14 lojas. O
+// campo `Customer.registroGiga` (Int único) era ambíguo — várias linhas
+// Giga colidiam na mesma chave.
+//
+// Agora cada cadastro Giga vira UM link. Múltiplos links podem apontar
+// pro mesmo Customer (deduplicado por CPF). Cliente sem CPF: cada link
+// vira Customer separado.
+//
+// `originStoreId` do Customer = loja do link mais antigo (cadastrou
+// primeiro).
+// ===========================================================================
+model CustomerGigaLink {
+  id          String   @id @default(uuid())
+  customerId  String   @map("customer_id")
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  gigaLoja    String   @map("giga_loja")    // "01", "02", "04"...
+  gigaCodigo  Int      @map("giga_codigo")  // 1, 2, 1234...
+  ultimoSync  DateTime @default(now()) @map("ultimo_sync")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([gigaLoja, gigaCodigo], name: "giga_loja_codigo_unique")
+  @@index([customerId])
+  @@map("customer_giga_links")
 }
 
 // ===========================================================================

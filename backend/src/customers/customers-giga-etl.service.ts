@@ -172,11 +172,17 @@ export class CustomersGigaEtlService {
       cpf: r[cols.cpf],
     }));
 
-    // 2. Customer atual
-    const customer = await (this.prisma as any).customer.findFirst({
-      where: { registroGiga: codCliente },
-      include: { originStore: { select: { code: true, name: true } } },
+    // 2. Customers atuais ligados a esse codCliente via CustomerGigaLink
+    //    (chave composta — pode ter até 1 Customer por loja)
+    const links = await (this.prisma as any).customerGigaLink.findMany({
+      where: { gigaCodigo: codCliente },
+      include: {
+        customer: {
+          include: { originStore: { select: { code: true, name: true } } },
+        },
+      },
     });
+    const customer = links[0]?.customer || null; // primeiro pra compat com output antigo
 
     // 3. Store que deveria ser
     const storeIdResolved = this._resolveStoreId(lojaGiga);
@@ -210,12 +216,20 @@ export class CustomersGigaEtlService {
         id: customer.id,
         name: customer.name,
         cpf: customer.cpf,
-        registroGiga: customer.registroGiga,
+        registroGiga: customer.registroGiga, // legacy — ignorar
         originSource: customer.originSource,
         originStoreId: customer.originStoreId,
         originStore: customer.originStore,
         active: customer.active,
       } : null,
+      todosCustomersLigados: links.map((l: any) => ({
+        gigaLoja: l.gigaLoja,
+        gigaCodigo: l.gigaCodigo,
+        customerId: l.customerId,
+        customerName: l.customer?.name,
+        customerCpf: l.customer?.cpf,
+        originStore: l.customer?.originStore,
+      })),
       storeResolved: {
         storeIdRetornado: storeIdResolved,
         storeCode: storeResolved?.code,
@@ -283,19 +297,30 @@ export class CustomersGigaEtlService {
       throw new Error('Coluna LOJA não encontrada na tabela clientes do Giga');
     }
 
-    // Filtro: por padrão só os que estão sem loja. Com sobrescrever=true,
-    // pega TODOS os clientes com registroGiga preenchido — INCLUSIVE os que
-    // estão marcados originSource='woo' (clientes que compraram no site mas
-    // TAMBÉM têm cadastro no Giga). Regra de negócio: se tem cadastro Giga
-    // (registroGiga != null), a LOJA do Giga manda — não importa origem.
-    // Resultado: clientes só-site continuam em 13 (sem registroGiga); quem
-    // tem cadastro físico ganha a loja correta.
-    const where: any = { registroGiga: { not: null } };
+    // NOVA LÓGICA (jun/2026): usa CustomerGigaLink (chave composta loja+codigo)
+    // em vez de registroGiga (Int único, era ambíguo). Pra cada Customer com
+    // pelo menos um link Giga, pega o link MAIS ANTIGO (loja que cadastrou
+    // primeiro) e usa essa loja como originStoreId.
+    //
+    // - sobrescrever=false: só atualiza Customers com originStoreId=null
+    // - sobrescrever=true: regrava TODOS os Customers com link Giga
+    const where: any = {
+      gigaLinks: { some: {} }, // tem pelo menos 1 link
+      originSource: { not: 'woo' }, // não toca em quem é só do site
+    };
     if (!opts?.sobrescrever) where.originStoreId = null;
 
     const customers = await (this.prisma as any).customer.findMany({
       where,
-      select: { id: true, registroGiga: true, originStoreId: true },
+      select: {
+        id: true,
+        originStoreId: true,
+        gigaLinks: {
+          orderBy: { createdAt: 'asc' }, // mais antigo primeiro
+          take: 1,
+          select: { gigaLoja: true, gigaCodigo: true },
+        },
+      },
     });
 
     let atualizados = 0;
@@ -303,41 +328,21 @@ export class CustomersGigaEtlService {
     let semStoreCorrespondente = 0;
     let pulados = 0;
 
-    // Busca LOJA do Giga em batches via IN (...) — muito mais rápido que 1 query por cliente
-    const BATCH = 200;
-    for (let i = 0; i < customers.length; i += BATCH) {
-      const slice = customers.slice(i, i + BATCH);
-      const codigos = slice.map((c: any) => Number(c.registroGiga)).filter(Boolean);
-      if (codigos.length === 0) continue;
+    for (const c of customers as any[]) {
+      const link = c.gigaLinks?.[0];
+      if (!link?.gigaLoja) { semLojaNoGiga++; continue; }
+      const storeId = this._resolveStoreId(link.gigaLoja);
+      if (!storeId) { semStoreCorrespondente++; continue; }
+      if (storeId === c.originStoreId) { pulados++; continue; }
 
-      const placeholders = codigos.map(() => '?').join(',');
-      const [rows]: any = await pool.query(
-        `SELECT ${cols.codigo} AS codCliente, ${cols.loja} AS loja
-          FROM clientes
-          WHERE ${cols.codigo} IN (${placeholders})`,
-        codigos,
-      );
-      const lojaByCod = new Map<number, string | null>();
-      for (const r of rows as any[]) {
-        lojaByCod.set(Number(r.codCliente), r.loja ? String(r.loja).trim() : null);
-      }
-
-      for (const c of slice as any[]) {
-        const lojaRaw = lojaByCod.get(Number(c.registroGiga));
-        if (!lojaRaw) { semLojaNoGiga++; continue; }
-        const storeId = this._resolveStoreId(lojaRaw);
-        if (!storeId) { semStoreCorrespondente++; continue; }
-        if (storeId === c.originStoreId) { pulados++; continue; } // já tá certo
-
-        try {
-          await (this.prisma as any).customer.update({
-            where: { id: c.id },
-            data: { originStoreId: storeId },
-          });
-          atualizados++;
-        } catch (e: any) {
-          this.logger.warn(`[giga-etl] atualizar loja cliente ${c.id} falhou: ${e?.message}`);
-        }
+      try {
+        await (this.prisma as any).customer.update({
+          where: { id: c.id },
+          data: { originStoreId: storeId },
+        });
+        atualizados++;
+      } catch (e: any) {
+        this.logger.warn(`[giga-etl] atualizar loja cliente ${c.id} falhou: ${e?.message}`);
       }
     }
 
@@ -353,6 +358,53 @@ export class CustomersGigaEtlService {
       semLojaNoGiga,
       semStoreCorrespondente,
       pulados,
+      duracaoMs: Date.now() - t0,
+    };
+  }
+
+  /**
+   * RESET CLIENTES GIGA — apaga todos os Customers com originSource
+   * 'giga' ou 'giga_sistema' + os CustomerGigaLink (cascade). Preserva
+   * WC, PDV e manual. Use ANTES de rodar Sincronizar Giga do zero pra
+   * limpar bagunça de syncs antigos com chave ambígua.
+   */
+  async resetClientesGiga(): Promise<{
+    customersApagados: number;
+    linksApagados: number;
+    duracaoMs: number;
+  }> {
+    const t0 = Date.now();
+
+    // 1. Conta + apaga links órfãos (de Customers que serão apagados)
+    const customersGiga = await (this.prisma as any).customer.findMany({
+      where: { originSource: { in: ['giga', 'giga_sistema'] } },
+      select: { id: true },
+    });
+    const idsGiga = customersGiga.map((c: any) => c.id);
+
+    const linksDel = await (this.prisma as any).customerGigaLink.deleteMany({
+      where: { customerId: { in: idsGiga } },
+    });
+
+    // 2. Apaga Customers Giga (cascade limpa addresses, consents, tags...)
+    const customersDel = await (this.prisma as any).customer.deleteMany({
+      where: { originSource: { in: ['giga', 'giga_sistema'] } },
+    });
+
+    // 3. Limpa registroGiga residual de Customers que sobraram (WC etc)
+    await (this.prisma as any).customer.updateMany({
+      where: { registroGiga: { not: null } },
+      data: { registroGiga: null },
+    });
+
+    this.logger.warn(
+      `[giga-etl] RESET CLIENTES GIGA: ${customersDel.count} customers + ` +
+      `${linksDel.count} links apagados. ${Date.now() - t0}ms`,
+    );
+
+    return {
+      customersApagados: customersDel.count,
+      linksApagados: linksDel.count,
       duracaoMs: Date.now() - t0,
     };
   }
@@ -793,48 +845,62 @@ export class CustomersGigaEtlService {
     const cpfDigits = String(row.cpf || '').replace(/\D/g, '');
     const codCliente = Number(row.codCliente) || null;
     const cpfValido = cpfDigits && cpfDigits.length === 11;
+    const gigaLoja = row.loja ? String(row.loja).trim().padStart(2, '0') : null;
 
-    // Precisa de PELO MENOS codCliente pra rastreabilidade. Sem CPF nem
-    // codCliente, não tem como deduplicar — pula.
-    if (!cpfValido && !codCliente) {
+    // CHAVE COMPOSTA: (loja, codigo). Sem loja não tem como rastrear — pula.
+    if (!codCliente || !gigaLoja) {
       this.state.pulados++;
       return;
     }
 
-    // SEM CPF, COM codCliente: importa MESMO ASSIM usando registroGiga
-    // como chave (clientes antigos do Giga frequentemente não têm CPF —
-    // ex: códigos 1, 2, 3, 4 do cadastro inicial da loja).
-    if (!cpfValido) {
-      const existing = await (this.prisma as any).customer.findFirst({
-        where: { registroGiga: codCliente },
+    // 1. Tenta achar link existente pela chave composta (loja, codigo)
+    const linkExistente = await (this.prisma as any).customerGigaLink.findUnique({
+      where: { giga_loja_codigo_unique: { gigaLoja, gigaCodigo: codCliente } },
+      include: { customer: true },
+    });
+
+    if (linkExistente) {
+      // Link já existe → atualiza customer com merge não-destrutivo
+      await this._aplicarMerge(linkExistente.customer, row);
+      await (this.prisma as any).customerGigaLink.update({
+        where: { id: linkExistente.id },
+        data: { ultimoSync: new Date() },
       });
-      if (existing) {
-        await this._aplicarMerge(existing, row);
-        this.state.atualizados++;
-        return;
-      }
-      // Cria NOVO sem CPF
-      await this._criarNovo(row, '', codCliente);
-      this.state.criados++;
+      this.state.atualizados++;
       return;
     }
 
-    // COM CPF VÁLIDO: busca por CPF (ambos formatos) OU por registroGiga.
-    // CPF formatado pro padrão FlowOps: 12345678901 → 123.456.789-01
-    const cpfFormatted = this._formatCpf(cpfDigits);
-    const whereClauses: any[] = [{ cpf: cpfDigits }, { cpf: cpfFormatted }];
-    if (codCliente) whereClauses.push({ registroGiga: codCliente });
-    const existing = await (this.prisma as any).customer.findFirst({
-      where: { OR: whereClauses },
-    });
+    // 2. Sem link. Se tem CPF, tenta deduplicar por CPF (mesma pessoa
+    //    cadastrada em outra loja Giga → reusa o Customer e adiciona novo
+    //    link).
+    if (cpfValido) {
+      const cpfFormatted = this._formatCpf(cpfDigits);
+      const customerExistente = await (this.prisma as any).customer.findFirst({
+        where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFormatted }] },
+      });
 
-    if (existing) {
-      await this._aplicarMerge(existing, row);
-      this.state.atualizados++;
-    } else {
-      await this._criarNovo(row, cpfDigits, codCliente);
-      this.state.criados++;
+      if (customerExistente) {
+        // Customer existe (provavelmente WC ou PDV ou outro link Giga).
+        // Cria o link e merge.
+        await (this.prisma as any).customerGigaLink.create({
+          data: {
+            customerId: customerExistente.id,
+            gigaLoja,
+            gigaCodigo: codCliente,
+          },
+        });
+        await this._aplicarMerge(customerExistente, row);
+        this.state.atualizados++;
+        return;
+      }
     }
+
+    // 3. Não tem link nem Customer com CPF batendo → cria Customer novo +
+    //    link novo. Esse caminho cobre clientes Giga sem CPF (códigos
+    //    antigos 1, 2, 3...) e clientes com CPF que ainda não estavam no
+    //    banco.
+    await this._criarNovoComLink(row, cpfDigits, codCliente, gigaLoja);
+    this.state.criados++;
   }
 
   /**
@@ -844,14 +910,10 @@ export class CustomersGigaEtlService {
   private async _aplicarMerge(existing: any, row: any): Promise<void> {
     const updates: any = {};
 
-    // registroGiga sempre atualiza (rastreio)
-    const codCliente = Number(row.codCliente) || null;
-    if (codCliente && existing.registroGiga !== codCliente) {
-      updates.registroGiga = codCliente;
-    }
+    // registroGiga: NÃO toca mais aqui. A vinculação Giga ↔ Customer agora
+    // vive na tabela customer_giga_links (chave composta loja+codigo).
 
     // Reclassifica cliente-sistema se aplicável (e ainda não foi marcado).
-    // Útil pra clientes importados antes do filtro de heurística existir.
     if (existing.originSource === 'giga') {
       const nomeAtual = (existing.name || row.nome || '').toString().toUpperCase();
       if (this._ehClienteSistema(nomeAtual)) {
@@ -860,15 +922,13 @@ export class CustomersGigaEtlService {
       }
     }
 
-    // originStoreId: o campo LOJA do Giga é a FONTE DE VERDADE pra clientes
-    // Giga. SEMPRE atualiza, mesmo se já tinha valor (corrige clientes
-    // importados em syncs antigos com lógica errada). EXCEÇÃO: clientes WC
-    // (originSource='woo') ficam com loja 13 (SITE) intocada.
-    if (existing.originSource !== 'woo') {
+    // originStoreId: só seta se ainda for null. NÃO sobrescreve loja já
+    // gravada — quando o mesmo CPF aparece em múltiplas lojas Giga, a loja
+    // origem é a do PRIMEIRO link (loja onde cadastrou primeiro). EXCEÇÃO:
+    // clientes WC ficam loja 13 (SITE) intocada.
+    if (!existing.originStoreId && existing.originSource !== 'woo') {
       const storeId = this._resolveStoreId(row.loja);
-      if (storeId && storeId !== existing.originStoreId) {
-        updates.originStoreId = storeId;
-      }
+      if (storeId) updates.originStoreId = storeId;
     }
 
     // ZERAR LTV inflado de syncs anteriores (que tentava importar histórico
@@ -950,7 +1010,12 @@ export class CustomersGigaEtlService {
    * Clientes-sistema (VENDAS ONLINE, VISA, etc) viram originSource='giga_sistema'
    * pra ficarem fora da base de marketing.
    */
-  private async _criarNovo(row: any, cpfDigits: string, codCliente: number | null): Promise<void> {
+  private async _criarNovoComLink(
+    row: any,
+    cpfDigits: string,
+    codCliente: number,
+    gigaLoja: string,
+  ): Promise<void> {
     const tel = String(row.foneCel || row.foneRes || '').replace(/\D/g, '');
     const telRes = String(row.foneRes || '').replace(/\D/g, '');
     const email = String(row.email || '').trim().toLowerCase();
@@ -958,31 +1023,35 @@ export class CustomersGigaEtlService {
     const originStoreId = this._resolveStoreId(row.loja);
     const nomeUpper = String(row.nome || '').trim().toUpperCase() || null;
 
-    // Cliente-sistema (VENDAS ONLINE, VISA, PEÇAS RESERVADAS, etc) marca
-    // como giga_sistema pra não poluir marketing. active=false pra não
-    // aparecer em listas/campanhas por padrão.
     const isSistema = this._ehClienteSistema(nomeUpper);
 
-    // CPF é opcional — clientes antigos do Giga (códigos 1, 2, 3...) podem
-    // não ter CPF cadastrado. Nesse caso fica null e a chave de dedupe vira
-    // apenas o registroGiga.
-    const customer = await (this.prisma as any).customer.create({
-      data: {
-        cpf: cpfDigits && cpfDigits.length === 11 ? this._formatCpf(cpfDigits) : null,
-        name: nomeUpper,
-        whatsapp: tel.length >= 10 ? tel : null,
-        phone: telRes.length >= 10 && telRes !== tel ? telRes : null,
-        email: email.includes('@') ? email : null,
-        birthDate,
-        registroGiga: codCliente,
-        originSource: isSistema ? 'giga_sistema' : 'giga',
-        originStoreId,
-        vipTier: 'bronze',
-        active: !isSistema,
-      },
-    });
+    // Cria Customer + Link em transação atômica
+    await (this.prisma as any).$transaction(async (tx: any) => {
+      const customer = await tx.customer.create({
+        data: {
+          cpf: cpfDigits && cpfDigits.length === 11 ? this._formatCpf(cpfDigits) : null,
+          name: nomeUpper,
+          whatsapp: tel.length >= 10 ? tel : null,
+          phone: telRes.length >= 10 && telRes !== tel ? telRes : null,
+          email: email.includes('@') ? email : null,
+          birthDate,
+          originSource: isSistema ? 'giga_sistema' : 'giga',
+          originStoreId,
+          vipTier: 'bronze',
+          active: !isSistema,
+        },
+      });
 
-    await this._criarEnderecoSeFaltar(customer.id, row);
+      await tx.customerGigaLink.create({
+        data: {
+          customerId: customer.id,
+          gigaLoja,
+          gigaCodigo: codCliente,
+        },
+      });
+
+      await this._criarEnderecoSeFaltarTx(tx, customer.id, row);
+    });
   }
 
   /**
@@ -990,31 +1059,37 @@ export class CustomersGigaEtlService {
    * endereço residencial pra esse cliente.
    */
   private async _criarEnderecoSeFaltar(customerId: string, row: any): Promise<void> {
+    return this._criarEnderecoSeFaltarTx(this.prisma, customerId, row);
+  }
+
+  private async _criarEnderecoSeFaltarTx(tx: any, customerId: string, row: any): Promise<void> {
     if (!row.endereco && !row.cep) return; // sem endereço minimamente preenchido, pula
 
-    const existing = await (this.prisma as any).customerAddress.findFirst({
+    const existing = await tx.customerAddress.findFirst({
       where: { customerId, type: 'residencial' },
     });
     if (existing) return;
 
     const cep = String(row.cep || '').replace(/\D/g, '');
-    await (this.prisma as any).customerAddress.create({
-      data: {
-        customerId,
-        type: 'residencial',
-        isPrimary: true,
-        active: true,
-        street: String(row.endereco || '').trim() || null,
-        number: String(row.numero || '').trim() || null,
-        complement: String(row.complemento || '').trim() || null,
-        district: String(row.bairro || '').trim() || null,
-        city: String(row.cidade || '').trim() || null,
-        state: String(row.uf || '').trim().toUpperCase().slice(0, 2) || null,
-        zipCode: cep.length === 8 ? cep : null,
-      },
-    }).catch((e: any) => {
+    try {
+      await tx.customerAddress.create({
+        data: {
+          customerId,
+          type: 'residencial',
+          isPrimary: true,
+          active: true,
+          street: String(row.endereco || '').trim() || null,
+          number: String(row.numero || '').trim() || null,
+          complement: String(row.complemento || '').trim() || null,
+          district: String(row.bairro || '').trim() || null,
+          city: String(row.cidade || '').trim() || null,
+          state: String(row.uf || '').trim().toUpperCase().slice(0, 2) || null,
+          zipCode: cep.length === 8 ? cep : null,
+        },
+      });
+    } catch (e: any) {
       this.logger.warn(`[giga-etl] criar endereço falhou customer=${customerId}: ${e?.message}`);
-    });
+    }
   }
 
   /**
