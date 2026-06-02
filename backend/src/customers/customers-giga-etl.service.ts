@@ -65,6 +65,21 @@ export interface GigaSyncState {
 export class CustomersGigaEtlService {
   private readonly logger = new Logger(CustomersGigaEtlService.name);
 
+  // Map Store.code → Store.id (e variações: '1'→'01', NOME→id) carregado uma
+  // vez no início da Fase 1 e reusado durante upsert+merge. Resolve a LOJA
+  // char(2) do Giga pro originStoreId do Customer.
+  private _storeByCode: Map<string, string> = new Map();
+
+  /** Resolve LOJA do Giga (ex: '01', '13', 'ITANHAEM') pro Store.id do FlowOps */
+  private _resolveStoreId(loja: any): string | undefined {
+    if (loja === null || loja === undefined) return undefined;
+    const raw = String(loja).trim().toUpperCase();
+    if (!raw) return undefined;
+    // Tenta exato, depois com padStart pra 2 dígitos (LOJA é char(2) com zero à esquerda)
+    return this._storeByCode.get(raw)
+      ?? this._storeByCode.get(raw.padStart(2, '0'));
+  }
+
   // State machine in-memory — só 1 sync por vez por instância.
   // Em produção (Railway), 1 instância = 1 lock. Suficiente.
   private state: GigaSyncState = {
@@ -107,16 +122,20 @@ export class CustomersGigaEtlService {
   }
 
   /**
-   * Atualiza SÓ originStoreId dos clientes que vieram do Giga (sem refazer
-   * o sync inteiro). Útil quando os clientes já foram importados mas vieram
-   * sem loja vinculada.
+   * Atualiza originStoreId dos clientes do Giga lendo o campo LOJA char(2)
+   * da tabela `clientes` do Giga (fonte de verdade).
    *
-   * Retorna { atualizados, semCompras } pro frontend mostrar feedback.
+   * MODO 'preencher' (default): só atribui loja a quem está com originStoreId
+   *                              NULL. Cadastros manuais ficam intactos.
+   * MODO 'sobrescrever':         força recálculo (corrige bagunça de syncs
+   *                              anteriores). NUNCA toca em clientes WC
+   *                              (originSource='woo' fica loja 13 SITE).
    */
-  async atualizarLojaPrincipal(): Promise<{
+  async atualizarLojaPrincipal(opts?: { sobrescrever?: boolean }): Promise<{
     atualizados: number;
-    semCompras: number;
+    semLojaNoGiga: number;
     semStoreCorrespondente: number;
+    pulados: number;
     duracaoMs: number;
   }> {
     const t0 = Date.now();
@@ -126,63 +145,84 @@ export class CustomersGigaEtlService {
     const stores = await (this.prisma as any).store.findMany({
       select: { id: true, code: true, name: true },
     });
-    const storeByCode = new Map<string, string>();
+    this._storeByCode = new Map<string, string>();
     for (const s of stores as any[]) {
-      storeByCode.set(String(s.code).trim().toUpperCase(), s.id);
-      if (s.name) storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
+      this._storeByCode.set(String(s.code).trim().toUpperCase().padStart(2, '0'), s.id);
+      this._storeByCode.set(String(s.code).trim().toUpperCase(), s.id);
+      if (s.name) this._storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
     }
 
-    // Pega só os Giga clients SEM originStoreId — não toca quem já tem loja
+    // Detecta coluna LOJA do Giga
+    const cols = await this._detectarColunasClientes();
+    if (!cols.loja) {
+      throw new Error('Coluna LOJA não encontrada na tabela clientes do Giga');
+    }
+
+    // Filtro: por padrão só os que estão sem loja. Com sobrescrever=true,
+    // pega TODOS os Giga clients (mas exclui WC pra manter loja 13).
+    const where: any = { registroGiga: { not: null }, originSource: { not: 'woo' } };
+    if (!opts?.sobrescrever) where.originStoreId = null;
+
     const customers = await (this.prisma as any).customer.findMany({
-      where: { registroGiga: { not: null }, originStoreId: null },
-      select: { id: true, registroGiga: true },
+      where,
+      select: { id: true, registroGiga: true, originStoreId: true },
     });
 
     let atualizados = 0;
-    let semCompras = 0;
+    let semLojaNoGiga = 0;
     let semStoreCorrespondente = 0;
+    let pulados = 0;
 
-    for (const c of customers as any[]) {
-      try {
-        const [lojas]: any = await pool.query(
-          `SELECT LOJA AS loja, COUNT(*) AS qtd
-            FROM caixa
-            WHERE CLIENTE = ?
-              AND VALORTOTAL > 0
-              AND UPPER(COALESCE(MARCADO, '')) != 'SIM'
-              AND LOJA IS NOT NULL
-            GROUP BY LOJA
-            ORDER BY qtd DESC
-            LIMIT 1`,
-          [c.registroGiga],
-        );
-        const lojaCode = lojas?.[0]?.loja
-          ? String(lojas[0].loja).trim().toUpperCase()
-          : null;
-        if (!lojaCode) { semCompras++; continue; }
-        const storeId = storeByCode.get(lojaCode);
+    // Busca LOJA do Giga em batches via IN (...) — muito mais rápido que 1 query por cliente
+    const BATCH = 200;
+    for (let i = 0; i < customers.length; i += BATCH) {
+      const slice = customers.slice(i, i + BATCH);
+      const codigos = slice.map((c: any) => Number(c.registroGiga)).filter(Boolean);
+      if (codigos.length === 0) continue;
+
+      const placeholders = codigos.map(() => '?').join(',');
+      const [rows]: any = await pool.query(
+        `SELECT ${cols.codigo} AS codCliente, ${cols.loja} AS loja
+          FROM clientes
+          WHERE ${cols.codigo} IN (${placeholders})`,
+        codigos,
+      );
+      const lojaByCod = new Map<number, string | null>();
+      for (const r of rows as any[]) {
+        lojaByCod.set(Number(r.codCliente), r.loja ? String(r.loja).trim() : null);
+      }
+
+      for (const c of slice as any[]) {
+        const lojaRaw = lojaByCod.get(Number(c.registroGiga));
+        if (!lojaRaw) { semLojaNoGiga++; continue; }
+        const storeId = this._resolveStoreId(lojaRaw);
         if (!storeId) { semStoreCorrespondente++; continue; }
+        if (storeId === c.originStoreId) { pulados++; continue; } // já tá certo
 
-        await (this.prisma as any).customer.update({
-          where: { id: c.id },
-          data: { originStoreId: storeId },
-        });
-        atualizados++;
-      } catch (e: any) {
-        this.logger.warn(`[giga-etl] atualizar loja cliente ${c.id} falhou: ${e?.message}`);
+        try {
+          await (this.prisma as any).customer.update({
+            where: { id: c.id },
+            data: { originStoreId: storeId },
+          });
+          atualizados++;
+        } catch (e: any) {
+          this.logger.warn(`[giga-etl] atualizar loja cliente ${c.id} falhou: ${e?.message}`);
+        }
       }
     }
 
     this.logger.log(
-      `[giga-etl] atualizarLojaPrincipal: ${atualizados} atualizados, ` +
-      `${semCompras} sem compras, ${semStoreCorrespondente} sem store match. ` +
+      `[giga-etl] atualizarLojaPrincipal (sobrescrever=${!!opts?.sobrescrever}): ` +
+      `${atualizados} atualizados, ${pulados} já estavam OK, ` +
+      `${semLojaNoGiga} sem LOJA no Giga, ${semStoreCorrespondente} sem store match. ` +
       `${Date.now() - t0}ms`,
     );
 
     return {
       atualizados,
-      semCompras,
+      semLojaNoGiga,
       semStoreCorrespondente,
+      pulados,
       duracaoMs: Date.now() - t0,
     };
   }
@@ -333,19 +373,26 @@ export class CustomersGigaEtlService {
   private async _runSync(): Promise<void> {
     this.logger.log('[giga-etl] === SYNC FULL iniciado ===');
 
-    // ─── FASE 1: CLIENTES ────────────────────────────────────────────────
+    // ─── FASE 1: CLIENTES + originStoreId (LOJA do Giga) ─────────────────
     if (!this.state.abortRequested) {
       this.state.fase = 'clientes';
       await this._syncClientes();
     }
 
     // ─── FASE 2: HISTÓRICO (LTV / orderCount / lastOrderAt) ──────────────
-    if (!this.state.abortRequested) {
-      this.state.fase = 'historico';
-      await this._syncHistorico();
-    }
+    // DESABILITADO por decisão de negócio (Lurd's): o histórico antigo do Giga
+    // não é confiável. LTV dos clientes Giga começa do zero e vai sendo
+    // construído conforme as vendas no FlowOps PDV (finalize() do PdvSale
+    // atualiza Customer). Clientes WC mantêm o LTV calculado pelo ETL Woo.
+    // Pra retomar: descomentar as 2 linhas abaixo.
+    // if (!this.state.abortRequested) {
+    //   this.state.fase = 'historico';
+    //   await this._syncHistorico();
+    // }
 
     // ─── FASE 3: TIER (recalcula vipTier) ────────────────────────────────
+    // Continua valendo — pega o LTV atual (0 pros Giga novos, real pros WC)
+    // e atribui tier. Quem é Giga vira bronze; quem é WC com LTV alto sobe.
     if (!this.state.abortRequested) {
       this.state.fase = 'tier';
       await this._recalcularTiers();
@@ -391,6 +438,21 @@ export class CustomersGigaEtlService {
     // 2. Detecta colunas reais (Giga muda nome entre instalações)
     const cols = await this._detectarColunasClientes();
 
+    // 2.5. Carrega mapeamento Store.code → Store.id pra resolver originStoreId
+    // direto durante o upsert. LOJA char(2) do Giga (ex: '01') bate com Store.code.
+    const stores = await (this.prisma as any).store.findMany({
+      select: { id: true, code: true, name: true },
+    });
+    this._storeByCode = new Map<string, string>();
+    for (const s of stores as any[]) {
+      this._storeByCode.set(String(s.code).trim().toUpperCase().padStart(2, '0'), s.id);
+      this._storeByCode.set(String(s.code).trim().toUpperCase(), s.id);
+      if (s.name) this._storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
+    }
+    this.logger.log(
+      `[giga-etl] FASE 1: ${stores.length} lojas mapeadas. Coluna LOJA Giga: ${cols.loja || 'NÃO ENCONTRADA'}`,
+    );
+
     // 3. Lê em batches de 500
     const BATCH = 500;
     let offset = 0;
@@ -416,6 +478,7 @@ export class CustomersGigaEtlService {
           cols.cidade ? `${cols.cidade} AS cidade` : `NULL AS cidade`,
           cols.uf ? `${cols.uf} AS uf` : `NULL AS uf`,
           cols.cep ? `${cols.cep} AS cep` : `NULL AS cep`,
+          cols.loja ? `${cols.loja} AS loja` : `NULL AS loja`,
         ].join(', ');
 
         const [rows]: any = await pool.query(
@@ -456,6 +519,7 @@ export class CustomersGigaEtlService {
     email: string | null; nascimento: string | null;
     endereco: string | null; numero: string | null; complemento: string | null;
     bairro: string | null; cidade: string | null; uf: string | null; cep: string | null;
+    loja: string | null;
   }> {
     const pool = (this.erp as any).pool;
     const [rows]: any = await pool.query(`SHOW COLUMNS FROM clientes`);
@@ -483,6 +547,10 @@ export class CustomersGigaEtlService {
       cidade: pick('CIDADERES', 'CIDADE', 'MUNICIPIO'),
       uf: pick('UFRES', 'UF', 'ESTADO'),
       cep: pick('CEPRES', 'CEP'),
+      // LOJA char(2) — campo do cadastro do cliente que indica a loja
+      // de origem (a que cadastrou). Esta é a fonte de verdade definitiva
+      // pra originStoreId no FlowOps.
+      loja: pick('LOJA', 'LOJA_ORIGEM', 'COD_LOJA'),
     };
   }
 
@@ -550,6 +618,26 @@ export class CustomersGigaEtlService {
       updates.registroGiga = codCliente;
     }
 
+    // originStoreId: se Customer ainda não tem loja vinculada E Giga tem LOJA,
+    // atribui. Não sobrescreve cadastro manual (vendedora pode ter atribuído
+    // a uma loja específica diferente do Giga). Exceção: clientes 'woo'
+    // (originSource='woo') ficam com loja 13 (SITE) — não sobrescreve.
+    if (!existing.originStoreId && existing.originSource !== 'woo') {
+      const storeId = this._resolveStoreId(row.loja);
+      if (storeId) updates.originStoreId = storeId;
+    }
+
+    // ZERAR LTV inflado de syncs anteriores (que tentava importar histórico
+    // Giga não confiável). LTV dos clientes Giga começa do zero — vai sendo
+    // construído pelas vendas no PDV daqui em diante.
+    // Só zera se NÃO é cliente WC (WC tem LTV real do site).
+    if (existing.originSource !== 'woo' && Number(existing.ltvCents || 0) > 0) {
+      updates.ltvCents = BigInt(0);
+      updates.orderCount = 0;
+      updates.ticketMedioCents = 0;
+      updates.lastOrderAt = null;
+    }
+
     // Nome: só preenche se Customer.name é null/vazio
     if (!existing.name && row.nome) {
       updates.name = String(row.nome).trim().toUpperCase();
@@ -593,12 +681,14 @@ export class CustomersGigaEtlService {
   /**
    * Cria Customer novo a partir de linha do Giga.
    * vipTier inicial = 'bronze' (recalculado na fase 3 com base no LTV).
+   * originStoreId = loja do campo LOJA do Giga (fonte de verdade definitiva).
    */
   private async _criarNovo(row: any, cpfDigits: string, codCliente: number | null): Promise<void> {
     const tel = String(row.foneCel || row.foneRes || '').replace(/\D/g, '');
     const telRes = String(row.foneRes || '').replace(/\D/g, '');
     const email = String(row.email || '').trim().toLowerCase();
     const birthDate = this._parseDate(row.nascimento);
+    const originStoreId = this._resolveStoreId(row.loja);
 
     const customer = await (this.prisma as any).customer.create({
       data: {
@@ -610,6 +700,7 @@ export class CustomersGigaEtlService {
         birthDate,
         registroGiga: codCliente,
         originSource: 'giga',
+        originStoreId,
         vipTier: 'bronze',
         active: true,
       },
@@ -664,28 +755,15 @@ export class CustomersGigaEtlService {
   private async _syncHistorico(): Promise<void> {
     const pool = (this.erp as any).pool;
 
-    // Carrega TODAS as Stores do FlowOps pra mapear code → id (originStoreId)
-    // O Giga usa LOJA como texto ('01', 'ITANHAEM', etc.). Mapeio pelo store.code.
-    const stores = await (this.prisma as any).store.findMany({
-      select: { id: true, code: true, name: true },
-    });
-    const storeByCode = new Map<string, string>();
-    for (const s of stores as any[]) {
-      // Indexa por code exato + nome normalizado (alguns Gigas guardam o nome)
-      storeByCode.set(String(s.code).trim().toUpperCase(), s.id);
-      if (s.name) storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
-    }
-
+    // FASE 2 só calcula histórico (LTV, orderCount, lastOrderAt).
+    // originStoreId já veio da Fase 1 (campo LOJA da tabela clientes do Giga).
     const customers = await (this.prisma as any).customer.findMany({
       where: { registroGiga: { not: null } },
-      select: { id: true, registroGiga: true, cpf: true, originStoreId: true },
+      select: { id: true, registroGiga: true, cpf: true },
     });
 
     this.state.faseProgresso = { current: 0, total: customers.length };
-    this.logger.log(
-      `[giga-etl] FASE 2: histórico + originStoreId de ${customers.length} clientes ` +
-      `(${stores.length} lojas mapeadas)`,
-    );
+    this.logger.log(`[giga-etl] FASE 2: histórico (LTV) de ${customers.length} clientes`);
 
     for (const c of customers as any[]) {
       if (this.state.abortRequested) {
@@ -710,44 +788,15 @@ export class CustomersGigaEtlService {
         const orderCount = Number(r.totalCompras) || 0;
         const lastOrderAt = r.ultimaCompra ? new Date(r.ultimaCompra) : null;
 
-        // 2) Loja PRINCIPAL — onde o cliente mais comprou (top 1 por COUNT)
-        // Group by LOJA + ORDER BY DESC + LIMIT 1
-        let lojaPrincipal: string | null = null;
         if (orderCount > 0) {
-          const [lojas]: any = await pool.query(
-            `SELECT LOJA AS loja, COUNT(*) AS qtd
-              FROM caixa
-              WHERE CLIENTE = ?
-                AND VALORTOTAL > 0
-                AND UPPER(COALESCE(MARCADO, '')) != 'SIM'
-                AND LOJA IS NOT NULL
-              GROUP BY LOJA
-              ORDER BY qtd DESC
-              LIMIT 1`,
-            [c.registroGiga],
-          );
-          if (lojas?.[0]?.loja) {
-            lojaPrincipal = String(lojas[0].loja).trim().toUpperCase();
-          }
-        }
-
-        const novoStoreId = lojaPrincipal ? storeByCode.get(lojaPrincipal) : undefined;
-
-        if (orderCount > 0 || novoStoreId) {
-          const updates: any = {};
-          if (orderCount > 0) {
-            updates.ltvCents = BigInt(ltvCents);
-            updates.orderCount = orderCount;
-            updates.lastOrderAt = lastOrderAt;
-            updates.ticketMedioCents = orderCount > 0 ? Math.round(ltvCents / orderCount) : 0;
-          }
-          // Só seta originStoreId se ainda não tiver (não sobrescreve cadastro manual)
-          if (novoStoreId && !c.originStoreId) {
-            updates.originStoreId = novoStoreId;
-          }
           await (this.prisma as any).customer.update({
             where: { id: c.id },
-            data: updates,
+            data: {
+              ltvCents: BigInt(ltvCents),
+              orderCount,
+              lastOrderAt,
+              ticketMedioCents: Math.round(ltvCents / orderCount),
+            },
           });
         }
       } catch (e: any) {

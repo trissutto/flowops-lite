@@ -1515,7 +1515,113 @@ export class PdvService {
       this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
     }
 
+    // ── ATUALIZA CRM (Customer) ──────────────────────────────────────────
+    // Fase 4 da captura PDV: ao finalizar venda real, soma LTV/orderCount
+    // do cliente no Customer. Pula treinamento e vendas sem CPF.
+    if (sale.customerCpf && !(sale as any).isTraining) {
+      try {
+        await this._atualizarCustomerAposVenda(updated);
+      } catch (e: any) {
+        this.logger.warn(`[pdv→CRM] falha ao atualizar Customer: ${e?.message || e}`);
+      }
+    }
+
     return { ok: true, sale: updated, nfcePreview: nfceStub };
+  }
+
+  /**
+   * Atualiza o Customer (CRM) após uma venda finalizada com CPF.
+   *
+   * Comportamento:
+   *  1. Busca Customer por CPF (com e sem formatação)
+   *  2. Se não existe, cria com originStoreId = loja da venda
+   *  3. Se existe, atualiza:
+   *      - orderCount += 1
+   *      - ltvCents += sale.total
+   *      - lastOrderAt = now
+   *      - ticketMedio = ltv / orderCount
+   *      - vipTier recalculado conforme régua oficial
+   *
+   * Tier: bronze<500 / prata 500-1500 / ouro 1500-5000 / diamante 5000+
+   *
+   * Skip: vendas de treinamento, sem CPF, ou total<=0.
+   */
+  private async _atualizarCustomerAposVenda(sale: any): Promise<void> {
+    const cpfDigits = String(sale.customerCpf || '').replace(/\D/g, '');
+    if (cpfDigits.length !== 11) return;
+    const totalCents = Math.round(Number(sale.total || 0) * 100);
+    if (totalCents <= 0) return;
+
+    // CPF formatado padrão FlowOps (123.456.789-01)
+    const cpfFmt = `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`;
+
+    const existing = await (this.prisma as any).customer.findFirst({
+      where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFmt }] },
+      select: {
+        id: true, ltvCents: true, orderCount: true, vipTier: true,
+        tierEnteredAt: true, originStoreId: true, originSource: true,
+      },
+    });
+
+    // Helper: calcula tier conforme régua oficial
+    const calcTier = (ltvCents: bigint | number): string => {
+      const reais = Number(ltvCents) / 100;
+      if (reais < 500) return 'bronze';
+      if (reais < 1500) return 'prata';
+      if (reais < 5000) return 'ouro';
+      return 'diamante';
+    };
+
+    if (!existing) {
+      // Cliente NOVO — cria no CRM com 1ª compra + tier conforme régua
+      // originStoreId = loja da venda (vendedora cadastrou no PDV)
+      const store = sale.storeCode
+        ? await (this.prisma as any).store.findUnique({ where: { code: sale.storeCode } })
+        : null;
+      const novoTier = calcTier(totalCents);
+      await (this.prisma as any).customer.create({
+        data: {
+          cpf: cpfFmt,
+          name: sale.customerName || null,
+          email: sale.customerEmail?.toLowerCase()?.trim() || null,
+          whatsapp: String(sale.customerPhone || '').replace(/\D/g, '') || null,
+          originSource: 'pdv',
+          originStoreId: store?.id || null,
+          ltvCents: BigInt(totalCents),
+          orderCount: 1,
+          lastOrderAt: new Date(),
+          ticketMedioCents: totalCents,
+          vipTier: novoTier,
+          tierEnteredAt: new Date(),
+          active: true,
+          cashbackBalance: { create: {} },
+        },
+      });
+      this.logger.log(`[pdv→CRM] Cliente NOVO criado: ${cpfFmt} · LTV inicial R$${(totalCents/100).toFixed(2)} · ${novoTier}`);
+      return;
+    }
+
+    // Cliente EXISTENTE — soma venda no LTV/orderCount e recalcula tier
+    const novoLtv = BigInt(existing.ltvCents || 0) + BigInt(totalCents);
+    const novoCount = (existing.orderCount || 0) + 1;
+    const novoTier = calcTier(novoLtv);
+    const tierMudou = novoTier !== existing.vipTier;
+
+    await (this.prisma as any).customer.update({
+      where: { id: existing.id },
+      data: {
+        ltvCents: novoLtv,
+        orderCount: novoCount,
+        lastOrderAt: new Date(),
+        ticketMedioCents: Math.round(Number(novoLtv) / novoCount),
+        vipTier: novoTier,
+        ...(tierMudou ? { tierEnteredAt: new Date() } : {}),
+      },
+    });
+    this.logger.log(
+      `[pdv→CRM] Cliente ${existing.id}: +R$${(totalCents/100).toFixed(2)} ` +
+      `→ LTV R$${(Number(novoLtv)/100).toFixed(2)} (${novoCount}x) ${tierMudou ? `· tier ${existing.vipTier} → ${novoTier}` : ''}`,
+    );
   }
 
   async cancel(input: { saleId: string; reason?: string }) {
