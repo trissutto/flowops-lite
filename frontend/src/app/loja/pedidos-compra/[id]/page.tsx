@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft, Loader2, AlertCircle, Package, CheckCircle2,
-  Truck, Printer, FileText, Edit3, Trash2, Plus,
+  Truck, Printer, FileText, Edit3, Trash2, Plus, X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -627,9 +627,14 @@ export default function PedidoDetalhePage() {
 
 // ===================================================================
 // AddItemModal — adiciona uma nova REF ao pedido
+// Formato IGUAL ao cadastro inicial (/novo): grade COR × TAM com chips
+// múltiplas. Ao salvar cria 1 PurchaseOrderItem por COR (mesma REF).
 // ===================================================================
 
 type Grupo = { codigo: number; nome: string };
+
+const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
+const TAMANHOS_NORMAL = ['P', 'M', 'G', 'GG'];
 
 function AddItemModal({
   orderId, onClose, onSaved,
@@ -642,7 +647,13 @@ function AddItemModal({
   const [subgrupos, setSubgrupos] = useState<Grupo[]>([]);
   const [ref, setRef] = useState('');
   const [descricaoBase, setDescricaoBase] = useState('');
-  const [cor, setCor] = useState('');
+  // GRADE: múltiplas cores + múltiplos tamanhos + qty por célula
+  const [cores, setCores] = useState<string[]>([]);
+  const [novaCor, setNovaCor] = useState('');
+  const [tamanhos, setTamanhos] = useState<string[]>([...TAMANHOS_PLUS]);
+  const [novoTam, setNovoTam] = useState('');
+  // chave = "COR|TAM" → quantidade (string pra input controlado)
+  const [grade, setGrade] = useState<Record<string, string>>({});
   const [grupoCode, setGrupoCode] = useState<number | null>(null);
   const [subgrupoCode, setSubgrupoCode] = useState<number | null>(null);
   const [ncm, setNcm] = useState('');
@@ -652,11 +663,53 @@ function AddItemModal({
   const [descontoPct, setDescontoPct] = useState('');
   const [tributoPct, setTributoPct] = useState('');
   const [precoUnit, setPrecoUnit] = useState('');
-  const [tamanhosTxt, setTamanhosTxt] = useState('');
   const [criandoG, setCriandoG] = useState(false);
   const [criandoSg, setCriandoSg] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Toggle PLUS SIZE troca a régua de tamanhos default
+  useEffect(() => {
+    if (plusSize && tamanhos.length === 0) setTamanhos([...TAMANHOS_PLUS]);
+  }, [plusSize]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const addCor = (c: string) => {
+    const v = c.trim().toUpperCase();
+    if (!v || cores.includes(v)) return;
+    setCores((prev) => [...prev, v]);
+  };
+  const removeCor = (c: string) => {
+    setCores((prev) => prev.filter((x) => x !== c));
+    setGrade((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) if (k.startsWith(`${c}|`)) delete next[k];
+      return next;
+    });
+  };
+  const addTam = (t: string) => {
+    const v = t.trim().toUpperCase();
+    if (!v || tamanhos.includes(v)) return;
+    setTamanhos((prev) => [...prev, v]);
+  };
+  const removeTam = (t: string) => {
+    setTamanhos((prev) => prev.filter((x) => x !== t));
+    setGrade((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) if (k.endsWith(`|${t}`)) delete next[k];
+      return next;
+    });
+  };
+  const setCelula = (cor: string, tam: string, valor: string) => {
+    setGrade((prev) => ({ ...prev, [`${cor}|${tam}`]: valor.replace(/\D/g, '') }));
+  };
+
+  const totalGeral = (() => {
+    let total = 0;
+    for (const c of cores) {
+      for (const t of tamanhos) total += Number(grade[`${c}|${t}`] || 0);
+    }
+    return total;
+  })();
 
   useEffect(() => {
     api<Grupo[]>('/purchase-orders/lookups/grupos').then(setGrupos).catch(() => {});
@@ -702,60 +755,59 @@ function AddItemModal({
     finally { setCriandoSg(false); }
   };
 
-  // Parse "PP:2,P:3,M:5" → { PP: 2, P: 3, M: 5 }
-  const parseTamanhos = (txt: string): Record<string, number> => {
-    const result: Record<string, number> = {};
-    for (const part of txt.split(',')) {
-      const [t, q] = part.split(':').map((s) => s.trim());
-      if (t && q && !isNaN(Number(q))) result[t.toUpperCase()] = Number(q);
-    }
-    return result;
-  };
-
-  const totalPecas = (() => {
-    const map = parseTamanhos(tamanhosTxt);
-    return Object.values(map).reduce((s, v) => s + v, 0);
-  })();
-
+  /**
+   * Salva 1 PurchaseOrderItem POR COR — assim a tela do pedido continua
+   * mostrando 1 linha por (REF, COR) igual ao formato do cadastro inicial.
+   * Cada item leva só seus próprios tamanhosQty.
+   */
   const salvar = async () => {
     setErr(null);
     if (!ref.trim()) { setErr('REF obrigatória'); return; }
-    if (!cor.trim()) { setErr('COR obrigatória'); return; }
+    if (cores.length === 0) { setErr('Adicione pelo menos uma COR'); return; }
     if (!grupoCode) { setErr('Grupo obrigatório'); return; }
     if (!subgrupoCode) { setErr('Subgrupo obrigatório'); return; }
     const custo = Number((custoUnit || '').replace(',', '.')) || 0;
     const preco = Number((precoUnit || '').replace(',', '.')) || 0;
     if (!custo) { setErr('Custo obrigatório'); return; }
     if (!preco) { setErr('Preço venda obrigatório'); return; }
-    const tamanhosQty = parseTamanhos(tamanhosTxt);
-    if (Object.keys(tamanhosQty).length === 0) {
-      setErr('Tamanhos obrigatórios (ex: P:2,M:3,G:1)');
-      return;
-    }
+    if (totalGeral <= 0) { setErr('Preencha ao menos uma qty na grade'); return; }
+
     const g = grupos.find((x) => x.codigo === grupoCode);
     const sg = subgrupos.find((x) => x.codigo === subgrupoCode);
     setSaving(true);
     try {
-      await api(`/purchase-orders/${orderId}/items`, {
-        method: 'POST',
-        body: JSON.stringify({
-          ref: ref.trim().toUpperCase(),
-          descricaoBase: descricaoBase.trim().toUpperCase() || ref.trim().toUpperCase(),
-          cor: cor.trim().toUpperCase(),
-          grupoCode,
-          grupoNome: g?.nome || '',
-          subgrupoCode,
-          subgrupoNome: sg?.nome || '',
-          ncm: ncm.trim(),
-          cfop: cfop.trim() || '5102',
-          plusSize,
-          custoUnit: custo,
-          precoUnit: preco,
-          descontoPct: Number((descontoPct || '0').replace(',', '.')) || 0,
-          tributoPct: Number((tributoPct || '0').replace(',', '.')) || 0,
-          tamanhosQty,
-        }),
-      });
+      // 1 chamada por COR (cada item do pedido = 1 cor)
+      for (const c of cores) {
+        // Monta tamanhosQty SÓ pra essa cor — pula tamanhos com qty=0
+        const tamanhosQty: Record<string, number> = {};
+        for (const t of tamanhos) {
+          const v = Number(grade[`${c}|${t}`] || 0);
+          if (v > 0) tamanhosQty[t] = v;
+        }
+        // Cor sem nenhuma qty preenchida → pula (não cria item vazio)
+        if (Object.keys(tamanhosQty).length === 0) continue;
+
+        await api(`/purchase-orders/${orderId}/items`, {
+          method: 'POST',
+          body: JSON.stringify({
+            ref: ref.trim().toUpperCase(),
+            descricaoBase: descricaoBase.trim().toUpperCase() || ref.trim().toUpperCase(),
+            cor: c,
+            grupoCode,
+            grupoNome: g?.nome || '',
+            subgrupoCode,
+            subgrupoNome: sg?.nome || '',
+            ncm: ncm.trim(),
+            cfop: cfop.trim() || '5102',
+            plusSize,
+            custoUnit: custo,
+            precoUnit: preco,
+            descontoPct: Number((descontoPct || '0').replace(',', '.')) || 0,
+            tributoPct: Number((tributoPct || '0').replace(',', '.')) || 0,
+            tamanhosQty,
+          }),
+        });
+      }
       onSaved();
     } catch (e: any) {
       setErr(e?.message || 'Erro ao salvar');
@@ -782,11 +834,6 @@ function AddItemModal({
             <label className="text-[10px] font-bold text-slate-600 uppercase">Descrição base</label>
             <input value={descricaoBase} onChange={(e) => setDescricaoBase(e.target.value.toUpperCase())}
               placeholder="BLUSA FEMININA MANGA CURTA"
-              className="w-full px-2 py-2 border rounded text-sm" />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="text-[10px] font-bold text-slate-600 uppercase">COR *</label>
-            <input value={cor} onChange={(e) => setCor(e.target.value.toUpperCase())} placeholder="PRETO"
               className="w-full px-2 py-2 border rounded text-sm" />
           </div>
           <div>
@@ -865,16 +912,101 @@ function AddItemModal({
           </div>
         </div>
 
-        {/* Tamanhos */}
-        <div className="mt-3">
-          <label className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos + Quantidades *</label>
-          <input value={tamanhosTxt} onChange={(e) => setTamanhosTxt(e.target.value)}
-            placeholder="P:2, M:3, G:5, GG:2"
-            className="w-full px-2 py-2 border rounded text-sm font-mono" />
-          <div className="text-[11px] text-slate-500 mt-1">
-            Formato: <code>tamanho:qty</code> separados por vírgula. Total: <b className="text-violet-700">{totalPecas} peças</b>
+        {/* Tamanhos (chips) */}
+        <div className="mt-3 space-y-1">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</label>
+          <div className="flex flex-wrap gap-1 items-center">
+            {tamanhos.map((t) => (
+              <span key={t} className="bg-violet-100 text-violet-700 px-2 py-1 rounded text-xs font-bold font-mono flex items-center gap-1">
+                {t}
+                <button onClick={() => removeTam(t)} className="hover:text-rose-600">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              value={novoTam}
+              onChange={(e) => setNovoTam(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); addTam(novoTam); setNovoTam(''); }
+              }}
+              placeholder="+ tam"
+              className="px-2 py-1 border rounded text-xs w-20 font-mono"
+            />
           </div>
         </div>
+
+        {/* Cores (chips) */}
+        <div className="mt-2 space-y-1">
+          <label className="text-[10px] font-bold text-slate-600 uppercase">Cores *</label>
+          <div className="flex flex-wrap gap-1 items-center">
+            {cores.map((c) => (
+              <span key={c} className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-bold flex items-center gap-1">
+                {c}
+                <button onClick={() => removeCor(c)} className="hover:text-rose-600">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              value={novaCor}
+              onChange={(e) => setNovaCor(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); addCor(novaCor); setNovaCor(''); }
+              }}
+              placeholder="+ cor"
+              className="px-2 py-1 border rounded text-xs w-32 uppercase"
+            />
+          </div>
+        </div>
+
+        {/* Grade COR × TAM */}
+        {cores.length > 0 && tamanhos.length > 0 && (
+          <div className="mt-2 overflow-x-auto bg-slate-50 rounded p-2">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left text-[10px] font-bold uppercase text-slate-500 p-1">Cor</th>
+                  {tamanhos.map((t) => (
+                    <th key={t} className="p-1 text-center text-[10px] font-mono text-violet-700">{t}</th>
+                  ))}
+                  <th className="p-1 text-center text-[10px] text-violet-700">TOT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cores.map((c) => {
+                  let total = 0;
+                  for (const t of tamanhos) total += Number(grade[`${c}|${t}`] || 0);
+                  return (
+                    <tr key={c}>
+                      <td className="p-1 font-bold text-amber-700 text-xs">{c}</td>
+                      {tamanhos.map((t) => (
+                        <td key={t} className="p-0.5">
+                          <input
+                            value={grade[`${c}|${t}`] || ''}
+                            onChange={(e) => setCelula(c, t, e.target.value)}
+                            placeholder="0"
+                            className="w-full px-1 py-0.5 border rounded text-center text-xs font-mono"
+                            inputMode="numeric"
+                          />
+                        </td>
+                      ))}
+                      <td className="p-1 text-center font-black text-violet-700 tabular-nums text-xs">{total}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="text-[11px] text-slate-500 mt-1 text-right">
+              Total geral: <b className="text-violet-700">{totalGeral} peças</b>
+              {cores.length > 1 && (
+                <span className="ml-2 text-slate-500">
+                  ({cores.length} cores × {cores.length === 1 ? '1 item' : `${cores.length} itens`} no pedido)
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {err && (
           <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded p-2 mt-3">{err}</div>
