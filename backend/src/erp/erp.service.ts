@@ -6238,6 +6238,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       // Busca por CODIGO exato OU REF exata OU EAN exato (com LPAD)
       // — todas as variantes em UPPER+TRIM pra tolerar lixo nas células do ERP.
+      // LIMIT alto (1000) pra cobrir REF com muitas cores × tamanhos.
+      // Exemplo: REF com 12 cores × 8 tamanhos = 96 SKUs; LIMIT 50 antes cortava.
       const [rows] = await this.pool.query(
         `SELECT CODIGO AS codigo, REF AS referencia, COR AS cor,
                 TAMANHO AS tamanho, VENDAUN AS preco,
@@ -6248,7 +6250,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
              OR UPPER(TRIM(REF)) = ?
              OR CODIGO = LPAD(?, 13, '0')
           ORDER BY REF, COR, TAMANHO
-          LIMIT 50`,
+          LIMIT 1000`,
         [c, c, c],
       );
       return (rows as any[]).map((r) => ({
