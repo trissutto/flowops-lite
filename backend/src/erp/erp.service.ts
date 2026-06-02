@@ -6224,22 +6224,30 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca produto(s) no Wincred por codigo (EAN, REFERENCIA ou CODIGO).
+   * Busca produto(s) no Wincred por codigo (EAN, REF ou CODIGO).
    * Usado pra imprimir etiquetas avulsas — aceita codigos misturados.
+   *
+   * BUG FIX: colunas reais do Wincred são REF / VENDAUN / DESCRICAOCOMPLETA /
+   * MARCA (e NÃO REFERENCIA / PRECOVENDA / DESCRICAO / FORNECEDOR). Antes a
+   * query nunca encontrava pesquisa por REF — só achava pelo CODIGO exato.
    */
   async buscarProdutoPorCodigo(codigo: string): Promise<Array<any>> {
     if (!this.pool || !codigo) return [];
     const c = codigo.trim().toUpperCase();
     if (!c) return [];
     try {
-      // Busca por CODIGO exato OU REFERENCIA exata OU EAN exato
-      // (em algumas instalacoes EAN e a propria coluna CODIGO)
+      // Busca por CODIGO exato OU REF exata OU EAN exato (com LPAD)
+      // — todas as variantes em UPPER+TRIM pra tolerar lixo nas células do ERP.
       const [rows] = await this.pool.query(
-        `SELECT CODIGO AS codigo, REFERENCIA AS referencia, COR AS cor,
-                TAMANHO AS tamanho, PRECOVENDA AS preco, DESCRICAO AS descricao,
-                FORNECEDOR AS fornecedor
+        `SELECT CODIGO AS codigo, REF AS referencia, COR AS cor,
+                TAMANHO AS tamanho, VENDAUN AS preco,
+                DESCRICAOCOMPLETA AS descricao,
+                MARCA AS marca
            FROM produtos
-          WHERE CODIGO = ? OR REFERENCIA = ? OR CODIGO = LPAD(?, 13, '0')
+          WHERE UPPER(TRIM(CODIGO)) = ?
+             OR UPPER(TRIM(REF)) = ?
+             OR CODIGO = LPAD(?, 13, '0')
+          ORDER BY REF, COR, TAMANHO
           LIMIT 50`,
         [c, c, c],
       );
@@ -6250,8 +6258,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         tamanho: String(r.tamanho || '').trim(),
         preco: Number(r.preco || 0),
         descricao: String(r.descricao || '').trim(),
-        fornecedor: r.fornecedor ? String(r.fornecedor).trim() : null,
-        marca: null,
+        fornecedor: null,
+        marca: r.marca ? String(r.marca).trim() : null,
       }));
     } catch (e: any) {
       this.logger.warn(`buscarProdutoPorCodigo ${c} falhou: ${e?.message}`);
