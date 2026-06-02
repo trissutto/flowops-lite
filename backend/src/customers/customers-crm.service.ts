@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
@@ -187,9 +187,32 @@ export class CustomersCrmService {
   // CRIAÇÃO / EDIÇÃO
   // ─────────────────────────────────────────────────────────────────────────
   async create(dto: CreateCustomerDto, actor?: RequestActor) {
+    if (!dto?.name?.trim()) {
+      throw new BadRequestException('Nome é obrigatório');
+    }
+
     const cpf = this.normalizeCpf(dto.cpf);
     const whatsapp = this.normalizePhone(dto.whatsapp);
     const phone    = this.normalizePhone(dto.phone);
+
+    // DETECÇÃO PRÉ-CADASTRO DE DUPLICIDADE — se CPF informado e já existir,
+    // retorna 409 com mensagem amigável + id do cliente existente pro frontend
+    // poder oferecer "abrir cliente existente".
+    if (cpf) {
+      // Considera variações: com pontuação (286.655.298-96) e sem (28665529896)
+      const cpfDigits = cpf.replace(/\D/g, '');
+      const existing = await this.prisma.customer.findFirst({
+        where: { OR: [{ cpf }, { cpf: cpfDigits }] },
+        select: { id: true, name: true, cpf: true },
+      });
+      if (existing) {
+        throw new ConflictException({
+          message: `CPF já cadastrado: ${existing.name} (${existing.cpf})`,
+          customerId: existing.id,
+          customerName: existing.name,
+        });
+      }
+    }
 
     // SCOPE POR LOJA — se quem cria é vendedora/loja, força originStoreId = sua loja.
     // Matriz pode escolher.
@@ -208,37 +231,69 @@ export class CustomersCrmService {
       if (ref) referredById = ref.id;
     }
 
-    const created = await this.prisma.customer.create({
-      data: {
-        cpf: cpf ?? undefined,
-        registroGiga: dto.registroGiga,
-        name: dto.name.trim(),
-        nameSocial: dto.nameSocial?.trim(),
-        email: dto.email?.toLowerCase().trim(),
-        phone: phone ?? undefined,
-        whatsapp: whatsapp ?? undefined,
-        birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
-        gender: dto.gender,
-        maritalStatus: dto.maritalStatus,
-        sizeDefault: dto.sizeDefault,
-        sizeSecondary: dto.sizeSecondary,
-        bodyType: dto.bodyType,
-        preferredStyle: dto.preferredStyle,
-        favoriteColors: dto.favoriteColors,
-        avoidedPieces: dto.avoidedPieces,
-        originSource: dto.originSource ?? 'manual',
-        originStoreId,
-        originSeller: dto.originSeller,
-        referredById,
-        notes: dto.notes,
-        // saldo inicial é criado vazio (1:1)
-        cashbackBalance: { create: {} },
-      },
-      include: { cashbackBalance: true },
-    });
+    // Frontend manda originSource='physical' mas valores aceitos são:
+    // 'manual', 'pdv', 'giga', 'woo', 'instagram'. Mapeia pra 'pdv' como default
+    // quando vem do PDV/loja, 'manual' caso contrário.
+    const sourceMap: Record<string, string> = {
+      physical: 'pdv',
+      pdv: 'pdv',
+      manual: 'manual',
+      giga: 'giga',
+      woo: 'woo',
+      instagram: 'instagram',
+    };
+    const originSourceNormalized = sourceMap[dto.originSource ?? 'manual'] ?? 'manual';
 
-    this.logger.log(`[CRM] cliente criado: ${created.id} (${created.name}) por ${actor?.userId ?? 'sistema'} | loja=${originStoreId ?? 'sem'}`);
-    return created;
+    try {
+      const created = await this.prisma.customer.create({
+        data: {
+          cpf: cpf ?? undefined,
+          registroGiga: dto.registroGiga,
+          name: dto.name.trim(),
+          nameSocial: dto.nameSocial?.trim(),
+          email: dto.email?.toLowerCase().trim() || undefined,
+          phone: phone ?? undefined,
+          whatsapp: whatsapp ?? undefined,
+          birthDate: dto.birthDate ? new Date(dto.birthDate) : undefined,
+          gender: dto.gender,
+          maritalStatus: dto.maritalStatus,
+          sizeDefault: dto.sizeDefault,
+          sizeSecondary: dto.sizeSecondary,
+          bodyType: dto.bodyType,
+          preferredStyle: dto.preferredStyle,
+          favoriteColors: dto.favoriteColors,
+          avoidedPieces: dto.avoidedPieces,
+          originSource: originSourceNormalized,
+          originStoreId,
+          originSeller: dto.originSeller,
+          referredById,
+          notes: dto.notes,
+          // saldo inicial é criado vazio (1:1)
+          cashbackBalance: { create: {} },
+        },
+        include: { cashbackBalance: true },
+      });
+
+      this.logger.log(`[CRM] cliente criado: ${created.id} (${created.name}) por ${actor?.userId ?? 'sistema'} | loja=${originStoreId ?? 'sem'}`);
+      return created;
+    } catch (e: any) {
+      // P2002 = Prisma unique constraint violation
+      if (e?.code === 'P2002') {
+        const fields = (e?.meta?.target || []).join(', ');
+        this.logger.warn(`[CRM] duplicidade ao criar cliente: campos=${fields}`);
+        throw new ConflictException(
+          `Já existe um cliente com esses dados (campo${fields ? ` ${fields}` : ''} duplicado).`,
+        );
+      }
+      // P2003 = foreign key violation
+      if (e?.code === 'P2003') {
+        this.logger.warn(`[CRM] FK violation: ${e?.message}`);
+        throw new BadRequestException('Referência inválida (loja ou cliente indicador não existe).');
+      }
+      // Loga full antes de re-throw pra debug em Railway logs
+      this.logger.error(`[CRM] create falhou: ${e?.code || ''} ${e?.message}`, e?.stack);
+      throw e;
+    }
   }
 
   async update(id: string, dto: UpdateCustomerDto, actor?: RequestActor) {
