@@ -335,8 +335,10 @@ export class CustomersCrmService {
   async list(query: ListQuery = {}, actor?: RequestActor) {
     const page  = Math.max(1, query.page ?? 1);
     const limit = Math.min(500, Math.max(1, query.limit ?? 50));
-    const orderBy = query.orderBy ?? 'createdAt';
-    const order   = query.order ?? 'desc';
+    // Default agora: ordem alfabética por nome (asc). Antes era createdAt desc
+    // — usuário pediu alfabético pra facilitar busca visual.
+    const orderBy = query.orderBy ?? 'name';
+    const order   = query.order ?? (query.orderBy === 'name' || !query.orderBy ? 'asc' : 'desc');
 
     const where: any = {};
 

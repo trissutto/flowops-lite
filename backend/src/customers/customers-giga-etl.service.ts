@@ -69,15 +69,24 @@ export class CustomersGigaEtlService {
   // vez no início da Fase 1 e reusado durante upsert+merge. Resolve a LOJA
   // char(2) do Giga pro originStoreId do Customer.
   private _storeByCode: Map<string, string> = new Map();
+  // Store catch-all 'NA' (Não Atribuída) pra clientes cuja LOJA não bate
+  // com nenhuma store cadastrada. Permite revisão manual depois.
+  private _fallbackStoreId: string | null = null;
 
-  /** Resolve LOJA do Giga (ex: '01', '13', 'ITANHAEM') pro Store.id do FlowOps */
+  /**
+   * Resolve LOJA do Giga (ex: '01', '13', 'ITANHAEM') pro Store.id do FlowOps.
+   * Se LOJA vazia/null → retorna undefined (Customer fica sem loja).
+   * Se LOJA tem valor MAS não bate com store → retorna fallback 'NA'.
+   */
   private _resolveStoreId(loja: any): string | undefined {
     if (loja === null || loja === undefined) return undefined;
     const raw = String(loja).trim().toUpperCase();
     if (!raw) return undefined;
     // Tenta exato, depois com padStart pra 2 dígitos (LOJA é char(2) com zero à esquerda)
-    return this._storeByCode.get(raw)
-      ?? this._storeByCode.get(raw.padStart(2, '0'));
+    const matched = this._storeByCode.get(raw) ?? this._storeByCode.get(raw.padStart(2, '0'));
+    if (matched) return matched;
+    // Sem match → fallback pra 'NA' (Não Atribuída)
+    return this._fallbackStoreId || undefined;
   }
 
   // State machine in-memory — só 1 sync por vez por instância.
@@ -141,6 +150,17 @@ export class CustomersGigaEtlService {
     const t0 = Date.now();
     const pool = (this.erp as any).pool;
     if (!pool) throw new Error('Pool Giga não inicializado');
+
+    // Garante store catch-all 'NA' pra usar como fallback
+    let storeNA = await (this.prisma as any).store.findUnique({ where: { code: 'NA' } });
+    if (!storeNA) {
+      try {
+        storeNA = await (this.prisma as any).store.create({
+          data: { code: 'NA', name: 'Não Atribuída', active: true, city: '—', uf: '—' },
+        });
+      } catch {}
+    }
+    this._fallbackStoreId = storeNA?.id || null;
 
     const stores = await (this.prisma as any).store.findMany({
       select: { id: true, code: true, name: true },
@@ -517,6 +537,29 @@ export class CustomersGigaEtlService {
 
     // 2.5. Carrega mapeamento Store.code → Store.id pra resolver originStoreId
     // direto durante o upsert. LOJA char(2) do Giga (ex: '01') bate com Store.code.
+    //
+    // CATCH-ALL: garante store 'NA' (Não Atribuída) pra clientes cuja LOJA
+    // do Giga não bate com nenhuma store cadastrada (ex: lojas antigas tipo
+    // 'C', 'G', '09'). Esses ficam nessa store pra revisão manual depois.
+    let storeNA = await (this.prisma as any).store.findUnique({ where: { code: 'NA' } });
+    if (!storeNA) {
+      try {
+        storeNA = await (this.prisma as any).store.create({
+          data: {
+            code: 'NA',
+            name: 'Não Atribuída',
+            active: true,
+            city: '—',
+            uf: '—',
+          },
+        });
+        this.logger.log(`[giga-etl] Criada store catch-all 'NA' (id=${storeNA.id})`);
+      } catch (e: any) {
+        this.logger.warn(`[giga-etl] Falha ao criar store 'NA': ${e?.message}`);
+      }
+    }
+    this._fallbackStoreId = storeNA?.id || null;
+
     const stores = await (this.prisma as any).store.findMany({
       select: { id: true, code: true, name: true },
     });
@@ -527,7 +570,8 @@ export class CustomersGigaEtlService {
       if (s.name) this._storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
     }
     this.logger.log(
-      `[giga-etl] FASE 1: ${stores.length} lojas mapeadas. Coluna LOJA Giga: ${cols.loja || 'NÃO ENCONTRADA'}`,
+      `[giga-etl] FASE 1: ${stores.length} lojas mapeadas. Coluna LOJA Giga: ${cols.loja || 'NÃO ENCONTRADA'}. ` +
+      `Fallback store NA: ${this._fallbackStoreId || 'NÃO DISPONÍVEL'}`,
     );
 
     // 3. Lê em batches de 500
@@ -695,6 +739,16 @@ export class CustomersGigaEtlService {
       updates.registroGiga = codCliente;
     }
 
+    // Reclassifica cliente-sistema se aplicável (e ainda não foi marcado).
+    // Útil pra clientes importados antes do filtro de heurística existir.
+    if (existing.originSource === 'giga') {
+      const nomeAtual = (existing.name || row.nome || '').toString().toUpperCase();
+      if (this._ehClienteSistema(nomeAtual)) {
+        updates.originSource = 'giga_sistema';
+        updates.active = false;
+      }
+    }
+
     // originStoreId: se Customer ainda não tem loja vinculada E Giga tem LOJA,
     // atribui. Não sobrescreve cadastro manual (vendedora pode ter atribuído
     // a uma loja específica diferente do Giga). Exceção: clientes 'woo'
@@ -756,9 +810,32 @@ export class CustomersGigaEtlService {
   }
 
   /**
+   * Detecta se o "cliente" do Giga é na verdade um registro de sistema/lixo
+   * (VENDAS ONLINE, VISA ELECTRON, PEÇAS RESERVADAS XYZ, FISICAMENTE NÃO
+   * CONSTA, etc). Esses ficam marcados com originSource='giga_sistema' pra
+   * vendedora poder filtrar fora da base de marketing.
+   */
+  private _ehClienteSistema(nome: string | null): boolean {
+    if (!nome) return false;
+    const upper = String(nome).toUpperCase().trim();
+    const padroes = [
+      /^VENDA/, /^VENDAS/, /^VISA\s/, /^MASTER\s/, /^CART[AÃ]O/, /^CARTAO/,
+      /^PE[CÇ]AS?\s/, /^PRODUTO/, /^SISTEMA/, /^CAIXA/,
+      /^FISICAMENTE/, /^ARMAZ[EÉ]M/, /^DEPOSITO/, /^DEP[ÓO]SITO/,
+      /^FARM[AÁ]CIA\b/, // ex: "MICHELE FARMÁCIA" (nome estranho)
+      /^TESTE/, /^TEST\s/, /^X+$/, /^N[AÃ]O\s/,
+      /^CONSUMIDOR\s*FINAL/, /^DIVERSOS/,
+      /RESERVADA/, /RESERVADO/, /^SEM\s/,
+    ];
+    return padroes.some((re) => re.test(upper));
+  }
+
+  /**
    * Cria Customer novo a partir de linha do Giga.
    * vipTier inicial = 'bronze' (recalculado na fase 3 com base no LTV).
    * originStoreId = loja do campo LOJA do Giga (fonte de verdade definitiva).
+   * Clientes-sistema (VENDAS ONLINE, VISA, etc) viram originSource='giga_sistema'
+   * pra ficarem fora da base de marketing.
    */
   private async _criarNovo(row: any, cpfDigits: string, codCliente: number | null): Promise<void> {
     const tel = String(row.foneCel || row.foneRes || '').replace(/\D/g, '');
@@ -766,20 +843,26 @@ export class CustomersGigaEtlService {
     const email = String(row.email || '').trim().toLowerCase();
     const birthDate = this._parseDate(row.nascimento);
     const originStoreId = this._resolveStoreId(row.loja);
+    const nomeUpper = String(row.nome || '').trim().toUpperCase() || null;
+
+    // Cliente-sistema (VENDAS ONLINE, VISA, PEÇAS RESERVADAS, etc) marca
+    // como giga_sistema pra não poluir marketing. active=false pra não
+    // aparecer em listas/campanhas por padrão.
+    const isSistema = this._ehClienteSistema(nomeUpper);
 
     const customer = await (this.prisma as any).customer.create({
       data: {
         cpf: this._formatCpf(cpfDigits),
-        name: String(row.nome || '').trim().toUpperCase() || null,
+        name: nomeUpper,
         whatsapp: tel.length >= 10 ? tel : null,
         phone: telRes.length >= 10 && telRes !== tel ? telRes : null,
         email: email.includes('@') ? email : null,
         birthDate,
         registroGiga: codCliente,
-        originSource: 'giga',
+        originSource: isSistema ? 'giga_sistema' : 'giga',
         originStoreId,
         vipTier: 'bronze',
-        active: true,
+        active: !isSistema,
       },
     });
 
