@@ -750,13 +750,15 @@ export class CustomersGigaEtlService {
       }
     }
 
-    // originStoreId: se Customer ainda não tem loja vinculada E Giga tem LOJA,
-    // atribui. Não sobrescreve cadastro manual (vendedora pode ter atribuído
-    // a uma loja específica diferente do Giga). Exceção: clientes 'woo'
-    // (originSource='woo') ficam com loja 13 (SITE) — não sobrescreve.
-    if (!existing.originStoreId && existing.originSource !== 'woo') {
+    // originStoreId: o campo LOJA do Giga é a FONTE DE VERDADE pra clientes
+    // Giga. SEMPRE atualiza, mesmo se já tinha valor (corrige clientes
+    // importados em syncs antigos com lógica errada). EXCEÇÃO: clientes WC
+    // (originSource='woo') ficam com loja 13 (SITE) intocada.
+    if (existing.originSource !== 'woo') {
       const storeId = this._resolveStoreId(row.loja);
-      if (storeId) updates.originStoreId = storeId;
+      if (storeId && storeId !== existing.originStoreId) {
+        updates.originStoreId = storeId;
+      }
     }
 
     // ZERAR LTV inflado de syncs anteriores (que tentava importar histórico
