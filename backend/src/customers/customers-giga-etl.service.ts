@@ -179,8 +179,13 @@ export class CustomersGigaEtlService {
     }
 
     // Filtro: por padrão só os que estão sem loja. Com sobrescrever=true,
-    // pega TODOS os Giga clients (mas exclui WC pra manter loja 13).
-    const where: any = { registroGiga: { not: null }, originSource: { not: 'woo' } };
+    // pega TODOS os clientes com registroGiga preenchido — INCLUSIVE os que
+    // estão marcados originSource='woo' (clientes que compraram no site mas
+    // TAMBÉM têm cadastro no Giga). Regra de negócio: se tem cadastro Giga
+    // (registroGiga != null), a LOJA do Giga manda — não importa origem.
+    // Resultado: clientes só-site continuam em 13 (sem registroGiga); quem
+    // tem cadastro físico ganha a loja correta.
+    const where: any = { registroGiga: { not: null } };
     if (!opts?.sobrescrever) where.originStoreId = null;
 
     const customers = await (this.prisma as any).customer.findMany({
