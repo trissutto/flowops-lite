@@ -696,14 +696,20 @@ export class PdvController {
 
   /**
    * GET /pdv/customer-search?q=texto&limit=20
-   * Typeahead pra aba crediário do PaymentModal — busca cliente por:
-   *  - CPF (se q tiver só dígitos)
-   *  - codCliente (se q tiver só dígitos)
-   *  - Nome (LIKE %q% case-insensitive)
    *
-   * Retorna lista de até `limit` clientes ordenados por nome. NÃO retorna
-   * dados sensíveis completos (sem RG, endereço completo) — só o suficiente
-   * pra escolher na lista. Pra pegar tudo, usa /customer-info?cpf=XXX.
+   * SEARCH HÍBRIDO — busca PRIMEIRO no Customer (CRM FlowOps), depois cai
+   * pro Giga se ainda houver slots livres no limit.
+   *
+   * Cada resultado tem `source: 'crm' | 'giga'` pra UI decidir o que mostrar.
+   * Clientes CRM trazem dados ricos: tier VIP, cashback, tamanho preferido,
+   * última compra. Clientes Giga trazem só o cadastro básico.
+   *
+   * Busca por:
+   *  - CPF (se q tiver só dígitos)
+   *  - codCliente (Giga)
+   *  - Nome (LIKE %q%)
+   *
+   * Dedup: se o mesmo CPF aparece nos 2 (CRM + Giga), CRM ganha.
    */
   @Get('customer-search')
   async searchCustomers(
@@ -718,57 +724,274 @@ export class PdvController {
     }
     const limit = Math.min(Math.max(Number(limitStr) || 20, 1), 50);
 
-    const cm = await this.crediarios.detectClientesTable();
-    if (!cm) return { results: [] };
-
-    // Detecta se é busca numérica (CPF/cod) ou texto (nome)
     const onlyDigits = term.replace(/\D/g, '');
     const isNumeric = onlyDigits.length >= 3 && /^\d+$/.test(term.replace(/[\s.\-]/g, ''));
 
-    // Sanitiza pra evitar SQL injection (LIKE com escape)
-    const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
-    const safeNum = onlyDigits.slice(0, 14);
+    // ─── 1. BUSCA NO CRM (Customer Prisma) ─────────────────────────────────
+    type SearchResult = {
+      source: 'crm' | 'giga';
+      codCliente: string;
+      nome: string;
+      cpf: string;
+      cidade: string;
+      telefone: string;
+      // Campos extras do CRM (undefined pra Giga)
+      customerId?: string;
+      vipTier?: string;
+      cashbackBalanceCents?: number;
+      orderCount?: number;
+      ltvCents?: number;
+      lastOrderAt?: string | null;
+      sizeDefault?: string | null;
+      registroGiga?: number | null;
+    };
+    const results: SearchResult[] = [];
+    const cpfsVistos = new Set<string>(); // dedup CPF entre CRM e Giga
 
-    // Monta SELECT — só colunas que detectClientesTable confirmou existir
-    const selectCols: string[] = [`\`${cm.codCliente}\``];
-    if (cm.nome) selectCols.push(`\`${cm.nome}\``);
-    if (cm.cpf) selectCols.push(`\`${cm.cpf}\``);
-    if (cm.cidade) selectCols.push(`\`${cm.cidade}\``);
-    if (cm.telefone) selectCols.push(`\`${cm.telefone}\``);
-
-    // WHERE: combina busca por CPF (normalizado), codCliente e nome (OR)
-    const wheres: string[] = [];
-    if (isNumeric) {
-      if (cm.cpf) {
-        // CPF no Giga pode estar formatado — comparar normalizado (só dígitos)
-        wheres.push(`REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
-      }
-      wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
-    }
-    if (cm.nome) {
-      wheres.push(`UPPER(\`${cm.nome}\`) LIKE UPPER('%${safeText}%')`);
-    }
-    if (wheres.length === 0) return { results: [] };
-
-    const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
-    const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${limit}`;
-
-    let rows: any[] = [];
     try {
-      const r = await this.erp.runReadOnly(sql, { maxRows: limit, timeoutMs: 8000 });
-      rows = r.rows || [];
+      const crmWhere: any = { active: true, OR: [] as any[] };
+      if (isNumeric) {
+        // Busca por CPF (normalizado e formatado)
+        const cpfFmt = onlyDigits.length === 11
+          ? `${onlyDigits.slice(0, 3)}.${onlyDigits.slice(3, 6)}.${onlyDigits.slice(6, 9)}-${onlyDigits.slice(9)}`
+          : '';
+        crmWhere.OR.push({ cpf: { startsWith: onlyDigits } });
+        if (cpfFmt) crmWhere.OR.push({ cpf: cpfFmt });
+        // Por whatsapp também (últimos dígitos)
+        if (onlyDigits.length >= 8) {
+          crmWhere.OR.push({ whatsapp: { endsWith: onlyDigits.slice(-8) } });
+          crmWhere.OR.push({ phone: { endsWith: onlyDigits.slice(-8) } });
+        }
+        // Por registroGiga (codCliente)
+        if (onlyDigits.length <= 10) {
+          const n = Number(onlyDigits);
+          if (Number.isFinite(n)) crmWhere.OR.push({ registroGiga: n });
+        }
+      } else {
+        // Busca por nome (case-insensitive)
+        crmWhere.OR.push({ name: { contains: term, mode: 'insensitive' } });
+        crmWhere.OR.push({ nameSocial: { contains: term, mode: 'insensitive' } });
+      }
+      if (crmWhere.OR.length > 0) {
+        const crmCustomers = await (this.svc as any).prisma.customer.findMany({
+          where: crmWhere,
+          take: limit,
+          orderBy: { name: 'asc' },
+          select: {
+            id: true, name: true, nameSocial: true, cpf: true, whatsapp: true,
+            phone: true, vipTier: true, registroGiga: true,
+            orderCount: true, ltvCents: true, lastOrderAt: true,
+            sizeDefault: true,
+            cashbackBalance: { select: { balanceCents: true } },
+            originStore: { select: { code: true, name: true } },
+          },
+        });
+
+        for (const c of crmCustomers as any[]) {
+          const cpfNum = String(c.cpf || '').replace(/\D/g, '');
+          if (cpfNum && cpfsVistos.has(cpfNum)) continue;
+          if (cpfNum) cpfsVistos.add(cpfNum);
+          results.push({
+            source: 'crm',
+            customerId: c.id,
+            codCliente: c.registroGiga ? String(c.registroGiga) : '',
+            nome: c.nameSocial || c.name || '',
+            cpf: cpfNum,
+            cidade: c.originStore?.name || '',
+            telefone: String(c.whatsapp || c.phone || '').replace(/\D/g, ''),
+            vipTier: c.vipTier || 'bronze',
+            cashbackBalanceCents: c.cashbackBalance?.balanceCents || 0,
+            orderCount: c.orderCount || 0,
+            ltvCents: Number(c.ltvCents || 0),
+            lastOrderAt: c.lastOrderAt ? c.lastOrderAt.toISOString() : null,
+            sizeDefault: c.sizeDefault || null,
+            registroGiga: c.registroGiga,
+          });
+        }
+      }
     } catch (e: any) {
-      console.warn('[customer-search] erro:', e?.message);
+      console.warn('[customer-search] CRM falhou:', e?.message);
     }
+
+    // ─── 2. SE AINDA HÁ SLOTS, BUSCA NO GIGA ──────────────────────────────
+    const restante = limit - results.length;
+    if (restante > 0) {
+      const cm = await this.crediarios.detectClientesTable();
+      if (cm) {
+        const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
+        const safeNum = onlyDigits.slice(0, 14);
+
+        const selectCols: string[] = [`\`${cm.codCliente}\``];
+        if (cm.nome) selectCols.push(`\`${cm.nome}\``);
+        if (cm.cpf) selectCols.push(`\`${cm.cpf}\``);
+        if (cm.cidade) selectCols.push(`\`${cm.cidade}\``);
+        if (cm.telefone) selectCols.push(`\`${cm.telefone}\``);
+
+        const wheres: string[] = [];
+        if (isNumeric) {
+          if (cm.cpf) {
+            wheres.push(`REPLACE(REPLACE(REPLACE(\`${cm.cpf}\`, '.', ''), '-', ''), '/', '') LIKE '${safeNum}%'`);
+          }
+          wheres.push(`CONCAT('', \`${cm.codCliente}\`) = '${safeNum}'`);
+        }
+        if (cm.nome) {
+          wheres.push(`UPPER(\`${cm.nome}\`) LIKE UPPER('%${safeText}%')`);
+        }
+
+        if (wheres.length > 0) {
+          const orderBy = cm.nome ? `ORDER BY \`${cm.nome}\` ASC` : `ORDER BY \`${cm.codCliente}\` ASC`;
+          const sql = `SELECT ${selectCols.join(', ')} FROM \`${cm.table}\` WHERE ${wheres.join(' OR ')} ${orderBy} LIMIT ${restante * 2}`;
+
+          try {
+            const r = await this.erp.runReadOnly(sql, { maxRows: restante * 2, timeoutMs: 8000 });
+            for (const row of (r.rows || [])) {
+              const cpfNum = cm.cpf ? String(row[cm.cpf] ?? '').replace(/\D/g, '').trim() : '';
+              // Dedup: pula se esse CPF já veio do CRM
+              if (cpfNum && cpfsVistos.has(cpfNum)) continue;
+              if (cpfNum) cpfsVistos.add(cpfNum);
+
+              results.push({
+                source: 'giga',
+                codCliente: String(row[cm.codCliente] ?? '').trim(),
+                nome: cm.nome ? String(row[cm.nome] ?? '').trim() : '',
+                cpf: cpfNum,
+                cidade: cm.cidade ? String(row[cm.cidade] ?? '').trim() : '',
+                telefone: cm.telefone ? String(row[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
+              });
+              if (results.length >= limit) break;
+            }
+          } catch (e: any) {
+            console.warn('[customer-search] Giga falhou:', e?.message);
+          }
+        }
+      }
+    }
+
+    return { results: results.slice(0, limit) };
+  }
+
+  /**
+   * POST /pdv/customer/upsert
+   *
+   * UPSERT inteligente do cliente capturado no PDV — verifica se CPF já
+   * existe e:
+   *   - JÁ EXISTE: faz MERGE não-destrutivo (só preenche campos null) e
+   *                retorna o cliente existente com flag duplicated=true.
+   *                Frontend mostra "Cliente já cadastrado" e identifica.
+   *   - NÃO EXISTE: cria novo Customer com originSource='pdv' + storeCode
+   *                 da venda. Marca created=true.
+   *
+   * Campos básicos capturados no PDV (todos opcionais exceto cpf):
+   *   - cpf       (obrigatório — chave de dedupe)
+   *   - name      (nome completo)
+   *   - whatsapp  (com DDD)
+   *   - email
+   *   - storeCode (loja origem; vem do JWT da vendedora)
+   *
+   * NÃO faz nada com tier/cashback/sizeDefault — esses são preenchidos
+   * depois via tela CRM completo ou comprovação de cashback no checkout.
+   *
+   * Body: { cpf, name?, whatsapp?, email?, storeCode? }
+   */
+  @Post('customer/upsert')
+  async upsertCustomer(
+    @Req() req: any,
+    @Body() body: { cpf: string; name?: string; whatsapp?: string; email?: string; storeCode?: string },
+  ) {
+    this.requireRole(req);
+
+    const cpfDigits = String(body?.cpf || '').replace(/\D/g, '');
+    if (cpfDigits.length !== 11) {
+      throw new BadRequestException('CPF inválido — precisa de 11 dígitos');
+    }
+    const cpfFmt = `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`;
+
+    const name = String(body?.name || '').trim();
+    const whatsapp = String(body?.whatsapp || '').replace(/\D/g, '') || null;
+    const email = String(body?.email || '').trim().toLowerCase() || null;
+    // Loja: prioriza JWT da vendedora; cai pro storeCode do body se admin
+    const userRole = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode;
+    const storeCode = userRole === 'store' && userStoreCode ? userStoreCode : (body?.storeCode || userStoreCode);
+
+    // 1) Busca cliente existente por CPF (formatado OU dígitos)
+    const prisma = (this.svc as any).prisma;
+    const existing = await prisma.customer.findFirst({
+      where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFmt }] },
+      select: {
+        id: true, name: true, whatsapp: true, phone: true, email: true,
+        vipTier: true, registroGiga: true, originSource: true, originStoreId: true,
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
+
+    // 2) JÁ EXISTE — merge não-destrutivo
+    if (existing) {
+      const updates: any = {};
+      if (name && !existing.name) updates.name = name.toUpperCase();
+      if (whatsapp && !existing.whatsapp) updates.whatsapp = whatsapp;
+      if (email && !existing.email) updates.email = email;
+
+      if (Object.keys(updates).length > 0) {
+        await prisma.customer.update({ where: { id: existing.id }, data: updates });
+      }
+
+      return {
+        customerId: existing.id,
+        duplicated: true,
+        created: false,
+        merged: Object.keys(updates).length > 0,
+        mergedFields: Object.keys(updates),
+        cliente: {
+          id: existing.id,
+          name: updates.name || existing.name,
+          cpf: cpfFmt,
+          whatsapp: updates.whatsapp || existing.whatsapp,
+          email: updates.email || existing.email,
+          vipTier: existing.vipTier,
+          cashbackBalanceCents: existing.cashbackBalance?.balanceCents || 0,
+        },
+      };
+    }
+
+    // 3) NÃO EXISTE — cria novo com originSource='pdv'
+    let originStoreId: string | null = null;
+    if (storeCode) {
+      const store = await prisma.store.findUnique({ where: { code: storeCode } });
+      if (store) originStoreId = store.id;
+    }
+
+    const created = await prisma.customer.create({
+      data: {
+        cpf: cpfFmt,
+        name: name ? name.toUpperCase() : null,
+        whatsapp,
+        email,
+        originSource: 'pdv',
+        originStoreId,
+        vipTier: 'bronze',
+        active: true,
+        cashbackBalance: { create: {} },
+      },
+      select: {
+        id: true, name: true, whatsapp: true, email: true, vipTier: true,
+        cashbackBalance: { select: { balanceCents: true } },
+      },
+    });
 
     return {
-      results: rows.map((r) => ({
-        codCliente: String(r[cm.codCliente] ?? '').trim(),
-        nome: cm.nome ? String(r[cm.nome] ?? '').trim() : '',
-        cpf: cm.cpf ? String(r[cm.cpf] ?? '').replace(/\D/g, '').trim() : '',
-        cidade: cm.cidade ? String(r[cm.cidade] ?? '').trim() : '',
-        telefone: cm.telefone ? String(r[cm.telefone] ?? '').replace(/\D/g, '').trim() : '',
-      })),
+      customerId: created.id,
+      duplicated: false,
+      created: true,
+      cliente: {
+        id: created.id,
+        name: created.name,
+        cpf: cpfFmt,
+        whatsapp: created.whatsapp,
+        email: created.email,
+        vipTier: created.vipTier,
+        cashbackBalanceCents: created.cashbackBalance?.balanceCents || 0,
+      },
     };
   }
 
