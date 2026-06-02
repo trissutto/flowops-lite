@@ -66,6 +66,29 @@ export class CustomersCrmController {
   }
 
   /**
+   * Diagnóstico de colunas — lista TODAS as colunas da tabela `clientes`
+   * do Giga + 3 amostras + sugestão de mapeamento pro Customer.
+   * Útil pra decidir quais campos importar além dos básicos.
+   */
+  @Get('etl/giga/colunas')
+  @AdminOnly()
+  async gigaEtlColunas() {
+    return this.gigaEtl.diagnosticarColunas();
+  }
+
+  /**
+   * POST /customers-crm/etl/giga/loja-principal
+   * Atualiza SÓ originStoreId dos clientes Giga que não têm loja vinculada.
+   * Atribui a loja onde o cliente MAIS comprou (via tabela caixa do Giga).
+   * Não refaz sync completo — só corrige a falta de loja.
+   */
+  @Post('etl/giga/loja-principal')
+  @AdminOnly()
+  async gigaAtualizarLoja() {
+    return this.gigaEtl.atualizarLojaPrincipal();
+  }
+
+  /**
    * POST /customers-crm/etl/giga
    * Inicia sync FULL Giga (MySQL Wincred) → Customer (Postgres FlowOps).
    * 3 fases: clientes → histórico (LTV/orderCount/lastOrderAt) → tier.

@@ -237,12 +237,10 @@ export default function ClientesCrmPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
-  // ETL state (só admin enxerga)
+  // ETL state — só lemos pra mostrar badge "rodando" no botão Sincronizações.
+  // As funções de disparar sync ficam em /clientes-crm/sincronizacao
   const [etlState, setEtlState] = useState<EtlState | null>(null);
-  const [etlSyncing, setEtlSyncing] = useState(false);
-  // ETL Giga state (separado — controlador próprio)
   const [gigaEtl, setGigaEtl] = useState<GigaEtlState | null>(null);
-  const [gigaSyncing, setGigaSyncing] = useState(false);
 
   const isMatrix = me?.role === 'admin' || me?.role === 'operator';
 
@@ -305,42 +303,10 @@ export default function ClientesCrmPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [etlState?.running]);
 
-  async function startWooSync() {
-    if (!confirm('Sincronizar todos os clientes do WooCommerce para o CRM?\n\nA primeira loja de cada cliente NÃO será sobrescrita.')) return;
-    setEtlSyncing(true);
-    try {
-      await api('/customers-crm/etl/woo', { method: 'POST' });
-      const s = await api<EtlState>('/customers-crm/etl/status');
-      setEtlState(s);
-    } catch (e: any) {
-      alert(`Falha: ${e.message}`);
-    } finally {
-      setEtlSyncing(false);
-    }
-  }
+  // NOTA: as funções de sync (startWooSync, startGigaSync, atualizarLojaPrincipal)
+  // foram movidas pra /clientes-crm/sincronizacao. Aqui só mantemos o polling
+  // dos states pra mostrar o badge "rodando" no botão de Sincronizações.
 
-  // ─── ETL Giga: importa clientes do MySQL Wincred + calcula LTV + tier ───
-  async function startGigaSync() {
-    if (!confirm(
-      'Sincronizar TODOS os clientes do Giga (Wincred) → CRM?\n\n' +
-      '3 fases automáticas:\n' +
-      '  1. Importa clientes\n' +
-      '  2. Calcula histórico (LTV)\n' +
-      '  3. Recalcula tier (Bronze/Prata/Ouro/Diamante)\n\n' +
-      'Roda em background — pode demorar 5-15 minutos. Dados marketing ' +
-      '(tamanho, cashback, opt-in) NÃO são alterados.',
-    )) return;
-    setGigaSyncing(true);
-    try {
-      await api('/customers-crm/etl/giga', { method: 'POST' });
-      const s = await api<GigaEtlState>('/customers-crm/etl/giga/status');
-      setGigaEtl(s);
-    } catch (e: any) {
-      alert(`Falha: ${e.message}`);
-    } finally {
-      setGigaSyncing(false);
-    }
-  }
   // Polling Giga
   useEffect(() => {
     if (!isMatrix) return;
@@ -392,29 +358,20 @@ export default function ClientesCrmPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Sincronizações agrupadas em página dedicada — tira poluição do header
+              da listagem. Botão indica se algum sync está rodando (badge animado). */}
           {isMatrix && (
-            <>
-              <button
-                onClick={startWooSync}
-                disabled={etlSyncing || etlState?.running}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
-                title="Importar clientes do WooCommerce para o CRM"
-              >
-                <RefreshCw className={`w-4 h-4 ${etlState?.running ? 'animate-spin' : ''}`} />
-                {etlState?.running ? `Site... ${etlState.processed}/${etlState.totalEmails}` : 'Sincronizar do site'}
-              </button>
-              <button
-                onClick={startGigaSync}
-                disabled={gigaSyncing || gigaEtl?.running}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
-                title="Importar TODOS os clientes do Giga (Wincred) + histórico de compras + tier"
-              >
-                <RefreshCw className={`w-4 h-4 ${gigaEtl?.running ? 'animate-spin' : ''}`} />
-                {gigaEtl?.running
-                  ? `Giga ${GIGA_FASE_LABEL[gigaEtl.fase] || gigaEtl.fase}... ${gigaEtl.faseProgresso.current}/${gigaEtl.faseProgresso.total}`
-                  : 'Sincronizar Giga'}
-              </button>
-            </>
+            <a
+              href="/clientes-crm/sincronizacao"
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border border-slate-300"
+              title="Importar clientes do site e Giga; atualizar lojas"
+            >
+              <RefreshCw className={`w-4 h-4 ${(etlState?.running || gigaEtl?.running) ? 'animate-spin text-blue-600' : ''}`} />
+              Sincronizações
+              {(etlState?.running || gigaEtl?.running) && (
+                <span className="ml-1 inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              )}
+            </a>
           )}
           <button
             onClick={() => setShowCreate(true)}
@@ -425,42 +382,17 @@ export default function ClientesCrmPage() {
         </div>
       </div>
 
-      {/* ── Card de progresso Giga ───────────────────────────────────── */}
-      {gigaEtl && (gigaEtl.running || (gigaEtl.finishedAt && Date.now() - new Date(gigaEtl.finishedAt).getTime() < 30000)) && (
-        <div className={`mb-4 rounded-lg p-3 border-2 ${
-          gigaEtl.running
-            ? 'bg-emerald-50 border-emerald-300'
-            : gigaEtl.erros > 0
-              ? 'bg-amber-50 border-amber-300'
-              : 'bg-emerald-50 border-emerald-300'
-        }`}>
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="font-semibold text-sm text-emerald-900">
-              {gigaEtl.running ? '🔄' : gigaEtl.erros > 0 ? '⚠️' : '✓'} Sync Giga — fase: <b className="capitalize">{GIGA_FASE_LABEL[gigaEtl.fase] || gigaEtl.fase}</b>
-              {gigaEtl.running && gigaEtl.faseProgresso.total > 0 && (
-                <span className="ml-2 text-emerald-700">
-                  {gigaEtl.faseProgresso.current} / {gigaEtl.faseProgresso.total}
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-emerald-800">
-              <b>{gigaEtl.criados}</b> novos · <b>{gigaEtl.atualizados}</b> atualizados
-              {gigaEtl.pulados > 0 && <> · {gigaEtl.pulados} pulados</>}
-              {gigaEtl.erros > 0 && <> · <span className="text-rose-700">{gigaEtl.erros} erros</span></>}
-            </div>
-          </div>
-          {gigaEtl.running && gigaEtl.faseProgresso.total > 0 && (
-            <div className="h-1.5 bg-emerald-100 rounded overflow-hidden">
-              <div
-                className="h-full bg-emerald-500 transition-all duration-500"
-                style={{ width: `${Math.min(100, (gigaEtl.faseProgresso.current / gigaEtl.faseProgresso.total) * 100)}%` }}
-              />
-            </div>
-          )}
-          {gigaEtl.lastError && (
-            <div className="mt-2 text-xs text-rose-700">Último erro: {gigaEtl.lastError}</div>
-          )}
-        </div>
+      {/* Sync em andamento? Mostra banner discreto com link pra página de progresso */}
+      {(gigaEtl?.running || etlState?.running) && (
+        <a
+          href="/clientes-crm/sincronizacao"
+          className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 bg-blue-50 border border-blue-200 text-sm text-blue-900 hover:bg-blue-100"
+        >
+          <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+          <span>
+            Sincronização em andamento — clique pra ver o progresso ao vivo
+          </span>
+        </a>
       )}
 
       {/* ── Banner informativo (só vendedora e sem-loja; admin filtra inline na busca) ── */}
