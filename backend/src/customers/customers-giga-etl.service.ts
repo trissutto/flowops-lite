@@ -131,6 +131,99 @@ export class CustomersGigaEtlService {
   }
 
   /**
+   * DEBUG — investiga 1 cliente Giga específico pra entender por que tá com
+   * loja errada no Customer. Mostra:
+   *   1. Dado bruto na tabela clientes do Giga (LOJA, NOME, CPF, etc)
+   *   2. Customer correspondente no Postgres (id, originStoreId, originSource)
+   *   3. Store atual (code, name)
+   *   4. Store que DEVERIA ter (resolveStoreId aplicado na LOJA Giga)
+   *   5. Mapa interno _storeByCode (pra ver se mapping está OK)
+   */
+  async debugClienteGiga(codCliente: number): Promise<any> {
+    const pool = (this.erp as any).pool;
+    if (!pool) throw new Error('Pool Giga não inicializado');
+
+    // Carrega o mapa de stores PRIMEIRO (se ainda não foi carregado nesta instância)
+    if (this._storeByCode.size === 0) {
+      const stores = await (this.prisma as any).store.findMany({
+        select: { id: true, code: true, name: true },
+      });
+      for (const s of stores as any[]) {
+        this._storeByCode.set(String(s.code).trim().toUpperCase().padStart(2, '0'), s.id);
+        this._storeByCode.set(String(s.code).trim().toUpperCase(), s.id);
+        if (s.name) this._storeByCode.set(String(s.name).trim().toUpperCase(), s.id);
+      }
+    }
+
+    const cols = await this._detectarColunasClientes();
+
+    // 1. Dado bruto Giga
+    const [gigaRows]: any = await pool.query(
+      `SELECT * FROM clientes WHERE ${cols.codigo} = ? LIMIT 1`,
+      [codCliente],
+    );
+    const giga = gigaRows[0] || null;
+    const lojaGiga = giga && cols.loja ? giga[cols.loja] : null;
+
+    // 2. Customer atual
+    const customer = await (this.prisma as any).customer.findFirst({
+      where: { registroGiga: codCliente },
+      include: { originStore: { select: { code: true, name: true } } },
+    });
+
+    // 3. Store que deveria ser
+    const storeIdResolved = this._resolveStoreId(lojaGiga);
+    let storeResolved: any = null;
+    if (storeIdResolved) {
+      storeResolved = await (this.prisma as any).store.findUnique({
+        where: { id: storeIdResolved },
+        select: { code: true, name: true },
+      });
+    }
+
+    return {
+      codClienteBuscado: codCliente,
+      colunaLojaDetectada: cols.loja,
+      giga: {
+        encontrado: !!giga,
+        codigo: giga?.[cols.codigo] ?? null,
+        nome: giga?.[cols.nome] ?? null,
+        cpf: giga?.[cols.cpf] ?? null,
+        loja_raw: lojaGiga,
+        loja_raw_typeof: typeof lojaGiga,
+        loja_raw_length: lojaGiga != null ? String(lojaGiga).length : null,
+        loja_normalizado: lojaGiga != null ? String(lojaGiga).trim().toUpperCase() : null,
+      },
+      customer: customer ? {
+        id: customer.id,
+        name: customer.name,
+        cpf: customer.cpf,
+        registroGiga: customer.registroGiga,
+        originSource: customer.originSource,
+        originStoreId: customer.originStoreId,
+        originStore: customer.originStore,
+        active: customer.active,
+      } : null,
+      storeResolved: {
+        storeIdRetornado: storeIdResolved,
+        storeCode: storeResolved?.code,
+        storeName: storeResolved?.name,
+      },
+      diagnostico: {
+        deveriaAtualizar: storeIdResolved && storeIdResolved !== customer?.originStoreId,
+        motivoPular: !customer
+          ? 'Cliente não existe no Customer'
+          : !storeIdResolved
+            ? 'LOJA Giga não bate com nenhuma Store'
+            : storeIdResolved === customer.originStoreId
+              ? 'Já está com a loja correta'
+              : 'Deveria atualizar mas algum filtro está excluindo',
+      },
+      _storeByCodeAmostra: Array.from(this._storeByCode.entries()).slice(0, 30),
+    };
+  }
+
+  /**
    * Atualiza originStoreId dos clientes do Giga lendo o campo LOJA char(2)
    * da tabela `clientes` do Giga (fonte de verdade).
    *

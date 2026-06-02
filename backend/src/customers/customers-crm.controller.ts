@@ -104,6 +104,22 @@ export class CustomersCrmController {
   }
 
   /**
+   * GET /customers-crm/etl/giga/debug-cliente/:codCliente
+   * Mostra dado bruto Giga + Customer atual + store que deveria ser, pra
+   * entender por que cliente específico está com loja errada.
+   * Exemplo: GET /etl/giga/debug-cliente/1 (TATIANA ROMAGNOLI Santos)
+   */
+  @Get('etl/giga/debug-cliente/:codCliente')
+  @AdminOnly()
+  async gigaDebugCliente(@Param('codCliente') codCliente: string) {
+    const cod = parseInt(codCliente, 10);
+    if (!Number.isFinite(cod) || cod <= 0) {
+      return { erro: 'codCliente inválido' };
+    }
+    return this.gigaEtl.debugClienteGiga(cod);
+  }
+
+  /**
    * POST /customers-crm/etl/giga/cancelar
    * Solicita cancelamento do sync Giga em andamento. Os loops checam essa
    * flag em cada iteração e param graciosamente. Os dados já gravados ficam.
