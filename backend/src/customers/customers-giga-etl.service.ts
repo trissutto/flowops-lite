@@ -157,13 +157,20 @@ export class CustomersGigaEtlService {
 
     const cols = await this._detectarColunasClientes();
 
-    // 1. Dado bruto Giga
+    // 1. Dado bruto Giga — TODAS as linhas com esse codigo (sem LIMIT)
+    // Pra detectar colisão: codigo pode se repetir em lojas diferentes
     const [gigaRows]: any = await pool.query(
-      `SELECT * FROM clientes WHERE ${cols.codigo} = ? LIMIT 1`,
+      `SELECT * FROM clientes WHERE ${cols.codigo} = ?`,
       [codCliente],
     );
     const giga = gigaRows[0] || null;
     const lojaGiga = giga && cols.loja ? giga[cols.loja] : null;
+    const todasLinhasGiga = gigaRows.map((r: any) => ({
+      codigo: r[cols.codigo],
+      nome: r[cols.nome],
+      loja: cols.loja ? r[cols.loja] : null,
+      cpf: r[cols.cpf],
+    }));
 
     // 2. Customer atual
     const customer = await (this.prisma as any).customer.findFirst({
@@ -184,6 +191,11 @@ export class CustomersGigaEtlService {
     return {
       codClienteBuscado: codCliente,
       colunaLojaDetectada: cols.loja,
+      totalLinhasComEsseCodigo: gigaRows.length,
+      ALERTA_CODIGO_DUPLICADO: gigaRows.length > 1
+        ? `🔴 BUG CONFIRMADO: existem ${gigaRows.length} clientes com codigo=${codCliente} em lojas diferentes. registroGiga precisa ser composto (LOJA-CODIGO).`
+        : null,
+      todasLinhasGiga,
       giga: {
         encontrado: !!giga,
         codigo: giga?.[cols.codigo] ?? null,
