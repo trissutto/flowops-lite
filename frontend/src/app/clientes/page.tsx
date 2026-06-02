@@ -47,6 +47,29 @@ interface SyncState {
   lastError: string | null;
 }
 
+interface GigaSyncState {
+  running: boolean;
+  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done';
+  faseProgresso: { current: number; total: number };
+  totalGiga: number;
+  processados: number;
+  criados: number;
+  atualizados: number;
+  pulados: number;
+  erros: number;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+const GIGA_FASE_LABEL: Record<string, string> = {
+  idle: 'aguardando',
+  clientes: 'importando clientes',
+  historico: 'calculando histórico (LTV)',
+  tier: 'recalculando tier',
+  done: 'concluído',
+};
+
 type SortField = 'totalSpent' | 'orderCount' | 'avgTicket' | 'lastOrder' | 'name';
 
 export default function ClientesPage() {
@@ -64,6 +87,8 @@ export default function ClientesPage() {
   const [exporting, setExporting] = useState(false);
   const [syncState, setSyncState] = useState<SyncState | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [gigaSync, setGigaSync] = useState<GigaSyncState | null>(null);
+  const [gigaSyncing, setGigaSyncing] = useState(false);
 
   useEffect(() => { load(); /* eslint-disable-line */ }, [page, search, orderBy, order]);
 
@@ -104,6 +129,43 @@ export default function ClientesPage() {
       setSyncing(false);
     }
   }
+
+  // ─── ETL Giga → Customer (sync clientes + histórico + tier) ─────────
+  async function loadGigaStatus(reloadOnDone = false) {
+    try {
+      const res = await api<GigaSyncState>('/customers-crm/etl/giga/status');
+      const wasRunning = gigaSync?.running;
+      setGigaSync(res);
+      if (reloadOnDone && wasRunning && !res.running) await load();
+    } catch { /* silencioso */ }
+  }
+  async function startGigaSync() {
+    if (!confirm(
+      'Iniciar sincronização Giga → CRM?\n\n' +
+      '• Importa TODOS os clientes do Giga (Wincred MySQL)\n' +
+      '• Calcula histórico de compras (LTV) por cliente\n' +
+      '• Recalcula tier (Bronze/Prata/Ouro/Diamante)\n\n' +
+      'Pode demorar 5-15 minutos. Roda em background — você pode usar o sistema normalmente.',
+    )) return;
+    setGigaSyncing(true);
+    try {
+      await api('/customers-crm/etl/giga', { method: 'POST' });
+      await loadGigaStatus();
+    } catch (e: any) {
+      alert(`Falha ao iniciar sync Giga: ${e.message}`);
+    } finally {
+      setGigaSyncing(false);
+    }
+  }
+
+  // Polling status Giga
+  useEffect(() => {
+    loadGigaStatus();
+    if (!gigaSync?.running) return;
+    const t = setInterval(() => loadGigaStatus(true), 2000);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gigaSync?.running]);
 
   async function load() {
     setLoading(true);

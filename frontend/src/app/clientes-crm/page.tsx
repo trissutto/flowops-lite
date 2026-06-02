@@ -138,17 +138,52 @@ interface EtlState {
   lastError: string | null;
 }
 
+interface GigaEtlState {
+  running: boolean;
+  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done';
+  faseProgresso: { current: number; total: number };
+  totalGiga: number;
+  processados: number;
+  criados: number;
+  atualizados: number;
+  pulados: number;
+  erros: number;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────
 const TIER_LABEL: Record<string, string> = {
+  // PT-BR (oficial)
   bronze: 'Bronze', prata: 'Prata', ouro: 'Ouro', diamante: 'Diamante',
+  // Aliases EN — clientes legados de seed antigo, traduz pra UI ficar consistente
+  silver: 'Prata', gold: 'Ouro', diamond: 'Diamante',
+  Bronze: 'Bronze', Silver: 'Prata', Gold: 'Ouro', Diamond: 'Diamante',
 };
 const TIER_BG: Record<string, string> = {
   bronze:   'bg-orange-100 text-orange-800 border-orange-300',
   prata:    'bg-gray-100 text-gray-800 border-gray-300',
   ouro:     'bg-yellow-100 text-yellow-800 border-yellow-300',
   diamante: 'bg-cyan-100 text-cyan-800 border-cyan-300',
+  // Aliases EN
+  silver:   'bg-gray-100 text-gray-800 border-gray-300',
+  gold:     'bg-yellow-100 text-yellow-800 border-yellow-300',
+  diamond:  'bg-cyan-100 text-cyan-800 border-cyan-300',
+  Bronze:   'bg-orange-100 text-orange-800 border-orange-300',
+  Silver:   'bg-gray-100 text-gray-800 border-gray-300',
+  Gold:     'bg-yellow-100 text-yellow-800 border-yellow-300',
+  Diamond:  'bg-cyan-100 text-cyan-800 border-cyan-300',
+};
+
+const GIGA_FASE_LABEL: Record<string, string> = {
+  idle: 'aguardando',
+  clientes: 'importando clientes',
+  historico: 'calculando histórico (LTV)',
+  tier: 'recalculando tier',
+  done: 'concluído',
 };
 
 function fmtMoney(cents: number | string): string {
@@ -205,6 +240,9 @@ export default function ClientesCrmPage() {
   // ETL state (só admin enxerga)
   const [etlState, setEtlState] = useState<EtlState | null>(null);
   const [etlSyncing, setEtlSyncing] = useState(false);
+  // ETL Giga state (separado — controlador próprio)
+  const [gigaEtl, setGigaEtl] = useState<GigaEtlState | null>(null);
+  const [gigaSyncing, setGigaSyncing] = useState(false);
 
   const isMatrix = me?.role === 'admin' || me?.role === 'operator';
 
@@ -281,6 +319,47 @@ export default function ClientesCrmPage() {
     }
   }
 
+  // ─── ETL Giga: importa clientes do MySQL Wincred + calcula LTV + tier ───
+  async function startGigaSync() {
+    if (!confirm(
+      'Sincronizar TODOS os clientes do Giga (Wincred) → CRM?\n\n' +
+      '3 fases automáticas:\n' +
+      '  1. Importa clientes\n' +
+      '  2. Calcula histórico (LTV)\n' +
+      '  3. Recalcula tier (Bronze/Prata/Ouro/Diamante)\n\n' +
+      'Roda em background — pode demorar 5-15 minutos. Dados marketing ' +
+      '(tamanho, cashback, opt-in) NÃO são alterados.',
+    )) return;
+    setGigaSyncing(true);
+    try {
+      await api('/customers-crm/etl/giga', { method: 'POST' });
+      const s = await api<GigaEtlState>('/customers-crm/etl/giga/status');
+      setGigaEtl(s);
+    } catch (e: any) {
+      alert(`Falha: ${e.message}`);
+    } finally {
+      setGigaSyncing(false);
+    }
+  }
+  // Polling Giga
+  useEffect(() => {
+    if (!isMatrix) return;
+    api<GigaEtlState>('/customers-crm/etl/giga/status').then(setGigaEtl).catch(() => {});
+  }, [isMatrix]);
+  useEffect(() => {
+    if (!gigaEtl?.running) return;
+    const t = setInterval(async () => {
+      try {
+        const s = await api<GigaEtlState>('/customers-crm/etl/giga/status');
+        const wasRunning = gigaEtl?.running;
+        setGigaEtl(s);
+        if (wasRunning && !s.running) load();
+      } catch {}
+    }, 2500);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gigaEtl?.running]);
+
   function onSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
     setPage(1);
@@ -312,17 +391,30 @@ export default function ClientesCrmPage() {
             Base mestra de clientes (Giga + WooCommerce + Instagram + cadastros PDV)
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {isMatrix && (
-            <button
-              onClick={startWooSync}
-              disabled={etlSyncing || etlState?.running}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
-              title="Importar clientes do WooCommerce para o CRM"
-            >
-              <RefreshCw className={`w-4 h-4 ${etlState?.running ? 'animate-spin' : ''}`} />
-              {etlState?.running ? `Sync... ${etlState.processed}/${etlState.totalEmails}` : 'Sincronizar do site'}
-            </button>
+            <>
+              <button
+                onClick={startWooSync}
+                disabled={etlSyncing || etlState?.running}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                title="Importar clientes do WooCommerce para o CRM"
+              >
+                <RefreshCw className={`w-4 h-4 ${etlState?.running ? 'animate-spin' : ''}`} />
+                {etlState?.running ? `Site... ${etlState.processed}/${etlState.totalEmails}` : 'Sincronizar do site'}
+              </button>
+              <button
+                onClick={startGigaSync}
+                disabled={gigaSyncing || gigaEtl?.running}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                title="Importar TODOS os clientes do Giga (Wincred) + histórico de compras + tier"
+              >
+                <RefreshCw className={`w-4 h-4 ${gigaEtl?.running ? 'animate-spin' : ''}`} />
+                {gigaEtl?.running
+                  ? `Giga ${GIGA_FASE_LABEL[gigaEtl.fase] || gigaEtl.fase}... ${gigaEtl.faseProgresso.current}/${gigaEtl.faseProgresso.total}`
+                  : 'Sincronizar Giga'}
+              </button>
+            </>
           )}
           <button
             onClick={() => setShowCreate(true)}
@@ -332,6 +424,44 @@ export default function ClientesCrmPage() {
           </button>
         </div>
       </div>
+
+      {/* ── Card de progresso Giga ───────────────────────────────────── */}
+      {gigaEtl && (gigaEtl.running || (gigaEtl.finishedAt && Date.now() - new Date(gigaEtl.finishedAt).getTime() < 30000)) && (
+        <div className={`mb-4 rounded-lg p-3 border-2 ${
+          gigaEtl.running
+            ? 'bg-emerald-50 border-emerald-300'
+            : gigaEtl.erros > 0
+              ? 'bg-amber-50 border-amber-300'
+              : 'bg-emerald-50 border-emerald-300'
+        }`}>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="font-semibold text-sm text-emerald-900">
+              {gigaEtl.running ? '🔄' : gigaEtl.erros > 0 ? '⚠️' : '✓'} Sync Giga — fase: <b className="capitalize">{GIGA_FASE_LABEL[gigaEtl.fase] || gigaEtl.fase}</b>
+              {gigaEtl.running && gigaEtl.faseProgresso.total > 0 && (
+                <span className="ml-2 text-emerald-700">
+                  {gigaEtl.faseProgresso.current} / {gigaEtl.faseProgresso.total}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-emerald-800">
+              <b>{gigaEtl.criados}</b> novos · <b>{gigaEtl.atualizados}</b> atualizados
+              {gigaEtl.pulados > 0 && <> · {gigaEtl.pulados} pulados</>}
+              {gigaEtl.erros > 0 && <> · <span className="text-rose-700">{gigaEtl.erros} erros</span></>}
+            </div>
+          </div>
+          {gigaEtl.running && gigaEtl.faseProgresso.total > 0 && (
+            <div className="h-1.5 bg-emerald-100 rounded overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all duration-500"
+                style={{ width: `${Math.min(100, (gigaEtl.faseProgresso.current / gigaEtl.faseProgresso.total) * 100)}%` }}
+              />
+            </div>
+          )}
+          {gigaEtl.lastError && (
+            <div className="mt-2 text-xs text-rose-700">Último erro: {gigaEtl.lastError}</div>
+          )}
+        </div>
+      )}
 
       {/* ── Banner informativo (só vendedora e sem-loja; admin filtra inline na busca) ── */}
       {me && !isMatrix && (
