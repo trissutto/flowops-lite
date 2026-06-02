@@ -39,7 +39,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 
-interface SyncState {
+/**
+ * Estado do sync Giga → Customer.
+ * EXPORTADO porque o controller usa esse tipo no retorno público dos
+ * endpoints — sem export o tsc lança TS4053 ("tipo não pode ser nomeado").
+ */
+export interface GigaSyncState {
   running: boolean;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -60,7 +65,7 @@ export class CustomersGigaEtlService {
 
   // State machine in-memory — só 1 sync por vez por instância.
   // Em produção (Railway), 1 instância = 1 lock. Suficiente.
-  private state: SyncState = {
+  private state: GigaSyncState = {
     running: false,
     startedAt: null,
     finishedAt: null,
@@ -80,7 +85,7 @@ export class CustomersGigaEtlService {
     private readonly erp: ErpService,
   ) {}
 
-  getState(): SyncState {
+  getState(): GigaSyncState {
     return { ...this.state, faseProgresso: { ...this.state.faseProgresso } };
   }
 
