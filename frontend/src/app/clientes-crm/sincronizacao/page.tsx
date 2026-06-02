@@ -9,7 +9,7 @@
  *
  *   1. Sincronizar do site (WooCommerce → Customer)
  *   2. Sincronizar Giga (Wincred MySQL → Customer + LTV + tier)
- *   3. Atualizar lojas Giga (atribui originStoreId baseado em onde mais comprou)
+ *   3. Atualizar lojas Giga (atribui originStoreId pelo campo LOJA do Giga)
  *
  * Cada uma é um card com explicação + botão + progresso ao vivo.
  */
@@ -68,8 +68,9 @@ export default function SincronizacaoPage() {
   const [lojaSyncing, setLojaSyncing] = useState(false);
   const [lojaResult, setLojaResult] = useState<{
     atualizados: number;
-    semCompras: number;
+    semLojaNoGiga: number;
     semStoreCorrespondente: number;
+    pulados: number;
     duracaoMs: number;
   } | null>(null);
 
@@ -150,9 +151,10 @@ export default function SincronizacaoPage() {
 
   async function atualizarLojas() {
     if (!confirm(
-      'Atualizar a LOJA principal dos clientes Giga sem loja vinculada?\n\n' +
-      'Atribui automaticamente a loja onde cada cliente mais comprou. ' +
-      'NÃO altera quem já tem loja definida. Demora 1-3 min.',
+      'Atualizar a LOJA dos clientes Giga sem loja vinculada?\n\n' +
+      'Lê o campo LOJA da tabela `clientes` do Giga (a loja que cadastrou ' +
+      'o cliente) e grava no CRM. NÃO altera quem já tem loja. NÃO mexe ' +
+      'em clientes do site (ficam loja 13). Demora 1-3 min.',
     )) return;
     setLojaSyncing(true);
     setLojaResult(null);
@@ -402,7 +404,7 @@ function LojasUpdateCard({
 }: {
   loading: boolean;
   gigaRunning: boolean;
-  result: { atualizados: number; semCompras: number; semStoreCorrespondente: number; duracaoMs: number } | null;
+  result: { atualizados: number; semLojaNoGiga: number; semStoreCorrespondente: number; pulados: number; duracaoMs: number } | null;
   onAction: () => void;
   onDismiss: () => void;
 }) {
@@ -415,9 +417,11 @@ function LojasUpdateCard({
         <div className="flex-1">
           <h3 className="font-bold text-slate-800">Atualizar lojas dos clientes Giga</h3>
           <p className="text-sm text-slate-600 mt-1">
-            Atribui a loja origem dos clientes Giga <b>sem loja vinculada</b>, baseado em
-            onde cada um <b>mais comprou</b> historicamente. Não altera quem já tem loja.
-            Rodada rápida (1-3 min).
+            Atribui a loja origem dos clientes Giga <b>sem loja vinculada</b> lendo o
+            campo <code className="bg-slate-100 px-1 py-0.5 rounded text-xs">LOJA</code> da
+            tabela <code className="bg-slate-100 px-1 py-0.5 rounded text-xs">clientes</code> do
+            Giga (a loja que cadastrou o cliente). Não altera quem já tem loja vinculada
+            nem clientes do site (loja 13). Rodada rápida (1-3 min).
           </p>
 
           <button
@@ -434,7 +438,8 @@ function LojasUpdateCard({
             <div className="mt-3 rounded-lg p-3 border bg-amber-50 border-amber-200 flex items-center justify-between">
               <div className="text-xs">
                 <span className="font-bold">✓ {result.atualizados} clientes</span> receberam loja origem
-                {result.semCompras > 0 && <> · {result.semCompras} sem compras</>}
+                {result.pulados > 0 && <> · {result.pulados} já estavam OK</>}
+                {result.semLojaNoGiga > 0 && <> · {result.semLojaNoGiga} sem LOJA no Giga</>}
                 {result.semStoreCorrespondente > 0 && (
                   <> · <span className="text-rose-700">{result.semStoreCorrespondente} sem store match</span></>
                 )}
