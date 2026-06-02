@@ -149,7 +149,7 @@ export default function EtiquetaPrint({ labels }: Props) {
           display: grid;
           grid-template-columns: 48mm 48mm;
           gap: 0 6mm;
-          padding: 12mm 0 0 6mm;
+          padding: 13mm 0 0 6mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -190,12 +190,13 @@ export default function EtiquetaPrint({ labels }: Props) {
           flex-shrink: 0;
         }
         .et-tam {
-          font-size: 11pt;
+          font-size: 12pt;
           font-weight: 900;
-          font-family: 'Courier New', monospace;
+          font-family: Arial Black, Arial, -apple-system, system-ui, sans-serif;
           border: 1.5px solid #000;
-          padding: 0 1mm;
+          padding: 0 1.2mm;
           line-height: 1.1;
+          letter-spacing: 0.3px;
         }
         .et-cor-destaque {
           font-size: 15pt;
@@ -252,7 +253,7 @@ export default function EtiquetaPrint({ labels }: Props) {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 12mm 0 0 6mm;
+            padding: 13mm 0 0 6mm;
             page-break-inside: auto;
           }
           .etiqueta {
