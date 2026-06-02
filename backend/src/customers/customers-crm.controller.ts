@@ -13,6 +13,7 @@ import {
   RequestActor,
 } from './customers-crm.service';
 import { CustomersEtlService } from './customers-etl.service';
+import { CustomersGigaEtlService } from './customers-giga-etl.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 
@@ -32,6 +33,7 @@ export class CustomersCrmController {
   constructor(
     private readonly svc: CustomersCrmService,
     private readonly etl: CustomersEtlService,
+    private readonly gigaEtl: CustomersGigaEtlService,
   ) {}
 
   // ─── ETL Woo → Customers (só admin) ──────────────────────────────────────
@@ -52,6 +54,34 @@ export class CustomersCrmController {
         ? 'Sync WooCommerce → Customer iniciado em background. GET /customers-crm/etl/status pra acompanhar.'
         : 'Sync já em andamento. GET /customers-crm/etl/status.',
       state: this.etl.getState(),
+    };
+  }
+
+  // ─── ETL Giga → Customers (só admin) ────────────────────────────────────
+  /** Status do sync Giga (polling pelo frontend). */
+  @Get('etl/giga/status')
+  @AdminOnly()
+  gigaEtlStatus() {
+    return this.gigaEtl.getState();
+  }
+
+  /**
+   * POST /customers-crm/etl/giga
+   * Inicia sync FULL Giga (MySQL Wincred) → Customer (Postgres FlowOps).
+   * 3 fases: clientes → histórico (LTV/orderCount/lastOrderAt) → tier.
+   * Roda em background, polling em GET /etl/giga/status.
+   */
+  @Post('etl/giga')
+  @AdminOnly()
+  @HttpCode(202)
+  startGigaSync() {
+    const started = this.gigaEtl.startFullSync();
+    return {
+      started,
+      message: started
+        ? 'Sync Giga → Customer iniciado em background. GET /customers-crm/etl/giga/status pra acompanhar.'
+        : 'Sync já em andamento.',
+      state: this.gigaEtl.getState(),
     };
   }
 
