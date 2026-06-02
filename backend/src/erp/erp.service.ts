@@ -1461,29 +1461,45 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const conds: string[] = [
       'e.ESTOQUE >= ?',
       'p.REF IS NOT NULL',
-      "p.REF <> ''",
+      "TRIM(p.REF) <> ''",
     ];
     const vals: any[] = [minQty];
 
+    // LOJA: comparação robusta — Giga pode ter LOJA como INT (1) ou STRING
+    // com zero à esquerda ('01'). Normaliza ambos os lados.
     if (input.storeCode) {
-      conds.push('e.LOJA = ?');
-      vals.push(input.storeCode);
-    }
-    if (input.plusSizeOnly) {
+      const lojaNum = parseInt(input.storeCode, 10);
+      const lojaStr = String(input.storeCode).trim();
+      const lojaPadded = lojaStr.padStart(2, '0');
       conds.push(
-        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'",
+        `(CAST(e.LOJA AS UNSIGNED) = ? OR TRIM(e.LOJA) = ? OR TRIM(e.LOJA) = ?)`,
       );
+      vals.push(lojaNum, lojaStr, lojaPadded);
+    }
+    // PLUS SIZE: busca em DESCRICAOCOMPLETA OU DESCRICAOPDV (alguns produtos
+    // só têm uma das duas preenchida). Aceita variações de grafia.
+    if (input.plusSizeOnly) {
+      conds.push(`(
+        UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) REGEXP 'PLUS[ -]?SIZE|PLUSSIZE'
+        OR UPPER(COALESCE(p.DESCRICAOPDV, '')) REGEXP 'PLUS[ -]?SIZE|PLUSSIZE'
+        OR UPPER(COALESCE(p.GRUPO, '')) LIKE '%PLUS%'
+      )`);
     }
     if (input.descricaoContains?.trim()) {
-      conds.push(
-        "UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ?",
-      );
-      vals.push(`%${input.descricaoContains.trim().toUpperCase()}%`);
+      // Cada palavra do filtro pode aparecer em qualquer ordem (AND entre palavras)
+      const palavras = input.descricaoContains.trim().toUpperCase().split(/\s+/).filter(Boolean);
+      for (const palavra of palavras) {
+        conds.push(`(
+          UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ?
+          OR UPPER(COALESCE(p.DESCRICAOPDV, '')) LIKE ?
+        )`);
+        vals.push(`%${palavra}%`, `%${palavra}%`);
+      }
     }
 
     const sql = `
-      SELECT p.REF                                                AS ref,
-             MAX(p.DESCRICAOCOMPLETA)      AS descricao,
+      SELECT TRIM(p.REF)                                          AS ref,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
              COUNT(DISTINCT p.CODIGO)                             AS variantesComSobra,
              SUM(e.ESTOQUE)                                       AS estoqueTotalSobra,
              MAX(p.CODIGO)                                        AS skuExemplo
@@ -1491,7 +1507,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         INNER JOIN produtos p
                 ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
        WHERE ${conds.join(' AND ')}
-       GROUP BY p.REF
+       GROUP BY TRIM(p.REF)
        ORDER BY estoqueTotalSobra DESC, variantesComSobra DESC
        LIMIT ?
     `;
@@ -1502,6 +1518,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         `[erp] searchRefsComSobraPorSku minQty=${minQty} loja=${input.storeCode || 'all'} ` +
         `plusSize=${!!input.plusSizeOnly} desc=${input.descricaoContains || '(none)'}`,
       );
+      this.logger.debug(`[erp] SQL: ${sql.replace(/\s+/g, ' ').trim()}`);
+      this.logger.debug(`[erp] VALS: ${JSON.stringify(vals)}`);
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, vals);
       this.logger.log(`[erp] searchRefsComSobraPorSku retornou ${rows.length} REF(s)`);
       return (rows as any[]).map((r) => ({
