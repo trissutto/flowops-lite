@@ -37,7 +37,7 @@ interface EtlState {
 
 interface GigaEtlState {
   running: boolean;
-  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done';
+  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done' | 'cancelled';
   faseProgresso: { current: number; total: number };
   totalGiga: number;
   processados: number;
@@ -48,6 +48,7 @@ interface GigaEtlState {
   lastError: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  abortRequested?: boolean;
 }
 
 const GIGA_FASE_LABEL: Record<string, string> = {
@@ -56,6 +57,7 @@ const GIGA_FASE_LABEL: Record<string, string> = {
   historico: 'calculando histórico (LTV)',
   tier: 'recalculando tier',
   done: 'concluído',
+  cancelled: 'cancelado pelo usuário',
 };
 
 export default function SincronizacaoPage() {
@@ -129,6 +131,23 @@ export default function SincronizacaoPage() {
     }
   }
 
+  /** Cancela o sync Giga em andamento. Os loops checam abortRequested. */
+  async function cancelGiga() {
+    if (!confirm(
+      'Cancelar o sync Giga em andamento?\n\n' +
+      'Os dados já gravados ficam no banco. Você pode rodar de novo depois ' +
+      'pra continuar.',
+    )) return;
+    try {
+      await api('/customers-crm/etl/giga/cancelar', { method: 'POST' });
+      // Atualiza status logo após
+      const s = await api<GigaEtlState>('/customers-crm/etl/giga/status');
+      setGigaEtl(s);
+    } catch (e: any) {
+      alert(`Falha ao cancelar: ${e.message}`);
+    }
+  }
+
   async function atualizarLojas() {
     if (!confirm(
       'Atualizar a LOJA principal dos clientes Giga sem loja vinculada?\n\n' +
@@ -184,6 +203,7 @@ export default function SincronizacaoPage() {
           state={gigaEtl}
           loading={gigaSyncing || !!gigaEtl?.running}
           onAction={syncGiga}
+          onCancel={cancelGiga}
         />
 
         {/* Card 3 — Atualizar lojas */}
@@ -293,11 +313,12 @@ function SyncCard({
 
 // ─── Card Giga (estado mais rico) ─────────────────────────────────────
 function GigaSyncCard({
-  state, loading, onAction,
+  state, loading, onAction, onCancel,
 }: {
   state: GigaEtlState | null;
   loading: boolean;
   onAction: () => void;
+  onCancel: () => void;
 }) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl p-5">
@@ -312,16 +333,28 @@ function GigaSyncCard({
             atribui tier VIP. Roda em 3 fases automaticamente. Não toca em dados marketing.
           </p>
 
-          <button
-            onClick={onAction}
-            disabled={loading}
-            className="mt-3 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${state?.running ? 'animate-spin' : ''}`} />
-            {state?.running
-              ? `${GIGA_FASE_LABEL[state.fase]}... ${state.faseProgresso.current}/${state.faseProgresso.total}`
-              : 'Sincronizar Giga'}
-          </button>
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <button
+              onClick={onAction}
+              disabled={loading}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${state?.running ? 'animate-spin' : ''}`} />
+              {state?.running
+                ? `${GIGA_FASE_LABEL[state.fase]}... ${state.faseProgresso.current}/${state.faseProgresso.total}`
+                : 'Sincronizar Giga'}
+            </button>
+            {state?.running && (
+              <button
+                onClick={onCancel}
+                disabled={!!state?.abortRequested}
+                className="px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+                title="Os dados já gravados ficam — só interrompe o que falta"
+              >
+                ✕ {state?.abortRequested ? 'Cancelando...' : 'Cancelar sync'}
+              </button>
+            )}
+          </div>
 
           {state && (state.running || (state.finishedAt && Date.now() - new Date(state.finishedAt).getTime() < 60000)) && (
             <div className={`mt-3 rounded-lg p-3 border ${

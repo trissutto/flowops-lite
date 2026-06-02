@@ -55,8 +55,10 @@ export interface GigaSyncState {
   pulados: number;
   erros: number;
   lastError: string | null;
-  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done';
+  fase: 'idle' | 'clientes' | 'historico' | 'tier' | 'done' | 'cancelled';
   faseProgresso: { current: number; total: number };
+  /** Flag de cancelamento — loops do sync checam isto em cada iteração */
+  abortRequested?: boolean;
 }
 
 @Injectable()
@@ -87,6 +89,21 @@ export class CustomersGigaEtlService {
 
   getState(): GigaSyncState {
     return { ...this.state, faseProgresso: { ...this.state.faseProgresso } };
+  }
+
+  /**
+   * Pede cancelamento do sync em andamento. Os loops checam essa flag em cada
+   * iteração e param graciosamente. Os dados já persistidos no Postgres ficam
+   * (não há rollback). Retorna o estado pra confirmar.
+   */
+  requestAbort(): GigaSyncState {
+    if (!this.state.running) {
+      this.logger.log('[giga-etl] requestAbort: nada rodando');
+      return this.getState();
+    }
+    this.logger.warn('[giga-etl] === CANCELAMENTO SOLICITADO ===');
+    this.state.abortRequested = true;
+    return this.getState();
   }
 
   /**
@@ -293,6 +310,7 @@ export class CustomersGigaEtlService {
       lastError: null,
       fase: 'clientes',
       faseProgresso: { current: 0, total: 0 },
+      abortRequested: false,
     };
     // Fire-and-forget — roda em background
     this._runSync().catch((e) => {
@@ -316,25 +334,42 @@ export class CustomersGigaEtlService {
     this.logger.log('[giga-etl] === SYNC FULL iniciado ===');
 
     // ─── FASE 1: CLIENTES ────────────────────────────────────────────────
-    this.state.fase = 'clientes';
-    await this._syncClientes();
+    if (!this.state.abortRequested) {
+      this.state.fase = 'clientes';
+      await this._syncClientes();
+    }
 
     // ─── FASE 2: HISTÓRICO (LTV / orderCount / lastOrderAt) ──────────────
-    this.state.fase = 'historico';
-    await this._syncHistorico();
+    if (!this.state.abortRequested) {
+      this.state.fase = 'historico';
+      await this._syncHistorico();
+    }
 
     // ─── FASE 3: TIER (recalcula vipTier) ────────────────────────────────
-    this.state.fase = 'tier';
-    await this._recalcularTiers();
+    if (!this.state.abortRequested) {
+      this.state.fase = 'tier';
+      await this._recalcularTiers();
+    }
 
-    this.state.fase = 'done';
+    // Estado final: cancelled se foi abortado, done se concluiu
+    if (this.state.abortRequested) {
+      this.state.fase = 'cancelled';
+      this.logger.warn(
+        `[giga-etl] === SYNC CANCELADO === ` +
+        `criados=${this.state.criados} atualizados=${this.state.atualizados} ` +
+        `pulados=${this.state.pulados} erros=${this.state.erros}`,
+      );
+    } else {
+      this.state.fase = 'done';
+      this.logger.log(
+        `[giga-etl] === SYNC concluído === ` +
+        `criados=${this.state.criados} atualizados=${this.state.atualizados} ` +
+        `pulados=${this.state.pulados} erros=${this.state.erros}`,
+      );
+    }
     this.state.running = false;
     this.state.finishedAt = new Date();
-    this.logger.log(
-      `[giga-etl] === SYNC concluído === ` +
-      `criados=${this.state.criados} atualizados=${this.state.atualizados} ` +
-      `pulados=${this.state.pulados} erros=${this.state.erros}`,
-    );
+    this.state.abortRequested = false;
   }
 
   /**
@@ -360,6 +395,11 @@ export class CustomersGigaEtlService {
     const BATCH = 500;
     let offset = 0;
     while (offset < this.state.totalGiga) {
+      // Verifica cancelamento ANTES de cada batch
+      if (this.state.abortRequested) {
+        this.logger.warn(`[giga-etl] FASE 1 abortada em offset=${offset}`);
+        break;
+      }
       try {
         const selectFields = [
           `${cols.codigo} AS codCliente`,
@@ -477,8 +517,15 @@ export class CustomersGigaEtlService {
 
     // CPF formatado pro padrão FlowOps: 12345678901 → 123.456.789-01
     const cpfFormatted = this._formatCpf(cpfDigits);
+
+    // Busca por CPF (em ambos formatos) OU por registroGiga (importante:
+    // cliente pode já existir no Customer com mesmo registroGiga mas sem CPF,
+    // ou com CPF cadastrado depois pelo ETL Woo. Sem essa segunda busca o
+    // sync tentava criar duplicata e estourava unique constraint P2002).
+    const whereClauses: any[] = [{ cpf: cpfDigits }, { cpf: cpfFormatted }];
+    if (codCliente) whereClauses.push({ registroGiga: codCliente });
     const existing = await (this.prisma as any).customer.findFirst({
-      where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFormatted }] },
+      where: { OR: whereClauses },
     });
 
     if (existing) {
@@ -641,6 +688,10 @@ export class CustomersGigaEtlService {
     );
 
     for (const c of customers as any[]) {
+      if (this.state.abortRequested) {
+        this.logger.warn(`[giga-etl] FASE 2 abortada em ${this.state.faseProgresso.current}/${this.state.faseProgresso.total}`);
+        break;
+      }
       try {
         // 1) Soma compras (LTV/orderCount/lastOrderAt)
         const [rows]: any = await pool.query(
@@ -722,6 +773,10 @@ export class CustomersGigaEtlService {
     this.logger.log(`[giga-etl] FASE 3: recalculando tier de ${customers.length} clientes`);
 
     for (const c of customers as any[]) {
+      if (this.state.abortRequested) {
+        this.logger.warn(`[giga-etl] FASE 3 abortada em ${this.state.faseProgresso.current}/${this.state.faseProgresso.total}`);
+        break;
+      }
       try {
         const ltvBRL = Number(c.ltvCents || 0) / 100;
         let novoTier: string;

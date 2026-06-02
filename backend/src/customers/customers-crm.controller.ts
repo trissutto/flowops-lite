@@ -89,6 +89,25 @@ export class CustomersCrmController {
   }
 
   /**
+   * POST /customers-crm/etl/giga/cancelar
+   * Solicita cancelamento do sync Giga em andamento. Os loops checam essa
+   * flag em cada iteração e param graciosamente. Os dados já gravados ficam.
+   */
+  @Post('etl/giga/cancelar')
+  @AdminOnly()
+  @HttpCode(202)
+  cancelGigaSync() {
+    const state = this.gigaEtl.requestAbort();
+    return {
+      cancelled: !!state.abortRequested,
+      message: state.running
+        ? 'Cancelamento solicitado. Os loops vão parar na próxima iteração (alguns segundos).'
+        : 'Não há sync em andamento.',
+      state,
+    };
+  }
+
+  /**
    * POST /customers-crm/etl/giga
    * Inicia sync FULL Giga (MySQL Wincred) → Customer (Postgres FlowOps).
    * 3 fases: clientes → histórico (LTV/orderCount/lastOrderAt) → tier.

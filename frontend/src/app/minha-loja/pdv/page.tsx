@@ -3735,6 +3735,17 @@ function PaymentModal({
       details.valorIguais = calc.iguais;
       details.qtdIguais = calc.qtdIguais;
       details.valorUltima = calc.ultima;
+      // BUG FIX: crediário precisa salvar a data escolhida pra impressão de
+      // promissórias/carnê. Antes ficava só no endpoint /crediario (que grava
+      // no Giga) — payment.details ficava sem, e o PDF caía no fallback D+30.
+      if (selected === 'crediario') {
+        details.primeiroVencimento = credVencto;
+        details.entrada = Math.max(
+          0,
+          Math.round((Number((credEntrada || '0').replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100,
+        );
+        details.observacao = credObs;
+      }
     }
     if (selected === 'dinheiro') {
       const trocoP = recebidoNum > valor ? recebidoNum - valor : 0;
