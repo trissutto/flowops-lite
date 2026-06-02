@@ -26,10 +26,16 @@ COPY package*.json ./
 COPY prisma ./prisma/
 
 # 2) Instala TUDO (inclui devDependencies pra rodar tsc)
-#    npm ci = determinístico, usa exatamente o lockfile (muito mais rápido)
+#    Voltei pra npm install (npm ci exige lockfile perfeitamente alinhado com
+#    package.json — qualquer mudança no package sem regerar o lock quebra).
+#    Flags pra acelerar:
+#      --no-audit        evita scan de segurança (não precisa em build)
+#      --no-fund         pula msgs de funding (acelera output)
+#      --prefer-offline  usa cache local primeiro
+#      --legacy-peer-deps tolera conflitos de peer dependencies
 #    PRISMA_SKIP_POSTINSTALL_GENERATE evita generate dupla (chamamos manualmente abaixo)
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=true
-RUN npm ci --no-audit --no-fund --prefer-offline
+RUN npm install --no-audit --no-fund --prefer-offline --legacy-peer-deps
 
 # 3) Gera client Prisma (1x)
 RUN npx prisma generate
