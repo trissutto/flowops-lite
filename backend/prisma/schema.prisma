@@ -1637,8 +1637,12 @@ model Customer {
   id              String   @id @default(uuid())
 
   // -- Identificacao fiscal / Giga --
-  cpf             String?  @unique
-  registroGiga    Int?     @unique @map("registro_giga")
+  // CPF NÃO é mais @unique (jun/2026): mesma pessoa pode ter cadastro em
+  // múltiplas lojas físicas (regra do Giga). Cada (loja, codigo) Giga vira
+  // 1 Customer separado. Filtro por loja em /clientes-crm fica fiel ao Giga.
+  // Pra deduplica de marketing, use o índice abaixo + group by cpf.
+  cpf             String?
+  registroGiga    Int?     @map("registro_giga")
   rg              String?
 
   // -- Dados basicos --

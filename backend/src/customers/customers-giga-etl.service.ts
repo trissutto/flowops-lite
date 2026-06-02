@@ -870,35 +870,10 @@ export class CustomersGigaEtlService {
       return;
     }
 
-    // 2. Sem link. Se tem CPF, tenta deduplicar por CPF (mesma pessoa
-    //    cadastrada em outra loja Giga → reusa o Customer e adiciona novo
-    //    link).
-    if (cpfValido) {
-      const cpfFormatted = this._formatCpf(cpfDigits);
-      const customerExistente = await (this.prisma as any).customer.findFirst({
-        where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFormatted }] },
-      });
-
-      if (customerExistente) {
-        // Customer existe (provavelmente WC ou PDV ou outro link Giga).
-        // Cria o link e merge.
-        await (this.prisma as any).customerGigaLink.create({
-          data: {
-            customerId: customerExistente.id,
-            gigaLoja,
-            gigaCodigo: codCliente,
-          },
-        });
-        await this._aplicarMerge(customerExistente, row);
-        this.state.atualizados++;
-        return;
-      }
-    }
-
-    // 3. Não tem link nem Customer com CPF batendo → cria Customer novo +
-    //    link novo. Esse caminho cobre clientes Giga sem CPF (códigos
-    //    antigos 1, 2, 3...) e clientes com CPF que ainda não estavam no
-    //    banco.
+    // 2. SEM dedup por CPF — cada (loja, codigo) vira UM Customer
+    //    independente. Mesma pessoa cadastrada em N lojas físicas no Giga
+    //    vai virar N Customers no FlowOps (regra de negócio aprovada por
+    //    Thiago em jun/2026). Cada loja gerencia seu próprio cadastro.
     await this._criarNovoComLink(row, cpfDigits, codCliente, gigaLoja);
     this.state.criados++;
   }

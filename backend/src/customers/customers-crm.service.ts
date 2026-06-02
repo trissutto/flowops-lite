@@ -198,16 +198,24 @@ export class CustomersCrmService {
     // DETECÇÃO PRÉ-CADASTRO DE DUPLICIDADE — se CPF informado e já existir,
     // retorna 409 com mensagem amigável + id do cliente existente pro frontend
     // poder oferecer "abrir cliente existente".
+    //
+    // REGRA (jun/2026): mesma pessoa pode ter cadastro em N lojas Giga.
+    // Só bloqueia se o CPF já existe NA MESMA LOJA do actor (evita
+    // duplicar cadastro dentro da própria loja). Loja diferente: permite.
     if (cpf) {
-      // Considera variações: com pontuação (286.655.298-96) e sem (28665529896)
       const cpfDigits = cpf.replace(/\D/g, '');
+      const scopeStoreId = actor && !isMatrix(actor) ? actor.storeId : (dto.originStoreId || null);
+      const whereScope: any = {
+        OR: [{ cpf }, { cpf: cpfDigits }],
+      };
+      if (scopeStoreId) whereScope.originStoreId = scopeStoreId;
       const existing = await this.prisma.customer.findFirst({
-        where: { OR: [{ cpf }, { cpf: cpfDigits }] },
+        where: whereScope,
         select: { id: true, name: true, cpf: true },
       });
       if (existing) {
         throw new ConflictException({
-          message: `CPF já cadastrado: ${existing.name} (${existing.cpf})`,
+          message: `CPF já cadastrado nesta loja: ${existing.name} (${existing.cpf})`,
           customerId: existing.id,
           customerName: existing.name,
         });
@@ -227,7 +235,9 @@ export class CustomersCrmService {
     // Resolve referredBy via CPF se veio
     let referredById: string | undefined;
     if (dto.referredByCpf) {
-      const ref = await this.prisma.customer.findUnique({ where: { cpf: this.normalizeCpf(dto.referredByCpf) ?? '' } });
+      // findFirst (não Unique) pq CPF não é mais @unique (jun/2026):
+      // mesmo CPF pode ter cadastro em N lojas Giga
+      const ref = await this.prisma.customer.findFirst({ where: { cpf: this.normalizeCpf(dto.referredByCpf) ?? '' } });
       if (ref) referredById = ref.id;
     }
 

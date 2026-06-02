@@ -915,15 +915,36 @@ export class PdvController {
     const storeCode = userRole === 'store' && userStoreCode ? userStoreCode : (body?.storeCode || userStoreCode);
 
     // 1) Busca cliente existente por CPF (formatado OU dígitos)
+    //    Regra (jun/2026): mesma pessoa pode ter cadastro em N lojas.
+    //    Prioriza Customer DA LOJA ATUAL do PDV; se não tem, qualquer um.
     const prisma = (this.svc as any).prisma;
-    const existing = await prisma.customer.findFirst({
-      where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFmt }] },
-      select: {
-        id: true, name: true, whatsapp: true, phone: true, email: true,
-        vipTier: true, registroGiga: true, originSource: true, originStoreId: true,
-        cashbackBalance: { select: { balanceCents: true } },
-      },
-    });
+    const storeIdResolved = userRole === 'store' ? req?.user?.storeId : null;
+    let existing = null;
+    if (storeIdResolved) {
+      existing = await prisma.customer.findFirst({
+        where: {
+          AND: [
+            { OR: [{ cpf: cpfDigits }, { cpf: cpfFmt }] },
+            { originStoreId: storeIdResolved },
+          ],
+        },
+        select: {
+          id: true, name: true, whatsapp: true, phone: true, email: true,
+          vipTier: true, registroGiga: true, originSource: true, originStoreId: true,
+          cashbackBalance: { select: { balanceCents: true } },
+        },
+      });
+    }
+    if (!existing) {
+      existing = await prisma.customer.findFirst({
+        where: { OR: [{ cpf: cpfDigits }, { cpf: cpfFmt }] },
+        select: {
+          id: true, name: true, whatsapp: true, phone: true, email: true,
+          vipTier: true, registroGiga: true, originSource: true, originStoreId: true,
+          cashbackBalance: { select: { balanceCents: true } },
+        },
+      });
+    }
 
     // 2) JÁ EXISTE — merge não-destrutivo
     if (existing) {
