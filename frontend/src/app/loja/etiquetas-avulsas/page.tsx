@@ -37,6 +37,8 @@ export default function EtiquetasAvulsasPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState<string[]>([]);
+  // Qty pra IMPRIMIR de cada SKU (key = codigo). Default 1.
+  const [qty, setQty] = useState<Record<string, number>>({});
 
   // Carrega JsBarcode via CDN
   useEffect(() => {
@@ -111,6 +113,10 @@ export default function EtiquetasAvulsasPage() {
       );
       setLabels(r.labels || []);
       setNotFound(r.notFound || []);
+      // Inicializa qty = 1 pra cada label encontrado (vendedora pode editar)
+      const initialQty: Record<string, number> = {};
+      for (const l of (r.labels || [])) initialQty[l.codigo] = 1;
+      setQty(initialQty);
     } catch (e: any) {
       setError(e?.message || 'Erro ao buscar');
     } finally {
@@ -125,6 +131,21 @@ export default function EtiquetasAvulsasPage() {
     setLabels([]);
     setNotFound([]);
     setError(null);
+    setQty({});
+  };
+
+  /** Expande labels segundo qty escolhido — cada label vira N cópias pra imprimir */
+  const labelsExpandidos = labels.flatMap((l) => {
+    const n = Math.max(1, Math.min(999, Number(qty[l.codigo] || 1)));
+    return Array.from({ length: n }, () => l);
+  });
+  const totalEtiquetas = labelsExpandidos.length;
+
+  /** Aplica MESMA qty em TODOS os produtos (botão rápido) */
+  const aplicarQtyTodos = (n: number) => {
+    const next: Record<string, number> = {};
+    for (const l of labels) next[l.codigo] = Math.max(0, n);
+    setQty(next);
   };
 
   return (
@@ -152,10 +173,11 @@ export default function EtiquetasAvulsasPage() {
               </button>
               <button
                 onClick={imprimir}
-                className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md"
+                disabled={totalEtiquetas === 0}
+                className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm rounded-lg shadow-md disabled:opacity-40"
               >
                 <Printer className="w-4 h-4" />
-                Imprimir {labels.length}
+                Imprimir {totalEtiquetas}
               </button>
             </>
           )}
@@ -203,14 +225,124 @@ export default function EtiquetasAvulsasPage() {
           )}
         </section>
 
-        {/* Preview */}
+        {/* Tabela de QTY por produto — vendedora escolhe quantas etiquetas de CADA */}
+        {labels.length > 0 && (
+          <section className="bg-white border border-slate-200 rounded-2xl p-4 mb-4 print:hidden">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div>
+                <h2 className="text-sm font-black text-slate-800">
+                  Quantidade a imprimir de cada peça
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Default 1 por peça. Ajuste se precisar mais (ex: 5 cópias da mesma cor+tamanho).
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-slate-500 uppercase font-bold mr-1">Aplicar em todas:</span>
+                {[1, 2, 3, 5, 10].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => aplicarQtyTodos(n)}
+                    className="px-2 py-1 bg-slate-100 hover:bg-violet-100 hover:text-violet-700 text-slate-700 font-bold rounded text-xs"
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button
+                  onClick={() => aplicarQtyTodos(0)}
+                  className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded text-xs ml-1"
+                  title="Zera tudo"
+                >
+                  zerar
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-600">
+                  <tr>
+                    <th className="text-left px-2 py-1.5">REF</th>
+                    <th className="text-left px-2 py-1.5">Cor</th>
+                    <th className="text-center px-2 py-1.5">Tam</th>
+                    <th className="text-left px-2 py-1.5">Descrição</th>
+                    <th className="text-right px-2 py-1.5">Preço</th>
+                    <th className="text-center px-2 py-1.5 w-32">Qty a imprimir</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {labels.map((l) => (
+                    <tr key={l.codigo} className="border-t border-slate-100 hover:bg-slate-50">
+                      <td className="px-2 py-1 font-mono font-bold text-violet-700">{l.ref}</td>
+                      <td className="px-2 py-1 font-bold text-amber-700">{l.cor}</td>
+                      <td className="px-2 py-1 text-center font-mono text-slate-700">{l.tamanho}</td>
+                      <td className="px-2 py-1 text-xs text-slate-600 truncate max-w-[260px]" title={l.descricao}>
+                        {l.descricao}
+                      </td>
+                      <td className="px-2 py-1 text-right font-bold text-emerald-700 tabular-nums">
+                        R$ {Number(l.preco || 0).toFixed(2).replace('.', ',')}
+                      </td>
+                      <td className="px-2 py-1">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => setQty((prev) => ({
+                              ...prev,
+                              [l.codigo]: Math.max(0, (Number(prev[l.codigo]) || 0) - 1),
+                            }))}
+                            className="w-6 h-6 bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
+                          >
+                            −
+                          </button>
+                          <input
+                            value={qty[l.codigo] ?? 1}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(999, Number(e.target.value.replace(/\D/g, '')) || 0));
+                              setQty((prev) => ({ ...prev, [l.codigo]: v }));
+                            }}
+                            inputMode="numeric"
+                            className="w-14 px-1 py-1 border rounded text-center font-mono font-bold text-sm"
+                          />
+                          <button
+                            onClick={() => setQty((prev) => ({
+                              ...prev,
+                              [l.codigo]: Math.min(999, (Number(prev[l.codigo]) || 0) + 1),
+                            }))}
+                            className="w-6 h-6 bg-slate-100 hover:bg-slate-200 rounded font-bold text-slate-700"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-violet-50 font-bold">
+                  <tr>
+                    <td colSpan={5} className="px-2 py-2 text-right text-violet-900">
+                      Total de etiquetas a imprimir:
+                    </td>
+                    <td className="px-2 py-2 text-center text-violet-900 tabular-nums text-base">
+                      {totalEtiquetas}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Preview de impressão */}
         {labels.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 print:hidden">
             <Tags className="w-12 h-12 text-slate-300 mx-auto mb-2" />
             <div className="text-sm">Os produtos encontrados aparecerão aqui</div>
           </div>
+        ) : totalEtiquetas === 0 ? (
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-6 text-center text-amber-900 print:hidden">
+            <div className="font-bold">Defina a quantidade de pelo menos 1 peça acima pra imprimir</div>
+          </div>
         ) : (
-          <EtiquetaPrint labels={labels.map(l => ({ ...l, descricao: l.descricao || '' }))} />
+          <EtiquetaPrint labels={labelsExpandidos.map(l => ({ ...l, descricao: l.descricao || '' }))} />
         )}
       </main>
 
