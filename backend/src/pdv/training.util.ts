@@ -21,9 +21,23 @@ export function isTrainingRequest(req: any): boolean {
   return s === '1' || s === 'true' || s === 'yes' || s === 'on';
 }
 
-/** Valida senha de treinamento. Senha vem do env TREINAMENTO_PASSWORD. */
+/**
+ * Valida senha de treinamento. Aceita várias env vars equivalentes pra
+ * facilitar configuração:
+ *   - TREINAMENTO_PASSWORD (nome padrão usado no doc)
+ *   - SENHA_DE_TREINAMENTO (PT-BR completo — alternativa intuitiva)
+ *   - SENHA_TREINAMENTO    (PT-BR curto)
+ *   - TRAINING_PASSWORD    (EN)
+ * A primeira que estiver setada é a que vale.
+ */
 export function isValidTrainingPassword(password: string): boolean {
-  const expected = (process.env.TREINAMENTO_PASSWORD || '').trim();
-  if (!expected) return false; // se não configurada, modo treino fica desligado
-  return String(password || '').trim() === expected;
+  const candidates = [
+    process.env.TREINAMENTO_PASSWORD,
+    process.env.SENHA_DE_TREINAMENTO,
+    process.env.SENHA_TREINAMENTO,
+    process.env.TRAINING_PASSWORD,
+  ];
+  const expected = candidates.find((v) => v && String(v).trim() !== '');
+  if (!expected) return false; // nenhuma configurada → modo treino desligado
+  return String(password || '').trim() === String(expected).trim();
 }
