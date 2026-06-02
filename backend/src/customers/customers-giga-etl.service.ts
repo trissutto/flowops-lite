@@ -682,35 +682,36 @@ export class CustomersGigaEtlService {
   private async _upsertCustomerFromGiga(row: any): Promise<void> {
     const cpfDigits = String(row.cpf || '').replace(/\D/g, '');
     const codCliente = Number(row.codCliente) || null;
+    const cpfValido = cpfDigits && cpfDigits.length === 11;
 
-    // Sem CPF, tenta linkar por registroGiga (codCliente) se já existe
-    // Senão pula — não tem como deduplicar de forma confiável
-    if (!cpfDigits || cpfDigits.length !== 11) {
-      if (!codCliente) {
-        this.state.pulados++;
-        return;
-      }
-      // Pode ter cliente sem CPF mas com codCliente — atualiza só se já existe
-      const existing = await (this.prisma as any).customer.findFirst({
-        where: { registroGiga: codCliente },
-      });
-      if (!existing) {
-        this.state.pulados++;
-        return;
-      }
-      // Atualiza nome/telefone se nulos no Customer
-      await this._aplicarMerge(existing, row);
-      this.state.atualizados++;
+    // Precisa de PELO MENOS codCliente pra rastreabilidade. Sem CPF nem
+    // codCliente, não tem como deduplicar — pula.
+    if (!cpfValido && !codCliente) {
+      this.state.pulados++;
       return;
     }
 
+    // SEM CPF, COM codCliente: importa MESMO ASSIM usando registroGiga
+    // como chave (clientes antigos do Giga frequentemente não têm CPF —
+    // ex: códigos 1, 2, 3, 4 do cadastro inicial da loja).
+    if (!cpfValido) {
+      const existing = await (this.prisma as any).customer.findFirst({
+        where: { registroGiga: codCliente },
+      });
+      if (existing) {
+        await this._aplicarMerge(existing, row);
+        this.state.atualizados++;
+        return;
+      }
+      // Cria NOVO sem CPF
+      await this._criarNovo(row, '', codCliente);
+      this.state.criados++;
+      return;
+    }
+
+    // COM CPF VÁLIDO: busca por CPF (ambos formatos) OU por registroGiga.
     // CPF formatado pro padrão FlowOps: 12345678901 → 123.456.789-01
     const cpfFormatted = this._formatCpf(cpfDigits);
-
-    // Busca por CPF (em ambos formatos) OU por registroGiga (importante:
-    // cliente pode já existir no Customer com mesmo registroGiga mas sem CPF,
-    // ou com CPF cadastrado depois pelo ETL Woo. Sem essa segunda busca o
-    // sync tentava criar duplicata e estourava unique constraint P2002).
     const whereClauses: any[] = [{ cpf: cpfDigits }, { cpf: cpfFormatted }];
     if (codCliente) whereClauses.push({ registroGiga: codCliente });
     const existing = await (this.prisma as any).customer.findFirst({
@@ -850,9 +851,12 @@ export class CustomersGigaEtlService {
     // aparecer em listas/campanhas por padrão.
     const isSistema = this._ehClienteSistema(nomeUpper);
 
+    // CPF é opcional — clientes antigos do Giga (códigos 1, 2, 3...) podem
+    // não ter CPF cadastrado. Nesse caso fica null e a chave de dedupe vira
+    // apenas o registroGiga.
     const customer = await (this.prisma as any).customer.create({
       data: {
-        cpf: this._formatCpf(cpfDigits),
+        cpf: cpfDigits && cpfDigits.length === 11 ? this._formatCpf(cpfDigits) : null,
         name: nomeUpper,
         whatsapp: tel.length >= 10 ? tel : null,
         phone: telRes.length >= 10 && telRes !== tel ? telRes : null,
