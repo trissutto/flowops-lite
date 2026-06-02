@@ -228,6 +228,83 @@ export class CustomersGigaEtlService {
   }
 
   /**
+   * Diagnóstico de lojas — cruza:
+   *   1. Stores cadastradas no FlowOps (code + name + id)
+   *   2. Distribuição da coluna LOJA da tabela `clientes` do Giga
+   *      (quantos clientes em cada LOJA + se bate com alguma Store)
+   *   3. Distribuição atual de originStoreId no Customer FlowOps
+   *
+   * Útil pra entender por que clientes não aparecem no filtro de loja:
+   *   - LOJA Giga sem store match? (precisa cadastrar store no FlowOps)
+   *   - LOJA Giga vazia? (sync não tem como inferir)
+   *   - Customer originStoreId errado/null? (precisa rodar atualização)
+   */
+  async diagnosticarLojas(): Promise<{
+    storesFlowOps: Array<{ id: string; code: string; name: string }>;
+    lojasNoGiga: Array<{ loja: string | null; qtdClientes: number; matchedStore: string | null }>;
+    clientesPorStoreNoCustomer: Array<{ storeCode: string | null; storeName: string | null; qtdClientes: number }>;
+  }> {
+    const pool = (this.erp as any).pool;
+    if (!pool) throw new Error('Pool Giga não inicializado');
+
+    // 1) Stores do FlowOps
+    const stores = await (this.prisma as any).store.findMany({
+      select: { id: true, code: true, name: true },
+      orderBy: { code: 'asc' },
+    });
+    const storeByCodeUpper = new Map<string, { id: string; code: string; name: string }>();
+    for (const s of stores as any[]) {
+      storeByCodeUpper.set(String(s.code).trim().toUpperCase().padStart(2, '0'), s);
+      storeByCodeUpper.set(String(s.code).trim().toUpperCase(), s);
+    }
+
+    // 2) Distribuição LOJA no Giga
+    const cols = await this._detectarColunasClientes();
+    let lojasNoGiga: Array<{ loja: string | null; qtdClientes: number; matchedStore: string | null }> = [];
+    if (cols.loja) {
+      const [rows]: any = await pool.query(
+        `SELECT COALESCE(${cols.loja}, '') AS loja, COUNT(*) AS qtd
+          FROM clientes
+          GROUP BY ${cols.loja}
+          ORDER BY qtd DESC`,
+      );
+      lojasNoGiga = (rows as any[]).map((r) => {
+        const raw = String(r.loja || '').trim().toUpperCase();
+        const matched = storeByCodeUpper.get(raw) || storeByCodeUpper.get(raw.padStart(2, '0'));
+        return {
+          loja: raw || null,
+          qtdClientes: Number(r.qtd) || 0,
+          matchedStore: matched ? `${matched.code} - ${matched.name}` : null,
+        };
+      });
+    }
+
+    // 3) Distribuição originStoreId no Customer FlowOps
+    const grupos = await (this.prisma as any).customer.groupBy({
+      by: ['originStoreId'],
+      _count: { _all: true },
+      orderBy: { _count: { originStoreId: 'desc' } },
+    });
+    const storeById = new Map<string, { code: string; name: string }>();
+    for (const s of stores as any[]) storeById.set(s.id, s);
+
+    const clientesPorStoreNoCustomer = (grupos as any[]).map((g) => {
+      const s = g.originStoreId ? storeById.get(g.originStoreId) : null;
+      return {
+        storeCode: s?.code || null,
+        storeName: s?.name || (g.originStoreId ? '(store id desconhecido)' : null),
+        qtdClientes: Number(g._count?._all) || 0,
+      };
+    });
+
+    return {
+      storesFlowOps: stores as any[],
+      lojasNoGiga,
+      clientesPorStoreNoCustomer,
+    };
+  }
+
+  /**
    * Diagnóstico — lista TODAS as colunas da tabela `clientes` do Giga
    * + 3 amostras de dados + sugestão de mapeamento pro modelo Customer.
    *

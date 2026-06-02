@@ -78,14 +78,29 @@ export class CustomersCrmController {
 
   /**
    * POST /customers-crm/etl/giga/loja-principal
-   * Atualiza SÓ originStoreId dos clientes Giga que não têm loja vinculada.
-   * Atribui a loja onde o cliente MAIS comprou (via tabela caixa do Giga).
-   * Não refaz sync completo — só corrige a falta de loja.
+   * Atualiza originStoreId dos clientes Giga lendo o campo LOJA char(2)
+   * da tabela `clientes` do Giga.
+   *
+   * Query param ?sobrescrever=1 força recálculo (inclui clientes que já
+   * tinham loja, exceto WC que sempre fica 13). Default: só preenche null.
    */
   @Post('etl/giga/loja-principal')
   @AdminOnly()
-  async gigaAtualizarLoja() {
-    return this.gigaEtl.atualizarLojaPrincipal();
+  async gigaAtualizarLoja(@Query('sobrescrever') sobrescrever?: string) {
+    return this.gigaEtl.atualizarLojaPrincipal({
+      sobrescrever: sobrescrever === '1' || sobrescrever === 'true',
+    });
+  }
+
+  /**
+   * GET /customers-crm/etl/giga/diagnostico-lojas
+   * Cruza Stores FlowOps × LOJA Giga × originStoreId Customer pra entender
+   * por que clientes não aparecem no filtro de loja.
+   */
+  @Get('etl/giga/diagnostico-lojas')
+  @AdminOnly()
+  async gigaDiagnosticoLojas() {
+    return this.gigaEtl.diagnosticarLojas();
   }
 
   /**

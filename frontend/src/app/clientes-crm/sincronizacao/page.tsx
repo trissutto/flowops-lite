@@ -149,24 +149,58 @@ export default function SincronizacaoPage() {
     }
   }
 
-  async function atualizarLojas() {
-    if (!confirm(
-      'Atualizar a LOJA dos clientes Giga sem loja vinculada?\n\n' +
-      'Lê o campo LOJA da tabela `clientes` do Giga (a loja que cadastrou ' +
-      'o cliente) e grava no CRM. NÃO altera quem já tem loja. NÃO mexe ' +
-      'em clientes do site (ficam loja 13). Demora 1-3 min.',
-    )) return;
+  /**
+   * Atualiza lojas dos clientes Giga.
+   * - sobrescrever=false (default): só preenche quem está com originStoreId=null
+   * - sobrescrever=true: força recalcular TODOS os clientes Giga (corrige
+   *   bagunças de syncs anteriores que gravaram loja errada)
+   */
+  async function atualizarLojas(sobrescrever: boolean = false) {
+    const msg = sobrescrever
+      ? 'RECALCULAR TODOS os clientes Giga?\n\n' +
+        'Sobrescreve a loja origem de TODOS os clientes vindos do Giga ' +
+        '(incluindo quem já tem loja). Lê o campo LOJA do Giga e regrava.\n\n' +
+        'NÃO mexe em clientes WC (loja 13). Pode demorar 3-5 min.\n\n' +
+        'Use isso pra corrigir clientes que ficaram com loja errada.'
+      : 'Atualizar a LOJA dos clientes Giga sem loja vinculada?\n\n' +
+        'Lê o campo LOJA da tabela `clientes` do Giga (a loja que cadastrou ' +
+        'o cliente) e grava no CRM. NÃO altera quem já tem loja. NÃO mexe ' +
+        'em clientes do site (ficam loja 13). Demora 1-3 min.';
+    if (!confirm(msg)) return;
     setLojaSyncing(true);
     setLojaResult(null);
     try {
-      const r = await api<typeof lojaResult>('/customers-crm/etl/giga/loja-principal', {
-        method: 'POST',
-      });
+      const url = sobrescrever
+        ? '/customers-crm/etl/giga/loja-principal?sobrescrever=1'
+        : '/customers-crm/etl/giga/loja-principal';
+      const r = await api<typeof lojaResult>(url, { method: 'POST' });
       setLojaResult(r);
+      // Recarrega diagnóstico após mudança
+      loadDiagnostico();
     } catch (e: any) {
       alert(`Falha: ${e.message}`);
     } finally {
       setLojaSyncing(false);
+    }
+  }
+
+  // ─── Diagnóstico de lojas (cruzamento Giga × FlowOps × Customer) ──────
+  interface DiagLojas {
+    storesFlowOps: Array<{ id: string; code: string; name: string }>;
+    lojasNoGiga: Array<{ loja: string | null; qtdClientes: number; matchedStore: string | null }>;
+    clientesPorStoreNoCustomer: Array<{ storeCode: string | null; storeName: string | null; qtdClientes: number }>;
+  }
+  const [diag, setDiag] = useState<DiagLojas | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  async function loadDiagnostico() {
+    setDiagLoading(true);
+    try {
+      const r = await api<DiagLojas>('/customers-crm/etl/giga/diagnostico-lojas');
+      setDiag(r);
+    } catch (e: any) {
+      alert(`Falha diagnóstico: ${e.message}`);
+    } finally {
+      setDiagLoading(false);
     }
   }
 
@@ -213,8 +247,16 @@ export default function SincronizacaoPage() {
           loading={lojaSyncing}
           gigaRunning={!!gigaEtl?.running}
           result={lojaResult}
-          onAction={atualizarLojas}
+          onAction={() => atualizarLojas(false)}
+          onActionSobrescrever={() => atualizarLojas(true)}
           onDismiss={() => setLojaResult(null)}
+        />
+
+        {/* Card 3.5 — Diagnóstico de lojas */}
+        <DiagnosticoLojasCard
+          diag={diag}
+          loading={diagLoading}
+          onLoad={loadDiagnostico}
         />
 
         {/* Card 4 — Diagnóstico colunas Giga (futuro) */}
@@ -400,12 +442,13 @@ function GigaSyncCard({
 
 // ─── Card atualizar lojas ─────────────────────────────────────────────
 function LojasUpdateCard({
-  loading, gigaRunning, result, onAction, onDismiss,
+  loading, gigaRunning, result, onAction, onActionSobrescrever, onDismiss,
 }: {
   loading: boolean;
   gigaRunning: boolean;
   result: { atualizados: number; semLojaNoGiga: number; semStoreCorrespondente: number; pulados: number; duracaoMs: number } | null;
   onAction: () => void;
+  onActionSobrescrever: () => void;
   onDismiss: () => void;
 }) {
   return (
@@ -424,15 +467,29 @@ function LojasUpdateCard({
             nem clientes do site (loja 13). Rodada rápida (1-3 min).
           </p>
 
-          <button
-            onClick={onAction}
-            disabled={loading || gigaRunning}
-            className="mt-3 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
-            title={gigaRunning ? 'Aguarde o sync Giga terminar' : ''}
-          >
-            <StoreIcon className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            {loading ? 'Atualizando...' : 'Atualizar lojas'}
-          </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={onAction}
+              disabled={loading || gigaRunning}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
+              title={gigaRunning ? 'Aguarde o sync Giga terminar' : 'Só preenche quem está sem loja'}
+            >
+              <StoreIcon className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Atualizando...' : 'Preencher faltantes'}
+            </button>
+            <button
+              onClick={onActionSobrescrever}
+              disabled={loading || gigaRunning}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
+              title="Recalcula TODOS os clientes Giga (corrige loja errada)"
+            >
+              ⚠ Recalcular TODOS
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-2">
+            <b>Preencher faltantes</b> = só quem está sem loja. <b>Recalcular TODOS</b> = sobrescreve
+            (use se ficou loja errada de syncs antigos).
+          </p>
 
           {result && (
             <div className="mt-3 rounded-lg p-3 border bg-amber-50 border-amber-200 flex items-center justify-between">
@@ -448,6 +505,136 @@ function LojasUpdateCard({
               <button onClick={onDismiss} className="text-amber-700 hover:text-amber-900 text-xs font-bold">
                 fechar
               </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Card diagnóstico de lojas (cruzamento Giga × FlowOps × Customer) ──
+function DiagnosticoLojasCard({
+  diag,
+  loading,
+  onLoad,
+}: {
+  diag: {
+    storesFlowOps: Array<{ id: string; code: string; name: string }>;
+    lojasNoGiga: Array<{ loja: string | null; qtdClientes: number; matchedStore: string | null }>;
+    clientesPorStoreNoCustomer: Array<{ storeCode: string | null; storeName: string | null; qtdClientes: number }>;
+  } | null;
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-5">
+      <div className="flex items-start gap-4">
+        <div className="w-12 h-12 rounded-xl bg-purple-100 flex items-center justify-center flex-shrink-0">
+          <Info className="w-6 h-6 text-purple-700" />
+        </div>
+        <div className="flex-1">
+          <h3 className="font-bold text-slate-800">Diagnóstico de lojas</h3>
+          <p className="text-sm text-slate-600 mt-1">
+            Cruza <b>Stores cadastradas no FlowOps</b> × <b>distribuição da LOJA no Giga</b> ×
+            <b> originStoreId atual dos clientes no CRM</b>. Útil pra entender por que
+            uma loja aparece vazia no filtro.
+          </p>
+          <button
+            onClick={onLoad}
+            disabled={loading}
+            className="mt-3 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold rounded-lg flex items-center gap-2 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Carregando...' : (diag ? 'Recarregar diagnóstico' : 'Rodar diagnóstico')}
+          </button>
+
+          {diag && (
+            <div className="mt-4 space-y-4">
+              {/* 1) Stores no FlowOps */}
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <div className="text-xs font-bold text-slate-700 uppercase mb-2">
+                  1️⃣ Stores cadastradas no FlowOps ({diag.storesFlowOps.length})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {diag.storesFlowOps.map((s) => (
+                    <span key={s.id} className="bg-white border border-slate-300 text-slate-700 px-2 py-1 rounded text-xs font-mono">
+                      <b className="text-purple-700">{s.code}</b> {s.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* 2) Distribuição LOJA no Giga */}
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <div className="text-xs font-bold text-emerald-900 uppercase mb-2">
+                  2️⃣ Distribuição do campo LOJA no Giga ({diag.lojasNoGiga.length} valores)
+                </div>
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] text-emerald-700 uppercase">
+                    <tr>
+                      <th className="text-left p-1">LOJA Giga</th>
+                      <th className="text-right p-1">Clientes</th>
+                      <th className="text-left p-1">Store FlowOps</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diag.lojasNoGiga.map((l, i) => (
+                      <tr key={i} className="border-t border-emerald-100">
+                        <td className="p-1 font-mono font-bold text-emerald-800">
+                          {l.loja ? `'${l.loja}'` : <span className="text-rose-600 italic">(vazio)</span>}
+                        </td>
+                        <td className="p-1 text-right tabular-nums">{l.qtdClientes.toLocaleString('pt-BR')}</td>
+                        <td className="p-1">
+                          {l.matchedStore ? (
+                            <span className="text-emerald-700">✓ {l.matchedStore}</span>
+                          ) : (
+                            <span className="text-rose-600 font-bold">⚠ SEM STORE MATCH</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 3) Distribuição atual no Customer */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <div className="text-xs font-bold text-blue-900 uppercase mb-2">
+                  3️⃣ Distribuição atual em Customer (CRM FlowOps)
+                </div>
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] text-blue-700 uppercase">
+                    <tr>
+                      <th className="text-left p-1">Store</th>
+                      <th className="text-right p-1">Clientes no CRM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {diag.clientesPorStoreNoCustomer.map((s, i) => (
+                      <tr key={i} className="border-t border-blue-100">
+                        <td className="p-1">
+                          {s.storeCode ? (
+                            <>
+                              <b className="font-mono text-blue-700">{s.storeCode}</b> {s.storeName}
+                            </>
+                          ) : (
+                            <span className="text-rose-600 italic">(sem loja vinculada)</span>
+                          )}
+                        </td>
+                        <td className="p-1 text-right tabular-nums font-bold">
+                          {s.qtdClientes.toLocaleString('pt-BR')}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="text-[11px] text-slate-500 italic">
+                💡 Se a LOJA do Giga aparece como "SEM STORE MATCH", crie a Store no FlowOps
+                com esse code antes de rodar "Recalcular TODOS".
+              </div>
             </div>
           )}
         </div>
