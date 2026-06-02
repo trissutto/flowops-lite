@@ -149,7 +149,7 @@ export default function EtiquetaPrint({ labels }: Props) {
           display: grid;
           grid-template-columns: 48mm 48mm;
           gap: 0 6mm;
-          padding: 14mm 0 0 6mm;
+          padding: 16mm 0 0 6mm;
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -170,16 +170,16 @@ export default function EtiquetaPrint({ labels }: Props) {
           overflow: hidden;
         }
         .et-descricao {
-          font-size: 6pt;
+          font-size: 7pt;
           font-weight: 900;
           text-transform: uppercase;
-          line-height: 1.0;
+          line-height: 1.05;
           letter-spacing: 0;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-          max-height: 4.2mm;
+          max-height: 5.2mm;
           flex-shrink: 0;
         }
         .et-destaque {
@@ -253,7 +253,7 @@ export default function EtiquetaPrint({ labels }: Props) {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 14mm 0 0 6mm;
+            padding: 16mm 0 0 6mm;
             page-break-inside: auto;
           }
           .etiqueta {
