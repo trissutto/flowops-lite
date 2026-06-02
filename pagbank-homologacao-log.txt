@@ -1,0 +1,197 @@
+================================================================================
+HOMOLOGAÇÃO PAGBANK — CHAMADO 1360753759
+LURD'S PLUS SIZE — Lurds Comércio de Roupas Ltda
+================================================================================
+
+Data do teste:      02/06/2026 13:15 (GMT-3)
+Sistema:            FlowOps Order One (ERP/PDV próprio)
+Email da conta:     matriz@lurds.com.br
+Ambiente testado:   sandbox
+Token utilizado:    Outro (32 caracteres) — token sandbox PagBank
+Tipo do token:      Bearer Token (Authorization header)
+
+
+================================================================================
+RESUMO EXECUTIVO
+================================================================================
+
+Foram testados 5 endpoints públicos do PagBank/PagSeguro com o token sandbox
+fornecido pela conta lurds.com.br. O token foi ACEITO pela "Orders API moderna"
+(retornou HTTP 400 com mensagem de validação de payload, confirmando autentica-
+ção bem-sucedida).
+
+Nossa integração será PLUGADA no endpoint /orders (Orders API moderna).
+
+Os endpoints clássicos v2/v3 (ws.sandbox.pagseguro.uol.com.br) retornaram HTTP
+406 — indicando que esse caminho legado não está disponível pra essa conta
+sandbox, o que é esperado pra novas integrações.
+
+O endpoint PIX QR-Codes retornou HTTP 401 com mensagem específica sobre o
+formato do Authorization header — provavelmente exige um esquema diferente
+de autenticação ou está reservado para tokens com permissão PIX específica.
+
+
+================================================================================
+DETALHES POR ENDPOINT
+================================================================================
+
+--------------------------------------------------------------------------------
+[1] ORDERS API MODERNA   ✓ TOKEN ACEITO
+--------------------------------------------------------------------------------
+
+Método:     POST
+URL:        https://sandbox.api.pagseguro.com/orders
+HTTP:       400 Bad Request  (autenticação OK — erro de validação de payload)
+Headers:
+  Authorization: Bearer <TOKEN_SANDBOX>
+  Content-Type: application/json
+  Accept: application/json
+
+Resposta:
+{
+  "error_messages": [
+    {
+      "code": "40001",
+      "description": "must not be null",
+      "parameter_name": "customer"
+    }
+  ]
+}
+
+Análise:
+HTTP 400 com mensagem de campo obrigatório ausente CONFIRMA que o token é
+válido — o servidor processou a autenticação e respondeu com validação do
+payload, não com 401/403. Este é o endpoint que iremos utilizar na integração
+final.
+
+
+--------------------------------------------------------------------------------
+[2] CHARGES API MODERNA   ✓ TOKEN ACEITO
+--------------------------------------------------------------------------------
+
+Método:     POST
+URL:        https://sandbox.api.pagseguro.com/charges
+HTTP:       400 Bad Request  (autenticação OK — erro de validação de payload)
+Headers:
+  Authorization: Bearer <TOKEN_SANDBOX>
+  Content-Type: application/json
+  Accept: application/json
+
+Resposta:
+{
+  "error_messages": [
+    {
+      "code": "40001",
+      "description": "required_parameter",
+      "parameter_name": "payment_method"
+    }
+  ]
+}
+
+Análise:
+Mesmo cenário do endpoint /orders — token aceito, retornou validação de
+payload. Disponível como alternativa.
+
+
+--------------------------------------------------------------------------------
+[3] PIX QR-CODES   ⚠ HTTP 401
+--------------------------------------------------------------------------------
+
+Método:     POST
+URL:        https://sandbox.api.pagseguro.com/pix/qr-codes
+HTTP:       401 Unauthorized
+Headers:
+  Authorization: Bearer <TOKEN_SANDBOX>
+  Content-Type: application/json
+  Accept: application/json
+
+Resposta:
+{
+  "message": "Invalid key-value pair (missing equal-sign) in Authorization
+              header (hashed with SHA-256 and encoded with Base64):
+              'el37mR=bc5wePKT3hVSDM=d4pPFzjA7Eayje3c9pTuQ=' ..."
+}
+
+Análise:
+A mensagem sugere que este endpoint usa um formato de Authorization header
+diferente (não Bearer) — possivelmente HMAC-SHA256 ou chave PIX específica.
+Vamos plugar o PIX via /orders + /charges (que aceitam o token Bearer
+padrão) ao invés deste endpoint direto.
+
+
+--------------------------------------------------------------------------------
+[4] CLASSIC v2 (sessions)   ⚠ HTTP 406
+--------------------------------------------------------------------------------
+
+Método:     POST
+URL:        https://ws.sandbox.pagseguro.uol.com.br/v2/sessions
+            ?email=matriz%40lurds.com.br&token=<TOKEN_REDACTED>
+HTTP:       406 Not Acceptable
+
+Resposta:
+<html>
+  <head><title>JBossWeb/2.0.1.GA - Error report</title></head>
+  ...
+</html>
+
+Análise:
+Endpoint legado (PagSeguro Classic). Retornou página HTML de erro JBoss em
+vez de JSON estruturado — indica que este caminho não está habilitado para
+nova conta/token sandbox. Esperado pra integrações modernas.
+
+
+--------------------------------------------------------------------------------
+[5] CLASSIC v3 (transactions)   ⚠ HTTP 406
+--------------------------------------------------------------------------------
+
+Método:     GET
+URL:        https://ws.sandbox.pagseguro.uol.com.br/v3/transactions
+            ?email=matriz%40lurds.com.br&token=<TOKEN_REDACTED>
+HTTP:       406 Not Acceptable
+
+Resposta:
+<html>
+  <head><title>JBossWeb/2.0.1.GA - Error report</title></head>
+  ...
+</html>
+
+Análise:
+Mesma situação do v2 — endpoint legado não disponível.
+
+
+================================================================================
+CONCLUSÃO TÉCNICA
+================================================================================
+
+1. O token sandbox fornecido é VÁLIDO e está ATIVO.
+
+2. A integração FlowOps utilizará a Orders API moderna como ponto de entrada
+   principal:
+     - POST https://sandbox.api.pagseguro.com/orders  (criação de pedido)
+     - POST https://sandbox.api.pagseguro.com/charges (cobrança vinculada)
+
+3. Próximos passos do nosso lado:
+     a) Implementar payload completo de Order (customer, items, shipping)
+     b) Configurar webhook de notificação no endpoint público da nossa
+        aplicação (Railway)
+     c) Testar fluxo end-to-end com pedido + cobrança PIX/Cartão
+     d) Migrar pra ambiente de produção após validação
+
+4. Solicitação:
+     Caso o endpoint PIX QR-Codes (/pix/qr-codes) deva ser utilizado com
+     algum esquema de autenticação específico além do Bearer Token padrão,
+     pedimos a documentação ou exemplo de header correto.
+
+
+================================================================================
+INFORMAÇÕES PARA CONTATO
+================================================================================
+
+Empresa:        Lurds Comércio de Roupas Ltda (LURD'S PLUS SIZE)
+Email técnico:  matriz@lurds.com.br
+Sistema:        FlowOps Order One
+Chamado:        1360753759
+
+================================================================================
+FIM DO LOG
+================================================================================
