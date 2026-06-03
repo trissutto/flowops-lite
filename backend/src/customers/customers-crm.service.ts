@@ -640,8 +640,8 @@ export class CustomersCrmService {
       '10': [[13201, 13219]],                    // Jundiaí
       '11': [[13480, 13489]],                    // Limeira
       '14': [[11700, 11729]],                    // Praia Grande
-      '15': [[04500, 04599]],                    // Moema (SP capital)
-      '17': [[08600, 08799]],                    // Suzano + Mogi (Mogi fechada → absorve)
+      '15': [[4500, 4599]],                      // Moema (SP capital) — CEP 04500-04599
+      '17': [[8600, 8799]],                      // Suzano + Mogi (Mogi fechada → absorve) — CEP 08600-08799
       // ❌ Itu (19) e Mogi das Cruzes (18): FECHADAS — leads absorvidos
       //    por Indaiatuba (04) e Suzano (17) respectivamente.
     };
