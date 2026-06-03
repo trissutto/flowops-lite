@@ -197,6 +197,11 @@ export class CustomersEtlService {
           select: { id: true, originStoreId: true, originSource: true },
         });
 
+        // CAMINHO C: personKey = email do WC (chave de pessoa pro Customer
+        // unificado). Quando Giga importar a mesma pessoa com mesmo email
+        // ou CPF, o personKey conectará os Customers.
+        const personKey = `email:${email.toLowerCase()}`;
+
         if (!existing) {
           // INSERIR — cliente vindo do site só (sem registro Giga)
           await this.prisma.customer.create({
@@ -207,6 +212,7 @@ export class CustomersEtlService {
               whatsapp: whatsapp ?? undefined,
               originSource: 'woo',
               originStoreId: siteStore.id,
+              personKey,
               orderCount: agg.orderCount,
               ltvCents: BigInt(agg.totalCents),
               ticketMedioCents: ticketMedio,
@@ -225,6 +231,8 @@ export class CustomersEtlService {
               ...(agg.name ? { name: { set: agg.name } } : {}),
               ...(phone ? { phone: { set: phone } } : {}),
               ...(whatsapp ? { whatsapp: { set: whatsapp } } : {}),
+              // personKey: garante que está setado (Customers WC antigos podem não ter)
+              personKey: { set: personKey },
               // métricas sempre recalculadas
               orderCount: agg.orderCount,
               ltvCents: BigInt(agg.totalCents),

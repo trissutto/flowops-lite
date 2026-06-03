@@ -74,6 +74,87 @@ export class CustomersGigaEtlService {
   private _fallbackStoreId: string | null = null;
 
   /**
+   * Calcula personKey (chave de PESSOA) a partir de identidade.
+   * Hierarquia: cpf digits → email lower → hash(nome+nascimento).
+   * Múltiplos Customers com mesmo personKey = mesma pessoa em canais diferentes.
+   */
+  private _computePersonKey(input: {
+    cpf?: string | null;
+    email?: string | null;
+    name?: string | null;
+    birthDate?: Date | string | null;
+  }): string | null {
+    const cpfDigits = String(input.cpf || '').replace(/\D/g, '');
+    if (cpfDigits.length === 11) return `cpf:${cpfDigits}`;
+    const email = String(input.email || '').trim().toLowerCase();
+    if (email.includes('@')) return `email:${email}`;
+    const name = String(input.name || '').trim().toUpperCase();
+    if (name && input.birthDate) {
+      const dt = input.birthDate instanceof Date
+        ? input.birthDate.toISOString().slice(0, 10)
+        : String(input.birthDate).slice(0, 10);
+      return `nb:${name}|${dt}`;
+    }
+    return null;
+  }
+
+  /**
+   * Extrai campos extras do raw da linha Giga e normaliza pro schema Customer.
+   * Retorna objeto pronto pra spread em customer.create({data: {...}}).
+   */
+  private _extractGigaExtras(row: any): any {
+    const raw = row._raw || {};
+    const parseDecimal = (v: any): bigint | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n)) return null;
+      return BigInt(Math.round(n * 100));
+    };
+    const parseFlag3 = (v: any): boolean => {
+      // Giga usa 'S'/'N'/'  ' em varchar(3) — só 'S' (ou similar) é true
+      if (!v) return false;
+      const u = String(v).trim().toUpperCase();
+      return u === 'S' || u === 'SIM' || u === '1' || u === 'TRUE';
+    };
+    const parseDate = (v: any): Date | null => {
+      if (!v) return null;
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? null : d;
+    };
+    const tel = (v: any): string | null => {
+      const s = String(v || '').replace(/\D/g, '');
+      return s.length >= 10 ? s : null;
+    };
+    return {
+      rgExp: raw.RGEXP ? String(raw.RGEXP).trim() || null : null,
+      rgEmissao: parseDate(raw.RGEMISSAO),
+      naturalidade: raw.NATURALIDADE ? String(raw.NATURALIDADE).trim() || null : null,
+      pai: raw.PAI ? String(raw.PAI).trim() || null : null,
+      mae: raw.MAE ? String(raw.MAE).trim() || null : null,
+      conjugeNome: raw.CONJUGE ? String(raw.CONJUGE).trim() || null : null,
+      conjugeCpf: raw.CONJUGECPF ? String(raw.CONJUGECPF).replace(/\D/g, '') || null : null,
+      trabalhoRazaoSocial: raw.TRABALHORAZAOSOC ? String(raw.TRABALHORAZAOSOC).trim() || null : null,
+      trabalhoCargo: raw.TRABALHOCARGO ? String(raw.TRABALHOCARGO).trim() || null : null,
+      trabalhoSalarioCents: parseDecimal(raw.TRABALHOSALARIO),
+      trabalhoAdmissao: parseDate(raw.TRABALHOADM),
+      trabalhoFone: tel(raw.TRABALHOFONE),
+      nomeRecado: raw.NOMEREC ? String(raw.NOMEREC).trim() || null : null,
+      foneRecado: tel(raw.FONEREC),
+      limiteCrediarioCents: parseDecimal(raw.LIMITECOMPRAS),
+      bloqueadoGiga: parseFlag3(raw.BLOQUEADO),
+      negativadoGiga: parseFlag3(raw.NEGATIVADO),
+      fidelidadeGiga: raw.FIDELIDADE ? String(raw.FIDELIDADE).trim() || null : null,
+      spcSituacao: raw.SPCSITUACAO ? String(raw.SPCSITUACAO).trim() || null : null,
+      spcData: parseDate(raw.SPCDATA),
+      gigaPrimeiraCompra: parseDate(raw.PRICOMPRA),
+      gigaUltimaCompra: parseDate(raw.ULTCOMPRA),
+      casaPropria: raw.CASAPROPRIA ? parseFlag3(raw.CASAPROPRIA) : null,
+      aluguelCents: parseDecimal(raw.ALUGUEL),
+      gigaRawData: raw,
+    };
+  }
+
+  /**
    * Resolve LOJA do Giga (ex: '01', '13', 'ITANHAEM') pro Store.id do FlowOps.
    * Se LOJA vazia/null → retorna undefined (Customer fica sem loja).
    * Se LOJA tem valor MAS não bate com store → retorna fallback 'NA'.
@@ -746,28 +827,49 @@ export class CustomersGigaEtlService {
         break;
       }
       try {
-        const selectFields = [
-          `${cols.codigo} AS codCliente`,
-          `${cols.nome} AS nome`,
-          `${cols.cpf} AS cpf`,
-          cols.foneCel ? `${cols.foneCel} AS foneCel` : `NULL AS foneCel`,
-          cols.foneRes ? `${cols.foneRes} AS foneRes` : `NULL AS foneRes`,
-          cols.email ? `${cols.email} AS email` : `NULL AS email`,
-          cols.nascimento ? `${cols.nascimento} AS nascimento` : `NULL AS nascimento`,
-          cols.endereco ? `${cols.endereco} AS endereco` : `NULL AS endereco`,
-          cols.numero ? `${cols.numero} AS numero` : `NULL AS numero`,
-          cols.complemento ? `${cols.complemento} AS complemento` : `NULL AS complemento`,
-          cols.bairro ? `${cols.bairro} AS bairro` : `NULL AS bairro`,
-          cols.cidade ? `${cols.cidade} AS cidade` : `NULL AS cidade`,
-          cols.uf ? `${cols.uf} AS uf` : `NULL AS uf`,
-          cols.cep ? `${cols.cep} AS cep` : `NULL AS cep`,
-          cols.loja ? `${cols.loja} AS loja` : `NULL AS loja`,
-        ].join(', ');
-
+        // PUXA TUDO (SELECT *) — guarda raw em gigaRawData JSON + popula
+        // os campos detectados normalmente. Conta+nome são essenciais; resto
+        // vai em raw mesmo que não esteja em cols.
         const [rows]: any = await pool.query(
-          `SELECT ${selectFields} FROM clientes ORDER BY ${cols.codigo} LIMIT ? OFFSET ?`,
+          `SELECT * FROM clientes ORDER BY ${cols.codigo} LIMIT ? OFFSET ?`,
           [BATCH, offset],
         );
+        // Normaliza pra os aliases que o resto do código espera
+        for (const r of rows as any[]) {
+          r.codCliente = r[cols.codigo];
+          r.nome = r[cols.nome];
+          r.cpf = cols.cpf ? r[cols.cpf] : null;
+          r.foneCel = cols.foneCel ? r[cols.foneCel] : null;
+          r.foneRes = cols.foneRes ? r[cols.foneRes] : null;
+          r.email = cols.email ? r[cols.email] : null;
+          r.nascimento = cols.nascimento ? r[cols.nascimento] : null;
+          r.endereco = cols.endereco ? r[cols.endereco] : null;
+          r.numero = cols.numero ? r[cols.numero] : null;
+          r.complemento = cols.complemento ? r[cols.complemento] : null;
+          r.bairro = cols.bairro ? r[cols.bairro] : null;
+          r.cidade = cols.cidade ? r[cols.cidade] : null;
+          r.uf = cols.uf ? r[cols.uf] : null;
+          r.cep = cols.cep ? r[cols.cep] : null;
+          r.loja = cols.loja ? r[cols.loja] : null;
+          // Raw da linha inteira (todos os campos) — pra gravar no JSON
+          r._raw = { ...r };
+          delete r._raw.codCliente;
+          delete r._raw.nome;
+          delete r._raw.cpf;
+          delete r._raw.foneCel;
+          delete r._raw.foneRes;
+          delete r._raw.email;
+          delete r._raw.nascimento;
+          delete r._raw.endereco;
+          delete r._raw.numero;
+          delete r._raw.complemento;
+          delete r._raw.bairro;
+          delete r._raw.cidade;
+          delete r._raw.uf;
+          delete r._raw.cep;
+          delete r._raw.loja;
+          delete r._raw._raw;
+        }
 
         for (const r of rows) {
           try {
@@ -946,6 +1048,38 @@ export class CustomersGigaEtlService {
       if (dt) updates.birthDate = dt;
     }
 
+    // ─── CAMINHO C: enriquece com TODOS os campos Giga (antes do update único) ─
+    const extras = this._extractGigaExtras(row);
+    for (const key of Object.keys(extras) as string[]) {
+      const v = extras[key];
+      if (v === null || v === undefined) continue;
+      // gigaRawData SEMPRE atualiza (snapshot do último sync)
+      if (key === 'gigaRawData') {
+        updates.gigaRawData = v;
+        continue;
+      }
+      // booleanos giga: SEMPRE atualiza (status crediário muda no Giga)
+      if (key === 'bloqueadoGiga' || key === 'negativadoGiga') {
+        if (existing[key] !== v) updates[key] = v;
+        continue;
+      }
+      // demais: só preenche se vazio
+      if (existing[key] === null || existing[key] === undefined || existing[key] === '') {
+        updates[key] = v;
+      }
+    }
+
+    // personKey: só seta se ainda não tem (não muda quando já calculado)
+    if (!existing.personKey) {
+      const pk = this._computePersonKey({
+        cpf: existing.cpf || row.cpf,
+        email: existing.email || row.email,
+        name: existing.name || row.nome,
+        birthDate: existing.birthDate || this._parseDate(row.nascimento),
+      });
+      if (pk) updates.personKey = pk;
+    }
+
     if (Object.keys(updates).length > 0) {
       await (this.prisma as any).customer.update({
         where: { id: existing.id },
@@ -1000,6 +1134,15 @@ export class CustomersGigaEtlService {
 
     const isSistema = this._ehClienteSistema(nomeUpper);
 
+    // Caminho C: extras Giga (15+ campos novos) + personKey
+    const extras = this._extractGigaExtras(row);
+    const personKey = this._computePersonKey({
+      cpf: cpfDigits,
+      email,
+      name: nomeUpper,
+      birthDate,
+    });
+
     // Cria Customer + Link em transação atômica
     await (this.prisma as any).$transaction(async (tx: any) => {
       const customer = await tx.customer.create({
@@ -1014,6 +1157,8 @@ export class CustomersGigaEtlService {
           originStoreId,
           vipTier: 'bronze',
           active: !isSistema,
+          personKey,
+          ...extras,
         },
       });
 

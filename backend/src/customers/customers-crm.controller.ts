@@ -234,6 +234,17 @@ export class CustomersCrmController {
     return this.svc.detail(id, this.actor(req));
   }
 
+  /**
+   * GET /customers-crm/:id/by-person
+   * Caminho C: retorna TODOS os outros Customers que compartilham o mesmo
+   * personKey (chave de pessoa) — útil pro drawer mostrar "esta pessoa
+   * também tem cadastro em Santos, Sorocaba e WC".
+   */
+  @Get(':id/by-person')
+  async byPerson(@Req() req: any, @Param('id') id: string) {
+    return this.svc.byPerson(id, this.actor(req));
+  }
+
   /** Histórico cronológico do cliente: compras + devoluções + vales + marcados Giga */
   @Get(':id/historico')
   historico(@Req() req: any, @Param('id') id: string) {

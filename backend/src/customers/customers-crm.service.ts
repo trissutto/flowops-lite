@@ -488,6 +488,55 @@ export class CustomersCrmService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // CAMINHO C — VISÃO POR PESSOA (consolidado entre canais)
+  // ─────────────────────────────────────────────────────────────────────────
+  /**
+   * Retorna TODOS os outros Customers que compartilham o mesmo personKey.
+   * Útil pra mostrar no drawer "esta pessoa também tem cadastro em X, Y".
+   *
+   * Inclui agregação básica: totalLtvCents somado, totalOrderCount, lista
+   * de lojas distintas onde tem cadastro.
+   */
+  async byPerson(id: string, actor?: RequestActor) {
+    const me = await this.loadScoped(id, actor);
+    if (!me.personKey) {
+      return {
+        personKey: null,
+        outros: [],
+        agregado: null,
+        message: 'Sem chave de pessoa (CPF/email indisponível).',
+      };
+    }
+    const todos = await this.prisma.customer.findMany({
+      where: { personKey: me.personKey },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        whatsapp: true,
+        originSource: true,
+        originStoreId: true,
+        originStore: { select: { code: true, name: true } },
+        ltvCents: true,
+        orderCount: true,
+        lastOrderAt: true,
+        vipTier: true,
+      },
+    });
+    const outros = todos.filter((c) => c.id !== id);
+    const agregado = {
+      totalCadastros: todos.length,
+      totalLtvCents: todos.reduce((s, c) => s + Number(c.ltvCents || 0), 0),
+      totalOrderCount: todos.reduce((s, c) => s + (c.orderCount || 0), 0),
+      lojas: Array.from(
+        new Set(todos.map((c) => c.originStore?.code).filter(Boolean)),
+      ).sort(),
+      canais: Array.from(new Set(todos.map((c) => c.originSource).filter(Boolean))),
+    };
+    return { personKey: me.personKey, outros, agregado };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // HISTÓRICO DE MOVIMENTAÇÃO
   // ─────────────────────────────────────────────────────────────────────────
   /**

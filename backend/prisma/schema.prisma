@@ -1640,10 +1640,19 @@ model Customer {
   // CPF NÃO é mais @unique (jun/2026): mesma pessoa pode ter cadastro em
   // múltiplas lojas físicas (regra do Giga). Cada (loja, codigo) Giga vira
   // 1 Customer separado. Filtro por loja em /clientes-crm fica fiel ao Giga.
-  // Pra deduplica de marketing, use o índice abaixo + group by cpf.
+  // Pra deduplica de marketing, use personKey (abaixo) + group by.
   cpf             String?
   registroGiga    Int?     @map("registro_giga")
   rg              String?
+  rgExp           String?  @map("rg_exp")
+  rgEmissao       DateTime? @map("rg_emissao") @db.Date
+
+  // -- Chave de PESSOA (Caminho C) --
+  // Identificador único da pessoa real (não confundir com Customer.id que é
+  // identificador do cadastro/conta). Múltiplos Customers com mesmo personKey
+  // = mesma pessoa em canais/lojas diferentes (WC + Giga loja A + Giga loja B).
+  // Hierarquia: cpf (digits) → email → hash(nome+nascimento).
+  personKey       String?  @map("person_key")
 
   // -- Dados basicos --
   name            String?
@@ -1697,6 +1706,40 @@ model Customer {
   // -- Observacoes livres --
   notes           String?
 
+  // ─── DADOS GIGA (Wincred) ───────────────────────────────────────────────
+  // Importados via ETL Giga clientes. Vendedora física precisa desses pra
+  // crediário, KYC, atendimento personalizado.
+  naturalidade        String?
+  pai                 String?
+  mae                 String?
+  conjugeNome         String?  @map("conjuge_nome")
+  conjugeCpf          String?  @map("conjuge_cpf")
+  // Trabalho
+  trabalhoRazaoSocial String?  @map("trabalho_razao_social")
+  trabalhoCargo       String?  @map("trabalho_cargo")
+  trabalhoSalarioCents BigInt? @map("trabalho_salario_cents")
+  trabalhoAdmissao    DateTime? @map("trabalho_admissao") @db.Date
+  trabalhoFone        String?  @map("trabalho_fone")
+  // Contato de recado
+  nomeRecado          String?  @map("nome_recado")
+  foneRecado          String?  @map("fone_recado")
+  // Status crediário Giga (snapshot do ETL)
+  limiteCrediarioCents BigInt? @map("limite_crediario_cents")
+  bloqueadoGiga       Boolean  @default(false) @map("bloqueado_giga")
+  negativadoGiga      Boolean  @default(false) @map("negativado_giga")
+  fidelidadeGiga      String?  @map("fidelidade_giga")
+  spcSituacao         String?  @map("spc_situacao")
+  spcData             DateTime? @map("spc_data") @db.Date
+  // Datas históricas Giga
+  gigaPrimeiraCompra  DateTime? @map("giga_primeira_compra") @db.Date
+  gigaUltimaCompra    DateTime? @map("giga_ultima_compra") @db.Date
+  // Moradia
+  casaPropria         Boolean? @map("casa_propria")
+  aluguelCents        BigInt?  @map("aluguel_cents")
+  // Snapshot bruto da linha do Giga clientes (todas as ~75 colunas em JSON).
+  // Pra mineração futura sem precisar mudar ETL. Atualizado a cada sync.
+  gigaRawData         Json?    @map("giga_raw_data")
+
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
@@ -1714,6 +1757,7 @@ model Customer {
   gigaLinks             CustomerGigaLink[]
 
   @@index([cpf])
+  @@index([personKey])
   @@index([phone])
   @@index([whatsapp])
   @@index([vipTier])
