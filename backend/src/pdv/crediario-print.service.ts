@@ -54,10 +54,22 @@ function loadCoordsConfig(logger: Logger): {
   blocoH?: number;
   fields?: Record<string, { x: number; dy: number; w?: number }>;
 } | null {
-  // OVERRIDE EM /tmp DESATIVADO — fonte de verdade é o JSON deployado.
-  // Tela /pdv-diag/calibrar não influencia mais. Pra mudar, edita o
-  // arquivo em assets/config/promissoria-coords.json + commit + push.
-  const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+  // OVERRIDE EM /tmp REATIVADO (jun/2026): tela /retaguarda/promissoria-config
+  // salva ajustes em /tmp/promissoria-coords.json — service lê /tmp PRIMEIRO,
+  // depois cai pro JSON deployado. Quando estiver bom, copia /tmp → assets +
+  // commit pra ficar definitivo (override some em redeploy do Railway).
+  let cfgPath: string | null = null;
+  let source = '';
+  try {
+    if (fs.existsSync(OVERRIDE_PATH)) {
+      cfgPath = OVERRIDE_PATH;
+      source = 'OVERRIDE /tmp (ajustes ao vivo)';
+    }
+  } catch { /* ignora — segue pro asset */ }
+  if (!cfgPath) {
+    cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
+    source = 'asset deployado (definitivo)';
+  }
   if (!cfgPath) {
     logger.warn('[crediario-print] JSON de coords NÃO encontrado. Usando defaults.');
     return null;
@@ -83,7 +95,7 @@ function loadCoordsConfig(logger: Logger): {
       }
     }
 
-    logger.log(`[crediario-print] coords carregadas de ${cfgPath} (${Object.keys(out.fields || {}).length} campos)`);
+    logger.log(`[crediario-print] coords carregadas de ${source}: ${cfgPath} (${Object.keys(out.fields || {}).length} campos)`);
     return out;
   } catch (e: any) {
     logger.warn(`[crediario-print] falha ler JSON de coords (${cfgPath}): ${e?.message}. Usando defaults.`);
