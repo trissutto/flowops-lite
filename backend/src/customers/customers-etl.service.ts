@@ -134,6 +134,9 @@ export class CustomersEtlService {
         customerEmail: true,
         customerName: true,
         customerPhone: true,
+        customerCpf: true,
+        shippingCep: true,
+        shippingAddress: true, // JSON serializado do WC shipping
         totalAmount: true,
         wcDateCreated: true,
         createdAt: true,
@@ -147,6 +150,10 @@ export class CustomersEtlService {
         email: string;
         name: string | null;
         phone: string | null;
+        cpf: string | null;
+        shippingCep: string | null;
+        shippingAddressJson: string | null; // do pedido MAIS RECENTE com endereço
+        shippingAddressDate: Date | null;
         orderCount: number;
         totalCents: number;
         firstOrder: Date;
@@ -167,6 +174,10 @@ export class CustomersEtlService {
           email,
           name: o.customerName?.trim() || null,
           phone: o.customerPhone?.trim() || null,
+          cpf: o.customerCpf?.replace(/\D/g, '') || null,
+          shippingCep: o.shippingCep?.replace(/\D/g, '') || null,
+          shippingAddressJson: o.shippingAddress || null,
+          shippingAddressDate: date,
           orderCount: 0,
           totalCents: 0,
           firstOrder: date,
@@ -180,6 +191,13 @@ export class CustomersEtlService {
       if (date < agg.firstOrder) agg.firstOrder = date;
       if (!agg.name && o.customerName?.trim()) agg.name = o.customerName.trim();
       if (!agg.phone && o.customerPhone?.trim()) agg.phone = o.customerPhone.trim();
+      if (!agg.cpf && o.customerCpf) agg.cpf = o.customerCpf.replace(/\D/g, '');
+      // Endereço: usa o do pedido MAIS RECENTE com shipping preenchido
+      if (o.shippingAddress && date >= (agg.shippingAddressDate || new Date(0))) {
+        agg.shippingAddressJson = o.shippingAddress;
+        agg.shippingCep = o.shippingCep?.replace(/\D/g, '') || agg.shippingCep;
+        agg.shippingAddressDate = date;
+      }
     }
 
     this.state.totalEmails = byEmail.size;
@@ -194,19 +212,24 @@ export class CustomersEtlService {
 
         const existing = await this.prisma.customer.findUnique({
           where: { email },
-          select: { id: true, originStoreId: true, originSource: true },
+          select: { id: true, originStoreId: true, originSource: true, cpf: true },
         });
 
-        // CAMINHO C: personKey = email do WC (chave de pessoa pro Customer
-        // unificado). Quando Giga importar a mesma pessoa com mesmo email
-        // ou CPF, o personKey conectará os Customers.
-        const personKey = `email:${email.toLowerCase()}`;
+        // CAMINHO C: personKey prioriza CPF (chave forte); fallback email
+        const cpfDigits = agg.cpf && agg.cpf.length === 11 ? agg.cpf : null;
+        const cpfFmt = cpfDigits
+          ? `${cpfDigits.slice(0, 3)}.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-${cpfDigits.slice(9)}`
+          : null;
+        const personKey = cpfDigits ? `cpf:${cpfDigits}` : `email:${email.toLowerCase()}`;
+
+        let customerId: string;
 
         if (!existing) {
-          // INSERIR — cliente vindo do site só (sem registro Giga)
-          await this.prisma.customer.create({
+          // INSERIR — cliente vindo do site só
+          const created = await this.prisma.customer.create({
             data: {
               email,
+              cpf: cpfFmt,
               name: agg.name ?? email.split('@')[0],
               phone: phone ?? undefined,
               whatsapp: whatsapp ?? undefined,
@@ -221,9 +244,10 @@ export class CustomersEtlService {
               cashbackBalance: { create: {} },
             },
           });
+          customerId = created.id;
           this.state.inserted += 1;
         } else {
-          // ATUALIZAR — só métricas. NUNCA mexe em originStoreId (regra "primeira loja ganha")
+          // ATUALIZAR — métricas + cpf se faltar
           await this.prisma.customer.update({
             where: { email },
             data: {
@@ -231,9 +255,9 @@ export class CustomersEtlService {
               ...(agg.name ? { name: { set: agg.name } } : {}),
               ...(phone ? { phone: { set: phone } } : {}),
               ...(whatsapp ? { whatsapp: { set: whatsapp } } : {}),
-              // personKey: garante que está setado (Customers WC antigos podem não ter)
+              // CPF: só seta se Customer ainda não tem
+              ...(cpfFmt && !existing.cpf ? { cpf: { set: cpfFmt } } : {}),
               personKey: { set: personKey },
-              // métricas sempre recalculadas
               orderCount: agg.orderCount,
               ltvCents: BigInt(agg.totalCents),
               ticketMedioCents: ticketMedio,
@@ -241,7 +265,13 @@ export class CustomersEtlService {
               lastOrderAt: agg.lastOrder,
             },
           });
+          customerId = existing.id;
           this.state.updated += 1;
+        }
+
+        // Endereço de entrega — usa shippingAddress JSON do último pedido
+        if (agg.shippingAddressJson) {
+          await this._upsertEnderecoEntregaWc(customerId, agg.shippingAddressJson, agg.shippingCep);
         }
 
         this.state.processed += 1;
@@ -266,5 +296,71 @@ export class CustomersEtlService {
       `[ETL/woo] FIM: ${this.state.inserted} inseridos, ` +
       `${this.state.updated} atualizados, ${this.state.errors} erros.`,
     );
+  }
+
+  /**
+   * Upsert CustomerAddress(type='entrega') a partir do JSON shippingAddress
+   * salvo no Order do WC. Parseia o JSON, normaliza campos pro schema
+   * CustomerAddress (cep, street, number, complement, district, city, state).
+   */
+  private async _upsertEnderecoEntregaWc(
+    customerId: string,
+    shippingJson: string,
+    shippingCep: string | null,
+  ): Promise<void> {
+    try {
+      const s = JSON.parse(shippingJson);
+      if (!s || typeof s !== 'object') return;
+
+      // address_1 do WC vem geralmente como "Rua X, 123" — separa rua/numero
+      const addr1 = String(s.address_1 || '').trim();
+      let street = addr1;
+      let number: string | null = null;
+      const mNum = addr1.match(/^(.+?),\s*(\d+\w*)$/);
+      if (mNum) {
+        street = mNum[1].trim();
+        number = mNum[2];
+      }
+
+      const cep = String(shippingCep || s.postcode || '').replace(/\D/g, '');
+      const data = {
+        customerId,
+        type: 'entrega',
+        isPrimary: true,
+        active: true,
+        cep: cep.length === 8 ? cep : null,
+        street: street || null,
+        number,
+        complement: String(s.address_2 || '').trim() || null,
+        district: String(s.neighborhood || s.bairro || '').trim() || null,
+        city: String(s.city || '').trim() || null,
+        state: String(s.state || '').trim().toUpperCase().slice(0, 2) || null,
+      };
+
+      // Procura endereço entrega existente
+      const existing = await this.prisma.customerAddress.findFirst({
+        where: { customerId, type: 'entrega' },
+      });
+      if (existing) {
+        await this.prisma.customerAddress.update({
+          where: { id: existing.id },
+          data: {
+            cep: data.cep,
+            street: data.street,
+            number: data.number,
+            complement: data.complement,
+            district: data.district,
+            city: data.city,
+            state: data.state,
+          },
+        });
+      } else {
+        await this.prisma.customerAddress.create({ data });
+      }
+    } catch (e: any) {
+      this.logger.error(
+        `[ETL/woo] criar endereço entrega falhou customer=${customerId}: ${e?.code || ''} ${e?.message}`,
+      );
+    }
   }
 }
