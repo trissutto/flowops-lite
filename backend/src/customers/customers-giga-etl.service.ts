@@ -1024,16 +1024,18 @@ export class CustomersGigaEtlService {
       updates.name = String(row.nome).trim().toUpperCase();
     }
 
-    // WhatsApp: prefere FONECEL, fallback FONERES. Só preenche se null.
+    // WhatsApp: prefere FONECEL, fallback FONERES. Aceita >=8 dígitos
+    // (Giga muitas vezes grava SEM DDD — ex: 996236888 = 9 dígitos).
+    // Quando faltar DDD, infere pela UF da loja Giga depois (TODO).
     if (!existing.whatsapp) {
       const tel = String(row.foneCel || row.foneRes || '').replace(/\D/g, '');
-      if (tel && tel.length >= 10) updates.whatsapp = tel;
+      if (tel && tel.length >= 8) updates.whatsapp = tel;
     }
 
     // Telefone fixo separado se foneRes existe E é diferente do whatsapp
     if (!existing.phone && row.foneRes) {
       const tel = String(row.foneRes).replace(/\D/g, '');
-      if (tel && tel.length >= 10) updates.phone = tel;
+      if (tel && tel.length >= 8) updates.phone = tel;
     }
 
     // Email
@@ -1149,8 +1151,8 @@ export class CustomersGigaEtlService {
         data: {
           cpf: cpfDigits && cpfDigits.length === 11 ? this._formatCpf(cpfDigits) : null,
           name: nomeUpper,
-          whatsapp: tel.length >= 10 ? tel : null,
-          phone: telRes.length >= 10 && telRes !== tel ? telRes : null,
+          whatsapp: tel.length >= 8 ? tel : null,
+          phone: telRes.length >= 8 && telRes !== tel ? telRes : null,
           email: email.includes('@') ? email : null,
           birthDate,
           originSource: isSistema ? 'giga_sistema' : 'giga',
@@ -1204,11 +1206,17 @@ export class CustomersGigaEtlService {
           district: String(row.bairro || '').trim() || null,
           city: String(row.cidade || '').trim() || null,
           state: String(row.uf || '').trim().toUpperCase().slice(0, 2) || null,
-          zipCode: cep.length === 8 ? cep : null,
+          // Field é `cep` no schema CustomerAddress (não zipCode — bug
+          // antigo silenciava P2002/Unknown field via catch).
+          cep: cep.length === 8 ? cep : null,
         },
       });
     } catch (e: any) {
-      this.logger.warn(`[giga-etl] criar endereço falhou customer=${customerId}: ${e?.message}`);
+      // Loga ERRO (não warn) — falha de endereço é silenciosa há semanas
+      this.logger.error(
+        `[giga-etl] criar endereço falhou customer=${customerId} ` +
+        `endereco="${row.endereco}" cep="${row.cep}": ${e?.code || ''} ${e?.message}`,
+      );
     }
   }
 
