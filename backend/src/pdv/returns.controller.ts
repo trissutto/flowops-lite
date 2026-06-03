@@ -183,6 +183,55 @@ export class ReturnsController {
   }
 
   /**
+   * POST /pdv/devolucao/batch
+   *
+   * Devolução BATCH — peças de VÁRIAS vendas originais em UMA operação.
+   * Cliente devolve peças que saíram de 2, 3 ou N compras diferentes.
+   *
+   * Cria N PdvReturns (1 por venda) mas consolida:
+   *  - 1 sangria total (modo dinheiro/pix)
+   *  - 1 código vale-troca master (modo troca/credito)
+   *  - 1 estorno de estoque consolidado
+   *
+   * Body: {
+   *   vendas: [{ originalSaleId, items: [{originalItemId, qty}] }, ...],
+   *   modo, motivo?, creditoValidadeDias?,
+   *   storeCode?, storeName?, attachToSaleId?
+   * }
+   */
+  @Post('batch')
+  async createBatch(
+    @Req() req: any,
+    @Body()
+    body: {
+      vendas: Array<{
+        originalSaleId: string;
+        items: Array<{ originalItemId: string; qty: number }>;
+      }>;
+      modo: 'dinheiro' | 'pix' | 'troca' | 'credito';
+      motivo?: string;
+      creditoValidadeDias?: number;
+      storeCode?: string;
+      storeName?: string;
+      attachToSaleId?: string | null;
+    },
+  ) {
+    this.requireRole(req);
+    const { storeCode, storeName } = this.resolveStore(req, body);
+    return this.svc.createReturnBatch({
+      vendas: body.vendas,
+      storeCode,
+      storeName,
+      modo: body.modo,
+      motivo: body.motivo,
+      creditoValidadeDias: body.creditoValidadeDias,
+      attachToSaleId: body.attachToSaleId ?? null,
+      userId: req?.user?.sub || req?.user?.id || null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
+  /**
    * GET /pdv/devolucao — lista devoluções da loja
    */
   @Get()

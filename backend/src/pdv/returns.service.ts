@@ -1507,4 +1507,332 @@ export class ReturnsService {
       attachedToExistingSale,
     };
   }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // BATCH MULTI-VENDA: devolver peças de N vendas originais em UMA operação
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Cliente devolve peças que saíram de COMPRAS DIFERENTES (vendas distintas).
+   * Cada venda original vira UM PdvReturn (pra audit), mas:
+   *  - UMA única sangria consolidada (se dinheiro/pix)
+   *  - UM único creditoCode master (se troca/credito) — cliente recebe 1 vale
+   *  - UM único estorno de estoque consolidado
+   *  - UM único pagamento vale_troca na venda em andamento (se troca anexa)
+   *
+   * Aceita N vendas (sem limite — duas, três, dez compras juntas).
+   */
+  async createReturnBatch(input: {
+    vendas: Array<{
+      originalSaleId: string;
+      items: Array<{ originalItemId: string; qty: number }>;
+    }>;
+    storeCode: string;
+    storeName: string;
+    modo: 'dinheiro' | 'pix' | 'troca' | 'credito';
+    motivo?: string;
+    creditoValidadeDias?: number;
+    attachToSaleId?: string | null;
+    userId?: string;
+    userName?: string;
+  }) {
+    const { vendas, storeCode, storeName, modo, motivo, userId, userName } = input;
+    const attachToSaleId = input.attachToSaleId || null;
+
+    if (!['dinheiro', 'pix', 'troca', 'credito'].includes(modo)) {
+      throw new BadRequestException(`Modo inválido: ${modo}`);
+    }
+    if (!vendas?.length) throw new BadRequestException('Selecione ao menos uma venda');
+    for (const v of vendas) {
+      if (!v.originalSaleId) throw new BadRequestException('originalSaleId faltando em uma das vendas');
+      if (!v.items?.length) throw new BadRequestException(`Venda ${v.originalSaleId.slice(0, 8)} sem itens`);
+    }
+
+    // 1. Pré-carrega todas as vendas + valida items + monta itemsToCreate por venda
+    type VendaProcessada = {
+      sale: any;
+      itemsToCreate: Array<any>;
+      valorParcial: number;
+      isTraining: boolean;
+    };
+    const processadas: VendaProcessada[] = [];
+    let valorTotalGeral = 0;
+    let alguemTreino = false;
+
+    for (const v of vendas) {
+      const sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: v.originalSaleId },
+        include: { items: true },
+      });
+      if (!sale) throw new NotFoundException(`Venda ${v.originalSaleId.slice(0, 8)} não encontrada`);
+      if (sale.status !== 'finalized') {
+        throw new BadRequestException(`Venda ${v.originalSaleId.slice(0, 8)} está ${sale.status}`);
+      }
+
+      // Devoluções anteriores pra essa venda
+      const previousReturns = await (this.prisma as any).pdvReturn.findMany({
+        where: { originalSaleId: v.originalSaleId },
+        include: { items: true },
+      });
+      const devolvidoPorItem = new Map<string, number>();
+      for (const ret of previousReturns as any[]) {
+        for (const it of ret.items) {
+          const id = it.originalItemId || it.sku;
+          devolvidoPorItem.set(id, (devolvidoPorItem.get(id) || 0) + (it.qty || 0));
+        }
+      }
+
+      const itemsToCreate: any[] = [];
+      let valorParcial = 0;
+      for (const reqItem of v.items) {
+        const original = (sale.items as any[]).find((i: any) => i.id === reqItem.originalItemId);
+        if (!original) {
+          throw new BadRequestException(`Item ${reqItem.originalItemId} não pertence à venda ${v.originalSaleId.slice(0, 8)}`);
+        }
+        const jaDev = devolvidoPorItem.get(original.id) || 0;
+        const disponivel = (original.qty || 0) - jaDev;
+        const qty = Math.max(1, Math.floor(Number(reqItem.qty) || 0));
+        if (qty > disponivel) {
+          throw new BadRequestException(
+            `${original.descricao}: pediu ${qty} mas só tem ${disponivel} disponível (venda ${v.originalSaleId.slice(0, 8)})`,
+          );
+        }
+        const valorUnit = original.qty > 0 ? original.total / original.qty : original.precoUnit;
+        const totalItem = valorUnit * qty;
+        valorParcial += totalItem;
+        itemsToCreate.push({
+          originalItemId: original.id,
+          sku: original.sku,
+          ref: original.ref,
+          cor: original.cor,
+          tamanho: original.tamanho,
+          descricao: original.descricao,
+          qty,
+          precoUnit: valorUnit,
+          total: totalItem,
+        });
+      }
+      valorParcial = Math.round(valorParcial * 100) / 100;
+      valorTotalGeral += valorParcial;
+      const isTraining = !!(sale as any).isTraining;
+      if (isTraining) alguemTreino = true;
+
+      processadas.push({ sale, itemsToCreate, valorParcial, isTraining });
+    }
+
+    valorTotalGeral = Math.round(valorTotalGeral * 100) / 100;
+
+    // 2. Validações de caixa (1 sessão, modo dinheiro/pix)
+    const cashSession = await this.cash.getCurrentSession(storeCode);
+    if ((modo === 'dinheiro' || modo === 'pix') && !cashSession && !alguemTreino) {
+      throw new BadRequestException('Modo dinheiro/PIX exige caixa aberto pra registrar a sangria.');
+    }
+
+    // 3. Estorno de estoque CONSOLIDADO (1 chamada com todos os itens de todas as vendas)
+    const allItemsForStock = processadas.flatMap((p) =>
+      p.isTraining ? [] : p.itemsToCreate.map((it) => ({ sku: it.sku, qty: it.qty, storeCode })),
+    );
+    const stockOkBySku = new Map<string, { ok: boolean; error?: string }>();
+    if (allItemsForStock.length === 0) {
+      // tudo treino — nada a estornar
+    } else {
+      try {
+        const erpResult = await this.erp.increaseStock(allItemsForStock);
+        if (erpResult.success) {
+          for (const it of allItemsForStock) stockOkBySku.set(it.sku, { ok: true });
+        } else {
+          for (const it of allItemsForStock) stockOkBySku.set(it.sku, { ok: false, error: erpResult.error || 'falha' });
+        }
+      } catch (e: any) {
+        for (const it of allItemsForStock) stockOkBySku.set(it.sku, { ok: false, error: e?.message || String(e) });
+      }
+    }
+
+    // 4. Gera UM creditoCode master (se troca/credito)
+    let creditoCodeMaster: string | null = null;
+    let creditoValidadeMaster: Date | null = null;
+    if (modo === 'troca' || modo === 'credito') {
+      creditoCodeMaster = this.genCreditoCode();
+      const dias = modo === 'troca' ? 1 : Math.max(1, input.creditoValidadeDias || 90);
+      creditoValidadeMaster = new Date(Date.now() + dias * 86400_000);
+    }
+
+    // 5. Cria N PdvReturns (transação) — só o 1º recebe o creditoCode master
+    const customerCpf = processadas[0].sale.customerCpf || null;
+    const customerName = processadas[0].sale.customerName || null;
+    const returnsCreated: any[] = [];
+    await (this.prisma as any).$transaction(async (tx: any) => {
+      for (let i = 0; i < processadas.length; i++) {
+        const p = processadas[i];
+        const isPrimeiro = i === 0;
+        const ret = await tx.pdvReturn.create({
+          data: {
+            originalSaleId: p.sale.id,
+            originalSaleNumber: p.sale.nfceNumber || null,
+            storeCode,
+            storeName,
+            cashSessionId: cashSession?.id || null,
+            modo,
+            valorTotal: p.valorParcial,
+            status: 'completed',
+            customerCpf: p.sale.customerCpf || null,
+            customerName: p.sale.customerName || null,
+            // Só o PRIMEIRO PdvReturn recebe o creditoCode master.
+            // Os demais ficam com null e motivo apontando pro master pra audit.
+            creditoCode: isPrimeiro ? creditoCodeMaster : null,
+            creditoValidade: isPrimeiro ? creditoValidadeMaster : null,
+            userId: userId || null,
+            userName: userName || null,
+            motivo: isPrimeiro
+              ? (motivo || (vendas.length > 1 ? `Devolução multi-venda (${vendas.length} compras)` : null))
+              : `Anexo ao vale ${creditoCodeMaster || '—'} (compra ${p.sale.nfceNumber || p.sale.id.slice(0, 8)})`,
+            isTraining: p.isTraining,
+            items: {
+              create: p.itemsToCreate.map((it) => ({
+                originalItemId: it.originalItemId,
+                sku: it.sku,
+                ref: it.ref,
+                cor: it.cor,
+                tamanho: it.tamanho,
+                descricao: it.descricao,
+                qty: it.qty,
+                precoUnit: it.precoUnit,
+                total: it.total,
+                stockReturnedAt: stockOkBySku.get(it.sku)?.ok ? new Date() : null,
+                stockError: stockOkBySku.get(it.sku)?.ok ? null : stockOkBySku.get(it.sku)?.error || null,
+              })),
+            },
+          },
+          include: { items: true },
+        });
+        returnsCreated.push(ret);
+      }
+    });
+
+    // 6. UMA sangria total (se dinheiro/pix)
+    if ((modo === 'dinheiro' || modo === 'pix') && cashSession && !alguemTreino) {
+      const tipoLabel = modo === 'pix' ? 'PIX devolucao' : 'Devolucao dinheiro';
+      const vendasResumo = vendas.length === 1
+        ? `venda ${processadas[0].sale.nfceNumber || processadas[0].sale.id.slice(0, 8)}`
+        : `${vendas.length} compras`;
+      await this.cash.addMovement({
+        storeCode,
+        tipo: 'sangria',
+        valor: valorTotalGeral,
+        motivo: `${tipoLabel} — ${vendasResumo}${motivo ? ' · ' + motivo : ''}`,
+        userId,
+        userName,
+      });
+    }
+
+    // 7. Vale-troca: anexa ou cria venda direta (modo='troca')
+    let directSaleId: string | null = null;
+    let attachedToExistingSale = false;
+
+    if (modo === 'troca' && creditoCodeMaster) {
+      const itemsDevolvidosPayload = processadas.flatMap((p) =>
+        p.itemsToCreate.map((it) => ({
+          sku: it.sku,
+          ref: it.ref,
+          cor: it.cor,
+          tamanho: it.tamanho,
+          descricao: it.descricao,
+          qty: it.qty,
+          valor: it.total,
+        })),
+      );
+
+      if (attachToSaleId) {
+        const target = await (this.prisma as any).pdvSale.findUnique({
+          where: { id: attachToSaleId },
+          select: { id: true, storeCode: true, status: true },
+        });
+        if (!target) throw new BadRequestException(`Venda em andamento ${attachToSaleId.slice(0, 8)} não encontrada`);
+        if (target.status !== 'open') throw new BadRequestException(`Venda em andamento está ${target.status}`);
+        if (target.storeCode !== storeCode) {
+          throw new BadRequestException(`Venda em andamento é da loja ${target.storeCode}, devolução em ${storeCode}`);
+        }
+        await (this.prisma as any).pdvSalePayment.create({
+          data: {
+            saleId: target.id,
+            method: 'vale_troca',
+            valor: valorTotalGeral,
+            details: JSON.stringify({
+              creditoCode: creditoCodeMaster,
+              fromReturnIds: returnsCreated.map((r) => r.id),
+              modo: 'troca-anexada-batch',
+              vendasOriginais: processadas.length,
+              itemsDevolvidos: itemsDevolvidosPayload,
+            }),
+          },
+        });
+        attachedToExistingSale = true;
+      } else {
+        try {
+          const store = await this.prisma.store.findUnique({
+            where: { code: storeCode },
+            select: { code: true, name: true },
+          });
+          if (store) {
+            let cashSessionId: string | null = null;
+            try {
+              const s = await (this.prisma as any).pdvCashSession.findFirst({
+                where: { storeCode: store.code, status: 'open' },
+                select: { id: true },
+              });
+              cashSessionId = s?.id || null;
+            } catch {}
+            const newSale = await (this.prisma as any).pdvSale.create({
+              data: {
+                storeCode: store.code,
+                storeName: store.name,
+                cashSessionId,
+                vendedorUserId: userId || null,
+                vendedorName: userName || null,
+                customerCpf,
+                customerName,
+                status: 'open',
+              },
+            });
+            await (this.prisma as any).pdvSalePayment.create({
+              data: {
+                saleId: newSale.id,
+                method: 'vale_troca',
+                valor: valorTotalGeral,
+                details: JSON.stringify({
+                  creditoCode: creditoCodeMaster,
+                  fromReturnIds: returnsCreated.map((r) => r.id),
+                  modo: 'troca-batch-mesmo-dia',
+                  vendasOriginais: processadas.length,
+                  itemsDevolvidos: itemsDevolvidosPayload,
+                }),
+              },
+            });
+            directSaleId = newSale.id;
+          }
+        } catch (e: any) {
+          this.logger.warn(`[devolução/batch troca-direta] Falha ao criar venda direta: ${e?.message}`);
+        }
+      }
+    }
+
+    this.logger.log(
+      `[devolução/BATCH] ${returnsCreated.length} return(s) loja=${storeCode} ` +
+      `modo=${modo} valorTotal=R$${valorTotalGeral.toFixed(2)} ` +
+      (creditoCodeMaster ? `code=${creditoCodeMaster}` : ''),
+    );
+
+    return {
+      batch: true,
+      returns: returnsCreated,
+      vendasProcessadas: processadas.length,
+      valorTotal: valorTotalGeral,
+      modo,
+      creditoCode: creditoCodeMaster,
+      creditoValidade: creditoValidadeMaster?.toISOString() ?? null,
+      directSaleId,
+      attachedToExistingSale,
+      customerCpf,
+      customerName,
+    };
+  }
 }

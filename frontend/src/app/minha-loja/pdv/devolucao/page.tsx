@@ -57,9 +57,25 @@ const fmt = (n: number) =>
 export default function DevolucaoPage() {
   const [query, setQuery] = useState('');
   const [data, setData] = useState<LookupResult | null>(null);
+  // VENDAS EXTRAS — cliente devolveu peças de N vendas diferentes na mesma operação
+  // Cada bipa em SKU que pertence a OUTRA venda adiciona aqui (sem resetar data).
+  const [vendasExtras, setVendasExtras] = useState<LookupResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Record<string, number>>({});
+
+  // Helper: encontra item pelo SKU/REF em data + vendasExtras
+  const acharItemEmTodasVendas = (sku: string): { item: any; sale: any } | null => {
+    const norm = sku.toUpperCase().trim();
+    const todas = [data, ...vendasExtras].filter(Boolean) as LookupResult[];
+    for (const v of todas) {
+      const m = v.items.find(
+        (it) => it.sku.toUpperCase() === norm || (it.ref && it.ref.toUpperCase() === norm),
+      );
+      if (m) return { item: m, sale: v.sale };
+    }
+    return null;
+  };
   // Role do user logado — decide se aparece o toggle "outras lojas"
   // (modo A2: vendedora SÓ vê vendas da loja dela; admin pode quebrar regra)
   const [userRole, setUserRole] = useState<string>('store');
@@ -139,17 +155,14 @@ export default function DevolucaoPage() {
       return;
     }
 
-    // ── MODO "JA TENHO VENDA CARREGADA" ──
-    // Se ja escolheu uma venda (data tem items), CADA bipada de SKU/REF dessa
-    // venda INCREMENTA a qty selecionada daquele item — em vez de fazer nova busca.
-    // Cliente devolveu 3 pecas? Vendedora bipa 3 vezes, cada bipa soma 1.
+    // ── MODO "JA TENHO VENDA(S) CARREGADA(S)" ──
+    // Se já tem venda(s) na operação, procura o SKU/REF em TODAS as vendas
+    // carregadas (data + vendasExtras). Match → incrementa qty.
+    // Sem match → faz NOVA BUSCA POR SKU pra adicionar venda EXTRA (não reseta!)
     if (data && data.items.length > 0) {
-      const norm = q.toUpperCase().trim();
-      const match = data.items.find(
-        (it) => it.sku.toUpperCase() === norm
-              || (it.ref && it.ref.toUpperCase() === norm),
-      );
-      if (match) {
+      const achado = acharItemEmTodasVendas(q);
+      if (achado) {
+        const match = achado.item;
         const atual = selected[match.id] || 0;
         const novaQty = atual + 1;
         if (novaQty > match.disponivel) {
@@ -161,18 +174,32 @@ export default function DevolucaoPage() {
         setLastScanFeedback(`✓ ${match.ref || match.sku} ${match.cor || ''} ${match.tamanho || ''} — ${novaQty}/${match.disponivel}`);
         setQuery('');
         inputRef.current?.focus();
-        // Limpa feedback apos 3s
         setTimeout(() => setLastScanFeedback(null), 3000);
         return;
       }
-      // Peca NAO esta nessa venda — avisa mas nao reseta
-      setErr(`SKU/REF "${q}" nao esta nessa venda. Bipe pecas dessa venda OU clique em "Nova busca".`);
+      // SKU NÃO está em nenhuma das vendas carregadas — busca em OUTRAS vendas
+      // pra adicionar como venda EXTRA (cliente devolveu peças de N compras).
+      try {
+        const qs = new URLSearchParams({ sku: q });
+        if (crossStore) qs.set('crossStore', '1');
+        const r = await api<{ sku: string; sales: Array<any> }>(`/pdv/devolucao/lookup-by-sku?${qs.toString()}`);
+        // Filtra vendas que JÁ estão carregadas (data + vendasExtras)
+        const jaCarregadas = new Set([data.sale.id, ...vendasExtras.map((v) => v.sale.id)]);
+        const novasOpcoes = (r.sales || []).filter((s: any) => !jaCarregadas.has(s.saleId));
+        if (novasOpcoes.length > 0) {
+          setSalesBySku(novasOpcoes);
+          setQuery('');
+          return;
+        }
+      } catch { /* ignora — cai no erro */ }
+      setErr(`SKU/REF "${q}" não está em nenhuma venda. Verifique o código.`);
       setQuery('');
       return;
     }
 
     // ── MODO BUSCA NORMAL — primeira bipa ou apos reset ──
     setData(null);
+    setVendasExtras([]);
     setSelected({});
     setSuccess(null);
     setSalesBySku(null);
@@ -300,14 +327,23 @@ export default function DevolucaoPage() {
     setErr('');
     try {
       const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(saleId)}`);
-      setData(r);
+      // Se JÁ tem venda principal carregada, ADICIONA esta como venda EXTRA
+      // (não substitui — cliente está devolvendo peças de N compras).
+      if (data) {
+        setVendasExtras((prev) => {
+          // Evita duplicar se já está nas extras
+          if (prev.some((v) => v.sale.id === r.sale.id)) return prev;
+          return [...prev, r];
+        });
+      } else {
+        setData(r);
+      }
       setSalesBySku(null);
-      // Conta UMA peca bipada (a que a vendedora acabou de bipar pra escolher venda).
-      // Pra adicionar mais pecas da mesma venda, vendedora bipa de novo no input —
-      // cada bipa incrementa qty (ver `lookup()`).
+      // Conta UMA peça bipada (a que a vendedora acabou de bipar pra escolher venda).
       const item = r.items.find((it) => it.sku === autoSelectSku || it.ref === autoSelectSku);
       if (item && item.disponivel > 0) {
-        setSelected({ [item.id]: 1 });
+        // Adiciona ao selected SEM zerar — empilha sobre seleções anteriores
+        setSelected((prev) => ({ ...prev, [item.id]: 1 }));
         setLastScanFeedback(`✓ ${item.ref || item.sku} ${item.cor || ''} ${item.tamanho || ''} — 1/${item.disponivel}`);
         setTimeout(() => setLastScanFeedback(null), 3000);
       }
@@ -339,7 +375,10 @@ export default function DevolucaoPage() {
     }));
   }
 
-  const totalDevolucao = (data?.items || [])
+  // Soma de TODAS as vendas carregadas (data + vendasExtras)
+  const todasVendasCarregadas = [data, ...vendasExtras].filter(Boolean) as LookupResult[];
+  const totalDevolucao = todasVendasCarregadas
+    .flatMap((v) => v.items)
     .filter((it) => selected[it.id])
     .reduce((s, it) => {
       const valorUnit = it.qty > 0 ? it.total / it.qty : it.precoUnit;
@@ -376,17 +415,45 @@ export default function DevolucaoPage() {
           }
         }
       } catch {}
-      const r = await api<any>('/pdv/devolucao', {
-        method: 'POST',
-        body: JSON.stringify({
-          originalSaleId: data!.sale.id,
-          modo,
-          items,
-          motivo: motivo || undefined,
-          creditoValidadeDias: modo === 'credito' ? validade : undefined,
-          attachToSaleId: modo === 'troca' ? attachToSaleId : null,
-        }),
-      });
+      // BATCH MULTI-VENDA: se cliente devolveu peças de N vendas, monta
+      // payload agrupando items por venda original e chama endpoint batch.
+      // Senão (1 venda só), chama endpoint normal pra manter compat.
+      const usarBatch = vendasExtras.length > 0;
+      let r: any;
+      if (usarBatch) {
+        // Agrupa items por venda original
+        const vendasPayload: Array<{ originalSaleId: string; items: typeof items }> = [];
+        for (const v of todasVendasCarregadas) {
+          const itemsDessaVenda = v.items
+            .filter((it) => selected[it.id])
+            .map((it) => ({ originalItemId: it.id, qty: selected[it.id] }));
+          if (itemsDessaVenda.length > 0) {
+            vendasPayload.push({ originalSaleId: v.sale.id, items: itemsDessaVenda });
+          }
+        }
+        r = await api<any>('/pdv/devolucao/batch', {
+          method: 'POST',
+          body: JSON.stringify({
+            vendas: vendasPayload,
+            modo,
+            motivo: motivo || undefined,
+            creditoValidadeDias: modo === 'credito' ? validade : undefined,
+            attachToSaleId: modo === 'troca' ? attachToSaleId : null,
+          }),
+        });
+      } else {
+        r = await api<any>('/pdv/devolucao', {
+          method: 'POST',
+          body: JSON.stringify({
+            originalSaleId: data!.sale.id,
+            modo,
+            items,
+            motivo: motivo || undefined,
+            creditoValidadeDias: modo === 'credito' ? validade : undefined,
+            attachToSaleId: modo === 'troca' ? attachToSaleId : null,
+          }),
+        });
+      }
       // Consome o attach (uso único)
       try { localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {}
       setSuccess(r);
@@ -450,6 +517,7 @@ export default function DevolucaoPage() {
   function reset() {
     setQuery('');
     setData(null);
+    setVendasExtras([]);
     setSelected({});
     setSuccess(null);
     setErr('');
@@ -539,7 +607,7 @@ export default function DevolucaoPage() {
         )}
 
         {/* Lista de vendas encontradas pela busca por SKU */}
-        {salesBySku && salesBySku.length > 0 && !data && !success && (
+        {salesBySku && salesBySku.length > 0 && !success && (
           <div className="bg-white rounded-2xl shadow-md p-5 mb-6">
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-bold text-rose-900">
@@ -762,6 +830,104 @@ export default function DevolucaoPage() {
                 {data.sale.customerCpf ? ` · CPF ${data.sale.customerCpf}` : ''}
               </div>
             </div>
+
+            {/* VENDAS EXTRAS — peças de outras compras adicionadas à mesma devolução */}
+            {vendasExtras.map((vex) => (
+              <div key={vex.sale.id} className="bg-white rounded-xl shadow-sm px-3 py-2 text-xs border-l-4 border-amber-400">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="font-bold text-amber-900">
+                    + {vex.sale.nfceNumber ? `NFC-e #${vex.sale.nfceNumber}` : 'Venda extra'}
+                    <span className="text-gray-500 font-normal ml-2">
+                      {vex.sale.storeName} · {new Date(vex.sale.finalizedAt).toLocaleDateString('pt-BR')}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-amber-900">R$ {fmt(vex.sale.total)}</span>
+                    <button
+                      onClick={() => {
+                        // Remove venda extra + deseleciona items dela
+                        setVendasExtras((prev) => prev.filter((v) => v.sale.id !== vex.sale.id));
+                        setSelected((prev) => {
+                          const next = { ...prev };
+                          for (const it of vex.items) delete next[it.id];
+                          return next;
+                        });
+                      }}
+                      className="text-rose-600 hover:text-rose-900 text-xs font-bold px-2"
+                      title="Remover essa venda da devolução"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <div className="text-gray-600 truncate">
+                  {vex.sale.customerName || 'Sem identificação'}
+                  {vex.sale.customerCpf ? ` · CPF ${vex.sale.customerCpf}` : ''}
+                </div>
+                {/* Items dessa venda extra — mesmo layout */}
+                <div className="space-y-1 mt-2">
+                  {vex.items.map((it) => {
+                    const isSel = !!selected[it.id];
+                    const sel = selected[it.id] || 0;
+                    const disabled = it.disponivel <= 0;
+                    return (
+                      <div
+                        key={it.id}
+                        className={`rounded-lg px-2.5 py-1.5 transition-all border-2 ${
+                          disabled
+                            ? 'bg-gray-100 border-gray-200 opacity-50'
+                            : isSel
+                            ? 'bg-amber-50 border-amber-400'
+                            : 'bg-white border-gray-200 hover:border-amber-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isSel}
+                            disabled={disabled}
+                            onChange={() => toggle(it.id, it.disponivel)}
+                            className="w-5 h-5 shrink-0"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-gray-800 text-sm leading-tight truncate">
+                              {it.descricao}
+                            </div>
+                            <div className="text-[11px] text-gray-500 leading-tight">
+                              SKU {it.sku}
+                              {it.cor ? ` · ${it.cor}` : ''}
+                              {it.tamanho ? ` · ${it.tamanho}` : ''}
+                              <span className="text-gray-700"> · R$ {fmt(it.precoUnit)} · Comprou {it.qty}</span>
+                              {it.jaDevolvido > 0 && (
+                                <span className="text-amber-700"> · já devolveu {it.jaDevolvido}</span>
+                              )}
+                            </div>
+                          </div>
+                          {isSel && it.disponivel > 1 && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => setQty(it.id, sel - 1, it.disponivel)}
+                                className="w-8 h-8 bg-amber-200 rounded font-bold"
+                              >
+                                −
+                              </button>
+                              <span className="w-8 text-center font-bold">{sel}</span>
+                              <button
+                                onClick={() => setQty(it.id, sel + 1, it.disponivel)}
+                                className="w-8 h-8 bg-amber-200 rounded font-bold"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+                          {disabled && <div className="text-xs text-red-600">Tudo já devolvido</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
 
             <div className="bg-white rounded-xl shadow-sm p-3">
               <h3 className="font-bold text-rose-900 text-sm mb-2">Selecione as peças a devolver</h3>
