@@ -79,9 +79,14 @@ function loadCoordsConfig(logger: Logger): {
     const json = JSON.parse(raw);
     const out: any = {};
 
-    // BLOCOS: IGNORADOS — fonte de verdade é PROM_DEFAULT no código.
-    // Notepad/linter podem reverter o JSON sem afetar os blocos.
-    // (campo blocosY_mm fica no JSON apenas pra documentação visual.)
+    // BLOCOS: LÊ do JSON (jun/2026). Permite ajustar via tela de calibração.
+    // Se vier array de 3 números válidos, usa; senão cai pro default.
+    if (Array.isArray(json.blocosY_mm) && json.blocosY_mm.length === 3) {
+      const arr = json.blocosY_mm.map((v: any) => Number(v));
+      if (arr.every((n: number) => Number.isFinite(n))) {
+        out.blocoY = arr.map((v: number) => mm(v)); // mm → pt
+      }
+    }
 
     // Converte fields de mm pra pt (x → x, y → dy, w → w)
     if (json.fields_mm && typeof json.fields_mm === 'object') {
