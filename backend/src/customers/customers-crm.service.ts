@@ -369,13 +369,22 @@ export class CustomersCrmService {
     if (query.hasWhatsapp) where.whatsapp = { not: null };
     if (query.search?.trim()) {
       const q = query.search.trim();
-      where.OR = [
+      const digits = q.replace(/\D/g, '');
+      // Monta OR só com cláusulas válidas. SE digits vazio (busca por texto
+      // tipo "THIAGO"), NÃO inclui filtros de cpf/whatsapp/phone porque
+      // { contains: "" } casa qualquer valor não-null e explode o filtro.
+      const or: any[] = [
         { name: { contains: q, mode: 'insensitive' } },
         { email: { contains: q, mode: 'insensitive' } },
-        { cpf: { contains: q.replace(/\D/g, '') } },
-        { whatsapp: { contains: q.replace(/\D/g, '') } },
-        { phone: { contains: q.replace(/\D/g, '') } },
       ];
+      if (digits.length > 0) {
+        or.push(
+          { cpf: { contains: digits } },
+          { whatsapp: { contains: digits } },
+          { phone: { contains: digits } },
+        );
+      }
+      where.OR = or;
     }
 
     const [total, rows] = await this.prisma.$transaction([
