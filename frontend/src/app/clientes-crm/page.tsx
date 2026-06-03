@@ -947,13 +947,13 @@ function HistoricoTab({ customerId }: { customerId: string }) {
         </div>
         <div className="bg-amber-50 border border-amber-200 rounded p-3">
           <div className="text-[10px] uppercase text-amber-700 font-bold">Vales ativos</div>
-          <div className="text-lg font-bold text-amber-900">{data.vales.ativos.length}</div>
-          <div className="text-[11px] text-amber-700">R$ {data.vales.saldoAtivo.toFixed(2).replace('.', ',')}</div>
+          <div className="text-lg font-bold text-amber-900">{data.vales?.ativos?.length ?? 0}</div>
+          <div className="text-[11px] text-amber-700">R$ {Number(data.vales?.saldoAtivo ?? 0).toFixed(2).replace('.', ',')}</div>
         </div>
         <div className="bg-purple-50 border border-purple-200 rounded p-3">
           <div className="text-[10px] uppercase text-purple-700 font-bold">Marcados</div>
-          <div className="text-lg font-bold text-purple-900">{data.marcadosGiga.qtd}</div>
-          <div className="text-[11px] text-purple-700">R$ {data.marcadosGiga.total.toFixed(2).replace('.', ',')}</div>
+          <div className="text-lg font-bold text-purple-900">{data.marcadosGiga?.qtd ?? 0}</div>
+          <div className="text-[11px] text-purple-700">R$ {Number(data.marcadosGiga?.total ?? 0).toFixed(2).replace('.', ',')}</div>
         </div>
       </div>
 

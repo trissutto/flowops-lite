@@ -571,7 +571,8 @@ export class CustomersCrmService {
         customer: { id: customer.id, name: customer.name, cpf: customer.cpf },
         compras: [],
         devolucoes: [],
-        vales: { ativos: [], usados: [] },
+        // estrutura completa pra frontend não quebrar em .toFixed/access
+        vales: { ativos: [], usados: [], saldoAtivo: 0, saldoUsado: 0 },
         marcadosGiga: { items: [], total: 0, qtd: 0 },
         warning: 'Cliente sem CPF cadastrado — busca limitada',
       };
