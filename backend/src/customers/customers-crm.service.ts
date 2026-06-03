@@ -479,9 +479,17 @@ export class CustomersCrmService {
       if (!(ev.channel in currentConsents)) currentConsents[ev.channel] = ev.granted;
     }
 
+    // Caminho C: BigInts dos campos Giga novos precisam virar string pra
+    // serializar em JSON (NestJS explode com BigInt nativo). Excluímos
+    // gigaRawData do payload — UI não usa e payload fica enorme.
+    const { gigaRawData, ...rest } = c as any;
     return {
-      ...c,
+      ...rest,
       ltvCents: c.ltvCents.toString(),
+      trabalhoSalarioCents: (c as any).trabalhoSalarioCents?.toString() ?? null,
+      limiteCrediarioCents: (c as any).limiteCrediarioCents?.toString() ?? null,
+      aluguelCents: (c as any).aluguelCents?.toString() ?? null,
+      hasGigaRawData: !!gigaRawData,
       cashbackBalance: c.cashbackBalance
         ? {
             ...c.cashbackBalance,
