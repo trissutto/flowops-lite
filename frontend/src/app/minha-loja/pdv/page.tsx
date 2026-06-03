@@ -5838,8 +5838,8 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   </script>
 </body></html>`;
 
-    // Roteado pelo printer-router: Electron → silentPrintHTML na térmica
-    // configurada (kind=nfce → profile=termica). Browser → popup + window.print().
+    // NFC-e SEMPRE vai direto pra impressora fiscal térmica 80mm configurada.
+    // Sem preview, sem popup — fluxo silencioso pra não atrapalhar venda.
     try {
       const { loadPrinterConfig, isElectron } = await import('@/lib/printer-router');
       const electron = (window as any).electronAPI;
@@ -5851,17 +5851,21 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
         await electron.silentPrintHTML(html);
         return;
       }
-    } catch (e) {
-      console.warn('[nfce] silentPrintHTML falhou, caindo pra popup:', e);
+      // Fora do Electron (Chrome puro) — sem app desktop não tem como imprimir
+      // silencioso. Mostra erro claro com link pra config.
+      toast(
+        'warning',
+        'App desktop necessário',
+        'Pra imprimir NFC-e direto na térmica, abra pelo app desktop (LURDS ORDER ONE). No Chrome puro não dá pra mandar pra impressora sem preview.',
+      );
+    } catch (e: any) {
+      console.warn('[nfce] silentPrintHTML falhou:', e);
+      toast(
+        'error',
+        'Impressão NFC-e falhou',
+        e?.message || 'Verifique se a impressora térmica 80mm está configurada em /pdv/config-impressora.',
+      );
     }
-    // Fallback browser: popup + window.print() injetado no HTML
-    const w = window.open('', 'nfce_print_' + sale.id, 'width=400,height=600');
-    if (!w) {
-      toast('warning', 'Popup bloqueado', 'Habilite popups pra esse site (ícone na barra de endereço do Chrome)');
-      return;
-    }
-    w.document.write(html);
-    w.document.close();
   }
 
   // Auto-print NFC-e: assim que SEFAZ autoriza, o cupom fiscal sai sozinho
