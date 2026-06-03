@@ -49,15 +49,53 @@ function resolveVerdanaPath(): string | null {
  */
 const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
 
+/** Chave do AppConfig onde fica o JSON salvo pela tela /retaguarda/promissoria-config. */
+const APP_CONFIG_KEY = 'promissoria-coords';
+
+/**
+ * Lê coords do AppConfig do Postgres (persiste entre redeploys).
+ * Retorna null se não tem ou erro.
+ */
+async function loadCoordsConfigFromDb(
+  prisma: PrismaService,
+  logger: Logger,
+): Promise<{
+  blocoY?: number[];
+  blocoH?: number;
+  fields?: Record<string, { x: number; dy: number; w?: number }>;
+} | null> {
+  try {
+    const row = await (prisma as any).appConfig.findUnique({ where: { key: APP_CONFIG_KEY } });
+    if (!row?.valueJson) return null;
+    const json = JSON.parse(row.valueJson);
+    const out: any = {};
+    if (json.fields_mm && typeof json.fields_mm === 'object') {
+      out.fields = {};
+      for (const [name, f] of Object.entries<any>(json.fields_mm)) {
+        out.fields[name] = {
+          x: mm(Number(f.x) || 0),
+          dy: mm(Number(f.y) || 0),
+          ...(f.w !== undefined ? { w: mm(Number(f.w)) } : {}),
+        };
+      }
+    }
+    logger.log(`[crediario-print] coords carregadas do BANCO (AppConfig.${APP_CONFIG_KEY}) — ${Object.keys(out.fields || {}).length} campos`);
+    return out;
+  } catch (e: any) {
+    logger.warn(`[crediario-print] falha ler AppConfig: ${e?.message}`);
+    return null;
+  }
+}
+
 function loadCoordsConfig(logger: Logger): {
   blocoY?: number[];
   blocoH?: number;
   fields?: Record<string, { x: number; dy: number; w?: number }>;
 } | null {
-  // OVERRIDE EM /tmp REATIVADO (jun/2026): tela /retaguarda/promissoria-config
-  // salva ajustes em /tmp/promissoria-coords.json — service lê /tmp PRIMEIRO,
-  // depois cai pro JSON deployado. Quando estiver bom, copia /tmp → assets +
-  // commit pra ficar definitivo (override some em redeploy do Railway).
+  // PRIORIDADE: /tmp (calibração ao vivo) → asset deployado.
+  // O BANCO (AppConfig) é checado em loadCoordsConfigFromDb separadamente
+  // antes desta função, pelo reloadCoords. Garantia: ajustes feitos via
+  // tela /retaguarda/promissoria-config NUNCA somem (ficam no Postgres).
   let cfgPath: string | null = null;
   let source = '';
   try {
@@ -137,29 +175,36 @@ export class CrediarioPrintService {
       blocoH: this.PROM_DEFAULT.blocoH,
       fields: { ...this.PROM_DEFAULT.fields },
     };
-    this.reloadCoords();
+    // fire-and-forget no constructor — defaults já tão inicializados acima.
+    // Primeira request de PDF já chama reloadCoords com await.
+    this.reloadCoords().catch((e) => this.logger.warn(`[reload] init falhou: ${e?.message}`));
   }
 
   /**
-   * Recarrega o JSON de coordenadas e atualiza this.PROM. Chamado pelo
-   * constructor e a cada geração de PDF. Custo: ~1ms (arquivo pequeno).
-   * Benefício: edita JSON, salva, gera PDF — vê o efeito imediato.
+   * Recarrega coordenadas e atualiza this.PROM. Chamado pelo constructor e
+   * a cada geração de PDF. Prioridade:
+   *   1. AppConfig do Postgres (persiste em redeploy — fonte definitiva)
+   *   2. /tmp/promissoria-coords.json (calibração ao vivo, some em redeploy)
+   *   3. asset deployado backend/assets/config/promissoria-coords.json
+   *   4. defaults hardcoded
    */
-  private reloadCoords(): void {
-    const cfg = loadCoordsConfig(this.logger);
+  async reloadCoords(): Promise<void> {
+    // 1. Tenta banco PRIMEIRO (fonte definitiva)
+    const fromDb = await loadCoordsConfigFromDb(this.prisma, this.logger);
+    // 2. Senão, lê /tmp ou asset
+    const cfg = fromDb || loadCoordsConfig(this.logger);
     this.PROM = {
       blocoY: cfg?.blocoY?.length === 3 ? cfg.blocoY : this.PROM_DEFAULT.blocoY,
       blocoH: cfg?.blocoH ?? this.PROM_DEFAULT.blocoH,
       fields: { ...this.PROM_DEFAULT.fields, ...(cfg?.fields ?? {}) },
     };
-    // Log curto pra ele confirmar nos logs do Railway/console qual valor foi usado
     const PT_TO_MM = 25.4 / 72;
     const e = this.PROM.fields.emitente;
     const c = this.PROM.fields.cpfEmitente;
     this.logger.log(
-      `[coords] emitente=(${(e.x * PT_TO_MM).toFixed(1)}mm, ${(e.dy * PT_TO_MM).toFixed(1)}mm)  ` +
-      `cpfEmitente=(${(c.x * PT_TO_MM).toFixed(1)}mm, ${(c.dy * PT_TO_MM).toFixed(1)}mm)  ` +
-      `(json=${cfg ? 'CARREGADO' : 'AUSENTE → defaults'})`,
+      `[coords] source=${fromDb ? 'BANCO' : cfg ? 'arquivo' : 'defaults'} ` +
+      `emitente=(${(e.x * PT_TO_MM).toFixed(1)}mm, ${(e.dy * PT_TO_MM).toFixed(1)}mm) ` +
+      `cpfEmitente=(${(c.x * PT_TO_MM).toFixed(1)}mm, ${(c.dy * PT_TO_MM).toFixed(1)}mm)`,
     );
   }
 
@@ -433,8 +478,8 @@ export class CrediarioPrintService {
    *
    * Endpoint: GET /pdv/diag-coords
    */
-  diagCoords(): any {
-    this.reloadCoords(); // garantir que retorna o estado FRESH do JSON
+  async diagCoords(): Promise<any> {
+    await this.reloadCoords(); // garantir que retorna o estado FRESH (banco/arquivo)
     const PT_TO_MM = 25.4 / 72;
     const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
     const verdanaPath = resolveVerdanaPath();
@@ -740,7 +785,7 @@ export class CrediarioPrintService {
    * Cada promissória corresponde a UMA parcela. Ordem: 1ª, 2ª, 3ª, ...
    */
   async generatePromissorias(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCoords(); // hot-reload do JSON a cada request
+    await this.reloadCoords(); // hot-reload coords (banco/arquivo) a cada request
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
       try {
@@ -949,7 +994,7 @@ export class CrediarioPrintService {
    * carrega na impressora (2 folhas brancas + 1 azul).
    */
   async generateImpressaoCompleta(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCoords(); // hot-reload do JSON a cada request
+    await this.reloadCoords(); // hot-reload coords (banco/arquivo) a cada request
     await this.reloadCarneCoords(); // hot-reload coords carne (Postgres)
     // pdfkit não tem merge nativo; geramos um único Document concatenando páginas
     const data = await this.loadSaleForPrint(saleId);
@@ -1086,7 +1131,7 @@ export class CrediarioPrintService {
    * Use: GET /pdv/promissorias-teste-debug-pdf
    */
   async generatePromissoriasTesteDebug(): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCoords(); // hot-reload do JSON a cada request
+    await this.reloadCoords(); // hot-reload coords (banco/arquivo) a cada request
     const dataMock = {
       sale: { customerCpf: '28665529896' },
       cliente: {
@@ -1167,7 +1212,7 @@ export class CrediarioPrintService {
    * EXATAMENTE em cima do impresso original.
    */
   async generatePromissoriasTeste(): Promise<{ buffer: Buffer; filename: string }> {
-    this.reloadCoords(); // hot-reload do JSON a cada request
+    await this.reloadCoords(); // hot-reload coords (banco/arquivo) a cada request
     // Mock data idêntico ao print de calibração que o usuário enviou.
     const dataMock = {
       sale: { customerCpf: '28665529896' },
@@ -1193,51 +1238,4 @@ export class CrediarioPrintService {
     const buffer = await new Promise<Buffer>((resolve, reject) => {
       try {
         const doc = new PDFDocument({ size: 'A4', margin: 0 });
-        const chunks: Buffer[] = [];
-        doc.on('data', (c: Buffer) => chunks.push(c));
-        doc.on('end', () => resolve(Buffer.concat(chunks)));
-        doc.on('error', reject);
-
-        this.registerFonts(doc);
-
-        // ===== CARIMBO DE DEBUG no canto superior =====
-        // Mostra timestamp + valores das coords ATIVAS — assim vê NA HORA se
-        // o PDF foi atualizado com as coords novas ou se está vindo cache.
-        const PT_TO_MM = 25.4 / 72;
-        const ts = new Date().toLocaleString('pt-BR');
-        const e = this.PROM.fields.emitente;
-        const cpfE = this.PROM.fields.cpfEmitente;
-        const end = this.PROM.fields.endereco;
-        const carimbo = `[DEBUG ${ts}] blocos=${this.PROM.blocoY.map(y => (y * PT_TO_MM).toFixed(1)).join('/')}mm | ` +
-          `emitente=(${(e.x * PT_TO_MM).toFixed(1)},${(e.dy * PT_TO_MM).toFixed(1)}) ` +
-          `cpf=(${(cpfE.x * PT_TO_MM).toFixed(1)},${(cpfE.dy * PT_TO_MM).toFixed(1)}) ` +
-          `end=(${(end.x * PT_TO_MM).toFixed(1)},${(end.dy * PT_TO_MM).toFixed(1)})`;
-        doc.font('Helvetica').fontSize(7).fillColor('#FF0000')
-          .text(carimbo, 5, 2, { lineBreak: false, width: 585 });
-        doc.fillColor('#000000');
-
-        doc.font('Verdana').fontSize(10);
-
-        // 3 parcelas em 1 folha (3 blocos)
-        for (let i = 0; i < parcelasMock.length; i++) {
-          const blocoTopY = this.PROM.blocoY[i];
-          this.drawPromissoriaBloco(doc, blocoTopY, dataMock, parcelasMock[i]);
-        }
-
-        doc.end();
-      } catch (e) { reject(e); }
-    });
-    return { buffer, filename: 'promissorias-TESTE.pdf' };
-  }
-
-  /** Helper pra desenhar texto em coordenada absoluta (x, y_relativo + bloco_top) */
-  private drawAt(
-    doc: any,
-    field: { x: number; dy: number },
-    blocoTopY: number,
-    text: string,
-  ) {
-    if (!text) return;
-    doc.text(String(text), field.x, blocoTopY + field.dy, { lineBreak: false });
-  }
-}
+   

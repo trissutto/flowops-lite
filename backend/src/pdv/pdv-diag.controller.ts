@@ -4,11 +4,13 @@ import { CrediarioPrintService } from './crediario-print.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { ErpService } from '../erp/erp.service';
+import { PrismaService } from '../prisma/prisma.service';
 import * as fs from 'fs';
 
 const MULTA_PERCENT_DEFAULT = 2.0; // 2% sobre o valor da parcela (Lurd's padrão)
 
 const OVERRIDE_PATH = '/tmp/promissoria-coords.json';
+const APP_CONFIG_KEY = 'promissoria-coords';
 
 /**
  * /pdv-diag — endpoints de DIAGNÓSTICO/CALIBRAÇÃO da promissória.

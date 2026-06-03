@@ -412,9 +412,9 @@ export class CustomersCrmService {
     ]);
 
     // Filtro post-query pra hasCashbackBalance (Prisma não filtra 1:1 facilmente)
-    let data = rows;
+    let data: any[] = rows as any[];
     if (query.hasCashbackBalance) {
-      data = data.filter(c => (c.cashbackBalance?.balanceCents ?? 0) > 0);
+      data = data.filter((c: any) => (c.cashbackBalance?.balanceCents ?? 0) > 0);
     }
 
     const scopedBy = actor && !isMatrix(actor) ? `store:${actor.storeId}` : 'global';
