@@ -632,7 +632,7 @@ export class CustomersCrmService {
       '01': [[11740, 11749]],                    // Itanhaém
       '02': [[11000, 11099], [11500, 11599]],    // Santos
       '03': [[13280, 13289]],                    // Vinhedo
-      '04': [[13330, 13349]],                    // Indaiatuba
+      '04': [[13300, 13349]],                    // Indaiatuba + Itu (Itu fechada → absorve)
       '05': [[13400, 13429]],                    // Piracicaba
       '06': [[18000, 18109]],                    // Sorocaba
       '07': [[13000, 13139]],                    // Campinas
@@ -641,9 +641,9 @@ export class CustomersCrmService {
       '11': [[13480, 13489]],                    // Limeira
       '14': [[11700, 11729]],                    // Praia Grande
       '15': [[04500, 04599]],                    // Moema (SP capital)
-      '17': [[08660, 08679]],                    // Suzano
-      '18': [[08700, 08799]],                    // Mogi das Cruzes
-      '19': [[13300, 13319]],                    // Itu
+      '17': [[08600, 08799]],                    // Suzano + Mogi (Mogi fechada → absorve)
+      // ❌ Itu (19) e Mogi das Cruzes (18): FECHADAS — leads absorvidos
+      //    por Indaiatuba (04) e Suzano (17) respectivamente.
     };
 
     let atualizados = 0;
