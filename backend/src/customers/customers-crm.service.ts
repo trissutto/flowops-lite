@@ -421,7 +421,7 @@ export class CustomersCrmService {
 
     return {
       scopedBy,
-      data: data.map(c => ({
+      data: (data as any[]).map((c: any) => ({
         id: c.id,
         name: c.name,
         nameSocial: c.nameSocial,
@@ -440,10 +440,10 @@ export class CustomersCrmService {
         lastOrderAt: c.lastOrderAt,
         originStore: c.originStore,
         originSource: c.originSource,
-        targetStore: (c as any).targetStore || null,
-        isMixed: !!(c as any).targetStoreId && c.originSource === 'woo',
-        tagsCount: (c as any)._count?.tags ?? 0,
-        addressesCount: (c as any)._count?.addresses ?? 0,
+        targetStore: c.targetStore || null,
+        isMixed: !!c.targetStoreId && c.originSource === 'woo',
+        tagsCount: c._count?.tags ?? 0,
+        addressesCount: c._count?.addresses ?? 0,
         active: c.active,
       })),
       total,
