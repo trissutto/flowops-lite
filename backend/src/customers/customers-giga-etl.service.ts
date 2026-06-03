@@ -720,15 +720,13 @@ export class CustomersGigaEtlService {
     }
 
     // ─── FASE 2: HISTÓRICO (LTV / orderCount / lastOrderAt) ──────────────
-    // DESABILITADO por decisão de negócio (Lurd's): o histórico antigo do Giga
-    // não é confiável. LTV dos clientes Giga começa do zero e vai sendo
-    // construído conforme as vendas no FlowOps PDV (finalize() do PdvSale
-    // atualiza Customer). Clientes WC mantêm o LTV calculado pelo ETL Woo.
-    // Pra retomar: descomentar as 2 linhas abaixo.
-    // if (!this.state.abortRequested) {
-    //   this.state.fase = 'historico';
-    //   await this._syncHistorico();
-    // }
+    // REATIVADA jun/2026: usa customer_giga_links (chave loja+codigo) pra
+    // somar caixa do Giga com precisão. Filtra MARCADO != SIM. Cliente
+    // que tem múltiplos cadastros (1 por loja) → soma compras de TODOS.
+    if (!this.state.abortRequested) {
+      this.state.fase = 'historico';
+      await this._syncHistorico();
+    }
 
     // ─── FASE 3: TIER (recalcula vipTier) ────────────────────────────────
     // Continua valendo — pega o LTV atual (0 pros Giga novos, real pros WC)
@@ -1234,11 +1232,15 @@ export class CustomersGigaEtlService {
   private async _syncHistorico(): Promise<void> {
     const pool = (this.erp as any).pool;
 
-    // FASE 2 só calcula histórico (LTV, orderCount, lastOrderAt).
-    // originStoreId já veio da Fase 1 (campo LOJA da tabela clientes do Giga).
+    // FASE 2 — usa customer_giga_links (chave composta loja+codigo) pra
+    // não bagunçar entre clientes de lojas diferentes com mesmo codigo.
+    // Pra cada Customer, soma compras de TODOS os seus links Giga.
     const customers = await (this.prisma as any).customer.findMany({
-      where: { registroGiga: { not: null } },
-      select: { id: true, registroGiga: true, cpf: true },
+      where: { gigaLinks: { some: {} } },
+      select: {
+        id: true, cpf: true, originSource: true,
+        gigaLinks: { select: { gigaLoja: true, gigaCodigo: true } },
+      },
     });
 
     this.state.faseProgresso = { current: 0, total: customers.length };
@@ -1250,31 +1252,69 @@ export class CustomersGigaEtlService {
         break;
       }
       try {
-        // 1) Soma compras (LTV/orderCount/lastOrderAt)
-        const [rows]: any = await pool.query(
-          `SELECT
-              COUNT(DISTINCT NUMERO) AS totalCompras,
-              SUM(VALORTOTAL) AS valorTotal,
-              MAX(DATA) AS ultimaCompra
-            FROM caixa
-            WHERE CLIENTE = ?
-              AND VALORTOTAL > 0
-              AND UPPER(COALESCE(MARCADO, '')) != 'SIM'`,
-          [c.registroGiga],
-        );
-        const r = rows[0] || {};
-        const ltvCents = Math.round((Number(r.valorTotal) || 0) * 100);
-        const orderCount = Number(r.totalCompras) || 0;
-        const lastOrderAt = r.ultimaCompra ? new Date(r.ultimaCompra) : null;
+        // Soma compras de TODOS os links Giga desse customer
+        let totalLtvCents = 0;
+        let totalCompras = 0;
+        let lastOrderAt: Date | null = null;
+        let firstOrderAt: Date | null = null;
 
-        if (orderCount > 0) {
+        for (const link of c.gigaLinks as any[]) {
+          // Tenta query com LOJA + CLIENTE; se LOJA não existir na tabela
+          // caixa, cai pro fallback de só CLIENTE (1ª tentativa só).
+          let rows: any[] = [];
+          try {
+            const [r1]: any = await pool.query(
+              `SELECT
+                  COUNT(DISTINCT NUMERO) AS totalCompras,
+                  SUM(VALORTOTAL) AS valorTotal,
+                  MAX(DATA) AS ultimaCompra,
+                  MIN(DATA) AS primeiraCompra
+                FROM caixa
+                WHERE LOJA = ? AND CLIENTE = ?
+                  AND VALORTOTAL > 0
+                  AND UPPER(COALESCE(MARCADO, '')) != 'SIM'`,
+              [link.gigaLoja, link.gigaCodigo],
+            );
+            rows = r1;
+          } catch (errLoja: any) {
+            // LOJA não existe em caixa — usa CLIENTE só (menos preciso mas
+            // funciona em layouts antigos)
+            const [r2]: any = await pool.query(
+              `SELECT
+                  COUNT(DISTINCT NUMERO) AS totalCompras,
+                  SUM(VALORTOTAL) AS valorTotal,
+                  MAX(DATA) AS ultimaCompra,
+                  MIN(DATA) AS primeiraCompra
+                FROM caixa
+                WHERE CLIENTE = ?
+                  AND VALORTOTAL > 0
+                  AND UPPER(COALESCE(MARCADO, '')) != 'SIM'`,
+              [link.gigaCodigo],
+            );
+            rows = r2;
+          }
+          const r = rows[0] || {};
+          totalLtvCents += Math.round((Number(r.valorTotal) || 0) * 100);
+          totalCompras += Number(r.totalCompras) || 0;
+          if (r.ultimaCompra) {
+            const d = new Date(r.ultimaCompra);
+            if (!lastOrderAt || d > lastOrderAt) lastOrderAt = d;
+          }
+          if (r.primeiraCompra) {
+            const d = new Date(r.primeiraCompra);
+            if (!firstOrderAt || d < firstOrderAt) firstOrderAt = d;
+          }
+        }
+
+        if (totalCompras > 0) {
           await (this.prisma as any).customer.update({
             where: { id: c.id },
             data: {
-              ltvCents: BigInt(ltvCents),
-              orderCount,
+              ltvCents: BigInt(totalLtvCents),
+              orderCount: totalCompras,
               lastOrderAt,
-              ticketMedioCents: Math.round(ltvCents / orderCount),
+              firstOrderAt,
+              ticketMedioCents: Math.round(totalLtvCents / totalCompras),
             },
           });
         }
