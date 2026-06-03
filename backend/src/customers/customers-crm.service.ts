@@ -1071,3 +1071,8 @@ export class CustomersCrmService {
     });
   }
 }
+({
+      where: { customerId_tagId: { customerId, tagId } },
+    });
+  }
+}
