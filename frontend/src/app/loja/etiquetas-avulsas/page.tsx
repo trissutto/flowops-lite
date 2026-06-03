@@ -113,9 +113,11 @@ export default function EtiquetasAvulsasPage() {
       );
       setLabels(r.labels || []);
       setNotFound(r.notFound || []);
-      // Inicializa qty = 1 pra cada label encontrado (vendedora pode editar)
+      // Inicializa qty = 0 pra cada label — vendedora escolhe explicitamente
+      // o que quer imprimir (botões 1/2/3/5/10 aplicam em todos, OU usa +/-
+      // peça a peça). Evita imprimir etiqueta sem querer.
       const initialQty: Record<string, number> = {};
-      for (const l of (r.labels || [])) initialQty[l.codigo] = 1;
+      for (const l of (r.labels || [])) initialQty[l.codigo] = 0;
       setQty(initialQty);
     } catch (e: any) {
       setError(e?.message || 'Erro ao buscar');
@@ -134,9 +136,9 @@ export default function EtiquetasAvulsasPage() {
     setQty({});
   };
 
-  /** Expande labels segundo qty escolhido — cada label vira N cópias pra imprimir */
+  /** Expande labels segundo qty escolhido — qty=0 = não imprime, qty=N = N cópias */
   const labelsExpandidos = labels.flatMap((l) => {
-    const n = Math.max(1, Math.min(999, Number(qty[l.codigo] || 1)));
+    const n = Math.max(0, Math.min(999, Number(qty[l.codigo] || 0)));
     return Array.from({ length: n }, () => l);
   });
   const totalEtiquetas = labelsExpandidos.length;
@@ -234,7 +236,7 @@ export default function EtiquetasAvulsasPage() {
                   Quantidade a imprimir de cada peça
                 </h2>
                 <p className="text-xs text-slate-500">
-                  Default 1 por peça. Ajuste se precisar mais (ex: 5 cópias da mesma cor+tamanho).
+                  Começa zerado. Use os botões em "Aplicar em todas" ou os ± de cada peça pra escolher qty.
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -294,7 +296,7 @@ export default function EtiquetasAvulsasPage() {
                             −
                           </button>
                           <input
-                            value={qty[l.codigo] ?? 1}
+                            value={qty[l.codigo] ?? 0}
                             onChange={(e) => {
                               const v = Math.max(0, Math.min(999, Number(e.target.value.replace(/\D/g, '')) || 0));
                               setQty((prev) => ({ ...prev, [l.codigo]: v }));
