@@ -44,6 +44,8 @@ interface CustomerListItem {
   lastOrderAt: string | null;
   originStore: { id: string; code: string; name: string } | null;
   originSource: string | null;
+  targetStore: { id: string; code: string; name: string } | null;
+  isMixed: boolean;
   tagsCount: number;
   addressesCount: number;
   active: boolean;
@@ -566,10 +568,22 @@ export default function ClientesCrmPage() {
                 <tr
                   key={c.id}
                   onClick={() => setSelectedId(c.id)}
-                  className={`border-b hover:bg-purple-50 cursor-pointer transition-colors ${tierPremium ? 'bg-amber-50/30' : ''}`}
+                  className={`border-b hover:bg-purple-50 cursor-pointer transition-colors ${
+                    c.isMixed ? 'bg-sky-50/60' : tierPremium ? 'bg-amber-50/30' : ''
+                  }`}
                 >
                   <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
-                    {c.nameSocial || c.name || <span className="italic text-gray-400">sem nome</span>}
+                    <div className="flex items-center gap-2">
+                      <span>{c.nameSocial || c.name || <span className="italic text-gray-400">sem nome</span>}</span>
+                      {c.isMixed && (
+                        <span
+                          title={`Cliente do site mora perto desta loja${c.targetStore ? ` (${c.targetStore.name})` : ''}`}
+                          className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 border border-sky-300"
+                        >
+                          🌐 SITE
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 font-mono text-xs text-gray-600 whitespace-nowrap">
                     {c.cpf ?? <span className="text-gray-400">—</span>}

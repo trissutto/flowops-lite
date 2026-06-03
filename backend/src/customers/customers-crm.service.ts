@@ -352,16 +352,23 @@ export class CustomersCrmService {
 
     const where: any = {};
 
-    // SCOPE POR LOJA — vendedora/loja só vê os clientes da loja dela.
+    // SCOPE POR LOJA — vendedora/loja vê:
+    //   1. Clientes nascidos na loja dela (originStoreId)
+    //   2. Clientes WC que moram perto dela (targetStoreId) — badge "🌐 SITE"
+    //
     // Matriz (admin/operator) pode filtrar por storeId via query, ou ver tudo.
+    // Usa AND array pra combinar storeFilter + searchFilter sem conflito de OR
+    const andClauses: any[] = [];
+    const buildStoreFilter = (storeId: string) => ({
+      OR: [{ originStoreId: storeId }, { targetStoreId: storeId } as any],
+    });
     if (actor && !isMatrix(actor)) {
       if (!actor.storeId) {
-        // Usuário sem loja vinculada → não vê nada (defensivo)
         return { data: [], total: 0, page, limit, scopedBy: 'store_no_store' };
       }
-      where.originStoreId = actor.storeId;
+      andClauses.push(buildStoreFilter(actor.storeId));
     } else if (query.storeId) {
-      where.originStoreId = query.storeId;
+      andClauses.push(buildStoreFilter(query.storeId));
     }
 
     if (query.tier) where.vipTier = query.tier;
@@ -370,9 +377,6 @@ export class CustomersCrmService {
     if (query.search?.trim()) {
       const q = query.search.trim();
       const digits = q.replace(/\D/g, '');
-      // Monta OR só com cláusulas válidas. SE digits vazio (busca por texto
-      // tipo "THIAGO"), NÃO inclui filtros de cpf/whatsapp/phone porque
-      // { contains: "" } casa qualquer valor não-null e explode o filtro.
       const or: any[] = [
         { name: { contains: q, mode: 'insensitive' } },
         { email: { contains: q, mode: 'insensitive' } },
@@ -384,8 +388,12 @@ export class CustomersCrmService {
           { phone: { contains: digits } },
         );
       }
-      where.OR = or;
+      // Empilha no AND junto do storeFilter (não usa where.OR direto pra
+      // não conflitar com o OR do storeFilter)
+      andClauses.push({ OR: or });
     }
+
+    if (andClauses.length > 0) where.AND = andClauses;
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.customer.count({ where }),
@@ -397,8 +405,9 @@ export class CustomersCrmService {
         include: {
           cashbackBalance: true,
           originStore: { select: { id: true, code: true, name: true } },
+          targetStore: { select: { id: true, code: true, name: true } } as any,
           _count: { select: { tags: true, addresses: true } },
-        },
+        } as any,
       }),
     ]);
 
@@ -431,6 +440,8 @@ export class CustomersCrmService {
         lastOrderAt: c.lastOrderAt,
         originStore: c.originStore,
         originSource: c.originSource,
+        targetStore: (c as any).targetStore || null,
+        isMixed: !!(c as any).targetStoreId && c.originSource === 'woo',
         tagsCount: c._count.tags,
         addressesCount: c._count.addresses,
         active: c.active,
@@ -502,6 +513,155 @@ export class CustomersCrmService {
       currentConsents,
       tags: c.tags.map(ct => ct.tag),
     };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // CLIENTE MISTO — atribui targetStoreId baseado em range CEP da Store
+  // ─────────────────────────────────────────────────────────────────────────
+  /**
+   * Atribui targetStoreId pra todos os Customers WC (originSource='woo')
+   * que têm CEP na CustomerAddress(type=entrega).
+   *
+   * Pra cada Customer:
+   *   1. Pega o cep do endereço de entrega
+   *   2. Normaliza pros 5 primeiros dígitos (inteiro)
+   *   3. Procura Store cujos cepRanges cobrem esse CEP
+   *   4. Atribui targetStoreId (loja física candidata)
+   *
+   * Cliente que JÁ é da loja física (originSource='giga') não é tocado.
+   * Cliente WC sem CEP fica com targetStoreId=null.
+   */
+  async assignTargetStoresByCep(): Promise<{
+    processados: number;
+    atribuidos: number;
+    semCep: number;
+    semRangeMatch: number;
+    duracaoMs: number;
+  }> {
+    const t0 = Date.now();
+
+    // 1) Carrega TODAS as stores com cepRanges definido
+    const stores = await this.prisma.store.findMany({
+      where: { cepRanges: { not: null }, active: true } as any,
+      select: { id: true, code: true, name: true, cepRanges: true } as any,
+    });
+    const storeRanges: Array<{ id: string; code: string; ranges: Array<[number, number]> }> = [];
+    for (const s of stores as any[]) {
+      try {
+        const parsed = JSON.parse(s.cepRanges);
+        if (Array.isArray(parsed)) {
+          const ranges = (parsed as any[])
+            .filter((r) => Array.isArray(r) && r.length === 2)
+            .map((r) => [Number(r[0]), Number(r[1])] as [number, number]);
+          if (ranges.length > 0) storeRanges.push({ id: s.id, code: s.code, ranges });
+        }
+      } catch { /* ignora cepRanges inválido */ }
+    }
+    this.logger.log(`[target-stores] ${storeRanges.length} lojas com ranges CEP cadastrados`);
+
+    // 2) Carrega Customers WC com pelo menos 1 CustomerAddress
+    const customers = await this.prisma.customer.findMany({
+      where: { originSource: 'woo' },
+      select: {
+        id: true,
+        targetStoreId: true,
+        addresses: { select: { cep: true, type: true } } as any,
+      } as any,
+    });
+
+    let atribuidos = 0;
+    let semCep = 0;
+    let semRangeMatch = 0;
+
+    for (const c of customers as any[]) {
+      // Prefere endereço de entrega; fallback pra qualquer addr com cep
+      let cep: string | null = null;
+      const entrega = c.addresses?.find((a: any) => a.type === 'entrega' && a.cep);
+      if (entrega) cep = entrega.cep;
+      else cep = c.addresses?.find((a: any) => a.cep)?.cep || null;
+
+      if (!cep) { semCep++; continue; }
+      const cepNum = parseInt(String(cep).replace(/\D/g, '').slice(0, 5), 10);
+      if (!Number.isFinite(cepNum)) { semCep++; continue; }
+
+      // Acha loja mais ESPECÍFICA (menor range que cobre o CEP)
+      let matched: { id: string; rangeSize: number } | null = null;
+      for (const s of storeRanges) {
+        for (const [start, end] of s.ranges) {
+          if (cepNum >= start && cepNum <= end) {
+            const size = end - start;
+            if (!matched || size < matched.rangeSize) {
+              matched = { id: s.id, rangeSize: size };
+            }
+          }
+        }
+      }
+
+      if (!matched) { semRangeMatch++; continue; }
+      if (c.targetStoreId !== matched.id) {
+        await this.prisma.customer.update({
+          where: { id: c.id },
+          data: { targetStoreId: matched.id },
+        });
+      }
+      atribuidos++;
+    }
+
+    this.logger.log(
+      `[target-stores] processados=${customers.length} atribuidos=${atribuidos} ` +
+      `semCep=${semCep} semRangeMatch=${semRangeMatch} ${Date.now() - t0}ms`,
+    );
+
+    return {
+      processados: customers.length,
+      atribuidos,
+      semCep,
+      semRangeMatch,
+      duracaoMs: Date.now() - t0,
+    };
+  }
+
+  /**
+   * Cadastra ranges de CEP padrão pras 15 lojas conhecidas (faixa Correios
+   * aproximada). Usuário pode ajustar via tela /lojas/[id] depois.
+   * NÃO sobrescreve ranges já cadastrados.
+   */
+  async seedCepRangesPadrao(): Promise<{ atualizados: number; jaTinha: number; semStore: number }> {
+    // Mapa code → ranges aproximados (CORREIOS, faixas principais)
+    const RANGES_PADRAO: Record<string, Array<[number, number]>> = {
+      '01': [[11740, 11749]],                    // Itanhaém
+      '02': [[11000, 11099], [11500, 11599]],    // Santos
+      '03': [[13280, 13289]],                    // Vinhedo
+      '04': [[13330, 13349]],                    // Indaiatuba
+      '05': [[13400, 13429]],                    // Piracicaba
+      '06': [[18000, 18109]],                    // Sorocaba
+      '07': [[13000, 13139]],                    // Campinas
+      '08': [[12200, 12249]],                    // São José dos Campos
+      '10': [[13201, 13219]],                    // Jundiaí
+      '11': [[13480, 13489]],                    // Limeira
+      '14': [[11700, 11729]],                    // Praia Grande
+      '15': [[04500, 04599]],                    // Moema (SP capital)
+      '17': [[08660, 08679]],                    // Suzano
+      '18': [[08700, 08799]],                    // Mogi das Cruzes
+      '19': [[13300, 13319]],                    // Itu
+    };
+
+    let atualizados = 0;
+    let jaTinha = 0;
+    let semStore = 0;
+
+    for (const [code, ranges] of Object.entries(RANGES_PADRAO)) {
+      const store = await this.prisma.store.findUnique({ where: { code } });
+      if (!store) { semStore++; continue; }
+      if ((store as any).cepRanges) { jaTinha++; continue; } // não sobrescreve
+      await this.prisma.store.update({
+        where: { id: store.id },
+        data: { cepRanges: JSON.stringify(ranges) } as any,
+      });
+      atualizados++;
+    }
+
+    return { atualizados, jaTinha, semStore };
   }
 
   // ─────────────────────────────────────────────────────────────────────────

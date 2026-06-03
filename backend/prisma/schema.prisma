@@ -123,7 +123,17 @@ model Store {
 
   // ── CRM / Cashback (expansão 2026-05) ──
   customersOrigin       Customer[]            @relation("CustomerOriginStore")
+  // CRM cliente misto (jun/2026): clientes WC que moram perto desta loja.
+  // Atribuído por range CEP. Cliente continua originStoreId=SITE mas
+  // aparece na lista física desta loja com badge "🌐 SITE".
+  customersTarget       Customer[]            @relation("CustomerTargetStore")
   cashbackTransactions  CashbackTransaction[] @relation("StoreCashbackTransactions")
+
+  // CEP ranges atendidos pela loja (raio aproximado).
+  // Formato: JSON array de [start, end] (inteiros 5 dígitos sem hífen).
+  // Ex: [[11000, 11199], [11500, 11599]]  → Santos
+  // Cliente WC com CEP nesses ranges é candidato a "misto" pra esta loja.
+  cepRanges     String?  @map("cep_ranges")
 
   @@map("stores")
 }
@@ -1681,6 +1691,11 @@ model Customer {
   originStoreId   String?  @map("origin_store_id")
   originStore     Store?   @relation("CustomerOriginStore", fields: [originStoreId], references: [id])
   originSeller    String?  @map("origin_seller")
+  // -- Loja física "candidata" pra cliente misto (WC perto de loja) --
+  // Atribuído via range de CEP. Cliente continua originStoreId=SITE (13)
+  // mas vendedora física vê ele com badge "🌐 SITE" na lista da sua loja.
+  targetStoreId   String?  @map("target_store_id")
+  targetStore     Store?   @relation("CustomerTargetStore", fields: [targetStoreId], references: [id])
   referredById    String?  @map("referred_by_id")
   referredBy      Customer? @relation("CustomerReferral", fields: [referredById], references: [id])
   referrals       Customer[] @relation("CustomerReferral")
@@ -1763,6 +1778,7 @@ model Customer {
   @@index([vipTier])
   @@index([rfvSegment])
   @@index([originStoreId])
+  @@index([targetStoreId])
   @@index([lastOrderAt])
   @@map("customers")
 }

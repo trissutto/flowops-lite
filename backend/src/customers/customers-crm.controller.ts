@@ -131,6 +131,29 @@ export class CustomersCrmController {
   }
 
   /**
+   * POST /customers-crm/seed-cep-ranges
+   * Cadastra ranges de CEP padrão pras 15 lojas conhecidas (Correios).
+   * NÃO sobrescreve ranges já cadastrados — só preenche vazios.
+   */
+  @Post('seed-cep-ranges')
+  @AdminOnly()
+  async seedCepRanges() {
+    return this.svc.seedCepRangesPadrao();
+  }
+
+  /**
+   * POST /customers-crm/assign-target-stores
+   * Pra cada Customer WC com CEP, acha a Store cujo cepRanges cobre o CEP
+   * e atribui como targetStoreId (loja física "candidata"). Vendedora
+   * passa a ver esses clientes na lista da sua loja com badge "🌐 SITE".
+   */
+  @Post('assign-target-stores')
+  @AdminOnly()
+  async assignTargetStores() {
+    return this.svc.assignTargetStoresByCep();
+  }
+
+  /**
    * POST /customers-crm/etl/giga/cancelar
    * Solicita cancelamento do sync Giga em andamento. Os loops checam essa
    * flag em cada iteração e param graciosamente. Os dados já gravados ficam.
