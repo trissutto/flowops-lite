@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { CrediarioPrintService } from './crediario-print.service';
+import { CoordsDbService } from './coords-db.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
 import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import { ErpService } from '../erp/erp.service';
@@ -23,6 +24,7 @@ const APP_CONFIG_KEY = 'promissoria-coords';
 export class PdvDiagController {
   constructor(
     private readonly crediarioPrint: CrediarioPrintService,
+    private readonly coordsDb: CoordsDbService,
     private readonly crediarios: CrediariosService,
     private readonly crediarioBaixa: CrediarioBaixaService,
     private readonly erp: ErpService,
@@ -292,9 +294,9 @@ export class PdvDiagController {
       if (!body || typeof body !== 'object') {
         return res.status(400).json({ message: 'Body inválido — envie JSON' });
       }
-      fs.writeFileSync(OVERRIDE_PATH, JSON.stringify(body, null, 2), 'utf8');
+      await this.coordsDb.saveCoords(body);
       const result = this.crediarioPrint.diagCoords();
-      res.status(200).json({ ok: true, salvo_em: OVERRIDE_PATH, coords_ativas: result });
+      res.status(200).json({ ok: true, salvo_em: 'banco + /tmp', persistido: true, coords_ativas: result });
     } catch (e: any) {
       res.status(500).json({ statusCode: 500, message: 'Erro ao salvar', detail: e?.message });
     }
@@ -304,7 +306,7 @@ export class PdvDiagController {
   @Post('coords/reset')
   async resetCoords(@Res() res: Response) {
     try {
-      if (fs.existsSync(OVERRIDE_PATH)) fs.unlinkSync(OVERRIDE_PATH);
+      await this.coordsDb.resetCoords();
       const result = this.crediarioPrint.diagCoords();
       res.status(200).json({ ok: true, coords_ativas: result });
     } catch (e: any) {
