@@ -591,15 +591,19 @@ export default function MinhaLojaPage() {
     return activeRows;
   }, [activeRows, filterTab]);
 
-  // Imprime todos os pedidos visíveis (batch). Usa delay de 600ms entre janelas
-  // pra evitar pop-up blocker e dar tempo do navegador renderizar.
+  // Imprime todos os pedidos visíveis (batch). Abre UMA única janela com TODOS
+  // os cupons concatenados — assim o popup blocker bloqueia 0 ou 1 (não N).
+  // Resolve o bug "só imprime o primeiro" (Chrome bloqueia janelas em loop).
   const printAllVisible = async () => {
     const targets = visibleRows.filter((r) => r.status === 'new' || r.status === 'separating');
     if (targets.length === 0) return;
     if (targets.length > 1 && !confirm(`Imprimir ${targets.length} pedidos de uma vez?`)) return;
-    for (let i = 0; i < targets.length; i++) {
-      openPrintWindow(targets[i].id);
-      if (i < targets.length - 1) await new Promise((res) => setTimeout(res, 600));
+    const ids = targets.map((t) => t.id).join(',');
+    const url = `/minha-loja/imprimir-todos?ids=${encodeURIComponent(ids)}`;
+    const w = window.open(url, 'imprimir-todos', 'width=420,height=720,noopener=no');
+    if (!w) {
+      // Se popup bloqueado, abre na MESMA aba (compromisso: usuário volta com back)
+      window.location.href = url;
     }
   };
 
