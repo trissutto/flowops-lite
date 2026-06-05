@@ -225,28 +225,28 @@ export class CrediarioPrintService {
   //   Bloco 2: 100.5mm → 284.92pt
   //   Bloco 3: 193.7mm → 549.14pt
   private readonly PROM_DEFAULT = {
-    // VALORES OFICIAIS DO THIAGO em PT (mm * 2.835). NAO MEXER.
-    blocoY: [22.00, 291.75, 557.98],
+    // VALORES VALIDADOS PELO THIAGO em 04/jun/2026 (asset 52b0943). NAO MEXER.
+    blocoY: [22.00, 280.01, 539.97],
     blocoH: 262.92,
     fields: {
-      numero:           { x: 172.68, dy: 29.00 },
-      parcela:          { x: 224.88, dy: 29.00 },
-      valor:            { x: 480.05, dy: 29.00 },
-      vencDia:          { x: 350.72, dy: 48.68 },
-      vencMes:          { x: 408.55, dy: 48.68 },
-      vencAno:          { x: 533.57, dy: 48.68 },
-      vencExtenso:      { x: 144.16, dy: 66.68, w: 320.04 },
-      beneficiarioA:    { x: 144.02, dy: 100.05 },
-      cpfDevedor:       { x: 484.53, dy: 100.05 },
-      quantiaExtenso:   { x: 203.13, dy: 127.58, w: 240.04 },
-      pagavelEm:        { x: 181.47, dy: 161.23 },
-      emissaoDia:       { x: 351.88, dy: 170.01 },
-      emissaoMes:       { x: 419.04, dy: 170.01 },
-      emissaoAno:       { x: 513.73, dy: 170.01 },
-      emitente:         { x: 120.20, dy: 181.05 },
-      cpfEmitente:      { x: 173.87, dy: 198.21 },
-      endereco:         { x: 160.04, dy: 218.21, w: 280.04 },
-      cep:              { x: 141.32, dy: 250.02 },
+      numero:           { x: 166.96, dy: 28.91 },
+      parcela:          { x: 221.95, dy: 28.91 },
+      valor:            { x: 479.91, dy: 28.91 },
+      vencDia:          { x: 353.48, dy: 48.76 },
+      vencMes:          { x: 408.47, dy: 48.76 },
+      vencAno:          { x: 530.65, dy: 48.76 },
+      vencExtenso:      { x: 141.17, dy: 65.76, w: 320.03 },
+      beneficiarioA:    { x: 144.00, dy: 99.78 },
+      cpfDevedor:       { x: 480.47, dy: 99.78 },
+      quantiaExtenso:   { x: 206.93, dy: 127.56, w: 240.09 },
+      pagavelEm:        { x: 189.92, dy: 161.58 },
+      emissaoDia:       { x: 348.95, dy: 167.24 },
+      emissaoMes:       { x: 418.96, dy: 167.24 },
+      emissaoAno:       { x: 517.32, dy: 167.24 },
+      emitente:         { x: 123.02, dy: 180.00 },
+      cpfEmitente:      { x: 159.87, dy: 197.29 },
+      endereco:         { x: 152.79, dy: 223.94, w: 342.43 },
+      cep:              { x: 148.54, dy: 236.13 },
     } as Record<string, { x: number; dy: number; w?: number }>,
   };
 

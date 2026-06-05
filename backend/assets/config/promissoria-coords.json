@@ -1,28 +1,48 @@
 {
   "_help": [
-    "COORDENADAS DEFINITIVAS DO THIAGO — jun/2026.",
-    "Calibradas e validadas. NAO MEXER.",
-    "Folha A4 = 210mm x 297mm. 3 promissórias por folha."
+    "ARQUIVO DE COORDENADAS DA PROMISSÓRIA — TUDO EM MILÍMETROS (mm).",
+    "",
+    "Como funciona:",
+    "  1. O sistema lê este arquivo SEM precisar redeploy (só restart do backend).",
+    "  2. Cada campo tem x (horizontal, da borda esquerda) e y (vertical, do TOPO do bloco).",
+    "  3. Conversão automática mm → pt (1mm = 2.835pt). Você só pensa em mm.",
+    "  4. blocosY são as distâncias do TOPO da folha A4 onde cada um dos 3 blocos começa.",
+    "",
+    "Como calibrar:",
+    "  1. Mede com régua na pré-impressa: pega o canto superior-esquerdo do bloco como (0,0).",
+    "  2. Mede até o INÍCIO do texto (não o centro nem o fim) em X (esq→dir) e Y (cima→baixo).",
+    "  3. Salva o JSON, restart o backend, gera /pdv/promissorias-teste-pdf, sobrepõe.",
+    "  4. Se um campo não existir no objeto, usa o default hardcoded do código.",
+    "",
+    "Folha A4 = 210mm x 297mm. Bloco padrão = 91mm de altura (3 blocos por folha)."
   ],
-  "blocosY_mm": [7.76, 102.91, 196.82],
+
+  "blocosY_mm": [7.76, 98.78, 190.49],
+
   "fields_mm": {
-    "numero":         { "x": 60.91,  "y": 10.23 },
-    "parcela":        { "x": 79.32,  "y": 10.23 },
-    "valor":          { "x": 169.33, "y": 10.23 },
-    "vencDia":        { "x": 123.71, "y": 17.17 },
-    "vencMes":        { "x": 144.11, "y": 17.17 },
-    "vencAno":        { "x": 188.21, "y": 17.17 },
-    "vencExtenso":    { "x": 50.85,  "y": 23.52, "w": 112.89 },
-    "beneficiarioA":  { "x": 50.8,   "y": 35.29 },
-    "cpfDevedor":     { "x": 170.91, "y": 35.29 },
-    "quantiaExtenso": { "x": 71.65,  "y": 45.00, "w": 84.67 },
-    "pagavelEm":      { "x": 64.01,  "y": 56.87 },
-    "emissaoDia":     { "x": 124.12, "y": 59.97 },
-    "emissaoMes":     { "x": 147.81, "y": 59.97 },
-    "emissaoAno":     { "x": 181.21, "y": 59.97 },
-    "emitente":       { "x": 42.4,   "y": 63.86 },
-    "cpfEmitente":    { "x": 61.33,  "y": 69.91 },
-    "endereco":       { "x": 56.45,  "y": 76.97, "w": 98.78 },
-    "cep":            { "x": 49.85,  "y": 88.19 }
+    "numero":         { "x": 58.9,  "y": 10.2 },
+    "parcela":        { "x": 78.3,  "y": 10.2 },
+    "valor":          { "x": 169.3, "y": 10.2 },
+
+    "vencDia":        { "x": 124.7, "y": 17.2 },
+    "vencMes":        { "x": 144.1, "y": 17.2 },
+    "vencAno":        { "x": 187.2, "y": 17.2 },
+
+    "vencExtenso":    { "x": 49.8,  "y": 23.2, "w": 112.9 },
+
+    "beneficiarioA":  { "x": 50.8,  "y": 35.2 },
+    "cpfDevedor":     { "x": 169.5, "y": 35.2 },
+
+    "quantiaExtenso": { "x": 73.0, "y": 45.0, "w": 84.7 },
+
+    "pagavelEm":      { "x": 67.0,  "y": 57.0 },
+    "emissaoDia":     { "x": 123.1, "y": 59.0 },
+    "emissaoMes":     { "x": 147.8, "y": 59.0 },
+    "emissaoAno":     { "x": 182.5, "y": 59.0 },
+
+    "emitente":       { "x": 43.4,  "y": 63.5 },
+    "cpfEmitente":    { "x": 56.4,  "y": 69.6 },
+    "endereco":       { "x": 53.9,  "y": 79.0, "w": 120.8 },
+    "cep":            { "x": 52.4,  "y": 83.3 }
   }
 }
