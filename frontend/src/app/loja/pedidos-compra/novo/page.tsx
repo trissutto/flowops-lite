@@ -48,6 +48,7 @@ type ItemForm = {
   tributoPct: string;
   descontoPct: string;
   markup: string; // markup proprio do item (sobrescreve o global)
+  gradePresetId: string | null; // id do preset (Plus 46→60, etc) — pra herdar destaque
   cores: string[];
   tamanhos: string[];
   // matriz: { "PRETO|46": 21, "PRETO|48": 21, ... }
@@ -116,6 +117,18 @@ export default function NovoPedidoPage() {
 
   // Items
   const [items, setItems] = useState<ItemForm[]>([]);
+
+  // Cache de subgrupos por grupoCode (compartilhado entre itens) — elimina race
+  // quando item novo herda grupoCode+subgrupoCode do anterior.
+  const [subgruposCache, setSubgruposCache] = useState<Record<number, Grupo[]>>({});
+  const getSubgrupos = async (grupoCode: number): Promise<Grupo[]> => {
+    if (subgruposCache[grupoCode]) return subgruposCache[grupoCode];
+    try {
+      const lista = await api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${grupoCode}`);
+      setSubgruposCache((p) => ({ ...p, [grupoCode]: lista }));
+      return lista;
+    } catch { return []; }
+  };
 
   // Estado
   const [saving, setSaving] = useState(false);
@@ -214,6 +227,7 @@ export default function NovoPedidoPage() {
           tributoPct: last?.tributoPct ?? '0',
           descontoPct: last?.descontoPct ?? '0',
           markup: last?.markup ?? MARKUP_PLUS,
+          gradePresetId: last?.gradePresetId ?? 'plus',
           cores: [],
           tamanhos: last?.tamanhos ? [...last.tamanhos] : [...TAMANHOS_PLUS],
           grade: {},
@@ -281,7 +295,8 @@ export default function NovoPedidoPage() {
     if (!t) return;
     const item = items.find((i) => i.tempId === tempId);
     if (!item || item.tamanhos.includes(t)) return;
-    updateItem(tempId, { tamanhos: [...item.tamanhos, t] });
+    // Edicao manual: limpa marca de preset
+    updateItem(tempId, { tamanhos: [...item.tamanhos, t], gradePresetId: null });
   };
 
   const removerTamanho = (tempId: string, tam: string) => {
@@ -607,6 +622,7 @@ export default function NovoPedidoPage() {
               grupos={grupos}
               categorias={categorias}
               markup={markup}
+              getSubgrupos={getSubgrupos}
               onRefreshGrupos={refetchGrupos}
               onUpdate={(patch) => updateItem(item.tempId, patch)}
               onRemove={() => removerItem(item.tempId)}
@@ -637,6 +653,7 @@ export default function NovoPedidoPage() {
 // ─── ItemEditor ─────────────────────────────────────────────────────────
 function ItemEditor({
   item, index, grupos, categorias, markup,
+  getSubgrupos,
   onUpdate, onRemove, onDuplicate, onAplicarCategoria,
   onAddCor, onRemoveCor, onAddTam, onRemoveTam, onGrade,
   onAdicionarNova, onRefreshGrupos,
@@ -646,6 +663,7 @@ function ItemEditor({
   grupos: Grupo[];
   categorias: Categoria[];
   markup: string;
+  getSubgrupos: (grupoCode: number) => Promise<Grupo[]>;
   onUpdate: (patch: Partial<ItemForm>) => void;
   onRemove: () => void;
   onDuplicate: () => void;
@@ -704,15 +722,13 @@ function ItemEditor({
     }
   };
 
-  // Carrega subgrupos do grupo selecionado
+  // Carrega subgrupos do grupo selecionado (usa cache do parent)
   useEffect(() => {
     if (!item.grupoCode) {
       setSubgrupos([]);
       return;
     }
-    api<Grupo[]>(`/purchase-orders/lookups/subgrupos?grupo=${item.grupoCode}`)
-      .then(setSubgrupos)
-      .catch(() => setSubgrupos([]));
+    getSubgrupos(item.grupoCode).then(setSubgrupos);
   }, [item.grupoCode]);
 
   // Total da linha
@@ -990,14 +1006,17 @@ function ItemEditor({
           <div className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</div>
           <div className="flex flex-wrap gap-1">
             {GRADE_PRESETS.map((g) => {
-              const active = item.tamanhos.length === g.tamanhos.length
-                && item.tamanhos.every((t, i) => t === g.tamanhos[i]);
+              // active: preferencia ao gradePresetId (explicit), fallback compara arrays
+              const active = item.gradePresetId
+                ? item.gradePresetId === g.id
+                : (item.tamanhos.length === g.tamanhos.length
+                   && item.tamanhos.every((t, i) => t === g.tamanhos[i]));
               const cls = active ? g.clsActive : g.clsIdle;
               return (
                 <button
                   key={g.id}
                   type="button"
-                  onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {}, markup: g.markup })}
+                  onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {}, markup: g.markup, gradePresetId: g.id })}
                   className={`px-2 py-1 border-2 rounded text-[10px] font-black uppercase ${cls}`}
                   title={`Aplicar: ${g.tamanhos.join(' • ')}`}
                 >
