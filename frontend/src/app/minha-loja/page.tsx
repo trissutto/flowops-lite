@@ -733,16 +733,31 @@ export default function MinhaLojaPage() {
 
       {/* Lista */}
       <main className="max-w-3xl mx-auto p-3 space-y-3 pb-10">
-        {/* Botão "Imprimir TODOS" — aparece quando filtrando Novos ou Separando */}
+        {/* Botões "Imprimir TODOS" + "RESUMO ESTOQUE" — quando filtra Novos/Separando */}
         {(filterTab === 'new' || filterTab === 'separating') && visibleRows.length > 0 && (
-          <button
-            type="button"
-            onClick={printAllVisible}
-            className="w-full px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
-          >
-            <Printer className="w-5 h-5" />
-            Imprimir TODOS ({visibleRows.length} {visibleRows.length === 1 ? 'pedido' : 'pedidos'})
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={printAllVisible}
+              className="w-full px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
+            >
+              <Printer className="w-5 h-5" />
+              Imprimir TODOS ({visibleRows.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const url = '/minha-loja/imprimir-resumo';
+                const w = window.open(url, 'resumo-estoque', 'width=420,height=720,noopener=no');
+                if (!w) window.location.href = url;
+              }}
+              className="w-full px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
+              title="Resumo consolidado pra picking no estoque (sem cupom individual)"
+            >
+              📋
+              RESUMO ESTOQUE ({visibleRows.length})
+            </button>
+          </div>
         )}
         {visibleRows.length === 0 ? (
           <EmptyState />
