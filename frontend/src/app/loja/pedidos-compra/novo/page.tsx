@@ -47,6 +47,7 @@ type ItemForm = {
   precoUnit: string;
   tributoPct: string;
   descontoPct: string;
+  markup: string; // markup proprio do item (sobrescreve o global)
   cores: string[];
   tamanhos: string[];
   // matriz: { "PRETO|46": 21, "PRETO|48": 21, ... }
@@ -58,25 +59,29 @@ const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
 // NCM padrao pra vestuario feminino (61062000 = camisas/blusas de malha algodao)
 const NCM_DEFAULT = '61062000';
 
+// Markup padrao POR TIPO de grade
+const MARKUP_PLUS = '2.75';
+const MARKUP_REGULAR = '2.35';
+
 // Grades pre-prontas — clique pra aplicar (classes estaticas pra Tailwind JIT)
-const GRADE_PRESETS: Array<{ id: string; label: string; tamanhos: string[]; plusSize: boolean; clsActive: string; clsIdle: string }> = [
+const GRADE_PRESETS: Array<{ id: string; label: string; tamanhos: string[]; plusSize: boolean; markup: string; clsActive: string; clsIdle: string }> = [
   {
-    id: 'reg-letras', label: 'Reg Letras', tamanhos: ['P','M','G','GG','XGG'], plusSize: false,
+    id: 'reg-letras', label: 'Reg Letras', tamanhos: ['P','M','G','GG','XGG'], plusSize: false, markup: MARKUP_REGULAR,
     clsActive: 'bg-sky-600 text-white border-sky-700',
     clsIdle: 'bg-white text-sky-700 border-sky-300 hover:bg-sky-50',
   },
   {
-    id: 'reg-num', label: 'Reg Num', tamanhos: ['36','38','40','42','44','46','48'], plusSize: false,
+    id: 'reg-num', label: 'Reg Num', tamanhos: ['36','38','40','42','44','46','48'], plusSize: false, markup: MARKUP_REGULAR,
     clsActive: 'bg-emerald-600 text-white border-emerald-700',
     clsIdle: 'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50',
   },
   {
-    id: 'plus', label: 'Plus 46→60', tamanhos: ['46','48','50','52','54','56','58','60'], plusSize: true,
+    id: 'plus', label: 'Plus 46→60', tamanhos: ['46','48','50','52','54','56','58','60'], plusSize: true, markup: MARKUP_PLUS,
     clsActive: 'bg-violet-600 text-white border-violet-700',
     clsIdle: 'bg-white text-violet-700 border-violet-300 hover:bg-violet-50',
   },
   {
-    id: 'plus-unif', label: 'Plus 46/48→60', tamanhos: ['46/48','50','52','54','56','58','60'], plusSize: true,
+    id: 'plus-unif', label: 'Plus 46/48→60', tamanhos: ['46/48','50','52','54','56','58','60'], plusSize: true, markup: MARKUP_PLUS,
     clsActive: 'bg-fuchsia-600 text-white border-fuchsia-700',
     clsIdle: 'bg-white text-fuchsia-700 border-fuchsia-300 hover:bg-fuchsia-50',
   },
@@ -207,6 +212,7 @@ export default function NovoPedidoPage() {
           precoUnit: '',
           tributoPct: last?.tributoPct ?? '0',
           descontoPct: last?.descontoPct ?? '0',
+          markup: last?.markup ?? MARKUP_PLUS,
           cores: [],
           tamanhos: [...TAMANHOS_PLUS],
           grade: {},
@@ -718,7 +724,7 @@ function ItemEditor({
   const custoNum = Number((item.custoUnit || '').toString().replace(',', '.')) || 0;
   const descNum = Number((item.descontoPct || '0').toString().replace(',', '.')) || 0;
   const tribNum = Number((item.tributoPct || '0').toString().replace(',', '.')) || 0;
-  const markupNum = Number((markup || '0').toString().replace(',', '.')) || 0;
+  const markupNum = Number(((item.markup || markup) || '0').toString().replace(',', '.')) || 0;
 
   // Cálculo: CUSTO − DESCONTO + IMPOSTO = CUSTO LÍQUIDO
   const custoLiquido = custoNum * (1 - descNum / 100) * (1 + tribNum / 100);
@@ -911,10 +917,19 @@ function ItemEditor({
               R$ {custoLiquido.toFixed(2).replace('.', ',')}
             </div>
           </div>
-          {/* Sugerido */}
+          {/* Sugerido + Markup editavel por item */}
           <div>
-            <label className="text-[10px] font-bold text-violet-700 uppercase">
-              × {markupNum || 0}× = Sugerido
+            <label className="text-[10px] font-bold text-violet-700 uppercase flex items-center gap-1">
+              × 
+              <input
+                value={item.markup}
+                onChange={(e) => { onUpdate({ markup: e.target.value }); setPrecoEditadoManual(false); }}
+                placeholder={markup}
+                inputMode="decimal"
+                className="w-12 px-1 py-0.5 border border-violet-300 rounded text-xs font-mono font-bold text-center bg-white"
+                title={`Markup do item. Plus=${MARKUP_PLUS}, Reg=${MARKUP_REGULAR}`}
+              />
+              × Sugerido
             </label>
             <button
               type="button"
@@ -977,7 +992,7 @@ function ItemEditor({
                 <button
                   key={g.id}
                   type="button"
-                  onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {} })}
+                  onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {}, markup: g.markup })}
                   className={`px-2 py-1 border-2 rounded text-[10px] font-black uppercase ${cls}`}
                   title={`Aplicar: ${g.tamanhos.join(' • ')}`}
                 >
