@@ -128,72 +128,93 @@ export default function ImprimirResumoPage() {
   }
 
   return (
-    <div className="bg-white text-black font-mono text-[11px] leading-tight p-2 print:p-0" style={{ width: '76mm', maxWidth: '76mm', margin: '0 auto' }}>
-      {/* Cabeçalho */}
-      <div className="text-center border-b border-dashed border-black pb-2 mb-2">
-        <div className="font-black text-base">RESUMO PARA ESTOQUE</div>
-        <div className="text-[10px]">{storeName}</div>
-        <div className="text-[10px]">{dataFmt}</div>
-        <div className="font-bold mt-1">{rows.length} pedido(s) · {totalPecas} peça(s)</div>
+    <div className="bg-white text-black font-sans text-[12px] leading-snug p-6 print:p-3 mx-auto" style={{ maxWidth: '200mm' }}>
+      {/* Cabeçalho A4 */}
+      <div className="border-b-2 border-black pb-2 mb-3 flex items-center justify-between">
+        <div>
+          <div className="font-black text-2xl">RESUMO PARA ESTOQUE</div>
+          <div className="text-sm text-gray-700">{storeName} · {dataFmt}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-3xl font-black text-violet-700">{totalPecas}</div>
+          <div className="text-xs uppercase tracking-wide">peças · {rows.length} pedidos</div>
+        </div>
       </div>
 
       {/* TOTAL CONSOLIDADO — PRA PICKING NO ESTOQUE */}
-      <div className="mb-3">
-        <div className="font-black text-center bg-black text-white py-0.5 text-[12px]">
-          PEÇAS A SEPARAR
-        </div>
-        <div className="space-y-1 mt-1">
-          {totalConsolidado.map((t, i) => (
-            <div key={i} className="border-b border-black pb-1">
-              <div className="flex justify-between font-bold border-b border-dotted border-gray-400 pb-0.5">
-                <span className="truncate flex-1 mr-2">{t.nome}</span>
-                <span>{t.qty}x</span>
-              </div>
-              <div className="text-[9px] text-gray-700 mt-0.5">SKU {t.sku}</div>
-              {/* Lista DE QUEM é cada peça */}
-              <div className="text-[10px] mt-0.5 leading-tight">
-                {t.pedidos.map((p, j) => (
-                  <div key={j}>
-                    → <span className="font-bold">{p.numero}</span> {p.cliente} {p.qty > 1 ? `(${p.qty}x)` : ''}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="text-right font-black border-t-2 border-black mt-1 pt-0.5">
-          TOTAL: {totalPecas} peça(s)
-        </div>
+      <div className="mb-4">
+        <h2 className="font-black bg-violet-700 text-white px-3 py-1 text-sm uppercase tracking-wide">
+          ★ Peças a separar (consolidado)
+        </h2>
+        <table className="w-full text-[12px] mt-1">
+          <thead>
+            <tr className="border-b-2 border-black bg-gray-100">
+              <th className="text-left px-2 py-1 w-[55%]">Produto</th>
+              <th className="text-left px-2 py-1">SKU</th>
+              <th className="text-right px-2 py-1 w-16">Qtd</th>
+              <th className="text-left px-2 py-1 w-[35%]">Pedidos / Clientes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {totalConsolidado.map((t, i) => (
+              <tr key={i} className="border-b border-gray-300 align-top">
+                <td className="px-2 py-1 font-semibold">{t.nome}</td>
+                <td className="px-2 py-1 font-mono text-[11px] text-gray-700">{t.sku}</td>
+                <td className="px-2 py-1 text-right font-black text-base">{t.qty}</td>
+                <td className="px-2 py-1 text-[11px] leading-tight">
+                  {t.pedidos.map((p, j) => (
+                    <div key={j}>
+                      <span className="font-bold">{p.numero}</span> {p.cliente}{p.qty > 1 ? ` (${p.qty}x)` : ''}
+                    </div>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-black font-black bg-gray-100">
+              <td colSpan={2} className="px-2 py-1 text-right">TOTAL</td>
+              <td className="px-2 py-1 text-right text-base">{totalPecas}</td>
+              <td className="px-2 py-1 text-[11px]">{rows.length} pedidos</td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
 
-      {/* DETALHE POR PEDIDO */}
-      <div className="border-t-2 border-dashed border-black pt-2 mt-2">
-        <div className="font-black text-center bg-black text-white py-0.5 text-[12px]">
-          DETALHE POR PEDIDO
+      {/* DETALHE POR PEDIDO — pra distribuir nas sacolas */}
+      <div className="mt-6 break-before-page print:break-before-page">
+        <h2 className="font-black bg-violet-700 text-white px-3 py-1 text-sm uppercase tracking-wide">
+          ✂ Detalhe por pedido (pra montar sacolas)
+        </h2>
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          {rows.map((r) => {
+            const o = r.order || {};
+            return (
+              <div key={r.id} className="border border-gray-400 rounded p-2 break-inside-avoid">
+                <div className="font-bold flex justify-between items-center border-b border-gray-300 pb-1 mb-1">
+                  <span className="text-sm">#{o.wcOrderNumber || r.id.slice(0, 6)}</span>
+                  <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                    {r.status === 'new' ? 'NOVO' : 'SEPARANDO'}
+                  </span>
+                </div>
+                <div className="text-[12px] font-semibold mb-1">
+                  {o.customerName || 'Sem nome'}
+                </div>
+                {o.customerPhone && (
+                  <div className="text-[10px] text-gray-600 mb-1">📞 {o.customerPhone}</div>
+                )}
+                <div className="text-[11px] space-y-0.5">
+                  {(o.items || []).map((it, i) => (
+                    <div key={i} className="flex justify-between gap-2 border-b border-dotted border-gray-300 pb-0.5">
+                      <span className="flex-1">{it.productName || it.sku}</span>
+                      <span className="font-black whitespace-nowrap">{it.quantity}x</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
-        {rows.map((r) => {
-          const o = r.order || {};
-          return (
-            <div key={r.id} className="mt-2 border-b border-dashed border-black pb-1">
-              <div className="font-bold flex justify-between">
-                <span>#{o.wcOrderNumber || r.id.slice(0, 6)}</span>
-                <span className="text-[10px] uppercase">{r.status === 'new' ? 'NOVO' : 'SEPARANDO'}</span>
-              </div>
-              <div className="text-[11px] mb-0.5">
-                {o.customerName || 'Sem nome'}
-                {o.customerPhone && <span className="text-[10px]"> · {o.customerPhone}</span>}
-              </div>
-              <div className="text-[10px] mt-0.5 space-y-0.5">
-                {(o.items || []).map((it, i) => (
-                  <div key={i} className="flex justify-between">
-                    <span className="truncate flex-1 mr-2">{it.productName || it.sku}</span>
-                    <span className="font-bold">{it.quantity}x</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
       </div>
 
       {/* Rodapé com botões — escondidos na impressão */}
@@ -212,10 +233,10 @@ export default function ImprimirResumoPage() {
         </button>
       </div>
 
-      <style jsx>{`
+      <style jsx global>{`
         @media print {
-          @page { size: 80mm auto; margin: 0; }
-          body { margin: 0; }
+          @page { size: A4 portrait; margin: 10mm; }
+          body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
       `}</style>
     </div>
