@@ -239,6 +239,22 @@ export default function ClientesCrmPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
+  // ── Suporte a URL ?openId=X — abre drawer direto desse cliente.
+  // Usado pelo PDV (modal Identificar Cliente → botão "Ver ficha completa")
+  // e pelo painel VIP. Lê uma vez ao carregar.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const openId = params.get('openId');
+    if (openId) {
+      setSelectedId(openId);
+      // Limpa query string sem recarregar pra não voltar a abrir se F5
+      const url = new URL(window.location.href);
+      url.searchParams.delete('openId');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, []);
+
   // ETL state — só lemos pra mostrar badge "rodando" no botão Sincronizações.
   // As funções de disparar sync ficam em /clientes-crm/sincronizacao
   const [etlState, setEtlState] = useState<EtlState | null>(null);
