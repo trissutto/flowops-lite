@@ -168,6 +168,37 @@ export class CrediarioPrintService {
     );
   }
 
+  /**
+   * SYNC DEFENSIVO: garante que /tmp/promissoria-coords.json esta atualizado
+   * com o que esta no Postgres (AppConfig.key='promissoria-coords').
+   *
+   * Por que? Se o restoreFromDb do CoordsDbService no boot falhar, /tmp fica
+   * vazio e o crediario cai no asset default → impressao desconfigura.
+   *
+   * Chamado a cada PDF (custo: 1 SELECT por gerada). Idempotente — so escreve
+   * se o conteudo do banco diferir do /tmp atual.
+   */
+  private async syncCoordsFromDb(): Promise<void> {
+    try {
+      const row = await (this.prisma as any).appConfig.findUnique({
+        where: { key: 'promissoria-coords' },
+      });
+      if (!row?.valueJson) return; // banco vazio — nada a sync
+      const TMP = '/tmp/promissoria-coords.json';
+      let tmpAtual = '';
+      try { tmpAtual = fs.readFileSync(TMP, 'utf8'); } catch { /* /tmp nao existe */ }
+      if (tmpAtual === row.valueJson) return; // ja esta igual — nada a fazer
+      try {
+        fs.writeFileSync(TMP, row.valueJson, 'utf8');
+        this.logger.log(`[coords-sync] /tmp atualizado do banco (${row.valueJson.length} bytes)`);
+      } catch (e: any) {
+        this.logger.warn(`[coords-sync] escrever /tmp falhou: ${e?.message}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[coords-sync] DB read falhou: ${e?.message}`);
+    }
+  }
+
   // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
   // Empresa juridicamente responsável pela cobrança.
   private readonly RAZAO_SOCIAL = 'T.O. RISSUTTO EIRELI';
@@ -438,7 +469,8 @@ export class CrediarioPrintService {
    *
    * Endpoint: GET /pdv/diag-coords
    */
-  diagCoords(): any {
+  async diagCoords(): Promise<any> {
+    await this.syncCoordsFromDb(); // pega do banco se /tmp sumiu
     this.reloadCoords(); // garantir que retorna o estado FRESH do JSON
     const PT_TO_MM = 25.4 / 72;
     const cfgPath = resolveAssetPath('config', 'promissoria-coords.json');
@@ -745,6 +777,7 @@ export class CrediarioPrintService {
    * Cada promissória corresponde a UMA parcela. Ordem: 1ª, 2ª, 3ª, ...
    */
   async generatePromissorias(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
+    await this.syncCoordsFromDb(); // pega do banco se /tmp sumiu
     this.reloadCoords(); // hot-reload do JSON a cada request
     const data = await this.loadSaleForPrint(saleId);
     const buffer = await new Promise<Buffer>((resolve, reject) => {
@@ -954,6 +987,7 @@ export class CrediarioPrintService {
    * carrega na impressora (2 folhas brancas + 1 azul).
    */
   async generateImpressaoCompleta(saleId: string): Promise<{ buffer: Buffer; filename: string }> {
+    await this.syncCoordsFromDb(); // pega do banco se /tmp sumiu
     this.reloadCoords(); // hot-reload do JSON a cada request
     await this.reloadCarneCoords(); // hot-reload coords carne (Postgres)
     // pdfkit não tem merge nativo; geramos um único Document concatenando páginas
@@ -1091,6 +1125,7 @@ export class CrediarioPrintService {
    * Use: GET /pdv/promissorias-teste-debug-pdf
    */
   async generatePromissoriasTesteDebug(): Promise<{ buffer: Buffer; filename: string }> {
+    await this.syncCoordsFromDb(); // pega do banco se /tmp sumiu
     this.reloadCoords(); // hot-reload do JSON a cada request
     const dataMock = {
       sale: { customerCpf: '28665529896' },
@@ -1172,6 +1207,7 @@ export class CrediarioPrintService {
    * EXATAMENTE em cima do impresso original.
    */
   async generatePromissoriasTeste(): Promise<{ buffer: Buffer; filename: string }> {
+    await this.syncCoordsFromDb(); // pega do banco se /tmp sumiu
     this.reloadCoords(); // hot-reload do JSON a cada request
     // Mock data idêntico ao print de calibração que o usuário enviou.
     const dataMock = {

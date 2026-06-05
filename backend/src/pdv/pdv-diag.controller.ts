@@ -275,7 +275,7 @@ export class PdvDiagController {
   async getCoords(@Res() res: Response) {
     try {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-      const result = this.crediarioPrint.diagCoords();
+      const result = await this.crediarioPrint.diagCoords();
       const hasOverride = fs.existsSync(OVERRIDE_PATH);
       res.status(200).json({ ...result, override_ativo: hasOverride, override_path: OVERRIDE_PATH });
     } catch (e: any) {
@@ -295,7 +295,7 @@ export class PdvDiagController {
         return res.status(400).json({ message: 'Body inválido — envie JSON' });
       }
       await this.coordsDb.saveCoords(body);
-      const result = this.crediarioPrint.diagCoords();
+      const result = await this.crediarioPrint.diagCoords();
       res.status(200).json({ ok: true, salvo_em: 'banco + /tmp', persistido: true, coords_ativas: result });
     } catch (e: any) {
       res.status(500).json({ statusCode: 500, message: 'Erro ao salvar', detail: e?.message });
@@ -307,7 +307,7 @@ export class PdvDiagController {
   async resetCoords(@Res() res: Response) {
     try {
       await this.coordsDb.resetCoords();
-      const result = this.crediarioPrint.diagCoords();
+      const result = await this.crediarioPrint.diagCoords();
       res.status(200).json({ ok: true, coords_ativas: result });
     } catch (e: any) {
       res.status(500).json({ statusCode: 500, message: 'Erro ao resetar', detail: e?.message });

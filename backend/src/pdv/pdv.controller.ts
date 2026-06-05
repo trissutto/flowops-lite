@@ -1330,7 +1330,7 @@ export class PdvController {
   @Get('diag-coords')
   async getDiagCoords(@Res() res: Response) {
     try {
-      const result = this.crediarioPrint.diagCoords();
+      const result = await this.crediarioPrint.diagCoords();
       res.status(200).json(result);
     } catch (e: any) {
       console.error('[pdv/diag-coords] FALHA', e?.stack || e);
