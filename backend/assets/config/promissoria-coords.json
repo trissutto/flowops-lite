@@ -1,9 +1,8 @@
 {
   "_help": [
-    "COORDENADAS DEFINITIVAS — calibradas pelo Thiago em jun/2026.",
+    "COORDENADAS DEFINITIVAS — calibradas em jun/2026 com foto da impressao real.",
     "Tudo em milímetros (mm). Conversão automática mm → pt (1mm = 2.835pt).",
-    "Esse é o FALLBACK do asset. O sistema lê primeiro do Postgres (app_config),",
-    "depois /tmp, depois cai aqui. NÃO mexer sem motivo.",
+    "Fonte: print + medição visual sobre folha pre-impressa Lurd's.",
     "Folha A4 = 210mm x 297mm. 3 promissórias por folha."
   ],
   "blocosY_mm": [7.76, 102.91, 196.82],
@@ -22,9 +21,9 @@
     "emissaoDia":     { "x": 124.12, "y": 59.97 },
     "emissaoMes":     { "x": 147.81, "y": 59.97 },
     "emissaoAno":     { "x": 181.21, "y": 59.97 },
-    "emitente":       { "x": 42.4,   "y": 63.86 },
-    "cpfEmitente":    { "x": 61.33,  "y": 69.91 },
-    "endereco":       { "x": 56.45,  "y": 76.97, "w": 98.78 },
-    "cep":            { "x": 49.85,  "y": 88.19 }
+    "emitente":       { "x": 42.4,   "y": 57.86 },
+    "cpfEmitente":    { "x": 61.33,  "y": 63.91 },
+    "endereco":       { "x": 56.45,  "y": 70.97, "w": 98.78 },
+    "cep":            { "x": 49.85,  "y": 82.19 }
   }
 }
