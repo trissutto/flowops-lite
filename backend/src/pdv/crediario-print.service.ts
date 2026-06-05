@@ -226,7 +226,7 @@ export class CrediarioPrintService {
   //   Bloco 3: 193.7mm → 549.14pt
   private readonly PROM_DEFAULT = {
     // VALORES VALIDADOS PELO THIAGO em 04/jun/2026 (asset 52b0943). NAO MEXER.
-    blocoY: [22.0, 277.17, 537.14],
+    blocoY: [22.0, 282.84, 542.81],
     blocoH: 262.92,
     fields: {
       numero:           { x: 166.96, dy: 28.91 },
