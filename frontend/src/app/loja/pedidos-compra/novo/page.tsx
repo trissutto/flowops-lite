@@ -828,12 +828,16 @@ function ItemEditor({
             onChange={(e) => {
               const code = Number(e.target.value);
               const s = subgrupos.find((x) => x.codigo === code);
-              onUpdate({ subgrupoCode: code, subgrupoNome: s?.nome || '' });
+              onUpdate({ subgrupoCode: code, subgrupoNome: s?.nome || (item.subgrupoCode === code ? item.subgrupoNome : '') });
             }}
             disabled={!item.grupoCode}
             className="w-full px-2 py-2 border rounded text-sm bg-white disabled:opacity-50"
           >
             <option value="">— selecione —</option>
+            {/* Option fantasma: subgrupo herdado pode nao estar na lista ainda (race) */}
+            {item.subgrupoCode != null && !subgrupos.find((s) => s.codigo === item.subgrupoCode) && (
+              <option value={item.subgrupoCode}>{item.subgrupoNome || `(codigo ${item.subgrupoCode})`}</option>
+            )}
             {subgrupos.map((s) => (
               <option key={s.codigo} value={s.codigo}>{s.nome}</option>
             ))}
