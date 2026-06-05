@@ -751,12 +751,13 @@ export default function MinhaLojaPage() {
             <button
               type="button"
               onClick={() => {
+                // Resumo é A4 (laser) — abre em nova ABA larga, não popup pequeno
                 const url = '/minha-loja/imprimir-resumo';
-                const w = window.open(url, 'resumo-estoque', 'width=420,height=720,noopener=no');
+                const w = window.open(url, '_blank');
                 if (!w) window.location.href = url;
               }}
               className="w-full px-4 py-3 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-md flex items-center justify-center gap-2 transition active:scale-95"
-              title="Resumo consolidado pra picking no estoque (sem cupom individual)"
+              title="Resumo A4 consolidado pra picking no estoque"
             >
               📋
               RESUMO ESTOQUE ({visibleRows.length})
