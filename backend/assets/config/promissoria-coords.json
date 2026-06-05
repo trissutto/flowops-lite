@@ -16,33 +16,86 @@
     "",
     "Folha A4 = 210mm x 297mm. Bloco padrão = 91mm de altura (3 blocos por folha)."
   ],
-
-  "blocosY_mm": [7.76, 98.78, 190.49],
-
+  "blocosY_mm": [
+    7.76,
+    94.78,
+    186.49
+  ],
   "fields_mm": {
-    "numero":         { "x": 58.9,  "y": 10.2 },
-    "parcela":        { "x": 78.3,  "y": 10.2 },
-    "valor":          { "x": 169.3, "y": 10.2 },
-
-    "vencDia":        { "x": 124.7, "y": 17.2 },
-    "vencMes":        { "x": 144.1, "y": 17.2 },
-    "vencAno":        { "x": 187.2, "y": 17.2 },
-
-    "vencExtenso":    { "x": 49.8,  "y": 23.2, "w": 112.9 },
-
-    "beneficiarioA":  { "x": 50.8,  "y": 35.2 },
-    "cpfDevedor":     { "x": 169.5, "y": 35.2 },
-
-    "quantiaExtenso": { "x": 73.0, "y": 45.0, "w": 84.7 },
-
-    "pagavelEm":      { "x": 67.0,  "y": 57.0 },
-    "emissaoDia":     { "x": 123.1, "y": 59.0 },
-    "emissaoMes":     { "x": 147.8, "y": 59.0 },
-    "emissaoAno":     { "x": 182.5, "y": 59.0 },
-
-    "emitente":       { "x": 43.4,  "y": 63.5 },
-    "cpfEmitente":    { "x": 56.4,  "y": 69.6 },
-    "endereco":       { "x": 53.9,  "y": 79.0, "w": 120.8 },
-    "cep":            { "x": 52.4,  "y": 83.3 }
+    "numero": {
+      "x": 58.9,
+      "y": 10.2
+    },
+    "parcela": {
+      "x": 78.3,
+      "y": 10.2
+    },
+    "valor": {
+      "x": 169.3,
+      "y": 10.2
+    },
+    "vencDia": {
+      "x": 124.7,
+      "y": 17.2
+    },
+    "vencMes": {
+      "x": 144.1,
+      "y": 17.2
+    },
+    "vencAno": {
+      "x": 187.2,
+      "y": 17.2
+    },
+    "vencExtenso": {
+      "x": 49.8,
+      "y": 23.2,
+      "w": 112.9
+    },
+    "beneficiarioA": {
+      "x": 50.8,
+      "y": 35.2
+    },
+    "cpfDevedor": {
+      "x": 169.5,
+      "y": 35.2
+    },
+    "quantiaExtenso": {
+      "x": 73.0,
+      "y": 45.0,
+      "w": 84.7
+    },
+    "pagavelEm": {
+      "x": 67.0,
+      "y": 57.0
+    },
+    "emissaoDia": {
+      "x": 123.1,
+      "y": 59.0
+    },
+    "emissaoMes": {
+      "x": 147.8,
+      "y": 59.0
+    },
+    "emissaoAno": {
+      "x": 182.5,
+      "y": 59.0
+    },
+    "emitente": {
+      "x": 43.4,
+      "y": 63.5
+    },
+    "cpfEmitente": {
+      "x": 56.4,
+      "y": 69.6
+    },
+    "endereco": {
+      "x": 53.9,
+      "y": 79.0,
+      "w": 120.8
+    },
+    "cep": {
+      "x": 52.4,
+      "y": 83.3
+    }
   }
 }
