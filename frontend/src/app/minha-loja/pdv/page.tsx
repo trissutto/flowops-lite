@@ -3207,6 +3207,20 @@ function CustomerModal({
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
+  // ─── PAINEL VIP: ficha do cliente quando CPF é válido ────────────────────
+  // Chama /pdv/customer-resume pra trazer LTV, tier, cashback e direcionamento
+  const [resume, setResume] = useState<any>(null);
+  const [loadingResume, setLoadingResume] = useState(false);
+  useEffect(() => {
+    const digits = cpf.replace(/\D/g, '');
+    if (digits.length !== 11) { setResume(null); return; }
+    setLoadingResume(true);
+    api<any>(`/pdv/customer-resume?cpf=${digits}`)
+      .then((r) => setResume(r))
+      .catch(() => setResume(null))
+      .finally(() => setLoadingResume(false));
+  }, [cpf]);
+
   useEffect(() => {
     const term = searchTerm.trim();
     if (term.length < 2) {
@@ -3315,6 +3329,122 @@ function CustomerModal({
             </div>
           )}
         </div>
+
+        {/* PAINEL VIP — ficha do cliente quando CPF válido */}
+        {loadingResume && cpf.replace(/\D/g, '').length === 11 && (
+          <div className="bg-slate-100 rounded-lg p-3 text-center text-xs text-slate-500 animate-pulse">
+            Buscando ficha do cliente...
+          </div>
+        )}
+        {resume?.found && resume.customer && (() => {
+          const c = resume.customer;
+          const cfg = resume.cashbackConfig || {};
+          const ltvBrl = (c.ltvCents / 100).toFixed(2).replace('.', ',');
+          const ticketBrl = (c.ticketMedioCents / 100).toFixed(2).replace('.', ',');
+          const cashbackBrl = (c.cashbackBalanceCents / 100).toFixed(2).replace('.', ',');
+          const diasUltima = c.lastOrderAt
+            ? Math.floor((Date.now() - new Date(c.lastOrderAt).getTime()) / 86400000)
+            : null;
+          const tierColors: Record<string, string> = {
+            bronze: 'bg-amber-100 text-amber-900 border-amber-400',
+            prata: 'bg-slate-200 text-slate-800 border-slate-400',
+            ouro: 'bg-yellow-100 text-yellow-900 border-yellow-500',
+            diamante: 'bg-violet-100 text-violet-900 border-violet-500',
+          };
+          const podeUsarCashback = c.cashbackBalanceCents >= (cfg.minimoUsoReais ?? 20) * 100 && cfg.ativo;
+          // Direcionamento pra vendedora
+          const sugestoes: string[] = [];
+          if (c.orderCount === 0) sugestoes.push('🆕 PRIMEIRA COMPRA — atenção VIP, ofereça cashback');
+          else if (diasUltima !== null && diasUltima > 180) sugestoes.push(`⚠️ Cliente INATIVA há ${diasUltima} dias — reativação`);
+          else if (diasUltima !== null && diasUltima < 30) sugestoes.push(`🔥 Cliente FREQUENTE (última há ${diasUltima}d)`);
+          if (c.vipTier === 'diamante') sugestoes.push('💎 DIAMANTE — máxima prioridade');
+          else if (c.vipTier === 'ouro') sugestoes.push('🥇 OURO — VIP');
+          if (podeUsarCashback) sugestoes.push(`💰 Pode usar R$ ${cashbackBrl} de cashback (até ${cfg.usoMaxPct ?? 30}% da compra)`);
+          if (c.bloqueado) sugestoes.push('🚫 CLIENTE BLOQUEADO no Giga — CUIDADO');
+          if (c.negativado) sugestoes.push('⚠️ NEGATIVADO no SPC — sem crediário');
+
+          return (
+            <div className="border-2 border-violet-300 bg-gradient-to-br from-violet-50 to-pink-50 rounded-xl p-3 space-y-2">
+              {/* Cabeçalho com tier + nome */}
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-bold text-violet-900 text-sm">{c.name || 'Sem nome'}</div>
+                  <div className="text-[10px] text-slate-500">{c.cpf}</div>
+                </div>
+                <span className={`px-2 py-0.5 text-[11px] font-black uppercase rounded border-2 ${tierColors[c.vipTier] || tierColors.bronze}`}>
+                  {c.vipTier}
+                </span>
+              </div>
+
+              {/* Métricas */}
+              <div className="grid grid-cols-3 gap-1.5 text-center">
+                <div className="bg-white rounded p-1.5 border border-slate-200">
+                  <div className="text-[9px] uppercase text-slate-500">Compras</div>
+                  <div className="font-black text-violet-700 text-sm">{c.orderCount}</div>
+                </div>
+                <div className="bg-white rounded p-1.5 border border-slate-200">
+                  <div className="text-[9px] uppercase text-slate-500">LTV</div>
+                  <div className="font-black text-violet-700 text-sm">R$ {ltvBrl}</div>
+                </div>
+                <div className="bg-white rounded p-1.5 border border-slate-200">
+                  <div className="text-[9px] uppercase text-slate-500">Ticket</div>
+                  <div className="font-black text-violet-700 text-sm">R$ {ticketBrl}</div>
+                </div>
+              </div>
+
+              {/* Cashback destacado */}
+              {c.cashbackBalanceCents > 0 && (
+                <div className={`rounded-lg p-2 flex items-center justify-between ${podeUsarCashback ? 'bg-emerald-100 border-2 border-emerald-400' : 'bg-amber-100 border-2 border-amber-400'}`}>
+                  <div>
+                    <div className="text-[10px] uppercase font-bold text-emerald-900">💰 Cashback disponível</div>
+                    <div className="font-black text-lg text-emerald-700">R$ {cashbackBrl}</div>
+                    {!podeUsarCashback && (
+                      <div className="text-[9px] text-amber-700">Mínimo R$ {cfg.minimoUsoReais ?? 20} pra usar</div>
+                    )}
+                  </div>
+                  {c.cashbackExpiraEm && (
+                    <div className="text-right text-[9px] text-slate-600">
+                      Vence em<br />
+                      <span className="font-bold">{new Date(c.cashbackExpiraEm).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Última compra */}
+              {c.lastOrderAt && (
+                <div className="text-[11px] text-slate-700">
+                  📅 Última compra: <span className="font-bold">{new Date(c.lastOrderAt).toLocaleDateString('pt-BR')}</span>
+                  {diasUltima !== null && <span className="text-slate-500"> ({diasUltima}d atrás)</span>}
+                </div>
+              )}
+
+              {/* Direcionamento pra vendedora */}
+              {sugestoes.length > 0 && (
+                <div className="bg-white border border-violet-200 rounded p-2 space-y-1">
+                  <div className="text-[9px] uppercase font-bold text-violet-700">💡 Direcionamento</div>
+                  {sugestoes.map((s, i) => (
+                    <div key={i} className="text-[11px] leading-tight">{s}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Botão ver ficha completa */}
+              <button
+                type="button"
+                onClick={() => window.open(`/clientes-crm?openId=${c.id}`, '_blank')}
+                className="w-full text-center text-[11px] font-bold text-violet-700 hover:text-violet-900 py-1 underline"
+              >
+                📋 Ver ficha completa do cliente →
+              </button>
+            </div>
+          );
+        })()}
+        {resume && !resume.found && cpf.replace(/\D/g, '').length === 11 && (
+          <div className="bg-sky-50 border border-sky-300 rounded p-2 text-[11px] text-sky-800">
+            🆕 Cliente novo — não está no CRM ainda. Preencha os dados pra cadastrar.
+          </div>
+        )}
 
         <div className="text-[10px] text-slate-400 text-center">— ou preencha manualmente —</div>
 
