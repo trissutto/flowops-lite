@@ -193,19 +193,20 @@ export default function NovoPedidoPage() {
 
   const adicionarItem = () => {
     setItems((prev) => {
-      // Herda desconto/imposto/CFOP/plusSize do ultimo item (se houver) — editaveis
+      // HERDA tudo do ultimo item: Grupo/Subgrupo/NCM/CFOP/PlusSize/Markup/Desc/Imp/Tamanhos
+      // (REF, custo, preco, cores e qtys ficam em branco — sao especificos por peca)
       const last = prev[prev.length - 1];
       return [
         ...prev,
         {
           tempId: newTempId(),
           ref: '',
-          descricaoBase: '',
-          grupoCode: null,
-          grupoNome: '',
-          subgrupoCode: null,
-          subgrupoNome: '',
-          ncm: '',
+          descricaoBase: last?.descricaoBase ?? '',
+          grupoCode: last?.grupoCode ?? null,
+          grupoNome: last?.grupoNome ?? '',
+          subgrupoCode: last?.subgrupoCode ?? null,
+          subgrupoNome: last?.subgrupoNome ?? '',
+          ncm: last?.ncm ?? '',
           cfop: last?.cfop || '5102',
           plusSize: last?.plusSize ?? true,
           custoUnit: '',
@@ -214,7 +215,7 @@ export default function NovoPedidoPage() {
           descontoPct: last?.descontoPct ?? '0',
           markup: last?.markup ?? MARKUP_PLUS,
           cores: [],
-          tamanhos: [...TAMANHOS_PLUS],
+          tamanhos: last?.tamanhos ? [...last.tamanhos] : [...TAMANHOS_PLUS],
           grade: {},
         },
       ];
@@ -1114,6 +1115,24 @@ function ItemEditor({
               })}
             </tbody>
           </table>
+          {/* Aviso de tamanhos com qty 0 — esses serao ignorados no cadastro */}
+          {(() => {
+            const zerados = new Set<string>();
+            for (const t of item.tamanhos) {
+              let temQty = false;
+              for (const co of item.cores) {
+                if (Number(item.grade[`${co}|${t}`] || 0) > 0) { temQty = true; break; }
+              }
+              if (!temQty) zerados.add(t);
+            }
+            if (zerados.size === 0) return null;
+            return (
+              <div className="mt-2 text-[11px] bg-amber-50 border border-amber-300 rounded px-2 py-1 text-amber-800">
+                <b>Tamanhos sem qty (nao serao cadastrados):</b>{' '}
+                <span className="font-mono font-bold">{Array.from(zerados).join(' • ')}</span>
+              </div>
+            );
+          })()}
         </div>
       )}
 

@@ -268,6 +268,15 @@ export class PurchaseOrdersService {
     if (!input.tamanhosQty || Object.keys(input.tamanhosQty).length === 0) {
       throw new BadRequestException('Informe ao menos 1 tamanho com qty');
     }
+    // FILTRA tamanhos com qty <= 0 (regra: nao cadastrar tamanho zerado no Wincred)
+    const tamanhosQtyFiltrado: Record<string, number> = {};
+    for (const [t, q] of Object.entries(input.tamanhosQty)) {
+      const n = Number(q || 0);
+      if (n > 0) tamanhosQtyFiltrado[t] = n;
+    }
+    if (Object.keys(tamanhosQtyFiltrado).length === 0) {
+      throw new BadRequestException('Nenhum tamanho com qty > 0 (todos zerados)');
+    }
     const it = await (this.prisma as any).purchaseOrderItem.create({
       data: {
         orderId,
@@ -285,7 +294,7 @@ export class PurchaseOrdersService {
         precoUnit: Number(input.precoUnit),
         tributoPct: Number(input.tributoPct || 0),
         descontoPct: Number(input.descontoPct || 0),
-        tamanhosQty: JSON.stringify(input.tamanhosQty),
+        tamanhosQty: JSON.stringify(tamanhosQtyFiltrado),
         // itemStatus default = 'pendente' (do schema) — não precisa setar aqui
       },
     });
@@ -334,7 +343,15 @@ export class PurchaseOrdersService {
     if (input.precoUnit !== undefined) data.precoUnit = Number(input.precoUnit);
     if (input.tributoPct !== undefined) data.tributoPct = Number(input.tributoPct);
     if (input.descontoPct !== undefined) data.descontoPct = Number(input.descontoPct);
-    if (input.tamanhosQty !== undefined) data.tamanhosQty = JSON.stringify(input.tamanhosQty);
+    if (input.tamanhosQty !== undefined) {
+      // FILTRA tamanhos com qty <= 0
+      const filt: Record<string, number> = {};
+      for (const [t, q] of Object.entries(input.tamanhosQty as Record<string, any>)) {
+        const n = Number(q || 0);
+        if (n > 0) filt[t] = n;
+      }
+      data.tamanhosQty = JSON.stringify(filt);
+    }
     const updated = await (this.prisma as any).purchaseOrderItem.update({
       where: { id: itemId },
       data,
