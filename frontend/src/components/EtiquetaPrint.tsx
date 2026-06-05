@@ -43,6 +43,20 @@ function corFontSize(cor: string): string {
   return '4.5pt';
 }
 
+/**
+ * Font-size adaptativo pra REF (et-tam) — REFs longas tipo "VLM-222ROY"
+ * quebravam em 2 linhas e empurravam o barcode.
+ */
+function refFontSize(ref: string): string {
+  const len = (ref || '').length;
+  if (len <= 4) return '12pt';
+  if (len <= 6) return '11pt';
+  if (len <= 8) return '9.5pt';
+  if (len <= 10) return '8pt';
+  if (len <= 12) return '7pt';
+  return '6pt';
+}
+
 export default function EtiquetaPrint({ labels }: Props) {
   // ── Carrega JsBarcode + renderiza códigos ─────────────────────────────
   useEffect(() => {
@@ -126,7 +140,7 @@ export default function EtiquetaPrint({ labels }: Props) {
               </div>
               {/* REF + TAMANHO em destaque */}
               <div className="et-destaque">
-                <span className="et-tam">{l.ref}</span>
+                <span className="et-tam" style={{ fontSize: refFontSize(l.ref), whiteSpace: 'nowrap' }}>{l.ref}</span>
                 <span className="et-cor-destaque">{l.tamanho}</span>
               </div>
               {/* Código de barras */}
@@ -197,6 +211,9 @@ export default function EtiquetaPrint({ labels }: Props) {
           padding: 0 1.2mm;
           line-height: 1.1;
           letter-spacing: 0.3px;
+          white-space: nowrap;
+          overflow: hidden;
+          max-width: 28mm;
         }
         .et-cor-destaque {
           font-size: 15pt;
