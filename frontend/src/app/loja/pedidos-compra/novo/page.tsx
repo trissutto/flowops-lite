@@ -54,6 +54,34 @@ type ItemForm = {
 };
 
 const TAMANHOS_PLUS = ['46', '48', '50', '52', '54', '56', '58', '60'];
+
+// NCM padrao pra vestuario feminino (61062000 = camisas/blusas de malha algodao)
+const NCM_DEFAULT = '61062000';
+
+// Grades pre-prontas — clique pra aplicar (classes estaticas pra Tailwind JIT)
+const GRADE_PRESETS: Array<{ id: string; label: string; tamanhos: string[]; plusSize: boolean; clsActive: string; clsIdle: string }> = [
+  {
+    id: 'reg-letras', label: 'Reg Letras', tamanhos: ['P','M','G','GG','XGG'], plusSize: false,
+    clsActive: 'bg-sky-600 text-white border-sky-700',
+    clsIdle: 'bg-white text-sky-700 border-sky-300 hover:bg-sky-50',
+  },
+  {
+    id: 'reg-num', label: 'Reg Num', tamanhos: ['36','38','40','42','44','46','48'], plusSize: false,
+    clsActive: 'bg-emerald-600 text-white border-emerald-700',
+    clsIdle: 'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50',
+  },
+  {
+    id: 'plus', label: 'Plus 46→60', tamanhos: ['46','48','50','52','54','56','58','60'], plusSize: true,
+    clsActive: 'bg-violet-600 text-white border-violet-700',
+    clsIdle: 'bg-white text-violet-700 border-violet-300 hover:bg-violet-50',
+  },
+  {
+    id: 'plus-unif', label: 'Plus 46/48→60', tamanhos: ['46/48','50','52','54','56','58','60'], plusSize: true,
+    clsActive: 'bg-fuchsia-600 text-white border-fuchsia-700',
+    clsIdle: 'bg-white text-fuchsia-700 border-fuchsia-300 hover:bg-fuchsia-50',
+  },
+];
+
 const newTempId = () => Math.random().toString(36).slice(2, 10);
 
 export default function NovoPedidoPage() {
@@ -213,7 +241,7 @@ export default function NovoPedidoPage() {
         grupoNome: cat.grupoNome,
         subgrupoCode: cat.subgrupoCode,
         subgrupoNome: cat.subgrupoNome,
-        ncm: cat.ncmDefault || '',
+        ncm: cat.ncmDefault || NCM_DEFAULT,
         cfop: cat.cfopDefault || '5102',
         plusSize: cat.plusSizeDefault,
       });
@@ -767,7 +795,9 @@ function ItemEditor({
             onChange={(e) => {
               const code = Number(e.target.value);
               const g = grupos.find((x) => x.codigo === code);
-              onUpdate({ grupoCode: code, grupoNome: g?.nome || '', subgrupoCode: null, subgrupoNome: '' });
+              const patch: any = { grupoCode: code, grupoNome: g?.nome || '', subgrupoCode: null, subgrupoNome: '' };
+              if (!item.ncm) patch.ncm = NCM_DEFAULT;
+              onUpdate(patch);
             }}
             className="w-full px-2 py-2 border rounded text-sm bg-white"
           >
@@ -936,7 +966,27 @@ function ItemEditor({
 
       {/* Tamanhos (chips) */}
       <div className="space-y-1">
-        <div className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</div>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="text-[10px] font-bold text-slate-600 uppercase">Tamanhos da grade</div>
+          <div className="flex flex-wrap gap-1">
+            {GRADE_PRESETS.map((g) => {
+              const active = item.tamanhos.length === g.tamanhos.length
+                && item.tamanhos.every((t, i) => t === g.tamanhos[i]);
+              const cls = active ? g.clsActive : g.clsIdle;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => onUpdate({ tamanhos: [...g.tamanhos], plusSize: g.plusSize, grade: {} })}
+                  className={`px-2 py-1 border-2 rounded text-[10px] font-black uppercase ${cls}`}
+                  title={`Aplicar: ${g.tamanhos.join(' • ')}`}
+                >
+                  {g.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="flex flex-wrap gap-1 items-center">
           {item.tamanhos.map((t) => (
             <span key={t} className="bg-violet-100 text-violet-700 px-2 py-1 rounded text-xs font-bold font-mono flex items-center gap-1">
