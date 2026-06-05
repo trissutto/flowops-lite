@@ -153,9 +153,9 @@ export default function PromissoriaConfigPage() {
         </p>
 
         {overrideAtivo && (
-          <div className="bg-amber-50 border-2 border-amber-300 text-amber-800 rounded-lg p-3 mb-4 text-sm">
-            ⚠ Override ativo em <code className="bg-amber-100 px-1 rounded">/tmp</code>. Sobrevive entre requests, mas SOME no redeploy.
-            Pra persistir definitivamente, copia o JSON salvo pra <code className="bg-amber-100 px-1 rounded">backend/assets/config/promissoria-coords.json</code> e faz commit.
+          <div className="bg-emerald-50 border-2 border-emerald-300 text-emerald-800 rounded-lg p-3 mb-4 text-sm">
+            ✓ Configuração salva no <b>Postgres</b> (tabela <code className="bg-emerald-100 px-1 rounded">app_config</code>). Sobrevive a redeploys do Railway automaticamente.
+            Cada impressão de promissória sincroniza o /tmp com o banco antes de gerar o PDF — nunca mais desconfigura.
           </div>
         )}
 
