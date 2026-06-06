@@ -1755,6 +1755,21 @@ model Customer {
   // Pra mineração futura sem precisar mudar ETL. Atualizado a cada sync.
   gigaRawData         Json?    @map("giga_raw_data")
 
+  // ─── APP CLIENTE FINAL (app.lurds.com.br PWA) ──────────────────────────────
+  // Set quando cliente se cadastra/faz login pela primeira vez no app.
+  // Senha SEMPRE com hash bcrypt — nunca em plaintext.
+  appPasswordHash     String?  @map("app_password_hash")
+  appLastLoginAt      DateTime? @map("app_last_login_at")
+  // Quando o navegador da cliente registrou o PWA como instalado (Add to
+  // Home Screen no iOS, beforeinstallprompt accepted no Android).
+  // Usado pra disparar push "obrigado por instalar 💛" + creditar bônus.
+  pwaInstalledAt      DateTime? @map("pwa_installed_at")
+  // Quando o bônus de R$ 20 (welcome) foi creditado no cashback.
+  // Garante que mesmo se cliente apagar/reinstalar o app, recebe só 1 vez.
+  welcomeBonusAt      DateTime? @map("welcome_bonus_at")
+  // Cliente autorizou push notifications no navegador (após opt-in).
+  appPushOptIn        Boolean  @default(false) @map("app_push_opt_in")
+
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

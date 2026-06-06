@@ -5,9 +5,10 @@
  *   - Parsing JSON com error handling padronizado
  */
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  'https://api.flowops-lite.com'; // será trocado no .env.production
+// Backend NestJS tem prefix global '/api', então URL final = ${API_BASE}/api/...
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || 'https://api.flowops-lite.com';
+const API_URL = `${API_BASE.replace(/\/$/, '')}/api`;
 
 const TOKEN_KEY = 'lurds_customer_token';
 

@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { OrdersModule } from './orders/orders.module';
 import { CustomersModule } from './customers/customers.module';
+import { CustomersAppModule } from './customers-app/customers-app.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
 import { StockModule } from './stock/stock.module';
@@ -57,6 +58,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     AuthModule,
     OrdersModule,
     CustomersModule,
+    CustomersAppModule,
     ProductsModule,
     StoresModule,
     StockModule,
