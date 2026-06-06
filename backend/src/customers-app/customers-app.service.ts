@@ -31,13 +31,17 @@ export class CustomersAppService {
   private readonly logger = new Logger(CustomersAppService.name);
 
   // Bônus de boas-vindas — em centavos. Configurável via env.
-  private readonly WELCOME_BONUS_CENTS = this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
+  // IMPORTANTE: inicializado no constructor porque `this.cfg` não existe
+  // durante a avaliação de field initializers (TS strict mode).
+  private readonly WELCOME_BONUS_CENTS: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly cfg: ConfigService,
-  ) {}
+  ) {
+    this.WELCOME_BONUS_CENTS = this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
+  }
 
   /* ─────────────────── REGISTER ─────────────────── */
 
