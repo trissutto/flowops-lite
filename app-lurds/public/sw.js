@@ -10,7 +10,11 @@
  * Atualização: o navegador checa este arquivo no load — se mudou, atualiza tudo.
  */
 
-const CACHE_VERSION = 'lurds-v1';
+// IMPORTANTE: bump a cada deploy pra invalidar cache antigo.
+// Sem isso, SW antigo serve chunks JS/CSS com hashes que não existem mais,
+// e usuária vê tela quebrada (CSS 404). Tem fallback network-first pra
+// /_next/static/* logo abaixo que TAMBÉM mitiga isso.
+const CACHE_VERSION = 'lurds-v2';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',
@@ -53,6 +57,16 @@ self.addEventListener('fetch', (event) => {
   // Network-first pra API e Next.js _next/data (sempre fresco)
   if (url.pathname.startsWith('/_next/data') || url.pathname.startsWith('/api')) {
     event.respondWith(networkFirst(request));
+    return;
+  }
+
+  // CRÍTICO: chunks JS/CSS do Next.js mudam a cada build (hash no nome).
+  // Cachear eles aqui causa 404 quando build novo sai e SW ainda referencia
+  // chunks antigos. Solução: passar direto pra rede SEMPRE.
+  // (Vercel já manda cache-control imutável nos chunks, então o navegador
+  // cacheia naturalmente — não precisa do SW.)
+  if (url.pathname.startsWith('/_next/static')) {
+    event.respondWith(fetch(request));
     return;
   }
 
