@@ -72,7 +72,9 @@ export function useWebPush() {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key),
+        // Cast forçado: TS 5.5+ briga com Uint8Array<ArrayBufferLike> vs BufferSource,
+        // mas o runtime aceita perfeitamente.
+        applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       });
       setSubscription(sub);
 
