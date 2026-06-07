@@ -6,8 +6,10 @@
  */
 
 // Backend NestJS tem prefix global '/api', então URL final = ${API_BASE}/api/...
+// Fallback hardcoded: URL real do Railway (caso env var não seja injetada no build do Vercel).
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || 'https://api.flowops-lite.com';
+  process.env.NEXT_PUBLIC_API_URL ||
+  'https://flowops-lite-production.up.railway.app';
 const API_URL = `${API_BASE.replace(/\/$/, '')}/api`;
 
 const TOKEN_KEY = 'lurds_customer_token';
