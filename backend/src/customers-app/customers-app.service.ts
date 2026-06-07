@@ -71,9 +71,9 @@ export class CustomersAppService {
       };
     }
 
-    // Não tem app account, mas pode ter Customer no CRM
+    // Não tem app account, mas pode ter Customer no CRM (formatos variados)
     const customer = await this.prisma.customer.findFirst({
-      where: { cpf, name: { not: null } },
+      where: { cpf: { in: cpfVariants(cpf) }, name: { not: null } },
       orderBy: { createdAt: 'asc' },
       select: {
         name: true,
@@ -92,7 +92,7 @@ export class CustomersAppService {
 
     // Conta TODOS os Customer com mesmo CPF pra dizer em quantas lojas comprou
     const allWithCpf = await this.prisma.customer.findMany({
-      where: { cpf },
+      where: { cpf: { in: cpfVariants(cpf) } },
       select: { id: true, originStoreId: true, ltvCents: true, orderCount: true },
     });
     let totalLtvCents = 0n;
@@ -273,9 +273,9 @@ export class CustomersAppService {
       }
     }
 
-    // 3) Acha TODOS Customers com mesmo CPF (vamos linkar todos)
+    // 3) Acha TODOS Customers com mesmo CPF (CRM tem com pontos OU só dígitos)
     const customers = await this.prisma.customer.findMany({
-      where: { cpf: dto.cpf },
+      where: { cpf: { in: cpfVariants(dto.cpf) } },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
@@ -387,10 +387,13 @@ export class CustomersAppService {
   private async ensureAccountLinks(accountId: string, cpf: string): Promise<number> {
     if (!cpf) return 0;
 
-    // Customers com mesmo CPF que NÃO estão vinculados ainda
+    // CRM tem CPF armazenado COM PONTOS (99% dos casos) e/ou só dígitos.
+    // Geramos todas as variantes pra achar todos os matches.
+    const variants = cpfVariants(cpf);
+
     const candidates = await this.prisma.customer.findMany({
       where: {
-        cpf,
+        cpf: { in: variants },
         accountLinks: { none: { accountId } },
       },
       select: { id: true, createdAt: true },
@@ -554,6 +557,22 @@ export class CustomersAppService {
       email: a.email,
     };
   }
+}
+
+/**
+ * Gera todas as variantes possíveis de um CPF pra match no banco.
+ *
+ * CRM Lurd's armazena 99% dos CPFs no formato 000.000.000-00 (com pontos),
+ * mas o app sempre manda só dígitos. Pra achar Customer existente,
+ * precisamos buscar pelas duas formas.
+ *
+ * Aceita input em qualquer formato e gera: [só dígitos, com pontuação].
+ */
+function cpfVariants(cpf: string): string[] {
+  const digits = (cpf || '').replace(/\D/g, '');
+  if (digits.length !== 11) return [cpf]; // dado inválido — devolve como veio
+  const formatted = `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+  return [digits, formatted];
 }
 
 /** Mascarar CPF na resposta pública: 123.***.***-45 */
