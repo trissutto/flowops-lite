@@ -285,6 +285,16 @@ export class CustomersAppController {
     return this.svc.getAdminStats();
   }
 
+  /** GET /customers/app/admin/search?q=XXX — autocomplete clientes */
+  @Get('admin/search')
+  @UseGuards(JwtAuthGuard)
+  async adminSearch(@Req() req: any, @Query('q') q?: string) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return { accounts: await this.svc.searchAccounts(q || '') };
+  }
+
   /**
    * POST /customers/app/admin/reconcile-links
    *

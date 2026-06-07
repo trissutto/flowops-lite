@@ -88,7 +88,7 @@ export default function AppPushPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [mode, setMode] = useState<'all' | 'segment'>('all');
+  const [mode, setMode] = useState<'all' | 'segment' | 'account'>('all');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [url, setUrl] = useState('/');
@@ -97,6 +97,29 @@ export default function AppPushPage() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<SendResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  // Busca de cliente (modo 'account')
+  const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<Array<{
+    id: string; name: string | null; cpf: string; phone: string | null; pushActive: boolean;
+  }>>([]);
+  const [selectedAccount, setSelectedAccount] = useState<{
+    id: string; name: string | null; cpf: string; pushActive: boolean;
+  } | null>(null);
+
+  // Busca com debounce
+  useEffect(() => {
+    if (mode !== 'account') return;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<{ accounts: typeof searchResults }>(
+          `/customers/app/admin/search?q=${encodeURIComponent(search)}`,
+        );
+        setSearchResults(r.accounts);
+      } catch {}
+    }, 250);
+    return () => clearTimeout(t);
+  }, [search, mode]);
 
   const loadStats = async () => {
     try {
@@ -123,6 +146,10 @@ export default function AppPushPage() {
       setErr('Título obrigatório');
       return;
     }
+    if (mode === 'account' && !selectedAccount) {
+      setErr('Selecione um cliente.');
+      return;
+    }
     if (!confirm(`Enviar push pra ${expectedAudience()} clientes?`)) return;
 
     setErr(null);
@@ -138,6 +165,7 @@ export default function AppPushPage() {
             hasCashback: segment.hasCashback,
             minLtvCents: segment.minLtvBrl * 100,
           } : undefined,
+          accountId: mode === 'account' ? selectedAccount?.id : undefined,
         }),
       });
       setResult(r);
@@ -151,6 +179,7 @@ export default function AppPushPage() {
   const expectedAudience = () => {
     if (!stats) return '?';
     if (mode === 'all') return stats.summary.activeSubscriptions;
+    if (mode === 'account') return selectedAccount ? '1' : '0';
     return `~${Math.round(stats.summary.activeSubscriptions * 0.5)}`; // estimativa
   };
 
@@ -266,10 +295,10 @@ export default function AppPushPage() {
             <label className="text-[11px] font-bold uppercase text-slate-500 tracking-wider block mb-2">
               Pra quem enviar
             </label>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => setMode('all')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold border transition ${
+                className={`px-3 py-2 rounded-lg text-sm font-bold border transition ${
                   mode === 'all'
                     ? 'bg-emerald-600 text-white border-emerald-700'
                     : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-400'
@@ -279,7 +308,7 @@ export default function AppPushPage() {
               </button>
               <button
                 onClick={() => setMode('segment')}
-                className={`flex-1 px-3 py-2 rounded-lg text-sm font-bold border transition ${
+                className={`px-3 py-2 rounded-lg text-sm font-bold border transition ${
                   mode === 'segment'
                     ? 'bg-emerald-600 text-white border-emerald-700'
                     : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-400'
@@ -287,7 +316,87 @@ export default function AppPushPage() {
               >
                 Segmentado
               </button>
+              <button
+                onClick={() => setMode('account')}
+                className={`px-3 py-2 rounded-lg text-sm font-bold border transition ${
+                  mode === 'account'
+                    ? 'bg-emerald-600 text-white border-emerald-700'
+                    : 'bg-white text-slate-700 border-slate-300 hover:border-emerald-400'
+                }`}
+              >
+                Por cliente
+              </button>
             </div>
+
+            {/* Modo cliente — busca + lista */}
+            {mode === 'account' && (
+              <div className="mt-3 p-3 bg-slate-50 rounded-lg">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar por nome, CPF ou telefone..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm mb-2"
+                  autoFocus
+                />
+                {selectedAccount ? (
+                  <div className="bg-emerald-50 border-2 border-emerald-500 rounded-lg p-3 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div className="flex-1">
+                      <div className="font-bold text-sm">{selectedAccount.name || '(sem nome)'}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{selectedAccount.cpf}</div>
+                    </div>
+                    {selectedAccount.pushActive ? (
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
+                        🔔 Push ativo
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                        ⚠️ Sem push
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setSelectedAccount(null)}
+                      className="text-slate-500 hover:text-slate-800 text-xs ml-1"
+                    >
+                      Trocar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto space-y-1">
+                    {searchResults.length === 0 ? (
+                      <div className="text-xs text-slate-400 text-center py-4">
+                        Digite ao menos 2 letras pra buscar
+                      </div>
+                    ) : (
+                      searchResults.map((a) => (
+                        <button
+                          key={a.id}
+                          onClick={() => setSelectedAccount({
+                            id: a.id, name: a.name, cpf: a.cpf, pushActive: a.pushActive,
+                          })}
+                          className="w-full text-left bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-400 rounded-lg p-2 transition flex items-center gap-2"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-sm truncate">
+                              {a.name || '(sem nome)'}
+                            </div>
+                            <div className="text-[11px] text-slate-500 font-mono">
+                              {a.cpf}{a.phone && ` · ${a.phone}`}
+                            </div>
+                          </div>
+                          {a.pushActive ? (
+                            <span title="Push ativo" className="text-emerald-600">🔔</span>
+                          ) : (
+                            <span title="Sem push" className="text-amber-500 opacity-60">⚠️</span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {mode === 'segment' && (
               <div className="mt-3 p-3 bg-slate-50 rounded-lg space-y-2">
                 <label className="flex items-center gap-2 text-sm">

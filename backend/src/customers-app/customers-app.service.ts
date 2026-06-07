@@ -39,6 +39,56 @@ export class CustomersAppService {
       this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
   }
 
+  /* ─────────────────── LIST (admin retaguarda) ─────────────────── */
+  /**
+   * Lista accounts pra autocomplete na tela /retaguarda/app-push.
+   * Busca por nome OU CPF parcial.
+   */
+  async searchAccounts(query: string, limit = 20) {
+    const q = (query || '').trim();
+    if (q.length < 2) {
+      // Retorna 10 mais recentes (default)
+      const list = await this.prisma.customerAccount.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        include: {
+          pushSubscriptions: { where: { active: true }, select: { id: true } },
+        },
+      });
+      return list.map((a) => ({
+        id: a.id,
+        name: a.name,
+        cpf: maskCpfPublic(a.cpf),
+        phone: a.phone,
+        pushActive: a.pushSubscriptions.length > 0,
+      }));
+    }
+
+    // Busca por nome (case insensitive) ou CPF parcial
+    const cpfDigits = q.replace(/\D/g, '');
+    const list = await this.prisma.customerAccount.findMany({
+      where: {
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          cpfDigits.length >= 3 ? { cpf: { contains: cpfDigits } } : undefined,
+          { phone: { contains: cpfDigits } },
+        ].filter(Boolean) as any,
+      },
+      take: limit,
+      include: {
+        pushSubscriptions: { where: { active: true }, select: { id: true } },
+      },
+    });
+
+    return list.map((a) => ({
+      id: a.id,
+      name: a.name,
+      cpf: maskCpfPublic(a.cpf),
+      phone: a.phone,
+      pushActive: a.pushSubscriptions.length > 0,
+    }));
+  }
+
   /* ─────────────────── STATS (admin retaguarda) ─────────────────── */
   /**
    * Métricas do app cliente — pra dashboard admin no flowops.
