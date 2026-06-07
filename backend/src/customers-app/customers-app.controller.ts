@@ -6,6 +6,7 @@ import {
   Post,
   Req,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { CustomersAppService } from './customers-app.service';
 import {
@@ -14,6 +15,8 @@ import {
   AppRegisterDto,
 } from './dto/app-auth.dto';
 import { CustomerJwtGuard } from './customer-jwt.guard';
+import { CustomerLinkingService } from './customer-linking.service';
+import { JwtAuthGuard } from '../auth/jwt.guard';
 
 /**
  * Endpoints públicos pro app cliente final (PWA app.lurds.com.br).
@@ -32,7 +35,10 @@ import { CustomerJwtGuard } from './customer-jwt.guard';
  */
 @Controller('customers/app')
 export class CustomersAppController {
-  constructor(private readonly svc: CustomersAppService) {}
+  constructor(
+    private readonly svc: CustomersAppService,
+    private readonly linking: CustomerLinkingService,
+  ) {}
 
   @Post('register')
   @HttpCode(201)
@@ -70,5 +76,24 @@ export class CustomersAppController {
     @Body() body: { optIn: boolean },
   ) {
     return this.svc.setPushOptIn(req.customer.id, !!body.optIn);
+  }
+
+  /**
+   * POST /customers/app/admin/reconcile-links
+   *
+   * Endpoint admin pra forçar reconciliação. Útil depois de importar muitos
+   * Customers do Giga ETL. Varre todos CustomerAccount e vincula a Customers
+   * com mesmo CPF que ainda não estão linkados.
+   *
+   * Auth: operador/admin (JWT_USER, não cliente).
+   */
+  @Post('admin/reconcile-links')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async reconcileLinks(@Req() req: any) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.linking.reconcileAll();
   }
 }

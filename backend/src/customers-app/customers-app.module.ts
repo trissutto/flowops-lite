@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { CustomersAppService } from './customers-app.service';
 import { CustomersAppController } from './customers-app.controller';
 import { CustomerJwtGuard } from './customer-jwt.guard';
+import { CustomerLinkingService } from './customer-linking.service';
 
 /**
  * Módulo do app cliente final (PWA app.lurds.com.br).
@@ -28,8 +29,9 @@ import { CustomerJwtGuard } from './customer-jwt.guard';
       }),
     }),
   ],
-  providers: [CustomersAppService, CustomerJwtGuard],
+  providers: [CustomersAppService, CustomerJwtGuard, CustomerLinkingService],
   controllers: [CustomersAppController],
-  exports: [CustomersAppService, CustomerJwtGuard],
+  // Linking service exportado pra ETL Giga importar e usar quando criar Customer.
+  exports: [CustomersAppService, CustomerJwtGuard, CustomerLinkingService],
 })
 export class CustomersAppModule {}

@@ -41,8 +41,10 @@ export class CustomerJwtGuard implements CanActivate {
       if (payload.scope !== 'customer') {
         throw new UnauthorizedException('Token inválido pra app cliente');
       }
+      // Anexa o ACCOUNT (não o Customer). Cliente identidade do app.
       req.customer = {
-        id: payload.sub,
+        id: payload.sub, // CustomerAccount.id
+        accountId: payload.sub,
         cpf: payload.cpf,
         name: payload.name,
       };

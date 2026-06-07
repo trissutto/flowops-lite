@@ -1755,20 +1755,11 @@ model Customer {
   // Pra mineração futura sem precisar mudar ETL. Atualizado a cada sync.
   gigaRawData         Json?    @map("giga_raw_data")
 
-  // ─── APP CLIENTE FINAL (app.lurds.com.br PWA) ──────────────────────────────
-  // Set quando cliente se cadastra/faz login pela primeira vez no app.
-  // Senha SEMPRE com hash bcrypt — nunca em plaintext.
-  appPasswordHash     String?  @map("app_password_hash")
-  appLastLoginAt      DateTime? @map("app_last_login_at")
-  // Quando o navegador da cliente registrou o PWA como instalado (Add to
-  // Home Screen no iOS, beforeinstallprompt accepted no Android).
-  // Usado pra disparar push "obrigado por instalar 💛" + creditar bônus.
-  pwaInstalledAt      DateTime? @map("pwa_installed_at")
-  // Quando o bônus de R$ 20 (welcome) foi creditado no cashback.
-  // Garante que mesmo se cliente apagar/reinstalar o app, recebe só 1 vez.
-  welcomeBonusAt      DateTime? @map("welcome_bonus_at")
-  // Cliente autorizou push notifications no navegador (após opt-in).
-  appPushOptIn        Boolean  @default(false) @map("app_push_opt_in")
+  // ─── APP CLIENTE FINAL ──────────────────────────────────────────────────────
+  // ATENÇÃO: os campos de auth/PWA do app foram MOVIDOS pra `CustomerAccount`
+  // a partir de jun/2026. Customer continua sendo "1 por loja Giga" (regra
+  // ERP), mas a IDENTIDADE DO APP fica em CustomerAccount (1 por pessoa).
+  // Cliente vinculado ao app: tem 1+ CustomerAccountLink → CustomerAccount.
 
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -1785,6 +1776,7 @@ model Customer {
   tags                  CustomerTag[]
   rfvSnapshots          CustomerRfvSnapshot[]
   gigaLinks             CustomerGigaLink[]
+  accountLinks          CustomerAccountLink[]
 
   @@index([cpf])
   @@index([personKey])
@@ -1796,6 +1788,92 @@ model Customer {
   @@index([targetStoreId])
   @@index([lastOrderAt])
   @@map("customers")
+}
+
+// ===========================================================================
+// CustomerAccount — IDENTIDADE DO APP CLIENTE FINAL (app.lurds.com.br PWA).
+//
+// 1 CustomerAccount por PESSOA REAL (chave: CPF).
+// Vincula a N Customer (1 por loja Giga onde ela já comprou).
+//
+// Por que existir como entidade separada do Customer:
+//   - Customer no schema atual = "cadastro por loja" (regra Giga ERP).
+//     Cliente que comprou em 5 lojas tem 5 Customer com mesmo CPF.
+//   - Mas DO PONTO DE VISTA DO APP, cliente é UMA pessoa só. Senha única,
+//     cashback consolidado, push notification única, perfil unificado.
+//   - Resolvermos isso aglutinando no Customer mais antigo seria frágil:
+//     se ele cadastra em loja nova depois, a chave do app teria que migrar.
+//
+// CustomerAccount resolve isso: ele é "a conta do app". Customer continua
+// sendo "o cadastro da loja". Linking via CustomerAccountLink.
+//
+// Login: CPF → CustomerAccount → JWT(sub=account.id, scope='customer').
+// /me: consolida ltvCents, orderCount etc. somando de TODOS Customer linkados.
+// Cashback: 1 saldo único por CustomerAccount (independe de em qual loja
+// foi acumulado).
+// ===========================================================================
+model CustomerAccount {
+  id                    String   @id @default(uuid())
+
+  // Identidade — CPF é a chave única (1 conta por pessoa)
+  cpf                   String   @unique
+  // Pra mostrar na UI / push notification. Vem do Customer mais antigo,
+  // mas cliente pode editar em /conta/dados.
+  name                  String?
+  phone                 String?
+  email                 String?  @unique
+
+  // ─── Auth do app ───
+  passwordHash          String   @map("password_hash") // bcrypt obrigatório
+  lastLoginAt           DateTime? @map("last_login_at")
+
+  // ─── Estado do PWA ───
+  pwaInstalledAt        DateTime? @map("pwa_installed_at")
+  welcomeBonusAt        DateTime? @map("welcome_bonus_at")
+  pushOptIn             Boolean  @default(false) @map("push_opt_in")
+
+  // ─── Cashback unificado (em centavos) ───
+  // Saldo único independente de em qual loja Giga foi gerado.
+  // Quando cliente compra em qualquer loja, o cashback creditado vai aqui.
+  cashbackBalanceCents  Int      @default(0) @map("cashback_balance_cents")
+  cashbackEarnedCents   BigInt   @default(0) @map("cashback_earned_cents")
+  cashbackSpentCents    BigInt   @default(0) @map("cashback_spent_cents")
+
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  links                 CustomerAccountLink[]
+
+  @@index([cpf])
+  @@map("customer_accounts")
+}
+
+// ===========================================================================
+// CustomerAccountLink — vincula 1 CustomerAccount (app) a N Customer (lojas).
+//
+// Criado automaticamente:
+//   - No register: vincula a todos Customer com mesmo CPF que existirem.
+//   - No ETL Giga: quando importa Customer novo cujo CPF já tem account,
+//     adiciona o link automaticamente.
+//
+// `isPrimary` = Customer escolhido como "fonte oficial" dos dados (nome,
+// telefone, endereço default). Geralmente o mais antigo (primeira loja
+// onde comprou).
+// ===========================================================================
+model CustomerAccountLink {
+  id          String   @id @default(uuid())
+  accountId   String   @map("account_id")
+  customerId  String   @map("customer_id")
+  isPrimary   Boolean  @default(false) @map("is_primary")
+  linkedAt    DateTime @default(now()) @map("linked_at")
+
+  account     CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  customer    Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, customerId])
+  @@index([accountId])
+  @@index([customerId])
+  @@map("customer_account_links")
 }
 
 // ===========================================================================
