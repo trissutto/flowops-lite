@@ -103,11 +103,52 @@ export async function registerCustomer(data: {
   phone: string;
   email?: string;
   password: string;
+  invite?: string;
 }) {
-  return api<{ token: string; bonus: number }>('/customers/app/register', {
+  return api<{
+    token: string;
+    customer: { id: string; name: string; cpf: string };
+    bonusPending: number;
+    invite?: { redeemed: boolean; bonus?: number; storeCode?: string; sellerName?: string };
+  }>('/customers/app/register', {
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+/* ─── App Invite (QR Code PDV) ─── */
+export type AppInviteLookup = {
+  valid: boolean;
+  bonus?: number;
+  storeCode?: string;
+  sellerName?: string;
+  reason?: string;
+};
+export async function lookupInvite(token: string) {
+  return api<AppInviteLookup>(`/customers/app/invite/lookup?token=${encodeURIComponent(token)}`);
+}
+
+/** Lê invite token da URL (?invite=XXX) e guarda em localStorage. */
+export function captureInviteFromUrl(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const invite = params.get('invite');
+  if (invite) {
+    window.localStorage.setItem('lurds_invite_token', invite);
+    return invite;
+  }
+  return window.localStorage.getItem('lurds_invite_token');
+}
+
+export function getStoredInvite(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem('lurds_invite_token');
+}
+
+export function clearStoredInvite() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('lurds_invite_token');
+  }
 }
 
 /** GET /me — perfil consolidado do account (cashback + stats + lojas) */
@@ -188,6 +229,50 @@ export async function getOrders() {
   return api<{ orders: AppOrder[]; linkedStoresCount: number }>(
     '/customers/app/orders',
   );
+}
+
+/* ─── Cashback ─── */
+export type CashbackTx = {
+  id: string;
+  type: 'earn' | 'welcome' | 'redeem' | 'expire' | 'adjust';
+  amount: number;
+  balanceAfter: number;
+  description: string | null;
+  date: string;
+  expiresAt: string | null;
+};
+export type CashbackStatement = {
+  balance: number;
+  earned: number;
+  spent: number;
+  rate: number;
+  ttlDays: number;
+  nextExpiration: { amount: number; expiresAt: string; daysLeft: number } | null;
+  transactions: CashbackTx[];
+};
+export async function getCashbackStatement() {
+  return api<CashbackStatement>('/customers/app/cashback');
+}
+
+/* ─── Push Notifications ─── */
+export async function getPushPublicKey() {
+  return api<{ key: string | null }>('/customers/app/push/public-key');
+}
+export async function pushSubscribeApi(sub: {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  userAgent?: string;
+}) {
+  return api<{ ok: true }>('/customers/app/push/subscribe', {
+    method: 'POST',
+    body: JSON.stringify(sub),
+  });
+}
+export async function pushUnsubscribeApi(endpoint: string) {
+  return api<{ ok: true }>('/customers/app/push/unsubscribe', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint }),
+  });
 }
 
 /* ─── Catálogo (público, sem auth) ─── */

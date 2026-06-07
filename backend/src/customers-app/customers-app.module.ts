@@ -6,6 +6,10 @@ import { CustomersAppService } from './customers-app.service';
 import { CustomersAppController } from './customers-app.controller';
 import { CustomerJwtGuard } from './customer-jwt.guard';
 import { CustomerLinkingService } from './customer-linking.service';
+import { CustomerPushService } from './customer-push.service';
+import { CustomerCashbackService } from './customer-cashback.service';
+import { AppInviteService } from './app-invite.service';
+import { CustomerPasswordResetService } from './customer-password-reset.service';
 
 /**
  * Módulo do app cliente final (PWA app.lurds.com.br).
@@ -29,9 +33,24 @@ import { CustomerLinkingService } from './customer-linking.service';
       }),
     }),
   ],
-  providers: [CustomersAppService, CustomerJwtGuard, CustomerLinkingService],
+  providers: [
+    CustomersAppService,
+    CustomerJwtGuard,
+    CustomerLinkingService,
+    CustomerPushService,
+    CustomerCashbackService,
+    AppInviteService,
+    CustomerPasswordResetService,
+  ],
   controllers: [CustomersAppController],
-  // Linking service exportado pra ETL Giga importar e usar quando criar Customer.
-  exports: [CustomersAppService, CustomerJwtGuard, CustomerLinkingService],
+  exports: [
+    CustomersAppService,
+    CustomerJwtGuard,
+    CustomerLinkingService,
+    CustomerPushService,
+    CustomerCashbackService,
+    AppInviteService,
+    CustomerPasswordResetService,
+  ],
 })
 export class CustomersAppModule {}

@@ -1843,6 +1843,9 @@ model CustomerAccount {
   updatedAt             DateTime @updatedAt @map("updated_at")
 
   links                 CustomerAccountLink[]
+  pushSubscriptions     CustomerAppPushSubscription[]
+  cashbackTxs           CustomerCashbackTx[]
+  passwordResetTokens   CustomerPasswordResetToken[]
 
   @@index([cpf])
   @@map("customer_accounts")
@@ -1860,6 +1863,121 @@ model CustomerAccount {
 // telefone, endereço default). Geralmente o mais antigo (primeira loja
 // onde comprou).
 // ===========================================================================
+// ===========================================================================
+// CustomerPasswordResetToken — código de 6 dígitos enviado por WhatsApp
+// pra reset de senha do app.
+//
+// Validade: 15 min. Limite: 3 tentativas. Após uso, fica `usedAt` setado.
+// ===========================================================================
+model CustomerPasswordResetToken {
+  id          String   @id @default(uuid())
+  accountId   String   @map("account_id")
+  account     CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  code        String                                    // 6 dígitos hash
+  attempts    Int      @default(0)
+  expiresAt   DateTime @map("expires_at")
+  usedAt      DateTime? @map("used_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@map("customer_password_reset_tokens")
+}
+
+// ===========================================================================
+// AppInviteToken — captação de cliente no PDV via QR Code.
+//
+// Após vendedora finalizar venda, sistema gera QR único:
+//   1. cliente lê QR → abre app.lurds.com.br/?invite=TOKEN
+//   2. cliente se cadastra (token é guardado no app)
+//   3. ao concluir cadastro, backend valida token, marca origin=PDV,
+//      credita R$ 20 IMEDIATAMENTE (não espera 1ª compra — vendedora
+//      precisa do incentivo na hora).
+//
+// Token expira em 7 dias se não for usado.
+// Cada venda gera 1 token. Pra rastrear conversão por loja/vendedora.
+// ===========================================================================
+model AppInviteToken {
+  id              String   @id @default(uuid())
+  token           String   @unique     // ULID/UUID curto, pra QR ficar pequeno
+  storeCode       String   @map("store_code")
+  sellerName      String?  @map("seller_name")
+  pdvSaleId       String?  @map("pdv_sale_id")
+  customerCpf     String?  @map("customer_cpf")   // se vendedora já bipou CPF
+  bonusCents      Int      @default(2000) @map("bonus_cents")
+  usedByAccountId String?  @map("used_by_account_id")
+  usedAt          DateTime? @map("used_at")
+  expiresAt       DateTime @map("expires_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([storeCode])
+  @@index([sellerName])
+  @@index([usedByAccountId])
+  @@map("app_invite_tokens")
+}
+
+// ===========================================================================
+// CustomerCashbackTx — extrato de cashback do app cliente final.
+//
+// Independente do CashbackTransaction do CRM (que usa Customer.id).
+// Aqui vinculamos ao CustomerAccount, então saldo é único por pessoa
+// (mesmo que ela tenha N Customer em N lojas Giga).
+//
+// Tipos:
+//   - earn:       crédito por compra (10% sobre valor)
+//   - welcome:    bônus R$ 20 (instalação + 1ª compra)
+//   - redeem:     usado pra abater na próxima compra (positivo = saída)
+//   - expire:     expirado por TTL (30 dias)
+//   - adjust:     ajuste manual admin (+ ou −)
+//
+// expiresAt: quando o crédito expira (ganhos expiram em 30 dias por default).
+//            Job diário roda e marca expired conforme essa data.
+// ===========================================================================
+model CustomerCashbackTx {
+  id              String   @id @default(uuid())
+  accountId       String   @map("account_id")
+  account         CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  type            String   // 'earn' | 'welcome' | 'redeem' | 'expire' | 'adjust'
+  amountCents     Int      @map("amount_cents")  // positivo = crédito, negativo = uso
+  balanceAfterCents Int    @map("balance_after_cents") // snapshot saldo após esta tx
+  description     String?
+  orderId         String?  @map("order_id")        // se gerado por Order do site
+  pdvSaleId       String?  @map("pdv_sale_id")     // se gerado por PDV
+  expiresAt       DateTime? @map("expires_at")     // só pra 'earn'/'welcome'
+  expiredAt       DateTime? @map("expired_at")     // setado quando vira 'expire'
+  notifiedExpireWarning Boolean @default(false) @map("notified_expire_warning") // alerta D-7 já enviado
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@index([accountId, type])
+  @@index([expiresAt, expiredAt])
+  @@map("customer_cashback_txs")
+}
+
+// ===========================================================================
+// CustomerAppPushSubscription — VAPID push subscriptions do app cliente final.
+//
+// Separado de PushSubscription (operador/User) pra:
+//   - Targetar push só pra clientes (não operadores)
+//   - Permitir múltiplos devices por account (celular + tablet)
+//   - Trackear engajamento (lastUsed)
+// ===========================================================================
+model CustomerAppPushSubscription {
+  id          String   @id @default(uuid())
+  accountId   String   @map("account_id")
+  account     CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  endpoint    String   @unique // chave única — identifica device
+  p256dh      String              // chave pública ECDH (criptografia)
+  auth        String              // segredo de autenticação
+  userAgent   String?  @map("user_agent")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  lastUsed    DateTime @default(now()) @map("last_used")
+
+  @@index([accountId])
+  @@index([active])
+  @@map("customer_app_push_subscriptions")
+}
+
 model CustomerAccountLink {
   id          String   @id @default(uuid())
   accountId   String   @map("account_id")

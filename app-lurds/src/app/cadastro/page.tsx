@@ -9,7 +9,11 @@ import {
   Sparkles, Store as StoreIcon, ShoppingBag, CheckCircle2,
 } from 'lucide-react';
 import { maskCpf, isValidCpf, cpfDigits } from '@/lib/cpf';
-import { registerCustomer, setToken, lookupCpf, type CpfLookup } from '@/lib/api';
+import {
+  registerCustomer, setToken, lookupCpf, lookupInvite,
+  captureInviteFromUrl, getStoredInvite, clearStoredInvite,
+  type CpfLookup, type AppInviteLookup,
+} from '@/lib/api';
 
 /**
  * /cadastro — fluxo INTELIGENTE:
@@ -34,6 +38,20 @@ export default function CadastroPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [invite, setInvite] = useState<AppInviteLookup | null>(null);
+
+  // Captura invite token da URL (se vier de QR PDV)
+  useEffect(() => {
+    const token = captureInviteFromUrl();
+    if (token) {
+      lookupInvite(token)
+        .then((r) => {
+          if (r.valid) setInvite(r);
+          else clearStoredInvite();
+        })
+        .catch(() => clearStoredInvite());
+    }
+  }, []);
 
   const set = <K extends keyof typeof form>(key: K, value: string) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -91,9 +109,12 @@ export default function CadastroPage() {
         ...form,
         cpf: cpfDigits(form.cpf),
         phone: form.phone.replace(/\D/g, ''),
+        invite: getStoredInvite() || undefined,
       });
       setToken(r.token);
-      router.push('/?welcome=1');
+      // Limpa invite (já foi resgatado)
+      if (r.invite?.redeemed) clearStoredInvite();
+      router.push(r.invite?.redeemed ? '/?welcome=1&invite=1' : '/?welcome=1');
     } catch (err: any) {
       setError(err?.message || 'Erro no cadastro. Tenta de novo.');
     } finally {
@@ -113,13 +134,28 @@ export default function CadastroPage() {
                width={80} height={43} className="h-9 w-auto ml-auto" />
       </header>
 
-      {/* Banner do bônus */}
+      {/* Banner do bônus (especial se veio de QR PDV) */}
       <div className="rounded-3xl bg-gradient-to-br from-gold via-gold-light to-gold p-5 text-ink mb-6">
         <div className="flex items-center gap-3">
           <Gift className="w-8 h-8" />
-          <div>
-            <div className="font-serif text-xl font-black">R$ 20 grátis</div>
-            <div className="text-xs opacity-80">cai no seu cashback após a 1ª compra</div>
+          <div className="flex-1">
+            {invite?.valid ? (
+              <>
+                <div className="font-serif text-xl font-black">
+                  R$ {invite.bonus?.toFixed(0)} esperando você!
+                </div>
+                <div className="text-xs opacity-80">
+                  Cortesia da loja <strong>{invite.storeCode}</strong>
+                  {invite.sellerName && <> com <strong>{invite.sellerName}</strong></>} —
+                  cai no cashback agora ao terminar cadastro
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="font-serif text-xl font-black">R$ 20 grátis</div>
+                <div className="text-xs opacity-80">cai no seu cashback após a 1ª compra</div>
+              </>
+            )}
           </div>
         </div>
       </div>

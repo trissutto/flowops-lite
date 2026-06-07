@@ -17,6 +17,10 @@ import {
 } from './dto/app-auth.dto';
 import { CustomerJwtGuard } from './customer-jwt.guard';
 import { CustomerLinkingService } from './customer-linking.service';
+import { CustomerPushService } from './customer-push.service';
+import { CustomerCashbackService } from './customer-cashback.service';
+import { AppInviteService } from './app-invite.service';
+import { CustomerPasswordResetService } from './customer-password-reset.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 
 /**
@@ -39,6 +43,10 @@ export class CustomersAppController {
   constructor(
     private readonly svc: CustomersAppService,
     private readonly linking: CustomerLinkingService,
+    private readonly push: CustomerPushService,
+    private readonly cashback: CustomerCashbackService,
+    private readonly invite: AppInviteService,
+    private readonly pwReset: CustomerPasswordResetService,
   ) {}
 
   /**
@@ -53,14 +61,90 @@ export class CustomersAppController {
 
   @Post('register')
   @HttpCode(201)
-  async register(@Body() dto: AppRegisterDto) {
-    return this.svc.register(dto);
+  async register(@Body() dto: AppRegisterDto & { invite?: string }) {
+    const result = await this.svc.register(dto);
+    // Se veio com invite de QR PDV, resgata bônus extra
+    if (dto.invite && result.customer.id) {
+      const redeemed = await this.invite.redeemToken(dto.invite, result.customer.id);
+      return { ...result, invite: redeemed };
+    }
+    return result;
+  }
+
+  /* ════════════════ INVITE TOKENS (QR PDV) ════════════════ */
+
+  /** GET /customers/app/invite/lookup?token=XXX — público, pra UI mostrar bônus */
+  @Get('invite/lookup')
+  async inviteLookup(@Query('token') token?: string) {
+    return this.invite.lookupToken(token || '');
+  }
+
+  /** POST /customers/app/admin/invite/create — PDV chama pra gerar QR */
+  @Post('admin/invite/create')
+  @HttpCode(201)
+  @UseGuards(JwtAuthGuard)
+  async inviteCreate(
+    @Req() req: any,
+    @Body() body: {
+      sellerName?: string;
+      pdvSaleId?: string;
+      customerCpf?: string;
+      bonusCents?: number;
+    },
+  ) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.invite.createInvite({
+      storeCode: req.user.storeCode || 'XX',
+      sellerName: body.sellerName,
+      pdvSaleId: body.pdvSaleId,
+      customerCpf: body.customerCpf,
+      bonusCents: body.bonusCents,
+    });
+  }
+
+  /** GET /customers/app/admin/invite/stats — relatório conversão por vendedora */
+  @Get('admin/invite/stats')
+  @UseGuards(JwtAuthGuard)
+  async inviteStats(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('storeCode') storeCode?: string,
+  ) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.invite.getStats({
+      fromDate: from ? new Date(from) : undefined,
+      toDate: to ? new Date(to) : undefined,
+      storeCode,
+    });
   }
 
   @Post('login')
   @HttpCode(200)
   async login(@Body() dto: AppLoginDto) {
     return this.svc.login(dto);
+  }
+
+  /* ════════════════ RESET DE SENHA (WhatsApp) ════════════════ */
+
+  /** POST /customers/app/forgot-password — recebe CPF, envia código no WhatsApp */
+  @Post('forgot-password')
+  @HttpCode(200)
+  async forgotPassword(@Body() body: { cpf: string }) {
+    const cpf = (body.cpf || '').replace(/\D/g, '');
+    return this.pwReset.requestReset(cpf);
+  }
+
+  /** POST /customers/app/reset-password — valida código e atualiza senha */
+  @Post('reset-password')
+  @HttpCode(200)
+  async resetPassword(@Body() body: { cpf: string; code: string; password: string }) {
+    const cpf = (body.cpf || '').replace(/\D/g, '');
+    return this.pwReset.confirmReset(cpf, body.code, body.password);
   }
 
   @Get('me')
@@ -99,6 +183,96 @@ export class CustomersAppController {
     @Body() body: { optIn: boolean },
   ) {
     return this.svc.setPushOptIn(req.customer.id, !!body.optIn);
+  }
+
+  /* ════════════════ CASHBACK ════════════════ */
+
+  /** GET /customers/app/cashback — saldo + extrato + próxima expiração */
+  @Get('cashback')
+  @UseGuards(CustomerJwtGuard)
+  async cashbackStatement(@Req() req: any) {
+    return this.cashback.getStatement(req.customer.id);
+  }
+
+  /** POST /customers/app/admin/cashback/expire-now — força run do job (admin) */
+  @Post('admin/cashback/expire-now')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async cashbackExpireNow(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.cashback.expireOldCashback();
+  }
+
+  /** POST /customers/app/admin/cashback/warn-now — força run alerta D-7 */
+  @Post('admin/cashback/warn-now')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async cashbackWarnNow(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.cashback.warnExpiringSoon();
+  }
+
+  /* ════════════════ PUSH NOTIFICATIONS (cliente) ════════════════ */
+
+  /** GET /customers/app/push/public-key — VAPID key pra frontend subscrever */
+  @Get('push/public-key')
+  pushPublicKey() {
+    return { key: this.push.getPublicKey() };
+  }
+
+  /** POST /customers/app/push/subscribe — cliente registra device */
+  @Post('push/subscribe')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async pushSubscribe(
+    @Req() req: any,
+    @Body() body: {
+      endpoint: string;
+      keys: { p256dh: string; auth: string };
+      userAgent?: string;
+    },
+  ) {
+    await this.push.saveSubscription(req.customer.id, body, body.userAgent);
+    // Marca opt-in no account
+    await this.svc.setPushOptIn(req.customer.id, true);
+    return { ok: true };
+  }
+
+  /** POST /customers/app/push/unsubscribe — cliente desativa um device */
+  @Post('push/unsubscribe')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async pushUnsubscribe(@Req() req: any, @Body() body: { endpoint: string }) {
+    await this.push.unsubscribe(req.customer.id, body.endpoint);
+    return { ok: true };
+  }
+
+  /**
+   * POST /customers/app/admin/push-send — operador dispara push manual.
+   * Body: { mode: 'all' | 'segment' | 'account', payload, segment?, accountId? }
+   */
+  @Post('admin/push-send')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async pushSend(
+    @Req() req: any,
+    @Body()
+    body: {
+      mode: 'all' | 'segment' | 'account';
+      payload: { title: string; body?: string; url?: string; image?: string; tag?: string };
+      segment?: { vipTiers?: string[]; minLtvCents?: number; hasCashback?: boolean; cpfs?: string[] };
+      accountId?: string;
+    },
+  ) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    if (body.mode === 'all') return this.push.sendToAll(body.payload);
+    if (body.mode === 'segment') return this.push.sendSegmented(body.segment || {}, body.payload);
+    if (body.mode === 'account' && body.accountId) {
+      return this.push.sendToAccount(body.accountId, body.payload);
+    }
+    return { error: 'modo inválido' };
   }
 
   /**
