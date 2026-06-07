@@ -132,6 +132,64 @@ export async function getMe(): Promise<CustomerMe> {
   return api<CustomerMe>('/customers/app/me');
 }
 
+/* ─── Lookup CPF (público, pré-cadastro) ─── */
+export type CpfLookup = {
+  exists: boolean;
+  hasAppAccount: boolean;
+  name?: string | null;
+  nameSuggested?: string | null;
+  phone?: string | null;
+  phoneSuggested?: string | null;
+  email?: string | null;
+  stats?: {
+    linkedStoresCount: number;
+    orderCount: number;
+    ltvBrl: number;
+    vipTier: string;
+  };
+};
+
+export async function lookupCpf(cpf: string): Promise<CpfLookup> {
+  const digits = cpf.replace(/\D/g, '');
+  if (digits.length !== 11) return { exists: false, hasAppAccount: false };
+  return api<CpfLookup>(`/customers/app/lookup?cpf=${digits}`);
+}
+
+/* ─── Endereços (do CRM, agregados) ─── */
+export type AppAddress = {
+  id: string;
+  type: string;
+  isPrimary: boolean;
+  cep: string | null;
+  street: string | null;
+  number: string | null;
+  complement: string | null;
+  district: string | null;
+  city: string | null;
+  state: string | null;
+  reference: string | null;
+};
+export async function getAddresses() {
+  return api<{ addresses: AppAddress[] }>('/customers/app/addresses');
+}
+
+/* ─── Pedidos consolidados (Flowops + Giga) ─── */
+export type AppOrder = {
+  id: string;
+  number: string | null;
+  status: string;
+  total: number;
+  date: string | null;
+  tracking: { code: string; carrier: string | null } | null;
+  itemsCount: number;
+  firstItem: string | null;
+};
+export async function getOrders() {
+  return api<{ orders: AppOrder[]; linkedStoresCount: number }>(
+    '/customers/app/orders',
+  );
+}
+
 /* ─── Catálogo (público, sem auth) ─── */
 
 export type WcCategory = {

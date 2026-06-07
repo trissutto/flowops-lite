@@ -39,6 +39,190 @@ export class CustomersAppService {
       this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
   }
 
+  /* ─────────────────── LOOKUP (público, pré-cadastro) ─────────────────── */
+  /**
+   * Verifica se já temos esse CPF na base (Giga ETL ou cadastrado antes).
+   * Retorna dados MASCARADOS pra o app pré-preencher o form de cadastro
+   * com confirmação ("É vc, Th***? Confirma seu telefone").
+   *
+   * IMPORTANTE: rota PÚBLICA. Não retorna dados sensíveis em texto claro.
+   * Quem conhece o CPF vê só primeiras letras do nome + último dígitos do
+   * telefone — suficiente pra cliente reconhecer a si mesma, mas não pra
+   * doxx terceiros.
+   */
+  async lookupByCpf(cpf: string) {
+    if (!/^\d{11}$/.test(cpf)) {
+      return { exists: false, hasAppAccount: false };
+    }
+
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { cpf },
+      select: { id: true, name: true, phone: true, email: true },
+    });
+
+    if (account) {
+      return {
+        exists: true,
+        hasAppAccount: true,
+        // Já cadastrado no app — mostrar mensagem "faça login"
+        name: account.name ? maskName(account.name) : null,
+        phone: account.phone ? maskPhone(account.phone) : null,
+        email: account.email ? maskEmail(account.email) : null,
+      };
+    }
+
+    // Não tem app account, mas pode ter Customer no CRM
+    const customer = await this.prisma.customer.findFirst({
+      where: { cpf, name: { not: null } },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        name: true,
+        phone: true,
+        whatsapp: true,
+        email: true,
+        ltvCents: true,
+        orderCount: true,
+        vipTier: true,
+      },
+    });
+
+    if (!customer) {
+      return { exists: false, hasAppAccount: false };
+    }
+
+    // Conta TODOS os Customer com mesmo CPF pra dizer em quantas lojas comprou
+    const allWithCpf = await this.prisma.customer.findMany({
+      where: { cpf },
+      select: { id: true, originStoreId: true, ltvCents: true, orderCount: true },
+    });
+    let totalLtvCents = 0n;
+    let totalOrders = 0;
+    const stores = new Set<string>();
+    for (const c of allWithCpf) {
+      totalLtvCents += c.ltvCents;
+      totalOrders += c.orderCount;
+      if (c.originStoreId) stores.add(c.originStoreId);
+    }
+
+    return {
+      exists: true,
+      hasAppAccount: false,
+      // Existe no CRM mas não tem app ainda — pré-preenche dados pro cadastro
+      name: customer.name ? maskName(customer.name) : null,
+      // Sugere preencher nome cheio confirmando
+      nameSuggested: customer.name,
+      phone: customer.phone ? maskPhone(customer.phone) : null,
+      phoneSuggested: customer.phone || customer.whatsapp,
+      email: customer.email ? maskEmail(customer.email) : null,
+      stats: {
+        linkedStoresCount: stores.size,
+        orderCount: totalOrders,
+        ltvBrl: Number(totalLtvCents) / 100,
+        vipTier: customer.vipTier,
+      },
+    };
+  }
+
+  /* ─────────────────── ENDEREÇOS ─────────────────── */
+  /**
+   * Lista endereços consolidados de TODOS os Customer vinculados ao account.
+   * Cliente que comprou em 3 lojas tem 3 cadastros — endereço pode estar em
+   * qualquer um deles. Agregamos e mostramos único.
+   */
+  async getAddresses(accountId: string) {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+
+    const customerIds = account.links.map((l) => l.customerId);
+    if (customerIds.length === 0) return { addresses: [] };
+
+    const addresses = await this.prisma.customerAddress.findMany({
+      where: {
+        customerId: { in: customerIds },
+        active: true,
+      },
+      orderBy: [{ isPrimary: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    // Deduplica por CEP + número (mesma cliente pode ter mesmo endereço em N Customers)
+    const seen = new Set<string>();
+    const unique = addresses.filter((a) => {
+      const key = `${a.cep || ''}-${a.number || ''}-${a.street || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return {
+      addresses: unique.map((a) => ({
+        id: a.id,
+        type: a.type,
+        isPrimary: a.isPrimary,
+        cep: a.cep,
+        street: a.street,
+        number: a.number,
+        complement: a.complement,
+        district: a.district,
+        city: a.city,
+        state: a.state,
+        reference: a.reference,
+      })),
+    };
+  }
+
+  /* ─────────────────── PEDIDOS (Flowops Orders) ─────────────────── */
+  /**
+   * Histórico de pedidos do site (Flowops/WC).
+   * Para pedidos da loja física, frontend mostra stats agregadas (#me) +
+   * link "Ver detalhes na loja" (não bipa Giga em real-time aqui).
+   */
+  async getOrders(accountId: string) {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+
+    const customerIds = account.links.map((l) => l.customerId);
+
+    // Pedidos do site (Flowops) — filtra por CPF do account porque
+    // Order não tem customerId direto, mas customer_cpf é populado.
+    const orders = await this.prisma.order.findMany({
+      where: { customerCpf: account.cpf },
+      orderBy: { wcDateCreated: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        wcOrderNumber: true,
+        status: true,
+        totalAmount: true,
+        wcDateCreated: true,
+        trackingCode: true,
+        carrier: true,
+        items: { select: { productName: true, quantity: true } },
+      },
+    });
+
+    return {
+      orders: orders.map((o) => ({
+        id: o.id,
+        number: o.wcOrderNumber,
+        status: o.status,
+        total: Number(o.totalAmount) || 0,
+        date: o.wcDateCreated,
+        tracking: o.trackingCode
+          ? { code: o.trackingCode, carrier: o.carrier }
+          : null,
+        itemsCount: o.items.reduce((s, i) => s + (i.quantity || 0), 0),
+        firstItem: o.items[0]?.productName || null,
+      })),
+      linkedStoresCount: customerIds.length,
+    };
+  }
+
   /* ─────────────────── REGISTER ─────────────────── */
   /**
    * Cria CustomerAccount (1 por CPF). Se a pessoa já tem N Customer no banco
@@ -308,4 +492,30 @@ export class CustomersAppService {
 function maskCpfPublic(cpf: string): string {
   if (!cpf || cpf.length !== 11) return cpf;
   return `${cpf.slice(0, 3)}.***.***-${cpf.slice(9, 11)}`;
+}
+
+/** Mascara nome — primeira palavra completa, demais com 1ª letra: "Thiago R*** S***" */
+function maskName(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .map((part, i) => (i === 0 ? part : part.charAt(0).toUpperCase() + '***'))
+    .join(' ');
+}
+
+/** Mascara telefone: (11) ****-1234 (mostra DDD + últimos 4) */
+function maskPhone(phone: string): string {
+  const d = (phone || '').replace(/\D/g, '');
+  if (d.length < 8) return '****';
+  const last4 = d.slice(-4);
+  const ddd = d.length >= 10 ? d.slice(0, 2) : '';
+  return ddd ? `(${ddd}) ****-${last4}` : `****-${last4}`;
+}
+
+/** Mascara e-mail: jo***@exemplo.com */
+function maskEmail(email: string): string {
+  const [user, domain] = (email || '').split('@');
+  if (!user || !domain) return '***';
+  const visible = user.slice(0, Math.min(2, user.length));
+  return `${visible}***@${domain}`;
 }

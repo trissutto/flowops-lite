@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Post,
+  Query,
   Req,
   UseGuards,
   ForbiddenException,
@@ -40,6 +41,16 @@ export class CustomersAppController {
     private readonly linking: CustomerLinkingService,
   ) {}
 
+  /**
+   * GET /customers/app/lookup?cpf=12345678901
+   * Público — checa se CPF existe na base (Giga ETL) e retorna dados
+   * mascarados pra pré-preencher o cadastro.
+   */
+  @Get('lookup')
+  async lookup(@Query('cpf') cpf?: string) {
+    return this.svc.lookupByCpf((cpf || '').replace(/\D/g, ''));
+  }
+
   @Post('register')
   @HttpCode(201)
   async register(@Body() dto: AppRegisterDto) {
@@ -56,6 +67,18 @@ export class CustomersAppController {
   @UseGuards(CustomerJwtGuard)
   async me(@Req() req: any) {
     return this.svc.me(req.customer.id);
+  }
+
+  @Get('addresses')
+  @UseGuards(CustomerJwtGuard)
+  async addresses(@Req() req: any) {
+    return this.svc.getAddresses(req.customer.id);
+  }
+
+  @Get('orders')
+  @UseGuards(CustomerJwtGuard)
+  async orders(@Req() req: any) {
+    return this.svc.getOrders(req.customer.id);
   }
 
   @Post('pwa-installed')
