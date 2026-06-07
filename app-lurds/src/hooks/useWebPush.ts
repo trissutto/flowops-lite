@@ -25,16 +25,34 @@ export function useWebPush() {
   const [subscription, setSubscription] = useState<PushSubscription | null>(null);
   const [isSupported, setIsSupported] = useState(false);
   const [loading, setLoading] = useState(false);
+  // iOS detection — push exige PWA INSTALADO (display-mode standalone)
+  const [isIOS, setIsIOS] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
   // Detecta suporte + estado inicial
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    // Detecta iOS (iPhone/iPad)
+    const ua = window.navigator.userAgent;
+    const ios = /iPad|iPhone|iPod/.test(ua) && !(window as any).MSStream;
+    setIsIOS(ios);
+
+    // Detecta se app está rodando como PWA (Add to Home Screen no iOS)
+    const standalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true;
+    setIsStandalone(standalone);
+
+    // Suporte real: Notification API existe E (no iOS) está em standalone
     const supported =
       'serviceWorker' in navigator &&
       'PushManager' in window &&
-      typeof Notification !== 'undefined';
+      typeof Notification !== 'undefined' &&
+      (!ios || standalone);
+
     setIsSupported(supported);
-    if (!supported) return;
+    if (!supported || typeof Notification === 'undefined') return;
 
     setPermission(Notification.permission);
 
@@ -111,6 +129,10 @@ export function useWebPush() {
     loading,
     enable,
     disable,
+    // iOS state — UI decide se mostra wizard ou botão direto
+    isIOS,
+    isStandalone,
+    needsInstallFirst: isIOS && !isStandalone,
   };
 }
 
