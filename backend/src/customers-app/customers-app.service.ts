@@ -60,33 +60,68 @@ export class CustomersAppService {
 
     const hash = await bcrypt.hash(dto.password, 10);
 
-    // Sem customer existente → cria novo
-    const customer = existing
-      ? await this.prisma.customer.update({
-          where: { id: existing.id },
-          data: {
-            appPasswordHash: hash,
-            // Preenche dados básicos se Giga não tinha
-            name: existing.name || dto.name,
-            phone: existing.phone || dto.phone,
-            whatsapp: existing.whatsapp || dto.phone,
-            email: existing.email || dto.email || undefined,
-            appLastLoginAt: new Date(),
-          },
-        })
-      : await this.prisma.customer.create({
-          data: {
-            cpf: dto.cpf,
-            name: dto.name,
-            phone: dto.phone,
-            whatsapp: dto.phone,
-            email: dto.email,
-            appPasswordHash: hash,
-            appLastLoginAt: new Date(),
-            // Origem = SITE (cadastrou direto pelo app, não veio de loja física)
-            // Se houver Store SITE no banco, vai pegar via service futuro.
-          },
-        });
+    // Email é OPCIONAL no app — mas tem @unique no schema. Se o email
+    // do form já pertence a OUTRO Customer (vindo do CRM/Giga), prefere
+    // NÃO setar nesse cadastro pra evitar P2002. Cliente pode confirmar
+    // o email depois em /conta/dados.
+    let safeEmail: string | undefined = dto.email || undefined;
+    if (safeEmail) {
+      const otherWithEmail = await this.prisma.customer.findFirst({
+        where: {
+          email: safeEmail,
+          NOT: existing?.id ? { id: existing.id } : undefined,
+        },
+        select: { id: true },
+      });
+      if (otherWithEmail) {
+        // Não bloqueia o cadastro — só ignora o email pra não violar UNIQUE.
+        // (Cliente pode atualizar depois no perfil)
+        this.logger.warn(
+          `Email ${safeEmail} já está em outro Customer (${otherWithEmail.id}); criando sem email.`,
+        );
+        safeEmail = undefined;
+      }
+    }
+
+    let customer;
+    try {
+      customer = existing
+        ? await this.prisma.customer.update({
+            where: { id: existing.id },
+            data: {
+              appPasswordHash: hash,
+              // Preenche dados básicos se Giga não tinha
+              name: existing.name || dto.name,
+              phone: existing.phone || dto.phone,
+              whatsapp: existing.whatsapp || dto.phone,
+              email: existing.email || safeEmail,
+              appLastLoginAt: new Date(),
+            },
+          })
+        : await this.prisma.customer.create({
+            data: {
+              cpf: dto.cpf,
+              name: dto.name,
+              phone: dto.phone,
+              whatsapp: dto.phone,
+              email: safeEmail,
+              appPasswordHash: hash,
+              appLastLoginAt: new Date(),
+              // Origem = SITE (cadastrou direto pelo app, não veio de loja física)
+            },
+          });
+    } catch (err: any) {
+      // P2002 = Prisma unique constraint violation
+      // Pode acontecer mesmo com a checagem acima (race condition).
+      if (err?.code === 'P2002') {
+        const fields = (err.meta?.target as string[] | undefined)?.join(', ') || 'campo único';
+        throw new ConflictException(
+          `Cadastro duplicado em: ${fields}. Tente fazer login ou use outro e-mail.`,
+        );
+      }
+      this.logger.error(`register falhou: ${err?.message || err}`);
+      throw err;
+    }
 
     const token = this.signToken(customer);
     return {
