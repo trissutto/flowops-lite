@@ -3,29 +3,37 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet } from 'lucide-react';
+import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2 } from 'lucide-react';
 import InstallBanner from '@/components/InstallBanner';
 import BottomNav from '@/components/BottomNav';
+import ProductCard from '@/components/ProductCard';
+import {
+  getCategories, getProducts, isLoggedIn,
+  type WcCategory, type WcProduct,
+} from '@/lib/api';
 
-/**
- * HOME do app Lurd's — primeira impressão da cliente.
- *
- * Estrutura:
- *  - Header com logo + sino notificação
- *  - Banner promo principal (rotativo no futuro — mock por ora)
- *  - Atalhos rápidos (Cashback, Catálogo, Live, Lojas)
- *  - Destaques da semana (carrossel horizontal)
- *  - Banner R$ 20 (se não logada ou não fez 1ª compra)
- *  - Bottom Nav fixa
- *  - Banner Install (smart — só mostra se ainda não instalou)
- */
 export default function HomePage() {
   const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [categories, setCategories] = useState<WcCategory[]>([]);
+  const [highlights, setHighlights] = useState<WcProduct[]>([]);
+  const [loadingHL, setLoadingHL] = useState(true);
+  const logged = typeof window !== 'undefined' && isLoggedIn();
 
   useEffect(() => {
-    // Mostra banner de instalação após 5s na home (não interrompe primeira navegação)
     const t = setTimeout(() => setShowInstallBanner(true), 5000);
     return () => clearTimeout(t);
+  }, []);
+
+  // Carrega categorias e destaques (em paralelo)
+  useEffect(() => {
+    Promise.all([
+      getCategories().catch(() => ({ categories: [] })),
+      getProducts({ perPage: 10, orderby: 'popularity' }).catch(() => ({ products: [] as WcProduct[] })),
+    ]).then(([catsR, prodsR]) => {
+      setCategories(catsR.categories.slice(0, 6));
+      setHighlights(prodsR.products);
+      setLoadingHL(false);
+    });
   }, []);
 
   return (
@@ -35,8 +43,7 @@ export default function HomePage() {
         <Image
           src="/images/logo-branco.png"
           alt="Lurd's Plus Size"
-          width={120}
-          height={66}
+          width={120} height={66}
           priority
           className="h-12 w-auto"
         />
@@ -52,11 +59,12 @@ export default function HomePage() {
 
       {/* ── BANNER PRINCIPAL ── */}
       <section className="mt-6 px-5">
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-ink-800 via-ink to-ink-800 border border-gold/20 p-6 shadow-gold">
+        <Link
+          href="/catalogo?promo=1"
+          className="block relative overflow-hidden rounded-3xl bg-gradient-to-br from-ink-800 via-ink to-ink-800 border border-gold/20 p-6 shadow-gold"
+        >
           <div className="absolute inset-0 opacity-10"
-               style={{
-                 backgroundImage: 'radial-gradient(circle at 30% 30%, #C9A961 0%, transparent 50%)',
-               }} />
+               style={{ backgroundImage: 'radial-gradient(circle at 30% 30%, #C9A961 0%, transparent 50%)' }} />
           <div className="relative">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-gold bg-gold/10 px-3 py-1 rounded-full mb-3">
               <Sparkles className="w-3 h-3" />
@@ -68,15 +76,14 @@ export default function HomePage() {
             <p className="mt-1 text-sm text-cream/70">
               Coleção nova com até 40% off — só no app
             </p>
-            <Link href="/catalogo?campanha=inverno" className="btn-gold mt-4">
-              Ver coleção
-              <ChevronRight className="w-4 h-4" />
-            </Link>
+            <div className="inline-flex items-center gap-1 mt-4 btn-gold">
+              Ver coleção <ChevronRight className="w-4 h-4" />
+            </div>
           </div>
-        </div>
+        </Link>
       </section>
 
-      {/* ── ATALHOS RÁPIDOS ── */}
+      {/* ── ATALHOS ── */}
       <section className="mt-7 px-5">
         <div className="grid grid-cols-4 gap-3">
           <QuickShortcut href="/cashback" icon={<Wallet className="w-5 h-5" />} label="Cashback" />
@@ -86,7 +93,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── DESTAQUES ── */}
+      {/* ── DESTAQUES (REAL DO WC) ── */}
       <section className="mt-8">
         <div className="flex items-center justify-between px-5 mb-3">
           <h3 className="font-serif text-xl font-bold">Destaques da semana</h3>
@@ -94,83 +101,105 @@ export default function HomePage() {
             Ver todos
           </Link>
         </div>
-        <div className="flex gap-3 overflow-x-auto no-scrollbar px-5 pb-2 snap-x snap-mandatory">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <ProductPlaceholder key={i} />
-          ))}
-        </div>
-      </section>
-
-      {/* ── BANNER R$ 20 BÔNUS ── */}
-      <section className="mt-8 px-5">
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-gold via-gold-light to-gold p-6 text-ink">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="text-xs font-bold uppercase tracking-widest opacity-80">
-                Bem-vinda 💛
+        {loadingHL ? (
+          <div className="flex gap-3 overflow-x-auto no-scrollbar px-5 pb-2">
+            {[1,2,3,4,5].map(i => (
+              <div key={i} className="snap-start shrink-0 w-40 rounded-2xl overflow-hidden bg-ink-800 border border-ink-600">
+                <div className="aspect-[3/4] shimmer" />
+                <div className="p-2">
+                  <div className="h-3 w-3/4 rounded shimmer mb-1.5" />
+                  <div className="h-4 w-1/2 rounded shimmer" />
+                </div>
               </div>
-              <h3 className="font-serif text-2xl font-black mt-1 leading-tight">
-                R$ 20 grátis
-              </h3>
-              <p className="text-sm mt-1 opacity-90">
-                Cadastre-se e ganhe na primeira compra
-              </p>
-              <Link href="/cadastro" className="inline-flex items-center gap-1 mt-3 text-sm font-bold uppercase tracking-wider border-b border-ink/40">
-                Pegar meu bônus
-                <ChevronRight className="w-4 h-4" />
-              </Link>
-            </div>
-            <Heart className="w-16 h-16 fill-ink/10 stroke-ink/30 shrink-0" />
+            ))}
           </div>
-        </div>
+        ) : highlights.length === 0 ? (
+          <div className="px-5 text-sm text-cream/50">
+            Em breve produtos por aqui. Enquanto isso, visita o{' '}
+            <a href="https://lurds.com.br" target="_blank" rel="noopener" className="text-gold underline">
+              lurds.com.br
+            </a>.
+          </div>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto no-scrollbar px-5 pb-2 snap-x snap-mandatory">
+            {highlights.map((p) => (
+              <div key={p.id} className="snap-start shrink-0 w-40">
+                <ProductCard product={p} compact />
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
-      {/* ── CATEGORIAS ── */}
+      {/* ── BANNER R$ 20 (só se não logado) ── */}
+      {!logged && (
+        <section className="mt-8 px-5">
+          <Link
+            href="/cadastro"
+            className="block relative overflow-hidden rounded-3xl bg-gradient-to-br from-gold via-gold-light to-gold p-6 text-ink"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-widest opacity-80">
+                  Bem-vinda 💛
+                </div>
+                <h3 className="font-serif text-2xl font-black mt-1 leading-tight">
+                  R$ 20 grátis
+                </h3>
+                <p className="text-sm mt-1 opacity-90">
+                  Cadastre-se e ganhe na primeira compra
+                </p>
+                <span className="inline-flex items-center gap-1 mt-3 text-sm font-bold uppercase tracking-wider border-b border-ink/40">
+                  Pegar meu bônus
+                  <ChevronRight className="w-4 h-4" />
+                </span>
+              </div>
+              <Heart className="w-16 h-16 fill-ink/10 stroke-ink/30 shrink-0" />
+            </div>
+          </Link>
+        </section>
+      )}
+
+      {/* ── CATEGORIAS REAIS WC ── */}
       <section className="mt-8 px-5">
         <h3 className="font-serif text-xl font-bold mb-3">Por categoria</h3>
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { name: 'Blusas', emoji: '👚' },
-            { name: 'Calças', emoji: '👖' },
-            { name: 'Vestidos', emoji: '👗' },
-            { name: 'Saias', emoji: '🩱' },
-          ].map((c) => (
-            <Link
-              key={c.name}
-              href={`/catalogo?cat=${c.name.toLowerCase()}`}
-              className="card-dark flex items-center gap-3 hover:border-gold/50 transition"
-            >
-              <span className="text-2xl">{c.emoji}</span>
-              <span className="font-semibold">{c.name}</span>
-            </Link>
-          ))}
-        </div>
+        {categories.length === 0 ? (
+          <div className="card-dark text-sm text-cream/50 text-center py-6">
+            Categorias indisponíveis no momento.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            {categories.map((c) => (
+              <Link
+                key={c.id}
+                href={`/catalogo?cat=${c.slug}`}
+                className="card-dark flex items-center gap-3 hover:border-gold/50 transition"
+              >
+                {c.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.image} alt={c.name} className="w-12 h-12 rounded-lg object-cover" />
+                ) : (
+                  <span className="text-2xl">👗</span>
+                )}
+                <div className="flex-1 min-w-0">
+                  <span className="font-semibold block truncate">{c.name}</span>
+                  <span className="text-[10px] text-cream/40">{c.count} peças</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
 
-      {/* Espaço pra Bottom Nav não cobrir conteúdo */}
       <div className="h-20" />
-
-      {/* ── BOTTOM NAV ── */}
       <BottomNav />
-
-      {/* ── INSTALL BANNER (smart) ── */}
       {showInstallBanner && <InstallBanner onClose={() => setShowInstallBanner(false)} />}
     </div>
   );
 }
 
-/* ─────────────────── Subcomponents ─────────────────── */
-
-function QuickShortcut({
-  href,
-  icon,
-  label,
-  badge,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  label: string;
-  badge?: boolean;
+function QuickShortcut({ href, icon, label, badge }: {
+  href: string; icon: React.ReactNode; label: string; badge?: boolean;
 }) {
   return (
     <Link
@@ -185,17 +214,5 @@ function QuickShortcut({
         <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
       )}
     </Link>
-  );
-}
-
-function ProductPlaceholder() {
-  return (
-    <div className="snap-start shrink-0 w-40 rounded-2xl overflow-hidden bg-ink-800 border border-ink-600">
-      <div className="aspect-[3/4] shimmer" />
-      <div className="p-2">
-        <div className="h-3 w-3/4 rounded shimmer mb-1.5" />
-        <div className="h-4 w-1/2 rounded shimmer" />
-      </div>
-    </div>
   );
 }

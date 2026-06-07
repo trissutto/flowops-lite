@@ -109,3 +109,74 @@ export async function registerCustomer(data: {
     body: JSON.stringify(data),
   });
 }
+
+/** GET /me — perfil consolidado do account (cashback + stats + lojas) */
+export type CustomerMe = {
+  id: string;
+  name: string | null;
+  cpf: string;        // mascarado: 123.***.***-45
+  phone: string | null;
+  email: string | null;
+  cashback: { balance: number; earned: number; spent: number };
+  stats: {
+    ltvBrl: number;
+    orderCount: number;
+    lastOrderAt: string | null;
+    linkedStoresCount: number;
+  };
+  pwaInstalled: boolean;
+  welcomeBonusReceived: boolean;
+};
+
+export async function getMe(): Promise<CustomerMe> {
+  return api<CustomerMe>('/customers/app/me');
+}
+
+/* ─── Catálogo (público, sem auth) ─── */
+
+export type WcCategory = {
+  id: number;
+  name: string;
+  slug: string;
+  count: number;
+  image: string | null;
+};
+export type WcProduct = {
+  id: number;
+  name: string;
+  slug: string;
+  price: number;
+  regularPrice: number;
+  onSale: boolean;
+  image: string | null;
+  permalink: string;
+  categories: string[];
+};
+
+export async function getCategories() {
+  return api<{ categories: WcCategory[] }>('/catalog/categories');
+}
+
+export async function getProducts(opts: {
+  category?: string;
+  search?: string;
+  page?: number;
+  perPage?: number;
+  orderby?: 'date' | 'popularity' | 'price' | 'rating';
+  onSale?: boolean;
+} = {}) {
+  const params = new URLSearchParams();
+  if (opts.category) params.set('category', opts.category);
+  if (opts.search) params.set('search', opts.search);
+  if (opts.page) params.set('page', String(opts.page));
+  if (opts.perPage) params.set('perPage', String(opts.perPage));
+  if (opts.orderby) params.set('orderby', opts.orderby);
+  if (opts.onSale) params.set('onSale', '1');
+  const qs = params.toString();
+  return api<{
+    products: WcProduct[];
+    total: number;
+    page: number;
+    perPage: number;
+  }>(`/catalog/products${qs ? '?' + qs : ''}`);
+}
