@@ -130,6 +130,13 @@ export class CustomersAppService {
    * qualquer um deles. Agregamos e mostramos único.
    */
   async getAddresses(accountId: string) {
+    const acc = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { id: true, cpf: true },
+    });
+    if (!acc) throw new UnauthorizedException('Conta não encontrada');
+    await this.ensureAccountLinks(acc.id, acc.cpf);
+
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
       include: { links: { select: { customerId: true } } },
@@ -180,6 +187,13 @@ export class CustomersAppService {
    * link "Ver detalhes na loja" (não bipa Giga em real-time aqui).
    */
   async getOrders(accountId: string) {
+    const acc = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { id: true, cpf: true },
+    });
+    if (!acc) throw new UnauthorizedException('Conta não encontrada');
+    await this.ensureAccountLinks(acc.id, acc.cpf);
+
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
       include: { links: { select: { customerId: true } } },
@@ -353,6 +367,11 @@ export class CustomersAppService {
       data: { lastLoginAt: new Date() },
     });
 
+    // AUTO-RECONCILIAÇÃO: se a conta foi criada antes de ter Customer com
+    // mesmo CPF no banco (ou se ETL Giga importou depois), faz o link agora.
+    // Idempotente — só roda se ainda não tem links.
+    await this.ensureAccountLinks(account.id, account.cpf);
+
     const token = this.signToken(account);
     return {
       token,
@@ -360,11 +379,60 @@ export class CustomersAppService {
     };
   }
 
+  /**
+   * Garante que o account tenha links com Customers de mesmo CPF.
+   * Chamado em login + me — pega casos onde o Customer foi criado DEPOIS
+   * do account (cliente cadastrou no app antes de aparecer no CRM Giga).
+   */
+  private async ensureAccountLinks(accountId: string, cpf: string): Promise<number> {
+    if (!cpf) return 0;
+
+    // Customers com mesmo CPF que NÃO estão vinculados ainda
+    const candidates = await this.prisma.customer.findMany({
+      where: {
+        cpf,
+        accountLinks: { none: { accountId } },
+      },
+      select: { id: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (candidates.length === 0) return 0;
+
+    // Verifica se já tem algum link (pra decidir qual fica como primary)
+    const existingCount = await this.prisma.customerAccountLink.count({
+      where: { accountId },
+    });
+
+    await this.prisma.customerAccountLink.createMany({
+      data: candidates.map((c, idx) => ({
+        accountId,
+        customerId: c.id,
+        isPrimary: existingCount === 0 && idx === 0, // só o 1º vira primary se não tinha nenhum
+      })),
+      skipDuplicates: true,
+    });
+
+    this.logger.log(
+      `Auto-linkados ${candidates.length} Customer(s) → Account ${accountId} (CPF ${cpf})`,
+    );
+    return candidates.length;
+  }
+
   /* ─────────────────── ME ─────────────────── */
   /**
    * Retorna dados consolidados: account + soma de TODOS Customer linkados.
    */
   async me(accountId: string) {
+    // Antes de retornar, tenta reconciliar links — captura Customers que
+    // foram importados do Giga DEPOIS do cadastro do app.
+    const acc = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { id: true, cpf: true },
+    });
+    if (!acc) throw new UnauthorizedException('Conta não encontrada');
+    await this.ensureAccountLinks(acc.id, acc.cpf);
+
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
       include: {
