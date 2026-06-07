@@ -1,8 +1,9 @@
 import {
-  BadRequestException, Injectable, Logger, NotFoundException,
+  BadRequestException, Injectable, Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
@@ -28,7 +29,10 @@ export class CustomerPasswordResetService {
   private readonly MAX_ATTEMPTS = 3;
   private readonly RATE_LIMIT_SEC = 60;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly whatsapp: WhatsappService,
+  ) {}
 
   /**
    * Solicita código de reset. Sempre retorna sucesso (não revela se CPF existe).
@@ -157,16 +161,11 @@ export class CustomerPasswordResetService {
       `Vale por 15 minutos. Não compartilha com ninguém.\n\n` +
       `Se você não solicitou, ignore esta mensagem.`;
 
-    // Vai pra WhatsappOutbox (já existe no schema)
-    await this.prisma.whatsappOutbox.create({
-      data: {
-        toPhone: phone.replace(/\D/g, ''),
-        body: message,
-        // Campos opcionais conforme schema do projeto
-        purpose: 'app_password_reset',
-        status: 'queued',
-      } as any,
-    });
+    // Envia direto pelo WhatsappService (Baileys socket)
+    const result = await this.whatsapp.sendText(phone.replace(/\D/g, ''), message);
+    if (!result.ok) {
+      throw new Error(result.error || 'WhatsApp falhou');
+    }
   }
 }
 
