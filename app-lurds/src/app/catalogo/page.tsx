@@ -1,19 +1,35 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Search, Loader2, SlidersHorizontal, Tag } from 'lucide-react';
+import { ArrowLeft, Search, Loader2 } from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import { getCategories, getProducts, type WcCategory, type WcProduct } from '@/lib/api';
 
 /**
  * /catalogo — produtos do site lurds.com.br via API WC.
- * Filtros: categoria (chips horizontais) + busca + on sale.
- * Click no produto → abre lurds.com.br/produto/SLUG.
+ *
+ * IMPORTANTE: useSearchParams() precisa estar dentro de <Suspense> pra
+ * Next.js 14 conseguir pré-renderizar (export estático). Por isso o
+ * componente é dividido em wrapper + content.
  */
 export default function CatalogoPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-dvh flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-gold" />
+        </div>
+      }
+    >
+      <CatalogoContent />
+    </Suspense>
+  );
+}
+
+function CatalogoContent() {
   const params = useSearchParams();
   const initialCat = params.get('cat') || '';
   const onlyPromo = params.get('campanha') === 'inverno' || params.get('promo') === '1';
