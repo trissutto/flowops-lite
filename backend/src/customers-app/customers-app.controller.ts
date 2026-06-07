@@ -275,6 +275,16 @@ export class CustomersAppController {
     return { error: 'modo inválido' };
   }
 
+  /** GET /customers/app/admin/stats — dashboard admin */
+  @Get('admin/stats')
+  @UseGuards(JwtAuthGuard)
+  async adminStats(@Req() req: any) {
+    if (req?.user?.role !== 'admin' && req?.user?.role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/operator');
+    }
+    return this.svc.getAdminStats();
+  }
+
   /**
    * POST /customers/app/admin/reconcile-links
    *

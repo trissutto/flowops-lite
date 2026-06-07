@@ -39,6 +39,82 @@ export class CustomersAppService {
       this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
   }
 
+  /* ─────────────────── STATS (admin retaguarda) ─────────────────── */
+  /**
+   * Métricas do app cliente — pra dashboard admin no flowops.
+   * Cobre todo o funil: cadastros, PWA instalado, push ativo, cashback.
+   */
+  async getAdminStats() {
+    const [
+      totalAccounts,
+      pwaInstalled,
+      pushOptIn,
+      activeSubscriptions,
+      cashbackTotal,
+      welcomeBonusGiven,
+      todayLogins,
+    ] = await Promise.all([
+      this.prisma.customerAccount.count(),
+      this.prisma.customerAccount.count({ where: { pwaInstalledAt: { not: null } } }),
+      this.prisma.customerAccount.count({ where: { pushOptIn: true } }),
+      this.prisma.customerAppPushSubscription.count({ where: { active: true } }),
+      this.prisma.customerAccount.aggregate({
+        _sum: { cashbackBalanceCents: true, cashbackEarnedCents: true },
+      }),
+      this.prisma.customerAccount.count({ where: { welcomeBonusAt: { not: null } } }),
+      this.prisma.customerAccount.count({
+        where: { lastLoginAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      }),
+    ]);
+
+    // Top vips com mais cashback
+    const topCashback = await this.prisma.customerAccount.findMany({
+      orderBy: { cashbackBalanceCents: 'desc' },
+      take: 10,
+      select: { id: true, name: true, cpf: true, cashbackBalanceCents: true },
+    });
+
+    // Últimos cadastros
+    const recentAccounts = await this.prisma.customerAccount.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      select: {
+        id: true, name: true, cpf: true, createdAt: true,
+        pwaInstalledAt: true, pushOptIn: true,
+      },
+    });
+
+    return {
+      summary: {
+        totalAccounts,
+        pwaInstalled,
+        pushOptIn,
+        activeSubscriptions,
+        welcomeBonusGiven,
+        todayLogins,
+        cashbackBalanceTotalBrl: (cashbackTotal._sum.cashbackBalanceCents || 0) / 100,
+        cashbackEarnedTotalBrl: Number(cashbackTotal._sum.cashbackEarnedCents || 0n) / 100,
+        // Taxa de conversão funil
+        pwaInstallRate: totalAccounts > 0 ? (pwaInstalled / totalAccounts) * 100 : 0,
+        pushOptInRate: totalAccounts > 0 ? (pushOptIn / totalAccounts) * 100 : 0,
+      },
+      topCashback: topCashback.map((c) => ({
+        id: c.id,
+        name: c.name,
+        cpf: maskCpfPublic(c.cpf),
+        balance: c.cashbackBalanceCents / 100,
+      })),
+      recentAccounts: recentAccounts.map((c) => ({
+        id: c.id,
+        name: c.name,
+        cpf: maskCpfPublic(c.cpf),
+        createdAt: c.createdAt,
+        pwaInstalled: !!c.pwaInstalledAt,
+        pushOptIn: c.pushOptIn,
+      })),
+    };
+  }
+
   /* ─────────────────── LOOKUP (público, pré-cadastro) ─────────────────── */
   /**
    * Verifica se já temos esse CPF na base (Giga ETL ou cadastrado antes).
