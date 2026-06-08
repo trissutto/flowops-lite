@@ -55,6 +55,10 @@ export default function PushPrePrompt({ context, reward, onClose, force }: Props
     if (!isLoggedIn()) return;
     // Não mostra se: já tá inscrita, não suporta, ou iOS sem PWA (mostra outro fluxo)
     if (isSubscribed || !isSupported || needsInstallFirst) return;
+    // Não mostra se cliente JÁ CONCEDEU permissão antes (mesmo que sub backend tenha falhado).
+    // Se ela já clicou "Permitir" no dialog nativo, NUNCA mais perguntamos —
+    // resub silenciosa fica por conta do useWebPush no mount.
+    if (permission === 'granted') return;
     // Não mostra se já negou no nativo (permission === 'denied')
     if (permission === 'denied') return;
     // Não mostra se dispensou recentemente nesse contexto
@@ -71,6 +75,11 @@ export default function PushPrePrompt({ context, reward, onClose, force }: Props
     setErr(null);
     try {
       await enable();
+      // Marca em TODOS os contextos como dispensado — não pergunta de novo
+      // independente do gatilho (order-placed, cashback, geral, etc).
+      ['order-placed', 'favorited', 'cashback-earned', 'live-coming', 'general'].forEach((ctx) => {
+        window.localStorage.setItem(DISMISS_KEY_PREFIX + ctx, String(Date.now() + 1000 * 60 * 60 * 24 * 365));
+      });
       setSuccess(true);
       setTimeout(() => {
         setOpen(false);

@@ -3,12 +3,13 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2 } from 'lucide-react';
+import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2, ShoppingBag } from 'lucide-react';
 import { HeroInstallCard } from '@/components/InstallBanner';
 import AppGate from '@/components/AppGate';
 import PushPrePrompt from '@/components/PushPrePrompt';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
+import { useCart } from '@/contexts/CartContext';
 import {
   getCategories, getProducts, isLoggedIn, getCustomerFromToken, getFirstName,
   getUnreadNotificationsCount,
@@ -22,6 +23,7 @@ export default function HomePage() {
   const [logged, setLogged] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const { itemCount } = useCart();
 
   // Lê estado de login + nome do JWT (sem precisar bater na API)
   useEffect(() => {
@@ -83,18 +85,39 @@ export default function HomePage() {
           priority
           className="h-12 w-auto"
         />
-        <Link
-          href="/notificacoes"
-          aria-label="Notificações"
-          className="relative p-2 rounded-full bg-ink-800 hover:bg-ink-700 transition"
-        >
-          <Bell className="w-5 h-5 text-gold" />
-          {unreadCount > 0 && (
-            <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 bg-gold text-ink text-[9px] font-black rounded-full flex items-center justify-center">
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
-          )}
-        </Link>
+        <div className="flex items-center gap-2">
+          {/* CARRINHO — mais destacado que o sino */}
+          <Link
+            href="/carrinho"
+            aria-label="Carrinho"
+            className={`relative p-2.5 rounded-full transition ${
+              itemCount > 0
+                ? 'bg-gradient-to-br from-gold to-gold-light shadow-gold-lg'
+                : 'bg-ink-800 hover:bg-ink-700'
+            }`}
+          >
+            <ShoppingBag className={`w-6 h-6 ${itemCount > 0 ? 'text-ink' : 'text-gold'}`} />
+            {itemCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 bg-rose-500 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-ink animate-pulse">
+                {itemCount > 99 ? '99+' : itemCount}
+              </span>
+            )}
+          </Link>
+
+          {/* SINO */}
+          <Link
+            href="/notificacoes"
+            aria-label="Notificações"
+            className="relative p-2 rounded-full bg-ink-800 hover:bg-ink-700 transition"
+          >
+            <Bell className="w-5 h-5 text-gold" />
+            {unreadCount > 0 && (
+              <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 bg-gold text-ink text-[9px] font-black rounded-full flex items-center justify-center">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </Link>
+        </div>
       </header>
 
       {/* ── SAUDAÇÃO PERSONALIZADA — só quando logada ── */}
