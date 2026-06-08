@@ -251,6 +251,37 @@ add_action('woocommerce_cart_calculate_fees', function ($cart) {
     }
 }, 10, 1);
 
+/* ─────────────────── HOOK: FORÇA "RETIRAR EM LOJA" QUANDO ESCOLHIDO NO APP ─────────────────── */
+// Quando cliente escolheu pickup no app, substitui TODOS os métodos de frete
+// por um único: "Retirar na loja X" com custo R$ 0.
+add_filter('woocommerce_package_rates', function ($rates, $package) {
+    if (!WC()->session) return $rates;
+    $pickup_code = WC()->session->get('lurds_app_pickup_store');
+    if (empty($pickup_code)) return $rates;
+
+    // Limpa zone rates e adiciona método pickup customizado
+    $label = 'Retirar na loja Lurd\'s ' . esc_html($pickup_code);
+    $rate = new WC_Shipping_Rate(
+        'lurds_app_pickup',
+        $label,
+        0,
+        [],
+        'local_pickup'
+    );
+    return ['lurds_app_pickup' => $rate];
+}, 999, 2);
+
+/* ─────────────────── HOOK: PRESERVA SESSÃO ENTRE PÁGINAS WC ─────────────────── */
+// Quando cliente recarrega o checkout, garante que o método de frete pickup
+// está selecionado (caso contrário ele cai pro PAC/SEDEX padrão).
+add_action('woocommerce_checkout_update_order_review', function ($post_data) {
+    if (!WC()->session) return;
+    $pickup_code = WC()->session->get('lurds_app_pickup_store');
+    if (!empty($pickup_code)) {
+        WC()->session->set('chosen_shipping_methods', ['lurds_app_pickup']);
+    }
+});
+
 /* ─────────────────── HOOK: META_DATA NO PEDIDO (origem app) ─────────────────── */
 add_action('woocommerce_checkout_create_order', function ($order, $data) {
     if (!WC()->session) return;

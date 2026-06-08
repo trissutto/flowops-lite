@@ -321,7 +321,12 @@ export class CatalogService {
         'Sistema de checkout em manutenção. Adicione LURDS_APP_CHECKOUT_KEY no Railway.',
       );
     }
-    const wpUrl = (this.cfg.get<string>('WC_URL') || '').replace(/\/$/, '');
+    // STRIP `www.` — Cloudflare/Apache redireciona www → non-www com 301.
+    // Axios segue redirect mas converte POST→GET, e o endpoint REST não tem
+    // rota GET, retorna 404. Resolver na origem evita esse 301.
+    const wpUrl = (this.cfg.get<string>('WC_URL') || '')
+      .replace(/\/$/, '')
+      .replace(/^https?:\/\/www\./, 'https://');
     const endpoint = `${wpUrl}/wp-json/lurds-app/v1/checkout`;
 
     // Aceita tanto `items` quanto `lineItems` (frontend pode mandar qualquer um)
