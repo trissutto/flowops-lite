@@ -5850,11 +5850,22 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
       : new Date().toLocaleString('pt-BR');
 
     // ── QR Code da SEFAZ-SP (NFC-e) ──────────────────────────────────
-    // Padrão: https://www.nfce.fazenda.sp.gov.br/qrcode?p=CHAVE|VERSAO|AMBIENTE|IDCSC|HASH
-    // Como não temos o CSC aqui, geramos QR só com URL de consulta pela chave.
-    const qrUrl = sale.nfceChave
-      ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1`
-      : '';
+    // Formato OFICIAL SEFAZ-SP: https://www.nfce.fazenda.sp.gov.br/qrcode?p=CHAVE|VERSAO|AMBIENTE|IDCSC|HASH
+    //
+    // BUG HISTORICO RESOLVIDO: Antes gerava URL invalida no frontend com
+    // ?chNFe=CHAVE&nVersao=100&tpAmb=1 — esse formato nao eh QR Code NFC-e,
+    // eh URL de consulta antiga que SEFAZ rejeita ao escanear ("Formato
+    // de QR-Code nao suportado"). O backend ja salvou o QR Code correto
+    // em sale.nfceQrUrl com o hash CSC valido. So precisa usar.
+    //
+    // Tenta extrair do XML autorizado tambem (fonte de verdade), com
+    // fallback pra nfceQrUrl direto. Ultimo recurso: URL antiga so pra
+    // nao quebrar cupom em casos onde o XML/qrUrl nao existem ainda.
+    const xmlForQr = ((sale as any).nfceXml as string | undefined) || '';
+    const qrFromXml = (xmlForQr.match(/<qrCode>\s*<!\[CDATA\[([^\]]+)\]\]>\s*<\/qrCode>/)?.[1] || '').trim();
+    const qrUrl = qrFromXml
+      || (sale as any).nfceQrUrl
+      || (sale.nfceChave ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1` : '');
     const qrImgUrl = qrUrl
       ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrUrl)}`
       : '';
