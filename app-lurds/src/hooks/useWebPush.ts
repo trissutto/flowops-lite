@@ -56,6 +56,9 @@ export function useWebPush() {
 
     setPermission(Notification.permission);
 
+    // Pré-aquece o SW: assim quando a cliente clicar "Sim, quero receber",
+    // o `serviceWorker.ready` já tá resolvido (instantâneo) em vez de
+    // esperar 5-15s pra acordar do background.
     navigator.serviceWorker.ready.then(async (reg) => {
       const sub = await reg.pushManager.getSubscription();
       setSubscription(sub);
@@ -118,10 +121,12 @@ export function useWebPush() {
       if (!key) throw new Error('Push não configurado no servidor.');
 
       // 3) Cria subscription via Service Worker — também com timeout
+      //    20s é confortável: dá tempo do SW acordar no Android (que dorme
+      //    pra economizar bateria) sem deixar o cliente esperando eternamente.
       const reg = await Promise.race([
         navigator.serviceWorker.ready,
         new Promise<ServiceWorkerRegistration>((_, reject) =>
-          setTimeout(() => reject(new Error('Service Worker demorou demais — reinicia o app.')), 8000),
+          setTimeout(() => reject(new Error('Demorou demais. Fecha e abre o app de novo, depois tenta ativar.')), 20000),
         ),
       ]);
       const sub = await reg.pushManager.subscribe({
