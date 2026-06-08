@@ -579,7 +579,9 @@ export class CatalogService {
   public async debugWcShippingZones() {
     this.wcShippingCache = null;
     await this.getWcShippingMethods('01001000', 'SP'); // dispara o fetch
-    return this.wcShippingCache?.zones || [];
+    // Cast: TS strict não rastreia que getWcShippingMethods repopula o cache.
+    const cache = this.wcShippingCache as { at: number; zones: any[] } | null;
+    return cache?.zones || [];
   }
 
   /**
