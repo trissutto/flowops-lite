@@ -280,6 +280,84 @@ export class CatalogService {
     return map[s] || s;
   }
 
+  /* ──────────────────────── APP CHECKOUT (PLUGIN WP) ──────────────────────── */
+
+  /**
+   * Manda items + dados pro plugin Lurd's App Checkout (no WP).
+   * Plugin popula o cart do WC nativamente e retorna URL pra cliente abrir.
+   * Resolve o problema de "métodos de pagamento indisponíveis" que rolava
+   * ao criar pedido via REST API + redirecionar pra order-pay.
+   */
+  async appCheckout(payload: {
+    customer: {
+      first_name: string;
+      last_name?: string;
+      email: string;
+      phone: string;
+      cpf: string;
+    };
+    shipping: {
+      address_1: string;
+      number?: string;
+      address_2?: string;
+      city: string;
+      state: string;
+      postcode: string;
+      country?: string;
+    };
+    items: Array<{
+      product_id: number;
+      variation_id?: number;
+      quantity: number;
+    }>;
+    paymentMethod: 'pix' | 'credit_card' | 'boleto';
+    cashbackUsedCents?: number;
+    pickupStoreCode?: string;
+  }): Promise<{ checkoutUrl: string; token: string }> {
+    const apiKey = this.cfg.get<string>('LURDS_APP_CHECKOUT_KEY');
+    if (!apiKey) {
+      throw new Error('LURDS_APP_CHECKOUT_KEY não configurado no backend');
+    }
+    const wpUrl = (this.cfg.get<string>('WC_URL') || '').replace(/\/$/, '');
+
+    try {
+      const res = await firstValueFrom(
+        this.http.post(
+          `${wpUrl}/wp-json/lurds-app/v1/checkout`,
+          {
+            items: payload.items,
+            customer: payload.customer,
+            shipping: payload.shipping,
+            cashback_cents: payload.cashbackUsedCents || 0,
+            pickup_store_code: payload.pickupStoreCode || '',
+            payment_pref: payload.paymentMethod,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Lurds-App-Key': apiKey,
+            },
+            timeout: 15000,
+          },
+        ),
+      );
+
+      const data = res.data || {};
+      if (!data.checkout_url) {
+        throw new Error('Plugin não retornou checkout_url');
+      }
+      this.logger.log(`appCheckout OK token=${data.token}`);
+      return {
+        checkoutUrl: data.checkout_url,
+        token: data.token,
+      };
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || 'Erro ao preparar checkout';
+      this.logger.error(`appCheckout falhou: ${msg}`);
+      throw new Error(msg);
+    }
+  }
+
   /* ──────────────────────── CRIAR PEDIDO NO WC ──────────────────────── */
   /**
    * Cria pedido no WooCommerce a partir do carrinho do app.

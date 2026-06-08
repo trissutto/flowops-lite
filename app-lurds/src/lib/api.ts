@@ -496,6 +496,15 @@ export async function createWcOrder(payload: CreateOrderPayload) {
   });
 }
 
+/** App Checkout via plugin WP — prepara cart nativo e retorna URL */
+export type AppCheckoutResult = { checkoutUrl: string; token: string };
+export async function appCheckout(payload: CreateOrderPayload) {
+  return api<AppCheckoutResult>('/catalog/app-checkout', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 /* ─── Acompanhamento de pedido ─── */
 export type WcOrderDetail = {
   id: number;

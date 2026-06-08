@@ -10,7 +10,7 @@ import {
 import { useCart } from '@/contexts/CartContext';
 import PushPrePrompt from '@/components/PushPrePrompt';
 import {
-  getAddresses, getMe, calculateShipping, createWcOrder,
+  getAddresses, getMe, calculateShipping, appCheckout,
   isLoggedIn, getCustomerFromToken,
   type AppAddress, type ShippingOption,
 } from '@/lib/api';
@@ -140,7 +140,8 @@ export default function CheckoutPage() {
     setCreating(true);
     setErr(null);
     try {
-      const order = await createWcOrder({
+      // Usa plugin WP: prepara cart nativo + retorna URL pro checkout
+      const result = await appCheckout({
         customer: {
           first_name: (me.name || c?.name || 'Cliente').split(' ')[0],
           last_name: (me.name || c?.name || '').split(' ').slice(1).join(' '),
@@ -168,15 +169,15 @@ export default function CheckoutPage() {
         pickupStoreCode: selectedShipping.type === 'pickup' ? selectedShipping.storeCode : undefined,
       });
 
-      // Limpa carrinho
+      // Limpa carrinho local — produtos vão pro cart do WC pelo plugin
       clear();
-      // Salva paymentUrl no state pra redirecionar quando cliente fechar o prompt
-      setCreatedOrderId(order.id);
-      setCreatedPaymentUrl(order.paymentUrl);
+      // Marca pra não redirecionar pra /carrinho (race condition fix)
+      setCreatedOrderId(1); // placeholder — só pra desativar useEffect redirect
+      setCreatedPaymentUrl(result.checkoutUrl);
       setShowPushPrompt(true);
       // Fallback: se cliente ignorar tudo, redireciona em 5s
       setTimeout(() => {
-        window.location.href = order.paymentUrl;
+        window.location.href = result.checkoutUrl;
       }, 5000);
     } catch (e: any) {
       setErr(e?.message || 'Erro ao criar pedido');

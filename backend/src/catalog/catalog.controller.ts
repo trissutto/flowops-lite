@@ -52,6 +52,12 @@ export class CatalogController {
     return this.svc.createOrder(body);
   }
 
+  /** POST /catalog/app-checkout — prepara checkout WC via plugin */
+  @Post('app-checkout')
+  async appCheckout(@Body() body: any) {
+    return this.svc.appCheckout(body);
+  }
+
   @Get('orders/:wcOrderId')
   async getOrder(@Param('wcOrderId') wcOrderId: string) {
     const id = Number(wcOrderId);
