@@ -403,12 +403,10 @@ export default function CheckoutPage() {
                 </div>
               </div>
             </div>
-            <div className={`w-11 h-6 rounded-full relative transition shrink-0 ${
-              useCashback ? 'bg-emerald-500' : 'bg-ink-600'
+            <div className={`w-12 h-6 rounded-full p-0.5 flex items-center transition shrink-0 ${
+              useCashback ? 'bg-emerald-500 justify-end' : 'bg-ink-600 justify-start'
             }`}>
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                useCashback ? 'translate-x-[22px]' : 'translate-x-0.5'
-              }`} />
+              <span className="block w-5 h-5 rounded-full bg-white shadow" />
             </div>
           </button>
           {useCashback && (
