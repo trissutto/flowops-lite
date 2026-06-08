@@ -1831,6 +1831,10 @@ model CustomerAccount {
   pwaInstalledAt        DateTime? @map("pwa_installed_at")
   welcomeBonusAt        DateTime? @map("welcome_bonus_at")
   pushOptIn             Boolean  @default(false) @map("push_opt_in")
+  // Fallback WhatsApp — pra clientes que não conseguem push (iOS antigo,
+  // cliente que não quer instalar PWA, ou que prefere WhatsApp mesmo).
+  // Quando admin dispara push e cliente tem essa flag, manda WhatsApp também.
+  whatsappOptIn         Boolean  @default(false) @map("whatsapp_opt_in")
 
   // ─── Cashback unificado (em centavos) ───
   // Saldo único independente de em qual loja Giga foi gerado.

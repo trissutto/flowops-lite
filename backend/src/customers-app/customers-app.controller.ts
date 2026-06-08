@@ -185,6 +185,17 @@ export class CustomersAppController {
     return this.svc.setPushOptIn(req.customer.id, !!body.optIn);
   }
 
+  /** POST /customers/app/whatsapp-opt-in — receber promos no WhatsApp */
+  @Post('whatsapp-opt-in')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async whatsappOptIn(
+    @Req() req: any,
+    @Body() body: { optIn: boolean },
+  ) {
+    return this.svc.setWhatsappOptIn(req.customer.id, !!body.optIn);
+  }
+
   /* ════════════════ CASHBACK ════════════════ */
 
   /** GET /customers/app/cashback — saldo + extrato + próxima expiração */

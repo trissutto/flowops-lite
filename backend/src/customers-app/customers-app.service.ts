@@ -614,6 +614,8 @@ export class CustomersAppService {
       },
       pwaInstalled: !!account.pwaInstalledAt,
       welcomeBonusReceived: !!account.welcomeBonusAt,
+      pushOptIn: account.pushOptIn,
+      whatsappOptIn: account.whatsappOptIn,
     };
   }
 
@@ -648,6 +650,18 @@ export class CustomersAppService {
       data: { pushOptIn: optIn },
     });
     return { optIn };
+  }
+
+  /**
+   * Toggle do fallback WhatsApp.
+   * Cliente iPhone antigo que não consegue push pode receber por WhatsApp.
+   */
+  async setWhatsappOptIn(accountId: string, optIn: boolean) {
+    await this.prisma.customerAccount.update({
+      where: { id: accountId },
+      data: { whatsappOptIn: optIn },
+    });
+    return { whatsappOptIn: optIn };
   }
 
   /* ─────────────────── HELPERS ─────────────────── */

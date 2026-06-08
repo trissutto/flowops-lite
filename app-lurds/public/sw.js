@@ -14,7 +14,7 @@
 // Sem isso, SW antigo serve chunks JS/CSS com hashes que não existem mais,
 // e usuária vê tela quebrada (CSS 404). Tem fallback network-first pra
 // /_next/static/* logo abaixo que TAMBÉM mitiga isso.
-const CACHE_VERSION = 'lurds-v2';
+const CACHE_VERSION = 'lurds-v3';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',
@@ -139,8 +139,12 @@ self.addEventListener('push', (event) => {
   const title = payload.title || "Lurd's Plus Size";
   const options = {
     body: payload.body || '',
+    // ICON: aparece no painel expandido (Android) ou no canto (Desktop).
+    // Usa o ícone colorido normal (logo Lurd's preto/dourado).
     icon: payload.icon || '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    // BADGE: aparece na status bar do Android — SÓ FORMA (mono).
+    // Sem isso, Android mostra um quadrado branco genérico.
+    badge: '/icons/badge-72.png',
     image: payload.image,
     data: { url: payload.url || '/' },
     vibrate: [100, 50, 100],

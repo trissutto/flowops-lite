@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import * as webpush from 'web-push';
 
 /**
@@ -23,6 +24,7 @@ export class CustomerPushService implements OnModuleInit {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly whatsapp: WhatsappService,
   ) {}
 
   onModuleInit() {
@@ -101,16 +103,28 @@ export class CustomerPushService implements OnModuleInit {
 
   /**
    * Envia push pra UMA cliente (todos devices ativos dela).
-   * Marca push opt-in se ainda não tava.
+   * Se cliente tem fallback WhatsApp ativo, manda também por WhatsApp.
    */
   async sendToAccount(accountId: string, payload: PushPayload) {
-    if (!this.configured) return { sent: 0, failed: 0, skipped: 'not configured' };
+    const subs = this.configured
+      ? await this.prisma.customerAppPushSubscription.findMany({
+          where: { accountId, active: true },
+        })
+      : [];
 
-    const subs = await this.prisma.customerAppPushSubscription.findMany({
-      where: { accountId, active: true },
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { whatsappOptIn: true, phone: true, name: true },
     });
 
-    return this.sendBatch(subs, payload);
+    const [pushResult, waResult] = await Promise.all([
+      subs.length > 0 ? this.sendBatch(subs, payload) : Promise.resolve({ sent: 0, failed: 0, deactivated: 0 }),
+      account?.whatsappOptIn && account?.phone
+        ? this.sendWhatsappFallback(account.phone, account.name, payload)
+        : Promise.resolve(false),
+    ]);
+
+    return { ...pushResult, whatsappSent: waResult };
   }
 
   /**
@@ -118,13 +132,31 @@ export class CustomerPushService implements OnModuleInit {
    * Usar com CUIDADO — boa pra avisar live começou.
    */
   async sendToAll(payload: PushPayload) {
-    if (!this.configured) return { sent: 0, failed: 0, skipped: 'not configured' };
+    // 1) Push pra quem tem device ativo
+    const subs = this.configured
+      ? await this.prisma.customerAppPushSubscription.findMany({
+          where: { active: true, account: { pushOptIn: true } },
+        })
+      : [];
 
-    const subs = await this.prisma.customerAppPushSubscription.findMany({
-      where: { active: true, account: { pushOptIn: true } },
+    // 2) WhatsApp pra quem optou pelo fallback
+    const waAccounts = await this.prisma.customerAccount.findMany({
+      where: { whatsappOptIn: true, phone: { not: null } },
+      select: { id: true, name: true, phone: true },
     });
 
-    return this.sendBatch(subs, payload);
+    const pushResult = subs.length > 0
+      ? await this.sendBatch(subs, payload)
+      : { sent: 0, failed: 0, deactivated: 0 };
+
+    let waSent = 0;
+    for (const acc of waAccounts) {
+      if (acc.phone && await this.sendWhatsappFallback(acc.phone, acc.name, payload)) {
+        waSent++;
+      }
+    }
+
+    return { ...pushResult, whatsappSent: waSent };
   }
 
   /**
@@ -152,6 +184,38 @@ export class CustomerPushService implements OnModuleInit {
 
     const subs = await this.prisma.customerAppPushSubscription.findMany({ where });
     return this.sendBatch(subs, payload);
+  }
+
+  /**
+   * Fallback WhatsApp — usado pra clientes que não conseguem push (iOS antigo,
+   * não instalaram PWA, etc). Envia mensagem texto via Baileys.
+   * Retorna true se enviou OK.
+   */
+  private async sendWhatsappFallback(
+    phone: string,
+    name: string | null,
+    payload: PushPayload,
+  ): Promise<boolean> {
+    try {
+      const greeting = name ? `Oi, ${name.split(' ')[0]}!` : 'Oi!';
+      const baseUrl = this.config.get<string>('APP_PUBLIC_URL') || 'https://app.lurds.com.br';
+      const linkSuffix = payload.url
+        ? `\n\nVer no app: ${baseUrl}${payload.url.startsWith('/') ? payload.url : '/' + payload.url}`
+        : '';
+
+      const text =
+        `*${payload.title}*\n\n` +
+        `${greeting}\n` +
+        (payload.body ? `${payload.body}\n` : '') +
+        linkSuffix +
+        `\n\n_Lurd's Plus Size_`;
+
+      const result = await this.whatsapp.sendText(phone.replace(/\D/g, ''), text);
+      return result.ok;
+    } catch (err: any) {
+      this.logger.warn(`whatsapp fallback falhou phone=${phone}: ${err?.message || err}`);
+      return false;
+    }
   }
 
   /* ─────────────────────── Helpers internos ─────────────────────── */

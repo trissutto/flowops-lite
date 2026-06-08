@@ -167,6 +167,8 @@ export type CustomerMe = {
   };
   pwaInstalled: boolean;
   welcomeBonusReceived: boolean;
+  pushOptIn?: boolean;
+  whatsappOptIn?: boolean;
 };
 
 export async function getMe(): Promise<CustomerMe> {
@@ -272,6 +274,14 @@ export async function pushUnsubscribeApi(endpoint: string) {
   return api<{ ok: true }>('/customers/app/push/unsubscribe', {
     method: 'POST',
     body: JSON.stringify({ endpoint }),
+  });
+}
+
+/** Fallback WhatsApp: recebe promoções por WA em vez de push */
+export async function setWhatsappOptIn(optIn: boolean) {
+  return api<{ whatsappOptIn: boolean }>('/customers/app/whatsapp-opt-in', {
+    method: 'POST',
+    body: JSON.stringify({ optIn }),
   });
 }
 
