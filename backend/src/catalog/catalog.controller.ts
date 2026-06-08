@@ -72,4 +72,39 @@ export class CatalogController {
   async paymentMethods() {
     return { gateways: await this.svc.getPaymentGateways() };
   }
+
+  /**
+   * GET /catalog/shipping/debug — diagnóstico de zonas de frete do WC.
+   * Retorna zonas + locations + methods crus, ignorando cache.
+   * Use pra descobrir QUAL zona tem free_shipping ativo e desabilitar no WP Admin.
+   */
+  @Get('shipping/debug')
+  async shippingDebug() {
+    const zones = await this.svc.debugWcShippingZones();
+    return {
+      zones: zones.map((z: any) => ({
+        id: z.id,
+        name: z.name,
+        order: z.order,
+        locations: z._locations,
+        methods: (z._methods || []).map((m: any) => ({
+          instance_id: m.instance_id,
+          method_id: m.method_id,
+          method_title: m.method_title,
+          title: m.title,
+          enabled: m.enabled,
+          settings_cost: m.settings?.cost?.value,
+          settings_min_amount: m.settings?.min_amount?.value,
+          settings_requires: m.settings?.requires?.value,
+        })),
+      })),
+    };
+  }
+
+  /** POST /catalog/shipping/clear-cache — força refetch das zones na próxima chamada */
+  @Post('shipping/clear-cache')
+  async clearShippingCache() {
+    this.svc.clearWcShippingCache();
+    return { ok: true, msg: 'Cache invalidado. Próximo calculateShipping irá refazer fetch.' };
+  }
 }

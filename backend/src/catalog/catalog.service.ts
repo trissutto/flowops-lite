@@ -569,6 +569,19 @@ export class CatalogService {
   private wcShippingCache: { at: number; zones: any[] } | null = null;
   private readonly WC_SHIPPING_TTL = 5 * 60 * 1000;
 
+  /** Limpa cache de zones — útil após mudar config no WC */
+  public clearWcShippingCache() {
+    this.wcShippingCache = null;
+    this.logger.log('[wcShipping] cache invalidado manualmente');
+  }
+
+  /** Retorna zones cruas do WC (debug) — força fetch fresh ignorando cache */
+  public async debugWcShippingZones() {
+    this.wcShippingCache = null;
+    await this.getWcShippingMethods('01001000', 'SP'); // dispara o fetch
+    return this.wcShippingCache?.zones || [];
+  }
+
   /**
    * Lê configuração real de frete do WooCommerce.
    * Match por: postcode range > state > zona 0 (default/resto).
@@ -663,6 +676,15 @@ export class CatalogService {
 
     if (!matchedZone) return [];
 
+    // LOG DETALHADO — pra debug de zonas/métodos "fantasma" no WC
+    this.logger.log(
+      `[wcShipping] zona escolhida: id=${matchedZone.id} nome="${matchedZone.name}" ` +
+      `cep=${cepDigits} uf=${uf} ` +
+      `métodos=${(matchedZone._methods || []).map((m: any) =>
+        `${m.method_id}#${m.instance_id}(enabled=${m.enabled},title="${m.title || m.method_title}")`
+      ).join(' | ')}`,
+    );
+
     // Formata os métodos da zona escolhida
     const methods = (matchedZone._methods || [])
       .filter((m: any) => m.enabled !== false)
@@ -675,6 +697,17 @@ export class CatalogService {
 
         if (m.method_id === 'local_pickup') {
           // Lurd's já trata pickup via Store própria — pula
+          return null;
+        }
+        // FILTRO: ignora free_shipping "fantasma".
+        // O cliente confirmou que NÃO oferece frete grátis universal — apenas
+        // como benefício de tier (Prata R$199+, Ouro/Diamante sempre), o que
+        // será tratado por regra de negócio futura. Por ora, esconde.
+        if (m.method_id === 'free_shipping') {
+          this.logger.warn(
+            `[wcShipping] free_shipping descartado — zona ${matchedZone.id} "${matchedZone.name}" ` +
+            `método #${m.instance_id} "${title}". DESATIVAR no WP Admin → WC → Settings → Shipping.`,
+          );
           return null;
         }
         return {
