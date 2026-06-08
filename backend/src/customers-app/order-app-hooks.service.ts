@@ -115,7 +115,7 @@ export class OrderAppHooksService {
     // 1) Credita cashback (idempotente — checa orderId em CustomerCashbackTx)
     if (baseCents > 0) {
       try {
-        const r = await this.cashback.earnFromOrder(account.id, wcOrderId, baseCents);
+        const r: any = await this.cashback.earnFromOrder(account.id, wcOrderId, baseCents);
         if (r && !r.skipped) {
           this.logger.log(
             `Cashback creditado: account=${account.id} order=${wcOrderId} base=${baseCents}c`,
