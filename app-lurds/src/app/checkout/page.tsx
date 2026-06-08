@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -50,6 +50,26 @@ export default function CheckoutPage() {
   // Pré-prompt de push após criar pedido
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
+
+  // Padding-bottom dinâmico baseado na altura real do bottom bar fixo
+  // (evita o card "Cartão de crédito" ficar atrás do botão Pagar)
+  const bottomBarRef = useRef<HTMLDivElement | null>(null);
+  const [bottomPad, setBottomPad] = useState(320);
+  useEffect(() => {
+    const measure = () => {
+      const h = bottomBarRef.current?.offsetHeight || 0;
+      // +32px de respiro em cima do bottom bar
+      setBottomPad(h + 32);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    // Re-mede sempre que err/loading/shipping muda (altura pode crescer)
+    const t = setInterval(measure, 500);
+    return () => {
+      window.removeEventListener('resize', measure);
+      clearInterval(t);
+    };
+  }, []);
 
   const cashbackUsed = useCashback ? Math.min(cashbackAvail, subtotal * 0.5) : 0;
   const shippingCost = selectedShipping?.price || 0;
@@ -175,7 +195,7 @@ export default function CheckoutPage() {
 
   return (
     <div
-      style={{ paddingBottom: 'calc(20rem + env(safe-area-inset-bottom))' }}
+      style={{ paddingBottom: `calc(${bottomPad}px + env(safe-area-inset-bottom))` }}
     >
       <header className="flex items-center gap-3 px-5 pt-5">
         <Link href="/carrinho" className="p-2 rounded-full bg-ink-800 hover:bg-ink-700 transition">
@@ -446,6 +466,7 @@ export default function CheckoutPage() {
 
       {/* ───────── Total + Botão ───────── */}
       <div
+        ref={bottomBarRef}
         className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-app bg-ink/95 backdrop-blur-md border-t border-ink-600 px-5 pt-3"
         style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}
       >
