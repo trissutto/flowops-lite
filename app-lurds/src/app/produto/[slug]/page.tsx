@@ -393,14 +393,17 @@ function AddedToCartModal({
   }, [productId]);
 
   // Quick-add: simple variation (sem atributos) direto ao carrinho
+  // CartItem exige campos: productId, variationId (number|null), slug,
+  // name, image (string|null), price, regularPrice, quantity, attributes.
   const handleQuickAdd = (p: RelatedProduct) => {
     addItem({
       productId: p.id,
-      variationId: undefined,
+      variationId: null,
       slug: p.slug,
       name: p.name,
+      image: p.image,
       price: p.price,
-      image: p.image || undefined,
+      regularPrice: p.regularPrice || p.price,
       quantity: 1,
       attributes: {},
     });
