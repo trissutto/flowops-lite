@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import {
   ArrowLeft, RefreshCw, Loader2, AlertCircle, Banknote, QrCode, CreditCard,
@@ -1319,7 +1320,12 @@ function MasterAdjustModal({
     }
   }
 
-  return (
+  // Portal: renderiza no body pra escapar de parents com `transform`/`overflow`
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
@@ -1405,7 +1411,8 @@ function MasterAdjustModal({
           ⚠️ Acao registrada em log com seu usuario. Use somente pra correcoes legitimas — sem rastreabilidade visual no fluxo da vendedora.
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1485,7 +1492,13 @@ function MasterEditPaymentModal({
     }
   }
 
-  return (
+  // Portal: renderiza no body pra escapar de parents com `transform`/`overflow`
+  // que quebram `position: fixed` (motivo do bug do modal transparente preso no card).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
@@ -1573,6 +1586,7 @@ function MasterEditPaymentModal({
           ⚠️ Alteracao registrada em PdvPaymentAudit. Se sessao ja fechou, totais sao recalculados automaticamente.
         </p>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
