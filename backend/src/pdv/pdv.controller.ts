@@ -299,14 +299,14 @@ export class PdvController {
   }
 
   /**
-   * POST /pdv/sales/:id/master/cancel-duplicate
+   * POST /pdv/sales/:id/master/cancel-duplicada
    * Body: { motivo, password }
    * Cancela QUALQUER venda finalizada (mesmo com pagamento) — caso da Hellen:
    * mesma venda batida 2x por engano antes de imprimir cupom fiscal.
    * Marca status=cancelled + cancelReason. NAO mexe em estoque (assume que era duplicata).
    * Exige senha master.
    */
-  @Post('sales/:id/master/cancel-duplicate')
+  @Post('sales/:id/master/cancel-duplicada')
   async masterCancelDuplicate(
     @Req() req: any,
     @Param('id') id: string,

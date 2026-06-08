@@ -639,7 +639,7 @@ function ProdutosVendidosContent() {
                                       const password = prompt('Senha MASTER:');
                                       if (!password) return;
                                       try {
-                                        await api(`/pdv/sales/${l.saleId}/master/cancel-duplicate`, {
+                                        await api(`/pdv/sales/${l.saleId}/master/cancel-duplicada`, {
                                           method: 'POST',
                                           body: JSON.stringify({ motivo: motivo.trim(), password }),
                                         });
@@ -652,7 +652,7 @@ function ProdutosVendidosContent() {
                                     className="ml-2 text-[10px] font-bold bg-rose-600 hover:bg-rose-700 text-white px-2 py-0.5 rounded"
                                     title="Excluir venda duplicada (master)"
                                   >
-                                    🗑️ Excluir duplicata
+                                    🗑️ Excluir duplicada
                                   </button>
                                 )}
                               </div>

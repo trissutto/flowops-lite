@@ -177,13 +177,13 @@ export class PdvService {
   }
 
   /**
-   * Cancela venda DUPLICATA — mesmo COM pagamento registrado.
+   * Cancela venda DUPLICADA — mesmo COM pagamento registrado.
    * Caso real: vendedora bateu venda 2x antes de imprimir cupom.
    * Diferente de zumbi: a venda tem pagamento mas é uma cópia da outra.
    * Estoque NAO é alterado (assume que só uma das vendas teve peça baixada de verdade
    * via NF emitida; ou se ambas baixaram, isso vira tarefa de reconciliação manual).
    */
-  async masterCancelDuplicate(input: {
+  async masterCancelDuplicada(input: {
     saleId: string;
     motivo: string;
     userName: string;
@@ -216,12 +216,12 @@ export class PdvService {
       data: {
         status: 'cancelled',
         cancelledAt: new Date(),
-        cancelReason: `[DUPLICATA] ${motivo} — por ${userName}`,
+        cancelReason: `[DUPLICADA] ${motivo} — por ${userName}`,
       } as any,
     });
 
     this.logger.warn(
-      `[MASTER] CANCEL-DUPLICATE saleId=${saleId} total=R$${sale.total} ` +
+      `[MASTER] CANCEL-DUPLICADA saleId=${saleId} total=R$${sale.total} ` +
       `payments=${(sale.payments || []).length} items=${(sale.items || []).length} motivo="${motivo}" por ${userName}`,
     );
 
