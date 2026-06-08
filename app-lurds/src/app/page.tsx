@@ -5,6 +5,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2 } from 'lucide-react';
 import { HeroInstallCard } from '@/components/InstallBanner';
+import AppGate from '@/components/AppGate';
+import PushPrePrompt from '@/components/PushPrePrompt';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import {
@@ -61,7 +63,16 @@ export default function HomePage() {
     });
   }, []);
 
+  // Mostrar pre-prompt push 1x após 4s na home (apenas pra logada)
+  const [showGeneralPrompt, setShowGeneralPrompt] = useState(false);
+  useEffect(() => {
+    if (!logged) return;
+    const t = setTimeout(() => setShowGeneralPrompt(true), 4000);
+    return () => clearTimeout(t);
+  }, [logged]);
+
   return (
+    <AppGate>
     <div className="pb-24">
       {/* ── HEADER ── */}
       <header className="flex items-center justify-between px-5 pt-5">
@@ -237,8 +248,15 @@ export default function HomePage() {
 
       <div className="h-20" />
       <BottomNav />
-      {/* Banner pequeno do rodapé desativado — o HeroInstallCard no topo já cobre */}
+      {showGeneralPrompt && (
+        <PushPrePrompt
+          context="general"
+          reward="Te avisamos em primeira mão quando rolar promoção de verdade e quando começar live com descontos. 💛"
+          onClose={() => setShowGeneralPrompt(false)}
+        />
+      )}
     </div>
+    </AppGate>
   );
 }
 

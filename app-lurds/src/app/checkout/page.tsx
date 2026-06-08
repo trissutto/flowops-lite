@@ -8,6 +8,7 @@ import {
   CheckCircle2, Sparkles, Plus, ChevronRight, ExternalLink, Store,
 } from 'lucide-react';
 import { useCart } from '@/contexts/CartContext';
+import PushPrePrompt from '@/components/PushPrePrompt';
 import {
   getAddresses, getMe, calculateShipping, createWcOrder,
   isLoggedIn, getCustomerFromToken,
@@ -45,6 +46,10 @@ export default function CheckoutPage() {
   // Pagamento
   const [paymentMethod, setPaymentMethod] = useState<'pix' | 'credit_card'>('pix');
   const [creating, setCreating] = useState(false);
+
+  // Pré-prompt de push após criar pedido
+  const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
+  const [showPushPrompt, setShowPushPrompt] = useState(false);
 
   const cashbackUsed = useCashback ? Math.min(cashbackAvail, subtotal * 0.5) : 0;
   const shippingCost = selectedShipping?.price || 0;
@@ -142,13 +147,17 @@ export default function CheckoutPage() {
 
       // Limpa carrinho
       clear();
-      // PIX: vai pra /pedido/[id] (mostra QR Code dentro do app — não sai)
-      // Cartão: vai pra WC checkout (precisa do form de cartão dele)
-      if (paymentMethod === 'pix') {
-        router.push(`/pedido/${order.id}`);
-      } else {
-        window.location.href = order.paymentUrl;
-      }
+      // Mostra pré-prompt de push ANTES de redirecionar (melhor momento)
+      setCreatedOrderId(order.id);
+      setShowPushPrompt(true);
+      // Se cliente fechar prompt sem aceitar, redireciona em 5s mesmo assim
+      setTimeout(() => {
+        if (paymentMethod === 'pix') {
+          router.push(`/pedido/${order.id}`);
+        } else {
+          window.location.href = order.paymentUrl;
+        }
+      }, 5000);
     } catch (e: any) {
       setErr(e?.message || 'Erro ao criar pedido');
     } finally {
@@ -499,6 +508,21 @@ export default function CheckoutPage() {
           Você será levado pra finalizar o pagamento de forma segura
         </p>
       </div>
+
+      {showPushPrompt && createdOrderId && (
+        <PushPrePrompt
+          context="order-placed"
+          reward="Pedido feito! 🎉 Posso te avisar na hora que ele sair pra entrega e quando chegar?"
+          onClose={() => {
+            setShowPushPrompt(false);
+            if (paymentMethod === 'pix') {
+              router.push(`/pedido/${createdOrderId}`);
+            } else if (createdOrderId) {
+              window.location.href = `/pedido/${createdOrderId}`;
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
