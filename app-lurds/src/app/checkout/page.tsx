@@ -155,10 +155,11 @@ export default function CheckoutPage() {
           address_1: selectedAddress.street || '',
           number: selectedAddress.number || '',
           address_2: selectedAddress.complement || '',
+          neighborhood: selectedAddress.district || '',
           city: selectedAddress.city || '',
           state: selectedAddress.state || 'SP',
           postcode: (selectedAddress.cep || '').replace(/\D/g, ''),
-        },
+        } as any,
         lineItems: items.map((i) => ({
           product_id: i.productId,
           variation_id: i.variationId || undefined,
