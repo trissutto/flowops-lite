@@ -241,6 +241,53 @@ export async function getAddresses() {
   return api<{ addresses: AppAddress[] }>('/customers/app/addresses');
 }
 
+export type AddressPayload = {
+  type?: string;
+  cep?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  district?: string;
+  city?: string;
+  state?: string;
+  reference?: string;
+  isPrimary?: boolean;
+};
+export async function createAddress(data: AddressPayload) {
+  return api<{ id: string }>('/customers/app/addresses', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+export async function updateAddress(id: string, data: AddressPayload) {
+  return api<{ id: string }>(`/customers/app/addresses/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+}
+export async function deleteAddress(id: string) {
+  return api<{ ok: true }>(`/customers/app/addresses/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+/** Lookup CEP no ViaCEP (frontend-side, sem auth, gratuito) */
+export async function lookupCep(cep: string) {
+  const digits = cep.replace(/\D/g, '');
+  if (digits.length !== 8) throw new Error('CEP inválido');
+  const r = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+  if (!r.ok) throw new Error('Falha consultando CEP');
+  const data = await r.json();
+  if (data.erro) throw new Error('CEP não encontrado');
+  return {
+    cep: digits,
+    street: data.logradouro as string,
+    district: data.bairro as string,
+    city: data.localidade as string,
+    state: data.uf as string,
+  };
+}
+
 /* ─── Pedidos consolidados (Flowops + Giga) ─── */
 export type AppOrder = {
   id: string;

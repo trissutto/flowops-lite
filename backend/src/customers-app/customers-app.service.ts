@@ -308,6 +308,177 @@ export class CustomersAppService {
     };
   }
 
+  /* ─────────────────── ENDEREÇOS — CRUD ─────────────────── */
+
+  /**
+   * Garante que o account tem PELO MENOS UM Customer linkado pra ser dono
+   * dos endereços. Se cliente nova cadastrou via app sem ter Customer no CRM,
+   * cria um Customer "virtual" com originStoreCode='SITE'.
+   */
+  private async ensureCustomerForAccount(accountId: string): Promise<string> {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: {
+        links: { orderBy: { isPrimary: 'desc' }, take: 1 },
+      },
+    });
+    if (!account) throw new BadRequestException('Conta não encontrada');
+
+    if (account.links.length > 0) return account.links[0].customerId;
+
+    // Cria Customer novo pro app (origin SITE)
+    const cpfRaw = account.cpf.replace(/\D/g, '');
+    const newCustomer = await this.prisma.customer.create({
+      data: {
+        cpf: cpfRaw,
+        name: account.name,
+        phone: account.phone,
+        email: account.email,
+        originStoreCode: 'SITE',
+      },
+    });
+    await this.prisma.customerAccountLink.create({
+      data: {
+        accountId: account.id,
+        customerId: newCustomer.id,
+        isPrimary: true,
+      },
+    });
+    return newCustomer.id;
+  }
+
+  /**
+   * Cria endereço novo. Se isPrimary=true, despinata os outros automaticamente.
+   */
+  async createAddress(accountId: string, dto: {
+    type?: string;
+    cep?: string;
+    street?: string;
+    number?: string;
+    complement?: string;
+    district?: string;
+    city?: string;
+    state?: string;
+    reference?: string;
+    isPrimary?: boolean;
+  }) {
+    const customerId = await this.ensureCustomerForAccount(accountId);
+    return this.prisma.$transaction(async (tx) => {
+      // Se vai ser principal, desmarca os outros
+      if (dto.isPrimary) {
+        await tx.customerAddress.updateMany({
+          where: { customerId, isPrimary: true },
+          data: { isPrimary: false },
+        });
+      }
+      const created = await tx.customerAddress.create({
+        data: {
+          customerId,
+          type: dto.type || 'residential',
+          cep: dto.cep || null,
+          street: dto.street || null,
+          number: dto.number || null,
+          complement: dto.complement || null,
+          district: dto.district || null,
+          city: dto.city || null,
+          state: dto.state ? dto.state.toUpperCase().slice(0, 2) : null,
+          reference: dto.reference || null,
+          isPrimary: !!dto.isPrimary,
+          active: true,
+        },
+      });
+      return { id: created.id };
+    });
+  }
+
+  /**
+   * Edita endereço existente. Só permite se o endereço pertence a um Customer
+   * linkado a esse account (segurança).
+   */
+  async updateAddress(accountId: string, addressId: string, dto: {
+    type?: string;
+    cep?: string;
+    street?: string;
+    number?: string;
+    complement?: string;
+    district?: string;
+    city?: string;
+    state?: string;
+    reference?: string;
+    isPrimary?: boolean;
+  }) {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+
+    const addr = await this.prisma.customerAddress.findUnique({
+      where: { id: addressId },
+      select: { id: true, customerId: true },
+    });
+    if (!addr) throw new BadRequestException('Endereço não encontrado');
+
+    const customerIds = account.links.map((l) => l.customerId);
+    if (!customerIds.includes(addr.customerId)) {
+      throw new UnauthorizedException('Endereço não pertence a você');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.isPrimary) {
+        await tx.customerAddress.updateMany({
+          where: { customerId: addr.customerId, isPrimary: true, id: { not: addressId } },
+          data: { isPrimary: false },
+        });
+      }
+      const data: any = {};
+      if (dto.type !== undefined) data.type = dto.type;
+      if (dto.cep !== undefined) data.cep = dto.cep;
+      if (dto.street !== undefined) data.street = dto.street;
+      if (dto.number !== undefined) data.number = dto.number;
+      if (dto.complement !== undefined) data.complement = dto.complement;
+      if (dto.district !== undefined) data.district = dto.district;
+      if (dto.city !== undefined) data.city = dto.city;
+      if (dto.state !== undefined) {
+        data.state = dto.state ? dto.state.toUpperCase().slice(0, 2) : null;
+      }
+      if (dto.reference !== undefined) data.reference = dto.reference;
+      if (dto.isPrimary !== undefined) data.isPrimary = dto.isPrimary;
+
+      await tx.customerAddress.update({
+        where: { id: addressId },
+        data,
+      });
+      return { id: addressId };
+    });
+  }
+
+  /** Desativa endereço (soft delete). Não apaga porque pode estar em Order. */
+  async deleteAddress(accountId: string, addressId: string) {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      include: { links: { select: { customerId: true } } },
+    });
+    if (!account) throw new UnauthorizedException('Conta não encontrada');
+
+    const addr = await this.prisma.customerAddress.findUnique({
+      where: { id: addressId },
+      select: { customerId: true },
+    });
+    if (!addr) throw new BadRequestException('Endereço não encontrado');
+
+    const customerIds = account.links.map((l) => l.customerId);
+    if (!customerIds.includes(addr.customerId)) {
+      throw new UnauthorizedException('Endereço não pertence a você');
+    }
+
+    await this.prisma.customerAddress.update({
+      where: { id: addressId },
+      data: { active: false },
+    });
+    return { ok: true };
+  }
+
   /* ─────────────────── PEDIDOS (Flowops Orders) ─────────────────── */
   /**
    * Histórico de pedidos do site (Flowops/WC).

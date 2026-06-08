@@ -1,8 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
+  Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -157,6 +160,31 @@ export class CustomersAppController {
   @UseGuards(CustomerJwtGuard)
   async addresses(@Req() req: any) {
     return this.svc.getAddresses(req.customer.id);
+  }
+
+  /** POST /addresses — cria endereço novo */
+  @Post('addresses')
+  @UseGuards(CustomerJwtGuard)
+  async createAddress(@Req() req: any, @Body() body: any) {
+    return this.svc.createAddress(req.customer.id, body || {});
+  }
+
+  /** PATCH /addresses/:id — edita endereço existente */
+  @Patch('addresses/:id')
+  @UseGuards(CustomerJwtGuard)
+  async updateAddress(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.svc.updateAddress(req.customer.id, id, body || {});
+  }
+
+  /** DELETE /addresses/:id — remove (soft delete via active=false) */
+  @Delete('addresses/:id')
+  @UseGuards(CustomerJwtGuard)
+  async deleteAddress(@Req() req: any, @Param('id') id: string) {
+    return this.svc.deleteAddress(req.customer.id, id);
   }
 
   @Get('orders')
