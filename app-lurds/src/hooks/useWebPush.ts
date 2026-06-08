@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import {
-  getPushPublicKey, pushSubscribeApi, pushUnsubscribeApi,
+  getPushPublicKey, pushSubscribeApi, pushUnsubscribeApi, isLoggedIn,
 } from '@/lib/api';
 
 /**
@@ -66,7 +66,17 @@ export function useWebPush() {
     if (!isSupported) {
       throw new Error('Seu navegador não suporta notificações.');
     }
+
+    // ⚠️ CRÍTICO: verifica login ANTES — sem JWT, backend rejeita e a UI
+    // ficaria travada em "Carregando" durante o redirect pro login.
+    if (!isLoggedIn()) {
+      throw new Error('LOGIN_REQUIRED');
+    }
+
     setLoading(true);
+    // Timeout de segurança: se qualquer etapa travar > 15s, libera o botão
+    const safetyTimeout = setTimeout(() => setLoading(false), 15000);
+
     try {
       // 1) Pede permissão (se ainda não pediu)
       let perm = Notification.permission;
@@ -82,7 +92,7 @@ export function useWebPush() {
         );
       }
 
-      // 2) Pega VAPID public key do backend
+      // 2) Pega VAPID public key do backend (público, sem JWT)
       const { key } = await getPushPublicKey();
       if (!key) throw new Error('Push não configurado no servidor.');
 
@@ -90,13 +100,11 @@ export function useWebPush() {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        // Cast forçado: TS 5.5+ briga com Uint8Array<ArrayBufferLike> vs BufferSource,
-        // mas o runtime aceita perfeitamente.
         applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       });
       setSubscription(sub);
 
-      // 4) Manda pro backend
+      // 4) Manda pro backend (precisa de JWT — já verificamos acima)
       const json = sub.toJSON() as any;
       await pushSubscribeApi({
         endpoint: json.endpoint,
@@ -105,6 +113,7 @@ export function useWebPush() {
       });
       return true;
     } finally {
+      clearTimeout(safetyTimeout);
       setLoading(false);
     }
   }, [isSupported]);

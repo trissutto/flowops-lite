@@ -1,14 +1,16 @@
 'use client';
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, Bell, BellOff, Loader2, AlertCircle, CheckCircle2,
-  Share, Plus, Smartphone, ArrowDown, Sparkles,
+  Share, Plus, Smartphone, ArrowDown, Sparkles, LogIn,
 } from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
 import { useWebPush } from '@/hooks/useWebPush';
 
 export default function PrefNotificacoesPage() {
+  const router = useRouter();
   const {
     isSupported, isSubscribed, permission, loading, enable, disable,
     isIOS, isStandalone, needsInstallFirst,
@@ -21,6 +23,11 @@ export default function PrefNotificacoesPage() {
       if (isSubscribed) await disable();
       else await enable();
     } catch (e: any) {
+      // Login obrigatório — redireciona em vez de mostrar erro
+      if (e?.message === 'LOGIN_REQUIRED') {
+        router.push('/login?next=/conta/notificacoes');
+        return;
+      }
       setErr(e?.message || 'Erro');
     }
   };
