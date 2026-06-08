@@ -322,6 +322,9 @@ export async function markAllNotificationsRead() {
     body: JSON.stringify({}),
   });
 }
+export async function getUnreadNotificationsCount() {
+  return api<{ count: number }>('/customers/app/notifications/unread-count');
+}
 
 /** Fallback WhatsApp: recebe promoções por WA em vez de push */
 export async function setWhatsappOptIn(optIn: boolean) {

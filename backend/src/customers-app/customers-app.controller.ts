@@ -267,6 +267,13 @@ export class CustomersAppController {
     return this.svc.getNotifications(req.customer.id);
   }
 
+  /** GET /customers/app/notifications/unread-count — só o número, pra header da home */
+  @Get('notifications/unread-count')
+  @UseGuards(CustomerJwtGuard)
+  async notificationsUnreadCount(@Req() req: any) {
+    return this.svc.getUnreadNotificationsCount(req.customer.id);
+  }
+
   /** POST /customers/app/notifications/read-all — marca tudo como lido */
   @Post('notifications/read-all')
   @HttpCode(200)

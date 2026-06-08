@@ -9,6 +9,7 @@ import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import {
   getCategories, getProducts, isLoggedIn, getCustomerFromToken, getFirstName,
+  getUnreadNotificationsCount,
   type WcCategory, type WcProduct,
 } from '@/lib/api';
 
@@ -18,6 +19,7 @@ export default function HomePage() {
   const [loadingHL, setLoadingHL] = useState(true);
   const [logged, setLogged] = useState(false);
   const [firstName, setFirstName] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Lê estado de login + nome do JWT (sem precisar bater na API)
   useEffect(() => {
@@ -26,6 +28,10 @@ export default function HomePage() {
     if (isIn) {
       const c = getCustomerFromToken();
       setFirstName(getFirstName(c?.name));
+      // Busca contagem de notificações não lidas (hit leve)
+      getUnreadNotificationsCount()
+        .then((r) => setUnreadCount(r.count))
+        .catch(() => null);
     }
   }, []);
 
@@ -72,7 +78,11 @@ export default function HomePage() {
           className="relative p-2 rounded-full bg-ink-800 hover:bg-ink-700 transition"
         >
           <Bell className="w-5 h-5 text-gold" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-gold rounded-full" />
+          {unreadCount > 0 && (
+            <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 bg-gold text-ink text-[9px] font-black rounded-full flex items-center justify-center">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
         </Link>
       </header>
 

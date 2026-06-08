@@ -800,6 +800,14 @@ export class CustomersAppService {
     };
   }
 
+  /** Hit barato no DB pra mostrar bolinha no sino da home. */
+  async getUnreadNotificationsCount(accountId: string) {
+    const count = await this.prisma.customerAppNotification.count({
+      where: { accountId, readAt: null },
+    });
+    return { count };
+  }
+
   /** Marca todas as notificações da cliente como lidas. */
   async markAllNotificationsRead(accountId: string) {
     const r = await this.prisma.customerAppNotification.updateMany({

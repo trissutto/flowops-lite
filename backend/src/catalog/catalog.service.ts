@@ -431,11 +431,14 @@ export class CatalogService {
 
     if (!customerCity) return options;
 
-    // 3) Procura loja na MESMA cidade (com fallback pra estado nas lojas vizinhas)
+    // 3) Procura A loja na MESMA cidade — SÓ UMA (a de maior priorityScore)
     try {
       const stores = await this.prisma.store.findMany({
         where: { active: true },
-        select: { code: true, name: true, city: true, state: true, cep: true },
+        select: {
+          code: true, name: true, city: true, state: true, cep: true,
+          whatsapp: true,
+        },
         orderBy: [{ priorityScore: 'desc' }, { name: 'asc' }],
       });
 
@@ -443,23 +446,36 @@ export class CatalogService {
         (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
       const customerCityNorm = norm(customerCity);
-      const sameCity = stores.filter((s) => norm(s.city) === customerCityNorm);
+      // Pega A loja (não todas) da cidade — a de maior priorityScore
+      const nearestStore = stores.find((s) => norm(s.city) === customerCityNorm);
 
-      // Só mostra pickup se cliente tá na MESMA cidade que tem loja
-      const pickupOptions = sameCity.map((s) => ({
-        code: `PICKUP_${s.code}`,
-        name: `Retirar na loja ${s.city}`,
-        price: 0,
-        days: 2,
-        type: 'pickup' as const,
-        storeCode: s.code,
-        storeAddress: [s.name, s.city, s.state].filter(Boolean).join(' · '),
-      }));
-
-      options.push(...pickupOptions);
-      this.logger.log(
-        `Shipping ${cepDigits}: cidade=${customerCity}/${customerState}, ${pickupOptions.length} pickup`,
-      );
+      if (nearestStore) {
+        // Monta info da loja com o que temos:
+        // nome (geralmente já contém o endereço descritivo) · cidade-UF · CEP
+        const addrParts = [
+          nearestStore.name,
+          nearestStore.city && nearestStore.state
+            ? `${nearestStore.city}-${nearestStore.state}`
+            : nearestStore.city || nearestStore.state,
+          nearestStore.cep ? `CEP ${nearestStore.cep}` : null,
+        ].filter(Boolean);
+        options.push({
+          code: `PICKUP_${nearestStore.code}`,
+          name: `Retirar na loja Lurd's ${nearestStore.city}`,
+          price: 0,
+          days: 2,
+          type: 'pickup' as const,
+          storeCode: nearestStore.code,
+          storeAddress: addrParts.join(' · '),
+        });
+        this.logger.log(
+          `Shipping ${cepDigits}: pickup ${nearestStore.code} (${nearestStore.city})`,
+        );
+      } else {
+        this.logger.log(
+          `Shipping ${cepDigits}: ${customerCity}/${customerState} sem loja Lurd's`,
+        );
+      }
     } catch (e: any) {
       this.logger.warn(`Falha listando lojas pra pickup: ${e?.message}`);
     }

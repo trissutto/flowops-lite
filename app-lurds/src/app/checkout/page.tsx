@@ -330,8 +330,13 @@ export default function CheckoutPage() {
                               <Store className="w-4 h-4 text-emerald-400 shrink-0" />
                               <div className="flex-1 min-w-0">
                                 <div className="font-bold text-sm">{opt.name}</div>
-                                <div className="text-xs text-cream/60 line-clamp-1">
-                                  {opt.storeAddress || `Pronto em até ${opt.days} dia${opt.days > 1 ? 's' : ''}`}
+                                {opt.storeAddress && (
+                                  <div className="text-[11px] text-cream/70 mt-0.5 leading-relaxed">
+                                    📍 {opt.storeAddress}
+                                  </div>
+                                )}
+                                <div className="text-[10px] text-cream/50 mt-0.5">
+                                  Pronto em até {opt.days} dia{opt.days > 1 ? 's' : ''}
                                 </div>
                               </div>
                               <div className="text-right shrink-0">
