@@ -5803,10 +5803,27 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
    *   3. Fallback: window.print() abre diálogo do navegador
    */
   async function imprimirDanfeNfce() {
-    // ── Constantes da empresa (LURD'S / T.O. RISSUTTO EIRELI) ─────────
-    const RAZAO_SOCIAL = "T.O. RISSUTTO EIRELI";
-    const NOME_FANTASIA = "LURD'S PLUS SIZE";
-    const CNPJ = "20.104.813/0001-39";
+    // ── Dados da empresa: extraídos do XML AUTORIZADO pela SEFAZ ──────
+    // ANTES estava hardcoded com CNPJ da matriz (/0001-39) e razão antiga
+    // "EIRELI" (extinto em 2021). Agora puxa do <emit> do XML — que reflete
+    // a config REAL de cada loja (cada CNPJ próprio, /0006-43 pra Santos, etc).
+    const xmlAutorizado = ((sale as any).nfceXml as string | undefined) || '';
+    const emitBlock = xmlAutorizado.match(/<emit>([\s\S]*?)<\/emit>/)?.[1] || '';
+    const xmlCnpjRaw = (emitBlock.match(/<CNPJ>([^<]+)<\/CNPJ>/)?.[1] || '').trim();
+    const xmlRazao = (emitBlock.match(/<xNome>([^<]+)<\/xNome>/)?.[1] || '').trim();
+    const xmlFant = (emitBlock.match(/<xFant>([^<]+)<\/xFant>/)?.[1] || '').trim();
+
+    // Formata CNPJ "20104813000643" → "20.104.813/0006-43"
+    const formatCnpj = (c: string) => {
+      const d = c.replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+      return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
+    };
+
+    // Fallbacks só usados se o XML não estiver disponível (preview antes
+    // da autorização SEFAZ, por ex). Atualizados pra razão correta atual.
+    const RAZAO_SOCIAL = xmlRazao || 'T.O. RISSUTTO LTDA';
+    const NOME_FANTASIA = xmlFant || "LURD'S PLUS SIZE";
+    const CNPJ = xmlCnpjRaw ? formatCnpj(xmlCnpjRaw) : '—';
 
     // ── Itens do cupom: descrição + qty + unitário + subtotal ────────
     const itensHtml = sale.items.map((it, idx) => {
