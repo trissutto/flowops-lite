@@ -238,6 +238,13 @@ export default function CheckoutPage() {
             <div className="text-sm text-cream/50">Sem opções pra esse CEP</div>
           ) : (
             <div className="space-y-3">
+              {!selectedShipping && (
+                <p className="text-xs text-amber-300/80 mb-2 flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  Toque pra escolher uma opção
+                </p>
+              )}
+
               {/* CORREIOS */}
               {shippingOptions.filter((o) => o.type === 'shipping').length > 0 && (
                 <div>
@@ -247,33 +254,42 @@ export default function CheckoutPage() {
                   <div className="space-y-2">
                     {shippingOptions
                       .filter((o) => o.type === 'shipping')
-                      .map((opt) => (
-                        <button
-                          key={opt.code}
-                          onClick={() => setSelectedShipping(opt)}
-                          className={`w-full card-dark text-left transition ${
-                            selectedShipping?.code === opt.code ? 'border-gold/60' : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Truck className="w-4 h-4 text-cream/70" />
-                              <div>
+                      .map((opt) => {
+                        const checked = selectedShipping?.code === opt.code;
+                        return (
+                          <button
+                            key={opt.code}
+                            onClick={() => setSelectedShipping(opt)}
+                            className={`w-full card-dark text-left transition active:scale-[0.98] ${
+                              checked ? 'border-gold bg-gold/5' : 'border-ink-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`w-5 h-5 rounded-full border-2 shrink-0 flex items-center justify-center transition ${
+                                  checked
+                                    ? 'border-gold bg-gold'
+                                    : 'border-cream/40 bg-transparent'
+                                }`}
+                              >
+                                {checked && (
+                                  <div className="w-2 h-2 rounded-full bg-ink" />
+                                )}
+                              </div>
+                              <Truck className="w-4 h-4 text-cream/70 shrink-0" />
+                              <div className="flex-1 min-w-0">
                                 <div className="font-bold text-sm">{opt.name}</div>
                                 <div className="text-xs text-cream/60">
                                   Em até {opt.days} dia{opt.days > 1 ? 's' : ''} úteis
                                 </div>
                               </div>
+                              <div className="text-right shrink-0">
+                                <div className="font-black text-gold tabular-nums">{brl(opt.price)}</div>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <div className="font-black text-gold tabular-nums">{brl(opt.price)}</div>
-                              {selectedShipping?.code === opt.code && (
-                                <CheckCircle2 className="w-4 h-4 text-gold ml-auto mt-1" />
-                              )}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
               )}
@@ -287,37 +303,46 @@ export default function CheckoutPage() {
                   <div className="space-y-2">
                     {shippingOptions
                       .filter((o) => o.type === 'pickup')
-                      .map((opt) => (
-                        <button
-                          key={opt.code}
-                          onClick={() => setSelectedShipping(opt)}
-                          className={`w-full card-dark text-left transition ${
-                            selectedShipping?.code === opt.code
-                              ? 'border-gold/60 bg-emerald-900/10'
-                              : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Store className="w-4 h-4 text-emerald-400" />
-                              <div>
+                      .map((opt) => {
+                        const checked = selectedShipping?.code === opt.code;
+                        return (
+                          <button
+                            key={opt.code}
+                            onClick={() => setSelectedShipping(opt)}
+                            className={`w-full card-dark text-left transition active:scale-[0.98] ${
+                              checked
+                                ? 'border-emerald-400 bg-emerald-900/15'
+                                : 'border-ink-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div
+                                className={`w-5 h-5 rounded-full border-2 shrink-0 flex items-center justify-center transition ${
+                                  checked
+                                    ? 'border-emerald-400 bg-emerald-400'
+                                    : 'border-cream/40 bg-transparent'
+                                }`}
+                              >
+                                {checked && (
+                                  <div className="w-2 h-2 rounded-full bg-ink" />
+                                )}
+                              </div>
+                              <Store className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <div className="flex-1 min-w-0">
                                 <div className="font-bold text-sm">{opt.name}</div>
-                                <div className="text-xs text-cream/60">
+                                <div className="text-xs text-cream/60 line-clamp-1">
                                   {opt.storeAddress || `Pronto em até ${opt.days} dia${opt.days > 1 ? 's' : ''}`}
                                 </div>
                               </div>
-                            </div>
-                            <div className="text-right">
-                              <div className="font-black text-emerald-400 tabular-nums text-xs uppercase">
-                                Grátis
+                              <div className="text-right shrink-0">
+                                <div className="font-black text-emerald-400 tabular-nums text-xs uppercase">
+                                  Grátis
+                                </div>
                               </div>
-                              {selectedShipping?.code === opt.code && (
-                                <CheckCircle2 className="w-4 h-4 text-gold ml-auto mt-1" />
-                              )}
                             </div>
-                          </div>
-                        </button>
-                      ))}
+                          </button>
+                        );
+                      })}
                   </div>
                 </div>
               )}
