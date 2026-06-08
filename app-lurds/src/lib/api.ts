@@ -378,8 +378,16 @@ export async function getProductBySlug(slug: string) {
   return api<WcProductDetail>(`/catalog/products/${encodeURIComponent(slug)}`);
 }
 
-/** Frete: retorna opções (PAC, SEDEX, etc) */
-export type ShippingOption = { code: string; name: string; price: number; days: number };
+/** Frete: retorna opções (PAC, SEDEX, retirar em loja, etc) */
+export type ShippingOption = {
+  code: string;
+  name: string;
+  price: number;
+  days: number;
+  type: 'shipping' | 'pickup';
+  storeCode?: string;
+  storeAddress?: string;
+};
 export async function calculateShipping(cep: string) {
   return api<{ options: ShippingOption[] }>('/catalog/shipping/calculate', {
     method: 'POST',
@@ -397,6 +405,7 @@ export type CreateOrderPayload = {
   cashbackUsedCents?: number;
   shippingMethod?: string;
   shippingCost?: number;
+  pickupStoreCode?: string;
 };
 export type CreatedOrder = {
   id: number;

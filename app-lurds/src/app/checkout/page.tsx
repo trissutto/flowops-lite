@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, MapPin, Truck, CreditCard, Loader2, AlertCircle,
-  CheckCircle2, Sparkles, Plus, ChevronRight, ExternalLink,
+  CheckCircle2, Sparkles, Plus, ChevronRight, ExternalLink, Store,
 } from 'lucide-react';
 import { useCart } from '@/contexts/CartContext';
 import {
@@ -137,6 +137,7 @@ export default function CheckoutPage() {
         cashbackUsedCents: Math.round(cashbackUsed * 100),
         shippingMethod: selectedShipping.name,
         shippingCost: selectedShipping.price,
+        pickupStoreCode: selectedShipping.type === 'pickup' ? selectedShipping.storeCode : undefined,
       });
 
       // Limpa carrinho
@@ -227,40 +228,99 @@ export default function CheckoutPage() {
         <section className="mt-7 px-5">
           <div className="flex items-center gap-2 mb-3">
             <Truck className="w-5 h-5 text-gold" />
-            <h2 className="font-bold text-sm uppercase tracking-wider">Frete</h2>
+            <h2 className="font-bold text-sm uppercase tracking-wider">Receber em casa ou retirar</h2>
           </div>
           {loadingShipping ? (
             <div className="text-center py-4 text-cream/50">
               <Loader2 className="w-5 h-5 animate-spin mx-auto" />
             </div>
           ) : shippingOptions.length === 0 ? (
-            <div className="text-sm text-cream/50">Sem opções de frete pra esse CEP</div>
+            <div className="text-sm text-cream/50">Sem opções pra esse CEP</div>
           ) : (
-            <div className="space-y-2">
-              {shippingOptions.map((opt) => (
-                <button
-                  key={opt.code}
-                  onClick={() => setSelectedShipping(opt)}
-                  className={`w-full card-dark text-left transition ${
-                    selectedShipping?.code === opt.code ? 'border-gold/60' : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-sm">{opt.name}</div>
-                      <div className="text-xs text-cream/60">
-                        Em até {opt.days} dia{opt.days > 1 ? 's' : ''} úteis
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-black text-gold tabular-nums">{brl(opt.price)}</div>
-                      {selectedShipping?.code === opt.code && (
-                        <CheckCircle2 className="w-4 h-4 text-gold ml-auto mt-1" />
-                      )}
-                    </div>
+            <div className="space-y-3">
+              {/* CORREIOS */}
+              {shippingOptions.filter((o) => o.type === 'shipping').length > 0 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-cream/40 mb-1.5 px-1">
+                    Receber em casa
+                  </p>
+                  <div className="space-y-2">
+                    {shippingOptions
+                      .filter((o) => o.type === 'shipping')
+                      .map((opt) => (
+                        <button
+                          key={opt.code}
+                          onClick={() => setSelectedShipping(opt)}
+                          className={`w-full card-dark text-left transition ${
+                            selectedShipping?.code === opt.code ? 'border-gold/60' : ''
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Truck className="w-4 h-4 text-cream/70" />
+                              <div>
+                                <div className="font-bold text-sm">{opt.name}</div>
+                                <div className="text-xs text-cream/60">
+                                  Em até {opt.days} dia{opt.days > 1 ? 's' : ''} úteis
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-black text-gold tabular-nums">{brl(opt.price)}</div>
+                              {selectedShipping?.code === opt.code && (
+                                <CheckCircle2 className="w-4 h-4 text-gold ml-auto mt-1" />
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
                   </div>
-                </button>
-              ))}
+                </div>
+              )}
+
+              {/* PICKUP */}
+              {shippingOptions.filter((o) => o.type === 'pickup').length > 0 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-cream/40 mb-1.5 px-1 flex items-center gap-1">
+                    <Store className="w-3 h-3" /> Retirar (grátis — você está perto)
+                  </p>
+                  <div className="space-y-2">
+                    {shippingOptions
+                      .filter((o) => o.type === 'pickup')
+                      .map((opt) => (
+                        <button
+                          key={opt.code}
+                          onClick={() => setSelectedShipping(opt)}
+                          className={`w-full card-dark text-left transition ${
+                            selectedShipping?.code === opt.code
+                              ? 'border-gold/60 bg-emerald-900/10'
+                              : ''
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Store className="w-4 h-4 text-emerald-400" />
+                              <div>
+                                <div className="font-bold text-sm">{opt.name}</div>
+                                <div className="text-xs text-cream/60">
+                                  {opt.storeAddress || `Pronto em até ${opt.days} dia${opt.days > 1 ? 's' : ''}`}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-black text-emerald-400 tabular-nums text-xs uppercase">
+                                Grátis
+                              </div>
+                              {selectedShipping?.code === opt.code && (
+                                <CheckCircle2 className="w-4 h-4 text-gold ml-auto mt-1" />
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -369,8 +429,14 @@ export default function CheckoutPage() {
           )}
           {selectedShipping && (
             <div className="flex justify-between text-cream/70">
-              <span>Frete ({selectedShipping.code})</span>
-              <span className="tabular-nums">{brl(shippingCost)}</span>
+              <span>
+                {selectedShipping.type === 'pickup'
+                  ? `Retirada em loja`
+                  : `Frete (${selectedShipping.code})`}
+              </span>
+              <span className="tabular-nums">
+                {selectedShipping.price === 0 ? 'Grátis' : brl(shippingCost)}
+              </span>
             </div>
           )}
           <div className="flex justify-between items-baseline pt-2 border-t border-ink-600">

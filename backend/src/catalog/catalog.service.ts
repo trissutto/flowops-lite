@@ -395,12 +395,11 @@ export class CatalogService {
    * Retorna opções de entrega:
    *   1. PAC (Correios)        — R$ 19,90 / 7 dias
    *   2. SEDEX (Correios)      — R$ 32,00 / 3 dias
-   *   3. Retirar em loja X     — R$ 0,00  / 2 dias (uma opção por loja ativa)
+   *   3. Retirar na loja X     — SÓ se existe loja Lurd's na CIDADE do CEP (ViaCEP)
    *
-   * Lojas vêm do banco (Store.active = true), ordenadas por cidade
-   * com a do CEP do cliente no topo (matching simples por cidade).
-   * Cliente escolhe qualquer loja — não temos restrição de estoque por loja aqui
-   * (estoque é resolvido pelo OrdersService.upsertFromWooCommerce no roteamento).
+   * Critério da pickup: ViaCEP → pega cidade do CEP → procura Store com
+   * mesma cidade (normalizando acentos/case). Se não achar match exato, sem pickup.
+   * Evita listar 15 lojas e poluir o checkout.
    */
   async calculateShipping(opts: { cep: string; weight?: number }): Promise<Array<{
     code: string; name: string; price: number; days: number;
@@ -412,7 +411,27 @@ export class CatalogService {
       { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3, type: 'shipping' as const },
     ];
 
-    // 2) Retirar em loja — todas as lojas ativas
+    // 2) Lookup ViaCEP → cidade do cliente
+    const cepDigits = (opts.cep || '').replace(/\D/g, '');
+    if (cepDigits.length !== 8) return options;
+
+    let customerCity: string | null = null;
+    let customerState: string | null = null;
+    try {
+      const r = await firstValueFrom(
+        this.http.get(`https://viacep.com.br/ws/${cepDigits}/json/`, { timeout: 4000 }),
+      );
+      if (r.data && !r.data.erro) {
+        customerCity = String(r.data.localidade || '').trim();
+        customerState = String(r.data.uf || '').trim();
+      }
+    } catch (e: any) {
+      this.logger.warn(`ViaCEP falhou pra ${cepDigits}: ${e?.message}`);
+    }
+
+    if (!customerCity) return options;
+
+    // 3) Procura loja na MESMA cidade (com fallback pra estado nas lojas vizinhas)
     try {
       const stores = await this.prisma.store.findMany({
         where: { active: true },
@@ -420,9 +439,16 @@ export class CatalogService {
         orderBy: [{ priorityScore: 'desc' }, { name: 'asc' }],
       });
 
-      const pickupOptions = stores.map((s) => ({
+      const norm = (s: string | null | undefined) =>
+        (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+      const customerCityNorm = norm(customerCity);
+      const sameCity = stores.filter((s) => norm(s.city) === customerCityNorm);
+
+      // Só mostra pickup se cliente tá na MESMA cidade que tem loja
+      const pickupOptions = sameCity.map((s) => ({
         code: `PICKUP_${s.code}`,
-        name: `Retirar na loja ${s.city || s.name}`,
+        name: `Retirar na loja ${s.city}`,
         price: 0,
         days: 2,
         type: 'pickup' as const,
@@ -431,6 +457,9 @@ export class CatalogService {
       }));
 
       options.push(...pickupOptions);
+      this.logger.log(
+        `Shipping ${cepDigits}: cidade=${customerCity}/${customerState}, ${pickupOptions.length} pickup`,
+      );
     } catch (e: any) {
       this.logger.warn(`Falha listando lojas pra pickup: ${e?.message}`);
     }
