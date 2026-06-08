@@ -18,6 +18,9 @@ import {
 const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Frete grátis acima desse valor (sincronizado com WC)
+const FREE_SHIPPING_MIN = 500;
+
 type Step = 'address' | 'shipping' | 'payment' | 'processing';
 
 export default function CheckoutPage() {
@@ -410,6 +413,37 @@ export default function CheckoutPage() {
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {/* ───────── PROGRESS BAR FRETE GRÁTIS (compacta) ─────────
+          Só mostra se NÃO escolheu pickup (pickup já é grátis, sem sentido).
+          Última chance de upsell antes de pagar. */}
+      {selectedShipping && selectedShipping.type !== 'pickup' && subtotal < FREE_SHIPPING_MIN && (
+        <section className="mt-5 px-5">
+          <Link
+            href="/catalogo"
+            className="block rounded-2xl bg-gradient-to-r from-gold/10 via-gold/5 to-transparent border border-gold/30 p-3 hover:border-gold/50 transition active:scale-[0.99]"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-gold mb-0.5 flex items-center gap-1.5">
+                  🚚 Falta pouco
+                </div>
+                <div className="text-sm text-cream leading-snug">
+                  Adicione <strong className="text-gold tabular-nums">{brl(FREE_SHIPPING_MIN - subtotal)}</strong> e ganhe <strong className="text-gold">FRETE GRÁTIS</strong>
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-gold shrink-0" />
+            </div>
+            {/* Barrinha */}
+            <div className="mt-2 h-1.5 bg-ink-900 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-gold/70 to-gold transition-all duration-700"
+                style={{ width: `${Math.min(100, (subtotal / FREE_SHIPPING_MIN) * 100)}%` }}
+              />
+            </div>
+          </Link>
         </section>
       )}
 
