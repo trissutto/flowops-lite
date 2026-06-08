@@ -177,6 +177,65 @@ export class PdvService {
   }
 
   /**
+   * Cancela venda DUPLICATA — mesmo COM pagamento registrado.
+   * Caso real: vendedora bateu venda 2x antes de imprimir cupom.
+   * Diferente de zumbi: a venda tem pagamento mas é uma cópia da outra.
+   * Estoque NAO é alterado (assume que só uma das vendas teve peça baixada de verdade
+   * via NF emitida; ou se ambas baixaram, isso vira tarefa de reconciliação manual).
+   */
+  async masterCancelDuplicate(input: {
+    saleId: string;
+    motivo: string;
+    userName: string;
+  }) {
+    const { saleId, motivo, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatorio');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe motivo (>=3 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: { payments: true, items: { select: { id: true, sku: true, total: true } } },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+
+    if (sale.status === 'cancelled') {
+      return { ok: true, alreadyDone: true, saleId, message: 'Venda ja estava cancelada' };
+    }
+
+    // Bloqueia se venda já tem NFC-e emitida (precisa cancelar cupom fiscal antes via SEFAZ)
+    if (sale.nfceStatus === 'autorizada' && !sale.nfceCanceladaEm) {
+      throw new BadRequestException(
+        'Venda tem NFC-e autorizada. Cancela o cupom fiscal primeiro (SEFAZ) e depois exclui.',
+      );
+    }
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: `[DUPLICATA] ${motivo} — por ${userName}`,
+      } as any,
+    });
+
+    this.logger.warn(
+      `[MASTER] CANCEL-DUPLICATE saleId=${saleId} total=R$${sale.total} ` +
+      `payments=${(sale.payments || []).length} items=${(sale.items || []).length} motivo="${motivo}" por ${userName}`,
+    );
+
+    return {
+      ok: true,
+      saleId,
+      totalCancelado: Number(sale.total || 0),
+      qtdPagamentos: (sale.payments || []).length,
+      qtdItens: (sale.items || []).length,
+      message: 'Venda duplicada cancelada. NFC-e nao foi afetada — verifica no caixa se precisa estornar o pagamento manualmente.',
+    };
+  }
+
+  /**
    * Lê venda + itens + pagamentos parciais (com totais sempre atualizados).
    */
   async getSale(id: string) {

@@ -619,6 +619,42 @@ function ProdutosVendidosContent() {
                                 )}
                                 <span className="text-slate-500">·</span>
                                 <span className="text-slate-600">{qtdItens} {qtdItens === 1 ? 'item' : 'itens'} · <b>{brl(totalItens)}</b></span>
+
+                                {/* Excluir DUPLICATA — qualquer venda, mesmo com pagamento (master only) */}
+                                {!isReturn && isMatrix && (
+                                  <button
+                                    onClick={async () => {
+                                      const motivo = prompt(
+                                        `🗑️ EXCLUIR VENDA DUPLICADA #${l.saleNumber || String(l.saleId).slice(0,8)}\n\n` +
+                                        `Valor: R$ ${totalItens.toFixed(2).replace('.', ',')}\n` +
+                                        `Vendedora: ${l.sellerName || '-'}\n` +
+                                        `Loja: ${l.storeCode || '-'}\n\n` +
+                                        `⚠ Use SÓ pra venda batida 2x por engano (antes do cupom fiscal).\n` +
+                                        `✓ Marca como cancelada (some do relatório)\n` +
+                                        `✗ NÃO mexe em estoque\n` +
+                                        `✗ NÃO estorna pagamento — verifica no caixa manualmente\n\n` +
+                                        `Motivo (>=3 chars):`
+                                      );
+                                      if (!motivo || motivo.trim().length < 3) return;
+                                      const password = prompt('Senha MASTER:');
+                                      if (!password) return;
+                                      try {
+                                        await api(`/pdv/sales/${l.saleId}/master/cancel-duplicate`, {
+                                          method: 'POST',
+                                          body: JSON.stringify({ motivo: motivo.trim(), password }),
+                                        });
+                                        alert('✓ Venda duplicada excluída!');
+                                        buscar();
+                                      } catch (e: any) {
+                                        alert(`Erro: ${e?.message || e}`);
+                                      }
+                                    }}
+                                    className="ml-2 text-[10px] font-bold bg-rose-600 hover:bg-rose-700 text-white px-2 py-0.5 rounded"
+                                    title="Excluir venda duplicada (master)"
+                                  >
+                                    🗑️ Excluir duplicata
+                                  </button>
+                                )}
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 {!isReturn && pmts.length > 0 ? (

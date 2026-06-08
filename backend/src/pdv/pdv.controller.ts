@@ -299,6 +299,33 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/master/cancel-duplicate
+   * Body: { motivo, password }
+   * Cancela QUALQUER venda finalizada (mesmo com pagamento) — caso da Hellen:
+   * mesma venda batida 2x por engano antes de imprimir cupom fiscal.
+   * Marca status=cancelled + cancelReason. NAO mexe em estoque (assume que era duplicata).
+   * Exige senha master.
+   */
+  @Post('sales/:id/master/cancel-duplicate')
+  async masterCancelDuplicate(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { motivo: string; password: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterCancelDuplicate({
+      saleId: id,
+      motivo: body?.motivo || '',
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
    * POST /pdv/sales/:id/items { skuOrEan, qty? }
    */
   @Post('sales/:id/items')
