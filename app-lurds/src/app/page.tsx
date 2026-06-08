@@ -44,8 +44,8 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(() => setShowInstallBanner(true), 5000);
-    return () => clearTimeout(t);
+    // Banner aparece IMEDIATAMENTE pra cliente não perder a opção de instalar
+    setShowInstallBanner(true);
   }, []);
 
   // Carrega categorias e destaques (em paralelo)
