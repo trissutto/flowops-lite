@@ -390,6 +390,133 @@ export class CatalogService {
     }
   }
 
+  /* ──────────────────────── FRETE — WC ZONES ──────────────────────── */
+
+  // Cache de shipping zones do WC (5 min) — evita 3 requests por checkout
+  private wcShippingCache: { at: number; zones: any[] } | null = null;
+  private readonly WC_SHIPPING_TTL = 5 * 60 * 1000;
+
+  /**
+   * Lê configuração real de frete do WooCommerce.
+   * Match por: postcode range > state > zona 0 (default/resto).
+   *
+   * Lê endpoints:
+   *   GET /wc/v3/shipping/zones
+   *   GET /wc/v3/shipping/zones/{id}/locations
+   *   GET /wc/v3/shipping/zones/{id}/methods
+   *
+   * Filtra só métodos habilitados (`enabled: true`).
+   * Suporta tipos: flat_rate, free_shipping, local_pickup.
+   * Pra cálculo dinâmico real (Correios via API), depende de plugin —
+   * por ora retorna o valor configurado em flat_rate.cost.
+   */
+  private async getWcShippingMethods(
+    cepDigits: string,
+    customerState: string | null,
+  ): Promise<Array<any>> {
+    // Cache check
+    let zones: any[];
+    if (this.wcShippingCache && Date.now() - this.wcShippingCache.at < this.WC_SHIPPING_TTL) {
+      zones = this.wcShippingCache.zones;
+    } else {
+      const r = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/shipping/zones`, {
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      zones = Array.isArray(r.data) ? r.data : [];
+      // Pra cada zona, carrega locations + methods em paralelo
+      await Promise.all(
+        zones.map(async (z) => {
+          const [locsRes, methodsRes] = await Promise.all([
+            firstValueFrom(
+              this.http.get(`${this.baseUrl}/shipping/zones/${z.id}/locations`, {
+                auth: this.auth, timeout: 6000,
+              }),
+            ).catch(() => ({ data: [] })),
+            firstValueFrom(
+              this.http.get(`${this.baseUrl}/shipping/zones/${z.id}/methods`, {
+                auth: this.auth, timeout: 6000,
+              }),
+            ).catch(() => ({ data: [] })),
+          ]);
+          z._locations = Array.isArray(locsRes.data) ? locsRes.data : [];
+          z._methods = Array.isArray(methodsRes.data) ? methodsRes.data : [];
+        }),
+      );
+      this.wcShippingCache = { at: Date.now(), zones };
+    }
+
+    // Match zona por CEP/UF — prioridade: postcode > state > zone 0
+    const cepNumber = cepDigits.length === 8 ? parseInt(cepDigits, 10) : null;
+    const uf = (customerState || '').toUpperCase();
+
+    let matchedZone: any | null = null;
+
+    // 1ª passada: postcode range (mais específico)
+    for (const z of zones) {
+      if (z.id === 0) continue; // zona 0 = "resto" (default)
+      const hasPostcodeMatch = (z._locations || []).some((l: any) => {
+        if (l.type !== 'postcode') return false;
+        const code = String(l.code || '');
+        // WC suporta range "11000...11999" e wildcards "11*"
+        if (code.includes('...')) {
+          const [start, end] = code.split('...').map((s) => parseInt(s.replace(/\D/g, ''), 10));
+          return cepNumber !== null && cepNumber >= start && cepNumber <= end;
+        }
+        if (code.includes('*')) {
+          const prefix = code.replace(/\*/g, '');
+          return cepDigits.startsWith(prefix.replace(/\D/g, ''));
+        }
+        return code.replace(/\D/g, '') === cepDigits;
+      });
+      if (hasPostcodeMatch) { matchedZone = z; break; }
+    }
+
+    // 2ª passada: state match
+    if (!matchedZone && uf) {
+      for (const z of zones) {
+        if (z.id === 0) continue;
+        const hasStateMatch = (z._locations || []).some(
+          (l: any) => l.type === 'state' && String(l.code || '').endsWith(`:${uf}`),
+        );
+        if (hasStateMatch) { matchedZone = z; break; }
+      }
+    }
+
+    // 3ª passada: zona 0 (fallback "rest of world / default")
+    if (!matchedZone) matchedZone = zones.find((z) => z.id === 0) || null;
+
+    if (!matchedZone) return [];
+
+    // Formata os métodos da zona escolhida
+    const methods = (matchedZone._methods || [])
+      .filter((m: any) => m.enabled !== false)
+      .map((m: any) => {
+        const cost = Number((m.settings?.cost?.value || '0').replace(',', '.')) || 0;
+        const title = m.title || m.method_title || 'Frete';
+        // Tenta extrair dias da descrição/título (ex: "PAC (7 dias)" ou settings)
+        const daysMatch = /(\d+)\s*dia/i.exec(title);
+        const days = daysMatch ? parseInt(daysMatch[1], 10) : (m.method_id === 'free_shipping' ? 10 : 7);
+
+        if (m.method_id === 'local_pickup') {
+          // Lurd's já trata pickup via Store própria — pula
+          return null;
+        }
+        return {
+          code: `WC_${m.method_id?.toUpperCase()}_${m.instance_id}`,
+          name: title,
+          price: cost,
+          days,
+          type: 'shipping' as const,
+        };
+      })
+      .filter(Boolean);
+
+    return methods;
+  }
+
   /* ──────────────────────── FRETE ──────────────────────── */
   /**
    * Retorna opções de entrega:
@@ -405,28 +532,40 @@ export class CatalogService {
     code: string; name: string; price: number; days: number;
     type: 'shipping' | 'pickup'; storeCode?: string; storeAddress?: string;
   }>> {
-    // 1) Correios
-    const options: Array<any> = [
-      { code: 'PAC', name: 'PAC (Correios)', price: 19.90, days: 7, type: 'shipping' as const },
-      { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3, type: 'shipping' as const },
-    ];
-
-    // 2) Lookup ViaCEP → cidade do cliente
     const cepDigits = (opts.cep || '').replace(/\D/g, '');
-    if (cepDigits.length !== 8) return options;
+    const options: Array<any> = [];
 
+    // 1) Lookup ViaCEP → cidade/UF do cliente (precisa pra match das zonas)
     let customerCity: string | null = null;
     let customerState: string | null = null;
-    try {
-      const r = await firstValueFrom(
-        this.http.get(`https://viacep.com.br/ws/${cepDigits}/json/`, { timeout: 4000 }),
-      );
-      if (r.data && !r.data.erro) {
-        customerCity = String(r.data.localidade || '').trim();
-        customerState = String(r.data.uf || '').trim();
+    if (cepDigits.length === 8) {
+      try {
+        const r = await firstValueFrom(
+          this.http.get(`https://viacep.com.br/ws/${cepDigits}/json/`, { timeout: 4000 }),
+        );
+        if (r.data && !r.data.erro) {
+          customerCity = String(r.data.localidade || '').trim();
+          customerState = String(r.data.uf || '').trim();
+        }
+      } catch (e: any) {
+        this.logger.warn(`ViaCEP falhou pra ${cepDigits}: ${e?.message}`);
       }
+    }
+
+    // 2) Tenta puxar do WooCommerce shipping zones (config real)
+    try {
+      const wcMethods = await this.getWcShippingMethods(cepDigits, customerState);
+      if (wcMethods.length > 0) options.push(...wcMethods);
     } catch (e: any) {
-      this.logger.warn(`ViaCEP falhou pra ${cepDigits}: ${e?.message}`);
+      this.logger.warn(`WC shipping zones falhou: ${e?.message}`);
+    }
+
+    // 3) Fallback: se não veio nada do WC, usa hardcoded Correios
+    if (options.length === 0) {
+      options.push(
+        { code: 'PAC', name: 'PAC (Correios)', price: 19.90, days: 7, type: 'shipping' as const },
+        { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3, type: 'shipping' as const },
+      );
     }
 
     if (!customerCity) return options;

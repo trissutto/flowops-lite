@@ -390,26 +390,26 @@ export default function CheckoutPage() {
         <section className="mt-7 px-5">
           <button
             onClick={() => setUseCashback(!useCashback)}
-            className={`w-full card-gold-border bg-emerald-900/20 flex items-center justify-between transition ${
-              useCashback ? 'border-emerald-400/60' : ''
+            className={`w-full bg-emerald-900/20 border rounded-2xl px-4 py-3 flex items-center justify-between gap-3 transition ${
+              useCashback ? 'border-emerald-400/60' : 'border-emerald-500/30'
             }`}
           >
-            <div className="flex items-center gap-3">
-              <Sparkles className="w-5 h-5 text-emerald-400" />
-              <div className="text-left">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <Sparkles className="w-5 h-5 text-emerald-400 shrink-0" />
+              <div className="text-left min-w-0">
                 <div className="font-bold text-sm text-white">
                   Usar cashback
                 </div>
-                <div className="text-[11px] text-cream/60">
-                  Saldo: <strong className="text-emerald-300">{brl(cashbackAvail)}</strong> (até 50% da compra)
+                <div className="text-[11px] text-cream/60 truncate">
+                  Saldo: <strong className="text-emerald-300">{brl(cashbackAvail)}</strong> (até 50%)
                 </div>
               </div>
             </div>
-            <div className={`w-11 h-6 rounded-full relative transition ${
+            <div className={`w-11 h-6 rounded-full relative transition shrink-0 ${
               useCashback ? 'bg-emerald-500' : 'bg-ink-600'
             }`}>
               <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                useCashback ? 'translate-x-5' : 'translate-x-0.5'
+                useCashback ? 'translate-x-[22px]' : 'translate-x-0.5'
               }`} />
             </div>
           </button>
