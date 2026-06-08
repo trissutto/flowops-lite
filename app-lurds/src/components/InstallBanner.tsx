@@ -129,6 +129,7 @@ export function HeroInstallCard() {
   const [showModal, setShowModal] = useState(false);
   const [device, setDevice] = useState<Device>('other');
   const [dismissed, setDismissed] = useState(true); // Default true pra esconder durante hydration
+  const [showInstalledCelebration, setShowInstalledCelebration] = useState(false);
 
   useEffect(() => {
     setDevice(detectDevice());
@@ -161,8 +162,21 @@ export function HeroInstallCard() {
 
     // 4) Liberado pra mostrar
     setDismissed(false);
+
+    // 5) Listener pro evento `appinstalled` — quando Android instala via prompt,
+    // dispara comemoração apontando pro ícone na tela inicial
+    const onInstalled = () => {
+      window.localStorage.setItem(ALREADY_INSTALLED_KEY, '1');
+      setShowInstalledCelebration(true);
+    };
+    window.addEventListener('appinstalled', onInstalled);
+    return () => window.removeEventListener('appinstalled', onInstalled);
   }, []);
 
+  // Comemoração tem prioridade — aparece mesmo após instalar
+  if (showInstalledCelebration) {
+    return <InstalledCelebration onClose={() => setShowInstalledCelebration(false)} />;
+  }
   if (isInstalled || dismissed) return null;
 
   const handleClick = async () => {
@@ -170,7 +184,7 @@ export function HeroInstallCard() {
       const outcome = await install();
       if (outcome === 'accepted') {
         window.localStorage.setItem(ALREADY_INSTALLED_KEY, '1');
-        setDismissed(true);
+        setShowInstalledCelebration(true);
         return;
       }
     }
@@ -688,6 +702,106 @@ function ArrowDownAnimation({ children }: { children: React.ReactNode }) {
           <line x1="12" y1="5" x2="12" y2="19" />
           <polyline points="19 12 12 19 5 12" />
         </svg>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════ COMEMORAÇÃO APÓS INSTALAR ════════════════════
+ * Tela cheia comemorando que cliente acabou de instalar.
+ * Não dá pra abrir o app standalone automaticamente (limitação Android/iOS),
+ * então mostramos uma tela GIGANTE pra ela sair do navegador e procurar
+ * o ícone Lurd's na tela inicial.
+ */
+function InstalledCelebration({ onClose }: { onClose: () => void }) {
+  // Auto-fecha após 30s (caso ela não interaja)
+  useEffect(() => {
+    const t = setTimeout(onClose, 30000);
+    return () => clearTimeout(t);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] bg-gradient-to-br from-ink via-ink-800 to-ink flex flex-col"
+      style={{
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}
+    >
+      {/* Confetti decorativo */}
+      <div className="absolute top-10 left-8 text-3xl animate-bounce" style={{ animationDelay: '0s' }}>🎉</div>
+      <div className="absolute top-20 right-10 text-2xl animate-bounce" style={{ animationDelay: '0.3s' }}>✨</div>
+      <div className="absolute top-32 left-16 text-2xl animate-bounce" style={{ animationDelay: '0.6s' }}>💛</div>
+      <div className="absolute top-12 right-20 text-3xl animate-bounce" style={{ animationDelay: '0.9s' }}>🎊</div>
+
+      <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+        <div className="text-7xl mb-4 animate-pulse">🎉</div>
+        <h1 className="font-serif text-3xl font-black text-gold leading-tight">
+          Instalado!
+        </h1>
+        <p className="text-base text-cream/80 mt-3 max-w-xs">
+          Seu app Lurd's tá guardado no seu celular 💛
+        </p>
+
+        {/* Card com instrução */}
+        <div className="mt-8 w-full max-w-sm bg-ink-800 border-2 border-gold/40 rounded-3xl p-5">
+          <div className="text-center text-xs uppercase tracking-widest text-gold/70 font-bold mb-3">
+            Como abrir daqui pra frente:
+          </div>
+
+          <div className="flex items-start gap-3 mb-3">
+            <div className="shrink-0 w-9 h-9 rounded-full bg-gold text-ink font-black font-serif text-lg flex items-center justify-center">
+              1
+            </div>
+            <div className="text-sm text-cream/90 text-left pt-1">
+              Sai dessa tela do navegador
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3 mb-3">
+            <div className="shrink-0 w-9 h-9 rounded-full bg-gold text-ink font-black font-serif text-lg flex items-center justify-center">
+              2
+            </div>
+            <div className="text-sm text-cream/90 text-left pt-1">
+              Procura o ícone <strong className="text-gold">Lurd's</strong> na sua tela inicial
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3">
+            <div className="shrink-0 w-9 h-9 rounded-full bg-gold text-ink font-black font-serif text-lg flex items-center justify-center">
+              3
+            </div>
+            <div className="text-sm text-cream/90 text-left pt-1">
+              Abre tocando nele
+            </div>
+          </div>
+
+          {/* Preview do ícone */}
+          <div className="mt-5 flex justify-center">
+            <div className="flex flex-col items-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-gold via-gold-light to-gold flex items-center justify-center font-serif font-black text-ink text-3xl shadow-2xl animate-pulse">
+                L
+              </div>
+              <div className="text-[10px] text-cream/60 mt-1">Lurd's</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 p-3 bg-emerald-900/30 border border-emerald-500/30 rounded-2xl flex items-center gap-2">
+          <div className="text-xl">🔔</div>
+          <div className="text-xs text-cream/85 text-left leading-relaxed">
+            <strong className="text-emerald-300">Importante:</strong> só abrindo pelo ícone que você recebe nossas promoções com notificação.
+          </div>
+        </div>
+      </div>
+
+      <div className="px-6 pb-6">
+        <button
+          onClick={onClose}
+          className="btn-gold-lg w-full"
+        >
+          Entendi! Vou abrir pelo ícone 💛
+        </button>
       </div>
     </div>
   );
