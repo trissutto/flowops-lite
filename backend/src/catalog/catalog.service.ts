@@ -316,14 +316,24 @@ export class CatalogService {
   }): Promise<{ checkoutUrl: string; token: string }> {
     const apiKey = this.cfg.get<string>('LURDS_APP_CHECKOUT_KEY');
     if (!apiKey) {
-      throw new Error('LURDS_APP_CHECKOUT_KEY não configurado no backend');
+      this.logger.error('LURDS_APP_CHECKOUT_KEY não configurado no Railway Variables');
+      throw new Error(
+        'Sistema de checkout em manutenção. Adicione LURDS_APP_CHECKOUT_KEY no Railway.',
+      );
     }
     const wpUrl = (this.cfg.get<string>('WC_URL') || '').replace(/\/$/, '');
+    const endpoint = `${wpUrl}/wp-json/lurds-app/v1/checkout`;
+
+    this.logger.log(
+      `appCheckout iniciando: ${payload.items.length} items, ` +
+      `cashback=${payload.cashbackUsedCents || 0}c, ` +
+      `pickup=${payload.pickupStoreCode || 'n/a'} → ${endpoint}`,
+    );
 
     try {
       const res = await firstValueFrom(
         this.http.post(
-          `${wpUrl}/wp-json/lurds-app/v1/checkout`,
+          endpoint,
           {
             items: payload.items,
             customer: payload.customer,
@@ -344,7 +354,8 @@ export class CatalogService {
 
       const data = res.data || {};
       if (!data.checkout_url) {
-        throw new Error('Plugin não retornou checkout_url');
+        this.logger.error(`Plugin não retornou checkout_url. Resposta: ${JSON.stringify(data)}`);
+        throw new Error('Plugin do site não retornou URL de checkout. Avisa o administrador.');
       }
       this.logger.log(`appCheckout OK token=${data.token}`);
       return {
@@ -352,9 +363,30 @@ export class CatalogService {
         token: data.token,
       };
     } catch (e: any) {
-      const msg = e?.response?.data?.message || e?.message || 'Erro ao preparar checkout';
-      this.logger.error(`appCheckout falhou: ${msg}`);
-      throw new Error(msg);
+      // Distingue erros pra dar mensagem útil pra cliente E pro log
+      const status = e?.response?.status;
+      const wpMessage = e?.response?.data?.message;
+      const code = e?.code; // ECONNREFUSED, ETIMEDOUT, etc
+
+      this.logger.error(
+        `appCheckout falhou: status=${status} code=${code} wp_msg="${wpMessage}" raw=${e?.message}`,
+      );
+
+      // Mensagens humanas pra cada cenário
+      if (status === 401) {
+        throw new Error(
+          'Chave de autenticação não bate. Confirme LURDS_APP_CHECKOUT_KEY no Railway = wp-config.php',
+        );
+      }
+      if (status === 404 || (wpMessage || '').includes('rest_no_route')) {
+        throw new Error(
+          'Plugin do site não foi instalado/ativado. Acesse o admin do WP.',
+        );
+      }
+      if (status === 500 || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') {
+        throw new Error('Site fora do ar momentaneamente. Tenta de novo em alguns segundos.');
+      }
+      throw new Error(wpMessage || e?.message || 'Erro ao preparar checkout');
     }
   }
 
