@@ -326,15 +326,20 @@ export class CustomersAppService {
 
     if (account.links.length > 0) return account.links[0].customerId;
 
-    // Cria Customer novo pro app (origin SITE)
+    // Cria Customer novo pro app — origin = Store com code='SITE' (se existir).
+    // Se nao existir, fica null (não bloqueia o cadastro do endereço).
     const cpfRaw = account.cpf.replace(/\D/g, '');
+    const siteStore = await this.prisma.store.findUnique({
+      where: { code: 'SITE' },
+      select: { id: true },
+    });
     const newCustomer = await this.prisma.customer.create({
       data: {
         cpf: cpfRaw,
         name: account.name,
         phone: account.phone,
         email: account.email,
-        originStoreCode: 'SITE',
+        originStoreId: siteStore?.id || null,
       },
     });
     await this.prisma.customerAccountLink.create({
