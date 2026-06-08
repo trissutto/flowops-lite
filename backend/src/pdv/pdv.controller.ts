@@ -307,7 +307,7 @@ export class PdvController {
    * Exige senha master.
    */
   @Post('sales/:id/master/cancel-duplicada')
-  async masterCancelDuplicate(
+  async masterCancelDuplicada(
     @Req() req: any,
     @Param('id') id: string,
     @Body() body: { motivo: string; password: string },
@@ -318,7 +318,7 @@ export class PdvController {
     }
     const nivel = validateMinLevel(body?.password, 'MASTER');
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
-    return this.svc.masterCancelDuplicate({
+    return this.svc.masterCancelDuplicada({
       saleId: id,
       motivo: body?.motivo || '',
       userName: `[${nivel}] ${userName}`,
