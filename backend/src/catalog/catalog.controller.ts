@@ -60,4 +60,10 @@ export class CatalogController {
     if (!order) throw new NotFoundException('Pedido não encontrado');
     return order;
   }
+
+  /** GET /catalog/payment-methods — diagnóstico: lista gateways do WC */
+  @Get('payment-methods')
+  async paymentMethods() {
+    return { gateways: await this.svc.getPaymentGateways() };
+  }
 }

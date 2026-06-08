@@ -402,6 +402,35 @@ export class CatalogService {
     }
   }
 
+  /* ─────────────────── PAYMENT GATEWAYS (DIAGNÓSTICO) ─────────────────── */
+  /**
+   * Lista todos os payment gateways do WC com status enabled.
+   * Usado pra debug: ver quais métodos estão ativos no admin do WP.
+   * GET /catalog/payment-methods
+   */
+  async getPaymentGateways(): Promise<Array<{
+    id: string; title: string; description: string; enabled: boolean; method_title?: string;
+  }>> {
+    try {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/payment_gateways`, {
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      return (Array.isArray(res.data) ? res.data : []).map((g: any) => ({
+        id: g.id,
+        title: g.title || g.method_title || g.id,
+        description: g.description || '',
+        enabled: g.enabled === true || g.enabled === 'yes',
+        method_title: g.method_title,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getPaymentGateways falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
   /* ──────────────────────── FRETE — WC ZONES ──────────────────────── */
 
   // Cache de shipping zones do WC (5 min) — evita 3 requests por checkout
