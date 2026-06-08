@@ -337,7 +337,7 @@ export class CatalogService {
           country: payload.shipping.country || 'BR',
           email: payload.customer.email,
           phone: payload.customer.phone,
-          cpf: payload.customer.cpf,
+          // CPF NÃO vai aqui — não é campo nativo do WC, vai em meta_data abaixo.
         },
         shipping: {
           first_name: payload.customer.first_name,
@@ -368,6 +368,17 @@ export class CatalogService {
         meta_data: [
           { key: '_app_origin', value: 'app.lurds.com.br' },
           { key: '_app_payment_pref', value: payload.paymentMethod },
+          // CPF em TODAS as chaves que plugins brasileiros leem.
+          // Cada plugin escolheu um nome diferente, então cobrimos todos.
+          ...(payload.customer.cpf
+            ? [
+                { key: '_billing_cpf', value: payload.customer.cpf },
+                { key: 'billing_cpf', value: payload.customer.cpf },
+                { key: '_billing_persontype', value: '1' }, // 1 = PF
+                { key: 'billing_persontype', value: '1' },
+                { key: '_wcbcf_customer_cpf', value: payload.customer.cpf },
+              ]
+            : []),
           ...(payload.cashbackUsedCents
             ? [{ key: '_app_cashback_used_cents', value: payload.cashbackUsedCents }]
             : []),
