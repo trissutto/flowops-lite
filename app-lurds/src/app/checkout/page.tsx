@@ -176,6 +176,26 @@ export default function CheckoutPage() {
       setCreatedOrderId(1); // placeholder
       setCreatedPaymentUrl(result.checkoutUrl);
 
+      // Salva "pedido pendente" no localStorage pra aparecer em /pedidos
+      // enquanto o real ainda não foi importado pelo webhook WC.
+      try {
+        const pending = {
+          token: result.token,
+          createdAt: Date.now(),
+          items: items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity,
+            price: i.price,
+            image: i.image,
+          })),
+          total,
+          paymentMethod,
+          shippingLabel: selectedShipping.name,
+          checkoutUrl: result.checkoutUrl,
+        };
+        window.localStorage.setItem('lurds_pending_order', JSON.stringify(pending));
+      } catch {}
+
       // REDIRECT IMEDIATO — mantém overlay até o browser navegar
       // NÃO chamamos clear() antes pra evitar a UI piscar valores zerados.
       // O cart local fica intacto até o WC pegar a sessão pelo plugin.
