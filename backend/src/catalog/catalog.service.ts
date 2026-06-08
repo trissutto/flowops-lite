@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Catalog Service — fetcha categorias + produtos do WC e serve formatado
@@ -24,6 +25,7 @@ export class CatalogService {
   constructor(
     private readonly http: HttpService,
     private readonly cfg: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private get baseUrl() {
@@ -313,8 +315,10 @@ export class CatalogService {
     cashbackUsedCents?: number;
     shippingMethod?: string;
     shippingCost?: number;
+    pickupStoreCode?: string;  // Quando frete = retirar em loja
   }) {
     try {
+      const isPickup = !!payload.pickupStoreCode;
       const body: any = {
         payment_method: payload.paymentMethod === 'pix' ? 'pagarme-pix' : 'pagarme-credit-card',
         payment_method_title: payload.paymentMethod === 'pix' ? 'PIX' : 'Cartão de Crédito',
@@ -345,17 +349,18 @@ export class CatalogService {
         },
         line_items: payload.lineItems,
         coupon_lines: payload.couponCode ? [{ code: payload.couponCode }] : undefined,
-        shipping_lines: payload.shippingCost
-          ? [{
-              method_id: 'flat_rate',
-              method_title: payload.shippingMethod || 'Frete',
-              total: String(payload.shippingCost.toFixed(2)),
-            }]
-          : undefined,
+        shipping_lines: [{
+          method_id: isPickup ? 'local_pickup' : 'flat_rate',
+          method_title: payload.shippingMethod || (isPickup ? 'Retirar em loja' : 'Frete'),
+          total: String((payload.shippingCost || 0).toFixed(2)),
+        }],
         meta_data: [
           { key: '_app_origin', value: 'app.lurds.com.br' },
           ...(payload.cashbackUsedCents
             ? [{ key: '_app_cashback_used_cents', value: payload.cashbackUsedCents }]
+            : []),
+          ...(payload.pickupStoreCode
+            ? [{ key: '_pickup_store_code', value: payload.pickupStoreCode }]
             : []),
         ],
         customer_note: payload.cashbackUsedCents
@@ -387,18 +392,50 @@ export class CatalogService {
 
   /* ──────────────────────── FRETE ──────────────────────── */
   /**
-   * Calcula frete via API WC (precisa do plugin Correios/Melhor Envio instalado)
-   * Fallback simples: PAC R$ 19,90 / SEDEX R$ 32,00 hardcoded.
+   * Retorna opções de entrega:
+   *   1. PAC (Correios)        — R$ 19,90 / 7 dias
+   *   2. SEDEX (Correios)      — R$ 32,00 / 3 dias
+   *   3. Retirar em loja X     — R$ 0,00  / 2 dias (uma opção por loja ativa)
+   *
+   * Lojas vêm do banco (Store.active = true), ordenadas por cidade
+   * com a do CEP do cliente no topo (matching simples por cidade).
+   * Cliente escolhe qualquer loja — não temos restrição de estoque por loja aqui
+   * (estoque é resolvido pelo OrdersService.upsertFromWooCommerce no roteamento).
    */
   async calculateShipping(opts: { cep: string; weight?: number }): Promise<Array<{
     code: string; name: string; price: number; days: number;
+    type: 'shipping' | 'pickup'; storeCode?: string; storeAddress?: string;
   }>> {
-    // TODO: integrar com WC shipping zones / Melhor Envio
-    // Por ora retorna mockup com valores típicos
-    return [
-      { code: 'PAC', name: 'PAC (Correios)', price: 19.90, days: 7 },
-      { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3 },
+    // 1) Correios
+    const options: Array<any> = [
+      { code: 'PAC', name: 'PAC (Correios)', price: 19.90, days: 7, type: 'shipping' as const },
+      { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3, type: 'shipping' as const },
     ];
+
+    // 2) Retirar em loja — todas as lojas ativas
+    try {
+      const stores = await this.prisma.store.findMany({
+        where: { active: true },
+        select: { code: true, name: true, city: true, state: true, cep: true },
+        orderBy: [{ priorityScore: 'desc' }, { name: 'asc' }],
+      });
+
+      const pickupOptions = stores.map((s) => ({
+        code: `PICKUP_${s.code}`,
+        name: `Retirar na loja ${s.city || s.name}`,
+        price: 0,
+        days: 2,
+        type: 'pickup' as const,
+        storeCode: s.code,
+        storeAddress: [s.name, s.city, s.state].filter(Boolean).join(' · '),
+      }));
+
+      options.push(...pickupOptions);
+    } catch (e: any) {
+      this.logger.warn(`Falha listando lojas pra pickup: ${e?.message}`);
+    }
+
+    return options;
   }
 
   /** Resolve slug → id da categoria pra usar em GET /products?category=ID */
