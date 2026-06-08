@@ -229,16 +229,16 @@ export function HeroInstallCard() {
               Quero instalar — É grátis
             </button>
 
+            <button
+              onClick={handleAlreadyHave}
+              className="mt-2 w-full inline-flex items-center justify-center gap-2 bg-ink/10 text-ink rounded-2xl px-5 py-3 text-sm font-bold border-2 border-ink/30 active:scale-95 transition"
+            >
+              ✓ Já tenho o app instalado
+            </button>
+
             <p className="text-center text-[10px] text-ink/60 mt-2">
               Eu te ensino passo a passo, é facinho 💛
             </p>
-
-            <button
-              onClick={handleAlreadyHave}
-              className="block mx-auto mt-2 text-[10px] text-ink/55 underline"
-            >
-              Já tenho o app — não mostra mais
-            </button>
           </div>
         </div>
       </div>
