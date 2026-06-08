@@ -8,7 +8,7 @@ import InstallBanner from '@/components/InstallBanner';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import {
-  getCategories, getProducts, isLoggedIn,
+  getCategories, getProducts, isLoggedIn, getCustomerFromToken, getFirstName,
   type WcCategory, type WcProduct,
 } from '@/lib/api';
 
@@ -17,7 +17,31 @@ export default function HomePage() {
   const [categories, setCategories] = useState<WcCategory[]>([]);
   const [highlights, setHighlights] = useState<WcProduct[]>([]);
   const [loadingHL, setLoadingHL] = useState(true);
-  const logged = typeof window !== 'undefined' && isLoggedIn();
+  const [logged, setLogged] = useState(false);
+  const [firstName, setFirstName] = useState<string | null>(null);
+
+  // Lê estado de login + nome do JWT (sem precisar bater na API)
+  useEffect(() => {
+    const isIn = isLoggedIn();
+    setLogged(isIn);
+    if (isIn) {
+      const c = getCustomerFromToken();
+      setFirstName(getFirstName(c?.name));
+    }
+  }, []);
+
+  // Toast de boas-vindas se acabou de logar/cadastrar (?welcome=1)
+  const [showWelcomeToast, setShowWelcomeToast] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('welcome') === '1') {
+      setShowWelcomeToast(true);
+      const t = setTimeout(() => setShowWelcomeToast(false), 4000);
+      window.history.replaceState({}, '', window.location.pathname);
+      return () => clearTimeout(t);
+    }
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setShowInstallBanner(true), 5000);
@@ -56,6 +80,18 @@ export default function HomePage() {
           <span className="absolute top-1 right-1 w-2 h-2 bg-gold rounded-full" />
         </Link>
       </header>
+
+      {/* ── SAUDAÇÃO PERSONALIZADA — só quando logada ── */}
+      {logged && firstName && (
+        <div className="mt-4 px-5 animate-fade-in">
+          <p className="font-serif text-2xl font-bold leading-tight">
+            Olá, <span className="text-gold italic">{firstName}</span> 💛
+          </p>
+          <p className="text-xs text-cream/60 mt-0.5">
+            Que bom te ver de novo!
+          </p>
+        </div>
+      )}
 
       {/* ── BANNER PRINCIPAL ── */}
       <section className="mt-6 px-5">

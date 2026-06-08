@@ -19,11 +19,21 @@ export default function PrefNotificacoesPage() {
 
   const handleToggle = async () => {
     setErr(null);
+
+    // PRÉ-CHECK: se não tá logado, redireciona ANTES de chamar o hook
+    // (evita loading infinito quando subscribe dá 401)
+    if (typeof window !== 'undefined') {
+      const hasToken = !!window.localStorage.getItem('lurds_customer_token');
+      if (!hasToken) {
+        router.push('/login?next=/conta/notificacoes');
+        return;
+      }
+    }
+
     try {
       if (isSubscribed) await disable();
       else await enable();
     } catch (e: any) {
-      // Login obrigatório — redireciona em vez de mostrar erro
       if (e?.message === 'LOGIN_REQUIRED') {
         router.push('/login?next=/conta/notificacoes');
         return;

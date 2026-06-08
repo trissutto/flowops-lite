@@ -1,15 +1,29 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, User, Bell, MapPin, FileText, Shield, LogOut, ChevronRight, Heart, ShoppingBag } from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
-import { logout } from '@/lib/api';
+import { logout, getCustomerFromToken, getFirstName, isLoggedIn } from '@/lib/api';
 
 /**
  * /conta — Tela de configurações e dados da cliente.
  * Lista links pra cada seção; conteúdo real virá nas Semanas 2-3.
  */
 export default function ContaPage() {
+  // Lê dados do JWT logo na montagem
+  const [customer, setCustomer] = useState<{ name: string | null; cpf: string | null } | null>(null);
+  const [logged, setLogged] = useState(false);
+
+  useEffect(() => {
+    setLogged(isLoggedIn());
+    const c = getCustomerFromToken();
+    if (c) setCustomer({ name: c.name, cpf: c.cpf });
+  }, []);
+
+  const firstName = getFirstName(customer?.name);
+  const initial = (firstName?.[0] || 'L').toUpperCase();
+
   const sections = [
     {
       title: 'Minha conta',
@@ -52,16 +66,31 @@ export default function ContaPage() {
       {/* Avatar + Nome */}
       <section className="mt-6 px-5">
         <div className="card-dark flex items-center gap-3">
-          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-gold to-gold-dark flex items-center justify-center font-serif text-2xl font-bold text-ink">
-            L
+          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-gold to-gold-dark flex items-center justify-center font-serif text-2xl font-bold text-ink shadow-gold">
+            {initial}
           </div>
-          <div className="flex-1">
-            <div className="font-bold text-white">Olá, cliente!</div>
-            <div className="text-xs text-cream/60">Entra ou cadastra-te pra acessar</div>
+          <div className="flex-1 min-w-0">
+            {logged && firstName ? (
+              <>
+                <div className="font-bold text-white truncate">
+                  Olá, <span className="text-gold">{firstName}</span> 💛
+                </div>
+                <div className="text-xs text-cream/60 truncate">
+                  {customer?.cpf ? `CPF: ${customer.cpf}` : 'Logada'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="font-bold text-white">Olá, cliente!</div>
+                <div className="text-xs text-cream/60">Entra ou cadastra-te pra acessar</div>
+              </>
+            )}
           </div>
-          <Link href="/login" className="btn-ghost text-gold">
-            Entrar
-          </Link>
+          {!logged && (
+            <Link href="/login" className="btn-ghost text-gold">
+              Entrar
+            </Link>
+          )}
         </div>
       </section>
 
@@ -87,16 +116,18 @@ export default function ContaPage() {
         </section>
       ))}
 
-      {/* Logout */}
-      <section className="mt-8 px-5">
-        <button
-          onClick={() => logout()}
-          className="w-full flex items-center justify-center gap-2 py-3 text-red-300/80 hover:text-red-300 text-sm font-bold uppercase tracking-wider transition"
-        >
-          <LogOut className="w-4 h-4" />
-          Sair
-        </button>
-      </section>
+      {/* Logout — só aparece se logada */}
+      {logged && (
+        <section className="mt-8 px-5">
+          <button
+            onClick={() => logout()}
+            className="w-full flex items-center justify-center gap-2 py-3 text-red-300/80 hover:text-red-300 text-sm font-bold uppercase tracking-wider transition"
+          >
+            <LogOut className="w-4 h-4" />
+            Sair
+          </button>
+        </section>
+      )}
 
       {/* Versão */}
       <div className="mt-8 text-center text-[10px] text-cream/30">

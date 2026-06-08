@@ -29,6 +29,29 @@ export function isLoggedIn(): boolean {
   return !!getToken();
 }
 
+/** Lê dados básicos do JWT pra mostrar "Olá Thiago" sem precisar bater no /me. */
+export function getCustomerFromToken(): { id: string; name: string | null; cpf: string | null } | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    if (!payload?.sub) return null;
+    return {
+      id: payload.sub,
+      name: payload.name || null,
+      cpf: payload.cpf || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Primeiro nome (ex: "Thiago Rissutto" → "Thiago"). */
+export function getFirstName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  return name.trim().split(/\s+/)[0];
+}
+
 export function logout(): void {
   setToken(null);
   if (typeof window !== 'undefined') window.location.href = '/login';

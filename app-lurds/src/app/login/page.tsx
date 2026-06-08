@@ -43,7 +43,9 @@ export default function LoginPage() {
     try {
       const r = await loginCustomer(cpfDigits(cpf), password);
       setToken(r.token);
-      router.push('/');
+      // Pega next param se vier de redirect (ex: /conta/notificacoes), senão home
+      const next = new URLSearchParams(window.location.search).get('next');
+      router.push(next ? `${next}?welcome=1` : '/?welcome=1');
     } catch (err: any) {
       setError(err?.message || 'Erro ao entrar. Tenta de novo.');
     } finally {
