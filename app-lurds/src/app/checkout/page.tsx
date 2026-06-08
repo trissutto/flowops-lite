@@ -83,7 +83,9 @@ export default function CheckoutPage() {
       router.push('/entrar?next=/checkout');
       return;
     }
-    if (items.length === 0) {
+    // IMPORTANTE: se já criamos um pedido, o carrinho foi limpo via clear() —
+    // não redireciona pra /carrinho (cliente está em pleno fluxo de pagamento)
+    if (items.length === 0 && !createdOrderId) {
       router.push('/carrinho');
       return;
     }
@@ -102,7 +104,7 @@ export default function CheckoutPage() {
       }
       setLoading(false);
     });
-  }, [items.length, router]);
+  }, [items.length, router, createdOrderId]);
 
   // Calcula frete ao escolher endereço
   const handleSelectAddress = async (addr: AppAddress) => {
