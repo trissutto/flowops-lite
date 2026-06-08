@@ -453,6 +453,24 @@ export async function getProductBySlug(slug: string) {
   return api<WcProductDetail>(`/catalog/products/${encodeURIComponent(slug)}`);
 }
 
+/** Cross-sell: produtos sugeridos pra um productId */
+export type RelatedProduct = {
+  id: number;
+  slug: string;
+  name: string;
+  price: number;
+  regularPrice: number;
+  salePrice: number;
+  onSale: boolean;
+  image: string | null;
+  permalink: string;
+};
+export async function getRelatedProducts(productId: number, limit: number = 6) {
+  return api<{ products: RelatedProduct[] }>(
+    `/catalog/products/${productId}/related?limit=${limit}`,
+  );
+}
+
 /** Frete: retorna opções (PAC, SEDEX, retirar em loja, etc) */
 export type ShippingOption = {
   code: string;

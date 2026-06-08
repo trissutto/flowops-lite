@@ -5,13 +5,17 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, ShoppingBag, Minus, Plus, Trash2, Sparkles,
-  ChevronRight, Tag, Gift,
+  ChevronRight, Tag, Gift, Truck, CheckCircle2,
 } from 'lucide-react';
 import { useCart } from '@/contexts/CartContext';
 import BottomNav from '@/components/BottomNav';
 
 const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Mínimo pra FRETE GRÁTIS (sincronizado com WC zone settings)
+// TODO: puxar dinamicamente do backend se mudar com frequência
+const FREE_SHIPPING_MIN = 500;
 
 // Catálogo de cupons local (implementação real virá do WC/backend)
 // type: 'percent' = value é fração (0.10 = 10%)
@@ -162,6 +166,65 @@ export default function CarrinhoPage() {
             </button>
           </div>
         ))}
+      </section>
+
+      {/* ───────── PROGRESS BAR FRETE GRÁTIS ─────────
+          Estratégia: gatilho de urgência pra subir AOV.
+          Mostra quanto falta pra R$ 500. Quando atinge, vira badge verde
+          "FRETE GRÁTIS LIBERADO". Não mostra se tiver pickup escolhido. */}
+      <section className="mt-6 px-5">
+        {(() => {
+          const faltam = Math.max(0, FREE_SHIPPING_MIN - subtotal);
+          const pct = Math.min(100, (subtotal / FREE_SHIPPING_MIN) * 100);
+          const liberado = faltam === 0;
+          return (
+            <div
+              className={`rounded-2xl p-4 border-2 transition-all ${
+                liberado
+                  ? 'bg-gradient-to-br from-emerald-900/40 to-emerald-800/20 border-emerald-400/40'
+                  : 'bg-ink-800 border-ink-600'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-2">
+                {liberado ? (
+                  <>
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 animate-pulse" />
+                    <div className="text-sm font-black text-emerald-300 uppercase tracking-wider">
+                      🎉 Frete grátis liberado!
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <Truck className="w-5 h-5 text-gold" />
+                    <div className="text-sm font-bold text-cream">
+                      Faltam <span className="text-gold tabular-nums">{brl(faltam)}</span> pra <span className="text-gold uppercase tracking-wider">FRETE GRÁTIS</span>
+                    </div>
+                  </>
+                )}
+              </div>
+              {/* Barra de progresso */}
+              <div className="h-2 bg-ink-900 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ease-out ${
+                    liberado
+                      ? 'bg-gradient-to-r from-emerald-500 to-emerald-300'
+                      : 'bg-gradient-to-r from-gold/70 to-gold'
+                  }`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              {!liberado && (
+                <div className="mt-2 flex items-center justify-between text-[10px] text-cream/50">
+                  <span className="tabular-nums">{brl(subtotal)}</span>
+                  <Link href="/catalogo" className="text-gold font-bold uppercase tracking-wider">
+                    Adicionar mais →
+                  </Link>
+                  <span className="tabular-nums">{brl(FREE_SHIPPING_MIN)}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </section>
 
       {/* Cupom */}

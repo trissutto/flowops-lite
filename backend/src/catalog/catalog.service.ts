@@ -956,4 +956,119 @@ export class CatalogService {
       return null;
     }
   }
+
+  /* ──────────────────────── CROSS-SELL / UPSELL ──────────────────────── */
+  /**
+   * Retorna produtos sugeridos pra um produto X.
+   *
+   * Estratégia em cascata:
+   *   1. cross_sell_ids do WC (configurado manualmente no admin) — MELHOR sinal
+   *   2. related_ids do WC (auto: mesma categoria/tag)
+   *   3. Fallback: outros produtos da mesma categoria principal
+   *
+   * Cacheado por 30min (sugestões mudam pouco).
+   */
+  async getRelatedProducts(productId: number, limit: number = 6): Promise<any[]> {
+    if (!productId) return [];
+    const cacheKey = `related:${productId}:${limit}`;
+    const cached = this.productsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < 30 * 60 * 1000) return cached.data;
+
+    try {
+      // 1. Busca o produto pra pegar cross_sell_ids / related_ids / categoria
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products/${productId}`, {
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      const p = res.data;
+      if (!p) return [];
+
+      // Coleta IDs candidatos em ordem de prioridade
+      const candidateIds: number[] = [];
+      const seen = new Set<number>([productId]);
+
+      const pushIds = (ids: any[]) => {
+        for (const id of ids || []) {
+          const n = Number(id);
+          if (n && !seen.has(n)) {
+            seen.add(n);
+            candidateIds.push(n);
+          }
+        }
+      };
+
+      pushIds(p.cross_sell_ids); // prioridade máxima
+      pushIds(p.related_ids);
+      pushIds(p.upsell_ids);
+
+      // 2. Se ainda não tem o suficiente, completa com mesma categoria
+      if (candidateIds.length < limit && Array.isArray(p.categories) && p.categories.length > 0) {
+        const catId = p.categories[0].id;
+        try {
+          const catRes = await firstValueFrom(
+            this.http.get(`${this.baseUrl}/products`, {
+              params: {
+                category: catId,
+                per_page: limit + 5,
+                status: 'publish',
+                stock_status: 'instock',
+              },
+              auth: this.auth,
+              timeout: 8000,
+            }),
+          );
+          const fallbackIds = (Array.isArray(catRes.data) ? catRes.data : []).map((x: any) => x.id);
+          pushIds(fallbackIds);
+        } catch {}
+      }
+
+      if (candidateIds.length === 0) {
+        this.productsCache.set(cacheKey, { at: Date.now(), data: [] });
+        return [];
+      }
+
+      // 3. Busca os produtos sugeridos em batch (include=...)
+      const idsToFetch = candidateIds.slice(0, limit);
+      const batchRes = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products`, {
+          params: {
+            include: idsToFetch.join(','),
+            per_page: idsToFetch.length,
+            status: 'publish',
+            stock_status: 'instock',
+          },
+          auth: this.auth,
+          timeout: 10000,
+        }),
+      );
+      const batch = Array.isArray(batchRes.data) ? batchRes.data : [];
+
+      // Reordena pra respeitar prioridade do cross_sell_ids
+      const byId = new Map(batch.map((x: any) => [x.id, x]));
+      const ordered = idsToFetch
+        .map((id) => byId.get(id))
+        .filter(Boolean);
+
+      // Formata mínimo necessário pra renderizar card
+      const result = ordered.map((x: any) => ({
+        id: x.id,
+        slug: x.slug,
+        name: x.name,
+        price: Number(x.price) || 0,
+        regularPrice: Number(x.regular_price) || Number(x.price) || 0,
+        salePrice: Number(x.sale_price) || 0,
+        onSale: !!x.on_sale,
+        image: x.images?.[0]?.src || null,
+        permalink: x.permalink,
+      }));
+
+      this.productsCache.set(cacheKey, { at: Date.now(), data: result });
+      return result;
+    } catch (e: any) {
+      this.logger.error(`getRelatedProducts falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
 }

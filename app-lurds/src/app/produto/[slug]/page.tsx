@@ -7,7 +7,7 @@ import {
   ArrowLeft, ShoppingBag, ShoppingCart, Loader2, AlertCircle, Sparkles,
   Minus, Plus, Heart, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
-import { getProductBySlug, type WcProductDetail, type WcVariation } from '@/lib/api';
+import { getProductBySlug, getRelatedProducts, type WcProductDetail, type WcVariation, type RelatedProduct } from '@/lib/api';
 import { useCart } from '@/contexts/CartContext';
 
 const brl = (n: number) =>
@@ -342,6 +342,7 @@ export default function ProdutoPage() {
       {/* Modal "Continuar comprando ou Finalizar?" — pós adicionar ao carrinho */}
       {showAddedModal && product && (
         <AddedToCartModal
+          productId={product.id}
           productName={product.name}
           productImage={matchedVariation?.image || product.images[0]?.src || null}
           quantity={quantity}
@@ -361,11 +362,12 @@ export default function ProdutoPage() {
   );
 }
 
-/* ════════════════ MODAL: ADICIONADO AO CARRINHO ════════════════ */
+/* ════════════════ MODAL: ADICIONADO AO CARRINHO + CROSS-SELL ════════════════ */
 function AddedToCartModal({
-  productName, productImage, quantity, price,
+  productId, productName, productImage, quantity, price,
   onContinue, onCheckout, onClose,
 }: {
+  productId: number;
   productName: string;
   productImage: string | null;
   quantity: number;
@@ -376,20 +378,49 @@ function AddedToCartModal({
 }) {
   const brl = (n: number) =>
     n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const { addItem } = useCart();
+  const [related, setRelated] = useState<RelatedProduct[]>([]);
+  const [loadingRelated, setLoadingRelated] = useState(true);
+  const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
+
+  // Carrega cross-sell ao abrir
+  useEffect(() => {
+    setLoadingRelated(true);
+    getRelatedProducts(productId, 6)
+      .then((r) => setRelated(r.products || []))
+      .catch(() => setRelated([]))
+      .finally(() => setLoadingRelated(false));
+  }, [productId]);
+
+  // Quick-add: simple variation (sem atributos) direto ao carrinho
+  const handleQuickAdd = (p: RelatedProduct) => {
+    addItem({
+      productId: p.id,
+      variationId: undefined,
+      slug: p.slug,
+      name: p.name,
+      price: p.price,
+      image: p.image || undefined,
+      quantity: 1,
+      attributes: {},
+    });
+    setAddedIds((prev) => new Set(prev).add(p.id));
+  };
+
   return (
     <div
       className="fixed inset-0 z-[200] bg-ink/90 backdrop-blur-sm flex items-end sm:items-center justify-center"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md mx-0 sm:mx-4 bg-ink-800 sm:border sm:border-gold/30 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl animate-slide-up"
+        className="w-full max-w-md mx-0 sm:mx-4 bg-ink-800 sm:border sm:border-gold/30 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl animate-slide-up max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))' }}
       >
         <button
           aria-label="Fechar"
           onClick={onClose}
-          className="absolute top-3 right-3 p-2 rounded-full bg-ink-700"
+          className="absolute top-3 right-3 p-2 rounded-full bg-ink-700 z-10"
         >
           <X className="w-4 h-4 text-cream" />
         </button>
@@ -422,6 +453,75 @@ function AddedToCartModal({
             </div>
           </div>
         </div>
+
+        {/* ──────── CROSS-SELL: "Combina com isso" ────────
+            Estratégia: pega prioridade max do cliente — JÁ disse "sim" pra peça.
+            Mostra 4 produtos com botão "+" pra adicionar sem sair do modal. */}
+        {(loadingRelated || related.length > 0) && (
+          <div className="mt-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles className="w-4 h-4 text-gold" />
+              <h4 className="text-sm font-black text-cream uppercase tracking-wider">
+                Combina com isso
+              </h4>
+            </div>
+
+            {loadingRelated ? (
+              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="shrink-0 w-28 h-40 rounded-xl bg-ink-700/50 shimmer" />
+                ))}
+              </div>
+            ) : (
+              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1 snap-x snap-mandatory">
+                {related.slice(0, 4).map((p) => {
+                  const isAdded = addedIds.has(p.id);
+                  return (
+                    <div
+                      key={p.id}
+                      className="snap-start shrink-0 w-28 bg-ink-900 rounded-xl overflow-hidden border border-ink-600 relative"
+                    >
+                      {/* Imagem clicável → vai pra página do produto */}
+                      <Link href={`/produto/${p.slug}`} className="block">
+                        <div className="aspect-[3/4] bg-ink-700">
+                          {p.image && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={p.image} alt={p.name} className="w-full h-full object-cover" />
+                          )}
+                        </div>
+                      </Link>
+                      <div className="p-1.5">
+                        <div className="text-[10px] font-bold text-cream line-clamp-2 leading-tight min-h-[1.8rem]">
+                          {p.name}
+                        </div>
+                        <div className="mt-1 flex items-center justify-between gap-1">
+                          <span className="text-[11px] font-black text-gold tabular-nums">
+                            {brl(p.price)}
+                          </span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isAdded) handleQuickAdd(p);
+                            }}
+                            disabled={isAdded}
+                            aria-label={isAdded ? 'Já adicionado' : 'Adicionar ao carrinho'}
+                            className={`w-6 h-6 rounded-full flex items-center justify-center transition active:scale-90 ${
+                              isAdded
+                                ? 'bg-emerald-500 text-white'
+                                : 'bg-gold text-ink hover:scale-110'
+                            }`}
+                          >
+                            {isAdded ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-3.5 h-3.5" strokeWidth={3} />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* CTAs grandes */}
         <div className="mt-5 space-y-2">

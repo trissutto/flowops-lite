@@ -22,6 +22,22 @@ export class CatalogController {
     return product;
   }
 
+  /**
+   * GET /catalog/products/:productId/related
+   * Produtos sugeridos pra cross-sell (cross_sell_ids > related_ids > mesma categoria).
+   * Usado no modal "Combina com isso" após adicionar ao carrinho.
+   */
+  @Get('products/:productId/related')
+  async relatedProducts(
+    @Param('productId') productId: string,
+    @Query('limit') limit?: string,
+  ) {
+    const id = Number(productId);
+    if (!id) return { products: [] };
+    const products = await this.svc.getRelatedProducts(id, limit ? Number(limit) : 6);
+    return { products };
+  }
+
   @Get('products')
   async products(
     @Query('category') category?: string,
