@@ -324,8 +324,14 @@ export class CatalogService {
     const wpUrl = (this.cfg.get<string>('WC_URL') || '').replace(/\/$/, '');
     const endpoint = `${wpUrl}/wp-json/lurds-app/v1/checkout`;
 
+    // Aceita tanto `items` quanto `lineItems` (frontend pode mandar qualquer um)
+    const items = (payload as any).items || (payload as any).lineItems || [];
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('Nenhum produto no carrinho.');
+    }
+
     this.logger.log(
-      `appCheckout iniciando: ${payload.items.length} items, ` +
+      `appCheckout iniciando: ${items.length} items, ` +
       `cashback=${payload.cashbackUsedCents || 0}c, ` +
       `pickup=${payload.pickupStoreCode || 'n/a'} → ${endpoint}`,
     );
@@ -335,7 +341,7 @@ export class CatalogService {
         this.http.post(
           endpoint,
           {
-            items: payload.items,
+            items,
             customer: payload.customer,
             shipping: payload.shipping,
             cashback_cents: payload.cashbackUsedCents || 0,
