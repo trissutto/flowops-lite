@@ -456,6 +456,11 @@ export class CustomersAppService {
         return acc;
       });
 
+      // 🎁 Credita bônus de boas-vindas R$ 20 NA HORA (sem esperar PWA/compra)
+      await this.creditWelcomeBonus(account.id).catch((err) =>
+        this.logger.warn(`Welcome bonus falhou: ${err?.message || err}`),
+      );
+
       // ✉️ Dispara email LGPD de boas-vindas (best-effort — não bloqueia)
       if (safeEmail) {
         this.email
@@ -470,10 +475,19 @@ export class CustomersAppService {
       }
 
       const token = this.signToken(account);
+      // Re-lê balance atualizado pós-bônus pra retornar pro frontend
+      const updated = await this.prisma.customerAccount.findUnique({
+        where: { id: account.id },
+        select: { cashbackBalanceCents: true },
+      });
       return {
         token,
-        customer: this.publicAccount(account),
-        bonusPending: this.WELCOME_BONUS_CENTS / 100,
+        customer: {
+          ...this.publicAccount(account),
+          cashbackBalance: (updated?.cashbackBalanceCents || 0) / 100,
+        },
+        bonusPending: 0,  // já entrou
+        bonusReceived: this.WELCOME_BONUS_CENTS / 100,
         linkedCustomers: customers.length,
       };
     } catch (err: any) {
@@ -677,6 +691,77 @@ export class CustomersAppService {
       data: { whatsappOptIn: optIn },
     });
     return { whatsappOptIn: optIn };
+  }
+
+  /* ─────────────────── BACKFILL (admin) ─────────────────── */
+
+  /**
+   * Aplica o bônus de boas-vindas RETROATIVAMENTE pra todas accounts criadas
+   * que nunca receberam (welcomeBonusAt = null).
+   * Chamado pelo /retaguarda manualmente — não roda automático.
+   */
+  async backfillWelcomeBonus(): Promise<{ credited: number; skipped: number }> {
+    const accounts = await this.prisma.customerAccount.findMany({
+      where: { welcomeBonusAt: null },
+      select: { id: true },
+    });
+    let credited = 0;
+    let skipped = 0;
+    for (const a of accounts) {
+      try {
+        await this.creditWelcomeBonus(a.id);
+        credited++;
+      } catch {
+        skipped++;
+      }
+    }
+    this.logger.log(`Backfill welcome bonus: ${credited} creditadas, ${skipped} skip`);
+    return { credited, skipped };
+  }
+
+  /* ─────────────────── WELCOME BONUS ─────────────────── */
+
+  /**
+   * Credita R$ 20 (configurável via APP_WELCOME_BONUS_CENTS) no cashback
+   * da conta NA HORA do cadastro. Idempotente (welcomeBonusAt).
+   * Não usa CustomerCashbackService pra evitar circular dep entre módulos.
+   */
+  private async creditWelcomeBonus(accountId: string): Promise<void> {
+    const account = await this.prisma.customerAccount.findUnique({
+      where: { id: accountId },
+      select: { welcomeBonusAt: true, cashbackBalanceCents: true },
+    });
+    if (!account || account.welcomeBonusAt) return;
+
+    const TTL_DAYS = Number(this.cfg.get('CASHBACK_TTL_DAYS') ?? 30);
+    const amountCents = this.WELCOME_BONUS_CENTS;
+    const expiresAt = new Date(Date.now() + TTL_DAYS * 86400 * 1000);
+    const newBalance = account.cashbackBalanceCents + amountCents;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customerCashbackTx.create({
+        data: {
+          accountId,
+          type: 'welcome',
+          amountCents,
+          balanceAfterCents: newBalance,
+          description: '🎁 Bônus de boas-vindas R$ 20',
+          expiresAt,
+        },
+      });
+      await tx.customerAccount.update({
+        where: { id: accountId },
+        data: {
+          cashbackBalanceCents: newBalance,
+          cashbackEarnedCents: { increment: BigInt(amountCents) },
+          welcomeBonusAt: new Date(),
+        },
+      });
+    });
+
+    this.logger.log(
+      `🎁 Welcome bonus R$ ${(amountCents / 100).toFixed(2)} creditado: account=${accountId}`,
+    );
   }
 
   /* ─────────────────── NOTIFICAÇÕES ─────────────────── */

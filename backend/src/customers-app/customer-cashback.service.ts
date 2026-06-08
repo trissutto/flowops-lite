@@ -64,20 +64,18 @@ export class CustomerCashbackService {
 
   /**
    * Credita bônus de boas-vindas R$ 20.
-   * Só cai 1 vez por account (welcomeBonusAt fica setado).
+   * Cai NA HORA DO CADASTRO (não espera instalar PWA ou comprar).
+   * 1 vez por account (welcomeBonusAt fica setado pra idempotência).
    */
   async earnWelcomeBonus(accountId: string) {
     const account = await this.prisma.customerAccount.findUnique({
       where: { id: accountId },
-      select: { welcomeBonusAt: true, pwaInstalledAt: true },
+      select: { welcomeBonusAt: true },
     });
     if (!account) throw new BadRequestException('Conta não encontrada');
 
     if (account.welcomeBonusAt) {
       return { skipped: true, reason: 'already received' };
-    }
-    if (!account.pwaInstalledAt) {
-      return { skipped: true, reason: 'pwa not installed' };
     }
 
     const result = await this.creditAndUpdate(accountId, {
@@ -91,7 +89,7 @@ export class CustomerCashbackService {
       data: { welcomeBonusAt: new Date() },
     });
 
-    // Push de comemoração
+    // Push de comemoração (best-effort, só funciona se já ativou push)
     this.push
       .sendToAccount(accountId, {
         title: '🎁 R$ 20 caiu no seu cashback!',
@@ -101,6 +99,7 @@ export class CustomerCashbackService {
       })
       .catch(() => null);
 
+    this.logger.log(`Welcome bonus creditado: account=${accountId} valor=R$${this.WELCOME_CENTS / 100}`);
     return result;
   }
 

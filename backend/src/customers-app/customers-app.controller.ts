@@ -276,6 +276,20 @@ export class CustomersAppController {
   }
 
   /**
+   * POST /customers/app/admin/backfill-welcome — credita R$20 retroativo
+   * pra todas accounts que nunca receberam. Só admin.
+   */
+  @Post('admin/backfill-welcome')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async adminBackfillWelcome(@Req() req: any) {
+    if (req?.user?.role !== 'admin') {
+      throw new ForbiddenException('Apenas admin');
+    }
+    return this.svc.backfillWelcomeBonus();
+  }
+
+  /**
    * POST /customers/app/admin/push-send — operador dispara push manual.
    * Body: { mode: 'all' | 'segment' | 'account', payload, segment?, accountId? }
    */
