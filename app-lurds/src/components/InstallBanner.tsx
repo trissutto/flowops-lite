@@ -122,19 +122,45 @@ export default function InstallBanner({ onClose }: { onClose?: () => void }) {
  * Card GIGANTE no topo da home — pra senhora não ter como perder.
  * Diferente do banner do rodapé: é grande, dourado, primeiro impacto visual.
  */
+const ALREADY_INSTALLED_KEY = 'lurds_already_installed';
+
 export function HeroInstallCard() {
   const { canInstall, isInstalled, install } = usePWAInstall();
   const [showModal, setShowModal] = useState(false);
   const [device, setDevice] = useState<Device>('other');
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(true); // Default true pra esconder durante hydration
 
   useEffect(() => {
     setDevice(detectDevice());
+
+    // 1) Já marcou que tem o app? Esconde pra sempre
+    if (window.localStorage.getItem(ALREADY_INSTALLED_KEY) === '1') {
+      setDismissed(true);
+      return;
+    }
+
+    // 2) Tá rodando em standalone (instalou)? Marca pra sempre + esconde
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true;
+    if (isStandalone) {
+      window.localStorage.setItem(ALREADY_INSTALLED_KEY, '1');
+      setDismissed(true);
+      return;
+    }
+
+    // 3) Dismissed temporário (24h)
     const stored = window.localStorage.getItem(DISMISS_KEY);
     if (stored) {
       const hours = (Date.now() - parseInt(stored)) / (1000 * 60 * 60);
-      if (hours < DISMISS_HOURS) setDismissed(true);
+      if (hours < DISMISS_HOURS) {
+        setDismissed(true);
+        return;
+      }
     }
+
+    // 4) Liberado pra mostrar
+    setDismissed(false);
   }, []);
 
   if (isInstalled || dismissed) return null;
@@ -142,13 +168,23 @@ export function HeroInstallCard() {
   const handleClick = async () => {
     if (canInstall) {
       const outcome = await install();
-      if (outcome === 'accepted') return;
+      if (outcome === 'accepted') {
+        window.localStorage.setItem(ALREADY_INSTALLED_KEY, '1');
+        setDismissed(true);
+        return;
+      }
     }
     setShowModal(true);
   };
 
   const handleDismiss = () => {
     window.localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    setDismissed(true);
+  };
+
+  /** Cliente já tem o app — esconde pra sempre */
+  const handleAlreadyHave = () => {
+    window.localStorage.setItem(ALREADY_INSTALLED_KEY, '1');
     setDismissed(true);
   };
 
@@ -196,6 +232,13 @@ export function HeroInstallCard() {
             <p className="text-center text-[10px] text-ink/60 mt-2">
               Eu te ensino passo a passo, é facinho 💛
             </p>
+
+            <button
+              onClick={handleAlreadyHave}
+              className="block mx-auto mt-2 text-[10px] text-ink/55 underline"
+            >
+              Já tenho o app — não mostra mais
+            </button>
           </div>
         </div>
       </div>

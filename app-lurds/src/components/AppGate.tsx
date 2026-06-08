@@ -38,12 +38,17 @@ export default function AppGate({ children }: { children: ReactNode }) {
       (window.navigator as any).standalone === true;
 
     if (isIOS && !isStandalone) {
-      // Cliente pode ter dispensado o gate antes (5min de tolerância pra ela navegar)
-      const skipUntil = Number(window.localStorage.getItem('lurds_ios_gate_skip') || 0);
-      if (Date.now() < skipUntil) {
+      // Cliente já marcou "Já tenho o app" → confiamos nela, sem bloqueio
+      if (window.localStorage.getItem('lurds_already_installed') === '1') {
         setShouldBlockIOS(false);
       } else {
-        setShouldBlockIOS(true);
+        // Tolerância: cliente pode pular o gate por 30min pra navegar
+        const skipUntil = Number(window.localStorage.getItem('lurds_ios_gate_skip') || 0);
+        if (Date.now() < skipUntil) {
+          setShouldBlockIOS(false);
+        } else {
+          setShouldBlockIOS(true);
+        }
       }
     }
 
