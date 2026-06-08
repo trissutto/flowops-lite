@@ -164,7 +164,9 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="pb-40">
+    <div
+      style={{ paddingBottom: 'calc(20rem + env(safe-area-inset-bottom))' }}
+    >
       <header className="flex items-center gap-3 px-5 pt-5">
         <Link href="/carrinho" className="p-2 rounded-full bg-ink-800 hover:bg-ink-700 transition">
           <ArrowLeft className="w-5 h-5 text-gold" />
