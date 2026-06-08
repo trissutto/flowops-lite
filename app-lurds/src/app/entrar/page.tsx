@@ -224,7 +224,7 @@ function StepCpf({ cpf, setCpf, loading, error, onNext }: any) {
           onChange={(e) => setCpf(cpfDigits(e.target.value))}
           maxLength={14}
           placeholder="000.000.000-00"
-          className="input-gold w-full text-xl tracking-wider tabular-nums text-center"
+          className="input-dark w-full text-xl tracking-wider tabular-nums text-center"
           autoFocus
         />
       </div>
@@ -290,7 +290,7 @@ function StepLogin({ cpf, lookup, pwd, setPwd, showPwd, setShowPwd, loading, err
             value={pwd}
             onChange={(e) => setPwd(e.target.value)}
             placeholder="Mínimo 4 dígitos"
-            className="input-gold w-full pr-12"
+            className="input-dark w-full pr-12"
             autoFocus
           />
           <button
@@ -382,7 +382,7 @@ function StepCadastro({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Como te chamamos?"
-            className="input-gold w-full"
+            className="input-dark w-full"
             autoFocus={!name}
             autoComplete="name"
           />
@@ -398,7 +398,7 @@ function StepCadastro({
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="(11) 99999-9999"
-            className="input-gold w-full"
+            className="input-dark w-full"
             autoComplete="tel"
           />
         </div>
@@ -413,7 +413,7 @@ function StepCadastro({
               value={pwd}
               onChange={(e) => setPwd(e.target.value)}
               placeholder="Mínimo 4 dígitos"
-              className="input-gold w-full pr-12"
+              className="input-dark w-full pr-12"
               autoComplete="new-password"
             />
             <button
