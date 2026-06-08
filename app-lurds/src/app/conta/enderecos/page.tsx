@@ -20,7 +20,7 @@ export default function EnderecosPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/conta/enderecos');
+      router.push('/entrar?next=/conta/enderecos');
       return;
     }
     getAddresses()

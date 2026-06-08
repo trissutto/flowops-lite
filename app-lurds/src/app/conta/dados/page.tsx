@@ -21,7 +21,7 @@ export default function DadosPessoaisPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/conta/dados');
+      router.push('/entrar?next=/conta/dados');
       return;
     }
     getMe()

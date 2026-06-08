@@ -25,7 +25,7 @@ export default function PrefNotificacoesPage() {
     if (typeof window !== 'undefined') {
       const hasToken = !!window.localStorage.getItem('lurds_customer_token');
       if (!hasToken) {
-        router.push('/login?next=/conta/notificacoes');
+        router.push('/entrar?next=/conta/notificacoes');
         return;
       }
     }
@@ -35,7 +35,7 @@ export default function PrefNotificacoesPage() {
       else await enable();
     } catch (e: any) {
       if (e?.message === 'LOGIN_REQUIRED') {
-        router.push('/login?next=/conta/notificacoes');
+        router.push('/entrar?next=/conta/notificacoes');
         return;
       }
       setErr(e?.message || 'Erro');

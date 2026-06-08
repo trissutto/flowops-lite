@@ -75,73 +75,129 @@ export function useWebPush() {
 
     setLoading(true);
 
+    // Helper pra time-cap qualquer Promise individualmente
+    const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`${label} (${ms / 1000}s)`)), ms),
+        ),
+      ]);
+
+    const log = (step: string, info?: any) =>
+      // eslint-disable-next-line no-console
+      console.log(`[push] ${step}`, info ?? '');
+
     try {
-      // 1) Pede permissão (se ainda não pediu)
-      //    iOS Safari quirk: a Promise de requestPermission() às vezes NUNCA resolve
-      //    se a aba perdeu foco quando o dialog abriu. Timeout interno + fallback
-      //    pra callback legado (caso polyfill quebrado) cobre os dois cenários.
+      log('1 start');
+
+      // ════ 1) PERMISSÃO ════
       let perm = Notification.permission;
+      log('1 current permission', perm);
       if (perm === 'default') {
         perm = await new Promise<NotificationPermission>((resolve) => {
           let settled = false;
           const finish = (r: NotificationPermission) => {
             if (settled) return;
             settled = true;
+            log('1 permission decided', r);
             resolve(r);
           };
           try {
-            // requestPermission tem 2 assinaturas: callback (legado) E Promise (novo)
-            // Chamamos AMBAS pra robustez.
             const maybe = Notification.requestPermission((r) => finish(r));
             if (maybe && typeof (maybe as any).then === 'function') {
-              (maybe as Promise<NotificationPermission>).then(finish, () =>
-                finish('denied'),
-              );
+              (maybe as Promise<NotificationPermission>).then(finish, () => finish('denied'));
             }
-          } catch {
+          } catch (e: any) {
+            log('1 requestPermission throw', e?.message);
             finish('denied');
           }
-          // Safety: se nada resolveu em 12s, lê o estado atual e libera UI
-          setTimeout(() => {
-            finish(Notification.permission || 'default');
-          }, 12000);
+          // Safety 15s
+          setTimeout(() => finish(Notification.permission || 'default'), 15000);
         });
       }
       setPermission(perm);
       if (perm !== 'granted') {
         throw new Error(
           perm === 'denied'
-            ? 'Notificações foram bloqueadas. Vai nas configurações do iPhone → Lurd\'s → Notificações → Permitir.'
-            : 'Você precisa permitir notificações pra continuar.',
+            ? 'Notificações foram bloqueadas. Vai nas Configurações do celular → Lurd\'s → Notificações → Permitir.'
+            : 'Você precisa permitir as notificações pra continuar.',
         );
       }
 
-      // 2) Pega VAPID public key do backend
-      const { key } = await getPushPublicKey();
-      if (!key) throw new Error('Push não configurado no servidor.');
+      // ════ 2) VAPID KEY ════
+      log('2 fetching VAPID key');
+      let key: string | null = null;
+      try {
+        const r = await withTimeout(getPushPublicKey(), 8000, 'Servidor demorou demais');
+        key = r.key;
+      } catch (e: any) {
+        log('2 vapid error', e?.message);
+        throw new Error('Não consegui falar com o servidor. Tenta de novo em 30 segundos.');
+      }
+      if (!key) throw new Error('Notificações não configuradas — me avisa pelo WhatsApp se aparecer esse erro.');
+      log('2 vapid OK');
 
-      // 3) Cria subscription via Service Worker — também com timeout
-      //    20s é confortável: dá tempo do SW acordar no Android (que dorme
-      //    pra economizar bateria) sem deixar o cliente esperando eternamente.
-      const reg = await Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise<ServiceWorkerRegistration>((_, reject) =>
-          setTimeout(() => reject(new Error('Demorou demais. Fecha e abre o app de novo, depois tenta ativar.')), 20000),
-        ),
-      ]);
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
-      });
+      // ════ 3) SERVICE WORKER ════
+      log('3 awaiting SW ready');
+      let reg: ServiceWorkerRegistration;
+      try {
+        reg = await withTimeout(navigator.serviceWorker.ready, 25000, 'App ainda carregando');
+      } catch (e: any) {
+        log('3 SW error', e?.message);
+        // Recovery: tenta registrar agora se não tem
+        try {
+          reg = await withTimeout(navigator.serviceWorker.register('/sw.js'), 10000, 'Não consegui preparar o app');
+        } catch (e2: any) {
+          log('3 SW register error', e2?.message);
+          throw new Error('Fecha o app e abre de novo pelo ícone Lurd\'s na tela inicial, depois tenta ativar.');
+        }
+      }
+      log('3 SW ready');
+
+      // ════ 4) SUBSCRIPTION ════
+      // Se já tem (caso comum: cliente já clicou antes e a sub ficou no device),
+      // reusa em vez de tentar criar de novo (subscribe() falha com já existente)
+      let sub = await reg.pushManager.getSubscription().catch(() => null);
+      if (sub) {
+        log('4 reusing existing subscription');
+      } else {
+        log('4 creating new subscription');
+        try {
+          sub = await withTimeout(
+            reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+            }),
+            20000,
+            'Falha ao registrar no servidor de notificações',
+          );
+        } catch (e: any) {
+          log('4 subscribe error', e?.message);
+          throw new Error('Falha registrando seu celular. Fecha o app, abre de novo e tenta — se persistir, me avisa.');
+        }
+      }
       setSubscription(sub);
 
-      // 4) Manda pro backend
+      // ════ 5) BACKEND ════
+      log('5 sending to backend');
       const json = sub.toJSON() as any;
-      await pushSubscribeApi({
-        endpoint: json.endpoint,
-        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-      });
+      try {
+        await withTimeout(
+          pushSubscribeApi({
+            endpoint: json.endpoint,
+            keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+          }),
+          8000,
+          'Servidor demorou demais',
+        );
+      } catch (e: any) {
+        log('5 backend error', e?.message);
+        throw new Error('Funcionou no celular mas não consegui avisar nosso servidor. Tenta de novo.');
+      }
+
+      log('6 DONE — push ativo');
       return true;
     } finally {
       setLoading(false);

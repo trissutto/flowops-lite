@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Bell, X, Sparkles } from 'lucide-react';
 import { useWebPush } from '@/hooks/useWebPush';
+import { isLoggedIn } from '@/lib/api';
 
 /**
  * PushPrePrompt — modal in-app perguntando ANTES de chamar Notification.requestPermission.
@@ -50,6 +51,8 @@ export default function PushPrePrompt({ context, reward, onClose, force }: Props
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    // GUARD CRÍTICO: não mostra pra cliente não logada
+    if (!isLoggedIn()) return;
     // Não mostra se: já tá inscrita, não suporta, ou iOS sem PWA (mostra outro fluxo)
     if (isSubscribed || !isSupported || needsInstallFirst) return;
     // Não mostra se já negou no nativo (permission === 'denied')

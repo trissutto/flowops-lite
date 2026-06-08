@@ -14,7 +14,7 @@
 // Sem isso, SW antigo serve chunks JS/CSS com hashes que não existem mais,
 // e usuária vê tela quebrada (CSS 404). Tem fallback network-first pra
 // /_next/static/* logo abaixo que TAMBÉM mitiga isso.
-const CACHE_VERSION = 'lurds-v7';
+const CACHE_VERSION = 'lurds-v8';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',

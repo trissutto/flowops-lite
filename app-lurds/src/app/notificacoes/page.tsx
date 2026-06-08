@@ -44,7 +44,7 @@ export default function NotificacoesPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/notificacoes');
+      router.push('/entrar?next=/notificacoes');
       return;
     }
     getNotifications()

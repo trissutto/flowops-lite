@@ -31,7 +31,7 @@ export default function PedidosPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/pedidos');
+      router.push('/entrar?next=/pedidos');
       return;
     }
     getOrders()

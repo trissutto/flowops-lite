@@ -79,7 +79,7 @@ export default function CheckoutPage() {
   // Carrega dados iniciais
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/checkout');
+      router.push('/entrar?next=/checkout');
       return;
     }
     if (items.length === 0) {

@@ -32,7 +32,7 @@ export default function CashbackPage() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      router.push('/login?next=/cashback');
+      router.push('/entrar?next=/cashback');
       return;
     }
     getCashbackStatement()
