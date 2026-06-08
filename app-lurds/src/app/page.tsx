@@ -11,9 +11,9 @@ import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import { useCart } from '@/contexts/CartContext';
 import {
-  getCategories, getProducts, isLoggedIn, getCustomerFromToken, getFirstName,
-  getUnreadNotificationsCount,
-  type WcCategory, type WcProduct,
+  getCategories, getProducts, getSizes, isLoggedIn, getCustomerFromToken, getFirstName,
+  getUnreadNotificationsCount, getPreferredSize, setPreferredSize,
+  type WcCategory, type WcProduct, type WcSize,
 } from '@/lib/api';
 
 export default function HomePage() {
@@ -24,6 +24,34 @@ export default function HomePage() {
   const [firstName, setFirstName] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const { itemCount } = useCart();
+
+  // ── COMPRE POR TAMANHO ──
+  const [sizes, setSizes] = useState<WcSize[]>([]);
+  const [activeSize, setActiveSize] = useState<string | null>(null);
+
+  // Lê tamanho salvo no localStorage e escuta mudanças globais
+  useEffect(() => {
+    setActiveSize(getPreferredSize());
+    const onChange = (e: any) => setActiveSize(e?.detail?.size ?? null);
+    window.addEventListener('lurds:size-changed', onChange);
+    return () => window.removeEventListener('lurds:size-changed', onChange);
+  }, []);
+
+  // Carrega lista de tamanhos disponíveis (1 vez na home)
+  useEffect(() => {
+    getSizes()
+      .then((r) => setSizes(r.sizes || []))
+      .catch(() => setSizes([]));
+  }, []);
+
+  const handlePickSize = (slug: string) => {
+    if (activeSize === slug) {
+      // Click no mesmo tamanho desativa
+      setPreferredSize(null);
+    } else {
+      setPreferredSize(slug);
+    }
+  };
 
   // Lê estado de login + nome do JWT (sem precisar bater na API)
   useEffect(() => {
@@ -53,17 +81,23 @@ export default function HomePage() {
   }, []);
 
 
-  // Carrega categorias e destaques (em paralelo)
+  // Carrega categorias e destaques (em paralelo).
+  // Destaques refazem fetch quando o tamanho preferido muda.
   useEffect(() => {
+    setLoadingHL(true);
     Promise.all([
       getCategories().catch(() => ({ categories: [] })),
-      getProducts({ perPage: 10, orderby: 'popularity' }).catch(() => ({ products: [] as WcProduct[] })),
+      getProducts({
+        perPage: 10,
+        orderby: 'popularity',
+        size: activeSize || undefined,
+      }).catch(() => ({ products: [] as WcProduct[] })),
     ]).then(([catsR, prodsR]) => {
       setCategories(catsR.categories.slice(0, 6));
       setHighlights(prodsR.products);
       setLoadingHL(false);
     });
-  }, []);
+  }, [activeSize]);
 
   // Mostrar pre-prompt push 1x após 4s na home (apenas pra logada)
   const [showGeneralPrompt, setShowGeneralPrompt] = useState(false);
@@ -171,11 +205,97 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* ──────── COMPRE PELO SEU TAMANHO ────────
+          Diferencial Lurd's: garantia de tamanho. Clica → filtra catálogo
+          em tudo (home + /catalogo). Tamanho salvo no localStorage. */}
+      {sizes.length > 0 && (
+        <section className="mt-7 px-5">
+          <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-gold/15 via-ink-800 to-ink-900 border border-gold/30 p-5">
+            {/* Brilho decorativo */}
+            <div
+              className="absolute -top-10 -right-10 w-32 h-32 bg-gold/20 rounded-full blur-2xl"
+              aria-hidden
+            />
+            <div className="relative">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-gold bg-gold/10 px-2 py-1 rounded-full mb-2">
+                    <Sparkles className="w-3 h-3" />
+                    Compre pelo seu tamanho
+                  </div>
+                  <h3 className="font-serif text-lg font-bold leading-tight">
+                    {activeSize ? (
+                      <>Filtrando peças do <span className="text-gold italic">tamanho {activeSize}</span></>
+                    ) : (
+                      <>Atendemos do <span className="text-gold italic">46 ao 60</span></>
+                    )}
+                  </h3>
+                  <p className="text-[11px] text-cream/60 mt-0.5">
+                    {activeSize
+                      ? 'Mostramos só o que tem disponível pra você 💛'
+                      : 'Toque no seu tamanho e veja só as peças disponíveis'}
+                  </p>
+                </div>
+                {activeSize && (
+                  <button
+                    onClick={() => setPreferredSize(null)}
+                    className="shrink-0 text-[10px] text-cream/60 underline whitespace-nowrap"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </div>
+
+              {/* Chips de tamanhos — scroll horizontal */}
+              <div className="mt-3 flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1">
+                {sizes.map((s) => {
+                  const isActive = activeSize === s.slug || activeSize === s.name;
+                  return (
+                    <button
+                      key={s.id}
+                      onClick={() => handlePickSize(s.slug)}
+                      className={`shrink-0 min-w-[52px] h-12 rounded-2xl font-black text-base transition active:scale-95 ${
+                        isActive
+                          ? 'bg-gold text-ink shadow-gold-lg ring-2 ring-gold/40 scale-105'
+                          : 'bg-ink-700 text-cream border border-ink-600 hover:border-gold/50'
+                      }`}
+                      aria-label={`Tamanho ${s.name}`}
+                    >
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Botão "ver tudo" se tamanho ativo */}
+              {activeSize && (
+                <Link
+                  href={`/catalogo?tamanho=${encodeURIComponent(activeSize)}`}
+                  className="mt-3 inline-flex items-center gap-1 text-xs font-black text-gold uppercase tracking-wider"
+                >
+                  Ver todas do tamanho {activeSize}
+                  <ChevronRight className="w-4 h-4" />
+                </Link>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* ── DESTAQUES (REAL DO WC) ── */}
       <section className="mt-8">
         <div className="flex items-center justify-between px-5 mb-3">
-          <h3 className="font-serif text-xl font-bold">Destaques da semana</h3>
-          <Link href="/catalogo" className="text-xs text-gold font-bold uppercase tracking-wider">
+          <h3 className="font-serif text-xl font-bold">
+            {activeSize ? (
+              <>Destaques <span className="text-gold italic">tam. {activeSize}</span></>
+            ) : (
+              'Destaques da semana'
+            )}
+          </h3>
+          <Link
+            href={activeSize ? `/catalogo?tamanho=${encodeURIComponent(activeSize)}` : '/catalogo'}
+            className="text-xs text-gold font-bold uppercase tracking-wider"
+          >
             Ver todos
           </Link>
         </div>

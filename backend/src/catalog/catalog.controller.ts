@@ -42,6 +42,7 @@ export class CatalogController {
   async products(
     @Query('category') category?: string,
     @Query('search') search?: string,
+    @Query('size') size?: string,
     @Query('page') page?: string,
     @Query('perPage') perPage?: string,
     @Query('orderby') orderby?: string,
@@ -50,11 +51,22 @@ export class CatalogController {
     return this.svc.getProducts({
       category,
       search,
+      size,
       page: page ? Number(page) : 1,
       perPage: perPage ? Number(perPage) : 12,
       orderby: orderby as any,
       onSale: onSale === '1' || onSale === 'true',
     });
+  }
+
+  /**
+   * GET /catalog/sizes — lista todos os tamanhos disponíveis com contagem.
+   * Usado pelo card "Compre por tamanho" na home.
+   */
+  @Get('sizes')
+  async sizes() {
+    const sizes = await this.svc.listSizes();
+    return { sizes };
   }
 
   @Post('shipping/calculate')

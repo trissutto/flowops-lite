@@ -88,6 +88,7 @@ export class CatalogService {
   async getProducts(opts: {
     category?: string;       // slug
     search?: string;
+    size?: string;           // ex: "46", "48", "50" — slug do termo pa_tamanho
     page?: number;
     perPage?: number;
     orderby?: 'date' | 'popularity' | 'price' | 'rating';
@@ -130,6 +131,16 @@ export class CatalogService {
       if (opts.category) params.category = await this.resolveCategoryId(opts.category);
       if (opts.search) params.search = opts.search;
       if (opts.onSale) params.on_sale = true;
+
+      // FILTRO POR TAMANHO — usa atributo global pa_tamanho do WC.
+      // Só inclui produtos que tenham pelo menos UMA variação no tamanho em estoque.
+      if (opts.size) {
+        const sizeSlug = String(opts.size).trim();
+        if (sizeSlug) {
+          params.attribute = 'pa_tamanho';
+          params.attribute_term = await this.resolveSizeTermId(sizeSlug);
+        }
+      }
 
       const res = await firstValueFrom(
         this.http.get(`${this.baseUrl}/products`, {
@@ -955,6 +966,113 @@ export class CatalogService {
       this.logger.error(`getProductBySlug falhou: ${e?.message || e}`);
       return null;
     }
+  }
+
+  /* ──────────────────────── COMPRE POR TAMANHO ──────────────────────── */
+
+  // Cache: lookup do attribute ID de "pa_tamanho" (raro mudar — cache 24h)
+  private tamanhoAttributeIdCache: { at: number; id: number | null } | null = null;
+  // Cache: termos do atributo pa_tamanho (cache 1h — mudam pouco)
+  private tamanhoTermsCache: { at: number; terms: Array<{ id: number; name: string; slug: string; count: number }> } | null = null;
+  // Lookup slug → term_id (preenchido junto com tamanhoTermsCache)
+  private tamanhoSlugToId: Map<string, number> = new Map();
+
+  /**
+   * Pega o attribute_id do atributo "pa_tamanho" no WC.
+   * Cache 24h — esse ID praticamente nunca muda.
+   */
+  private async getTamanhoAttributeId(): Promise<number | null> {
+    if (this.tamanhoAttributeIdCache && Date.now() - this.tamanhoAttributeIdCache.at < 24 * 60 * 60 * 1000) {
+      return this.tamanhoAttributeIdCache.id;
+    }
+    try {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products/attributes`, {
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      const attrs = Array.isArray(res.data) ? res.data : [];
+      // Procura por slug "pa_tamanho" ou "tamanho" (alguns sites usam só "tamanho")
+      const tamanho = attrs.find(
+        (a: any) =>
+          a.slug === 'pa_tamanho' ||
+          a.slug === 'tamanho' ||
+          String(a.name || '').toLowerCase() === 'tamanho',
+      );
+      const id = tamanho?.id || null;
+      this.tamanhoAttributeIdCache = { at: Date.now(), id };
+      this.logger.log(`[sizes] attribute pa_tamanho id=${id}`);
+      return id;
+    } catch (e: any) {
+      this.logger.error(`getTamanhoAttributeId falhou: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /**
+   * Lista todos os termos do atributo pa_tamanho (46, 48, 50, ..., 60).
+   * Retorna nome + slug + contagem de produtos. Cache 1h.
+   */
+  async listSizes(): Promise<Array<{ id: number; name: string; slug: string; count: number }>> {
+    if (this.tamanhoTermsCache && Date.now() - this.tamanhoTermsCache.at < 60 * 60 * 1000) {
+      return this.tamanhoTermsCache.terms;
+    }
+    const attrId = await this.getTamanhoAttributeId();
+    if (!attrId) return [];
+
+    try {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products/attributes/${attrId}/terms`, {
+          params: { per_page: 100, orderby: 'name', order: 'asc', hide_empty: true },
+          auth: this.auth,
+          timeout: 8000,
+        }),
+      );
+      const raw = Array.isArray(res.data) ? res.data : [];
+      // Filtra termos vazios e ordena numericamente (46, 48, 50... não 100, 46)
+      const terms = raw
+        .filter((t: any) => t.count > 0)
+        .map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          slug: t.slug,
+          count: t.count,
+        }))
+        .sort((a: any, b: any) => {
+          const na = parseInt(a.name, 10);
+          const nb = parseInt(b.name, 10);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          return a.name.localeCompare(b.name);
+        });
+
+      // Atualiza lookup slug → id
+      this.tamanhoSlugToId.clear();
+      for (const t of terms) {
+        this.tamanhoSlugToId.set(t.slug, t.id);
+        this.tamanhoSlugToId.set(t.name, t.id); // permite filtrar por nome ("46") também
+      }
+
+      this.tamanhoTermsCache = { at: Date.now(), terms };
+      this.logger.log(`[sizes] ${terms.length} tamanhos disponíveis`);
+      return terms;
+    } catch (e: any) {
+      this.logger.error(`listSizes falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve um slug/nome de tamanho ("46") pra term_id do WC.
+   * Necessário pra filtrar produtos via ?attribute=pa_tamanho&attribute_term=<id>
+   */
+  private async resolveSizeTermId(sizeSlugOrName: string): Promise<number | null> {
+    if (this.tamanhoSlugToId.has(sizeSlugOrName)) {
+      return this.tamanhoSlugToId.get(sizeSlugOrName)!;
+    }
+    // Força refresh do cache
+    await this.listSizes();
+    return this.tamanhoSlugToId.get(sizeSlugOrName) || null;
   }
 
   /* ──────────────────────── CROSS-SELL / UPSELL ──────────────────────── */

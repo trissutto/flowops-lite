@@ -408,6 +408,37 @@ export async function getCategories() {
   return api<{ categories: WcCategory[] }>('/catalog/categories');
 }
 
+/** Tamanhos disponíveis (puxa do atributo pa_tamanho do WC). */
+export type WcSize = { id: number; name: string; slug: string; count: number };
+export async function getSizes() {
+  return api<{ sizes: WcSize[] }>('/catalog/sizes');
+}
+
+/* ───── Tamanho preferido da cliente (localStorage) ───── */
+const PREFERRED_SIZE_KEY = 'lurds_preferred_size';
+
+export function getPreferredSize(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(PREFERRED_SIZE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setPreferredSize(size: string | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (size) {
+      window.localStorage.setItem(PREFERRED_SIZE_KEY, size);
+    } else {
+      window.localStorage.removeItem(PREFERRED_SIZE_KEY);
+    }
+    // Dispara evento pra outros componentes reagirem
+    window.dispatchEvent(new CustomEvent('lurds:size-changed', { detail: { size } }));
+  } catch {}
+}
+
 /** Produto completo: galeria, variações, atributos */
 export type WcProductImage = { id: number; src: string; alt: string };
 export type WcAttribute = {
@@ -572,6 +603,7 @@ export async function getOrderById(wcOrderId: number | string) {
 export async function getProducts(opts: {
   category?: string;
   search?: string;
+  size?: string;
   page?: number;
   perPage?: number;
   orderby?: 'date' | 'popularity' | 'price' | 'rating';
@@ -580,6 +612,7 @@ export async function getProducts(opts: {
   const params = new URLSearchParams();
   if (opts.category) params.set('category', opts.category);
   if (opts.search) params.set('search', opts.search);
+  if (opts.size) params.set('size', opts.size);
   if (opts.page) params.set('page', String(opts.page));
   if (opts.perPage) params.set('perPage', String(opts.perPage));
   if (opts.orderby) params.set('orderby', opts.orderby);
