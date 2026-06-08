@@ -52,6 +52,7 @@ function EntrarFlow() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [pwd, setPwd] = useState('');
+  const [birthDate, setBirthDate] = useState(''); // opcional, ISO YYYY-MM-DD
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +127,7 @@ function EntrarFlow() {
         name: name.trim(),
         phone: phone.replace(/\D/g, ''),
         password: pwd,
+        birthDate: birthDate || undefined,
         invite: getStoredInvite() || undefined,
       });
       setToken(r.token);
@@ -180,6 +182,7 @@ function EntrarFlow() {
             name={name} setName={setName}
             phone={phone} setPhone={setPhone}
             pwd={pwd} setPwd={setPwd}
+            birthDate={birthDate} setBirthDate={setBirthDate}
             showPwd={showPwd} setShowPwd={setShowPwd}
             loading={loading} error={error}
             onSubmit={handleRegister}
@@ -335,6 +338,7 @@ function StepLogin({ cpf, lookup, pwd, setPwd, showPwd, setShowPwd, loading, err
 /* ═══════════════════ ETAPA 2B/C: CADASTRO ═══════════════════ */
 function StepCadastro({
   cpf, lookup, name, setName, phone, setPhone, pwd, setPwd,
+  birthDate, setBirthDate,
   showPwd, setShowPwd, loading, error, onSubmit, onBack,
 }: any) {
   const isReturning = lookup?.exists && !lookup?.hasAppAccount;
@@ -400,6 +404,26 @@ function StepCadastro({
             placeholder="(11) 99999-9999"
             className="input-dark w-full"
             autoComplete="tel"
+          />
+        </div>
+
+        {/* Aniversário — OPCIONAL com incentivo */}
+        <div className="rounded-xl bg-gold/5 border border-gold/20 p-3">
+          <label className="flex items-center gap-2 text-sm font-bold text-gold mb-1">
+            🎂 Quer um mimo no seu aniversário?
+            <span className="text-[10px] font-normal text-cream/50 normal-case ml-auto">opcional</span>
+          </label>
+          <p className="text-[11px] text-cream/60 mb-2 leading-relaxed">
+            Quem preenche ganha <strong className="text-gold">R$ 30 extra de cashback</strong> no mês do aniversário 💛
+          </p>
+          <input
+            type="date"
+            value={birthDate}
+            onChange={(e) => setBirthDate(e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            min="1930-01-01"
+            className="input-dark w-full"
+            autoComplete="bday"
           />
         </div>
 

@@ -1822,6 +1822,10 @@ model CustomerAccount {
   name                  String?
   phone                 String?
   email                 String?  @unique
+  // Data de nascimento — opcional no cadastro. Usada pra campanha "mimo
+  // de aniversário" (push promo + R$30 cashback extra no mês do aniversário).
+  // Se cliente já tem Customer linked com birthDate, podemos copiar via job.
+  birthDate             DateTime? @map("birth_date") @db.Date
 
   // ─── Auth do app ───
   passwordHash          String   @map("password_hash") // bcrypt obrigatório

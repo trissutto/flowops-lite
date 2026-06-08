@@ -126,6 +126,8 @@ export async function registerCustomer(data: {
   phone: string;
   email?: string;
   password: string;
+  /** ISO YYYY-MM-DD — opcional, pra campanha de aniversário */
+  birthDate?: string;
   invite?: string;
 }) {
   return api<{

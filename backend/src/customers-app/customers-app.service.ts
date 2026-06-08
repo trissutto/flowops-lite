@@ -422,6 +422,21 @@ export class CustomersAppService {
     const hash = await bcrypt.hash(dto.password, 10);
 
     // 4) Cria CustomerAccount + links em UMA transação
+    // Parse birthDate (opcional) — aceita YYYY-MM-DD (input type=date)
+    // Fallback: se cliente já tem Customer no CRM com birthDate, usa essa.
+    let birthDate: Date | null = null;
+    if (dto.birthDate) {
+      const parsed = new Date(dto.birthDate);
+      if (!isNaN(parsed.getTime())) birthDate = parsed;
+    } else if (customers[0]) {
+      // Puxa do Customer mais antigo se existe
+      const c = await this.prisma.customer.findUnique({
+        where: { id: customers[0].id },
+        select: { birthDate: true },
+      });
+      if (c?.birthDate) birthDate = c.birthDate;
+    }
+
     try {
       const account = await this.prisma.$transaction(async (tx) => {
         const acc = await tx.customerAccount.create({
@@ -432,6 +447,7 @@ export class CustomersAppService {
             email: safeEmail,
             passwordHash: hash,
             lastLoginAt: new Date(),
+            birthDate,
           },
         });
 

@@ -12,7 +12,7 @@ export class AppLoginDto {
   cpf!: string;
 
   @IsString()
-  @MinLength(6, { message: 'Senha deve ter pelo menos 6 caracteres' })
+  @MinLength(4, { message: 'Senha deve ter pelo menos 4 dígitos' })
   password!: string;
 }
 
@@ -34,8 +34,17 @@ export class AppRegisterDto {
   email?: string;
 
   @IsString()
-  @MinLength(6, { message: 'Senha deve ter pelo menos 6 caracteres' })
+  @MinLength(4, { message: 'Senha deve ter pelo menos 4 dígitos' })
   password!: string;
+
+  /**
+   * Data de nascimento — OPCIONAL.
+   * Aceita formato ISO (YYYY-MM-DD) que o input type=date emite.
+   * Usada pra campanha "Mimo de aniversário" (push + cashback extra no mês).
+   */
+  @IsOptional()
+  @IsString()
+  birthDate?: string;
 }
 
 export class AppMarkPwaInstalledDto {
