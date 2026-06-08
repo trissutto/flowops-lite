@@ -60,12 +60,13 @@ export class CatalogController {
   }
 
   /**
-   * GET /catalog/sizes — lista todos os tamanhos disponíveis com contagem.
-   * Usado pelo card "Compre por tamanho" na home.
+   * GET /catalog/sizes — lista tamanhos PUROS pra exibir como chips no app.
+   * Esconde híbridos (46/48, etc) — o filtro inclui esses automaticamente
+   * quando cliente seleciona um tamanho puro. UX mais limpa.
    */
   @Get('sizes')
   async sizes() {
-    const sizes = await this.svc.listSizes();
+    const sizes = await this.svc.listAppSizes();
     return { sizes };
   }
 

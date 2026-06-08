@@ -133,12 +133,16 @@ export class CatalogService {
       if (opts.onSale) params.on_sale = true;
 
       // FILTRO POR TAMANHO — usa atributo global pa_tamanho do WC.
-      // Só inclui produtos que tenham pelo menos UMA variação no tamanho em estoque.
+      // Inclui o tamanho puro + híbridos contendo esse número (ex: 46 + 46/48).
+      // CSV de term_ids — WC retorna produtos com QUALQUER um dos termos.
       if (opts.size) {
         const sizeSlug = String(opts.size).trim();
         if (sizeSlug) {
-          params.attribute = 'pa_tamanho';
-          params.attribute_term = await this.resolveSizeTermId(sizeSlug);
+          const termIds = await this.resolveSizeTermIds(sizeSlug);
+          if (termIds.length > 0) {
+            params.attribute = 'pa_tamanho';
+            params.attribute_term = termIds.join(',');
+          }
         }
       }
 
@@ -1110,16 +1114,46 @@ export class CatalogService {
   }
 
   /**
-   * Resolve um slug/nome de tamanho ("46") pra term_id do WC.
-   * Necessário pra filtrar produtos via ?attribute=pa_tamanho&attribute_term=<id>
+   * Lista APENAS tamanhos "puros" (46, 48, 50, ..., 60) pra exibir no app.
+   * Esconde híbridos ("46/48", "46 48") — eles SÃO incluídos na busca
+   * quando o cliente clica num puro (ver resolveSizeTermIds), mas não
+   * aparecem como chips selecionáveis. UX mais clean.
    */
-  private async resolveSizeTermId(sizeSlugOrName: string): Promise<number | null> {
-    if (this.tamanhoSlugToId.has(sizeSlugOrName)) {
-      return this.tamanhoSlugToId.get(sizeSlugOrName)!;
+  async listAppSizes(): Promise<Array<{ id: number; name: string; slug: string; count: number }>> {
+    const all = await this.listSizes();
+    // Mantém só os que matcham apenas dígitos (ex: "46", "48"), não "46/48"
+    return all.filter((t) => /^\d+$/.test(t.name.trim()));
+  }
+
+  /**
+   * Resolve um nome de tamanho ("46") pra LISTA de term_ids do WC.
+   *
+   * Estratégia "tamanho inteligente":
+   *   - "46" → retorna [id_46, id_46/48, id_46_48, id_46-48]
+   *     Inclui o tamanho puro + qualquer híbrido que CONTENHA o número 46.
+   *   - Match por extração de números: extrai todos os dígitos do nome do
+   *     termo e checa se contém o número buscado.
+   *
+   * WC aceita CSV no attribute_term: ?attribute=pa_tamanho&attribute_term=10,20,30
+   */
+  private async resolveSizeTermIds(sizeSlugOrName: string): Promise<number[]> {
+    const all = await this.listSizes();
+    const targetNum = parseInt(String(sizeSlugOrName).replace(/\D/g, ''), 10);
+    if (isNaN(targetNum)) return [];
+
+    const ids: number[] = [];
+    for (const term of all) {
+      // Extrai TODOS os números do nome do termo
+      // "46" → [46]
+      // "46/48" → [46, 48]
+      // "46 48" → [46, 48]
+      const nums = (term.name.match(/\d+/g) || []).map((n) => parseInt(n, 10));
+      if (nums.includes(targetNum)) {
+        ids.push(term.id);
+      }
     }
-    // Força refresh do cache
-    await this.listSizes();
-    return this.tamanhoSlugToId.get(sizeSlugOrName) || null;
+    this.logger.log(`[sizes] "${sizeSlugOrName}" → ${ids.length} term_ids (puro + híbridos)`);
+    return ids;
   }
 
   /* ──────────────────────── CROSS-SELL / UPSELL ──────────────────────── */
