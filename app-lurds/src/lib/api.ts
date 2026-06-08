@@ -300,6 +300,29 @@ export async function pushUnsubscribeApi(endpoint: string) {
   });
 }
 
+/* ─── Histórico de notificações (caixa do app) ─── */
+export type AppNotification = {
+  id: string;
+  title: string;
+  body: string | null;
+  url: string | null;
+  image: string | null;
+  category: 'promo' | 'order' | 'cashback' | 'live' | 'system';
+  read: boolean;
+  createdAt: string;
+};
+export async function getNotifications() {
+  return api<{ notifications: AppNotification[]; unreadCount: number }>(
+    '/customers/app/notifications',
+  );
+}
+export async function markAllNotificationsRead() {
+  return api<{ marked: number }>('/customers/app/notifications/read-all', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 /** Fallback WhatsApp: recebe promoções por WA em vez de push */
 export async function setWhatsappOptIn(optIn: boolean) {
   return api<{ whatsappOptIn: boolean }>('/customers/app/whatsapp-opt-in', {

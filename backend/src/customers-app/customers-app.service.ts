@@ -679,6 +679,51 @@ export class CustomersAppService {
     return { whatsappOptIn: optIn };
   }
 
+  /* ─────────────────── NOTIFICAÇÕES ─────────────────── */
+
+  /**
+   * Retorna últimas 50 notificações da cliente + contagem de não lidas.
+   * Usado pela tela /notificacoes do app.
+   */
+  async getNotifications(accountId: string) {
+    const [items, unreadCount] = await Promise.all([
+      this.prisma.customerAppNotification.findMany({
+        where: { accountId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+        select: {
+          id: true, title: true, body: true, url: true, image: true,
+          category: true, readAt: true, createdAt: true,
+        },
+      }),
+      this.prisma.customerAppNotification.count({
+        where: { accountId, readAt: null },
+      }),
+    ]);
+    return {
+      notifications: items.map((n) => ({
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        url: n.url,
+        image: n.image,
+        category: n.category || 'promo',
+        read: n.readAt !== null,
+        createdAt: n.createdAt,
+      })),
+      unreadCount,
+    };
+  }
+
+  /** Marca todas as notificações da cliente como lidas. */
+  async markAllNotificationsRead(accountId: string) {
+    const r = await this.prisma.customerAppNotification.updateMany({
+      where: { accountId, readAt: null },
+      data: { readAt: new Date() },
+    });
+    return { marked: r.count };
+  }
+
   /* ─────────────────── HELPERS ─────────────────── */
 
   private signToken(account: {
