@@ -118,6 +118,95 @@ export default function InstallBanner({ onClose }: { onClose?: () => void }) {
   );
 }
 
+/* ══════════════════════════ HERO CARD ══════════════════════════
+ * Card GIGANTE no topo da home — pra senhora não ter como perder.
+ * Diferente do banner do rodapé: é grande, dourado, primeiro impacto visual.
+ */
+export function HeroInstallCard() {
+  const { canInstall, isInstalled, install } = usePWAInstall();
+  const [showModal, setShowModal] = useState(false);
+  const [device, setDevice] = useState<Device>('other');
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    setDevice(detectDevice());
+    const stored = window.localStorage.getItem(DISMISS_KEY);
+    if (stored) {
+      const hours = (Date.now() - parseInt(stored)) / (1000 * 60 * 60);
+      if (hours < DISMISS_HOURS) setDismissed(true);
+    }
+  }, []);
+
+  if (isInstalled || dismissed) return null;
+
+  const handleClick = async () => {
+    if (canInstall) {
+      const outcome = await install();
+      if (outcome === 'accepted') return;
+    }
+    setShowModal(true);
+  };
+
+  const handleDismiss = () => {
+    window.localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    setDismissed(true);
+  };
+
+  return (
+    <>
+      <div className="mx-5 mt-4 relative">
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-gold via-gold-light to-gold p-5 shadow-gold-lg">
+          {/* Detalhes decorativos */}
+          <div className="absolute -right-8 -top-8 w-32 h-32 bg-ink/10 rounded-full" />
+          <div className="absolute -right-4 -bottom-4 w-20 h-20 bg-ink/10 rounded-full" />
+
+          <button
+            aria-label="Fechar"
+            onClick={handleDismiss}
+            className="absolute top-2 right-2 p-1.5 rounded-full bg-ink/15 hover:bg-ink/25 transition z-10"
+          >
+            <X className="w-4 h-4 text-ink/70" />
+          </button>
+
+          <div className="relative">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="text-4xl">📲</div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider font-bold text-ink/70">
+                  Acesso rápido
+                </p>
+                <h2 className="font-serif text-xl font-black text-ink leading-none">
+                  Guarda o app no seu celular
+                </h2>
+              </div>
+            </div>
+
+            <p className="text-sm text-ink/85 leading-relaxed mt-2 pr-6">
+              Fica <strong>muito mais fácil</strong> de abrir, e você recebe nossas promoções com sininho 🔔
+            </p>
+
+            <button
+              onClick={handleClick}
+              className="mt-4 w-full inline-flex items-center justify-center gap-2 bg-ink text-gold rounded-2xl px-5 py-4 text-base font-black uppercase tracking-wider active:scale-95 transition shadow-xl border-2 border-ink-700"
+            >
+              <Download className="w-5 h-5" />
+              Quero instalar — É grátis
+            </button>
+
+            <p className="text-center text-[10px] text-ink/60 mt-2">
+              Eu te ensino passo a passo, é facinho 💛
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {showModal && (
+        <InstallWizard device={device} onClose={() => setShowModal(false)} onDone={() => setShowModal(false)} />
+      )}
+    </>
+  );
+}
+
 /* ══════════════════════════ WIZARD ══════════════════════════
  * Modal full-screen com passos numerados — 1 passo por tela.
  * Senhora avança com botão "Próximo" gigante embaixo.

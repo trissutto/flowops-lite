@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2 } from 'lucide-react';
-import InstallBanner from '@/components/InstallBanner';
+import { HeroInstallCard } from '@/components/InstallBanner';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
 import {
@@ -13,7 +13,6 @@ import {
 } from '@/lib/api';
 
 export default function HomePage() {
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [categories, setCategories] = useState<WcCategory[]>([]);
   const [highlights, setHighlights] = useState<WcProduct[]>([]);
   const [loadingHL, setLoadingHL] = useState(true);
@@ -43,10 +42,6 @@ export default function HomePage() {
     }
   }, []);
 
-  useEffect(() => {
-    // Banner aparece IMEDIATAMENTE pra cliente não perder a opção de instalar
-    setShowInstallBanner(true);
-  }, []);
 
   // Carrega categorias e destaques (em paralelo)
   useEffect(() => {
@@ -92,6 +87,9 @@ export default function HomePage() {
           </p>
         </div>
       )}
+
+      {/* ── CARD INSTALAR APP — GIGANTE, primeiro impacto visual ── */}
+      <HeroInstallCard />
 
       {/* ── BANNER PRINCIPAL ── */}
       <section className="mt-6 px-5">
@@ -229,7 +227,7 @@ export default function HomePage() {
 
       <div className="h-20" />
       <BottomNav />
-      {showInstallBanner && <InstallBanner onClose={() => setShowInstallBanner(false)} />}
+      {/* Banner pequeno do rodapé desativado — o HeroInstallCard no topo já cobre */}
     </div>
   );
 }
