@@ -69,6 +69,16 @@ export class CatalogController {
     return { sizes };
   }
 
+  /**
+   * GET /catalog/stores — lista lojas ativas pra app cliente.
+   * Puxa do banco (Store.active=true) ordenado por code. Sempre atualizado.
+   */
+  @Get('stores')
+  async stores() {
+    const stores = await this.svc.listAppStores();
+    return { stores };
+  }
+
   @Post('shipping/calculate')
   async calculateShipping(@Body() body: { cep: string; weight?: number }) {
     const options = await this.svc.calculateShipping(body);

@@ -968,6 +968,49 @@ export class CatalogService {
     }
   }
 
+  /* ──────────────────────── LOJAS PRO APP ──────────────────────── */
+  /**
+   * Lista lojas pra mostrar no app cliente (/lojas).
+   * Filtra active=true e ordena por code asc (Itanhaém 01, Santos 02, ...).
+   * Cache 10min — listagem muda raramente.
+   */
+  private appStoresCache: { at: number; data: any[] } | null = null;
+  private readonly APP_STORES_TTL = 10 * 60 * 1000;
+
+  async listAppStores(): Promise<Array<{
+    code: string;
+    nome: string;
+    cidade: string;
+    cep: string | null;
+    whatsapp: string | null;
+  }>> {
+    if (this.appStoresCache && Date.now() - this.appStoresCache.at < this.APP_STORES_TTL) {
+      return this.appStoresCache.data;
+    }
+    const stores = await this.prisma.store.findMany({
+      where: { active: true } as any,
+      select: {
+        code: true, name: true, city: true, state: true,
+        cep: true, whatsapp: true,
+      } as any,
+      orderBy: { code: 'asc' } as any,
+    });
+    const data = (stores as any[]).map((s: any) => ({
+      code: s.code,
+      nome: s.name,
+      cidade: `${s.city || s.name} — ${s.state || 'SP'}`,
+      cep: s.cep || null,
+      whatsapp: s.whatsapp || null,
+    }));
+    this.appStoresCache = { at: Date.now(), data };
+    return data;
+  }
+
+  /** Limpa cache de lojas — chamado quando admin ativa/desativa loja na retaguarda. */
+  public clearAppStoresCache() {
+    this.appStoresCache = null;
+  }
+
   /* ──────────────────────── COMPRE POR TAMANHO ──────────────────────── */
 
   // Cache: lookup do attribute ID de "pa_tamanho" (raro mudar — cache 24h)

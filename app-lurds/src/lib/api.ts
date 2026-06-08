@@ -408,6 +408,18 @@ export async function getCategories() {
   return api<{ categories: WcCategory[] }>('/catalog/categories');
 }
 
+/** Lojas físicas ativas (dinâmico do banco). */
+export type AppStore = {
+  code: string;
+  nome: string;
+  cidade: string;
+  cep: string | null;
+  whatsapp: string | null;
+};
+export async function getStores() {
+  return api<{ stores: AppStore[] }>('/catalog/stores');
+}
+
 /** Tamanhos disponíveis (puxa do atributo pa_tamanho do WC). */
 export type WcSize = { id: number; name: string; slug: string; count: number };
 export async function getSizes() {
