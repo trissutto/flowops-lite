@@ -66,45 +66,71 @@ export function useWebPush() {
     if (!isSupported) {
       throw new Error('Seu navegador não suporta notificações.');
     }
-
-    // ⚠️ CRÍTICO: verifica login ANTES — sem JWT, backend rejeita e a UI
-    // ficaria travada em "Carregando" durante o redirect pro login.
     if (!isLoggedIn()) {
       throw new Error('LOGIN_REQUIRED');
     }
 
     setLoading(true);
-    // Timeout de segurança: se qualquer etapa travar > 15s, libera o botão
-    const safetyTimeout = setTimeout(() => setLoading(false), 15000);
 
     try {
       // 1) Pede permissão (se ainda não pediu)
+      //    iOS Safari quirk: a Promise de requestPermission() às vezes NUNCA resolve
+      //    se a aba perdeu foco quando o dialog abriu. Timeout interno + fallback
+      //    pra callback legado (caso polyfill quebrado) cobre os dois cenários.
       let perm = Notification.permission;
       if (perm === 'default') {
-        perm = await Notification.requestPermission();
+        perm = await new Promise<NotificationPermission>((resolve) => {
+          let settled = false;
+          const finish = (r: NotificationPermission) => {
+            if (settled) return;
+            settled = true;
+            resolve(r);
+          };
+          try {
+            // requestPermission tem 2 assinaturas: callback (legado) E Promise (novo)
+            // Chamamos AMBAS pra robustez.
+            const maybe = Notification.requestPermission((r) => finish(r));
+            if (maybe && typeof (maybe as any).then === 'function') {
+              (maybe as Promise<NotificationPermission>).then(finish, () =>
+                finish('denied'),
+              );
+            }
+          } catch {
+            finish('denied');
+          }
+          // Safety: se nada resolveu em 12s, lê o estado atual e libera UI
+          setTimeout(() => {
+            finish(Notification.permission || 'default');
+          }, 12000);
+        });
       }
       setPermission(perm);
       if (perm !== 'granted') {
         throw new Error(
           perm === 'denied'
-            ? 'Notificações foram bloqueadas. Libera nas configurações do navegador.'
-            : 'Você precisa permitir notificações.',
+            ? 'Notificações foram bloqueadas. Vai nas configurações do iPhone → Lurd\'s → Notificações → Permitir.'
+            : 'Você precisa permitir notificações pra continuar.',
         );
       }
 
-      // 2) Pega VAPID public key do backend (público, sem JWT)
+      // 2) Pega VAPID public key do backend
       const { key } = await getPushPublicKey();
       if (!key) throw new Error('Push não configurado no servidor.');
 
-      // 3) Cria subscription via Service Worker
-      const reg = await navigator.serviceWorker.ready;
+      // 3) Cria subscription via Service Worker — também com timeout
+      const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<ServiceWorkerRegistration>((_, reject) =>
+          setTimeout(() => reject(new Error('Service Worker demorou demais — reinicia o app.')), 8000),
+        ),
+      ]);
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
       });
       setSubscription(sub);
 
-      // 4) Manda pro backend (precisa de JWT — já verificamos acima)
+      // 4) Manda pro backend
       const json = sub.toJSON() as any;
       await pushSubscribeApi({
         endpoint: json.endpoint,
@@ -113,7 +139,6 @@ export function useWebPush() {
       });
       return true;
     } finally {
-      clearTimeout(safetyTimeout);
       setLoading(false);
     }
   }, [isSupported]);
