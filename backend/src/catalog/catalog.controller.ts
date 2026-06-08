@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
 
 /**
@@ -13,6 +13,13 @@ export class CatalogController {
   async categories() {
     const data = await this.svc.getCategories();
     return { categories: data };
+  }
+
+  @Get('products/:slug')
+  async productBySlug(@Param('slug') slug: string) {
+    const product = await this.svc.getProductBySlug(slug);
+    if (!product) throw new NotFoundException('Produto não encontrado');
+    return product;
   }
 
   @Get('products')
@@ -32,5 +39,25 @@ export class CatalogController {
       orderby: orderby as any,
       onSale: onSale === '1' || onSale === 'true',
     });
+  }
+
+  @Post('shipping/calculate')
+  async calculateShipping(@Body() body: { cep: string; weight?: number }) {
+    const options = await this.svc.calculateShipping(body);
+    return { options };
+  }
+
+  @Post('orders/create')
+  async createOrder(@Body() body: any) {
+    return this.svc.createOrder(body);
+  }
+
+  @Get('orders/:wcOrderId')
+  async getOrder(@Param('wcOrderId') wcOrderId: string) {
+    const id = Number(wcOrderId);
+    if (!id) throw new NotFoundException('Pedido inválido');
+    const order = await this.svc.getOrder(id);
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+    return order;
   }
 }

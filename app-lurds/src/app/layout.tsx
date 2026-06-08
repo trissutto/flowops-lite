@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter, Playfair_Display } from 'next/font/google';
 import Script from 'next/script';
 import './globals.css';
+import { CartProvider } from '@/contexts/CartContext';
 
 // Tipografia — combina logo cursivo (serif) com botões legíveis (sans)
 const inter = Inter({
@@ -79,7 +80,9 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-title" content="Lurd's" />
       </head>
       <body>
-        <div className="app-container">{children}</div>
+        <CartProvider>
+          <div className="app-container">{children}</div>
+        </CartProvider>
 
         {/* Registra Service Worker depois do load (não bloqueia first paint) */}
         <Script id="register-sw" strategy="afterInteractive">

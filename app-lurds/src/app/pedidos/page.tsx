@@ -101,8 +101,12 @@ export default function PedidosPage() {
                     icon: Package,
                   };
                   const Icon = st.icon;
+                  // Só linka quem tem WC number (pedido site/app — Giga não tem)
+                  const wcNumber = o.number && /^\d+$/.test(o.number) ? o.number : null;
+                  const Wrapper: any = wcNumber ? Link : 'div';
+                  const wrapperProps = wcNumber ? { href: `/pedido/${wcNumber}` } : {};
                   return (
-                    <div key={o.id} className="card-dark">
+                    <Wrapper key={o.id} className={`card-dark block ${wcNumber ? 'active:scale-[0.98] transition' : ''}`} {...wrapperProps}>
                       <div className="flex items-start justify-between gap-3 mb-2">
                         <div>
                           <div className="text-xs text-cream/50 font-mono">
@@ -136,7 +140,7 @@ export default function PedidosPage() {
                           <span className="text-gold font-mono">{o.tracking.code}</span>
                         </div>
                       )}
-                    </div>
+                    </Wrapper>
                   );
                 })}
               </div>

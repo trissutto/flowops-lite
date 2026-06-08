@@ -159,9 +159,352 @@ export class CatalogService {
     }
   }
 
+  /* ──────────────────────── BUSCAR PEDIDO ──────────────────────── */
+  /**
+   * Busca pedido do WC pelo ID — pra página /pedido/[id] no app.
+   * Inclui status, total, itens, endereço de entrega, código de rastreio,
+   * e PIX QR Code/copy-paste se método for PIX e ainda não pago.
+   */
+  async getOrder(wcOrderId: number): Promise<any | null> {
+    try {
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/orders/${wcOrderId}`, {
+          auth: this.auth,
+          timeout: 10000,
+        }),
+      );
+      const wc = res.data;
+      if (!wc?.id) return null;
+
+      // Tenta extrair PIX QR Code do meta_data (plugins comuns: pagarme, pagbank)
+      const meta: any[] = Array.isArray(wc.meta_data) ? wc.meta_data : [];
+      const pixQrCode =
+        meta.find((m) => m.key === '_pagarme_pix_qr_code')?.value ||
+        meta.find((m) => m.key === '_pix_qr_code')?.value ||
+        null;
+      const pixCopyPaste =
+        meta.find((m) => m.key === '_pagarme_pix_qr_code_url')?.value ||
+        meta.find((m) => m.key === '_pix_copy_paste')?.value ||
+        null;
+      const pixExpiresAt =
+        meta.find((m) => m.key === '_pagarme_pix_expires_at')?.value ||
+        meta.find((m) => m.key === '_pix_expires_at')?.value ||
+        null;
+
+      // Tracking — primeiro tenta meta_data, depois shipping_lines/customer_note
+      const trackingCode =
+        meta.find((m) => m.key === '_tracking_code')?.value ||
+        meta.find((m) => m.key === '_correios_tracking_code')?.value ||
+        null;
+      const trackingUrl = trackingCode
+        ? `https://www.linkcorreios.com.br/${trackingCode}`
+        : null;
+
+      // Cashback usado
+      const cashbackUsedCents = Number(
+        meta.find((m) => m.key === '_app_cashback_used_cents')?.value || 0,
+      );
+
+      return {
+        id: wc.id,
+        number: wc.number,
+        status: wc.status,
+        statusLabel: this.statusLabel(wc.status),
+        paymentMethod: wc.payment_method,
+        paymentMethodTitle: wc.payment_method_title,
+        currency: wc.currency,
+        total: Number(wc.total) || 0,
+        shippingTotal: Number(wc.shipping_total) || 0,
+        discountTotal: Number(wc.discount_total) || 0,
+        cashbackUsed: cashbackUsedCents / 100,
+        dateCreated: wc.date_created,
+        datePaid: wc.date_paid,
+        items: (wc.line_items || []).map((li: any) => ({
+          id: li.id,
+          name: li.name,
+          quantity: li.quantity,
+          price: Number(li.price) || 0,
+          subtotal: Number(li.subtotal) || 0,
+          total: Number(li.total) || 0,
+          image: li.image?.src || null,
+          variation: (li.meta_data || [])
+            .filter((m: any) => !String(m.key || '').startsWith('_'))
+            .map((m: any) => `${m.display_key || m.key}: ${m.display_value || m.value}`)
+            .join(' · '),
+        })),
+        shipping: {
+          name: `${wc.shipping?.first_name || ''} ${wc.shipping?.last_name || ''}`.trim(),
+          address: wc.shipping?.address_1,
+          address2: wc.shipping?.address_2,
+          city: wc.shipping?.city,
+          state: wc.shipping?.state,
+          postcode: wc.shipping?.postcode,
+        },
+        shippingMethod: wc.shipping_lines?.[0]?.method_title || null,
+        pix: pixQrCode
+          ? {
+              qrCodeBase64: pixQrCode.startsWith('data:') ? pixQrCode : null,
+              qrCodeUrl: pixQrCode.startsWith('http') ? pixQrCode : null,
+              copyPaste: pixCopyPaste,
+              expiresAt: pixExpiresAt,
+            }
+          : null,
+        tracking: trackingCode
+          ? { code: trackingCode, url: trackingUrl, carrier: 'Correios' }
+          : null,
+        paymentUrl:
+          wc.status === 'pending'
+            ? `${this.cfg.get('WC_URL')}/checkout/order-pay/${wc.id}/?pay_for_order=true&key=${wc.order_key}`
+            : null,
+      };
+    } catch (e: any) {
+      this.logger.error(`getOrder #${wcOrderId} falhou: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  private statusLabel(s: string): string {
+    const map: Record<string, string> = {
+      pending: 'Aguardando pagamento',
+      processing: 'Pagamento confirmado — separando',
+      'on-hold': 'Aguardando pagamento',
+      completed: 'Concluído',
+      cancelled: 'Cancelado',
+      refunded: 'Reembolsado',
+      failed: 'Pagamento falhou',
+      shipped: 'Enviado',
+      delivered: 'Entregue',
+    };
+    return map[s] || s;
+  }
+
+  /* ──────────────────────── CRIAR PEDIDO NO WC ──────────────────────── */
+  /**
+   * Cria pedido no WooCommerce a partir do carrinho do app.
+   * Retorna order_id WC + URL de pagamento (PIX/cartão via WC checkout).
+   *
+   * line_items = produtos do carrinho com variation_id
+   * Customer note inclui cashback aplicado pra ser registrado no histórico
+   */
+  async createOrder(payload: {
+    customer: {
+      first_name: string;
+      last_name?: string;
+      email: string;
+      phone: string;
+      cpf: string;
+    };
+    shipping: {
+      address_1: string;
+      number?: string;
+      address_2?: string;
+      city: string;
+      state: string;
+      postcode: string;
+      country?: string;
+    };
+    lineItems: Array<{
+      product_id: number;
+      variation_id?: number;
+      quantity: number;
+    }>;
+    couponCode?: string;
+    paymentMethod: 'pix' | 'credit_card' | 'boleto';
+    cashbackUsedCents?: number;
+    shippingMethod?: string;
+    shippingCost?: number;
+  }) {
+    try {
+      const body: any = {
+        payment_method: payload.paymentMethod === 'pix' ? 'pagarme-pix' : 'pagarme-credit-card',
+        payment_method_title: payload.paymentMethod === 'pix' ? 'PIX' : 'Cartão de Crédito',
+        set_paid: false,
+        status: 'pending',
+        billing: {
+          first_name: payload.customer.first_name,
+          last_name: payload.customer.last_name || '',
+          address_1: payload.shipping.address_1,
+          address_2: [payload.shipping.number, payload.shipping.address_2].filter(Boolean).join(' '),
+          city: payload.shipping.city,
+          state: payload.shipping.state,
+          postcode: payload.shipping.postcode,
+          country: payload.shipping.country || 'BR',
+          email: payload.customer.email,
+          phone: payload.customer.phone,
+          cpf: payload.customer.cpf,
+        },
+        shipping: {
+          first_name: payload.customer.first_name,
+          last_name: payload.customer.last_name || '',
+          address_1: payload.shipping.address_1,
+          address_2: [payload.shipping.number, payload.shipping.address_2].filter(Boolean).join(' '),
+          city: payload.shipping.city,
+          state: payload.shipping.state,
+          postcode: payload.shipping.postcode,
+          country: payload.shipping.country || 'BR',
+        },
+        line_items: payload.lineItems,
+        coupon_lines: payload.couponCode ? [{ code: payload.couponCode }] : undefined,
+        shipping_lines: payload.shippingCost
+          ? [{
+              method_id: 'flat_rate',
+              method_title: payload.shippingMethod || 'Frete',
+              total: String(payload.shippingCost.toFixed(2)),
+            }]
+          : undefined,
+        meta_data: [
+          { key: '_app_origin', value: 'app.lurds.com.br' },
+          ...(payload.cashbackUsedCents
+            ? [{ key: '_app_cashback_used_cents', value: payload.cashbackUsedCents }]
+            : []),
+        ],
+        customer_note: payload.cashbackUsedCents
+          ? `Cashback aplicado: R$ ${(payload.cashbackUsedCents / 100).toFixed(2)}`
+          : '',
+      };
+
+      const res = await firstValueFrom(
+        this.http.post(`${this.baseUrl}/orders`, body, {
+          auth: this.auth,
+          timeout: 15000,
+        }),
+      );
+
+      const order = res.data;
+      return {
+        id: order.id,
+        number: order.number,
+        status: order.status,
+        total: Number(order.total) || 0,
+        paymentUrl: order.payment_url || `${this.cfg.get('WC_URL')}/checkout/order-pay/${order.id}/?pay_for_order=true&key=${order.order_key}`,
+      };
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || 'Erro ao criar pedido';
+      this.logger.error(`createOrder WC falhou: ${msg}`);
+      throw new Error(msg);
+    }
+  }
+
+  /* ──────────────────────── FRETE ──────────────────────── */
+  /**
+   * Calcula frete via API WC (precisa do plugin Correios/Melhor Envio instalado)
+   * Fallback simples: PAC R$ 19,90 / SEDEX R$ 32,00 hardcoded.
+   */
+  async calculateShipping(opts: { cep: string; weight?: number }): Promise<Array<{
+    code: string; name: string; price: number; days: number;
+  }>> {
+    // TODO: integrar com WC shipping zones / Melhor Envio
+    // Por ora retorna mockup com valores típicos
+    return [
+      { code: 'PAC', name: 'PAC (Correios)', price: 19.90, days: 7 },
+      { code: 'SEDEX', name: 'SEDEX (Correios)', price: 32.00, days: 3 },
+    ];
+  }
+
   /** Resolve slug → id da categoria pra usar em GET /products?category=ID */
   private async resolveCategoryId(slug: string): Promise<number | undefined> {
     const cats = await this.getCategories();
     return cats.find((c) => c.slug === slug)?.id;
+  }
+
+  /* ──────────────────────── PRODUTO DETALHADO ──────────────────────── */
+
+  /**
+   * Busca produto completo pelo slug com:
+   *   - Galeria (todas imagens)
+   *   - Descrição HTML
+   *   - Atributos (Cor, Tamanho, etc)
+   *   - Variações (se for variable product) com preço/estoque por variação
+   */
+  async getProductBySlug(slug: string): Promise<any | null> {
+    if (!slug) return null;
+    const cacheKey = `product:${slug}`;
+    const cached = this.productsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < this.CACHE_TTL) return cached.data;
+
+    try {
+      // Busca o produto principal
+      const res = await firstValueFrom(
+        this.http.get(`${this.baseUrl}/products`, {
+          params: { slug, per_page: 1 },
+          auth: this.auth,
+          timeout: 10000,
+        }),
+      );
+      const products = Array.isArray(res.data) ? res.data : [];
+      if (products.length === 0) return null;
+      const p = products[0];
+
+      // Se for variable, busca todas as variações
+      let variations: any[] = [];
+      if (p.type === 'variable' && Array.isArray(p.variations) && p.variations.length > 0) {
+        try {
+          const vres = await firstValueFrom(
+            this.http.get(`${this.baseUrl}/products/${p.id}/variations`, {
+              params: { per_page: 50 },
+              auth: this.auth,
+              timeout: 10000,
+            }),
+          );
+          variations = Array.isArray(vres.data) ? vres.data : [];
+        } catch {
+          variations = [];
+        }
+      }
+
+      const out = {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        description: p.description || '',
+        shortDescription: p.short_description || '',
+        type: p.type, // 'simple' | 'variable'
+        price: Number(p.price) || 0,
+        regularPrice: Number(p.regular_price) || Number(p.price) || 0,
+        salePrice: Number(p.sale_price) || 0,
+        onSale: !!p.on_sale,
+        stockStatus: p.stock_status,
+        stockQuantity: p.stock_quantity,
+        permalink: p.permalink,
+        images: (p.images || []).map((img: any) => ({
+          id: img.id,
+          src: img.src,
+          alt: img.alt || p.name,
+        })),
+        categories: (p.categories || []).map((c: any) => ({
+          id: c.id, name: c.name, slug: c.slug,
+        })),
+        attributes: (p.attributes || []).map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          slug: a.slug,
+          options: a.options || [],
+          variation: !!a.variation,
+        })),
+        variations: variations.map((v: any) => ({
+          id: v.id,
+          sku: v.sku,
+          price: Number(v.price) || 0,
+          regularPrice: Number(v.regular_price) || 0,
+          salePrice: Number(v.sale_price) || 0,
+          onSale: !!v.on_sale,
+          stockStatus: v.stock_status,
+          stockQuantity: v.stock_quantity,
+          image: v.image?.src || null,
+          attributes: (v.attributes || []).map((a: any) => ({
+            name: a.name,
+            option: a.option,
+          })),
+        })),
+        // Relacionados (IDs)
+        relatedIds: p.related_ids || [],
+      };
+
+      this.productsCache.set(cacheKey, { at: Date.now(), data: out });
+      return out;
+    } catch (e: any) {
+      this.logger.error(`getProductBySlug falhou: ${e?.message || e}`);
+      return null;
+    }
   }
 }

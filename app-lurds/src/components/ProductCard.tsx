@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import type { WcProduct } from '@/lib/api';
 
 const brl = (n: number) =>
@@ -22,10 +23,8 @@ export default function ProductCard({ product, compact, priority }: {
   priority?: boolean;
 }) {
   return (
-    <a
-      href={product.permalink}
-      target="_blank"
-      rel="noopener"
+    <Link
+      href={`/produto/${product.slug}`}
       className="block group rounded-2xl overflow-hidden bg-ink-800 border border-ink-600 hover:border-gold/50 transition active:scale-[0.98] touch-tap"
     >
       <div className="relative aspect-[3/4] bg-ink overflow-hidden">
@@ -72,6 +71,6 @@ export default function ProductCard({ product, compact, priority }: {
           </span>
         </div>
       </div>
-    </a>
+    </Link>
   );
 }

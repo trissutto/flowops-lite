@@ -333,6 +333,131 @@ export async function getCategories() {
   return api<{ categories: WcCategory[] }>('/catalog/categories');
 }
 
+/** Produto completo: galeria, variações, atributos */
+export type WcProductImage = { id: number; src: string; alt: string };
+export type WcAttribute = {
+  id: number;
+  name: string;
+  slug: string;
+  options: string[];
+  variation: boolean;
+};
+export type WcVariation = {
+  id: number;
+  sku: string;
+  price: number;
+  regularPrice: number;
+  onSale: boolean;
+  stockStatus: 'instock' | 'outofstock' | 'onbackorder';
+  stockQuantity: number | null;
+  image: string | null;
+  attributes: Array<{ name: string; option: string }>;
+};
+export type WcProductDetail = {
+  id: number;
+  slug: string;
+  name: string;
+  description: string;
+  shortDescription: string;
+  type: 'simple' | 'variable';
+  price: number;
+  regularPrice: number;
+  salePrice: number;
+  onSale: boolean;
+  stockStatus: 'instock' | 'outofstock' | 'onbackorder';
+  stockQuantity: number | null;
+  permalink: string;
+  images: WcProductImage[];
+  categories: Array<{ id: number; name: string; slug: string }>;
+  attributes: WcAttribute[];
+  variations: WcVariation[];
+  relatedIds: number[];
+};
+
+export async function getProductBySlug(slug: string) {
+  return api<WcProductDetail>(`/catalog/products/${encodeURIComponent(slug)}`);
+}
+
+/** Frete: retorna opções (PAC, SEDEX, etc) */
+export type ShippingOption = { code: string; name: string; price: number; days: number };
+export async function calculateShipping(cep: string) {
+  return api<{ options: ShippingOption[] }>('/catalog/shipping/calculate', {
+    method: 'POST',
+    body: JSON.stringify({ cep }),
+  });
+}
+
+/** Cria pedido no WC e retorna URL pra pagar (PIX/cartão) */
+export type CreateOrderPayload = {
+  customer: { first_name: string; last_name?: string; email: string; phone: string; cpf: string };
+  shipping: { address_1: string; number?: string; address_2?: string; city: string; state: string; postcode: string };
+  lineItems: Array<{ product_id: number; variation_id?: number; quantity: number }>;
+  couponCode?: string;
+  paymentMethod: 'pix' | 'credit_card' | 'boleto';
+  cashbackUsedCents?: number;
+  shippingMethod?: string;
+  shippingCost?: number;
+};
+export type CreatedOrder = {
+  id: number;
+  number: string;
+  status: string;
+  total: number;
+  paymentUrl: string;
+};
+export async function createWcOrder(payload: CreateOrderPayload) {
+  return api<CreatedOrder>('/catalog/orders/create', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/* ─── Acompanhamento de pedido ─── */
+export type WcOrderDetail = {
+  id: number;
+  number: string;
+  status: string;
+  statusLabel: string;
+  paymentMethod: string;
+  paymentMethodTitle: string;
+  total: number;
+  shippingTotal: number;
+  discountTotal: number;
+  cashbackUsed: number;
+  dateCreated: string;
+  datePaid: string | null;
+  items: Array<{
+    id: number;
+    name: string;
+    quantity: number;
+    price: number;
+    subtotal: number;
+    total: number;
+    image: string | null;
+    variation: string;
+  }>;
+  shipping: {
+    name: string;
+    address: string;
+    address2: string;
+    city: string;
+    state: string;
+    postcode: string;
+  };
+  shippingMethod: string | null;
+  pix: {
+    qrCodeBase64: string | null;
+    qrCodeUrl: string | null;
+    copyPaste: string | null;
+    expiresAt: string | null;
+  } | null;
+  tracking: { code: string; url: string; carrier: string } | null;
+  paymentUrl: string | null;
+};
+export async function getOrderById(wcOrderId: number | string) {
+  return api<WcOrderDetail>(`/catalog/orders/${encodeURIComponent(String(wcOrderId))}`);
+}
+
 export async function getProducts(opts: {
   category?: string;
   search?: string;

@@ -7,6 +7,7 @@ import { OrdersModule } from '../orders/orders.module';
 import { QueueModule } from '../queue/queue.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { PilotModule } from '../pilot/pilot.module';
+import { CustomersAppModule } from '../customers-app/customers-app.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { PilotModule } from '../pilot/pilot.module';
     QueueModule,
     WebsocketModule,
     forwardRef(() => PilotModule),
+    CustomersAppModule,
   ],
   providers: [WooCommerceService, WcPollerService],
   controllers: [WooCommerceController],

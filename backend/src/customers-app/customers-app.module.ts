@@ -12,6 +12,7 @@ import { CustomerPushService } from './customer-push.service';
 import { CustomerCashbackService } from './customer-cashback.service';
 import { AppInviteService } from './app-invite.service';
 import { CustomerPasswordResetService } from './customer-password-reset.service';
+import { OrderAppHooksService } from './order-app-hooks.service';
 
 /**
  * Módulo do app cliente final (PWA app.lurds.com.br).
@@ -45,6 +46,7 @@ import { CustomerPasswordResetService } from './customer-password-reset.service'
     CustomerCashbackService,
     AppInviteService,
     CustomerPasswordResetService,
+    OrderAppHooksService,
   ],
   controllers: [CustomersAppController],
   exports: [
@@ -55,6 +57,7 @@ import { CustomerPasswordResetService } from './customer-password-reset.service'
     CustomerCashbackService,
     AppInviteService,
     CustomerPasswordResetService,
+    OrderAppHooksService,
   ],
 })
 export class CustomersAppModule {}
