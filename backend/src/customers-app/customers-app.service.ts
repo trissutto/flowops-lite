@@ -9,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
 import { AppLoginDto, AppRegisterDto } from './dto/app-auth.dto';
 
 /**
@@ -34,6 +35,7 @@ export class CustomersAppService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly cfg: ConfigService,
+    private readonly email: EmailService,
   ) {
     this.WELCOME_BONUS_CENTS =
       this.cfg.get<number>('APP_WELCOME_BONUS_CENTS') ?? 2000;
@@ -453,6 +455,19 @@ export class CustomersAppService {
 
         return acc;
       });
+
+      // ✉️ Dispara email LGPD de boas-vindas (best-effort — não bloqueia)
+      if (safeEmail) {
+        this.email
+          .sendWelcome({
+            to: safeEmail,
+            name: sourceName,
+            cpfMasked: maskCpfPublic(dto.cpf),
+          })
+          .catch((err) => {
+            this.logger.warn(`Email boas-vindas falhou: ${err?.message || err}`);
+          });
+      }
 
       const token = this.signToken(account);
       return {

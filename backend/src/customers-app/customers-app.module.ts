@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaModule } from '../prisma/prisma.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
+import { EmailModule } from '../email/email.module';
 import { CustomersAppService } from './customers-app.service';
 import { CustomersAppController } from './customers-app.controller';
 import { CustomerJwtGuard } from './customer-jwt.guard';
@@ -25,6 +26,7 @@ import { CustomerPasswordResetService } from './customer-password-reset.service'
   imports: [
     PrismaModule,
     WhatsappModule,
+    EmailModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (cfg: ConfigService) => ({
