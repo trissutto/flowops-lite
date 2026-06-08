@@ -49,6 +49,7 @@ export default function CheckoutPage() {
 
   // Pré-prompt de push após criar pedido
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
+  const [createdPaymentUrl, setCreatedPaymentUrl] = useState<string>('');
   const [showPushPrompt, setShowPushPrompt] = useState(false);
 
   // Padding-bottom dinâmico baseado na altura real do bottom bar fixo
@@ -167,16 +168,13 @@ export default function CheckoutPage() {
 
       // Limpa carrinho
       clear();
-      // Mostra pré-prompt de push ANTES de redirecionar (melhor momento)
+      // Salva paymentUrl no state pra redirecionar quando cliente fechar o prompt
       setCreatedOrderId(order.id);
+      setCreatedPaymentUrl(order.paymentUrl);
       setShowPushPrompt(true);
-      // Se cliente fechar prompt sem aceitar, redireciona em 5s mesmo assim
+      // Fallback: se cliente ignorar tudo, redireciona em 5s
       setTimeout(() => {
-        if (paymentMethod === 'pix') {
-          router.push(`/pedido/${order.id}`);
-        } else {
-          window.location.href = order.paymentUrl;
-        }
+        window.location.href = order.paymentUrl;
       }, 5000);
     } catch (e: any) {
       setErr(e?.message || 'Erro ao criar pedido');
@@ -536,10 +534,11 @@ export default function CheckoutPage() {
           reward="Pedido feito! 🎉 Posso te avisar na hora que ele sair pra entrega e quando chegar?"
           onClose={() => {
             setShowPushPrompt(false);
-            if (paymentMethod === 'pix') {
-              router.push(`/pedido/${createdOrderId}`);
+            // Sempre vai pro paymentUrl do WC — lá tem todos os métodos configurados
+            if (createdPaymentUrl) {
+              window.location.href = createdPaymentUrl;
             } else if (createdOrderId) {
-              window.location.href = `/pedido/${createdOrderId}`;
+              router.push(`/pedido/${createdOrderId}`);
             }
           }}
         />

@@ -320,8 +320,10 @@ export class CatalogService {
     try {
       const isPickup = !!payload.pickupStoreCode;
       const body: any = {
-        payment_method: payload.paymentMethod === 'pix' ? 'pagarme-pix' : 'pagarme-credit-card',
-        payment_method_title: payload.paymentMethod === 'pix' ? 'PIX' : 'Cartão de Crédito',
+        // NÃO setamos payment_method: deixa o WC mostrar TODAS as opções
+        // configuradas no admin (PIX, cartão, etc) e cliente escolhe lá.
+        // Setar nome errado dispara "método inválido" no checkout do WC.
+        // Preferência registrada via meta_data pra relatório.
         set_paid: false,
         status: 'pending',
         billing: {
@@ -354,8 +356,18 @@ export class CatalogService {
           method_title: payload.shippingMethod || (isPickup ? 'Retirar em loja' : 'Frete'),
           total: String((payload.shippingCost || 0).toFixed(2)),
         }],
+        // Aplica cashback como FEE NEGATIVO — único jeito do WC subtrair do total
+        // sem ter cupom configurado. Aparece como "Cashback" no resumo do pedido.
+        fee_lines: payload.cashbackUsedCents
+          ? [{
+              name: 'Cashback Lurd\'s',
+              total: String((-payload.cashbackUsedCents / 100).toFixed(2)),
+              tax_status: 'none',
+            }]
+          : undefined,
         meta_data: [
           { key: '_app_origin', value: 'app.lurds.com.br' },
+          { key: '_app_payment_pref', value: payload.paymentMethod },
           ...(payload.cashbackUsedCents
             ? [{ key: '_app_cashback_used_cents', value: payload.cashbackUsedCents }]
             : []),
