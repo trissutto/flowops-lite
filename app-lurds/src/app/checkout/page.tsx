@@ -139,6 +139,8 @@ export default function CheckoutPage() {
 
     setCreating(true);
     setErr(null);
+    // Flag que distingue "loading da chamada" vs "redirecionando" — mantém overlay
+    // ativo durante TODA a transição (sem cliente ver carrinho zerado)
     try {
       // Usa plugin WP: prepara cart nativo + retorna URL pro checkout
       const result = await appCheckout({
@@ -169,20 +171,23 @@ export default function CheckoutPage() {
         pickupStoreCode: selectedShipping.type === 'pickup' ? selectedShipping.storeCode : undefined,
       });
 
-      // Limpa carrinho local — produtos vão pro cart do WC pelo plugin
-      clear();
       // Marca pra não redirecionar pra /carrinho (race condition fix)
-      setCreatedOrderId(1); // placeholder — só pra desativar useEffect redirect
+      setCreatedOrderId(1); // placeholder
       setCreatedPaymentUrl(result.checkoutUrl);
-      setShowPushPrompt(true);
-      // Fallback: se cliente ignorar tudo, redireciona em 5s
-      setTimeout(() => {
-        window.location.href = result.checkoutUrl;
-      }, 5000);
+
+      // REDIRECT IMEDIATO — mantém overlay até o browser navegar
+      // NÃO chamamos clear() antes pra evitar a UI piscar valores zerados.
+      // O cart local fica intacto até o WC pegar a sessão pelo plugin.
+      window.location.href = result.checkoutUrl;
+
+      // Limpa o cart local DEPOIS do redirect (não dá tempo de renderizar)
+      // — se o redirect demorar, ainda fica em loading até navegar.
+      setTimeout(() => clear(), 200);
+      // NÃO setCreating(false) — overlay continua visível até navegar
+      return;
     } catch (e: any) {
       setErr(e?.message || 'Erro ao criar pedido');
-    } finally {
-      setCreating(false);
+      setCreating(false); // só desativa em caso de erro
     }
   };
 
@@ -530,27 +535,7 @@ export default function CheckoutPage() {
       </div>
 
       {/* Overlay full-screen durante a criação do pedido — feedback visível */}
-      {creating && (
-        <div className="fixed inset-0 z-[150] bg-ink/95 backdrop-blur-md flex flex-col items-center justify-center px-6">
-          <div className="relative">
-            <div className="w-24 h-24 rounded-full border-4 border-gold/20 border-t-gold animate-spin" />
-            <div className="absolute inset-0 flex items-center justify-center text-3xl">
-              🛒
-            </div>
-          </div>
-          <h2 className="font-serif text-2xl font-black text-gold mt-6 text-center">
-            Preparando seu pedido...
-          </h2>
-          <p className="text-sm text-cream/70 mt-2 text-center max-w-xs">
-            Estamos abrindo a tela de pagamento. Não feche o app, é rapidinho 💛
-          </p>
-          <div className="mt-6 flex items-center gap-1.5 text-[11px] text-cream/40">
-            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" />
-            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.2s' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.4s' }} />
-          </div>
-        </div>
-      )}
+      {creating && <CreatingOverlay hasUrl={!!createdPaymentUrl} />}
 
       {showPushPrompt && createdOrderId && (
         <PushPrePrompt
@@ -567,6 +552,58 @@ export default function CheckoutPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/* ════════════════ OVERLAY: criando pedido + transição ════════════════
+ * Tela cheia durante TODA a transição: chamada API + redirect pro WC.
+ * Mensagem progressiva pra cliente sentir que algo continua acontecendo.
+ */
+function CreatingOverlay({ hasUrl }: { hasUrl: boolean }) {
+  const [phase, setPhase] = useState(0);
+  useEffect(() => {
+    const timers = [
+      setTimeout(() => setPhase(1), 1500),
+      setTimeout(() => setPhase(2), 3500),
+    ];
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  // Quando hasUrl=true → já estamos redirecionando, mostra última mensagem
+  const effectivePhase = hasUrl ? 2 : phase;
+  const messages = [
+    { title: 'Preparando seu pedido...', sub: 'Conferindo os produtos e o cashback' },
+    { title: 'Abrindo o checkout...', sub: 'Estamos quase lá' },
+    { title: 'Levando você pro pagamento...', sub: 'Aguenta firme, em segundos vamos pular' },
+  ];
+  const m = messages[effectivePhase];
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] bg-ink flex flex-col items-center justify-center px-6"
+      style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+    >
+      <div className="relative">
+        <div className="w-28 h-28 rounded-full border-4 border-gold/15 border-t-gold animate-spin" />
+        <div className="absolute inset-0 flex items-center justify-center text-4xl">
+          🛒
+        </div>
+      </div>
+      <h2 className="font-serif text-2xl font-black text-gold mt-7 text-center min-h-[2rem] transition-all">
+        {m.title}
+      </h2>
+      <p className="text-sm text-cream/70 mt-2 text-center max-w-xs">
+        {m.sub}
+      </p>
+      <p className="text-[11px] text-cream/40 text-center mt-5">
+        Não feche o app — vai abrir o site da Lurd's pra finalizar o pagamento 💛
+      </p>
+      <div className="mt-5 flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
+        <span className="w-2 h-2 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.2s' }} />
+        <span className="w-2 h-2 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.4s' }} />
+      </div>
     </div>
   );
 }
