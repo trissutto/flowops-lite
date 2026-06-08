@@ -573,6 +573,7 @@ export class PdvController {
       saleId: id,
       valor: sale.total,
       storeCode: sale.storeCode,
+      storeName: sale.storeName,
       customerName: sale.customerName || undefined,
       customerCpf: sale.customerCpf || undefined,
       customerEmail: sale.customerEmail || undefined,

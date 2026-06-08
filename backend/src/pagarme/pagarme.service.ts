@@ -238,6 +238,7 @@ export class PagarmeService {
     saleId: string;
     valor: number;
     storeCode: string;
+    storeName?: string; // pra fallback do nome do cliente (conciliação)
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
@@ -271,7 +272,14 @@ export class PagarmeService {
     // Agora geramos CPF ficticio VALIDO unico por cobranca (algoritmo + saleId
     // como semente) — assim cada cobranca vira um customer novo no Pagar.me e
     // o pagador real aparece corretamente.
-    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    //
+    // FALLBACK PRA CONCILIACAO: se nao tem nome do cliente, usa nome da loja.
+    // Ex: "VENDA LOJA INDAIATUBA" em vez de "Cliente PDV ABC123". Facilita
+    // identificar a origem da venda no dashboard Pagar.me e relatorios.
+    const customerName = (
+      input.customerName
+      || (input.storeName ? `VENDA LOJA ${input.storeName.toUpperCase()}` : `VENDA LOJA ${input.storeCode}`)
+    ).slice(0, 64);
     const customerEmail = input.customerEmail
       || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
@@ -552,6 +560,7 @@ export class PagarmeService {
     saleId: string;
     valor: number;
     storeCode: string;
+    storeName?: string; // pra fallback do nome do cliente (conciliação)
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
@@ -588,7 +597,11 @@ export class PagarmeService {
     }
 
     // Customer — mesma lógica do PIX (CPF fictício único por venda se não tem)
-    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    // Fallback "VENDA LOJA <NOME>" pra facilitar conciliação.
+    const customerName = (
+      input.customerName
+      || (input.storeName ? `VENDA LOJA ${input.storeName.toUpperCase()}` : `VENDA LOJA ${input.storeCode}`)
+    ).slice(0, 64);
     const customerEmail = input.customerEmail
       || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
