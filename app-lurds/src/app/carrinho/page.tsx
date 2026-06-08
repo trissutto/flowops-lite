@@ -13,25 +13,58 @@ import BottomNav from '@/components/BottomNav';
 const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Catálogo de cupons local (implementação real virá do WC/backend)
+// type: 'percent' = value é fração (0.10 = 10%)
+// type: 'fixed'   = value é R$ fixo
+type CouponRule = {
+  code: string;
+  type: 'percent' | 'fixed';
+  value: number;
+  minSubtotal?: number;
+};
+
+const COUPON_RULES: Record<string, CouponRule> = {
+  APP10: { code: 'APP10', type: 'percent', value: 0.10 },
+};
+
 export default function CarrinhoPage() {
   const router = useRouter();
   const { items, itemCount, subtotal, updateQuantity, removeItem } = useCart();
   const [coupon, setCoupon] = useState('');
-  const [couponApplied, setCouponApplied] = useState<{ code: string; discount: number } | null>(null);
+  // Guardamos APENAS a regra. O valor do desconto é calculado em runtime
+  // baseado no subtotal atual — assim, ao remover/alterar itens, recalcula.
+  const [couponApplied, setCouponApplied] = useState<CouponRule | null>(null);
 
   const cashbackAGanhar = subtotal * 0.10;
-  const discount = couponApplied?.discount || 0;
+
+  // RECÁLCULO DINÂMICO — sempre baseado no subtotal atual
+  const discount = (() => {
+    if (!couponApplied) return 0;
+    if (couponApplied.minSubtotal && subtotal < couponApplied.minSubtotal) return 0;
+    const raw = couponApplied.type === 'percent'
+      ? subtotal * couponApplied.value
+      : couponApplied.value;
+    // Nunca desconta mais que o subtotal
+    return Math.min(raw, subtotal);
+  })();
+
   const total = Math.max(0, subtotal - discount);
+
+  // Se o cupom tem mínimo e o carrinho ficou abaixo, mantém o cupom mas mostra aviso
+  const couponBelowMin = !!(
+    couponApplied?.minSubtotal && subtotal < couponApplied.minSubtotal
+  );
 
   const applyCoupon = () => {
     const code = coupon.trim().toUpperCase();
     if (!code) return;
-    // Cupons simulados — implementação real vai no checkout via WC
-    if (code === 'APP10') {
-      setCouponApplied({ code, discount: subtotal * 0.10 });
-    } else {
+    const rule = COUPON_RULES[code];
+    if (!rule) {
       alert('Cupom inválido. Tente APP10');
+      return;
     }
+    setCouponApplied(rule);
+    setCoupon('');
   };
 
   if (items.length === 0) {
@@ -137,14 +170,23 @@ export default function CarrinhoPage() {
           Cupom de desconto
         </h3>
         {couponApplied ? (
-          <div className="card-gold-border bg-gold/10 flex items-center justify-between">
+          <div className={`card-gold-border ${couponBelowMin ? 'bg-amber-900/20 border-amber-500/30' : 'bg-gold/10'} flex items-center justify-between`}>
             <div className="flex items-center gap-2">
-              <Tag className="w-4 h-4 text-gold" />
+              <Tag className={`w-4 h-4 ${couponBelowMin ? 'text-amber-300' : 'text-gold'}`} />
               <div>
                 <div className="font-bold text-sm">{couponApplied.code}</div>
-                <div className="text-[11px] text-emerald-400">
-                  −{brl(couponApplied.discount)} aplicado
-                </div>
+                {couponBelowMin ? (
+                  <div className="text-[11px] text-amber-300">
+                    Mínimo de {brl(couponApplied.minSubtotal!)} pra ativar
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-emerald-400">
+                    −{brl(discount)} aplicado
+                    {couponApplied.type === 'percent' && (
+                      <span className="text-cream/50"> ({Math.round(couponApplied.value * 100)}% off)</span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -190,10 +232,10 @@ export default function CarrinhoPage() {
             <span>Subtotal</span>
             <span className="tabular-nums">{brl(subtotal)}</span>
           </div>
-          {couponApplied && (
+          {couponApplied && discount > 0 && (
             <div className="flex justify-between text-emerald-400">
               <span>Cupom {couponApplied.code}</span>
-              <span className="tabular-nums">−{brl(couponApplied.discount)}</span>
+              <span className="tabular-nums">−{brl(discount)}</span>
             </div>
           )}
           <div className="flex justify-between text-cream/50 text-xs">
