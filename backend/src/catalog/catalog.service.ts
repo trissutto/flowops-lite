@@ -993,15 +993,19 @@ export class CatalogService {
         code: true, name: true, city: true, state: true,
         cep: true, whatsapp: true,
       } as any,
-      orderBy: { code: 'asc' } as any,
+      orderBy: { name: 'asc' } as any,
     });
-    const data = (stores as any[]).map((s: any) => ({
-      code: s.code,
-      nome: s.name,
-      cidade: `${s.city || s.name} — ${s.state || 'SP'}`,
-      cep: s.cep || null,
-      whatsapp: s.whatsapp || null,
-    }));
+    // Ordenação adicional em JS pra garantir acentos corretos
+    // (PT-BR: "Á" deve vir depois de "A", não no final como ASCII puro)
+    const data = (stores as any[])
+      .map((s: any) => ({
+        code: s.code,
+        nome: s.name,
+        cidade: `${s.city || s.name} — ${s.state || 'SP'}`,
+        cep: s.cep || null,
+        whatsapp: s.whatsapp || null,
+      }))
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR', { sensitivity: 'base' }));
     this.appStoresCache = { at: Date.now(), data };
     return data;
   }
