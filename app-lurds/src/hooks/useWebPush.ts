@@ -156,24 +156,42 @@ export function useWebPush() {
       log('3 SW ready');
 
       // ════ 4) SUBSCRIPTION ════
-      // Se já tem (caso comum: cliente já clicou antes e a sub ficou no device),
-      // reusa em vez de tentar criar de novo (subscribe() falha com já existente)
-      let sub = await reg.pushManager.getSubscription().catch(() => null);
-      if (sub) {
-        log('4 reusing existing subscription');
-      } else {
-        log('4 creating new subscription');
+      // SEMPRE desinscreve a sub anterior antes de criar nova.
+      // Motivo: se VAPID key foi rotacionada (ou cliente tinha sub stale),
+      // tentar reusar a antiga ou criar por cima dela falha com "applicationServerKey
+      // diferente" e a cliente fica sem push pra sempre.
+      const existing = await reg.pushManager.getSubscription().catch(() => null);
+      if (existing) {
+        log('4 unsubscribing existing (stale)');
+        await existing.unsubscribe().catch(() => null);
+      }
+      let sub: PushSubscription;
+      log('4 creating new subscription');
+      try {
+        sub = await withTimeout(
+          reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
+          }),
+          20000,
+          'Falha ao registrar no servidor de notificações',
+        );
+      } catch (e: any) {
+        log('4 subscribe error', e?.message);
+        // Tenta UMA segunda vez — alguns devices precisam de re-tentar após cleanup
         try {
+          await new Promise((r) => setTimeout(r, 1000));
           sub = await withTimeout(
             reg.pushManager.subscribe({
               userVisibleOnly: true,
               applicationServerKey: urlBase64ToUint8Array(key) as BufferSource,
             }),
-            20000,
-            'Falha ao registrar no servidor de notificações',
+            15000,
+            'Falha ao registrar no servidor (2ª tentativa)',
           );
-        } catch (e: any) {
-          log('4 subscribe error', e?.message);
+          log('4 subscribe OK on retry');
+        } catch (e2: any) {
+          log('4 subscribe retry error', e2?.message);
           throw new Error('Falha registrando seu celular. Fecha o app, abre de novo e tenta — se persistir, me avisa.');
         }
       }
