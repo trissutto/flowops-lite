@@ -1850,6 +1850,7 @@ model CustomerAccount {
   pushSubscriptions     CustomerAppPushSubscription[]
   cashbackTxs           CustomerCashbackTx[]
   passwordResetTokens   CustomerPasswordResetToken[]
+  notifications         CustomerAppNotification[]
 
   @@index([cpf])
   @@map("customer_accounts")
@@ -1980,6 +1981,29 @@ model CustomerAppPushSubscription {
   @@index([accountId])
   @@index([active])
   @@map("customer_app_push_subscriptions")
+}
+
+// Histórico de notificações enviadas — alimenta a tela /notificacoes do app PWA.
+// Gravamos toda vez que CustomerPushService dispara, independente de chegar no device
+// (cliente pode ter desativado push, instalado em outro device, ainda assim quer ver histórico).
+model CustomerAppNotification {
+  id           String   @id @default(uuid())
+  accountId    String   @map("account_id")
+  account      CustomerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  title        String
+  body         String?
+  url          String?              // link interno do app
+  image        String?              // banner rico
+  tag          String?              // agrupa notifs do mesmo tipo
+  category     String?              // 'promo' | 'order' | 'cashback' | 'live' | 'system'
+  readAt       DateTime? @map("read_at")
+  pushSent     Boolean   @default(false) @map("push_sent")
+  whatsappSent Boolean   @default(false) @map("whatsapp_sent")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([accountId, createdAt])
+  @@index([accountId, readAt])
+  @@map("customer_app_notifications")
 }
 
 model CustomerAccountLink {

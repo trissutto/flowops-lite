@@ -258,6 +258,23 @@ export class CustomersAppController {
     return { ok: true };
   }
 
+  /* ════════════════ HISTÓRICO DE NOTIFICAÇÕES ════════════════ */
+
+  /** GET /customers/app/notifications — últimas 50 + contagem não lidas */
+  @Get('notifications')
+  @UseGuards(CustomerJwtGuard)
+  async notifications(@Req() req: any) {
+    return this.svc.getNotifications(req.customer.id);
+  }
+
+  /** POST /customers/app/notifications/read-all — marca tudo como lido */
+  @Post('notifications/read-all')
+  @HttpCode(200)
+  @UseGuards(CustomerJwtGuard)
+  async notificationsReadAll(@Req() req: any) {
+    return this.svc.markAllNotificationsRead(req.customer.id);
+  }
+
   /**
    * POST /customers/app/admin/push-send — operador dispara push manual.
    * Body: { mode: 'all' | 'segment' | 'account', payload, segment?, accountId? }

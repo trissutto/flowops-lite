@@ -124,6 +124,9 @@ export class CustomerPushService implements OnModuleInit {
         : Promise.resolve(false),
     ]);
 
+    // Grava no histórico — alimenta a tela /notificacoes do app
+    this.logNotification(accountId, payload, pushResult.sent > 0, waResult).catch(() => null);
+
     return { ...pushResult, whatsappSent: waResult };
   }
 
@@ -156,7 +159,77 @@ export class CustomerPushService implements OnModuleInit {
       }
     }
 
+    // Grava no histórico de TODAS as contas que receberam (broadcast)
+    // Grava em batch — 1 linha por account, pra cada account ver no seu /notificacoes
+    const uniqueAccountIds = new Set<string>();
+    for (const s of subs) uniqueAccountIds.add(s.accountId);
+    for (const a of waAccounts) uniqueAccountIds.add(a.id);
+    if (uniqueAccountIds.size > 0) {
+      this.logNotificationBatch(Array.from(uniqueAccountIds), payload).catch(() => null);
+    }
+
     return { ...pushResult, whatsappSent: waSent };
+  }
+
+  /* ─────────────────────── HISTÓRICO ─────────────────────── */
+
+  /** Grava 1 linha por notificação enviada (pra mostrar em /notificacoes do app). */
+  private async logNotification(
+    accountId: string,
+    payload: PushPayload,
+    pushSent: boolean,
+    whatsappSent: boolean,
+  ): Promise<void> {
+    try {
+      await this.prisma.customerAppNotification.create({
+        data: {
+          accountId,
+          title: payload.title,
+          body: payload.body,
+          url: payload.url,
+          image: payload.image,
+          tag: payload.tag,
+          category: this.inferCategory(payload),
+          pushSent,
+          whatsappSent,
+        },
+      });
+    } catch (e: any) {
+      this.logger.warn(`logNotification falhou account=${accountId}: ${e?.message}`);
+    }
+  }
+
+  /** Grava em batch (broadcast pra muitos accounts). */
+  private async logNotificationBatch(accountIds: string[], payload: PushPayload): Promise<void> {
+    if (accountIds.length === 0) return;
+    try {
+      await this.prisma.customerAppNotification.createMany({
+        data: accountIds.map((accountId) => ({
+          accountId,
+          title: payload.title,
+          body: payload.body,
+          url: payload.url,
+          image: payload.image,
+          tag: payload.tag,
+          category: this.inferCategory(payload),
+          pushSent: true,
+          whatsappSent: false,
+        })),
+      });
+    } catch (e: any) {
+      this.logger.warn(`logNotificationBatch falhou: ${e?.message}`);
+    }
+  }
+
+  /** Categoriza pela tag/url — usado pra agrupar ícones na UI */
+  private inferCategory(payload: PushPayload): string {
+    const t = (payload.tag || '').toLowerCase();
+    const u = (payload.url || '').toLowerCase();
+    if (t.includes('order') || u.includes('/pedido')) return 'order';
+    if (t.includes('cashback') || u.includes('/cashback')) return 'cashback';
+    if (t.includes('live') || u.includes('/live')) return 'live';
+    if (t.includes('welcome')) return 'system';
+    return 'promo';
   }
 
   /**
