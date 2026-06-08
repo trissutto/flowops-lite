@@ -415,7 +415,7 @@ export default function ProductDetailPage() {
             </div>
             {currentPrice.price && (
               <div className="text-sm text-slate-600 mt-1">
-                ou <strong>6x de {fmt(currentPrice.price / 6)}</strong> sem juros no cartão
+                ou <strong>12x de {fmt(currentPrice.price / 12)}</strong> sem juros no cartão
               </div>
             )}
             {currentPrice.price && (
@@ -589,7 +589,7 @@ function TopMiniHeader() {
   return (
     <>
       <div className="bg-gradient-to-r from-pink-600 to-rose-600 text-white text-center text-xs sm:text-sm py-2 px-4 font-medium">
-        🚚 FRETE GRÁTIS acima de R$ 299 · 💳 6x sem juros · 🎁 10% OFF no PIX
+        🚚 FRETE GRÁTIS acima de R$ 500 · 💳 12x sem juros · 🎁 5% OFF no PIX
       </div>
       <header className="sticky top-0 bg-white border-b border-slate-200 z-40 shadow-sm">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">

@@ -482,7 +482,7 @@ export default function CheckoutPage() {
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-bold text-sm">💳 Cartão de crédito</div>
-                <div className="text-xs text-cream/60">Em até 6x sem juros</div>
+                <div className="text-xs text-cream/60">Em até 12x sem juros</div>
               </div>
               {paymentMethod === 'credit_card' && <CheckCircle2 className="w-5 h-5 text-gold" />}
             </div>

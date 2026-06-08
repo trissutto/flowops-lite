@@ -206,6 +206,16 @@ export default function ProdutoPage() {
           </span>
         </div>
 
+        {/* Parcelamento — conversão killer */}
+        <div className="mt-1.5 text-xs text-cream/70">
+          ou <strong className="text-cream">12x de {brl(effectivePrice / 12)}</strong> sem juros
+        </div>
+
+        {/* PIX desconto — gatilho de urgência */}
+        <div className="mt-1 text-xs text-emerald-400">
+          💚 <strong>{brl(effectivePrice * 0.95)}</strong> no PIX (5% off)
+        </div>
+
         {/* Cashback */}
         <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/20 px-3 py-1.5 rounded-full inline-flex">
           <Sparkles className="w-3.5 h-3.5" />

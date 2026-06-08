@@ -2662,7 +2662,7 @@ function PdvPageInner() {
                                 </button>
                                 <a
                                   href={`https://wa.me/${(p.customerPhone || '').replace(/\D/g, '') ? `55${(p.customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 6x sem juros.`,
+                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 12x sem juros.`,
                                   )}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -4889,7 +4889,7 @@ function PaymentModal({
                       </button>
                       <a
                         href={`https://wa.me/${(customerPhone || '').replace(/\D/g, '') ? `55${(customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 6x sem juros. Expira em 24h.`,
+                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. Expira em 24h.`,
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"

@@ -85,13 +85,13 @@ const DEFAULT_CONFIG: LuConfig = {
     { id: '1', trigger: 'tamanho|manequim|veste', response: 'Atendemos do 46 ao 60 💕 Qual seria o seu tamanho?' },
     { id: '2', trigger: 'preço|valor|quanto custa', response: 'Te mando os valores agora linda! Tem desconto pra primeira compra ✨' },
     { id: '3', trigger: 'frete|entrega|chegou', response: 'Entregamos pro Brasil todo via Correios e transportadoras parceiras 📦' },
-    { id: '4', trigger: 'parcelar|cartão|pix', response: 'Pode parcelar em até 6x sem juros no cartão ou 5% off no Pix 💳' },
+    { id: '4', trigger: 'parcelar|cartão|pix', response: 'Pode parcelar em até 12x sem juros no cartão ou 5% off no Pix 💳' },
   ],
   presets: [
     { id: '1', label: 'Saudação', body: 'Oi linda! Tudo bem? 💕 Como posso te ajudar?', category: 'other' },
     { id: '2', label: 'Tamanho disponível', body: 'Acabei de checar e tem sim! Posso reservar pra você?', category: 'size' },
     { id: '3', label: 'Pedir CEP', body: 'Me passa seu CEP pra eu ver se temos loja física pertinho de você? 📍', category: 'store' },
-    { id: '4', label: 'Forma de pagamento', body: 'Aceitamos Pix (5% off), cartão até 6x sem juros e boleto 💳', category: 'payment' },
+    { id: '4', label: 'Forma de pagamento', body: 'Aceitamos Pix (5% off), cartão até 12x sem juros e boleto 💳', category: 'payment' },
     { id: '5', label: 'Prazo de entrega', body: 'O prazo é de 3 a 7 dias úteis após confirmação do pagamento 📦', category: 'shipping' },
   ],
 };
