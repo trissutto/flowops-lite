@@ -529,6 +529,29 @@ export default function CheckoutPage() {
         </p>
       </div>
 
+      {/* Overlay full-screen durante a criação do pedido — feedback visível */}
+      {creating && (
+        <div className="fixed inset-0 z-[150] bg-ink/95 backdrop-blur-md flex flex-col items-center justify-center px-6">
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full border-4 border-gold/20 border-t-gold animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center text-3xl">
+              🛒
+            </div>
+          </div>
+          <h2 className="font-serif text-2xl font-black text-gold mt-6 text-center">
+            Preparando seu pedido...
+          </h2>
+          <p className="text-sm text-cream/70 mt-2 text-center max-w-xs">
+            Estamos abrindo a tela de pagamento. Não feche o app, é rapidinho 💛
+          </p>
+          <div className="mt-6 flex items-center gap-1.5 text-[11px] text-cream/40">
+            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.2s' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-gold animate-pulse" style={{ animationDelay: '0.4s' }} />
+          </div>
+        </div>
+      )}
+
       {showPushPrompt && createdOrderId && (
         <PushPrePrompt
           context="order-placed"

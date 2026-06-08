@@ -4,8 +4,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ArrowLeft, ShoppingBag, Loader2, AlertCircle, Sparkles,
-  Minus, Plus, Heart, ChevronLeft, ChevronRight,
+  ArrowLeft, ShoppingBag, ShoppingCart, Loader2, AlertCircle, Sparkles,
+  Minus, Plus, Heart, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
 import { getProductBySlug, type WcProductDetail, type WcVariation } from '@/lib/api';
 import { useCart } from '@/contexts/CartContext';
@@ -28,6 +28,7 @@ export default function ProdutoPage() {
   const [quantity, setQuantity] = useState(1);
   const [adding, setAdding] = useState(false);
   const [justAdded, setJustAdded] = useState(false);
+  const [showAddedModal, setShowAddedModal] = useState(false);
 
   useEffect(() => {
     if (!params?.slug) return;
@@ -88,11 +89,9 @@ export default function ProdutoPage() {
       attributes: selectedAttrs,
     });
 
-    setJustAdded(true);
-    setTimeout(() => {
-      setJustAdded(false);
-      setAdding(false);
-    }, 1200);
+    // Modal "Continuar comprando ou Finalizar?"
+    setShowAddedModal(true);
+    setAdding(false);
   };
 
   if (loading) {
@@ -328,6 +327,108 @@ export default function ProdutoPage() {
             )}
           </button>
         )}
+      </div>
+
+      {/* Modal "Continuar comprando ou Finalizar?" — pós adicionar ao carrinho */}
+      {showAddedModal && product && (
+        <AddedToCartModal
+          productName={product.name}
+          productImage={matchedVariation?.image || product.images[0]?.src || null}
+          quantity={quantity}
+          price={effectivePrice * quantity}
+          onContinue={() => {
+            setShowAddedModal(false);
+            router.push('/catalogo');
+          }}
+          onCheckout={() => {
+            setShowAddedModal(false);
+            router.push('/carrinho');
+          }}
+          onClose={() => setShowAddedModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ════════════════ MODAL: ADICIONADO AO CARRINHO ════════════════ */
+function AddedToCartModal({
+  productName, productImage, quantity, price,
+  onContinue, onCheckout, onClose,
+}: {
+  productName: string;
+  productImage: string | null;
+  quantity: number;
+  price: number;
+  onContinue: () => void;
+  onCheckout: () => void;
+  onClose: () => void;
+}) {
+  const brl = (n: number) =>
+    n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return (
+    <div
+      className="fixed inset-0 z-[200] bg-ink/90 backdrop-blur-sm flex items-end sm:items-center justify-center"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md mx-0 sm:mx-4 bg-ink-800 sm:border sm:border-gold/30 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl animate-slide-up"
+        onClick={(e) => e.stopPropagation()}
+        style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))' }}
+      >
+        <button
+          aria-label="Fechar"
+          onClick={onClose}
+          className="absolute top-3 right-3 p-2 rounded-full bg-ink-700"
+        >
+          <X className="w-4 h-4 text-cream" />
+        </button>
+
+        {/* Check verde com animação */}
+        <div className="flex justify-center mb-3">
+          <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center animate-pulse">
+            <CheckCircle2 className="w-9 h-9 text-emerald-400" />
+          </div>
+        </div>
+
+        <h3 className="font-serif text-xl font-black text-gold text-center mb-1">
+          Adicionado ao carrinho!
+        </h3>
+
+        {/* Mini-card do produto */}
+        <div className="mt-4 bg-ink-900 rounded-2xl p-3 flex gap-3 items-center">
+          <div className="w-14 h-16 bg-ink-700 rounded-lg overflow-hidden shrink-0">
+            {productImage && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={productImage} alt={productName} className="w-full h-full object-cover" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-bold text-white line-clamp-2 leading-tight">
+              {productName}
+            </div>
+            <div className="text-xs text-cream/60 mt-0.5">
+              {quantity}× · <span className="text-gold font-bold">{brl(price)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* CTAs grandes */}
+        <div className="mt-5 space-y-2">
+          <button
+            onClick={onCheckout}
+            className="btn-gold-lg w-full"
+          >
+            <ShoppingCart className="w-5 h-5" />
+            Finalizar compra
+          </button>
+          <button
+            onClick={onContinue}
+            className="w-full py-3.5 rounded-2xl bg-ink-700 hover:bg-ink-600 text-cream font-bold text-sm border border-ink-600"
+          >
+            Continuar comprando
+          </button>
+        </div>
       </div>
     </div>
   );

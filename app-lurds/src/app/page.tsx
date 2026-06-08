@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2, ShoppingBag } from 'lucide-react';
+import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2, ShoppingCart } from 'lucide-react';
 import { HeroInstallCard } from '@/components/InstallBanner';
 import AppGate from '@/components/AppGate';
 import PushPrePrompt from '@/components/PushPrePrompt';
@@ -86,19 +86,19 @@ export default function HomePage() {
           className="h-12 w-auto"
         />
         <div className="flex items-center gap-2">
-          {/* CARRINHO — mais destacado que o sino */}
+          {/* CARRINHO — 50% maior + sempre destacado em dourado */}
           <Link
             href="/carrinho"
             aria-label="Carrinho"
-            className={`relative p-2.5 rounded-full transition ${
+            className={`relative p-3.5 rounded-full transition active:scale-95 ${
               itemCount > 0
-                ? 'bg-gradient-to-br from-gold to-gold-light shadow-gold-lg'
-                : 'bg-ink-800 hover:bg-ink-700'
+                ? 'bg-gradient-to-br from-gold via-gold-light to-gold shadow-gold-lg ring-2 ring-gold/40'
+                : 'bg-gradient-to-br from-gold/30 to-gold/10 border-2 border-gold/40'
             }`}
           >
-            <ShoppingBag className={`w-6 h-6 ${itemCount > 0 ? 'text-ink' : 'text-gold'}`} />
+            <ShoppingCart className={`w-9 h-9 ${itemCount > 0 ? 'text-ink' : 'text-gold'}`} strokeWidth={2.2} />
             {itemCount > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 bg-rose-500 text-white text-[10px] font-black rounded-full flex items-center justify-center border-2 border-ink animate-pulse">
+              <span className="absolute -top-1.5 -right-1.5 min-w-[24px] h-6 px-1.5 bg-rose-500 text-white text-xs font-black rounded-full flex items-center justify-center border-2 border-ink animate-pulse shadow-lg">
                 {itemCount > 99 ? '99+' : itemCount}
               </span>
             )}
