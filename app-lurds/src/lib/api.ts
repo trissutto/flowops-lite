@@ -463,10 +463,10 @@ export type ShippingOption = {
   storeCode?: string;
   storeAddress?: string;
 };
-export async function calculateShipping(cep: string) {
+export async function calculateShipping(cep: string, subtotal?: number) {
   return api<{ options: ShippingOption[] }>('/catalog/shipping/calculate', {
     method: 'POST',
-    body: JSON.stringify({ cep }),
+    body: JSON.stringify({ cep, subtotal }),
   });
 }
 

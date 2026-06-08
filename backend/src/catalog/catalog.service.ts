@@ -599,6 +599,7 @@ export class CatalogService {
   private async getWcShippingMethods(
     cepDigits: string,
     customerState: string | null,
+    subtotal: number = 0,
   ): Promise<Array<any>> {
     // Cache check
     let zones: any[];
@@ -699,16 +700,30 @@ export class CatalogService {
           // Lurd's já trata pickup via Store própria — pula
           return null;
         }
-        // FILTRO: ignora free_shipping "fantasma".
-        // O cliente confirmou que NÃO oferece frete grátis universal — apenas
-        // como benefício de tier (Prata R$199+, Ouro/Diamante sempre), o que
-        // será tratado por regra de negócio futura. Por ora, esconde.
+        // FREE_SHIPPING: respeitar min_amount do WC.
+        // Configurável em WP Admin → WC → Shipping → [zona] → Frete grátis.
         if (m.method_id === 'free_shipping') {
-          this.logger.warn(
-            `[wcShipping] free_shipping descartado — zona ${matchedZone.id} "${matchedZone.name}" ` +
-            `método #${m.instance_id} "${title}". DESATIVAR no WP Admin → WC → Settings → Shipping.`,
-          );
-          return null;
+          const minAmount = Number(
+            String(m.settings?.min_amount?.value || '0').replace(',', '.'),
+          ) || 0;
+          const requires = String(m.settings?.requires?.value || '').toLowerCase();
+          // requires possíveis: "min_amount", "coupon", "either", "both", ""
+          // Pra simplificar: se tem min_amount > 0, exige subtotal >= min_amount
+          if (minAmount > 0 && subtotal < minAmount) {
+            this.logger.log(
+              `[wcShipping] free_shipping ESCONDIDO — subtotal ${subtotal} < min ${minAmount} ` +
+              `(zona ${matchedZone.id} "${matchedZone.name}")`,
+            );
+            return null;
+          }
+          // Passou no mínimo OU não tem mínimo configurado → mostra
+          return {
+            code: `WC_FREE_SHIPPING_${m.instance_id}`,
+            name: title || 'Frete grátis',
+            price: 0,
+            days,
+            type: 'shipping' as const,
+          };
         }
         return {
           code: `WC_${m.method_id?.toUpperCase()}_${m.instance_id}`,
@@ -734,11 +749,16 @@ export class CatalogService {
    * mesma cidade (normalizando acentos/case). Se não achar match exato, sem pickup.
    * Evita listar 15 lojas e poluir o checkout.
    */
-  async calculateShipping(opts: { cep: string; weight?: number }): Promise<Array<{
+  async calculateShipping(opts: {
+    cep: string;
+    weight?: number;
+    subtotal?: number;
+  }): Promise<Array<{
     code: string; name: string; price: number; days: number;
     type: 'shipping' | 'pickup'; storeCode?: string; storeAddress?: string;
   }>> {
     const cepDigits = (opts.cep || '').replace(/\D/g, '');
+    const subtotal = Number(opts.subtotal) || 0;
     const options: Array<any> = [];
 
     // 1) Lookup ViaCEP → cidade/UF do cliente (precisa pra match das zonas)
@@ -760,7 +780,7 @@ export class CatalogService {
 
     // 2) Tenta puxar do WooCommerce shipping zones (config real)
     try {
-      const wcMethods = await this.getWcShippingMethods(cepDigits, customerState);
+      const wcMethods = await this.getWcShippingMethods(cepDigits, customerState, subtotal);
       if (wcMethods.length > 0) options.push(...wcMethods);
     } catch (e: any) {
       this.logger.warn(`WC shipping zones falhou: ${e?.message}`);

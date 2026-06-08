@@ -107,12 +107,13 @@ export default function CheckoutPage() {
   }, [items.length, router, createdOrderId]);
 
   // Calcula frete ao escolher endereço
+  // IMPORTANTE: manda subtotal pra backend validar min_amount de free_shipping
   const handleSelectAddress = async (addr: AppAddress) => {
     setSelectedAddrId(addr.id);
     if (!addr.cep) return;
     setLoadingShipping(true);
     try {
-      const r = await calculateShipping(addr.cep);
+      const r = await calculateShipping(addr.cep, subtotal);
       setShippingOptions(r.options);
     } catch {
       setShippingOptions([]);
