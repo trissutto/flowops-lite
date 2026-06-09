@@ -14,7 +14,10 @@
 // Sem isso, SW antigo serve chunks JS/CSS com hashes que não existem mais,
 // e usuária vê tela quebrada (CSS 404). Tem fallback network-first pra
 // /_next/static/* logo abaixo que TAMBÉM mitiga isso.
-const CACHE_VERSION = 'lurds-v8';
+//
+// v9 (2026-06-09): bump forçado após muitas mudanças de hoje.
+// Cache anterior tava acumulado e segurando bundles antigos no celular.
+const CACHE_VERSION = 'lurds-v9';
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',
