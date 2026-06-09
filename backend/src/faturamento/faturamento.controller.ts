@@ -45,6 +45,27 @@ export class FaturamentoController {
   }
 
   /**
+   * GET /faturamento/auditoria-paridade?from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Compara Wincred (Giga) vs PdvSale (flowops) por loja+dia.
+   * Detecta divergências em tempo real pra suportar migração 30/06.
+   */
+  @Get('auditoria-paridade')
+  async auditoriaParidade(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    this.requireAdmin(req);
+    const today = new Date();
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const f = from || fmt(today);
+    const t = to || fmt(today);
+    return this.svc.auditoriaParidade(f, t);
+  }
+
+  /**
    * GET /faturamento/loja/:storeCode/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD
    *
    * Lista vendas DETALHADAS (PdvSale) da loja no período pra drill-down.

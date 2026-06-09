@@ -26,6 +26,118 @@ export class FaturamentoService {
   ) {}
 
   /**
+   * Auditoria de paridade Wincred vs Flowops por loja+dia.
+   * Suporta migração 30/06 — detecta divergência > tolerância.
+   * Foca nas 5 lojas migradas (INDAIATUBA, ITANHAEM, MOEMA, SOROCABA, SANTOS)
+   * mas retorna TODAS pra dashboard completo.
+   */
+  async auditoriaParidade(from: string, to: string) {
+    const dInicio = this.parseDate(from, false);
+    const dFimExclusive = this.parseDate(to, true);
+
+    // 1) Faturamento Wincred por loja
+    const wincred = await this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive);
+    const wincredMap = new Map<string, { qtd: number; valor: number }>();
+    for (const w of wincred as any[]) {
+      const code = (w.loja || w.LOJA || w.code || '').toString().toUpperCase();
+      wincredMap.set(code, {
+        qtd: Number(w.cupons || w.qtd || 0),
+        valor: Number(w.valor || w.faturamento || 0),
+      });
+    }
+
+    // 2) PdvSale (flowops) por loja
+    const lojasDb = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true },
+    });
+
+    const LOJAS_MIGRADAS = ['INDAIATUBA', 'ITANHAEM', 'MOEMA', 'SOROCABA', 'SANTOS'];
+    const resultado: any[] = [];
+
+    for (const loja of lojasDb) {
+      const code = (loja.code || '').toUpperCase();
+      const name = (loja.name || '').toUpperCase();
+      const possibleCodes = [code, name].filter(Boolean);
+
+      const flowAgg = await (this.prisma as any).pdvSale.aggregate({
+        where: {
+          storeCode: { in: possibleCodes },
+          status: { in: ['finalized', 'cancelled'] },
+          isTraining: false,
+          OR: [
+            { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
+            {
+              AND: [
+                { finalizedAt: null },
+                { createdAt: { gte: dInicio, lt: dFimExclusive } },
+              ],
+            },
+          ],
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      });
+      const flowQtd = flowAgg._count?._all || 0;
+      const flowValor = Number(flowAgg._sum?.total || 0);
+
+      // Procura no Wincred por code OR name
+      const wKey = wincredMap.has(code) ? code : (wincredMap.has(name) ? name : code);
+      const w = wincredMap.get(wKey) || { qtd: 0, valor: 0 };
+
+      const isMigrada = LOJAS_MIGRADAS.some(
+        (m) => m === code || m === name,
+      );
+      const divergenciaValor = flowValor - w.valor;
+      const divergenciaPct = w.valor > 0 ? (divergenciaValor / w.valor) * 100 : 0;
+
+      // Status: ok se < 1%, alerta se < 5%, crítico se >= 5%
+      let status: 'ok' | 'alerta' | 'critico' | 'sem_dado';
+      if (!isMigrada && flowQtd === 0) {
+        status = 'sem_dado'; // loja ainda no Wincred — esperado
+      } else if (Math.abs(divergenciaPct) < 1) {
+        status = 'ok';
+      } else if (Math.abs(divergenciaPct) < 5) {
+        status = 'alerta';
+      } else {
+        status = 'critico';
+      }
+
+      resultado.push({
+        storeCode: code,
+        storeName: loja.name,
+        migrada: isMigrada,
+        wincred: { qtd: w.qtd, valor: w.valor },
+        flowops: { qtd: flowQtd, valor: flowValor },
+        divergencia: {
+          valor: Number(divergenciaValor.toFixed(2)),
+          pct: Number(divergenciaPct.toFixed(2)),
+        },
+        status,
+      });
+    }
+
+    // Ordena: críticos primeiro, depois alertas, depois OK
+    resultado.sort((a, b) => {
+      const ord: Record<string, number> = { critico: 0, alerta: 1, ok: 2, sem_dado: 3 };
+      return ord[a.status] - ord[b.status];
+    });
+
+    const sumario = {
+      total: resultado.length,
+      criticos: resultado.filter((r) => r.status === 'critico').length,
+      alertas: resultado.filter((r) => r.status === 'alerta').length,
+      ok: resultado.filter((r) => r.status === 'ok').length,
+      semDado: resultado.filter((r) => r.status === 'sem_dado').length,
+      lojasMigradas: LOJAS_MIGRADAS,
+      totalWincredBrl: Array.from(wincredMap.values()).reduce((s, w) => s + w.valor, 0),
+      totalFlowopsBrl: resultado.reduce((s, r) => s + r.flowops.valor, 0),
+    };
+
+    return { from, to, sumario, lojas: resultado };
+  }
+
+  /**
    * Lista vendas detalhadas de uma loja num período (drill-down do faturamento).
    * Inclui itens + payments pra mostrar tudo no modal de averiguação.
    *
@@ -84,11 +196,35 @@ export class FaturamentoService {
 
     // Lojas físicas — PdvSale (PDV novo flowops)
     const storeCodeUpper = storeCode.toUpperCase();
+
+    // Busca Store pelo code pra obter o NAME e ID — match flexível:
+    // - tabela Store usa codes do Wincred (ex: "04", "13")
+    // - mas pdv_sales.store_code pode estar gravado como "INDAIATUBA" (nome) ou "04" (code)
+    // - vendedoras antigas mexem em ambos os formatos
+    const storeRecord = await (this.prisma as any).store.findUnique({
+      where: { code: storeCodeUpper },
+      select: { code: true, name: true, id: true },
+    });
+    const storeName = storeRecord?.name?.toUpperCase() || '';
+    const possibleCodes = [storeCodeUpper, storeName].filter(Boolean);
+
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: {
-        storeCode: storeCodeUpper,
+        // Match em code OR name (acomoda variação de gravação)
+        storeCode: possibleCodes.length > 1
+          ? { in: possibleCodes }
+          : storeCodeUpper,
         status: { in: ['finalized', 'cancelled'] },
-        finalizedAt: { gte: dInicio, lt: dFimExclusive },
+        // Match em finalizedAt OR createdAt — vendas legadas podem ter finalizedAt NULL
+        OR: [
+          { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
+          {
+            AND: [
+              { finalizedAt: null },
+              { createdAt: { gte: dInicio, lt: dFimExclusive } },
+            ],
+          },
+        ],
         isTraining: false,
       },
       select: {
@@ -97,6 +233,7 @@ export class FaturamentoService {
         total: true,
         subtotal: true,
         desconto: true,
+        createdAt: true,
         finalizedAt: true,
         cancelledAt: true,
         cancelReason: true,
@@ -117,7 +254,10 @@ export class FaturamentoService {
           select: { method: true, valor: true, details: true },
         },
       },
-      orderBy: { finalizedAt: 'desc' },
+      orderBy: [
+        { finalizedAt: 'desc' },
+        { createdAt: 'desc' },
+      ],
       take: 500,
     });
 
@@ -130,7 +270,7 @@ export class FaturamentoService {
           id: s.id,
           number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
           status: s.status,
-          createdAt: s.finalizedAt,
+          createdAt: s.finalizedAt || s.createdAt,
           total: s.total,
           subtotal: s.subtotal,
           desconto: s.desconto,
