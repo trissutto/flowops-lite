@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { CustomerAccountAuthGuard } from '../customers-app/customer-account-auth.guard';
+import { CustomerJwtGuard } from '../customers-app/customer-jwt.guard';
 import { SizeFeedbackService } from './size-feedback.service';
 
 @Controller()
@@ -10,11 +10,11 @@ export class SizeFeedbackController {
    * POST /me/size-feedback — cliente envia review.
    * Body: { productId, variationId?, orderId?, sizeBought, sizeUsually?, feedback, comment? }
    */
-  @UseGuards(CustomerAccountAuthGuard)
+  @UseGuards(CustomerJwtGuard)
   @Post('me/size-feedback')
   async submit(@Req() req: any, @Body() body: any) {
     return this.svc.submitFeedback({
-      customerId: req.customerAccount.id,
+      customerId: req.customer.id,
       ...body,
     });
   }
@@ -37,11 +37,11 @@ export class SizeFeedbackController {
    * GET /me/size-feedback/pending — lista pedidos elegíveis pra review.
    * Usado pela tela de coleta in-app.
    */
-  @UseGuards(CustomerAccountAuthGuard)
+  @UseGuards(CustomerJwtGuard)
   @Get('me/size-feedback/pending')
   async pending(@Req() req: any) {
     return {
-      pending: await this.svc.getPendingReviews(req.customerAccount.id),
+      pending: await this.svc.getPendingReviews(req.customer.id),
     };
   }
 }
