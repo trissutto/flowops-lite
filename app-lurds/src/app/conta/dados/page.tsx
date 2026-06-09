@@ -308,14 +308,30 @@ function EditModal({
   onSave: (v: string) => void;
   onCancel: () => void;
 }) {
-  const [value, setValue] = useState(currentValue);
+  // Pra birthDate: converte ISO (YYYY-MM-DD) que vem do backend → DD/MM/AAAA pra mostrar
+  const isoToBr = (iso: string) => {
+    if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+  };
+  const brToIso = (br: string) => {
+    const m = br.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+    const [, d, mo, y] = m;
+    return `${y}-${mo}-${d}`;
+  };
+
+  const [value, setValue] = useState(
+    field === 'birthDate' ? isoToBr(currentValue) : currentValue
+  );
   const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const config = {
-    name:      { title: 'Editar nome',       placeholder: 'Maria da Silva',     inputMode: 'text',     type: 'text' },
-    phone:     { title: 'Editar WhatsApp',   placeholder: '(13) 99999-9999',    inputMode: 'tel',      type: 'tel' },
-    email:     { title: 'Editar e-mail',     placeholder: 'maria@exemplo.com',  inputMode: 'email',    type: 'email' },
-    birthDate: { title: 'Data de nascimento',placeholder: '01/01/1990',         inputMode: 'numeric',  type: 'date' },
+    name:      { title: 'Editar nome',       placeholder: 'Maria da Silva',     inputMode: 'text',     type: 'text', maxLength: 80 },
+    phone:     { title: 'Editar WhatsApp',   placeholder: '(13) 99999-9999',    inputMode: 'tel',      type: 'tel',  maxLength: 15 },
+    email:     { title: 'Editar e-mail',     placeholder: 'maria@exemplo.com',  inputMode: 'email',    type: 'email', maxLength: 100 },
+    birthDate: { title: 'Data de nascimento',placeholder: 'DD/MM/AAAA',         inputMode: 'numeric',  type: 'text', maxLength: 10 },
   }[field];
 
   const formatPhoneInput = (v: string) => {
@@ -325,18 +341,57 @@ function EditModal({
     return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   };
 
+  // Máscara DD/MM/AAAA com barras automáticas
+  const formatBirthInput = (v: string) => {
+    const d = v.replace(/\D/g, '').slice(0, 8);
+    if (d.length <= 2) return d;
+    if (d.length <= 4) return `${d.slice(0, 2)}/${d.slice(2)}`;
+    return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+  };
+
   const handleChange = (raw: string) => {
+    setLocalError(null);
     if (field === 'phone') {
       setValue(formatPhoneInput(raw));
+    } else if (field === 'birthDate') {
+      setValue(formatBirthInput(raw));
     } else {
       setValue(raw);
     }
   };
 
   const handleSubmit = async () => {
+    setLocalError(null);
+
+    let toSend: string;
+    if (field === 'phone') {
+      toSend = value.replace(/\D/g, '');
+    } else if (field === 'birthDate') {
+      // Valida DD/MM/AAAA antes de mandar
+      const iso = brToIso(value.trim());
+      if (!iso) {
+        setLocalError('Use o formato DD/MM/AAAA (ex: 15/03/1990)');
+        return;
+      }
+      const dt = new Date(iso);
+      if (isNaN(dt.getTime())) {
+        setLocalError('Data inválida');
+        return;
+      }
+      // Sanity check ano (entre 1900 e hoje - 13 anos)
+      const minYear = 1900;
+      const maxYear = new Date().getFullYear() - 13;
+      if (dt.getFullYear() < minYear || dt.getFullYear() > maxYear) {
+        setLocalError(`Ano deve estar entre ${minYear} e ${maxYear}`);
+        return;
+      }
+      toSend = iso;
+    } else {
+      toSend = value.trim();
+    }
+
     setSaving(true);
     try {
-      const toSend = field === 'phone' ? value.replace(/\D/g, '') : value;
       await onSave(toSend);
     } finally {
       setSaving(false);
@@ -366,11 +421,19 @@ function EditModal({
           value={value}
           onChange={(e) => handleChange(e.target.value)}
           placeholder={config.placeholder}
+          maxLength={config.maxLength}
           autoFocus
           className="input-dark text-base"
         />
 
-        {field === 'birthDate' && (
+        {localError && (
+          <p className="mt-2 text-[11px] text-red-300 flex items-center gap-1">
+            <AlertCircle className="w-3 h-3" />
+            {localError}
+          </p>
+        )}
+
+        {field === 'birthDate' && !localError && (
           <p className="mt-2 text-[11px] text-cream/60">
             🎂 Adicionando seu aniversário, você ganha um mimo todo ano.
           </p>
