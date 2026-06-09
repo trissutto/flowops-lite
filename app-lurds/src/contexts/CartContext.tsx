@@ -125,34 +125,40 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
    * Detecção de abandono na hidratação:
    * Se carrinho tem itens E última atividade > 60min atrás E
    * ainda não gerou cupom relâmpago nas últimas 24h → gera.
+   *
+   * Roda 1x após hidratação (com delay pra não atropelar boot).
    */
   useEffect(() => {
-    if (!hydrated || items.length === 0 || relampagoCoupon) return;
-    if (!lastActivityAt) return;
-    const idleMs = Date.now() - lastActivityAt;
-    if (idleMs < ABANDON_THRESHOLD_MS) return;
-    // Verifica se já gerou cupom nas últimas 24h (anti-spam)
-    try {
-      const lastGen = window.localStorage.getItem('lurds_relampago_last_gen');
-      if (lastGen && Date.now() - parseInt(lastGen, 10) < 24 * 60 * 60 * 1000) {
-        return;
-      }
-    } catch {}
-    // Gera cupom
-    const now = Date.now();
-    const coupon: RelampagoCoupon = {
-      code: genRelampagoCode(),
-      percent: 0.10,
-      generatedAt: now,
-      expiresAt: now + RELAMPAGO_VALIDITY_MS,
-      dismissed: false,
-    };
-    try {
-      window.localStorage.setItem(RELAMPAGO_KEY, JSON.stringify(coupon));
-      window.localStorage.setItem('lurds_relampago_last_gen', String(now));
-    } catch {}
-    setRelampagoCoupon(coupon);
-  }, [hydrated, items.length, lastActivityAt, relampagoCoupon]);
+    if (!hydrated) return;
+    // Delay pra não competir com first paint/login
+    const t = setTimeout(() => {
+      if (items.length === 0 || relampagoCoupon) return;
+      if (!lastActivityAt) return;
+      const idleMs = Date.now() - lastActivityAt;
+      if (idleMs < ABANDON_THRESHOLD_MS) return;
+      try {
+        const lastGen = window.localStorage.getItem('lurds_relampago_last_gen');
+        if (lastGen && Date.now() - parseInt(lastGen, 10) < 24 * 60 * 60 * 1000) {
+          return;
+        }
+      } catch {}
+      const now = Date.now();
+      const coupon: RelampagoCoupon = {
+        code: genRelampagoCode(),
+        percent: 0.10,
+        generatedAt: now,
+        expiresAt: now + RELAMPAGO_VALIDITY_MS,
+        dismissed: false,
+      };
+      try {
+        window.localStorage.setItem(RELAMPAGO_KEY, JSON.stringify(coupon));
+        window.localStorage.setItem('lurds_relampago_last_gen', String(now));
+      } catch {}
+      setRelampagoCoupon(coupon);
+    }, 3000); // 3s após hidratar — não compete com renderização inicial
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]); // só re-roda se hidratação mudar (nunca, exceto remount)
 
   /** Atualiza timestamp de atividade. Chamado em add/update/remove. */
   const touchActivity = useCallback(() => {
