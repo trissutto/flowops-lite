@@ -50,6 +50,16 @@ interface WcOrder {
   customerName: string;
   origem: string;
   source: string;
+  // NOVO: loja responsável pela separação (vem do banco interno via pick-orders)
+  pickOrders?: Array<{ storeCode: string | null; storeName: string | null; status: string }>;
+}
+
+interface StoreInfo {
+  code: string;
+  name: string;
+  city: string | null;
+  state: string | null;
+  openOrders: number;
 }
 
 export default function PedidosPage() {
@@ -85,12 +95,15 @@ function PedidosPageInner() {
   // manualmente quando quiser filtrar.
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [storeCode, setStoreCode] = useState<string>('');
+  const [stores, setStores] = useState<StoreInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { load(); /* eslint-disable-line */ }, [status, page, search, dateFrom, dateTo]);
+  useEffect(() => { load(); /* eslint-disable-line */ }, [status, page, search, dateFrom, dateTo, storeCode]);
   useEffect(() => {
     loadCounts();
+    loadStores();
     const t = setInterval(loadCounts, 30_000);
     return () => clearInterval(t);
   }, []);
@@ -104,6 +117,7 @@ function PedidosPageInner() {
       q.set('page', String(page));
       q.set('per_page', '50');
       if (search) q.set('search', search);
+      if (storeCode) q.set('storeCode', storeCode);
       // Datas: WooCommerce REST aceita ISO 8601. Início do dia local → 00:00,
       // fim do dia → 23:59:59 (inclusivo).
       if (dateFrom) q.set('after', `${dateFrom}T00:00:00`);
@@ -126,6 +140,15 @@ function PedidosPageInner() {
       setGrand(res.grand);
     } catch {
       // silencioso — o polling de 30s vai retentar
+    }
+  }
+
+  async function loadStores() {
+    try {
+      const res = await api<{ stores: StoreInfo[] }>('/orders/wc/stores-load');
+      setStores(res.stores);
+    } catch {
+      // silencioso — sem lojas, dropdown fica vazio
     }
   }
 
@@ -279,31 +302,73 @@ function PedidosPageInner() {
         </button>
       </div>
 
-      {/* Busca */}
-      <form onSubmit={onSearchSubmit} className="mb-4 flex gap-2">
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Pesquisar pedido (número, nome, email)..."
-            className="w-full pl-9 pr-3 py-2 border rounded text-sm"
-          />
-        </div>
-        <button type="submit" className="px-4 py-2 border rounded hover:bg-slate-50 text-sm">
-          Pesquisar pedidos
-        </button>
-        {search && (
-          <button
-            type="button"
-            onClick={() => { setSearchInput(''); setSearch(''); }}
-            className="px-3 py-2 text-sm text-slate-500 hover:text-slate-800"
-          >
-            Limpar
+      {/* Busca + filtro de loja */}
+      <div className="mb-4 flex gap-2 flex-wrap items-center">
+        <form onSubmit={onSearchSubmit} className="flex gap-2">
+          <div className="relative w-72">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Pesquisar pedido (número, nome, email)..."
+              className="w-full pl-9 pr-3 py-2 border rounded text-sm"
+            />
+          </div>
+          <button type="submit" className="px-4 py-2 border rounded hover:bg-slate-50 text-sm">
+            Pesquisar
           </button>
-        )}
-      </form>
+          {search && (
+            <button
+              type="button"
+              onClick={() => { setSearchInput(''); setSearch(''); }}
+              className="px-3 py-2 text-sm text-slate-500 hover:text-slate-800"
+            >
+              Limpar
+            </button>
+          )}
+        </form>
+
+        {/* Filtro de LOJA RESPONSÁVEL */}
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Loja:
+          </span>
+          <select
+            value={storeCode}
+            onChange={(e) => { setStoreCode(e.target.value); setPage(1); }}
+            className="px-3 py-2 border rounded text-sm bg-white min-w-[200px]"
+          >
+            <option value="">Todas as lojas</option>
+            {stores.map((s) => (
+              <option key={s.code} value={s.code}>
+                {s.name}{s.openOrders > 0 ? ` (${s.openOrders})` : ''}
+              </option>
+            ))}
+          </select>
+          {storeCode && (
+            <button
+              type="button"
+              onClick={() => { setStoreCode(''); setPage(1); }}
+              className="px-2 py-1 text-xs text-slate-500 hover:text-rose-700"
+              title="Limpar filtro de loja"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Indicador de filtro ativo */}
+      {storeCode && (
+        <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900 flex items-center gap-2">
+          <span>📦 Mostrando apenas pedidos da loja</span>
+          <strong>{stores.find((s) => s.code === storeCode)?.name || storeCode}</strong>
+          <span className="text-blue-700/70 ml-auto text-xs">
+            {data.length} pedido{data.length === 1 ? '' : 's'} encontrado{data.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
 
       {/* Tabela — mesmas colunas do admin WP */}
       <div className="bg-white rounded shadow overflow-hidden">
@@ -313,16 +378,17 @@ function PedidosPageInner() {
               <th className="p-3 text-left">Pedido</th>
               <th className="p-3 text-left">Data</th>
               <th className="p-3 text-left">Status</th>
+              <th className="p-3 text-left">Loja responsável</th>
               <th className="p-3 text-right">Total</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={4} className="p-6 text-center text-slate-400">Carregando...</td></tr>
+              <tr><td colSpan={5} className="p-6 text-center text-slate-400">Carregando...</td></tr>
             )}
             {!loading && data.length === 0 && (
               <tr>
-                <td colSpan={4} className="p-8 text-center text-slate-400">
+                <td colSpan={5} className="p-8 text-center text-slate-400">
                   Nenhum pedido nesse filtro.
                 </td>
               </tr>
@@ -355,6 +421,24 @@ function PedidosPageInner() {
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${s.color}`}>
                       {s.label}
                     </span>
+                  </td>
+                  <td className="p-3">
+                    {o.pickOrders && o.pickOrders.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {o.pickOrders.map((p, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => { setStoreCode(p.storeCode || ''); setPage(1); }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100"
+                            title={`Filtrar por ${p.storeName}`}
+                          >
+                            🏪 {p.storeName || p.storeCode}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">Não roteado</span>
+                    )}
                   </td>
                   <td className="p-3 text-right font-mono">{fmtMoney(o.total)}</td>
                 </tr>

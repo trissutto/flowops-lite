@@ -61,11 +61,18 @@ export class OrdersController {
     @Query('search') search?: string,
     @Query('after') after?: string,
     @Query('before') before?: string,
+    @Query('storeCode') storeCode?: string,
   ) {
+    // Quando filtra por loja, pega per_page MAIOR pra compensar o filtro local
+    // (já que filtro acontece após retornar do WC). Limita em 200 pra não estourar.
+    const effectivePerPage = storeCode
+      ? Math.min(200, Number(perPage || 50) * 4)
+      : (perPage ? Number(perPage) : 50);
+
     const res = await this.wc.listOrders({
       status,
       page: page ? Number(page) : 1,
-      perPage: perPage ? Number(perPage) : 50,
+      perPage: effectivePerPage,
       search,
       after,
       before,
@@ -145,7 +152,52 @@ export class OrdersController {
       };
     });
 
-    return { data, total: res.total, totalPages: res.totalPages };
+    // Filtro por loja responsável (aplicado APÓS enriquecer com pickOrders)
+    const filteredData = storeCode
+      ? data.filter((o: any) =>
+          (o.pickOrders || []).some((p: any) => p.storeCode === storeCode),
+        )
+      : data;
+
+    return {
+      data: filteredData,
+      total: storeCode ? filteredData.length : res.total,
+      totalPages: storeCode ? 1 : res.totalPages,
+      filteredByStore: !!storeCode,
+    };
+  }
+
+  /**
+   * Lista lojas com contagem de pedidos em separação por loja.
+   * Usado pelo dropdown de filtro na tela /pedidos.
+   */
+  @Get('wc/stores-load')
+  async wcStoresLoad() {
+    // Pega lojas ativas + conta pedidos cuja pick-order ainda não foi enviada
+    const stores = await (this.prisma as any).store.findMany({
+      where: { active: true },
+      select: { id: true, code: true, name: true, city: true, state: true },
+      orderBy: { name: 'asc' },
+    });
+
+    // Conta pick-orders em aberto por loja (status != shipped/cancelled)
+    const countsRaw = await (this.prisma as any).pickOrder.groupBy({
+      by: ['storeId'],
+      where: { status: { notIn: ['shipped', 'cancelled'] } },
+      _count: { _all: true },
+    });
+    const countMap = new Map<string, number>();
+    for (const c of countsRaw) countMap.set(c.storeId, c._count._all);
+
+    return {
+      stores: stores.map((s: any) => ({
+        code: s.code,
+        name: s.name,
+        city: s.city,
+        state: s.state,
+        openOrders: countMap.get(s.id) || 0,
+      })),
+    };
   }
 
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */
