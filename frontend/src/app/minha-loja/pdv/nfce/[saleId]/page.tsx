@@ -79,12 +79,36 @@ function ReimprimirNfceInner() {
   }, [saleId]);
 
   // Quando a sale carrega e tem NFCe autorizada → dispara print
+  // Espera o QR Code carregar de verdade (não só timeout) pra garantir que sai impresso
   useEffect(() => {
     if (!sale || !sale.nfceChave) return;
-    // Espera o QR code renderizar antes de imprimir
-    const t = setTimeout(() => {
+
+    const printWhenReady = () => {
       try { window.print(); } catch {}
-    }, 600);
+    };
+
+    // Procura o <img> do QR e espera ele carregar
+    const checkAndPrint = () => {
+      const img = document.querySelector('img.qr') as HTMLImageElement | null;
+      if (!img) {
+        // Sem QR (provavelmente erro de dados) → imprime mesmo assim depois de 1s
+        setTimeout(printWhenReady, 1000);
+        return;
+      }
+      if (img.complete && img.naturalWidth > 0) {
+        // Já carregou
+        setTimeout(printWhenReady, 300);
+      } else {
+        // Espera carregar ou falhar
+        img.addEventListener('load', () => setTimeout(printWhenReady, 300), { once: true });
+        img.addEventListener('error', () => setTimeout(printWhenReady, 800), { once: true });
+        // Timeout máximo de 3s pra não travar pra sempre
+        setTimeout(printWhenReady, 3000);
+      }
+    };
+
+    // Pequeno delay pro DOM montar
+    const t = setTimeout(checkAndPrint, 200);
     return () => clearTimeout(t);
   }, [sale]);
 
@@ -140,8 +164,12 @@ function ReimprimirNfceInner() {
   /* ─────── QR Code: do XML (fonte de verdade) com fallback pra nfceQrUrl ─────── */
   const qrFromXml = (xml.match(/<qrCode>\s*<!\[CDATA\[([^\]]+)\]\]>\s*<\/qrCode>/)?.[1] || '').trim();
   const qrUrl = qrFromXml || sale.nfceQrUrl || '';
-  const qrImgUrl = qrUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrUrl)}`
+  // Usa Google Charts (mais confiável que qrserver) + fallback automático
+  const qrImgPrimary = qrUrl
+    ? `https://chart.googleapis.com/chart?cht=qr&chs=200x200&chld=H|0&chl=${encodeURIComponent(qrUrl)}`
+    : '';
+  const qrImgFallback = qrUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(qrUrl)}`
     : '';
 
   const dataAut = sale.nfceAutorizadaEm
@@ -286,9 +314,26 @@ function ReimprimirNfceInner() {
         <div className="chave center">{sale.nfceChave || ''}</div>
         <div className="sep" />
 
-        {/* QR Code */}
-        {qrImgUrl && (
-          <img src={qrImgUrl} className="qr" alt="QR Code NFC-e" width={180} height={180} />
+        {/* QR Code — tenta Google Charts primeiro, fallback pra qrserver */}
+        {qrImgPrimary && (
+          <img
+            src={qrImgPrimary}
+            className="qr"
+            alt="QR Code NFC-e"
+            width={200}
+            height={200}
+            onError={(e) => {
+              const img = e.currentTarget as HTMLImageElement;
+              if (img.src !== qrImgFallback && qrImgFallback) {
+                img.src = qrImgFallback;
+              }
+            }}
+          />
+        )}
+        {!qrUrl && (
+          <div className="center xs" style={{ padding: '20px', border: '1px dashed #999' }}>
+            ⚠️ QR Code não disponível (XML/URL ausentes no banco)
+          </div>
         )}
 
         {/* Protocolo */}
