@@ -9,6 +9,7 @@ import AppGate from '@/components/AppGate';
 import PushPrePrompt from '@/components/PushPrePrompt';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
+import AbandonedCartModal from '@/components/AbandonedCartModal';
 import { useCart } from '@/contexts/CartContext';
 import {
   getCategories, getProducts, getSizes, isLoggedIn, getCustomerFromToken, getFirstName,
@@ -398,6 +399,8 @@ export default function HomePage() {
           onClose={() => setShowGeneralPrompt(false)}
         />
       )}
+      {/* Modal cupom relâmpago — só aparece com carrinho abandonado > 60min */}
+      <AbandonedCartModal />
     </div>
     </AppGate>
   );

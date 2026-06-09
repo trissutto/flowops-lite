@@ -1626,6 +1626,36 @@ model EanSequence {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Size Feedback — review por tamanho real ("Cabe em quem veste 48?")
+//
+// Coletado D+7 após a entrega via push/banner in-app. Cliente diz como
+// serviu a peça que comprou. Exibido na página de produto pra ajudar
+// outras clientes a escolher o tamanho certo. Mata a maior dúvida do plus:
+// "vai servir em mim?". Compromisso de confiança — não falsificar dados.
+//
+// Exemplo de query agregada (na página do produto, tamanho selecionado=48):
+//   SELECT feedback, COUNT(*) FROM size_feedback
+//   WHERE product_id=X AND size_usually='48' GROUP BY feedback;
+// ═══════════════════════════════════════════════════════════════════════
+model SizeFeedback {
+  id           String   @id @default(uuid())
+  customerId   String   @map("customer_id")      // CustomerAccount.id
+  productId    Int      @map("product_id")        // WC product_id
+  variationId  Int?     @map("variation_id")      // WC variation_id (se variable)
+  orderId      Int?     @map("order_id")          // WC order onde comprou (audit)
+  sizeBought   String   @map("size_bought")       // ex: "48"
+  sizeUsually  String?  @map("size_usually")      // tamanho que cliente costuma vestir
+  feedback     String                              // 'fits' | 'tight' | 'loose' | 'returned'
+  comment      String?                             // opcional, free text
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([productId, sizeUsually])               // pra agregação rápida na página produto
+  @@index([customerId])                            // pra histórico da cliente
+  @@unique([customerId, productId, variationId])   // 1 review por produto/variação
+  @@map("size_feedback")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // LIVE OS — Live commerce no Instagram
 // ═══════════════════════════════════════════════════════════════════════
 

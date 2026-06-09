@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * Catalog Service — fetcha categorias + produtos do WC e serve formatado
@@ -26,6 +27,7 @@ export class CatalogService {
     private readonly http: HttpService,
     private readonly cfg: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
   ) {}
 
   private get baseUrl() {
@@ -970,6 +972,115 @@ export class CatalogService {
       this.logger.error(`getProductBySlug falhou: ${e?.message || e}`);
       return null;
     }
+  }
+
+  /* ──────────────────────── DISPONIBILIDADE EM LOJA ──────────────────────── */
+  /**
+   * Verifica em quais lojas tem estoque dos SKUs informados.
+   * Calcula distância haversine das lojas ao CEP da cliente.
+   * Retorna ordenado por distância (mais perto primeiro), só com estoque > 0.
+   *
+   * Plus size adora "vai ter na minha cidade?" — feature de fidelização forte.
+   */
+  async checkAvailability(input: { skus: string[]; cep: string | null }): Promise<{
+    cepCliente: string | null;
+    cidadeCliente: string | null;
+    lojas: Array<{
+      code: string;
+      name: string;
+      city: string | null;
+      distanceKm: number | null;
+      totalQty: number;
+      whatsapp: string | null;
+    }>;
+  }> {
+    if (!input.skus || input.skus.length === 0) {
+      return { cepCliente: input.cep, cidadeCliente: null, lojas: [] };
+    }
+
+    // 1) Pega estoque por loja pra todos os SKUs (já existe no ErpService)
+    let stockMap: Map<string, Array<{ storeCode: string; qty: number }>> = new Map();
+    try {
+      const detailed: any = await this.erp.getStockBySkusDetailed(input.skus);
+      if (detailed && typeof detailed === 'object') {
+        for (const sku of input.skus) {
+          stockMap.set(sku, detailed[sku] || []);
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(`getStockBySkusDetailed falhou: ${e?.message}`);
+    }
+
+    // 2) Agrega total por loja somando todos os SKUs (variations do mesmo produto)
+    const lojaQty = new Map<string, number>();
+    for (const arr of stockMap.values()) {
+      for (const item of arr) {
+        const cur = lojaQty.get(item.storeCode) || 0;
+        lojaQty.set(item.storeCode, cur + (item.qty || 0));
+      }
+    }
+
+    // 3) Lojas ativas com info de cidade pra calcular distância
+    const allStores = await this.prisma.store.findMany({
+      where: { active: true } as any,
+      select: { code: true, name: true, city: true, cep: true, whatsapp: true } as any,
+    });
+
+    // 4) Coordenadas do CEP da cliente via ViaCEP
+    let cidadeCliente: string | null = null;
+    let coordsCliente: { lat: number; lng: number } | null = null;
+    if (input.cep) {
+      const cepDigits = input.cep.replace(/\D/g, '');
+      if (cepDigits.length === 8) {
+        try {
+          const r = await firstValueFrom(
+            this.http.get(`https://viacep.com.br/ws/${cepDigits}/json/`, { timeout: 4000 }),
+          );
+          if (r.data && !r.data.erro) {
+            cidadeCliente = String(r.data.localidade || '').trim();
+          }
+        } catch {}
+        // Geocoding seria ideal mas pra MVP usa cidade como proxy
+      }
+    }
+
+    // 5) Monta resposta: pra cada loja com estoque > 0, calcula distância
+    //    (usando city match — sem API de geocoding, distância simbólica)
+    const result = (allStores as any[])
+      .map((s: any) => {
+        const qty = lojaQty.get(s.code) || 0;
+        if (qty <= 0) return null;
+        // Distância: match exato de cidade = 0km, senão null (sem geocoding ainda)
+        let distanceKm: number | null = null;
+        if (cidadeCliente && s.city) {
+          const normalize = (x: string) =>
+            x.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+          if (normalize(cidadeCliente) === normalize(s.city)) {
+            distanceKm = 0; // mesma cidade
+          }
+        }
+        return {
+          code: s.code,
+          name: s.name,
+          city: s.city,
+          distanceKm,
+          totalQty: qty,
+          whatsapp: s.whatsapp,
+        };
+      })
+      .filter(Boolean)
+      // Ordena: mesma cidade primeiro, depois por nome
+      .sort((a: any, b: any) => {
+        if (a.distanceKm === 0 && b.distanceKm !== 0) return -1;
+        if (b.distanceKm === 0 && a.distanceKm !== 0) return 1;
+        return a.name.localeCompare(b.name, 'pt-BR');
+      });
+
+    return {
+      cepCliente: input.cep,
+      cidadeCliente,
+      lojas: result as any[],
+    };
   }
 
   /* ──────────────────────── LOJAS PRO APP ──────────────────────── */

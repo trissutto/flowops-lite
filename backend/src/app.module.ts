@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { OrdersModule } from './orders/orders.module';
 import { CustomersModule } from './customers/customers.module';
 import { CustomersAppModule } from './customers-app/customers-app.module';
+import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
@@ -60,6 +61,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     OrdersModule,
     CustomersModule,
     CustomersAppModule,
+    SizeFeedbackModule,
     CatalogModule,
     ProductsModule,
     StoresModule,

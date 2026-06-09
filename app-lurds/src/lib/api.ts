@@ -420,6 +420,26 @@ export async function getStores() {
   return api<{ stores: AppStore[] }>('/catalog/stores');
 }
 
+/** Disponibilidade do produto nas lojas perto da cliente. */
+export type StoreAvailability = {
+  code: string;
+  name: string;
+  city: string | null;
+  distanceKm: number | null;
+  totalQty: number;
+  whatsapp: string | null;
+};
+export async function checkAvailability(skus: string[], cep?: string) {
+  return api<{
+    cepCliente: string | null;
+    cidadeCliente: string | null;
+    lojas: StoreAvailability[];
+  }>('/catalog/availability', {
+    method: 'POST',
+    body: JSON.stringify({ skus, cep }),
+  });
+}
+
 /** Tamanhos disponíveis (puxa do atributo pa_tamanho do WC). */
 export type WcSize = { id: number; name: string; slug: string; count: number };
 export async function getSizes() {
@@ -494,6 +514,37 @@ export type WcProductDetail = {
 
 export async function getProductBySlug(slug: string) {
   return api<WcProductDetail>(`/catalog/products/${encodeURIComponent(slug)}`);
+}
+
+/** Review por tamanho: estatísticas pra mostrar na página de produto */
+export type SizeStats = {
+  total: number;
+  fits: number;
+  tight: number;
+  loose: number;
+  returned: number;
+  fitsPct: number;
+  recommendation: 'buy_size' | 'go_up' | 'go_down' | 'mixed' | 'no_data';
+};
+export async function getSizeStats(productId: number, sizeUsually?: string) {
+  const qs = sizeUsually ? `?size=${encodeURIComponent(sizeUsually)}` : '';
+  return api<SizeStats>(`/catalog/products/${productId}/size-stats${qs}`);
+}
+
+export type SizeFeedbackInput = {
+  productId: number;
+  variationId?: number | null;
+  orderId?: number | null;
+  sizeBought: string;
+  sizeUsually?: string | null;
+  feedback: 'fits' | 'tight' | 'loose' | 'returned';
+  comment?: string | null;
+};
+export async function submitSizeFeedback(input: SizeFeedbackInput) {
+  return api<{ id: string }>('/me/size-feedback', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 /** Cross-sell: produtos sugeridos pra um productId */

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -33,11 +33,23 @@ const COUPON_RULES: Record<string, CouponRule> = {
 
 export default function CarrinhoPage() {
   const router = useRouter();
-  const { items, itemCount, subtotal, updateQuantity, removeItem } = useCart();
+  const { items, itemCount, subtotal, updateQuantity, removeItem, relampagoCoupon } = useCart();
   const [coupon, setCoupon] = useState('');
   // Guardamos APENAS a regra. O valor do desconto é calculado em runtime
   // baseado no subtotal atual — assim, ao remover/alterar itens, recalcula.
   const [couponApplied, setCouponApplied] = useState<CouponRule | null>(null);
+
+  // AUTO-APLICA cupom relâmpago se existir e não expirado.
+  // Só aplica 1x (não sobrescreve se cliente colocou outro depois)
+  useEffect(() => {
+    if (!relampagoCoupon || couponApplied) return;
+    if (relampagoCoupon.expiresAt < Date.now()) return;
+    setCouponApplied({
+      code: relampagoCoupon.code,
+      type: 'percent',
+      value: relampagoCoupon.percent,
+    });
+  }, [relampagoCoupon, couponApplied]);
 
   const cashbackAGanhar = subtotal * 0.10;
 

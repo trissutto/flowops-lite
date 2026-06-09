@@ -8,6 +8,8 @@ import {
   Minus, Plus, Heart, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
 import { getProductBySlug, getRelatedProducts, type WcProductDetail, type WcVariation, type RelatedProduct } from '@/lib/api';
+import SizeReviewBlock from '@/components/SizeReviewBlock';
+import StoreAvailabilityBlock from '@/components/StoreAvailability';
 import { useCart } from '@/contexts/CartContext';
 
 const brl = (n: number) =>
@@ -220,6 +222,24 @@ export default function ProdutoPage() {
         <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/20 px-3 py-1.5 rounded-full inline-flex">
           <Sparkles className="w-3.5 h-3.5" />
           <span>Ganhe <strong>{brl(cashbackBrl)}</strong> em cashback</span>
+        </div>
+
+        {/* Review por tamanho — "Cabe em quem veste 48?" */}
+        <div className="mt-4">
+          <SizeReviewBlock productId={product.id} />
+        </div>
+
+        {/* Disponível na sua região? — consulta estoque por loja via CEP */}
+        <div className="mt-4">
+          <StoreAvailabilityBlock
+            skus={
+              // Se variação selecionada, usa SKU dela. Senão, tenta SKU do produto base
+              // ou todos os SKUs das variações disponíveis.
+              matchedVariation?.sku
+                ? [matchedVariation.sku]
+                : (product.variations || []).map((v) => v.sku).filter(Boolean) as string[]
+            }
+          />
         </div>
       </section>
 

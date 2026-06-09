@@ -80,6 +80,21 @@ export class CatalogController {
     return { stores };
   }
 
+  /**
+   * POST /catalog/availability
+   * Body: { skus: string[], cep: string }
+   *
+   * Retorna em quais lojas tem estoque do(s) SKU(s) E distância da cliente.
+   * Ordenado por distância. Pra UX "disponível na loja perto de mim".
+   */
+  @Post('availability')
+  async availability(@Body() body: { skus: string[]; cep?: string }) {
+    return this.svc.checkAvailability({
+      skus: Array.isArray(body?.skus) ? body.skus.filter(Boolean) : [],
+      cep: body?.cep || null,
+    });
+  }
+
   @Post('shipping/calculate')
   async calculateShipping(@Body() body: { cep: string; weight?: number }) {
     const options = await this.svc.calculateShipping(body);
