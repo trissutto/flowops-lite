@@ -771,7 +771,7 @@ function SeparacaoPageInner() {
 
     if (status === 'em-transito') {
       try {
-        const q = new URLSearchParams({ status: 'shipped', per_page: '100' });
+        const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
         if (search) q.set('search', search);
         if (storeCode) q.set('storeCode', storeCode);
         const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);

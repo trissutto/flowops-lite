@@ -63,10 +63,10 @@ export class OrdersController {
     @Query('before') before?: string,
     @Query('storeCode') storeCode?: string,
   ) {
-    // Quando filtra por loja, pega per_page MAIOR pra compensar o filtro local
-    // (já que filtro acontece após retornar do WC). Limita em 200 pra não estourar.
+    // Quando filtra por loja, pega per_page MAIOR pra compensar o filtro local.
+    // LIMITE 100 — WooCommerce REST API REJEITA per_page > 100 com 500.
     const effectivePerPage = storeCode
-      ? Math.min(200, Number(perPage || 50) * 4)
+      ? Math.min(100, Number(perPage || 50) * 2)
       : (perPage ? Number(perPage) : 50);
 
     const res = await this.wc.listOrders({

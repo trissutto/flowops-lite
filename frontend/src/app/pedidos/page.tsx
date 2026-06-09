@@ -115,8 +115,9 @@ function PedidosPageInner() {
       const q = new URLSearchParams();
       if (status) q.set('status', status);
       q.set('page', String(page));
-      // Quando filtra loja, busca mais pra compensar fallback local
+      // Quando filtra loja, busca o máximo permitido pelo WC (100) pra compensar fallback
       q.set('per_page', storeCode ? '100' : '50');
+      // Nota: WC REST aceita no MÁXIMO 100, valores maiores retornam HTTP 500
       if (search) q.set('search', search);
       if (storeCode) q.set('storeCode', storeCode);
       // Datas: WooCommerce REST aceita ISO 8601. Início do dia local → 00:00,
