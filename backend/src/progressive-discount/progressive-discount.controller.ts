@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnlyGuard } from '../auth/admin-only.guard';
 import {
   ProgressiveDiscountService,
