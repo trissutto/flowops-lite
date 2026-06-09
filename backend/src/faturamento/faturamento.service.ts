@@ -26,6 +26,131 @@ export class FaturamentoService {
   ) {}
 
   /**
+   * Lista vendas detalhadas de uma loja num período (drill-down do faturamento).
+   * Inclui itens + payments pra mostrar tudo no modal de averiguação.
+   *
+   * @param storeCode  Código da loja (ex: 'ITANHAEM') ou 'SITE' pra Order do flowops
+   * @param from       YYYY-MM-DD inclusivo
+   * @param to         YYYY-MM-DD inclusivo
+   */
+  async getVendasDetalhadas(storeCode: string, from: string, to: string) {
+    const dInicio = this.parseDate(from, false);
+    const dFimExclusive = this.parseDate(to, true);
+
+    // SITE = pedidos do WC/flowops Order (não PdvSale)
+    if (storeCode === 'SITE' || storeCode.toUpperCase() === 'SITE') {
+      const orders = await (this.prisma as any).order.findMany({
+        where: {
+          status: 'completed',
+          createdAt: { gte: dInicio, lt: dFimExclusive },
+        },
+        select: {
+          id: true,
+          wcOrderId: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+          customerCpf: true,
+          customerName: true,
+          paymentMethod: true,
+          items: {
+            select: { sku: true, descricao: true, qty: true, unitPrice: true, total: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+      });
+      return {
+        storeCode: 'SITE',
+        source: 'flowops_order',
+        vendas: orders.map((o: any) => ({
+          id: o.id,
+          number: `#${o.wcOrderId || o.id.slice(0, 8)}`,
+          status: o.status,
+          createdAt: o.createdAt,
+          total: o.totalAmount,
+          customerCpf: o.customerCpf,
+          customerName: o.customerName,
+          paymentMethod: o.paymentMethod,
+          sellerName: null,
+          nfceStatus: null,
+          nfceNumber: null,
+          items: o.items,
+          payments: [],
+          canEstornar: false,  // pedidos site têm fluxo separado de cancelamento
+        })),
+      };
+    }
+
+    // Lojas físicas — PdvSale
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        storeCode: storeCode.toUpperCase(),
+        status: { in: ['finalized', 'cancelled'] },
+        finalizedAt: { gte: dInicio, lt: dFimExclusive },
+        isTraining: false,
+      },
+      select: {
+        id: true,
+        status: true,
+        total: true,
+        subtotal: true,
+        desconto: true,
+        finalizedAt: true,
+        cancelledAt: true,
+        cancelReason: true,
+        sellerName: true,
+        customerCpf: true,
+        customerName: true,
+        paymentMethod: true,
+        nfceStatus: true,
+        nfceNumber: true,
+        nfceSerie: true,
+        nfceChave: true,
+        nfceAutorizadaEm: true,
+        stockDecreasedAt: true,
+        items: {
+          select: { sku: true, descricao: true, qty: true, precoUnit: true, total: true, cor: true, tamanho: true },
+        },
+        payments: {
+          select: { method: true, valor: true, details: true },
+        },
+      },
+      orderBy: { finalizedAt: 'desc' },
+      take: 500,
+    });
+
+    return {
+      storeCode: storeCode.toUpperCase(),
+      source: 'pdv_sale',
+      vendas: sales.map((s: any) => ({
+        id: s.id,
+        number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
+        status: s.status,
+        createdAt: s.finalizedAt,
+        total: s.total,
+        subtotal: s.subtotal,
+        desconto: s.desconto,
+        cancelledAt: s.cancelledAt,
+        cancelReason: s.cancelReason,
+        sellerName: s.sellerName,
+        customerCpf: s.customerCpf,
+        customerName: s.customerName,
+        paymentMethod: s.paymentMethod,
+        nfceStatus: s.nfceStatus,
+        nfceNumber: s.nfceNumber,
+        nfceSerie: s.nfceSerie,
+        nfceChave: s.nfceChave,
+        nfceAutorizadaEm: s.nfceAutorizadaEm,
+        stockDecreased: !!s.stockDecreasedAt,
+        items: s.items,
+        payments: s.payments,
+        canEstornar: s.status === 'finalized', // só finalizada pode estornar
+      })),
+    };
+  }
+
+  /**
    * Retorna faturamento agregado por loja + total rede + comparação ano
    * anterior + série temporal (pra gráfico).
    *

@@ -14,6 +14,7 @@
  * Fonte: tabela `caixa` do Giga (MySQL) + Order do flowops (status=completed)
  */
 
+import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -94,6 +95,12 @@ export default function FaturamentoPage() {
   const [data, setData] = useState<Resumo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Drill-down: storeCode expandida + vendas detalhadas em cache
+  const [expandedStore, setExpandedStore] = useState<string | null>(null);
+  const [storeVendas, setStoreVendas] = useState<Record<string, any[]>>({});
+  const [loadingVendas, setLoadingVendas] = useState<string | null>(null);
+  // Modal de estorno: venda alvo + estado
+  const [estornoTarget, setEstornoTarget] = useState<any | null>(null);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
@@ -112,6 +119,49 @@ export default function FaturamentoPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Carrega vendas detalhadas de uma loja (drill-down) — com cache local
+  const toggleStore = async (storeCode: string) => {
+    if (expandedStore === storeCode) {
+      setExpandedStore(null);
+      return;
+    }
+    setExpandedStore(storeCode);
+    // Se já tem cache, não recarrega
+    if (storeVendas[storeCode]) return;
+    setLoadingVendas(storeCode);
+    try {
+      const r = await api<{ vendas: any[] }>(
+        `/faturamento/loja/${encodeURIComponent(storeCode)}/vendas?from=${from}&to=${to}`,
+      );
+      setStoreVendas((prev) => ({ ...prev, [storeCode]: r.vendas || [] }));
+    } catch (e: any) {
+      setErr(e?.message || 'Falha ao carregar vendas detalhadas');
+    } finally {
+      setLoadingVendas(null);
+    }
+  };
+
+  // Após estornar, recarrega vendas da loja + invalida cache + recarrega resumo
+  const onEstornoConcluido = async (storeCode: string) => {
+    setStoreVendas((prev) => {
+      const copy = { ...prev };
+      delete copy[storeCode];
+      return copy;
+    });
+    if (expandedStore === storeCode) {
+      // Recarrega vendas
+      setLoadingVendas(storeCode);
+      try {
+        const r = await api<{ vendas: any[] }>(
+          `/faturamento/loja/${encodeURIComponent(storeCode)}/vendas?from=${from}&to=${to}`,
+        );
+        setStoreVendas((prev) => ({ ...prev, [storeCode]: r.vendas || [] }));
+      } catch {}
+      setLoadingVendas(null);
+    }
+    load(); // recarrega ranking
   };
 
   useEffect(() => {
@@ -342,52 +392,88 @@ export default function FaturamentoPage() {
                       const variacao = l.variacaoPct;
                       const varColor = variacao > 0 ? 'text-emerald-700' : variacao < 0 ? 'text-rose-700' : 'text-slate-500';
                       const varBg = variacao > 0 ? 'bg-emerald-50' : variacao < 0 ? 'bg-rose-50' : 'bg-slate-50';
+                      const isExpanded = expandedStore === l.storeCode;
+                      const vendasDessaLoja = storeVendas[l.storeCode];
+                      const isLoadingExp = loadingVendas === l.storeCode;
                       return (
-                        <tr key={l.storeCode} className="hover:bg-slate-50 transition">
-                          <td className="px-3 py-2 text-slate-400 font-mono font-bold text-xs">
-                            {String(idx + 1).padStart(2, '0')}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono text-slate-400">{l.storeCode}</span>
-                              <span className="font-bold text-slate-800">{l.storeName}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right font-bold text-slate-900 tabular-nums">
-                            {brl(l.atual.faturamento)}
-                          </td>
-                          <td className="px-3 py-2 text-right text-slate-500 tabular-nums">
-                            {brl(l.anterior.faturamento)}
-                          </td>
-                          <td className={`px-3 py-2 text-right font-bold tabular-nums ${varColor}`}>
-                            <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${varBg}`}>
-                              {variacao > 0 ? '▲' : variacao < 0 ? '▼' : '='}
-                              {variacao >= 0 ? '+' : ''}{variacao.toFixed(1)}%
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 bg-slate-100 rounded-sm h-3 overflow-hidden">
-                                  <div
-                                    className="h-full bg-emerald-500 rounded-sm transition-all"
-                                    style={{ width: `${pct2026}%` }}
-                                  />
-                                </div>
-                                <span className="text-[9px] font-bold text-emerald-700 w-8 text-right">26</span>
+                        <React.Fragment key={l.storeCode}>
+                          <tr
+                            className={`hover:bg-blue-50 transition cursor-pointer ${isExpanded ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}
+                            onClick={() => toggleStore(l.storeCode)}
+                          >
+                            <td className="px-3 py-2 text-slate-400 font-mono font-bold text-xs">
+                              <div className="flex items-center gap-1">
+                                <span className={`text-slate-500 transition ${isExpanded ? 'rotate-90' : ''}`}>▸</span>
+                                {String(idx + 1).padStart(2, '0')}
                               </div>
+                            </td>
+                            <td className="px-3 py-2">
                               <div className="flex items-center gap-2">
-                                <div className="flex-1 bg-slate-100 rounded-sm h-2 overflow-hidden">
-                                  <div
-                                    className="h-full bg-slate-400 rounded-sm transition-all"
-                                    style={{ width: `${pct2025}%` }}
-                                  />
-                                </div>
-                                <span className="text-[9px] font-bold text-slate-500 w-8 text-right">25</span>
+                                <span className="text-[10px] font-mono text-slate-400">{l.storeCode}</span>
+                                <span className="font-bold text-slate-800">{l.storeName}</span>
                               </div>
-                            </div>
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="px-3 py-2 text-right font-bold text-slate-900 tabular-nums">
+                              {brl(l.atual.faturamento)}
+                            </td>
+                            <td className="px-3 py-2 text-right text-slate-500 tabular-nums">
+                              {brl(l.anterior.faturamento)}
+                            </td>
+                            <td className={`px-3 py-2 text-right font-bold tabular-nums ${varColor}`}>
+                              <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${varBg}`}>
+                                {variacao > 0 ? '▲' : variacao < 0 ? '▼' : '='}
+                                {variacao >= 0 ? '+' : ''}{variacao.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 bg-slate-100 rounded-sm h-3 overflow-hidden">
+                                    <div
+                                      className="h-full bg-emerald-500 rounded-sm transition-all"
+                                      style={{ width: `${pct2026}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[9px] font-bold text-emerald-700 w-8 text-right">26</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div className="flex-1 bg-slate-100 rounded-sm h-2 overflow-hidden">
+                                    <div
+                                      className="h-full bg-slate-400 rounded-sm transition-all"
+                                      style={{ width: `${pct2025}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[9px] font-bold text-slate-500 w-8 text-right">25</span>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                          {/* ─── DRILL-DOWN ─── */}
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={6} className="p-0 bg-slate-50 border-l-4 border-blue-500">
+                                <div className="p-3">
+                                  {isLoadingExp ? (
+                                    <div className="text-center text-slate-500 py-4 text-sm">
+                                      Carregando vendas de {l.storeName}…
+                                    </div>
+                                  ) : !vendasDessaLoja || vendasDessaLoja.length === 0 ? (
+                                    <div className="text-center text-slate-400 py-4 text-sm italic">
+                                      Nenhuma venda no período pra essa loja.
+                                    </div>
+                                  ) : (
+                                    <DrilldownVendas
+                                      storeName={l.storeName}
+                                      storeCode={l.storeCode}
+                                      vendas={vendasDessaLoja}
+                                      onEstornar={(v) => setEstornoTarget({ ...v, storeCode: l.storeCode, storeName: l.storeName })}
+                                    />
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -498,6 +584,363 @@ export default function FaturamentoPage() {
           </div>
         )}
       </main>
+
+      {/* MODAL DE ESTORNO */}
+      {estornoTarget && (
+        <EstornoModal
+          venda={estornoTarget}
+          onClose={() => setEstornoTarget(null)}
+          onSuccess={() => {
+            const sc = estornoTarget.storeCode;
+            setEstornoTarget(null);
+            onEstornoConcluido(sc);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  DRILLDOWN — tabela de vendas detalhadas por loja
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function DrilldownVendas({
+  storeName,
+  storeCode,
+  vendas,
+  onEstornar,
+}: {
+  storeName: string;
+  storeCode: string;
+  vendas: any[];
+  onEstornar: (v: any) => void;
+}) {
+  const fmtDate = (iso: string) =>
+    iso ? new Date(iso).toLocaleString('pt-BR') : '—';
+  const totalLoja = vendas.reduce(
+    (s, v) => s + (v.status === 'cancelled' ? 0 : Number(v.total || 0)),
+    0,
+  );
+  const qtdCancelled = vendas.filter((v) => v.status === 'cancelled').length;
+
+  return (
+    <div className="bg-white border border-blue-200 rounded-lg overflow-hidden">
+      <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 flex items-center justify-between text-xs">
+        <div className="font-bold text-blue-900">
+          📊 {storeName} — {vendas.length} venda{vendas.length === 1 ? '' : 's'} no período
+          {qtdCancelled > 0 && (
+            <span className="ml-2 text-rose-700">({qtdCancelled} cancelada{qtdCancelled === 1 ? '' : 's'})</span>
+          )}
+        </div>
+        <div className="text-blue-900 font-bold">
+          Total ativo: {brl(totalLoja)}
+        </div>
+      </div>
+      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-50 sticky top-0">
+            <tr>
+              <th className="px-2 py-1.5 text-left">Quando</th>
+              <th className="px-2 py-1.5 text-left">NFC-e/ID</th>
+              <th className="px-2 py-1.5 text-left">Vendedora</th>
+              <th className="px-2 py-1.5 text-left">Cliente</th>
+              <th className="px-2 py-1.5 text-left">Pgto</th>
+              <th className="px-2 py-1.5 text-right">Total</th>
+              <th className="px-2 py-1.5 text-center">Status</th>
+              <th className="px-2 py-1.5 text-center">Ação</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {vendas.map((v) => (
+              <tr key={v.id} className={v.status === 'cancelled' ? 'bg-rose-50/40' : 'hover:bg-slate-50'}>
+                <td className="px-2 py-1.5 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                  {fmtDate(v.createdAt)}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[11px]">
+                  <div className="font-bold text-slate-800">{v.number}</div>
+                  {v.nfceChave && (
+                    <div className="text-[9px] text-slate-400 truncate max-w-[120px]" title={v.nfceChave}>
+                      {v.nfceChave.slice(0, 12)}…
+                    </div>
+                  )}
+                </td>
+                <td className="px-2 py-1.5">{v.sellerName || '—'}</td>
+                <td className="px-2 py-1.5">
+                  <div>{v.customerName || <span className="text-slate-400 italic">avulso</span>}</div>
+                  {v.customerCpf && <div className="text-[9px] text-slate-500 font-mono">{v.customerCpf}</div>}
+                </td>
+                <td className="px-2 py-1.5 uppercase text-[10px] font-bold text-slate-600">
+                  {v.paymentMethod || '—'}
+                </td>
+                <td className="px-2 py-1.5 text-right font-bold tabular-nums">
+                  {v.status === 'cancelled' ? (
+                    <span className="text-rose-600 line-through">{brl(v.total)}</span>
+                  ) : (
+                    brl(v.total)
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-center">
+                  {v.status === 'cancelled' ? (
+                    <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 rounded text-[9px] font-bold">
+                      ESTORNADA
+                    </span>
+                  ) : v.nfceStatus === 'authorized' ? (
+                    <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[9px] font-bold">
+                      NFC-e OK
+                    </span>
+                  ) : v.nfceStatus === 'rejected' ? (
+                    <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded text-[9px] font-bold">
+                      REJEITADA
+                    </span>
+                  ) : v.nfceStatus === 'preview' ? (
+                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[9px] font-bold">
+                      PREVIEW
+                    </span>
+                  ) : (
+                    <span className="text-[9px] text-slate-400">—</span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-center">
+                  {v.canEstornar ? (
+                    <button
+                      onClick={() => onEstornar(v)}
+                      className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded transition"
+                      title="Estornar (exige senha master)"
+                    >
+                      ESTORNAR
+                    </button>
+                  ) : (
+                    <span className="text-[9px] text-slate-400">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  MODAL DE ESTORNO — senha master + motivo + relatório
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+function EstornoModal({
+  venda,
+  onClose,
+  onSuccess,
+}: {
+  venda: any;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [motivo, setMotivo] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [resultado, setResultado] = useState<any | null>(null);
+
+  const isValid = motivo.trim().length >= 5 && password.trim().length >= 3;
+
+  const confirmar = async () => {
+    if (!isValid || loading) return;
+    setError(null);
+    setLoading(true);
+    try {
+      const r = await api<any>(`/pdv/sales/${venda.id}/master/estornar`, {
+        method: 'POST',
+        body: JSON.stringify({ motivo: motivo.trim(), password: password.trim() }),
+      });
+      setResultado(r);
+      setPassword(''); // limpa senha após resposta
+    } catch (e: any) {
+      setError(e?.message || 'Falha ao estornar');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={resultado ? onSuccess : onClose}
+    >
+      <div
+        className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* HEADER */}
+        <div className="px-5 py-4 bg-gradient-to-r from-rose-600 to-rose-700 text-white">
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg flex items-center gap-2">
+              ⚠️ ESTORNO DE VENDA
+            </h2>
+            <button onClick={resultado ? onSuccess : onClose} className="text-white/80 hover:text-white">
+              ✕
+            </button>
+          </div>
+          <p className="text-xs text-rose-100 mt-1">
+            Ação IRREVERSÍVEL. Reverte NFC-e + estoque + cashback.
+          </p>
+        </div>
+
+        {/* CORPO */}
+        <div className="p-5 space-y-4">
+          {!resultado ? (
+            <>
+              {/* Resumo da venda */}
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Loja:</span>
+                  <strong>{venda.storeName}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">NFC-e/ID:</span>
+                  <strong className="font-mono">{venda.number}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Cliente:</span>
+                  <span>{venda.customerName || 'avulso'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-600">Pagamento:</span>
+                  <span className="uppercase text-xs">{venda.paymentMethod || '—'}</span>
+                </div>
+                <div className="flex justify-between text-base pt-1 border-t border-slate-200">
+                  <strong>Total a estornar:</strong>
+                  <strong className="text-rose-700">{brl(venda.total)}</strong>
+                </div>
+              </div>
+
+              {/* Motivo */}
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-1 block">
+                  Motivo do estorno <span className="text-rose-600">*</span>
+                </label>
+                <textarea
+                  value={motivo}
+                  onChange={(e) => setMotivo(e.target.value)}
+                  placeholder="Ex: Cliente desistiu da compra. Produto devolvido em perfeito estado."
+                  rows={3}
+                  maxLength={300}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                />
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  Mín 5 chars · {motivo.length}/300
+                </div>
+              </div>
+
+              {/* Senha master */}
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-1 block">
+                  Senha master <span className="text-rose-600">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Senha de nível MASTER"
+                  autoComplete="off"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
+                />
+              </div>
+
+              {error && (
+                <div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded text-sm text-rose-800">
+                  ❌ {error}
+                </div>
+              )}
+
+              {/* Avisos */}
+              <div className="bg-amber-50 border border-amber-200 rounded p-2.5 text-[11px] text-amber-900 space-y-0.5">
+                <div><strong>O que vai acontecer:</strong></div>
+                <div>• Cancela NFC-e na SEFAZ (se autorizada e dentro da janela 30min)</div>
+                <div>• Devolve estoque ao Wincred automaticamente</div>
+                <div>• Revoga cashback do cliente</div>
+                {(['credito', 'debito', 'cartao'].includes(String(venda.paymentMethod || '').toLowerCase())) && (
+                  <div className="font-bold pt-1 border-t border-amber-300">
+                    ⚠️ Pagamento em CARTÃO — você precisa estornar MANUALMENTE na maquininha
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={onClose}
+                  disabled={loading}
+                  className="flex-1 px-4 py-2.5 border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold rounded-lg transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmar}
+                  disabled={!isValid || loading}
+                  className="flex-1 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-lg transition flex items-center justify-center gap-2"
+                >
+                  {loading ? '⏳ Processando…' : '✓ ESTORNAR'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* RESULTADO */}
+              <div className={`p-3 rounded-lg ${
+                resultado.passos?.some((p: any) => p.status === 'falhou')
+                  ? 'bg-amber-50 border border-amber-300'
+                  : 'bg-emerald-50 border border-emerald-300'
+              }`}>
+                <div className="font-bold text-sm mb-1">
+                  {resultado.passos?.some((p: any) => p.status === 'falhou')
+                    ? '⚠️ Estorno parcial — atenção aos avisos'
+                    : '✅ Estorno concluído'}
+                </div>
+                <div className="text-xs text-slate-700">
+                  Total estornado: <strong>{brl(resultado.totalEstornado || 0)}</strong>
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">
+                  Detalhamento
+                </div>
+                <div className="space-y-1.5">
+                  {(resultado.passos || []).map((p: any, i: number) => (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-2 p-2 rounded text-xs border ${
+                        p.status === 'ok' ? 'bg-emerald-50 border-emerald-200' :
+                        p.status === 'falhou' ? 'bg-rose-50 border-rose-200' :
+                        p.status === 'atencao' ? 'bg-amber-50 border-amber-200' :
+                        'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <span className="text-base shrink-0 mt-[-2px]">
+                        {p.status === 'ok' ? '✅' :
+                         p.status === 'falhou' ? '❌' :
+                         p.status === 'atencao' ? '⚠️' :
+                         '⊝'}
+                      </span>
+                      <div className="flex-1">
+                        <div className="font-bold">{p.passo}</div>
+                        <div className="text-slate-600 mt-0.5">{p.detalhe}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={onSuccess}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition"
+              >
+                Entendi, fechar
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

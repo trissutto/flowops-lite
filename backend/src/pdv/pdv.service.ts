@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
+import { NfceService } from './nfce.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -31,6 +32,7 @@ export class PdvService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly cash: CashService,
+    private readonly nfce: NfceService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -183,6 +185,221 @@ export class PdvService {
    * Estoque NAO é alterado (assume que só uma das vendas teve peça baixada de verdade
    * via NF emitida; ou se ambas baixaram, isso vira tarefa de reconciliação manual).
    */
+  /**
+   * ESTORNO COMPLETO de venda finalizada — usado pelo botão "ESTORNAR"
+   * da tela /retaguarda/faturamento (drill-down).
+   *
+   * Diferente do masterCancelDuplicada: este AQUI tenta REVERTER tudo:
+   *   1. Cancela NFC-e na SEFAZ se autorizada (chama nfce.cancel)
+   *   2. Reverte estoque no Wincred (gravarVendaPdv com qty negativa)
+   *   3. Marca cashback ganho como REVOGADO (cliente perde o cashback gerado)
+   *   4. Marca a sale como cancelled
+   *   5. Logger detalhado pra auditoria
+   *
+   * Cada passo é tentado independentemente — se um falhar, os outros seguem.
+   * Retorna relatório do que funcionou e do que precisa ação manual.
+   *
+   * Requer:
+   *   - senha master (validada no controller via validateMinLevel)
+   *   - motivo (>= 5 chars)
+   *
+   * Atenção: NÃO consegue estornar pagamento de cartão fisicamente. Vendedora
+   * precisa fazer estorno manual na maquininha. O relatório avisa.
+   */
+  async masterEstornarVenda(input: {
+    saleId: string;
+    motivo: string;
+    userName: string;
+  }) {
+    const { saleId, motivo, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatório');
+    if (!motivo || motivo.trim().length < 5) {
+      throw new BadRequestException('Informe motivo (≥5 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: {
+        payments: true,
+        items: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+
+    if (sale.status === 'cancelled') {
+      return {
+        ok: true,
+        alreadyDone: true,
+        saleId,
+        message: 'Venda já estava cancelada',
+        passos: [],
+      };
+    }
+
+    if (sale.status !== 'finalized') {
+      throw new BadRequestException(`Venda no status ${sale.status} — só pode estornar finalizada`);
+    }
+
+    const passos: Array<{
+      passo: string;
+      status: 'ok' | 'falhou' | 'pulado' | 'atencao';
+      detalhe: string;
+    }> = [];
+
+    /* ─── PASSO 1: Cancelar NFC-e na SEFAZ se autorizada ─── */
+    if (sale.nfceStatus === 'authorized' && !sale.nfceCanceladaEm) {
+      try {
+        const r = await this.nfce.cancel(saleId, `Estorno: ${motivo}`.slice(0, 250));
+        if (r?.success) {
+          passos.push({
+            passo: 'NFC-e SEFAZ',
+            status: 'ok',
+            detalhe: `Cancelada. Protocolo cancelamento: ${r.protocolo || '—'}`,
+          });
+        } else {
+          passos.push({
+            passo: 'NFC-e SEFAZ',
+            status: 'falhou',
+            detalhe: r?.motivo || 'SEFAZ rejeitou cancelamento. Verifique janela 30min.',
+          });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'NFC-e SEFAZ',
+          status: 'falhou',
+          detalhe: `Erro ao cancelar: ${e?.message || String(e)}`,
+        });
+      }
+    } else if (sale.nfceCanceladaEm) {
+      passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'Já cancelada antes' });
+    } else {
+      passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'NFC-e não foi autorizada (skip)' });
+    }
+
+    /* ─── PASSO 2: Reverter estoque no Wincred ─── */
+    if (sale.stockDecreasedAt && !sale.isTraining) {
+      try {
+        // Estorno = gravar venda com qtds NEGATIVAS (devolve estoque)
+        await this.erp.gravarVendaPdv({
+          storeCode: sale.storeCode,
+          items: sale.items.map((it: any) => ({
+            sku: String(it.sku || it.ean || ''),
+            qty: -Math.abs(Number(it.qty) || 1), // NEGATIVO devolve ao estoque
+            valorUnit: Number(it.precoUnit) || 0,
+            desconto: 0,
+            descricao: String(it.descricao || ''),
+          })),
+          pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
+        } as any);
+        passos.push({
+          passo: 'Estoque Wincred',
+          status: 'ok',
+          detalhe: `${sale.items.length} item(ns) devolvido(s) ao estoque`,
+        });
+      } catch (e: any) {
+        passos.push({
+          passo: 'Estoque Wincred',
+          status: 'falhou',
+          detalhe: `Erro ao reverter: ${e?.message || String(e)}. Faça manual no Wincred!`,
+        });
+      }
+    } else {
+      passos.push({
+        passo: 'Estoque Wincred',
+        status: 'pulado',
+        detalhe: sale.isTraining ? 'Modo treinamento' : 'Estoque não foi baixado',
+      });
+    }
+
+    /* ─── PASSO 3: Revogar cashback ganho ─── */
+    if (sale.customerCpf && !sale.isTraining) {
+      try {
+        const cpfDigits = String(sale.customerCpf).replace(/\D/g, '');
+        const totalCents = Math.round(Number(sale.total || 0) * 100);
+        const cashbackGerado = Math.floor(totalCents * 0.10); // 10% padrão
+        if (cashbackGerado > 0) {
+          // Procura a conta unificada
+          const acc = await (this.prisma as any).customerAccount.findUnique({
+            where: { cpf: cpfDigits.length === 11 ? `${cpfDigits.slice(0,3)}.${cpfDigits.slice(3,6)}.${cpfDigits.slice(6,9)}-${cpfDigits.slice(9)}` : cpfDigits },
+            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
+          }) || await (this.prisma as any).customerAccount.findUnique({
+            where: { cpf: cpfDigits },
+            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
+          });
+          if (acc) {
+            await (this.prisma as any).customerAccount.update({
+              where: { id: acc.id },
+              data: {
+                cashbackBalanceCents: Math.max(0, (acc.cashbackBalanceCents || 0) - cashbackGerado),
+                cashbackEarnedCents: { decrement: BigInt(cashbackGerado) },
+              },
+            });
+            passos.push({
+              passo: 'Cashback cliente',
+              status: 'ok',
+              detalhe: `Revogados R$ ${(cashbackGerado / 100).toFixed(2)} do cliente`,
+            });
+          } else {
+            passos.push({
+              passo: 'Cashback cliente',
+              status: 'pulado',
+              detalhe: 'Cliente não tem conta no app — nada a revogar',
+            });
+          }
+        } else {
+          passos.push({ passo: 'Cashback cliente', status: 'pulado', detalhe: 'Sem cashback gerado' });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'Cashback cliente',
+          status: 'falhou',
+          detalhe: `Erro: ${e?.message || String(e)}`,
+        });
+      }
+    } else {
+      passos.push({ passo: 'Cashback cliente', status: 'pulado', detalhe: 'Venda sem CPF' });
+    }
+
+    /* ─── PASSO 4: Aviso sobre pagamentos cartão ─── */
+    const temCartao = (sale.payments || []).some((p: any) =>
+      ['credito', 'debito', 'cartao'].includes(String(p.method || '').toLowerCase()),
+    );
+    if (temCartao) {
+      passos.push({
+        passo: 'Pagamento cartão',
+        status: 'atencao',
+        detalhe: '⚠️ Estorno do cartão é MANUAL na maquininha (Stone/PagBank). Faça lá pessoalmente.',
+      });
+    }
+
+    /* ─── PASSO 5: Marca a sale como cancelada ─── */
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: `[ESTORNO MASTER] ${motivo} — por ${userName}`,
+      } as any,
+    });
+    passos.push({ passo: 'Status venda', status: 'ok', detalhe: 'Marcada como cancelled' });
+
+    /* ─── Log final ─── */
+    this.logger.warn(
+      `[MASTER ESTORNO] saleId=${saleId} loja=${sale.storeCode} total=R$${sale.total} ` +
+      `cliente=${sale.customerCpf || 'avulso'} motivo="${motivo}" por ${userName} ` +
+      `— passos: ${passos.map(p => `${p.passo}:${p.status}`).join(' | ')}`,
+    );
+
+    return {
+      ok: true,
+      saleId,
+      totalEstornado: Number(sale.total || 0),
+      passos,
+      message: `Estorno concluído. ${passos.filter(p => p.status === 'falhou').length} falha(s). Veja os passos abaixo.`,
+      precisaAcaoManual: passos.some(p => p.status === 'falhou' || p.status === 'atencao'),
+    };
+  }
+
   async masterCancelDuplicada(input: {
     saleId: string;
     motivo: string;

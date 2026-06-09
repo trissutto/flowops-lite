@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FaturamentoService } from './faturamento.service';
 import { ErpService } from '../erp/erp.service';
@@ -42,6 +42,27 @@ export class FaturamentoController {
     const t = to || fmt(today);
     const g = (granularity === 'week' || granularity === 'month') ? granularity : 'day';
     return this.svc.getResumo(f, t, g);
+  }
+
+  /**
+   * GET /faturamento/loja/:storeCode/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Lista vendas DETALHADAS (PdvSale) da loja no período pra drill-down.
+   * Usado pelo botão expandir na tabela /retaguarda/faturamento.
+   * Retorna nº NFCe, hora, vendedora, cliente, total, forma pgto, status.
+   */
+  @Get('loja/:storeCode/vendas')
+  async vendasPorLoja(
+    @Req() req: any,
+    @Param('storeCode') storeCode: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    this.requireAdmin(req);
+    if (!from || !to) {
+      return { error: 'from e to obrigatórios (YYYY-MM-DD)' };
+    }
+    return this.svc.getVendasDetalhadas(storeCode, from, to);
   }
 
   /**

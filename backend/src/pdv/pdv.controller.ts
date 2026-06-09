@@ -299,6 +299,39 @@ export class PdvController {
   }
 
   /**
+   * POST /pdv/sales/:id/master/estornar
+   * Body: { motivo, password }
+   *
+   * ESTORNO COMPLETO — usado pelo botão "ESTORNAR" da tela
+   * /retaguarda/faturamento (drill-down). Reverte tudo automaticamente:
+   *   - Cancela NFC-e na SEFAZ
+   *   - Devolve estoque ao Wincred
+   *   - Revoga cashback do cliente
+   *   - Marca sale como cancelled
+   *
+   * Exige senha master + motivo (>=5 chars).
+   * Retorna relatório passo-a-passo do que conseguiu reverter.
+   */
+  @Post('sales/:id/master/estornar')
+  async masterEstornar(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { motivo: string; password: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterEstornarVenda({
+      saleId: id,
+      motivo: body?.motivo || '',
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
    * POST /pdv/sales/:id/master/cancel-duplicada
    * Body: { motivo, password }
    * Cancela QUALQUER venda finalizada (mesmo com pagamento) — caso da Hellen:
