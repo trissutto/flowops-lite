@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Store, MapPin, Loader2, Phone } from 'lucide-react';
+import { Store, MapPin, Loader2, Phone, Truck } from 'lucide-react';
 import { checkAvailability, type StoreAvailability } from '@/lib/api';
 
 /**
@@ -25,6 +25,8 @@ export default function StoreAvailabilityBlock({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{
     cidadeCliente: string | null;
+    ufCliente: string | null;
+    freteSugerido: { valor: number; descricao: string } | null;
     lojas: StoreAvailability[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +44,12 @@ export default function StoreAvailabilityBlock({
     setError(null);
     try {
       const r = await checkAvailability(skus, cepValue);
-      setResult({ cidadeCliente: r.cidadeCliente, lojas: r.lojas });
+      setResult({
+        cidadeCliente: r.cidadeCliente,
+        ufCliente: r.ufCliente,
+        freteSugerido: r.freteSugerido,
+        lojas: r.lojas,
+      });
     } catch (e: any) {
       setError(e?.message || 'Não conseguimos consultar agora');
     } finally {
@@ -123,11 +130,47 @@ export default function StoreAvailabilityBlock({
             </div>
           )}
 
+          {/* CARD DE FRETE SUGERIDO — quando não tem loja na cidade da cliente */}
+          {result.freteSugerido && (
+            <div className="rounded-xl bg-gradient-to-br from-emerald-900/30 via-emerald-900/15 to-ink-900 border border-emerald-500/30 p-3">
+              <div className="flex items-start gap-2.5">
+                <div className="w-9 h-9 rounded-full bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center shrink-0">
+                  <Truck className="w-4 h-4 text-emerald-300" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-black uppercase tracking-widest text-emerald-300">
+                    Sem loja na sua cidade? Sem problema
+                  </div>
+                  <div className="text-sm font-bold text-cream mt-0.5">
+                    Frete por apenas{' '}
+                    <span className="text-emerald-300 text-base">
+                      R$ {result.freteSugerido.valor.toFixed(2).replace('.', ',')}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-cream/60 mt-0.5">
+                    {result.freteSugerido.descricao}
+                    {result.ufCliente && (
+                      <span className="ml-1 px-1.5 py-0.5 bg-ink-700 rounded text-cream/80 font-mono text-[10px]">
+                        {result.ufCliente}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {result.lojas.length === 0 ? (
             <div className="text-xs text-cream/60 bg-ink-900 rounded-xl p-3 text-center">
-              😔 Sem estoque nas lojas físicas agora.
-              <br />
-              Recomendamos pedir online pelo app.
+              {result.freteSugerido ? (
+                <>👆 Aproveita o frete acima — chegamos rapidinho</>
+              ) : (
+                <>
+                  😔 Sem estoque nas lojas físicas agora.
+                  <br />
+                  Recomendamos pedir online pelo app.
+                </>
+              )}
             </div>
           ) : (
             result.lojas.map((l) => (

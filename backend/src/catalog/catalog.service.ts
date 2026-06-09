@@ -985,6 +985,8 @@ export class CatalogService {
   async checkAvailability(input: { skus: string[]; cep: string | null }): Promise<{
     cepCliente: string | null;
     cidadeCliente: string | null;
+    ufCliente: string | null;
+    freteSugerido: { valor: number; descricao: string } | null;
     lojas: Array<{
       code: string;
       name: string;
@@ -995,7 +997,13 @@ export class CatalogService {
     }>;
   }> {
     if (!input.skus || input.skus.length === 0) {
-      return { cepCliente: input.cep, cidadeCliente: null, lojas: [] };
+      return {
+        cepCliente: input.cep,
+        cidadeCliente: null,
+        ufCliente: null,
+        freteSugerido: null,
+        lojas: [],
+      };
     }
 
     // 1) Pega estoque por loja pra todos os SKUs (já existe no ErpService)
@@ -1026,9 +1034,9 @@ export class CatalogService {
       select: { code: true, name: true, city: true, cep: true, whatsapp: true } as any,
     });
 
-    // 4) Coordenadas do CEP da cliente via ViaCEP
+    // 4) Cidade + UF da cliente via ViaCEP (sem geocoding por ora)
     let cidadeCliente: string | null = null;
-    let coordsCliente: { lat: number; lng: number } | null = null;
+    let ufCliente: string | null = null;
     if (input.cep) {
       const cepDigits = input.cep.replace(/\D/g, '');
       if (cepDigits.length === 8) {
@@ -1038,9 +1046,9 @@ export class CatalogService {
           );
           if (r.data && !r.data.erro) {
             cidadeCliente = String(r.data.localidade || '').trim();
+            ufCliente = String(r.data.uf || '').trim().toUpperCase();
           }
         } catch {}
-        // Geocoding seria ideal mas pra MVP usa cidade como proxy
       }
     }
 
@@ -1076,9 +1084,28 @@ export class CatalogService {
         return a.name.localeCompare(b.name, 'pt-BR');
       });
 
+    // 6) Frete sugerido quando NÃO tem loja na cidade da cliente.
+    //    Política Lurd's:
+    //    - SP (mesmo estado): R$ 9,90
+    //    - Outros estados: R$ 19,90
+    //
+    //    Mostrado quando ela vê "nenhuma loja na cidade" — incentiva pedir online
+    //    em vez de ir embora pensando "não tem aqui".
+    let freteSugerido: { valor: number; descricao: string } | null = null;
+    const temLojaNaCidade = (result as any[]).some((l) => l.distanceKm === 0);
+    if (!temLojaNaCidade && ufCliente) {
+      if (ufCliente === 'SP') {
+        freteSugerido = { valor: 9.90, descricao: 'Frete fixo dentro de São Paulo' };
+      } else {
+        freteSugerido = { valor: 19.90, descricao: 'Frete fixo pra fora de São Paulo' };
+      }
+    }
+
     return {
       cepCliente: input.cep,
       cidadeCliente,
+      ufCliente,
+      freteSugerido,
       lojas: result as any[],
     };
   }

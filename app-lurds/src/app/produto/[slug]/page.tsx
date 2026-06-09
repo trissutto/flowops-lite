@@ -8,7 +8,7 @@ import {
   Minus, Plus, Heart, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import { getProductBySlug, getRelatedProducts, type WcProductDetail, type WcVariation, type RelatedProduct } from '@/lib/api';
+import { getProductBySlug, getTopWeeklyProducts, type WcProductDetail, type WcVariation, type WcProduct } from '@/lib/api';
 import { useCart } from '@/contexts/CartContext';
 
 // LAZY LOAD pesados — só baixa quando renderiza (reduz bundle inicial)
@@ -408,23 +408,25 @@ function AddedToCartModal({
   const brl = (n: number) =>
     n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const { addItem } = useCart();
-  const [related, setRelated] = useState<RelatedProduct[]>([]);
+  const [related, setRelated] = useState<WcProduct[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
   const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
 
-  // Carrega cross-sell ao abrir
+  // Carrega TOP da semana ao abrir (orderby popularity)
+  // Filtra o produto atual da lista (cliente já viu)
   useEffect(() => {
     setLoadingRelated(true);
-    getRelatedProducts(productId, 6)
-      .then((r) => setRelated(r.products || []))
+    getTopWeeklyProducts(8)
+      .then((r) => {
+        const filtered = (r.products || []).filter((p) => p.id !== productId).slice(0, 6);
+        setRelated(filtered);
+      })
       .catch(() => setRelated([]))
       .finally(() => setLoadingRelated(false));
   }, [productId]);
 
   // Quick-add: simple variation (sem atributos) direto ao carrinho
-  // CartItem exige campos: productId, variationId (number|null), slug,
-  // name, image (string|null), price, regularPrice, quantity, attributes.
-  const handleQuickAdd = (p: RelatedProduct) => {
+  const handleQuickAdd = (p: WcProduct) => {
     addItem({
       productId: p.id,
       variationId: null,
@@ -486,15 +488,15 @@ function AddedToCartModal({
           </div>
         </div>
 
-        {/* ──────── CROSS-SELL: "Combina com isso" ────────
-            Estratégia: pega prioridade max do cliente — JÁ disse "sim" pra peça.
-            Mostra 4 produtos com botão "+" pra adicionar sem sair do modal. */}
+        {/* ──────── MELHORES DA SEMANA ────────
+            Cliente já disse "sim" pra peça — momento perfeito pra mostrar
+            os top vendidos. Aumenta AOV (ticket médio) com peças bombando. */}
         {(loadingRelated || related.length > 0) && (
           <div className="mt-5">
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="w-4 h-4 text-gold" />
               <h4 className="text-sm font-black text-cream uppercase tracking-wider">
-                Combina com isso
+                Melhores da semana
               </h4>
             </div>
 

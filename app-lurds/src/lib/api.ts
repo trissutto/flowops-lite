@@ -433,6 +433,8 @@ export async function checkAvailability(skus: string[], cep?: string) {
   return api<{
     cepCliente: string | null;
     cidadeCliente: string | null;
+    ufCliente: string | null;
+    freteSugerido: { valor: number; descricao: string } | null;
     lojas: StoreAvailability[];
   }>('/catalog/availability', {
     method: 'POST',
@@ -545,6 +547,13 @@ export async function submitSizeFeedback(input: SizeFeedbackInput) {
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+/** Top vendidos da semana — globalmente populares (não relacionados a produto X) */
+export async function getTopWeeklyProducts(limit: number = 6) {
+  return api<{ products: WcProduct[]; total: number; page: number; perPage: number }>(
+    `/catalog/products?orderby=popularity&perPage=${limit}`,
+  );
 }
 
 /** Cross-sell: produtos sugeridos pra um productId */
