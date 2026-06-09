@@ -194,8 +194,8 @@ export default function ProdutoPage() {
         )}
       </section>
 
-      {/* Info do produto */}
-      <section className="px-5 mt-5">
+      {/* Info do produto — CENTRALIZADO pra visual mais equilibrado */}
+      <section className="px-5 mt-5 flex flex-col items-center text-center">
         {product.categories[0] && (
           <div className="text-[10px] uppercase tracking-widest text-gold/80 font-bold mb-1">
             {product.categories[0].name}
@@ -206,7 +206,7 @@ export default function ProdutoPage() {
         </h1>
 
         {/* Preço */}
-        <div className="mt-4 flex items-baseline gap-3">
+        <div className="mt-4 flex items-baseline gap-3 justify-center">
           {onSale && effectiveRegular > effectivePrice && (
             <span className="text-sm line-through text-cream/40">
               {brl(effectiveRegular)}
@@ -228,15 +228,15 @@ export default function ProdutoPage() {
         </div>
 
         {/* Cashback */}
-        <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/20 px-3 py-1.5 rounded-full inline-flex">
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-900/20 px-3 py-1.5 rounded-full">
           <Sparkles className="w-3.5 h-3.5" />
           <span>Ganhe <strong>{brl(cashbackBrl)}</strong> em cashback</span>
         </div>
       </section>
 
-      {/* Atributos / Variações */}
+      {/* Atributos / Variações — CENTRALIZADO */}
       {product.attributes.filter((a) => a.variation).length > 0 && (
-        <section className="px-5 mt-6 space-y-4">
+        <section className="px-5 mt-6 space-y-4 text-center">
           {product.attributes
             .filter((a) => a.variation)
             .map((attr) => (
@@ -246,7 +246,7 @@ export default function ProdutoPage() {
                     <span className="text-gold">{selectedAttrs[attr.name]}</span>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 justify-center">
                   {attr.options.map((opt) => {
                     const isSelected = selectedAttrs[attr.name] === opt;
                     return (
@@ -269,32 +269,26 @@ export default function ProdutoPage() {
         </section>
       )}
 
-      {/* Quantidade + CTA principal — logo após escolha de cor/tamanho.
-          Cliente decide tamanho → vê o botão de comprar IMEDIATO.
-          Disponibilidade/Review viram info COMPLEMENTAR abaixo (não bloqueia). */}
-      <section className="px-5 mt-6">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-cream/60 mb-2">
-              Quantidade
-            </div>
-            <div className="inline-flex items-center bg-ink-800 border border-ink-600 rounded-full">
-              <button
-                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                className="p-3 text-gold disabled:opacity-30"
-                disabled={quantity <= 1}
-              >
-                <Minus className="w-4 h-4" />
-              </button>
-              <span className="px-4 font-bold tabular-nums min-w-[40px] text-center">{quantity}</span>
-              <button
-                onClick={() => setQuantity((q) => q + 1)}
-                className="p-3 text-gold"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+      {/* Quantidade + CTA principal — CENTRALIZADO logo após variações */}
+      <section className="px-5 mt-6 text-center">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-cream/60 mb-2">
+          Quantidade
+        </div>
+        <div className="inline-flex items-center bg-ink-800 border border-ink-600 rounded-full">
+          <button
+            onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+            className="p-3 text-gold disabled:opacity-30"
+            disabled={quantity <= 1}
+          >
+            <Minus className="w-4 h-4" />
+          </button>
+          <span className="px-4 font-bold tabular-nums min-w-[40px] text-center">{quantity}</span>
+          <button
+            onClick={() => setQuantity((q) => q + 1)}
+            className="p-3 text-gold"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Botão principal — Adicionar ao carrinho (inline, abaixo das variações) */}
