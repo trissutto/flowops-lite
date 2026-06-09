@@ -30,30 +30,36 @@ export type Manequim = {
 
 /**
  * Tabela OFICIAL Lurd's Plus Size (extraída do site lurds.com.br nos produtos).
+ *
+ * Mapeamento das linhas do site:
+ *   Linha 1 = Busto
+ *   Linha 2 = Cintura (a única medida usada — descartamos a linha 3)
+ *   Linha 4 = Quadril
+ *
  * Cada faixa é INCLUSIVA no min, EXCLUSIVA no max (>= min, < max) — exceto
- * o tamanho 60 que é o limite superior.
+ * o tamanho 60 que é o limite superior fechado nos 2 lados.
  *
- * Valores do site:
- *   46 → busto 110-115, cintura 95-100, quadril 118-124
- *   48 → busto 115-120, cintura 100-105, quadril 124-130
- *   50 → busto 120-125, cintura 105-110, quadril 130-136
- *   52 → busto 125-130, cintura 110-115, quadril 136-142
- *   54 → busto 130-135, cintura 115-125, quadril 142-148
- *   56 → busto 135-142, cintura 125-135, quadril 148-154
- *   58 → busto 142-150, cintura 135-145, quadril 154-160
- *   60 → busto 150-157, cintura 145-155, quadril 160-166
+ * Valores do site (linhas 1, 2 e 4):
+ *   46 → busto 110-115, cintura 95-98,    quadril 118-124
+ *   48 → busto 115-120, cintura 98-101,   quadril 124-130
+ *   50 → busto 120-125, cintura 101-106,  quadril 130-136
+ *   52 → busto 125-130, cintura 106-115,  quadril 136-142
+ *   54 → busto 130-135, cintura 115-125,  quadril 142-148
+ *   56 → busto 135-142, cintura 125-135,  quadril 148-154
+ *   58 → busto 142-150, cintura 135-148,  quadril 154-160
+ *   60 → busto 150-157, cintura 148-160,  quadril 160-166
  *
- * Se mudar a tabela do site, atualizar aqui também.
+ * Se a tabela do site mudar, atualizar aqui também.
  */
 const TABELA = [
-  { tamanho: 46, busto: [110, 115], cintura: [95, 100],  quadril: [118, 124] },
-  { tamanho: 48, busto: [115, 120], cintura: [100, 105], quadril: [124, 130] },
-  { tamanho: 50, busto: [120, 125], cintura: [105, 110], quadril: [130, 136] },
-  { tamanho: 52, busto: [125, 130], cintura: [110, 115], quadril: [136, 142] },
+  { tamanho: 46, busto: [110, 115], cintura: [95, 98],   quadril: [118, 124] },
+  { tamanho: 48, busto: [115, 120], cintura: [98, 101],  quadril: [124, 130] },
+  { tamanho: 50, busto: [120, 125], cintura: [101, 106], quadril: [130, 136] },
+  { tamanho: 52, busto: [125, 130], cintura: [106, 115], quadril: [136, 142] },
   { tamanho: 54, busto: [130, 135], cintura: [115, 125], quadril: [142, 148] },
   { tamanho: 56, busto: [135, 142], cintura: [125, 135], quadril: [148, 154] },
-  { tamanho: 58, busto: [142, 150], cintura: [135, 145], quadril: [154, 160] },
-  { tamanho: 60, busto: [150, 157], cintura: [145, 155], quadril: [160, 166] },
+  { tamanho: 58, busto: [142, 150], cintura: [135, 148], quadril: [154, 160] },
+  { tamanho: 60, busto: [150, 157], cintura: [148, 160], quadril: [160, 166] },
 ] as const;
 
 /** Tamanhos disponíveis no catálogo (espelha catalog/sizes do backend). */
