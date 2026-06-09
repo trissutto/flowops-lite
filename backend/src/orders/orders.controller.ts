@@ -202,6 +202,134 @@ export class OrdersController {
 
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */
   @Get('wc/counts')
+  /**
+   * GET /orders/wc/:wcOrderId/routing-audit
+   *
+   * Auditoria COMPLETA do roteamento de um pedido:
+   *  - PickOrders atuais (lojas que estão/estavam separando)
+   *  - Items + assignedStoreId (qual loja foi responsável por cada peça)
+   *  - OrderHistory completo (mudanças de status + swaps)
+   *  - Detecção de duplicidade (lojas com mesmo item)
+   *
+   * Usado pra investigar "saiu por loja X mas começou por loja Y".
+   */
+  @Get('wc/:wcOrderId/routing-audit')
+  async routingAudit(@Param('wcOrderId') wcOrderId: string) {
+    const wcId = Number(wcOrderId);
+    if (!wcId || isNaN(wcId)) {
+      throw new Error('wcOrderId inválido');
+    }
+
+    const order = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId: wcId },
+      include: {
+        items: {
+          select: {
+            id: true,
+            sku: true,
+            quantity: true,
+            assignedStoreId: true,
+          },
+        },
+        pickOrders: {
+          include: {
+            store: { select: { code: true, name: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        history: {
+          orderBy: { createdAt: 'asc' },
+          take: 100,
+        },
+      },
+    });
+
+    if (!order) {
+      return { found: false, wcOrderId: wcId };
+    }
+
+    // Enriquece items com nome da loja
+    const storeMap = new Map<string, { code: string; name: string }>();
+    const allStoreIds = new Set<string>();
+    order.items.forEach((it: any) => it.assignedStoreId && allStoreIds.add(it.assignedStoreId));
+    order.pickOrders.forEach((p: any) => allStoreIds.add(p.storeId));
+
+    if (allStoreIds.size > 0) {
+      const stores = await (this.prisma as any).store.findMany({
+        where: { id: { in: Array.from(allStoreIds) } },
+        select: { id: true, code: true, name: true },
+      });
+      stores.forEach((s: any) => storeMap.set(s.id, { code: s.code, name: s.name }));
+    }
+
+    // Detecta possível duplicidade: pick-orders ativos com mesmo SKU
+    const activePickOrders = order.pickOrders.filter(
+      (p: any) => !['cancelled'].includes(p.status),
+    );
+    const skusByStore: Record<string, string[]> = {};
+    for (const it of order.items) {
+      if (!it.assignedStoreId) continue;
+      const loja = storeMap.get(it.assignedStoreId);
+      const key = `${loja?.code || it.assignedStoreId}`;
+      if (!skusByStore[key]) skusByStore[key] = [];
+      skusByStore[key].push(it.sku);
+    }
+    const skuConflicts: Array<{ sku: string; stores: string[] }> = [];
+    const allSkus = new Set(order.items.map((i: any) => i.sku));
+    for (const sku of allSkus) {
+      const stores = Object.entries(skusByStore).filter(([_, skus]) => skus.includes(sku as string)).map(([s]) => s);
+      if (stores.length > 1) skuConflicts.push({ sku: sku as string, stores });
+    }
+
+    return {
+      found: true,
+      orderId: order.id,
+      wcOrderId: wcId,
+      status: order.status,
+      createdAt: order.createdAt,
+      pickOrders: order.pickOrders.map((p: any) => ({
+        id: p.id,
+        storeCode: p.store?.code,
+        storeName: p.store?.name,
+        status: p.status,
+        trackingCode: p.trackingCode,
+        carrier: p.carrier,
+        isTransfer: p.isTransfer,
+        transferToStoreCode: p.transferToStoreCode,
+        issueReason: p.issueReason,
+        issueNote: p.issueNote,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      })),
+      items: order.items.map((it: any) => ({
+        id: it.id,
+        sku: it.sku,
+        quantity: it.quantity,
+        assignedStoreCode: it.assignedStoreId ? storeMap.get(it.assignedStoreId)?.code : null,
+        assignedStoreName: it.assignedStoreId ? storeMap.get(it.assignedStoreId)?.name : null,
+      })),
+      history: order.history.map((h: any) => ({
+        id: h.id,
+        createdAt: h.createdAt,
+        fromStatus: h.fromStatus,
+        toStatus: h.toStatus,
+        note: h.note,
+        userId: h.userId,
+      })),
+      // FLAGS DE RISCO
+      activePickOrderCount: activePickOrders.length,
+      hasDuplicateRisk: skuConflicts.length > 0,
+      skuConflicts,
+      summary: {
+        totalSwaps: order.history.filter((h: any) => (h.note || '').toLowerCase().includes('swap')).length,
+        totalItems: order.items.length,
+        totalPickOrders: order.pickOrders.length,
+        firstPickOrderStore: order.pickOrders[0]?.store?.name,
+        lastPickOrderStore: order.pickOrders[order.pickOrders.length - 1]?.store?.name,
+      },
+    };
+  }
+
   async wcCounts() {
     const totals = await this.wc.countByStatus();
     const byStatus: Record<string, { name: string; total: number }> = {};
