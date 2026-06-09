@@ -269,9 +269,64 @@ export default function ProdutoPage() {
         </section>
       )}
 
-      {/* Disponibilidade + Review por tamanho — após escolha de variação.
-          Ordem proposital: primeiro CEP/loja (decisão de canal), depois
-          review (confiança no caimento). */}
+      {/* Quantidade + CTA principal — logo após escolha de cor/tamanho.
+          Cliente decide tamanho → vê o botão de comprar IMEDIATO.
+          Disponibilidade/Review viram info COMPLEMENTAR abaixo (não bloqueia). */}
+      <section className="px-5 mt-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wider text-cream/60 mb-2">
+              Quantidade
+            </div>
+            <div className="inline-flex items-center bg-ink-800 border border-ink-600 rounded-full">
+              <button
+                onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                className="p-3 text-gold disabled:opacity-30"
+                disabled={quantity <= 1}
+              >
+                <Minus className="w-4 h-4" />
+              </button>
+              <span className="px-4 font-bold tabular-nums min-w-[40px] text-center">{quantity}</span>
+              <button
+                onClick={() => setQuantity((q) => q + 1)}
+                className="p-3 text-gold"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Botão principal — Adicionar ao carrinho (inline, abaixo das variações) */}
+        {!inStock ? (
+          <div className="mt-4 text-center py-3 text-rose-300 font-bold uppercase text-sm">
+            Esgotado
+          </div>
+        ) : (
+          <button
+            onClick={handleAdd}
+            disabled={!canAdd}
+            className={`mt-4 w-full btn-gold-lg ${justAdded ? '!bg-emerald-500' : ''} transition`}
+          >
+            {justAdded ? (
+              <>✓ Adicionado!</>
+            ) : adding ? (
+              <><Loader2 className="w-5 h-5 animate-spin" /> Adicionando...</>
+            ) : product.type === 'variable' && !matchedVariation ? (
+              'Escolha tamanho e cor'
+            ) : (
+              <>
+                <ShoppingBag className="w-5 h-5" />
+                Adicionar ao carrinho
+              </>
+            )}
+          </button>
+        )}
+      </section>
+
+      {/* Disponibilidade + Review por tamanho — info complementar, sem
+          bloquear a compra. Cliente já tem CTA acima, isso é "se quiser
+          saber mais antes de fechar". */}
       <section className="px-5 mt-6 space-y-4">
         <StoreAvailabilityBlock
           skus={
@@ -281,29 +336,6 @@ export default function ProdutoPage() {
           }
         />
         <SizeReviewBlock productId={product.id} />
-      </section>
-
-      {/* Quantidade */}
-      <section className="px-5 mt-6">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-cream/60 mb-2">
-          Quantidade
-        </div>
-        <div className="inline-flex items-center bg-ink-800 border border-ink-600 rounded-full">
-          <button
-            onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-            className="p-3 text-gold disabled:opacity-30"
-            disabled={quantity <= 1}
-          >
-            <Minus className="w-4 h-4" />
-          </button>
-          <span className="px-4 font-bold tabular-nums min-w-[40px] text-center">{quantity}</span>
-          <button
-            onClick={() => setQuantity((q) => q + 1)}
-            className="p-3 text-gold"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-        </div>
       </section>
 
       {/* Descrição */}
