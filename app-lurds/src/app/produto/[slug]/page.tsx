@@ -62,6 +62,23 @@ export default function ProdutoPage() {
     ) || null;
   }, [product, selectedAttrs]);
 
+  /**
+   * Mensagem dinâmica "Escolha tamanho [e cor]" baseada no que falta.
+   * Como a maioria dos produtos Lurd's tem só "Tamanho" como variação
+   * (a cor já vem no nome), esse helper evita citar "cor" quando não é
+   * variação real do produto.
+   */
+  const missingAttrsMsg = useMemo(() => {
+    if (!product || product.type !== 'variable') return '';
+    const missing = product.attributes
+      .filter((a) => a.variation && !selectedAttrs[a.name])
+      .map((a) => a.name.toLowerCase());
+    if (missing.length === 0) return '';
+    if (missing.length === 1) return `Escolha o ${missing[0]}`;
+    if (missing.length === 2) return `Escolha ${missing[0]} e ${missing[1]}`;
+    return `Escolha ${missing.slice(0, -1).join(', ')} e ${missing[missing.length - 1]}`;
+  }, [product, selectedAttrs]);
+
   // Preço efetivo (variação > produto)
   const effectivePrice = matchedVariation
     ? matchedVariation.price
@@ -307,7 +324,7 @@ export default function ProdutoPage() {
             ) : adding ? (
               <><Loader2 className="w-5 h-5 animate-spin" /> Adicionando...</>
             ) : product.type === 'variable' && !matchedVariation ? (
-              'Escolha tamanho e cor'
+              missingAttrsMsg || 'Escolha as opções'
             ) : (
               <>
                 <ShoppingBag className="w-5 h-5" />
@@ -379,7 +396,7 @@ export default function ProdutoPage() {
             ) : adding ? (
               <><Loader2 className="w-5 h-5 animate-spin" /> Adicionando...</>
             ) : product.type === 'variable' && !matchedVariation ? (
-              'Escolha tamanho e cor'
+              missingAttrsMsg || 'Escolha as opções'
             ) : (
               <>
                 <ShoppingBag className="w-5 h-5" />
