@@ -153,9 +153,21 @@ export class OrdersController {
     });
 
     // Filtro por loja responsável (aplicado APÓS enriquecer com pickOrders)
+    // Match flexível: normaliza removendo acentos + uppercase + compara code OU name
+    const normalize = (s: any) =>
+      String(s || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '') // remove diacríticos (acentos)
+        .toUpperCase()
+        .trim();
+    const targetNorm = normalize(storeCode);
     const filteredData = storeCode
       ? data.filter((o: any) =>
-          (o.pickOrders || []).some((p: any) => p.storeCode === storeCode),
+          (o.pickOrders || []).some((p: any) => {
+            const codeN = normalize(p.storeCode);
+            const nameN = normalize(p.storeName);
+            return codeN === targetNorm || nameN === targetNorm;
+          }),
         )
       : data;
 

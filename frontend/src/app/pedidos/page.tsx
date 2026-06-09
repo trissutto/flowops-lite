@@ -124,11 +124,15 @@ function PedidosPageInner() {
       if (dateFrom) q.set('after', `${dateFrom}T00:00:00`);
       if (dateTo) q.set('before', `${dateTo}T23:59:59`);
       const res = await api<{ data: WcOrder[]; total: number; totalPages: number }>(`/orders/wc?${q}`);
-      // FALLBACK LOCAL: filtra no front também (cobre versão atrasada do backend
-      // que ainda não implementou o filtro server-side de storeCode).
+      // FALLBACK LOCAL com match flexível (acentos/case + code OU name)
+      const normalize = (s: any) =>
+        String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+      const target = normalize(storeCode);
       const filtered = storeCode
         ? (res.data || []).filter((o: any) =>
-            (o.pickOrders || []).some((p: any) => p?.storeCode === storeCode),
+            (o.pickOrders || []).some((p: any) =>
+              normalize(p?.storeCode) === target || normalize(p?.storeName) === target,
+            ),
           )
         : res.data;
       setData(filtered);

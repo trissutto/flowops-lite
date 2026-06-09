@@ -742,12 +742,17 @@ function SeparacaoPageInner() {
     // — ícone roxo no admin do WP). Quando a integração de tracking em tempo
     // real ficar pronta, esses pedidos receberão atualizações automáticas
     // (postado → saiu pra entrega → entregue) via webhook dos Correios.
-    // Filtra localmente caso backend não suporte o query param (fallback de segurança)
-    // até deploy do backend novo estabilizar.
+    // Filtra localmente caso backend não suporte o query param.
+    // Match flexível: normaliza removendo acentos/case e compara code OU name.
+    const normalize = (s: any) =>
+      String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+    const target = normalize(storeCode);
     const filterByStoreLocal = (list: WcOrderListItem[]): WcOrderListItem[] => {
       if (!storeCode) return list;
       return list.filter((o: any) =>
-        (o.pickOrders || []).some((p: any) => p?.storeCode === storeCode),
+        (o.pickOrders || []).some((p: any) =>
+          normalize(p?.storeCode) === target || normalize(p?.storeName) === target,
+        ),
       );
     };
 
