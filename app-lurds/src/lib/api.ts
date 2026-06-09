@@ -215,6 +215,49 @@ export async function updateMe(input: UpdateProfileInput): Promise<CustomerMe> {
   });
 }
 
+/* ─────── DESCONTO PROGRESSIVO ─────── */
+export type ProgressiveTier = { minPieces: number; discountPct: number };
+export type ProgressivePublicConfig = {
+  enabled: boolean;
+  tiers: ProgressiveTier[];
+  bannerText?: string;
+  excludePromoItems?: boolean;
+  countMode?: 'unique_sku' | 'unit';
+  blocksPixDiscount?: boolean;
+};
+export type ProgressiveCartItem = {
+  productId: number;
+  variationId?: number | null;
+  qty: number;
+  unitPrice: number;
+  regularPrice?: number;
+  onSale?: boolean;
+};
+export type ProgressiveDiscountResult = {
+  applied: boolean;
+  tierPct: number;
+  tierLabel: string;
+  eligiblePieces: number;
+  eligibleSubtotal: number;
+  discountValue: number;
+  finalTotal: number;
+  blocksPixDiscount: boolean;
+  nextTier: { piecesToGo: number; nextPct: number; extraPct: number } | null;
+};
+
+export async function getProgressiveConfig(): Promise<ProgressivePublicConfig> {
+  return api<ProgressivePublicConfig>('/app/progressive-discount');
+}
+
+export async function calculateProgressiveDiscount(
+  items: ProgressiveCartItem[],
+): Promise<ProgressiveDiscountResult> {
+  return api<ProgressiveDiscountResult>('/app/progressive-discount/calculate', {
+    method: 'POST',
+    body: JSON.stringify({ items }),
+  });
+}
+
 /* ─── Lookup CPF (público, pré-cadastro) ─── */
 export type CpfLookup = {
   exists: boolean;

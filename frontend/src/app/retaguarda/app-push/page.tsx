@@ -7,6 +7,7 @@ import {
   Sparkles, Gift, Heart, Tv, Loader2, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import ProgressiveDiscountAdmin from '@/components/ProgressiveDiscountAdmin';
 
 /**
  * /retaguarda/app-push — Painel admin do App Lurd's PWA.
@@ -263,6 +264,9 @@ export default function AppPushPage() {
             </div>
           </>
         )}
+
+        {/* ──────── DESCONTO PROGRESSIVO (campanha do app) ──────── */}
+        <ProgressiveDiscountAdmin />
 
         {/* ──────── DISPARAR PUSH ──────── */}
         <div className="bg-white border border-slate-200 rounded-xl p-5">

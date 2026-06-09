@@ -10,6 +10,7 @@ import { CustomersModule } from './customers/customers.module';
 import { CustomersAppModule } from './customers-app/customers-app.module';
 import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { ProgressiveDiscountModule } from './progressive-discount/progressive-discount.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
 import { StockModule } from './stock/stock.module';
@@ -63,6 +64,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     CustomersAppModule,
     SizeFeedbackModule,
     CatalogModule,
+    ProgressiveDiscountModule,
     ProductsModule,
     StoresModule,
     StockModule,

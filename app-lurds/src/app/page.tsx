@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2, ShoppingCart } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { HeroInstallCard } from '@/components/InstallBanner';
+import ProgressiveBanner from '@/components/ProgressiveBanner';
 import AppGate from '@/components/AppGate';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
@@ -176,6 +177,9 @@ export default function HomePage() {
           </p>
         </div>
       )}
+
+      {/* ── BANNER DESCONTO PROGRESSIVO (se campanha ativa) ── */}
+      <ProgressiveBanner />
 
       {/* ── CARD INSTALAR APP — GIGANTE, primeiro impacto visual ── */}
       <HeroInstallCard />

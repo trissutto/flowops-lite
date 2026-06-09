@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useCart } from '@/contexts/CartContext';
 import BottomNav from '@/components/BottomNav';
+import ProgressiveDiscountCard from '@/components/ProgressiveDiscountCard';
+import type { ProgressiveDiscountResult } from '@/lib/api';
 
 const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -38,6 +40,18 @@ export default function CarrinhoPage() {
   // Guardamos APENAS a regra. O valor do desconto é calculado em runtime
   // baseado no subtotal atual — assim, ao remover/alterar itens, recalcula.
   const [couponApplied, setCouponApplied] = useState<CouponRule | null>(null);
+  // Desconto progressivo (atualizado pelo componente ProgressiveDiscountCard)
+  const [progressive, setProgressive] = useState<ProgressiveDiscountResult | null>(null);
+
+  // Mapeia items do carrinho pro formato do progressivo
+  const progressiveItems = items.map((it) => ({
+    productId: it.productId,
+    variationId: it.variationId,
+    qty: it.quantity,
+    unitPrice: it.price,
+    regularPrice: it.regularPrice,
+    onSale: it.regularPrice > it.price,
+  }));
 
   // AUTO-APLICA cupom relâmpago se existir e não expirado.
   // Só aplica 1x (não sobrescreve se cliente colocou outro depois)
@@ -64,7 +78,11 @@ export default function CarrinhoPage() {
     return Math.min(raw, subtotal);
   })();
 
-  const total = Math.max(0, subtotal - discount);
+  // PROGRESSIVO prevalece sobre cupom (não acumula)
+  const progressiveDiscount = progressive?.applied ? progressive.discountValue : 0;
+  const couponDiscount = progressive?.applied ? 0 : discount;
+  const totalDiscount = progressiveDiscount + couponDiscount;
+  const total = Math.max(0, subtotal - totalDiscount);
 
   // Se o cupom tem mínimo e o carrinho ficou abaixo, mantém o cupom mas mostra aviso
   const couponBelowMin = !!(
@@ -287,6 +305,14 @@ export default function CarrinhoPage() {
         )}
       </section>
 
+      {/* Desconto Progressivo (campanha do app) */}
+      <section className="mt-5 px-5">
+        <ProgressiveDiscountCard
+          items={progressiveItems}
+          onDiscountChange={setProgressive}
+        />
+      </section>
+
       {/* Cashback que vai ganhar */}
       <section className="mt-6 px-5">
         <div className="card-gold-border bg-gradient-to-br from-emerald-900/30 to-transparent flex items-center gap-3">
@@ -307,10 +333,21 @@ export default function CarrinhoPage() {
             <span>Subtotal</span>
             <span className="tabular-nums">{brl(subtotal)}</span>
           </div>
-          {couponApplied && discount > 0 && (
+          {progressive?.applied && (
+            <div className="flex justify-between text-gold">
+              <span>✨ {progressive.tierLabel}</span>
+              <span className="tabular-nums">−{brl(progressive.discountValue)}</span>
+            </div>
+          )}
+          {couponApplied && couponDiscount > 0 && (
             <div className="flex justify-between text-emerald-400">
               <span>Cupom {couponApplied.code}</span>
-              <span className="tabular-nums">−{brl(discount)}</span>
+              <span className="tabular-nums">−{brl(couponDiscount)}</span>
+            </div>
+          )}
+          {couponApplied && progressive?.applied && (
+            <div className="text-[10px] text-amber-300/70 italic">
+              Cupom desativado: progressivo é maior
             </div>
           )}
           <div className="flex justify-between text-cream/50 text-xs">
