@@ -29,21 +29,31 @@ export type Manequim = {
 };
 
 /**
- * Tabela oficial Lurd's. Cada faixa é INCLUSIVA nos 2 lados (>= min, <= max).
- * Se cliente está acima do 60 ou abaixo do 46, retorna o limite.
+ * Tabela OFICIAL Lurd's Plus Size (extraída do site lurds.com.br nos produtos).
+ * Cada faixa é INCLUSIVA no min, EXCLUSIVA no max (>= min, < max) — exceto
+ * o tamanho 60 que é o limite superior.
  *
- * Valores baseados em padrão plus size BR genérico — ajustar com base no
- * modelista de você se as conversões reais forem diferentes.
+ * Valores do site:
+ *   46 → busto 110-115, cintura 95-100, quadril 118-124
+ *   48 → busto 115-120, cintura 100-105, quadril 124-130
+ *   50 → busto 120-125, cintura 105-110, quadril 130-136
+ *   52 → busto 125-130, cintura 110-115, quadril 136-142
+ *   54 → busto 130-135, cintura 115-125, quadril 142-148
+ *   56 → busto 135-142, cintura 125-135, quadril 148-154
+ *   58 → busto 142-150, cintura 135-145, quadril 154-160
+ *   60 → busto 150-157, cintura 145-155, quadril 160-166
+ *
+ * Se mudar a tabela do site, atualizar aqui também.
  */
 const TABELA = [
-  { tamanho: 46, busto: [100, 104], cintura: [84, 88],   quadril: [108, 112] },
-  { tamanho: 48, busto: [104, 108], cintura: [88, 92],   quadril: [112, 116] },
-  { tamanho: 50, busto: [108, 112], cintura: [92, 96],   quadril: [116, 120] },
-  { tamanho: 52, busto: [112, 116], cintura: [96, 100],  quadril: [120, 124] },
-  { tamanho: 54, busto: [116, 120], cintura: [100, 104], quadril: [124, 128] },
-  { tamanho: 56, busto: [120, 124], cintura: [104, 108], quadril: [128, 132] },
-  { tamanho: 58, busto: [124, 128], cintura: [108, 112], quadril: [132, 136] },
-  { tamanho: 60, busto: [128, 132], cintura: [112, 116], quadril: [136, 140] },
+  { tamanho: 46, busto: [110, 115], cintura: [95, 100],  quadril: [118, 124] },
+  { tamanho: 48, busto: [115, 120], cintura: [100, 105], quadril: [124, 130] },
+  { tamanho: 50, busto: [120, 125], cintura: [105, 110], quadril: [130, 136] },
+  { tamanho: 52, busto: [125, 130], cintura: [110, 115], quadril: [136, 142] },
+  { tamanho: 54, busto: [130, 135], cintura: [115, 125], quadril: [142, 148] },
+  { tamanho: 56, busto: [135, 142], cintura: [125, 135], quadril: [148, 154] },
+  { tamanho: 58, busto: [142, 150], cintura: [135, 145], quadril: [154, 160] },
+  { tamanho: 60, busto: [150, 157], cintura: [145, 155], quadril: [160, 166] },
 ] as const;
 
 /** Tamanhos disponíveis no catálogo (espelha catalog/sizes do backend). */
@@ -51,20 +61,33 @@ const TAMANHOS_DISPONIVEIS = [46, 48, 50, 52, 54, 56, 58, 60];
 
 /**
  * Mapeia uma medida em cm pro tamanho correspondente.
- * Se ultrapassar 60, retorna 60 (peça maior que catalogamos).
- * Se for menor que 46, retorna 46.
+ *
+ * Regra de match: >= min E < max (faixa fechada à esquerda, aberta à direita).
+ * Tamanho 60 é a única exceção — fica >= min E <= max (limite superior).
+ *
+ * Se ultrapassar 157cm (busto), 155cm (cintura) ou 166cm (quadril), retorna
+ * 60 (não temos tamanho maior catalogado).
+ * Se for menor que 110cm (busto), 95cm (cintura) ou 118cm (quadril), retorna
+ * 46 (peças plus size começam aqui).
  */
 function tamanhoPorMedida(
   valor: number,
   campo: 'busto' | 'cintura' | 'quadril',
 ): number {
-  for (const linha of TABELA) {
+  for (let i = 0; i < TABELA.length; i++) {
+    const linha = TABELA[i];
     const [min, max] = linha[campo];
-    if (valor >= min && valor <= max) return linha.tamanho;
+    const isLast = i === TABELA.length - 1;
+    // Última faixa: inclusiva nos 2 lados. Outras: inclusiva só no min.
+    if (isLast) {
+      if (valor >= min && valor <= max) return linha.tamanho;
+    } else {
+      if (valor >= min && valor < max) return linha.tamanho;
+    }
   }
-  // Acima do 60
+  // Acima do limite superior do 60 → 60 (maior tamanho)
   if (valor > TABELA[TABELA.length - 1][campo][1]) return 60;
-  // Abaixo do 46
+  // Abaixo do limite inferior do 46 → 46 (menor tamanho plus size)
   return 46;
 }
 
