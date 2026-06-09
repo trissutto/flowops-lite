@@ -115,7 +115,8 @@ function PedidosPageInner() {
       const q = new URLSearchParams();
       if (status) q.set('status', status);
       q.set('page', String(page));
-      q.set('per_page', '50');
+      // Quando filtra loja, busca mais pra compensar fallback local
+      q.set('per_page', storeCode ? '100' : '50');
       if (search) q.set('search', search);
       if (storeCode) q.set('storeCode', storeCode);
       // Datas: WooCommerce REST aceita ISO 8601. Início do dia local → 00:00,
@@ -123,9 +124,16 @@ function PedidosPageInner() {
       if (dateFrom) q.set('after', `${dateFrom}T00:00:00`);
       if (dateTo) q.set('before', `${dateTo}T23:59:59`);
       const res = await api<{ data: WcOrder[]; total: number; totalPages: number }>(`/orders/wc?${q}`);
-      setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      // FALLBACK LOCAL: filtra no front também (cobre versão atrasada do backend
+      // que ainda não implementou o filtro server-side de storeCode).
+      const filtered = storeCode
+        ? (res.data || []).filter((o: any) =>
+            (o.pickOrders || []).some((p: any) => p?.storeCode === storeCode),
+          )
+        : res.data;
+      setData(filtered);
+      setTotal(storeCode ? filtered.length : res.total);
+      setTotalPages(storeCode ? 1 : res.totalPages);
     } catch (e: any) {
       setError(`Falha ao consultar WooCommerce: ${e.message}`);
     } finally {

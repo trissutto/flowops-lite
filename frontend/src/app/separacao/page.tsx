@@ -742,13 +742,22 @@ function SeparacaoPageInner() {
     // — ícone roxo no admin do WP). Quando a integração de tracking em tempo
     // real ficar pronta, esses pedidos receberão atualizações automáticas
     // (postado → saiu pra entrega → entregue) via webhook dos Correios.
+    // Filtra localmente caso backend não suporte o query param (fallback de segurança)
+    // até deploy do backend novo estabilizar.
+    const filterByStoreLocal = (list: WcOrderListItem[]): WcOrderListItem[] => {
+      if (!storeCode) return list;
+      return list.filter((o: any) =>
+        (o.pickOrders || []).some((p: any) => p?.storeCode === storeCode),
+      );
+    };
+
     if (status === 'em-transito') {
       try {
-        const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
+        const q = new URLSearchParams({ status: 'shipped', per_page: '100' });
         if (search) q.set('search', search);
         if (storeCode) q.set('storeCode', storeCode);
         const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
-        setOrders(res.data);
+        setOrders(filterByStoreLocal(res.data));
       } catch (e) {
         console.error(e);
       } finally {
@@ -757,11 +766,12 @@ function SeparacaoPageInner() {
       return;
     }
     try {
-      const q = new URLSearchParams({ status, per_page: '50' });
+      // Quando filtrando por loja, busca mais (per_page=100) pra compensar filtro local
+      const q = new URLSearchParams({ status, per_page: storeCode ? '100' : '50' });
       if (search) q.set('search', search);
       if (storeCode) q.set('storeCode', storeCode);
       const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
-      setOrders(res.data);
+      setOrders(filterByStoreLocal(res.data));
     } catch (e) {
       console.error(e);
     } finally {
