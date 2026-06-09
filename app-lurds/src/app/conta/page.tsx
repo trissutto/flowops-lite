@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, User, Bell, MapPin, FileText, Shield, LogOut, ChevronRight, Heart, ShoppingBag } from 'lucide-react';
+import { ArrowLeft, User, Bell, MapPin, FileText, Shield, LogOut, ChevronRight, Heart, ShoppingBag, Ruler } from 'lucide-react';
 import BottomNav from '@/components/BottomNav';
 import { logout, getCustomerFromToken, getFirstName, isLoggedIn } from '@/lib/api';
 
@@ -29,6 +29,7 @@ export default function ContaPage() {
       title: 'Minha conta',
       items: [
         { icon: User, label: 'Dados pessoais', href: '/conta/dados' },
+        { icon: Ruler, label: 'Meu manequim', href: '/conta/manequim' },
         { icon: MapPin, label: 'Endereços', href: '/conta/enderecos' },
         { icon: Heart, label: 'Favoritos', href: '/favoritos' },
       ],

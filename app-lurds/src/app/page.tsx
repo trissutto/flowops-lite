@@ -278,16 +278,24 @@ export default function HomePage() {
                 })}
               </div>
 
-              {/* Botão "ver tudo" se tamanho ativo */}
-              {activeSize && (
+              {/* Botão "ver tudo" + atalho calculadora manequim */}
+              <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+                {activeSize && (
+                  <Link
+                    href={`/catalogo?tamanho=${encodeURIComponent(activeSize)}`}
+                    className="inline-flex items-center gap-1 text-xs font-black text-gold uppercase tracking-wider"
+                  >
+                    Ver todas do tamanho {activeSize}
+                    <ChevronRight className="w-4 h-4" />
+                  </Link>
+                )}
                 <Link
-                  href={`/catalogo?tamanho=${encodeURIComponent(activeSize)}`}
-                  className="mt-3 inline-flex items-center gap-1 text-xs font-black text-gold uppercase tracking-wider"
+                  href="/conta/manequim"
+                  className="ml-auto inline-flex items-center gap-1 text-[11px] text-cream/70 hover:text-gold underline"
                 >
-                  Ver todas do tamanho {activeSize}
-                  <ChevronRight className="w-4 h-4" />
+                  Não sabe seu tamanho? Calcular →
                 </Link>
-              )}
+              </div>
             </div>
           </div>
         </section>
