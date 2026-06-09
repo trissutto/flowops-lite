@@ -232,24 +232,6 @@ export default function ProdutoPage() {
           <Sparkles className="w-3.5 h-3.5" />
           <span>Ganhe <strong>{brl(cashbackBrl)}</strong> em cashback</span>
         </div>
-
-        {/* Review por tamanho — "Cabe em quem veste 48?" */}
-        <div className="mt-4">
-          <SizeReviewBlock productId={product.id} />
-        </div>
-
-        {/* Disponível na sua região? — consulta estoque por loja via CEP */}
-        <div className="mt-4">
-          <StoreAvailabilityBlock
-            skus={
-              // Se variação selecionada, usa SKU dela. Senão, tenta SKU do produto base
-              // ou todos os SKUs das variações disponíveis.
-              matchedVariation?.sku
-                ? [matchedVariation.sku]
-                : (product.variations || []).map((v) => v.sku).filter(Boolean) as string[]
-            }
-          />
-        </div>
       </section>
 
       {/* Atributos / Variações */}
@@ -286,6 +268,21 @@ export default function ProdutoPage() {
             ))}
         </section>
       )}
+
+      {/* Review por tamanho + Disponibilidade — MOVIDOS PRA CÁ
+          Após cliente escolher tamanho, faz sentido ver "cabe em quem
+          veste 48?" e "disponível na minha região". Não tumultua o topo
+          do produto, e fica MAIS RELEVANTE quando o tamanho já tá selecionado. */}
+      <section className="px-5 mt-6 space-y-4">
+        <SizeReviewBlock productId={product.id} />
+        <StoreAvailabilityBlock
+          skus={
+            matchedVariation?.sku
+              ? [matchedVariation.sku]
+              : (product.variations || []).map((v) => v.sku).filter(Boolean) as string[]
+          }
+        />
+      </section>
 
       {/* Quantidade */}
       <section className="px-5 mt-6">
