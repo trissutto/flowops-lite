@@ -107,11 +107,12 @@ export default function FaturamentoPage() {
     if (!token) router.push('/login');
   }, [router]);
 
-  const load = async () => {
+  const load = async (forceRefresh = false) => {
     setLoading(true);
     setErr(null);
     try {
       const qs = new URLSearchParams({ from, to, granularity });
+      if (forceRefresh) qs.set('refresh', '1');
       const r = await api<Resumo>(`/faturamento/resumo?${qs.toString()}`);
       setData(r);
     } catch (e: any) {
@@ -164,7 +165,7 @@ export default function FaturamentoPage() {
       } catch {}
       setLoadingVendas(null);
     }
-    load(); // recarrega ranking
+    load(true); // FORÇA refresh — limpa cache pra estorno aparecer na hora
   };
 
   useEffect(() => {

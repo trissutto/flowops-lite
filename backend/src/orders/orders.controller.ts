@@ -200,8 +200,6 @@ export class OrdersController {
     };
   }
 
-  /** Contadores por status (pra renderizar os filtros com número exato do WC). */
-  @Get('wc/counts')
   /**
    * GET /orders/wc/:wcOrderId/routing-audit
    *
@@ -330,6 +328,8 @@ export class OrdersController {
     };
   }
 
+  /** Contadores por status (pra renderizar os filtros com número exato do WC). */
+  @Get('wc/counts')
   async wcCounts() {
     const totals = await this.wc.countByStatus();
     const byStatus: Record<string, { name: string; total: number }> = {};

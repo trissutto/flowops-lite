@@ -7469,6 +7469,39 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * (que pode incluir acréscimos/juros do crediário).
    */
   /**
+   * Marca uma venda do Wincred como CANCELADA (MARCADO='SIM').
+   * Usada no fluxo de estorno do flowops — remove a venda do faturamento + caixa
+   * sem deletar fisicamente (audit trail preservado).
+   *
+   * Match pela coluna OBS_PEDIDO = 'flowops-{saleIdShort}'.
+   * saleIdShort = primeiros 8 chars do UUID do PdvSale.
+   */
+  async marcarVendaWincredCancelada(input: {
+    saleId: string;
+    storeCode: string;
+  }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; affected?: number; error?: string }> {
+    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
+    if (!this.pool) return { ok: false, mode, error: 'Pool não inicializado' };
+    const saleIdShort = input.saleId.replace(/-/g, '').slice(0, 8);
+    const obsPedido = `flowops-${saleIdShort}`;
+    const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
+    const sql = `UPDATE caixa SET MARCADO='SIM' WHERE OBS_PEDIDO = ? AND LOJA = ?`;
+    if (mode === 'shadow') {
+      this.logger.warn(`[wincred SHADOW] cancelar venda obsPedido=${obsPedido} loja=${lojaCode}`);
+      return { ok: true, mode };
+    }
+    try {
+      const [result] = await this.pool.query<mysql.ResultSetHeader>(sql, [obsPedido, lojaCode]);
+      const affected = result.affectedRows;
+      this.logger.log(`[wincred] CANCELADO obsPedido=${obsPedido} loja=${lojaCode} (${affected} linhas)`);
+      return { ok: true, mode, affected };
+    } catch (e: any) {
+      this.logger.error(`marcarVendaWincredCancelada falhou: ${e?.message || e}`);
+      return { ok: false, mode, error: e?.message || String(e) };
+    }
+  }
+
+  /**
    * Lista vendas DETALHADAS de uma loja no Wincred (tabela caixa) num período.
    * Usado pelo drill-down da tela /retaguarda/faturamento pra lojas que ainda
    * não usam o PDV flowops (vendas direto no Wincred legado).
@@ -7478,37 +7511,53 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    */
   async getVendasCaixa(loja: string, from: string, toExclusive: string): Promise<any[]> {
     if (!this.pool) return [];
+    // Tenta com o code passado E com padding pra 2 dígitos (cobre "6" vs "06")
+    const codeAsIs = String(loja).trim().toUpperCase();
+    const codePadded = String(loja).padStart(2, '0').slice(-2);
+    const possibleCodes = Array.from(new Set([codeAsIs, codePadded]));
+
     try {
+      // IMPORTANTE: usa DATAFEC igual ao ranking (getFaturamentoPorLoja).
+      // Antes usava DATA — vendas tarde da noite ficavam fora porque DATAFEC
+      // só é preenchido quando fecha o cupom (pode ser dia seguinte).
       const sql = `
         SELECT
           NUMERO,
+          DATAFEC,
           DATA,
-          MAX(NOME_CLIENTE) as NOME_CLIENTE,
-          MAX(CPFCNPJ) as CPFCNPJ,
+          LOJA,
+          MAX(NOMECLIENTE) as NOME_CLIENTE,
+          MAX(CPF) as CPFCNPJ,
           MAX(VENDEDORA) as VENDEDORA,
           MAX(FPAG) as FPAG,
-          MAX(CODFUNCIONARIO) as CODFUNCIONARIO,
+          MAX(VENDEDORACODE) as CODFUNCIONARIO,
+          MAX(OBS_PEDIDO) as OBS_PEDIDO,
           ROUND(SUM(VALORUNITARIO * QUANTIDADE), 2) as VALOR_TOTAL,
           SUM(QUANTIDADE) as QTD_ITENS,
           COUNT(*) as QTD_LINHAS
         FROM caixa
-        WHERE LOJA = ?
-          AND DATA >= ?
-          AND DATA <  ?
+        WHERE LOJA IN (?)
+          AND DATAFEC >= ?
+          AND DATAFEC <  ?
           AND (MARCADO IS NULL OR MARCADO <> 'SIM')
-        GROUP BY NUMERO, DATA
-        ORDER BY DATA DESC, NUMERO DESC
+        GROUP BY NUMERO, DATAFEC, DATA, LOJA
+        ORDER BY DATAFEC DESC, NUMERO DESC
         LIMIT 500
       `;
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [loja, from, toExclusive]);
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [possibleCodes, from, toExclusive]);
+      this.logger.log(
+        `[getVendasCaixa] loja=${possibleCodes.join('|')} period=${from}→${toExclusive} → ${rows.length} cupons`,
+      );
       return (rows as any[]).map((r) => ({
         numero: r.NUMERO,
-        data: r.DATA,
+        data: r.DATAFEC || r.DATA,
+        loja: r.LOJA,
         cliente: r.NOME_CLIENTE,
         cpf: r.CPFCNPJ,
         vendedora: r.VENDEDORA,
         fpag: r.FPAG,
         codFuncionario: r.CODFUNCIONARIO,
+        obsPedido: r.OBS_PEDIDO,
         total: Number(r.VALOR_TOTAL) || 0,
         qtdItens: Number(r.QTD_ITENS) || 0,
       }));

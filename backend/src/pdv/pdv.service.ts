@@ -276,20 +276,55 @@ export class PdvService {
       passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'NFC-e não foi autorizada (skip)' });
     }
 
-    /* ─── PASSO 2: Reverter estoque no Wincred ─── */
+    /* ─── PASSO 2: Cancelar venda no Wincred (some do faturamento) ─── */
+    if (!sale.isTraining) {
+      try {
+        const r = await (this.erp as any).marcarVendaWincredCancelada({
+          saleId,
+          storeCode: sale.storeCode,
+        });
+        if (r?.ok) {
+          passos.push({
+            passo: 'Venda Wincred',
+            status: 'ok',
+            detalhe: `Marcada como cancelada (${r.affected ?? 0} linhas). Some do faturamento.`,
+          });
+        } else {
+          passos.push({
+            passo: 'Venda Wincred',
+            status: 'falhou',
+            detalhe: `Não removeu do Wincred: ${r?.error || 'erro desconhecido'}. Marque manual!`,
+          });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'Venda Wincred',
+          status: 'falhou',
+          detalhe: `Erro: ${e?.message || String(e)}`,
+        });
+      }
+    } else {
+      passos.push({
+        passo: 'Venda Wincred',
+        status: 'pulado',
+        detalhe: 'Modo treinamento',
+      });
+    }
+
+    /* ─── PASSO 2b: Devolver estoque Wincred (qty negativa) ─── */
     if (sale.stockDecreasedAt && !sale.isTraining) {
       try {
-        // Estorno = gravar venda com qtds NEGATIVAS (devolve estoque)
         await this.erp.gravarVendaPdv({
           storeCode: sale.storeCode,
           items: sale.items.map((it: any) => ({
             sku: String(it.sku || it.ean || ''),
-            qty: -Math.abs(Number(it.qty) || 1), // NEGATIVO devolve ao estoque
+            qty: -Math.abs(Number(it.qty) || 1),
             valorUnit: Number(it.precoUnit) || 0,
             desconto: 0,
             descricao: String(it.descricao || ''),
           })),
           pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
+          obsPedido: `estorno-${saleId.slice(0, 8)}`,
         } as any);
         passos.push({
           passo: 'Estoque Wincred',
@@ -300,7 +335,7 @@ export class PdvService {
         passos.push({
           passo: 'Estoque Wincred',
           status: 'falhou',
-          detalhe: `Erro ao reverter: ${e?.message || String(e)}. Faça manual no Wincred!`,
+          detalhe: `Erro ao reverter: ${e?.message || String(e)}. Faça manual!`,
         });
       }
     } else {

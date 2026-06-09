@@ -25,6 +25,12 @@ export class FaturamentoService {
     private readonly erp: ErpService,
   ) {}
 
+  /** Limpa cache de resumo — chamado após estorno pra forçar refresh. */
+  clearCache() {
+    this.cache.clear();
+    this.logger.log('[faturamento] cache limpo');
+  }
+
   /**
    * Auditoria de paridade Wincred vs Flowops por loja+dia.
    * Suporta migração 30/06 — detecta divergência > tolerância.

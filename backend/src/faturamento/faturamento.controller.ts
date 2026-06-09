@@ -31,8 +31,10 @@ export class FaturamentoController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('granularity') granularity?: string,
+    @Query('refresh') refresh?: string,
   ) {
     this.requireAdmin(req);
+    if (refresh === '1') this.svc.clearCache();
     const today = new Date();
     const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     const fmt = (d: Date) =>
