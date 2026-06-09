@@ -13,6 +13,7 @@
  * Mobile-first. Listener global de teclas pra foco automático.
  */
 
+import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -5463,11 +5464,23 @@ function PaymentModal({
  *  - Aceita CPF com pontos/traço ou só números (limpa antes de salvar)
  *  - Após adicionar, atualiza a venda no parent via onUpdated
  */
-function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) => void }) {
+/** Handle pra parent forçar flush do CPF antes de emitir NFC-e */
+export type CpfNaNotaHandle = {
+  /** Salva o CPF se houver um input válido não persistido. Retorna true se salvou. */
+  flushPendingSave: () => Promise<boolean>;
+  /** Retorna true se há CPF digitado mas ainda não salvo no banco */
+  hasUnsavedCpf: () => boolean;
+};
+
+const CpfNaNotaInput = React.forwardRef<
+  CpfNaNotaHandle,
+  { sale: Sale; onUpdated: (s: Sale) => void }
+>(function CpfNaNotaInput({ sale, onUpdated }, ref) {
   const { toast } = usePdvToast();
   const [editing, setEditing] = useState(false);
   const [cpfInput, setCpfInput] = useState('');
   const [saving, setSaving] = useState(false);
+  const [lastSavedCpf, setLastSavedCpf] = useState<string | null>(sale.customerCpf || null);
 
   // Formata CPF pra exibição: 28665529896 → 286.655.298-96
   const fmtCpf = (raw: string | null) => {
@@ -5477,31 +5490,64 @@ function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) 
     return d;
   };
 
-  async function salvarCpf() {
-    const cpfLimpo = cpfInput.replace(/\D/g, '');
+  // Salva diretamente um CPF passado por parâmetro (versão pra debounce/flush)
+  async function salvarCpfDireto(cpfLimpo: string, opts?: { silent?: boolean }): Promise<boolean> {
     if (cpfLimpo.length !== 11) {
-      toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
-      return;
+      if (!opts?.silent) toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
+      return false;
     }
+    if (cpfLimpo === lastSavedCpf) return true; // já salvo, não precisa
     setSaving(true);
     try {
-      // Chama backend pra atualizar customerCpf da venda
       await api(`/pdv/sales/${sale.id}/customer`, {
         method: 'PATCH',
         body: JSON.stringify({ cpf: cpfLimpo }),
       });
-      // Recarrega venda completa
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       onUpdated(fresh);
+      setLastSavedCpf(cpfLimpo);
       setEditing(false);
       setCpfInput('');
-      toast('success', 'CPF adicionado', 'Vai aparecer na NFC-e quando emitir');
+      if (!opts?.silent) toast('success', 'CPF adicionado', 'Vai aparecer na NFC-e');
+      return true;
     } catch (e: any) {
       toast('error', 'Falha ao salvar CPF', e?.message || String(e));
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  async function salvarCpf() {
+    const cpfLimpo = cpfInput.replace(/\D/g, '');
+    await salvarCpfDireto(cpfLimpo);
+  }
+
+  // ─── AUTO-SAVE com debounce 600ms ───
+  // Quando vendedora digita o 11º dígito, salva sozinho (sem precisar clicar Salvar)
+  useEffect(() => {
+    const cpfLimpo = cpfInput.replace(/\D/g, '');
+    if (cpfLimpo.length !== 11) return;
+    if (cpfLimpo === lastSavedCpf) return;
+    const t = setTimeout(() => {
+      salvarCpfDireto(cpfLimpo, { silent: false });
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cpfInput, lastSavedCpf]);
+
+  // ─── Expõe API pro parent forçar flush antes de emitir NFC-e ───
+  React.useImperativeHandle(ref, () => ({
+    hasUnsavedCpf: () => {
+      const cpfLimpo = cpfInput.replace(/\D/g, '');
+      return editing && cpfLimpo.length === 11 && cpfLimpo !== lastSavedCpf;
+    },
+    flushPendingSave: async () => {
+      const cpfLimpo = cpfInput.replace(/\D/g, '');
+      if (cpfLimpo.length !== 11 || cpfLimpo === lastSavedCpf) return false;
+      return await salvarCpfDireto(cpfLimpo, { silent: true });
+    },
+  }), [cpfInput, editing, lastSavedCpf]);
 
   // Já tem CPF + não está editando: mostra resumido
   if (sale.customerCpf && !editing) {
@@ -5569,11 +5615,11 @@ function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) 
         </button>
       </div>
       <div className="text-[10px] text-blue-700">
-        Aperta Enter pra salvar. CPF aparece na NFC-e impressa.
+        ✨ Salva sozinho ao digitar os 11 dígitos. CPF vai aparecer na NFC-e.
       </div>
     </div>
   );
-}
+});
 
 /**
  * Componente "Marcar peças" — sistema de "leva pra provar em casa".
@@ -5713,6 +5759,8 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [printingCred, setPrintingCred] = useState(false);
   const { toast } = usePdvToast();
+  // Ref pro componente de CPF — permite forçar flush antes de emitir NFC-e
+  const cpfInputRef = useRef<CpfNaNotaHandle>(null);
 
   // Detecta se a venda tem pagamento de crediário (mostra botões de impressão).
   // Cobre 2 caminhos: (1) split — payments[] tem method='crediario',
@@ -6043,6 +6091,19 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     setEmitting(true);
     setEmitError(null);
     try {
+      // ─── FLUSH do CPF antes de emitir ───
+      // Se vendedora digitou CPF mas não clicou Salvar, salva agora.
+      // Resolve bug onde a NFC-e saía sem CPF mesmo o input tendo valor.
+      if (cpfInputRef.current?.hasUnsavedCpf()) {
+        const ok = await cpfInputRef.current.flushPendingSave();
+        if (!ok) {
+          setEmitError('Falhou ao salvar CPF antes de emitir. Confira e tente de novo.');
+          setEmitting(false);
+          return;
+        }
+        // Aguarda um tick pro state propagar antes de chamar a NFCe
+        await new Promise((r) => setTimeout(r, 100));
+      }
       const r = await api<any>(`/pdv/sales/${sale.id}/nfce`, { method: 'POST' });
       // Recarrega venda pra puxar status atualizado
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
@@ -6163,7 +6224,7 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
 
           {/* ─── Adicionar CPF na nota (só se ainda NÃO emitiu NFC-e) ─── */}
           {!isAuthorized && !isCancelled && (
-            <CpfNaNotaInput sale={sale} onUpdated={(s) => setSale(s)} />
+            <CpfNaNotaInput ref={cpfInputRef} sale={sale} onUpdated={(s) => setSale(s)} />
           )}
 
           {/* ─── Ações NFC-e ─── */}

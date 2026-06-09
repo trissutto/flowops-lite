@@ -1149,16 +1149,36 @@ export class PdvService {
     if (!sale) throw new NotFoundException('Venda não encontrada');
     // Permite atualizar customer se:
     //  - Venda em aberto (fluxo normal — antes de finalizar) OU
-    //  - Venda finalizada MAS NFC-e ainda não emitida (caso "CPF na nota"
-    //    pedido pelo cliente depois do pagamento mas antes da emissão)
+    //  - Venda finalizada MAS NFC-e ainda NÃO foi AUTORIZADA pela SEFAZ
+    //
+    // BUG FIX (2026-06): o canUpdate antigo era `!sale.nfceStatus`, mas o
+    // finalize() SEMPRE seta nfceStatus='preview' (do stub). Resultado: o
+    // PATCH /customer rejeitava o CPF avulso depois do pagamento mesmo
+    // antes da emissão real. Agora só bloqueia se a NFC-e foi efetivamente
+    // autorizada pela SEFAZ (XML enviado, chave de acesso protocolada).
+    // Estados aceitos pra update: 'preview' (stub local), 'rejected' (SEFAZ
+    // recusou, vendedora corrige e tenta de novo), null (skipped/sem stub).
     const canUpdate =
       sale.status === 'open' ||
-      (sale.status === 'finalized' && !sale.nfceStatus);
+      (sale.status === 'finalized' && sale.nfceStatus !== 'authorized');
     if (!canUpdate) {
       throw new BadRequestException(
-        sale.nfceStatus
-          ? 'NFC-e já foi emitida — não dá pra alterar dados do cliente'
+        sale.nfceStatus === 'authorized'
+          ? 'NFC-e já foi autorizada pela SEFAZ — não dá pra alterar dados do cliente'
           : 'Venda já finalizada',
+      );
+    }
+
+    // Quando atualiza dados do cliente em venda já finalizada com stub de
+    // NFC-e pendente (preview/rejected), invalida campos derivados pra
+    // forçar regeneração com os dados novos no próximo emit().
+    if (sale.status === 'finalized' && sale.nfceStatus && sale.nfceStatus !== 'authorized') {
+      // Não precisa limpar explicitamente — o emit() sobrescreve nfceXml/
+      // nfceChave/nfceNumero quando regenera. Mas resetar nfceStatus pra
+      // 'preview' garante consistência se vendedora vier de um 'rejected'.
+      this.logger.log(
+        `[pdv] CPF/dados atualizados em venda finalizada ${input.saleId.slice(0, 8)} ` +
+        `(nfceStatus=${sale.nfceStatus}) — emit() vai regenerar XML`,
       );
     }
 
