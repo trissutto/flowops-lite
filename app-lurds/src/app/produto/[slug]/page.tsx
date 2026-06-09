@@ -269,12 +269,10 @@ export default function ProdutoPage() {
         </section>
       )}
 
-      {/* Review por tamanho + Disponibilidade — MOVIDOS PRA CÁ
-          Após cliente escolher tamanho, faz sentido ver "cabe em quem
-          veste 48?" e "disponível na minha região". Não tumultua o topo
-          do produto, e fica MAIS RELEVANTE quando o tamanho já tá selecionado. */}
+      {/* Disponibilidade + Review por tamanho — após escolha de variação.
+          Ordem proposital: primeiro CEP/loja (decisão de canal), depois
+          review (confiança no caimento). */}
       <section className="px-5 mt-6 space-y-4">
-        <SizeReviewBlock productId={product.id} />
         <StoreAvailabilityBlock
           skus={
             matchedVariation?.sku
@@ -282,6 +280,7 @@ export default function ProdutoPage() {
               : (product.variations || []).map((v) => v.sku).filter(Boolean) as string[]
           }
         />
+        <SizeReviewBlock productId={product.id} />
       </section>
 
       {/* Quantidade */}
@@ -404,10 +403,8 @@ function AddedToCartModal({
 }) {
   const brl = (n: number) =>
     n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-  const { addItem } = useCart();
   const [related, setRelated] = useState<WcProduct[]>([]);
   const [loadingRelated, setLoadingRelated] = useState(true);
-  const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
 
   // Carrega TOP da semana ao abrir (orderby popularity)
   // Filtra o produto atual da lista (cliente já viu)
@@ -421,22 +418,6 @@ function AddedToCartModal({
       .catch(() => setRelated([]))
       .finally(() => setLoadingRelated(false));
   }, [productId]);
-
-  // Quick-add: simple variation (sem atributos) direto ao carrinho
-  const handleQuickAdd = (p: WcProduct) => {
-    addItem({
-      productId: p.id,
-      variationId: null,
-      slug: p.slug,
-      name: p.name,
-      image: p.image,
-      price: p.price,
-      regularPrice: p.regularPrice || p.price,
-      quantity: 1,
-      attributes: {},
-    });
-    setAddedIds((prev) => new Set(prev).add(p.id));
-  };
 
   return (
     <div
@@ -505,50 +486,36 @@ function AddedToCartModal({
               </div>
             ) : (
               <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1 snap-x snap-mandatory">
-                {related.slice(0, 4).map((p) => {
-                  const isAdded = addedIds.has(p.id);
-                  return (
-                    <div
-                      key={p.id}
-                      className="snap-start shrink-0 w-28 bg-ink-900 rounded-xl overflow-hidden border border-ink-600 relative"
-                    >
-                      {/* Imagem clicável → vai pra página do produto */}
-                      <Link href={`/produto/${p.slug}`} className="block">
-                        <div className="aspect-[3/4] bg-ink-700">
-                          {p.image && (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={p.image} alt={p.name} className="w-full h-full object-cover" />
-                          )}
-                        </div>
-                      </Link>
-                      <div className="p-1.5">
-                        <div className="text-[10px] font-bold text-cream line-clamp-2 leading-tight min-h-[1.8rem]">
-                          {p.name}
-                        </div>
-                        <div className="mt-1 flex items-center justify-between gap-1">
-                          <span className="text-[11px] font-black text-gold tabular-nums">
-                            {brl(p.price)}
-                          </span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!isAdded) handleQuickAdd(p);
-                            }}
-                            disabled={isAdded}
-                            aria-label={isAdded ? 'Já adicionado' : 'Adicionar ao carrinho'}
-                            className={`w-6 h-6 rounded-full flex items-center justify-center transition active:scale-90 ${
-                              isAdded
-                                ? 'bg-emerald-500 text-white'
-                                : 'bg-gold text-ink hover:scale-110'
-                            }`}
-                          >
-                            {isAdded ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-3.5 h-3.5" strokeWidth={3} />}
-                          </button>
-                        </div>
+                {related.slice(0, 4).map((p) => (
+                  // Card inteiro é Link — fecha o modal e leva pra página
+                  // do produto pra cliente escolher tamanho/cor (variações).
+                  // Quick-add não funciona aqui porque a maioria dos produtos
+                  // tem variações obrigatórias (cor/tamanho).
+                  <Link
+                    key={p.id}
+                    href={`/produto/${p.slug}`}
+                    onClick={onClose}
+                    className="snap-start shrink-0 w-28 bg-ink-900 rounded-xl overflow-hidden border border-ink-600 active:scale-95 transition"
+                  >
+                    <div className="aspect-[3/4] bg-ink-700">
+                      {p.image && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={p.image} alt={p.name} className="w-full h-full object-cover" />
+                      )}
+                    </div>
+                    <div className="p-1.5">
+                      <div className="text-[10px] font-bold text-cream line-clamp-2 leading-tight min-h-[1.8rem]">
+                        {p.name}
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-1">
+                        <span className="text-[11px] font-black text-gold tabular-nums">
+                          {brl(p.price)}
+                        </span>
+                        <ChevronRight className="w-3.5 h-3.5 text-gold" />
                       </div>
                     </div>
-                  );
-                })}
+                  </Link>
+                ))}
               </div>
             )}
           </div>
