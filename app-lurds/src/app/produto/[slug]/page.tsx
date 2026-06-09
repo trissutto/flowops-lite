@@ -7,10 +7,19 @@ import {
   ArrowLeft, ShoppingBag, ShoppingCart, Loader2, AlertCircle, Sparkles,
   Minus, Plus, Heart, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { getProductBySlug, getRelatedProducts, type WcProductDetail, type WcVariation, type RelatedProduct } from '@/lib/api';
-import SizeReviewBlock from '@/components/SizeReviewBlock';
-import StoreAvailabilityBlock from '@/components/StoreAvailability';
 import { useCart } from '@/contexts/CartContext';
+
+// LAZY LOAD pesados — só baixa quando renderiza (reduz bundle inicial)
+const SizeReviewBlock = dynamic(() => import('@/components/SizeReviewBlock'), {
+  ssr: false,
+  loading: () => <div className="card-dark h-20 animate-pulse" />,
+});
+const StoreAvailabilityBlock = dynamic(() => import('@/components/StoreAvailability'), {
+  ssr: false,
+  loading: () => <div className="card-dark h-32 animate-pulse" />,
+});
 
 const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });

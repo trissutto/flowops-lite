@@ -4,12 +4,22 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { Sparkles, Heart, Bell, ChevronRight, Tag, Tv, MapPin, Wallet, Loader2, ShoppingCart } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { HeroInstallCard } from '@/components/InstallBanner';
 import AppGate from '@/components/AppGate';
-import PushPrePrompt from '@/components/PushPrePrompt';
 import BottomNav from '@/components/BottomNav';
 import ProductCard from '@/components/ProductCard';
-import AbandonedCartModal from '@/components/AbandonedCartModal';
+
+// LAZY LOAD componentes que não bloqueiam first paint
+// (PushPrePrompt só aparece após 4s, AbandonedCartModal só com carrinho parado)
+const PushPrePrompt = dynamic(() => import('@/components/PushPrePrompt'), {
+  ssr: false,
+  loading: () => null,
+});
+const AbandonedCartModal = dynamic(() => import('@/components/AbandonedCartModal'), {
+  ssr: false,
+  loading: () => null,
+});
 import { useCart } from '@/contexts/CartContext';
 import {
   getCategories, getProducts, getSizes, isLoggedIn, getCustomerFromToken, getFirstName,
