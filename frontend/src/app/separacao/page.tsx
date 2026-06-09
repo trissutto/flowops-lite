@@ -749,11 +749,24 @@ function SeparacaoPageInner() {
     const target = normalize(storeCode);
     const filterByStoreLocal = (list: WcOrderListItem[]): WcOrderListItem[] => {
       if (!storeCode) return list;
-      return list.filter((o: any) =>
+      const filtered = list.filter((o: any) =>
         (o.pickOrders || []).some((p: any) =>
           normalize(p?.storeCode) === target || normalize(p?.storeName) === target,
         ),
       );
+      // DEBUG: ajuda a diagnosticar se filtro não funciona
+      // eslint-disable-next-line no-console
+      console.log('[separacao filter]', {
+        storeCode,
+        target,
+        total: list.length,
+        filtered: filtered.length,
+        samplePickOrders: list.slice(0, 3).map((o: any) => ({
+          id: o.id,
+          picks: (o.pickOrders || []).map((p: any) => ({ code: p?.storeCode, name: p?.storeName })),
+        })),
+      });
+      return filtered;
     };
 
     if (status === 'em-transito') {
