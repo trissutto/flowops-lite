@@ -58,6 +58,9 @@ import { OrderAppHooksService } from './order-app-hooks.service';
     AppInviteService,
     CustomerPasswordResetService,
     OrderAppHooksService,
+    // Exporta JwtModule pra módulos externos (SizeFeedbackModule etc) que
+    // usem o CustomerJwtGuard — sem isso o Nest não resolve JwtService.
+    JwtModule,
   ],
 })
 export class CustomersAppModule {}

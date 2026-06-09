@@ -1,5 +1,6 @@
 import { Body, Controller, Get, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { CatalogService } from './catalog.service';
+import { SizeFeedbackService } from '../size-feedback/size-feedback.service';
 
 /**
  * Endpoints PÚBLICOS de catálogo — sem auth (qualquer cliente vê).
@@ -7,7 +8,26 @@ import { CatalogService } from './catalog.service';
  */
 @Controller('catalog')
 export class CatalogController {
-  constructor(private readonly svc: CatalogService) {}
+  constructor(
+    private readonly svc: CatalogService,
+    private readonly sizeFeedback: SizeFeedbackService,
+  ) {}
+
+  /**
+   * GET /catalog/size-stats/:productId?size=48
+   * Estatísticas públicas de review por tamanho.
+   * NOTA: tive que usar /size-stats/:productId em vez de
+   * /products/:productId/size-stats pra evitar conflito com /products/:slug.
+   */
+  @Get('size-stats/:productId')
+  async sizeStats(
+    @Param('productId') productId: string,
+    @Query('size') size?: string,
+  ) {
+    const id = Number(productId);
+    if (!id) return { total: 0, recommendation: 'no_data' };
+    return this.sizeFeedback.getStats(id, size);
+  }
 
   @Get('categories')
   async categories() {
