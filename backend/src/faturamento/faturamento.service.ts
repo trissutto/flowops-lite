@@ -82,10 +82,11 @@ export class FaturamentoService {
       };
     }
 
-    // Lojas físicas — PdvSale
+    // Lojas físicas — PdvSale (PDV novo flowops)
+    const storeCodeUpper = storeCode.toUpperCase();
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: {
-        storeCode: storeCode.toUpperCase(),
+        storeCode: storeCodeUpper,
         status: { in: ['finalized', 'cancelled'] },
         finalizedAt: { gte: dInicio, lt: dFimExclusive },
         isTraining: false,
@@ -120,32 +121,74 @@ export class FaturamentoService {
       take: 500,
     });
 
+    // Se PDV flowops tem vendas → retorna elas (com flag canEstornar)
+    if (sales.length > 0) {
+      return {
+        storeCode: storeCodeUpper,
+        source: 'pdv_sale',
+        vendas: sales.map((s: any) => ({
+          id: s.id,
+          number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
+          status: s.status,
+          createdAt: s.finalizedAt,
+          total: s.total,
+          subtotal: s.subtotal,
+          desconto: s.desconto,
+          cancelledAt: s.cancelledAt,
+          cancelReason: s.cancelReason,
+          sellerName: s.sellerName,
+          customerCpf: s.customerCpf,
+          customerName: s.customerName,
+          paymentMethod: s.paymentMethod,
+          nfceStatus: s.nfceStatus,
+          nfceNumber: s.nfceNumber,
+          nfceSerie: s.nfceSerie,
+          nfceChave: s.nfceChave,
+          nfceAutorizadaEm: s.nfceAutorizadaEm,
+          stockDecreased: !!s.stockDecreasedAt,
+          items: s.items,
+          payments: s.payments,
+          canEstornar: s.status === 'finalized',
+        })),
+      };
+    }
+
+    // FALLBACK: Loja não usa PDV flowops → busca direto no Wincred (tabela caixa)
+    // Estorno NÃO disponível pra essas vendas — precisa ser feito no PDV Wincred legado.
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const caixaVendas = await this.erp.getVendasCaixa(
+      storeCodeUpper,
+      fmt(dInicio),
+      fmt(dFimExclusive),
+    );
+
     return {
-      storeCode: storeCode.toUpperCase(),
-      source: 'pdv_sale',
-      vendas: sales.map((s: any) => ({
-        id: s.id,
-        number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
-        status: s.status,
-        createdAt: s.finalizedAt,
-        total: s.total,
-        subtotal: s.subtotal,
-        desconto: s.desconto,
-        cancelledAt: s.cancelledAt,
-        cancelReason: s.cancelReason,
-        sellerName: s.sellerName,
-        customerCpf: s.customerCpf,
-        customerName: s.customerName,
-        paymentMethod: s.paymentMethod,
-        nfceStatus: s.nfceStatus,
-        nfceNumber: s.nfceNumber,
-        nfceSerie: s.nfceSerie,
-        nfceChave: s.nfceChave,
-        nfceAutorizadaEm: s.nfceAutorizadaEm,
-        stockDecreased: !!s.stockDecreasedAt,
-        items: s.items,
-        payments: s.payments,
-        canEstornar: s.status === 'finalized', // só finalizada pode estornar
+      storeCode: storeCodeUpper,
+      source: 'wincred_caixa',
+      sourceWarning:
+        'Esta loja ainda usa o PDV Wincred legado. Estorno não disponível por aqui — faça direto no Wincred.',
+      vendas: caixaVendas.map((v: any) => ({
+        id: `wincred:${storeCodeUpper}:${v.numero}`,
+        number: `#${v.numero}`,
+        status: 'finalized',
+        createdAt: v.data,
+        total: v.total,
+        subtotal: v.total,
+        desconto: 0,
+        sellerName: v.vendedora || (v.codFuncionario ? `cod ${v.codFuncionario}` : null),
+        customerCpf: v.cpf,
+        customerName: v.cliente,
+        paymentMethod: v.fpag,
+        nfceStatus: null,
+        nfceNumber: String(v.numero),
+        nfceSerie: null,
+        nfceChave: null,
+        nfceAutorizadaEm: null,
+        stockDecreased: true,
+        items: [{ sku: '—', descricao: `${v.qtdItens} item(ns)`, qty: v.qtdItens, precoUnit: 0, total: v.total }],
+        payments: [{ method: v.fpag || '—', valor: v.total }],
+        canEstornar: false, // estorno Wincred deve ser feito no PDV legado
       })),
     };
   }

@@ -7468,6 +7468,56 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * tipo VALORUNITARIO*QUANTIDADE ou VALORLIQUIDO, não o VALORTOTAL
    * (que pode incluir acréscimos/juros do crediário).
    */
+  /**
+   * Lista vendas DETALHADAS de uma loja no Wincred (tabela caixa) num período.
+   * Usado pelo drill-down da tela /retaguarda/faturamento pra lojas que ainda
+   * não usam o PDV flowops (vendas direto no Wincred legado).
+   *
+   * Agrupa por NUMERO (cupom fiscal) — cada cupom é uma "venda" mesmo tendo
+   * múltiplos itens na tabela caixa.
+   */
+  async getVendasCaixa(loja: string, from: string, toExclusive: string): Promise<any[]> {
+    if (!this.pool) return [];
+    try {
+      const sql = `
+        SELECT
+          NUMERO,
+          DATA,
+          MAX(NOME_CLIENTE) as NOME_CLIENTE,
+          MAX(CPFCNPJ) as CPFCNPJ,
+          MAX(VENDEDORA) as VENDEDORA,
+          MAX(FPAG) as FPAG,
+          MAX(CODFUNCIONARIO) as CODFUNCIONARIO,
+          ROUND(SUM(VALORUNITARIO * QUANTIDADE), 2) as VALOR_TOTAL,
+          SUM(QUANTIDADE) as QTD_ITENS,
+          COUNT(*) as QTD_LINHAS
+        FROM caixa
+        WHERE LOJA = ?
+          AND DATA >= ?
+          AND DATA <  ?
+          AND (MARCADO IS NULL OR MARCADO <> 'SIM')
+        GROUP BY NUMERO, DATA
+        ORDER BY DATA DESC, NUMERO DESC
+        LIMIT 500
+      `;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [loja, from, toExclusive]);
+      return (rows as any[]).map((r) => ({
+        numero: r.NUMERO,
+        data: r.DATA,
+        cliente: r.NOME_CLIENTE,
+        cpf: r.CPFCNPJ,
+        vendedora: r.VENDEDORA,
+        fpag: r.FPAG,
+        codFuncionario: r.CODFUNCIONARIO,
+        total: Number(r.VALOR_TOTAL) || 0,
+        qtdItens: Number(r.QTD_ITENS) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getVendasCaixa(${loja}) falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
   async getCaixaSchemaDiagnostic(loja: string, from: string, toExclusive: string): Promise<any> {
     if (!this.pool) return { error: 'pool não inicializado' };
     try {

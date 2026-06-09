@@ -209,6 +209,22 @@ function SeparacaoPageInner() {
   // Mapeia FILTROS.slug → total. "enviados" é painel próprio (sem contador).
   const [tabCounts, setTabCounts] = useState<Record<string, number>>({});
 
+  // Filtro de LOJA RESPONSÁVEL pela separação
+  const [storeCode, setStoreCode] = useState<string>('');
+  const [stores, setStores] = useState<Array<{ code: string; name: string; openOrders: number }>>([]);
+
+  // Carrega lojas com contagem de pedidos em aberto
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<{ stores: Array<{ code: string; name: string; openOrders: number }> }>(
+          '/orders/wc/stores-load',
+        );
+        setStores(r.stores || []);
+      } catch {}
+    })();
+  }, []);
+
   async function loadCounts() {
     try {
       const r = await api<{ byStatus: Record<string, { name: string; total: number }> }>('/orders/wc/counts');
@@ -233,7 +249,7 @@ function SeparacaoPageInner() {
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, search]);
+  }, [status, search, storeCode]);
 
   // Fetch inicial + socket listener pra issues reportados pelas lojas
   useEffect(() => {
@@ -730,6 +746,7 @@ function SeparacaoPageInner() {
       try {
         const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
         if (search) q.set('search', search);
+        if (storeCode) q.set('storeCode', storeCode);
         const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
         setOrders(res.data);
       } catch (e) {
@@ -742,6 +759,7 @@ function SeparacaoPageInner() {
     try {
       const q = new URLSearchParams({ status, per_page: '50' });
       if (search) q.set('search', search);
+      if (storeCode) q.set('storeCode', storeCode);
       const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
       setOrders(res.data);
     } catch (e) {
@@ -998,7 +1016,47 @@ function SeparacaoPageInner() {
             Limpar
           </button>
         )}
+
+        {/* ─── FILTRO LOJA RESPONSÁVEL ─── */}
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Loja:
+          </span>
+          <select
+            value={storeCode}
+            onChange={(e) => setStoreCode(e.target.value)}
+            className="px-3 py-2 border rounded text-sm bg-white min-w-[200px]"
+          >
+            <option value="">Todas as lojas</option>
+            {stores.map((s) => (
+              <option key={s.code} value={s.code}>
+                {s.name}{s.openOrders > 0 ? ` (${s.openOrders})` : ''}
+              </option>
+            ))}
+          </select>
+          {storeCode && (
+            <button
+              type="button"
+              onClick={() => setStoreCode('')}
+              className="px-2 py-1 text-xs text-slate-500 hover:text-rose-700"
+              title="Limpar filtro de loja"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </form>
+
+      {/* Aviso de filtro ativo */}
+      {storeCode && (
+        <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900 flex items-center gap-2">
+          <span>📦 Mostrando apenas pedidos da loja</span>
+          <strong>{stores.find((s) => s.code === storeCode)?.name || storeCode}</strong>
+          <span className="text-blue-700/70 ml-auto text-xs">
+            {orders.length} pedido{orders.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
 
       {/* Banner de issues ativos — alerta matriz que lojas reportaram problema */}
       {Object.keys(issuesByWcId).length > 0 && (

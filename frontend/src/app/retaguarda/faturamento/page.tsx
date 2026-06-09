@@ -122,6 +122,8 @@ export default function FaturamentoPage() {
   };
 
   // Carrega vendas detalhadas de uma loja (drill-down) — com cache local
+  // Guarda também source ('pdv_sale' | 'wincred_caixa') e sourceWarning
+  const [storeMeta, setStoreMeta] = useState<Record<string, { source?: string; sourceWarning?: string }>>({});
   const toggleStore = async (storeCode: string) => {
     if (expandedStore === storeCode) {
       setExpandedStore(null);
@@ -132,10 +134,11 @@ export default function FaturamentoPage() {
     if (storeVendas[storeCode]) return;
     setLoadingVendas(storeCode);
     try {
-      const r = await api<{ vendas: any[] }>(
+      const r = await api<{ vendas: any[]; source?: string; sourceWarning?: string }>(
         `/faturamento/loja/${encodeURIComponent(storeCode)}/vendas?from=${from}&to=${to}`,
       );
       setStoreVendas((prev) => ({ ...prev, [storeCode]: r.vendas || [] }));
+      setStoreMeta((prev) => ({ ...prev, [storeCode]: { source: r.source, sourceWarning: r.sourceWarning } }));
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar vendas detalhadas');
     } finally {
@@ -462,12 +465,20 @@ export default function FaturamentoPage() {
                                       Nenhuma venda no período pra essa loja.
                                     </div>
                                   ) : (
-                                    <DrilldownVendas
-                                      storeName={l.storeName}
-                                      storeCode={l.storeCode}
-                                      vendas={vendasDessaLoja}
-                                      onEstornar={(v) => setEstornoTarget({ ...v, storeCode: l.storeCode, storeName: l.storeName })}
-                                    />
+                                    <>
+                                      {storeMeta[l.storeCode]?.sourceWarning && (
+                                        <div className="mb-2 px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+                                          <span>⚠️</span>
+                                          <span>{storeMeta[l.storeCode].sourceWarning}</span>
+                                        </div>
+                                      )}
+                                      <DrilldownVendas
+                                        storeName={l.storeName}
+                                        storeCode={l.storeCode}
+                                        vendas={vendasDessaLoja}
+                                        onEstornar={(v) => setEstornoTarget({ ...v, storeCode: l.storeCode, storeName: l.storeName })}
+                                      />
+                                    </>
                                   )}
                                 </div>
                               </td>

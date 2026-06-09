@@ -254,13 +254,13 @@ export class PdvService {
           passos.push({
             passo: 'NFC-e SEFAZ',
             status: 'ok',
-            detalhe: `Cancelada. Protocolo cancelamento: ${r.protocolo || '—'}`,
+            detalhe: `Cancelada. Protocolo cancelamento: ${r.nProtCancelamento || '—'}`,
           });
         } else {
           passos.push({
             passo: 'NFC-e SEFAZ',
             status: 'falhou',
-            detalhe: r?.motivo || 'SEFAZ rejeitou cancelamento. Verifique janela 30min.',
+            detalhe: r?.motivo || r?.error || 'SEFAZ rejeitou cancelamento. Verifique janela 30min.',
           });
         }
       } catch (e: any) {
