@@ -183,6 +183,7 @@ export type CustomerMe = {
   cpf: string;        // mascarado: 123.***.***-45
   phone: string | null;
   email: string | null;
+  birthDate: string | null;   // YYYY-MM-DD (pra mimo aniversário)
   cashback: { balance: number; earned: number; spent: number };
   stats: {
     ltvBrl: number;
@@ -198,6 +199,20 @@ export type CustomerMe = {
 
 export async function getMe(): Promise<CustomerMe> {
   return api<CustomerMe>('/customers/app/me');
+}
+
+/** PATCH /customers/app/me — atualiza dados editáveis */
+export type UpdateProfileInput = {
+  name?: string;
+  phone?: string;
+  email?: string;
+  birthDate?: string | null;
+};
+export async function updateMe(input: UpdateProfileInput): Promise<CustomerMe> {
+  return api<CustomerMe>('/customers/app/me', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }
 
 /* ─── Lookup CPF (público, pré-cadastro) ─── */

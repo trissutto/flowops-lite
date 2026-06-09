@@ -156,6 +156,13 @@ export class CustomersAppController {
     return this.svc.me(req.customer.id);
   }
 
+  /** PATCH /me — atualiza dados editáveis (nome, whatsapp, email, birthDate) */
+  @Patch('me')
+  @UseGuards(CustomerJwtGuard)
+  async updateMe(@Req() req: any, @Body() body: any) {
+    return this.svc.updateProfile(req.customer.id, body || {});
+  }
+
   @Get('addresses')
   @UseGuards(CustomerJwtGuard)
   async addresses(@Req() req: any) {

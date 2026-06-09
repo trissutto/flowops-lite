@@ -769,6 +769,88 @@ export class CustomersAppService {
     return candidates.length;
   }
 
+  /* ─────────────────── UPDATE PROFILE ─────────────────── */
+  /**
+   * Atualiza dados editáveis do CustomerAccount.
+   * Cliente pode mudar: nome, whatsapp, email, data nascimento.
+   * CPF NÃO é editável (é o identificador único).
+   */
+  async updateProfile(accountId: string, input: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    birthDate?: string | null;
+  }) {
+    const data: any = {};
+
+    if (input.name !== undefined) {
+      const name = String(input.name || '').trim();
+      if (name.length < 2) {
+        throw new BadRequestException('Nome precisa ter pelo menos 2 caracteres');
+      }
+      if (name.length > 80) {
+        throw new BadRequestException('Nome muito longo (máx 80)');
+      }
+      data.name = name;
+    }
+
+    if (input.phone !== undefined) {
+      const phone = String(input.phone || '').replace(/\D/g, '');
+      if (phone && (phone.length < 10 || phone.length > 11)) {
+        throw new BadRequestException('WhatsApp inválido (use DDD + número)');
+      }
+      data.phone = phone || null;
+    }
+
+    if (input.email !== undefined) {
+      const email = String(input.email || '').trim().toLowerCase();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new BadRequestException('E-mail inválido');
+      }
+      data.email = email || null;
+    }
+
+    if (input.birthDate !== undefined) {
+      if (input.birthDate === null || input.birthDate === '') {
+        data.birthDate = null;
+      } else {
+        const d = new Date(input.birthDate);
+        if (isNaN(d.getTime())) {
+          throw new BadRequestException('Data de nascimento inválida');
+        }
+        const now = new Date();
+        const age = (now.getTime() - d.getTime()) / (365.25 * 86400 * 1000);
+        if (age < 13) {
+          throw new BadRequestException('É necessário ter pelo menos 13 anos');
+        }
+        if (age > 120) {
+          throw new BadRequestException('Data de nascimento inválida');
+        }
+        data.birthDate = d;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      return this.me(accountId);
+    }
+
+    try {
+      await this.prisma.customerAccount.update({
+        where: { id: accountId },
+        data,
+      });
+    } catch (e: any) {
+      // P2002 = unique constraint (email duplicado)
+      if (e?.code === 'P2002') {
+        throw new BadRequestException('Este e-mail já está em uso por outra conta');
+      }
+      throw e;
+    }
+
+    this.logger.log(`[customer-app] perfil atualizado: ${accountId.slice(0, 8)} (${Object.keys(data).join(',')})`);
+    return this.me(accountId);
+  }
+
   /* ─────────────────── ME ─────────────────── */
   /**
    * Retorna dados consolidados: account + soma de TODOS Customer linkados.
@@ -1033,6 +1115,7 @@ export class CustomersAppService {
     name: string | null;
     phone: string | null;
     email: string | null;
+    birthDate?: Date | null;
   }) {
     return {
       id: a.id,
@@ -1040,6 +1123,7 @@ export class CustomersAppService {
       cpf: maskCpfPublic(a.cpf),
       phone: a.phone,
       email: a.email,
+      birthDate: a.birthDate ? a.birthDate.toISOString().slice(0, 10) : null,
     };
   }
 }
