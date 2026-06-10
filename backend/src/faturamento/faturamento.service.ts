@@ -409,18 +409,28 @@ export class FaturamentoService {
     );
     const siteStoreCode = siteStore?.code || 'SITE';
 
+    // ── 2a) META do MÊS = faturamento do MÊS INTEIRO do ano anterior
+    //        (do dia 1 até o último dia do mês de `from`, no ano-1).
+    //        Serve como "alvo do mês" pra UI mostrar quanto falta.
+    const anoMeta = dInicio.getFullYear() - 1;
+    const mesMeta = dInicio.getMonth();
+    const dInicioMetaMes = new Date(anoMeta, mesMeta, 1);
+    const dFimMetaMesExclusive = new Date(anoMeta, mesMeta + 1, 1);
+
     // ── 2) Giga: faturamento por loja, período atual + ano anterior em paralelo ──
-    const [gigaAtual, gigaAnterior, tsAtual, tsAnterior] = await Promise.all([
+    const [gigaAtual, gigaAnterior, gigaMetaMes, tsAtual, tsAnterior] = await Promise.all([
       this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive),
       this.erp.getFaturamentoPorLoja(dInicioAnterior, dFimAnterior),
+      this.erp.getFaturamentoPorLoja(dInicioMetaMes, dFimMetaMesExclusive),
       this.erp.getFaturamentoTimeseries(dInicio, dFimExclusive, granularity),
       this.erp.getFaturamentoTimeseries(dInicioAnterior, dFimAnterior, granularity),
     ]);
 
     // ── 3) Flowops SITE: Order com status=completed no período ──
-    const [flowAtual, flowAnterior] = await Promise.all([
+    const [flowAtual, flowAnterior, flowMetaMes] = await Promise.all([
       this.getFlowopsSiteFaturamento(dInicio, dFimExclusive),
       this.getFlowopsSiteFaturamento(dInicioAnterior, dFimAnterior),
+      this.getFlowopsSiteFaturamento(dInicioMetaMes, dFimMetaMesExclusive),
     ]);
 
     // Time series Flowops SITE (mesmo formato do Giga)
@@ -428,7 +438,7 @@ export class FaturamentoService {
     const flowTsAnterior = await this.getFlowopsTimeseries(dInicioAnterior, dFimAnterior, granularity);
 
     // ── 4) Compõe SITE = Giga SITE + Flowops completed ──
-    const lojas = this.combinarLojas(
+    const lojasBase = this.combinarLojas(
       gigaAtual,
       gigaAnterior,
       flowAtual,
@@ -437,9 +447,21 @@ export class FaturamentoService {
       siteStoreCode,
     );
 
+    // ── 4b) Injeta metaMes por loja (faturamento do mês inteiro ano-1) ──
+    const mapMetaMes = new Map<string, any>(gigaMetaMes.map((r: any) => [r.storeCode, r]));
+    const lojas = lojasBase.map((l: any) => {
+      const gm = mapMetaMes.get(l.storeCode) || { faturamento: 0 };
+      const isSite = l.storeCode === siteStoreCode;
+      const metaMes = isSite
+        ? Number(gm.faturamento || 0) + Number(flowMetaMes.faturamento || 0)
+        : Number(gm.faturamento || 0);
+      return { ...l, metaMes };
+    });
+
     // ── 5) Totais ──
     const totalAtual = lojas.reduce((s, l) => s + l.atual.faturamento, 0);
     const totalAnterior = lojas.reduce((s, l) => s + l.anterior.faturamento, 0);
+    const totalMetaMes = lojas.reduce((s, l) => s + (l.metaMes || 0), 0);
     const totalCuponsAtual = lojas.reduce((s, l) => s + l.atual.cupons, 0);
     const totalPecasAtual = lojas.reduce((s, l) => s + l.atual.pecas, 0);
     const varTotal = totalAnterior > 0 ? ((totalAtual - totalAnterior) / totalAnterior) * 100 : 0;
@@ -470,6 +492,11 @@ export class FaturamentoService {
         cupons: totalCuponsAtual,
         pecas: totalPecasAtual,
         ticketMedio: totalCuponsAtual > 0 ? totalAtual / totalCuponsAtual : 0,
+        metaMes: totalMetaMes,
+      },
+      metaMesPeriodo: {
+        from: this.isoDate(dInicioMetaMes),
+        to: this.isoDate(new Date(dFimMetaMesExclusive.getTime() - 86400_000)),
       },
       lojas,
       series,

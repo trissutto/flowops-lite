@@ -41,7 +41,9 @@ type Resumo = {
     cupons: number;
     pecas: number;
     ticketMedio: number;
+    metaMes?: number;
   };
+  metaMesPeriodo?: { from: string; to: string };
   lojas: Array<{
     storeCode: string;
     storeName: string;
@@ -57,6 +59,7 @@ type Resumo = {
     };
     anterior: { faturamento: number; cupons: number; pecas: number; ticketMedio: number };
     variacaoPct: number;
+    metaMes?: number;
   }>;
   series: Array<{ bucket: string; atual: number; anterior: number }>;
   cached: boolean;
@@ -471,8 +474,10 @@ export default function FaturamentoPage() {
                       <th className="px-3 py-2 text-left">Loja</th>
                       <th className="px-3 py-2 text-right">2026</th>
                       <th className="px-3 py-2 text-right">2025</th>
+                      <th className="px-3 py-2 text-right w-24">Δ R$</th>
                       <th className="px-3 py-2 text-right w-20">Δ%</th>
-                      <th className="px-3 py-2 text-left w-1/3">Visual</th>
+                      <th className="px-3 py-2 text-right w-32" title="Faturamento do mês inteiro do ano passado vs realizado">Falta Meta</th>
+                      <th className="px-3 py-2 text-left w-1/4">Visual</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -509,12 +514,51 @@ export default function FaturamentoPage() {
                             <td className="px-3 py-2 text-right text-slate-500 tabular-nums">
                               {brl(l.anterior.faturamento)}
                             </td>
+                            {/* Δ R$ — diferença absoluta atual - ano anterior */}
+                            {(() => {
+                              const deltaRs = l.atual.faturamento - l.anterior.faturamento;
+                              const dColor = deltaRs > 0 ? 'text-emerald-700' : deltaRs < 0 ? 'text-rose-700' : 'text-slate-500';
+                              const dBg = deltaRs > 0 ? 'bg-emerald-50' : deltaRs < 0 ? 'bg-rose-50' : 'bg-slate-50';
+                              return (
+                                <td className={`px-3 py-2 text-right font-bold tabular-nums ${dColor}`}>
+                                  <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${dBg}`}>
+                                    {deltaRs > 0 ? '+' : ''}{brl(deltaRs)}
+                                  </span>
+                                </td>
+                              );
+                            })()}
                             <td className={`px-3 py-2 text-right font-bold tabular-nums ${varColor}`}>
                               <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${varBg}`}>
                                 {variacao > 0 ? '▲' : variacao < 0 ? '▼' : '='}
                                 {variacao >= 0 ? '+' : ''}{variacao.toFixed(1)}%
                               </span>
                             </td>
+                            {/* Falta Meta — meta = mês inteiro ano anterior */}
+                            {(() => {
+                              const meta = Number(l.metaMes || 0);
+                              const falta = meta - l.atual.faturamento;
+                              if (meta <= 0) {
+                                return <td className="px-3 py-2 text-right text-slate-300 text-xs italic">—</td>;
+                              }
+                              const bateu = falta <= 0;
+                              const pctAtingido = Math.min(100, (l.atual.faturamento / meta) * 100);
+                              return (
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  <div className="flex flex-col items-end gap-0.5">
+                                    <span className={`text-xs font-bold ${bateu ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                      {bateu ? `✓ +${brl(Math.abs(falta))}` : `falta ${brl(falta)}`}
+                                    </span>
+                                    <div className="w-20 bg-slate-100 rounded-sm h-1 overflow-hidden">
+                                      <div
+                                        className={`h-full rounded-sm ${bateu ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                        style={{ width: `${pctAtingido}%` }}
+                                      />
+                                    </div>
+                                    <span className="text-[9px] text-slate-400">meta {brl(meta)}</span>
+                                  </div>
+                                </td>
+                              );
+                            })()}
                             <td className="px-3 py-2">
                               <div className="space-y-1">
                                 <div className="flex items-center gap-2">
@@ -541,7 +585,7 @@ export default function FaturamentoPage() {
                           {/* ─── DRILL-DOWN ─── */}
                           {isExpanded && (
                             <tr>
-                              <td colSpan={6} className="p-0 bg-slate-50 border-l-4 border-blue-500">
+                              <td colSpan={8} className="p-0 bg-slate-50 border-l-4 border-blue-500">
                                 <div className="p-3">
                                   {isLoadingExp ? (
                                     <div className="text-center text-slate-500 py-4 text-sm">
@@ -586,9 +630,43 @@ export default function FaturamentoPage() {
                       <td className="px-3 py-2 text-right text-slate-600 tabular-nums">
                         {brl(data.totalRede.anterior)}
                       </td>
+                      {/* TOTAL Δ R$ */}
+                      {(() => {
+                        const deltaTot = data.totalRede.atual - data.totalRede.anterior;
+                        const cor = deltaTot > 0 ? 'text-emerald-700' : deltaTot < 0 ? 'text-rose-700' : 'text-slate-500';
+                        return (
+                          <td className={`px-3 py-2 text-right tabular-nums ${cor}`}>
+                            {deltaTot > 0 ? '+' : ''}{brl(deltaTot)}
+                          </td>
+                        );
+                      })()}
                       <td className={`px-3 py-2 text-right tabular-nums ${data.totalRede.variacaoPct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                         {data.totalRede.variacaoPct >= 0 ? '+' : ''}{data.totalRede.variacaoPct.toFixed(1)}%
                       </td>
+                      {/* TOTAL Falta Meta */}
+                      {(() => {
+                        const meta = Number(data.totalRede.metaMes || 0);
+                        if (meta <= 0) return <td className="px-3 py-2 text-right text-slate-300 italic">—</td>;
+                        const falta = meta - data.totalRede.atual;
+                        const bateu = falta <= 0;
+                        const pct = Math.min(100, (data.totalRede.atual / meta) * 100);
+                        return (
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            <div className="flex flex-col items-end gap-0.5">
+                              <span className={`text-xs font-extrabold ${bateu ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                {bateu ? `✓ +${brl(Math.abs(falta))}` : `falta ${brl(falta)}`}
+                              </span>
+                              <div className="w-24 bg-slate-200 rounded-sm h-1.5 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-sm ${bateu ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              <span className="text-[9px] text-slate-500">{pct.toFixed(0)}% de {brl(meta)}</span>
+                            </div>
+                          </td>
+                        );
+                      })()}
                       <td className="px-3 py-2"></td>
                     </tr>
                   </tfoot>
@@ -1039,10 +1117,10 @@ function EstornoModal({
               >
                 Entendi, fechar
               </button>
-            </>
+                  </>
           )}
         </div>
-          </div>
       </div>
+    </div>
   );
 }
