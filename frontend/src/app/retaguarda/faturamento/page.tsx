@@ -133,6 +133,9 @@ export default function FaturamentoPage() {
   const load = async (forceRefresh = false) => {
     setLoading(true);
     setErr(null);
+    // Limpa cache de drill-down — qualquer mudança no resumo invalida detalhes
+    setStoreVendas({});
+    setStoreMeta({});
     try {
       const qs = new URLSearchParams({ from, to, granularity });
       if (forceRefresh) qs.set('refresh', '1');
@@ -553,6 +556,7 @@ export default function FaturamentoPage() {
                                         storeCode={l.storeCode}
                                         vendas={vendasDessaLoja}
                                         onEstornar={(v) => setEstornoTarget({ ...v, storeCode: l.storeCode, storeName: l.storeName })}
+                                        periodLabel={from === to ? from : `${from} → ${to}`}
                                       />
                                     </>
                                   )}
@@ -697,11 +701,13 @@ function DrilldownVendas({
   storeCode,
   vendas,
   onEstornar,
+  periodLabel,
 }: {
   storeName: string;
   storeCode: string;
   vendas: any[];
   onEstornar: (v: any) => void;
+  periodLabel?: string;
 }) {
   const fmtDate = (iso: string) =>
     iso ? new Date(iso).toLocaleString('pt-BR') : '—';
@@ -715,7 +721,8 @@ function DrilldownVendas({
     <div className="bg-white border border-blue-200 rounded-lg overflow-hidden">
       <div className="px-3 py-2 bg-blue-50 border-b border-blue-200 flex items-center justify-between text-xs">
         <div className="font-bold text-blue-900">
-          📊 {storeName} — {vendas.length} venda{vendas.length === 1 ? '' : 's'} no período
+          📊 {storeName} — {vendas.length} venda{vendas.length === 1 ? '' : 's'}
+          {periodLabel && <span className="text-blue-700/70 font-normal"> · período {periodLabel}</span>}
           {qtdCancelled > 0 && (
             <span className="ml-2 text-rose-700">({qtdCancelled} cancelada{qtdCancelled === 1 ? '' : 's'})</span>
           )}

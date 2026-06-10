@@ -214,24 +214,42 @@ export class FaturamentoService {
     const storeName = storeRecord?.name?.toUpperCase() || '';
     const possibleCodes = [storeCodeUpper, storeName].filter(Boolean);
 
+    // Filtro de data ESTRITO: a venda precisa ter algum timestamp DENTRO do
+    // período. Usa AND explícito pra evitar ambiguidade do Prisma com OR
+    // misturado com outros campos no nível top do where.
+    const dateInPeriod = {
+      OR: [
+        { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
+        // Estornadas hoje (cancelledAt no período) também aparecem
+        { cancelledAt: { gte: dInicio, lt: dFimExclusive } },
+        // Vendas sem finalizedAt (legadas) — usa createdAt
+        {
+          AND: [
+            { finalizedAt: null },
+            { cancelledAt: null },
+            { createdAt: { gte: dInicio, lt: dFimExclusive } },
+          ],
+        },
+      ],
+    };
+
+    const storeFilter: any = possibleCodes.length > 1
+      ? { storeCode: { in: possibleCodes } }
+      : { storeCode: storeCodeUpper };
+
+    this.logger.log(
+      `[getVendasDetalhadas] storeCode=${storeCodeUpper} possible=${JSON.stringify(possibleCodes)} ` +
+      `period=${from}→${to} (dInicio=${dInicio.toISOString()} dFim=${dFimExclusive.toISOString()})`,
+    );
+
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: {
-        // Match em code OR name (acomoda variação de gravação)
-        storeCode: possibleCodes.length > 1
-          ? { in: possibleCodes }
-          : storeCodeUpper,
-        status: { in: ['finalized', 'cancelled'] },
-        // Match em finalizedAt OR createdAt — vendas legadas podem ter finalizedAt NULL
-        OR: [
-          { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
-          {
-            AND: [
-              { finalizedAt: null },
-              { createdAt: { gte: dInicio, lt: dFimExclusive } },
-            ],
-          },
+        AND: [
+          storeFilter,
+          { status: { in: ['finalized', 'cancelled'] } },
+          { isTraining: false },
+          dateInPeriod,
         ],
-        isTraining: false,
       },
       select: {
         id: true,
@@ -267,16 +285,26 @@ export class FaturamentoService {
       take: 500,
     });
 
+    this.logger.log(
+      `[getVendasDetalhadas] storeCode=${storeCodeUpper} retornou ${sales.length} vendas`,
+    );
+
     // Se PDV flowops tem vendas → retorna elas (com flag canEstornar)
     if (sales.length > 0) {
       return {
         storeCode: storeCodeUpper,
         source: 'pdv_sale',
+        appliedPeriod: { from, to },
         vendas: sales.map((s: any) => ({
           id: s.id,
           number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
           status: s.status,
-          createdAt: s.finalizedAt || s.createdAt,
+          // Mostra a data mais relevante:
+          // estornadas → cancelledAt (data do estorno)
+          // outras → finalizedAt
+          createdAt: s.status === 'cancelled'
+            ? (s.cancelledAt || s.finalizedAt || s.createdAt)
+            : (s.finalizedAt || s.createdAt),
           total: s.total,
           subtotal: s.subtotal,
           desconto: s.desconto,
