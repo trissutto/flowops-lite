@@ -131,14 +131,19 @@ export default function FaturamentoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [from, to]);
 
-  const load = async (forceRefresh = false) => {
+  const load = async (
+    forceRefresh = false,
+    override?: { from?: string; to?: string },
+  ) => {
+    const useFrom = override?.from ?? from;
+    const useTo = override?.to ?? to;
     setLoading(true);
     setErr(null);
     // Limpa cache de drill-down — qualquer mudança no resumo invalida detalhes
     setStoreVendas({});
     setStoreMeta({});
     try {
-      const qs = new URLSearchParams({ from, to, granularity });
+      const qs = new URLSearchParams({ from: useFrom, to: useTo, granularity });
       if (forceRefresh) qs.set('refresh', '1');
       const r = await api<Resumo>(`/faturamento/resumo?${qs.toString()}`);
       setData(r);
@@ -295,13 +300,13 @@ export default function FaturamentoPage() {
             Aplicar
           </button>
 
-          {/* Atalhos rápidos */}
+          {/* Atalhos rápidos — disparam load() na hora, sem precisar clicar Aplicar */}
           <div className="flex gap-1">
             <button
               onClick={() => {
                 const t = todayIso();
                 setFrom(t); setTo(t);
-                setTimeout(load, 0);
+                load(false, { from: t, to: t });
               }}
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
               title="Hoje"
@@ -314,7 +319,7 @@ export default function FaturamentoPage() {
                 d.setDate(d.getDate() - 1);
                 const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                 setFrom(iso); setTo(iso);
-                setTimeout(load, 0);
+                load(false, { from: iso, to: iso });
               }}
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
               title="Ontem"
@@ -326,8 +331,9 @@ export default function FaturamentoPage() {
                 const d = new Date();
                 d.setDate(d.getDate() - 7);
                 const fromIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                setFrom(fromIso); setTo(todayIso());
-                setTimeout(load, 0);
+                const toIso = todayIso();
+                setFrom(fromIso); setTo(toIso);
+                load(false, { from: fromIso, to: toIso });
               }}
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
               title="Últimos 7 dias"
@@ -336,8 +342,10 @@ export default function FaturamentoPage() {
             </button>
             <button
               onClick={() => {
-                setFrom(firstOfMonthIso()); setTo(todayIso());
-                setTimeout(load, 0);
+                const fromIso = firstOfMonthIso();
+                const toIso = todayIso();
+                setFrom(fromIso); setTo(toIso);
+                load(false, { from: fromIso, to: toIso });
               }}
               className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
               title="Mês atual"
@@ -1034,7 +1042,7 @@ function EstornoModal({
             </>
           )}
         </div>
-      </div>
+          </div>
       </div>
   );
 }
