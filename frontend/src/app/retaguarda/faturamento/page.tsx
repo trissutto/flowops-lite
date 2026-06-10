@@ -268,6 +268,58 @@ export default function FaturamentoPage() {
           >
             Aplicar
           </button>
+
+          {/* Atalhos rápidos */}
+          <div className="flex gap-1">
+            <button
+              onClick={() => {
+                const t = todayIso();
+                setFrom(t); setTo(t);
+                setTimeout(load, 0);
+              }}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
+              title="Hoje"
+            >
+              Hoje
+            </button>
+            <button
+              onClick={() => {
+                const d = new Date();
+                d.setDate(d.getDate() - 1);
+                const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                setFrom(iso); setTo(iso);
+                setTimeout(load, 0);
+              }}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
+              title="Ontem"
+            >
+              Ontem
+            </button>
+            <button
+              onClick={() => {
+                const d = new Date();
+                d.setDate(d.getDate() - 7);
+                const fromIso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                setFrom(fromIso); setTo(todayIso());
+                setTimeout(load, 0);
+              }}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
+              title="Últimos 7 dias"
+            >
+              7 dias
+            </button>
+            <button
+              onClick={() => {
+                setFrom(firstOfMonthIso()); setTo(todayIso());
+                setTimeout(load, 0);
+              }}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-bold"
+              title="Mês atual"
+            >
+              Mês
+            </button>
+          </div>
+
           {data?.periodoAnterior && (
             <div className="text-xs text-slate-500 ml-auto flex items-center gap-1">
               <Calendar className="w-3 h-3" />
