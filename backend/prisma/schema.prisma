@@ -2682,3 +2682,47 @@ model ProductPhoto {
   @@map("product_photos")
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// ESTOQUE — espelho do Wincred no PostgreSQL pra migração 30/06
+// ═══════════════════════════════════════════════════════════════════════
+// Fase 2 da migração Giga → Flowops. Sync via /retaguarda/estoque/sync
+// pega da tabela `estoque` do Wincred (SELECT CODIGO, LOJA, ESTOQUE).
+// Foco inicial nas 5 lojas migradas (INDAIATUBA, ITANHAEM, MOEMA, SOROCABA, SANTOS).
+//
+// Quando PDV finalizar venda, decrementa AQUI primeiro (read fast) + grava
+// também no Giga via double-write. Quando Giga sair, é só remover a chamada.
+model Stock {
+  id        String   @id @default(uuid())
+  storeCode String   @map("store_code")
+  sku       String                          // CODIGO do Wincred
+  qty       Int      @default(0)            // estoque disponível
+  syncedAt  DateTime @default(now()) @map("synced_at")  // último sync do Giga
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([storeCode, sku])
+  @@index([storeCode, qty])
+  @@index([sku])
+  @@map("stock")
+}
+
+// Log de toda movimentação de estoque — auditoria + reconciliação.
+// reason: 'sync_giga' | 'sale' | 'return' | 'adjust' | 'transfer' | 'initial'
+model StockMovement {
+  id        String   @id @default(uuid())
+  storeCode String   @map("store_code")
+  sku       String
+  delta     Int                              // negativo = saída, positivo = entrada
+  qtyBefore Int      @map("qty_before")
+  qtyAfter  Int      @map("qty_after")
+  reason    String                           // categoria do movimento
+  refId     String?  @map("ref_id")          // saleId / orderId / transferId
+  note      String?                          // observação livre
+  userId    String?  @map("user_id")         // quem fez (se aplicável)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([storeCode, sku, createdAt(sort: Desc)])
+  @@index([reason, createdAt(sort: Desc)])
+  @@index([refId])
+  @@map("stock_movements")
+}
+

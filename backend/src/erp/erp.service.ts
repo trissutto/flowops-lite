@@ -7469,6 +7469,88 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * (que pode incluir acréscimos/juros do crediário).
    */
   /**
+   * Lista funcionários (vendedoras) ATIVAS de uma loja no Wincred.
+   * Filtra por status ativo + LOJA. Usado pelo sync /retaguarda/vendedoras
+   * pra popular PdvActiveSeller.
+   */
+  async getFuncionariosAtivosByLoja(storeCodes: string[]): Promise<Array<{
+    codigo: string;
+    nome: string;
+    apelido: string | null;
+    storeCode: string;
+  }>> {
+    if (!this.pool) return [];
+    const codes = storeCodes.filter(Boolean);
+    if (codes.length === 0) return [];
+    try {
+      // Tenta primeiro com FLAG_INATIVO (estrutura comum do Wincred).
+      // Se não existir essa coluna, cai pro select sem filtro e o caller filtra.
+      let rows: mysql.RowDataPacket[] = [];
+      try {
+        const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, NOME, APELIDO, LOJA
+             FROM funcionarios
+            WHERE LOJA IN (?)
+              AND (FLAG_INATIVO IS NULL OR FLAG_INATIVO = 'N' OR FLAG_INATIVO = 0)
+            ORDER BY LOJA, NOME`,
+          [codes],
+        );
+        rows = r;
+      } catch {
+        const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, NOME, APELIDO, LOJA
+             FROM funcionarios
+            WHERE LOJA IN (?)
+            ORDER BY LOJA, NOME`,
+          [codes],
+        );
+        rows = r;
+      }
+      return (rows as any[]).map((r) => ({
+        codigo: String(r.CODIGO || '').trim(),
+        nome: String(r.NOME || '').trim(),
+        apelido: r.APELIDO ? String(r.APELIDO).trim() : null,
+        storeCode: String(r.LOJA || '').trim().toUpperCase(),
+      })).filter((r) => r.codigo && r.nome);
+    } catch (e: any) {
+      this.logger.error(`getFuncionariosAtivosByLoja falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista TODO o estoque (sku → qty) das lojas dadas no Wincred.
+   * Usado pelo StockMirrorService pra sync inicial e periódico.
+   * Filtra ESTOQUE > 0 pra evitar trazer 200k linhas zeradas inúteis.
+   */
+  async getEstoqueFullByLoja(storeCodes: string[]): Promise<Array<{
+    sku: string;
+    storeCode: string;
+    qty: number;
+  }>> {
+    if (!this.pool) return [];
+    const codes = storeCodes.filter(Boolean);
+    if (codes.length === 0) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
+           FROM estoque
+          WHERE LOJA IN (?)
+            AND ESTOQUE > 0`,
+        [codes],
+      );
+      return (rows as any[]).map((r) => ({
+        sku: String(r.sku || '').trim(),
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        qty: Number(r.qty) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getEstoqueFullByLoja falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
    * Marca uma venda do Wincred como CANCELADA (MARCADO='SIM').
    * Usada no fluxo de estorno do flowops — remove a venda do faturamento + caixa
    * sem deletar fisicamente (audit trail preservado).

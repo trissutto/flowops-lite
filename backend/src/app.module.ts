@@ -11,6 +11,7 @@ import { CustomersAppModule } from './customers-app/customers-app.module';
 import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { ProgressiveDiscountModule } from './progressive-discount/progressive-discount.module';
+import { StockMirrorModule } from './stock-mirror/stock-mirror.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
 import { StockModule } from './stock/stock.module';
@@ -65,6 +66,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     SizeFeedbackModule,
     CatalogModule,
     ProgressiveDiscountModule,
+    StockMirrorModule,
     ProductsModule,
     StoresModule,
     StockModule,
