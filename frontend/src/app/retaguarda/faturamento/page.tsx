@@ -107,6 +107,29 @@ export default function FaturamentoPage() {
     if (!token) router.push('/login');
   }, [router]);
 
+  // Invalida cache de drill-down quando MUDA o período.
+  // Se a loja expandida estava aberta, força recarga com o novo período.
+  useEffect(() => {
+    setStoreVendas({});
+    setStoreMeta({});
+    // Se tem uma loja expandida, dispara recarregar
+    if (expandedStore) {
+      const sc = expandedStore;
+      setLoadingVendas(sc);
+      (async () => {
+        try {
+          const r = await api<{ vendas: any[]; source?: string; sourceWarning?: string }>(
+            `/faturamento/loja/${encodeURIComponent(sc)}/vendas?from=${from}&to=${to}`,
+          );
+          setStoreVendas((prev) => ({ ...prev, [sc]: r.vendas || [] }));
+          setStoreMeta((prev) => ({ ...prev, [sc]: { source: r.source, sourceWarning: r.sourceWarning } }));
+        } catch {}
+        setLoadingVendas(null);
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to]);
+
   const load = async (forceRefresh = false) => {
     setLoading(true);
     setErr(null);
