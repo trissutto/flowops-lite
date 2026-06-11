@@ -31,7 +31,7 @@ import { ConnectionProvider, ConnectionBadge, useConnection } from '@/lib/connec
 import Logo from '@/components/Logo';
 import {
   Search, ArrowLeft, RefreshCw, X, MessageCircle,
-  XCircle, AlertCircle, Store, Tag, Barcode, ChevronRight,
+  XCircle, AlertCircle, Store, Tag, Barcode, ChevronRight, ChevronDown,
   Plus, Trash2, Truck, Home, MapPin,
 } from 'lucide-react';
 
@@ -392,7 +392,11 @@ function ConsultarInner() {
             >
               <ArrowLeft className="w-4 h-4" /> Voltar pra lista de REFs
             </button>
-            <ProductCard item={pickedRefFromDesc} highlightSku={null} />
+            <ProductCard
+              item={pickedRefFromDesc}
+              highlightSku={null}
+              myStore={data?.myStore ?? (me?.storeCode ? { code: me.storeCode, name: me.storeName ?? me.storeCode } : null)}
+            />
           </div>
         )}
 
@@ -417,6 +421,7 @@ function ConsultarInner() {
                 key={r.ref}
                 item={r}
                 highlightSku={mode === 'sku' ? r.matchedSku ?? null : null}
+                myStore={data.myStore}
               />
             ))}
           </div>
@@ -598,7 +603,11 @@ function sortSizes(a: string, b: string): number {
 // ============================================================
 // Product card — matriz cor × tamanho
 // ============================================================
-function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku: string | null }) {
+function ProductCard({ item, highlightSku, myStore }: {
+  item: ProductResult;
+  highlightSku: string | null;
+  myStore?: { code: string; name: string } | null;
+}) {
   const hasInMyStore = item.myStoreTotal > 0;
 
   // Monta a matriz: lista de tamanhos únicos (colunas) × lista de cores (linhas)
@@ -832,6 +841,9 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         <CellLegend />
       </section>
 
+      {/* ESTOQUE POR LOJA — matriz sempre visível (estilo Wincred): variação × loja, sem precisar clicar. */}
+      <StockByStoreMatrix item={item} myStore={myStore ?? null} />
+
       {/* OUTRAS LOJAS — só aparece quando usuário clica em cor/tamanho/célula. */}
       {(selectedColor || selectedSize) && filteredOtherStores.length > 0 && (
         <section className="px-4 pb-4 pt-1 border-t border-slate-100 bg-slate-50/50">
@@ -891,6 +903,204 @@ function ProductCard({ item, highlightSku }: { item: ProductResult; highlightSku
         </section>
       )}
     </article>
+  );
+}
+
+/**
+ * ESTOQUE POR LOJA — matriz variação × loja, SEMPRE visível (sem clique).
+ *
+ * Pedido das vendedoras: o Wincred mostrava direto em quais lojas tinha cada
+ * variação. Aqui derivamos tudo do resultado já carregado (zero chamadas novas):
+ *  - LINHAS  = variações (cor · tamanho) com estoque > 0 em alguma loja,
+ *              agrupadas por cor e ordenadas por tamanho.
+ *  - COLUNAS = MINHA LOJA primeiro (destacada em dourado-claro), depois as
+ *              outras lojas com estoque dessa REF, por qty total desc.
+ *  - Rodapé  = total por loja. Primeira coluna sticky pra aguentar muita loja.
+ * Dá pra recolher, mas o default é ABERTO.
+ */
+function StockByStoreMatrix({ item, myStore }: {
+  item: ProductResult;
+  myStore: { code: string; name: string } | null;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const { rows, stores, myTotal, totalsByStore } = useMemo(() => {
+    const keyOf = (cor: string, tam: string) => `${cor} ${tam}`;
+    const meta = new Map<string, { cor: string; tamanho: string }>();
+    const register = (corRaw: string, tamRaw: string) => {
+      const cor = (corRaw || '—').trim();
+      const tam = (tamRaw || '—').trim();
+      const k = keyOf(cor, tam);
+      if (!meta.has(k)) meta.set(k, { cor, tamanho: tam });
+      return k;
+    };
+
+    // Quantidades da MINHA loja por variação.
+    const myQty = new Map<string, number>();
+    for (const v of item.variants) {
+      const k = register(v.cor, v.tamanho);
+      myQty.set(k, (myQty.get(k) || 0) + v.myStoreQty);
+    }
+
+    // Quantidades das OUTRAS lojas por variação (code → key → qty).
+    const otherQty = new Map<string, Map<string, number>>();
+    for (const s of item.otherStores) {
+      const m = otherQty.get(s.code) ?? new Map<string, number>();
+      for (const v of s.variants) {
+        const k = register(v.cor, v.tamanho);
+        m.set(k, (m.get(k) || 0) + v.qty);
+      }
+      otherQty.set(s.code, m);
+    }
+
+    // Colunas: outras lojas com estoque dessa REF, maior estoque primeiro.
+    const stores = item.otherStores
+      .filter((s) => s.qty > 0)
+      .slice()
+      .sort((a, b) => b.qty - a.qty || a.code.localeCompare(b.code));
+
+    // Linhas: só variações com estoque > 0 em alguma loja (minha ou outras).
+    const keys = Array.from(meta.keys()).filter((k) =>
+      (myQty.get(k) || 0) > 0 ||
+      stores.some((s) => (otherQty.get(s.code)?.get(k) || 0) > 0)
+    );
+    keys.sort((ka, kb) => {
+      const a = meta.get(ka)!;
+      const b = meta.get(kb)!;
+      const c = a.cor.localeCompare(b.cor);
+      if (c !== 0) return c;
+      return sortSizes(a.tamanho, b.tamanho);
+    });
+
+    const rows = keys.map((k) => {
+      const { cor, tamanho } = meta.get(k)!;
+      return {
+        key: k,
+        cor,
+        tamanho,
+        myQty: myQty.get(k) || 0,
+        byStore: stores.map((s) => otherQty.get(s.code)?.get(k) || 0),
+      };
+    });
+
+    const myTotal = rows.reduce((acc, r) => acc + r.myQty, 0);
+    const totalsByStore = stores.map((_, i) =>
+      rows.reduce((acc, r) => acc + r.byStore[i], 0)
+    );
+
+    return { rows, stores, myTotal, totalsByStore };
+  }, [item.variants, item.otherStores]);
+
+  if (rows.length === 0) return null;
+
+  const myLabel = myStore ? `MINHA LOJA (${myStore.code})` : 'MINHA LOJA';
+
+  return (
+    <section className="px-3 pb-3">
+      <div className="flex items-center justify-between mb-2 px-1 gap-2 flex-wrap">
+        <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 flex items-center gap-1">
+          <Store className="w-3 h-3" /> Estoque por loja · todas as variações, sem precisar clicar
+        </div>
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          className="text-xs text-brand font-medium hover:underline flex items-center gap-1"
+          aria-expanded={!collapsed}
+        >
+          {collapsed
+            ? <><ChevronRight className="w-3 h-3" /> Mostrar</>
+            : <><ChevronDown className="w-3 h-3" /> Recolher</>}
+        </button>
+      </div>
+
+      {!collapsed && (
+        <div className="overflow-x-auto border border-slate-200 rounded-lg">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-100 border-b border-slate-200">
+                <th className="text-left px-2 py-1 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 min-w-[110px] border-r border-slate-200">
+                  Variação
+                </th>
+                <th
+                  className="px-2 py-1 text-center font-bold text-slate-900 whitespace-nowrap bg-[#FAF6E8] border-r border-slate-200"
+                  title={myStore?.name ?? 'Minha loja'}
+                >
+                  {myLabel}
+                </th>
+                {stores.map((s) => (
+                  <th
+                    key={s.code}
+                    className="px-2 py-1 text-center font-semibold text-slate-600 whitespace-nowrap min-w-[44px]"
+                    title={s.name}
+                  >
+                    {s.code}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => {
+                const newColorGroup = idx > 0 && rows[idx - 1].cor !== r.cor;
+                return (
+                  <tr
+                    key={r.key}
+                    className={`border-b border-slate-100 hover:bg-slate-50 ${
+                      newColorGroup ? 'border-t-2 border-t-slate-200' : ''
+                    }`}
+                  >
+                    <td className="px-2 py-1 sticky left-0 z-10 bg-white border-r border-slate-100 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-800">
+                        <span className="truncate max-w-[110px]" title={r.cor}>{r.cor}</span>
+                        <span className="text-slate-400 font-normal">·</span>
+                        <span>{r.tamanho}</span>
+                      </span>
+                    </td>
+                    <td className={`px-2 py-1 text-center border-r border-slate-200 bg-[#FAF6E8] ${
+                      r.myQty > 0
+                        ? 'font-extrabold text-emerald-800'
+                        : 'text-slate-300'
+                    }`}>
+                      {r.myQty > 0 ? r.myQty : '—'}
+                    </td>
+                    {r.byStore.map((q, i) => (
+                      <td
+                        key={stores[i].code}
+                        className={`px-2 py-1 text-center ${
+                          q > 0 ? 'font-bold text-slate-800' : 'text-slate-300'
+                        }`}
+                      >
+                        {q > 0 ? q : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+              {/* Rodapé: total por loja */}
+              <tr className="bg-slate-100 border-t-2 border-slate-300">
+                <td className="px-2 py-1 font-bold text-slate-700 sticky left-0 bg-slate-100 z-10 border-r border-slate-200">
+                  TOTAL
+                </td>
+                <td className={`px-2 py-1 text-center font-extrabold bg-[#FAF6E8] ${
+                  myTotal > 0 ? 'text-emerald-800' : 'text-slate-400'
+                }`}>
+                  {myTotal}
+                </td>
+                {totalsByStore.map((t, i) => (
+                  <td
+                    key={stores[i].code}
+                    className={`px-2 py-1 text-center font-bold ${
+                      t > 0 ? 'text-slate-800' : 'text-slate-400'
+                    }`}
+                  >
+                    {t}
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
