@@ -1667,15 +1667,14 @@ function SeparacaoPageInner() {
                 className="p-1.5 rounded hover:bg-slate-800 disabled:opacity-50"
                 title="Limpar seleção"
               >
-                <X className="w-4 h-4" />
+-4" />
               </button>
             </div>
           </div>
         </div>
       )}
-         </>
+      </>
       )}
     </AdminShell>
   );
 }
-
