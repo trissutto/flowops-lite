@@ -5298,10 +5298,11 @@ function PaymentModal({
               {/* PDV2: COLUNA ÚNICA — uma linha por parcela, leitura limpa
                   de cima pra baixo ("3× de R$ 15,93"). Linha selecionada
                   vira verde. Dica de teclado: 1-9 selecionam direto. */}
-              <div className="flex flex-col gap-1 max-h-[42vh] overflow-y-auto pr-1">
+              <div className="flex flex-col gap-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
+                  const todasIguais = calc.iguais === calc.ultima;
                   const ativo = parcelas === p;
                   return (
                     <button
@@ -5320,7 +5321,7 @@ function PaymentModal({
                       <span className={`flex-1 text-left text-[11px] uppercase tracking-wide font-semibold ${
                         ativo ? 'text-white/85' : 'text-slate-400'
                       }`}>
-                        {p === 1 ? 'à vista' : 'de'}
+                        {p === 1 ? 'à vista' : todasIguais ? 'de' : `de · última ${brl(calc.ultima)}`}
                       </span>
                       <span className={`text-base font-black tabular-nums leading-none ${
                         ativo ? 'text-white' : 'text-slate-800'
@@ -5332,22 +5333,9 @@ function PaymentModal({
                 })}
               </div>
 
-              {/* Card destaque ULTRA-COMPACTO — uma linha só com info essencial */}
-              {(() => {
-                const calc = calcularParcelas(baseTotal, parcelas);
-                const todasIguais = calc.iguais === calc.ultima;
-                return (
-                  <div className="bg-emerald-600 rounded-lg px-3 py-1.5 flex items-center justify-between text-white shadow-sm">
-                    <span className="text-[10px] uppercase tracking-wider font-bold opacity-90">
-                      {parcelas === 1 ? 'À vista' : 'Parcelado'}
-                      {!todasIguais && ` · últ ${brl(calc.ultima)}`}
-                    </span>
-                    <span className="text-lg font-black tabular-nums">
-                      {parcelas === 1 ? brl(baseTotal) : `${parcelas}× ${brl(calc.iguais)}`}
-                    </span>
-                  </div>
-                );
-              })()}
+              {/* PDV2: card-resumo verde REMOVIDO — redundante com a linha
+                  selecionada (que já destaca Nx + valor). A info de "última
+                  parcela ajustada" foi pra dentro da própria linha. */}
             </div>
           );
         })()}
