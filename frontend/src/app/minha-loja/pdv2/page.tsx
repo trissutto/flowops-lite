@@ -281,6 +281,24 @@ function PdvPageInner() {
   // é retomado automaticamente com os mesmos argumentos.
   const pendingFinalizeRef = useRef<{ paymentMethod: string; paymentDetails?: any } | null>(null);
 
+  // ── AUTO-FIT: escala a UI inteira pro tamanho do monitor ──
+  // Design-base: 1700px de largura. Monitor menor → zoom proporcional menor
+  // (1366px → ~0.80); maior → até 1.1. Sem config por loja, recalcula em
+  // resize. Abaixo de 1024px (tablet/celular) não aplica — breakpoints
+  // responsivos do Tailwind assumem.
+  const [uiZoom, setUiZoom] = useState(1);
+  useEffect(() => {
+    const calcZoom = () => {
+      const w = window.innerWidth;
+      if (w < 1024) { setUiZoom(1); return; }
+      const z = Math.min(1.1, Math.max(0.7, w / 1700));
+      setUiZoom(Math.round(z * 100) / 100);
+    };
+    calcZoom();
+    window.addEventListener('resize', calcZoom);
+    return () => window.removeEventListener('resize', calcZoom);
+  }, []);
+
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
@@ -1201,7 +1219,7 @@ function PdvPageInner() {
   return (
     <div
       className="min-h-screen flex flex-col"
-      style={{ background: '#0B0B0B' }}
+      style={{ background: '#0B0B0B', zoom: uiZoom }}
     >
       <TrainingModeBanner />
       {/* ── PDV2: banner fino fixo de VERSÃO DE TESTE ── */}
