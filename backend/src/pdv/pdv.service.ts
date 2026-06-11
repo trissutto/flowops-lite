@@ -584,8 +584,16 @@ export class PdvService {
       // (Status do pdvReturn só vira used no finalize; entre addPayment e
       // finalize, o code fica amarrado no payment.details — essa busca cobre
       // esse intervalo crítico onde 2 PDVs poderiam usar o mesmo vale.)
+      // PERF: filtra no BANCO por `details contains code` (details é String/Text
+      // com JSON serializado — o código TROCA-XXXXX aparece literal no texto).
+      // Antes carregava a tabela INTEIRA de payments vale_troca e filtrava em JS.
+      // mode insensitive garante superset do filtro JS (que faz toUpperCase).
+      // A validação JS abaixo continua como confirmação (parse + compare exato).
       const outrasOcorrencias = await (this.prisma as any).pdvSalePayment.findMany({
-        where: { method: 'vale_troca' },
+        where: {
+          method: 'vale_troca',
+          details: { contains: code, mode: 'insensitive' },
+        },
         select: { id: true, saleId: true, details: true, sale: { select: { status: true } } },
       });
       for (const p of outrasOcorrencias as any[]) {
@@ -1662,6 +1670,89 @@ export class PdvService {
       return { ok: true, sale: updated, nfcePreview: null, training: true };
     }
 
+    // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — extraído pra postFinalizeErpSync().
+    // FLAG PDV_FINALIZE_ASYNC (default: false):
+    //   false → await (comportamento atual: resposta espera Wincred + estoque)
+    //   true  → fire-and-forget (resposta volta imediata; erros só logam, igual hoje,
+    //           já que erros nesses blocos NUNCA bloquearam a venda — só warning)
+    const finalizeAsync =
+      String(process.env.PDV_FINALIZE_ASYNC ?? '').trim().toLowerCase() === 'true';
+    if (finalizeAsync) {
+      void this.postFinalizeErpSync(sale, payments as any[], finalMethod).catch((e: any) =>
+        this.logger.error(
+          `[pdv] postFinalizeErpSync (async) falhou pra venda ${sale.id}: ${e?.message || e}`,
+        ),
+      );
+    } else {
+      await this.postFinalizeErpSync(sale, payments as any[], finalMethod);
+    }
+
+    // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
+    // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
+    try {
+      const valeTrocaPayments = (payments as any[]).filter(
+        (p: any) => p.method === 'vale_troca',
+      );
+      for (const p of valeTrocaPayments) {
+        let code: string | null = null;
+        try {
+          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
+        } catch { /* ignora */ }
+        if (!code) continue;
+        const ret = await (this.prisma as any).pdvReturn.findUnique({
+          where: { creditoCode: code },
+        });
+        if (!ret) {
+          this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
+          continue;
+        }
+        if (ret.status === 'used') continue; // idempotente
+        await (this.prisma as any).pdvReturn.update({
+          where: { id: ret.id },
+          data: {
+            status: 'used',
+            creditoUsadoEm: sale.id,
+            creditoUsadoAt: new Date(),
+          },
+        });
+        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
+    }
+
+    // ── ATUALIZA CRM (Customer) ──────────────────────────────────────────
+    // Fase 4 da captura PDV: ao finalizar venda real, soma LTV/orderCount
+    // do cliente no Customer. Pula treinamento e vendas sem CPF.
+    if (sale.customerCpf && !(sale as any).isTraining) {
+      try {
+        await this._atualizarCustomerAposVenda(updated);
+      } catch (e: any) {
+        this.logger.warn(`[pdv→CRM] falha ao atualizar Customer: ${e?.message || e}`);
+      }
+    }
+
+    return { ok: true, sale: updated, nfcePreview: nfceStub };
+  }
+
+  /**
+   * PÓS-PROCESSAMENTO ERP do finalize(): gravação da venda no Wincred
+   * (tabela `caixa`) + baixa de estoque + marcação de stockDecreasedAt.
+   *
+   * Extraído do finalize() pra permitir execução assíncrona via flag
+   * PDV_FINALIZE_ASYNC (fire-and-forget). Erros aqui NUNCA bloqueiam a venda
+   * — o Postgres do flowops é a fonte da verdade; cada bloco tem try/catch
+   * próprio que só loga warning (mesmo comportamento de quando era inline).
+   *
+   * IMPORTANTE: recebe tudo por parâmetro (sale/payments/finalMethod) — não
+   * depende de estado capturado do finalize, pra ser seguro rodar destacado.
+   */
+  private async postFinalizeErpSync(
+    sale: any,
+    payments: any[],
+    finalMethod: string,
+  ): Promise<void> {
     // GRAVAÇÃO NO WINCRED — replica venda na tabela `caixa` do gigasistemas21
     // pra contabilidade/relatórios. Em modo SHADOW por padrão (PDV_ERP_WRITE_ENABLED=false)
     // só LOGA os SQLs sem executar — permite validar antes de ligar real.
@@ -1699,8 +1790,8 @@ export class PdvService {
         // Pagamentos: usa array payments (após split) ou fallback pro paymentMethod legado.
         // Quando método é credito/debito genérico, extrai a bandeira do details
         // (ex: method='credito' + details.bandeira='MASTERCARD' → mapeia como MASTERCARD).
-        pagamentos: (payments as any[]).length > 0
-          ? (payments as any[]).map((p: any) => {
+        pagamentos: payments.length > 0
+          ? payments.map((p: any) => {
               let metodo = String(p.method || '');
               const generico = metodo === 'credito' || metodo === 'debito' || metodo === 'cartao';
               if (generico && p.details) {
@@ -1810,54 +1901,6 @@ export class PdvService {
         `[pdv→estoque] Erro inesperado ao baixar estoque da venda ${sale.id}: ${e?.message || e}. Venda no flowops segue OK.`,
       );
     }
-
-    // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
-    // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
-    try {
-      const valeTrocaPayments = (payments as any[]).filter(
-        (p: any) => p.method === 'vale_troca',
-      );
-      for (const p of valeTrocaPayments) {
-        let code: string | null = null;
-        try {
-          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
-        } catch { /* ignora */ }
-        if (!code) continue;
-        const ret = await (this.prisma as any).pdvReturn.findUnique({
-          where: { creditoCode: code },
-        });
-        if (!ret) {
-          this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
-          continue;
-        }
-        if (ret.status === 'used') continue; // idempotente
-        await (this.prisma as any).pdvReturn.update({
-          where: { id: ret.id },
-          data: {
-            status: 'used',
-            creditoUsadoEm: sale.id,
-            creditoUsadoAt: new Date(),
-          },
-        });
-        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
-      }
-    } catch (e: any) {
-      this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
-    }
-
-    // ── ATUALIZA CRM (Customer) ──────────────────────────────────────────
-    // Fase 4 da captura PDV: ao finalizar venda real, soma LTV/orderCount
-    // do cliente no Customer. Pula treinamento e vendas sem CPF.
-    if (sale.customerCpf && !(sale as any).isTraining) {
-      try {
-        await this._atualizarCustomerAposVenda(updated);
-      } catch (e: any) {
-        this.logger.warn(`[pdv→CRM] falha ao atualizar Customer: ${e?.message || e}`);
-      }
-    }
-
-    return { ok: true, sale: updated, nfcePreview: nfceStub };
   }
 
   /**

@@ -55,6 +55,34 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin ou loja');
   }
 
+  // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
+  // FLAG PDV_GIGA_DISCOVERY_CACHE (default: false):
+  //   false → comportamento atual: delega direto pro crediarios.detectClientesTable()
+  //   true  → cacheia o mapa tabela/colunas de clientes em memória por 1h,
+  //           evitando redescoberta (SHOW COLUMNS etc) a cada customer-info/
+  //           customer-search. Resultado null (Giga fora) NÃO é cacheado.
+  private readonly gigaDiscoveryCache = new Map<string, { value: any; expiresAt: number }>();
+  private static readonly GIGA_DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h
+
+  private async detectClientesTableCached(): Promise<any> {
+    const enabled =
+      String(process.env.PDV_GIGA_DISCOVERY_CACHE ?? '').trim().toLowerCase() === 'true';
+    if (!enabled) return this.crediarios.detectClientesTable();
+
+    const key = 'clientesMap';
+    const hit = this.gigaDiscoveryCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+    const value = await this.crediarios.detectClientesTable();
+    if (value) {
+      this.gigaDiscoveryCache.set(key, {
+        value,
+        expiresAt: Date.now() + PdvController.GIGA_DISCOVERY_TTL_MS,
+      });
+    }
+    return value;
+  }
+
   /**
    * GET /pdv/product-image?sku=XXX
    * Retorna URL da foto do produto no WooCommerce (cache 1h em memória).
@@ -658,8 +686,9 @@ export class PdvController {
       throw new BadRequestException('Mínimo 3 dígitos');
     }
 
-    // Busca cliente no Giga (tabela clientes detectada dinamicamente)
-    const cm = await this.crediarios.detectClientesTable();
+    // Busca cliente no Giga (tabela clientes detectada dinamicamente —
+    // com cache opcional de 1h via flag PDV_GIGA_DISCOVERY_CACHE)
+    const cm = await this.detectClientesTableCached();
     if (!cm) {
       return { found: false, message: 'Tabela de clientes do Giga não detectada' };
     }
@@ -877,7 +906,7 @@ export class PdvController {
     // ─── 2. SE AINDA HÁ SLOTS, BUSCA NO GIGA ──────────────────────────────
     const restante = limit - results.length;
     if (restante > 0) {
-      const cm = await this.crediarios.detectClientesTable();
+      const cm = await this.detectClientesTableCached();
       if (cm) {
         const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
         const safeNum = onlyDigits.slice(0, 14);
