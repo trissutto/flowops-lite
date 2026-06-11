@@ -56,7 +56,7 @@ export class PdvController {
   }
 
   // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
-  // FLAG PDV_GIGA_DISCOVERY_CACHE (default: false):
+  // FLAG PDV_GIGA_CACHE (default: false):
   //   false → comportamento atual: delega direto pro crediarios.detectClientesTable()
   //   true  → cacheia o mapa tabela/colunas de clientes em memória por 1h,
   //           evitando redescoberta (SHOW COLUMNS etc) a cada customer-info/
@@ -66,7 +66,7 @@ export class PdvController {
 
   private async detectClientesTableCached(): Promise<any> {
     const enabled =
-      String(process.env.PDV_GIGA_DISCOVERY_CACHE ?? '').trim().toLowerCase() === 'true';
+      String(process.env.PDV_GIGA_CACHE ?? '').trim().toLowerCase() === 'true';
     if (!enabled) return this.crediarios.detectClientesTable();
 
     const key = 'clientesMap';
@@ -687,7 +687,7 @@ export class PdvController {
     }
 
     // Busca cliente no Giga (tabela clientes detectada dinamicamente —
-    // com cache opcional de 1h via flag PDV_GIGA_DISCOVERY_CACHE)
+    // com cache opcional de 1h via flag PDV_GIGA_CACHE)
     const cm = await this.detectClientesTableCached();
     if (!cm) {
       return { found: false, message: 'Tabela de clientes do Giga não detectada' };
