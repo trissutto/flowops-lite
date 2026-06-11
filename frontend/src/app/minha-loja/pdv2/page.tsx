@@ -275,6 +275,11 @@ function PdvPageInner() {
   // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
   // (vendedora nao precisa voltar e clicar de novo na setinha).
   const pendingScanRef = useRef<string | null>(null);
+  // PDV2: finalize pendente quando vendedora ainda nao foi escolhida.
+  // A vendedora agora é exigida no ENCERRAMENTO da venda (nao no 1º bip,
+  // pra liberar a cliente mais rapido). Apos saveVendedora, o finalize
+  // é retomado automaticamente com os mesmos argumentos.
+  const pendingFinalizeRef = useRef<{ paymentMethod: string; paymentDetails?: any } | null>(null);
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
@@ -441,27 +446,10 @@ function PdvPageInner() {
   // Auto-abrir modal de vendedora REMOVIDO — agora vendedora é escolhida
   // a qualquer momento clicando no botão do header (cascata inline).
 
-  // ── LEMBRETE: vendedora não escolhida ao tentar fechar venda ──
-  const sellerCheckRef = useRef(false);
-  useEffect(() => {
-    if (!showPayment) {
-      sellerCheckRef.current = false;
-      return;
-    }
-    if (sellerCheckRef.current) return;
-    if (!sale || sale.sellerName) return;
-    sellerCheckRef.current = true;
-    const t = setTimeout(() => {
-      const ok = window.confirm(
-        '⚠ ATENÇÃO\n\nVocê ainda não escolheu a vendedora!\n\nA comissão NÃO será atribuída a ninguém.\n\nDeseja continuar mesmo assim?\n\n• OK = continuar sem comissão\n• Cancelar = escolher vendedora agora',
-      );
-      if (!ok) {
-        setShowPayment(false);
-        setShowVendedora(true);
-      }
-    }, 200);
-    return () => clearTimeout(t);
-  }, [showPayment, sale]);
+  // PDV2: o confirm() de "vendedora não escolhida" ao abrir pagamento foi
+  // REMOVIDO — a vendedora agora é exigida no ENCERRAMENTO (gate no
+  // finalizeSale), com retomada automática após escolher. Bipagem e
+  // pagamento fluem sem interrupção pra liberar a cliente mais rápido.
 
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
@@ -626,16 +614,8 @@ function PdvPageInner() {
     if (!sale) return;
     const sku = scanInput.trim();
     if (!sku) return;
-    // GUARD: vendedora OBRIGATÓRIA antes do primeiro bipe.
-    // Sem vendedora atribuída, abre modal e bloqueia bipagem.
-    // SALVA o SKU pendente — apos saveVendedora, o bipe eh re-executado
-    // automaticamente (vendedora nao precisa voltar e bipar de novo).
-    if (!sale.sellerName) {
-      pendingScanRef.current = sku;
-      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça bipada vai entrar no carrinho automaticamente.');
-      setShowVendedora(true);
-      return;
-    }
+    // PDV2: gate de vendedora no 1º bipe REMOVIDO — vendedora é exigida
+    // no ENCERRAMENTO da venda (gate no finalizeSale). Bipagem flui direto.
     // Atalho item manual: vendedora digita "0" → abre modal pra lançar
     // produto livre (descrição + valor) sem precisar achar no Giga.
     if (sku === '0') {
@@ -671,12 +651,7 @@ function PdvPageInner() {
   // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
   const addBySku = useCallback(async (sku: string) => {
     if (!sale) return;
-    if (!sale.sellerName) {
-      pendingScanRef.current = sku;
-      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça vai entrar no carrinho automaticamente.');
-      setShowVendedora(true);
-      return;
-    }
+    // PDV2: gate de vendedora removido daqui — exigida só no finalizeSale.
     setShowResults(false);
     setSearchResults([]);
     setScanLoading(true);
@@ -999,6 +974,16 @@ function PdvPageInner() {
         }
         setTimeout(() => inputRef.current?.focus(), 50);
       }
+
+      // PDV2: AUTO-FINALIZE — se o operador tentou fechar a venda sem
+      // vendedora, o finalize ficou pendente; retoma agora automaticamente
+      // (skipSellerGate: o `sale` na closure do finalizeSale ainda é o
+      // stale sem sellerName — o backend já tem a vendedora gravada).
+      const pendingFin = pendingFinalizeRef.current;
+      if (pendingFin) {
+        pendingFinalizeRef.current = null;
+        await finalizeSale(pendingFin.paymentMethod, pendingFin.paymentDetails, { skipSellerGate: true });
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -1055,8 +1040,17 @@ function PdvPageInner() {
 
   // ── Finalizar ──
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
-  const finalizeSale = async (paymentMethod: string, paymentDetails?: any) => {
+  const finalizeSale = async (paymentMethod: string, paymentDetails?: any, opts?: { skipSellerGate?: boolean }) => {
     if (!sale) return;
+    // PDV2: vendedora OBRIGATÓRIA no ENCERRAMENTO (não no 1º bip).
+    // Sem vendedora: salva o finalize pendente, abre o modal e retoma
+    // automaticamente após a escolha (skipSellerGate evita loop na retomada).
+    if (!sale.sellerName && !opts?.skipSellerGate) {
+      pendingFinalizeRef.current = { paymentMethod, paymentDetails };
+      toast('warning', 'Escolha a vendedora pra fechar a venda', 'Após confirmar, a venda finaliza automaticamente.');
+      setShowVendedora(true);
+      return;
+    }
     // GUARD SINCRONO contra double-fire: ref muda IMEDIATAMENTE (antes do
     // setFinalizing(true) que so reflete no proximo render). Cobre o cenario
     // de auto-finalize via setTimeout(80ms) + click manual no botao Finalizar
@@ -2542,7 +2536,12 @@ function PdvPageInner() {
         <VendedoraModal
           atual={sale.sellerName || ''}
           storeCode={sale.storeCode}
-          onClose={() => setShowVendedora(false)}
+          onClose={() => {
+            // Fechou sem escolher → descarta finalize pendente (evita
+            // finalize "fantasma" disparar numa escolha de vendedora futura)
+            pendingFinalizeRef.current = null;
+            setShowVendedora(false);
+          }}
           onSave={saveVendedora}
         />
       )}
