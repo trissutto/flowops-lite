@@ -3,12 +3,9 @@
 /**
  * ServiceWorkerRegister — registra /sw.js no boot do app.
  *
- * Por que precisa: Android Chrome só dispara o evento "beforeinstallprompt"
- * (que ativa o banner de instalar) se houver um SW ativo. Sem isso, o PWA
- * não é instalável.
- *
- * Roda só no browser (use client). Em dev local roda igual; em produção,
- * o Vercel serve /sw.js direto do public/ com Cache-Control correto.
+ * Auto-update: check imediato + a cada 5 min. Quando descobre versão
+ * nova, recarrega automaticamente. Resolve o problema do PWA instalado
+ * que nunca pegava UI nova até desinstalar/reinstalar.
  */
 
 import { useEffect } from 'react';
@@ -22,14 +19,35 @@ export default function ServiceWorkerRegister() {
       try {
         const reg = await navigator.serviceWorker.register('/sw.js', {
           scope: '/',
+          // SEMPRE busca o sw.js do servidor (sem cache HTTP)
+          updateViaCache: 'none',
         });
-        // Log silencioso pra debug — vendedora não vê
         console.log('[SW] registrado', reg.scope);
+
+        // Check imediato — pega versão nova mesmo se PWA tá aberto há dias
+        reg.update().catch(() => {});
+
+        // Quando descobre versão nova, recarrega automaticamente
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+              console.log('[SW] versao nova ativa — recarregando');
+              setTimeout(() => window.location.reload(), 500);
+            }
+          });
+        });
+
+        // Check periódico a cada 5 min
+        setInterval(() => {
+          reg.update().catch(() => {});
+        }, 5 * 60 * 1000);
       } catch (e) {
         console.warn('[SW] falha ao registrar:', e);
       }
     };
-    // Aguarda load pra não competir com requests críticas iniciais
+
     if (document.readyState === 'complete') {
       register();
     } else {
