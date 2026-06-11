@@ -2117,15 +2117,14 @@ function PdvPageInner() {
          em crédito ou confirmação em débito; PIX/CREDIÁRIO/DINHEIRO abrem
          no modo certo). */}
       {sale?.status === 'open' && (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0 && (() => {
-        const venderCredito = (band: string) => {
-          setPresetMethod('credito');
-          setPresetBandeira(band);
-          setPaymentFilter('cartao');
-          setShowPayment(true);
-        };
-        const venderDebito = (band: string) => {
-          setPresetMethod('debito');
-          setPresetBandeira(band);
+        // OPÇÃO A (consolidada): CRÉDITO/DÉBITO viram 1 botão grande cada —
+        // a BANDEIRA é escolhida no PaymentModal (tela própria, botões
+        // grandes). setPresetBandeira(null) evita bandeira stale de uso
+        // anterior. Custo: 1 clique a mais no cartão; ganho: barra sem
+        // scroll, botões 2x maiores, tudo visível em qualquer monitor.
+        const venderCartao = (m: 'credito' | 'debito') => {
+          setPresetMethod(m);
+          setPresetBandeira(null);
           setPaymentFilter('cartao');
           setShowPayment(true);
         };
@@ -2146,109 +2145,72 @@ function PdvPageInner() {
             return;
           }
         };
+        // Botão GRANDE: ícone em cima + label embaixo, altura 64px, flex-1
+        // (divide a barra por igual, sem scroll). `secondary` = MARCAR
+        // (não é pagamento — borda tracejada pra diferenciar).
         const PayBtn = ({
-          onClick, brand, label, hoverColor,
+          onClick, icon, label, secondary,
         }: {
           onClick: () => void;
-          brand?: string;
-          label?: React.ReactNode;
-          hoverColor: string;
+          icon: React.ReactNode;
+          label: string;
+          secondary?: boolean;
         }) => (
           <button
             onClick={onClick}
-            className={`bg-white rounded-lg px-2 py-1.5 flex items-center justify-center transition border border-slate-200 hover:shadow-md h-11 min-w-[60px] ${hoverColor}`}
-            title={brand || (typeof label === 'string' ? label : '')}
+            title={label}
+            className={`flex-1 min-w-0 h-16 rounded-xl flex flex-col items-center justify-center gap-1 transition border-2 ${
+              secondary
+                ? 'bg-white border-dashed border-slate-300 hover:border-[#D4AF37] hover:bg-[#FAF6E8]'
+                : 'bg-white border-slate-200 hover:border-[#D4AF37] hover:bg-[#FAF6E8] hover:shadow-md'
+            }`}
           >
-            {brand ? <BandeiraLogo brand={brand} /> : label}
+            {icon}
+            <span className="text-[13px] font-black text-black tracking-wide leading-none whitespace-nowrap">{label}</span>
           </button>
         );
         return (
           <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
-            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
-              {/* GRUPO CRÉDITO */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Crédito</span>
-                <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                </div>
-              </div>
-
-              <div className="w-px bg-slate-200 mx-0.5" />
-
-              {/* GRUPO DÉBITO */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Débito</span>
-                <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                </div>
-              </div>
-
-              <div className="w-px bg-slate-200 mx-0.5" />
-
-              {/* GRUPO OUTROS */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Outros</span>
-                <div className="flex gap-1.5">
-                  <PayBtn
-                    onClick={() => venderOutro('pix')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <QrCode className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">PIX</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('dinheiro')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Banknote className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">DINHEIRO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('crediario')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Receipt className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">CREDIÁRIO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => setShowValeTroca(true)}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Tag className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">VALE</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
-                      fora (PIX direto ou link externo). Só registra venda +
-                      baixa estoque. Sem NFC-e automática. CPF obrigatório. */}
-                  <PayBtn
-                    onClick={() => venderOutro('venda_online')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Globe className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">V.ONLINE</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  {/* MARCAR — cliente leva pra provar em casa.
+            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2">
+              <PayBtn
+                onClick={() => venderCartao('credito')}
+                icon={<CreditCard className="w-6 h-6 text-[#8C7325]" />}
+                label="CRÉDITO"
+              />
+              <PayBtn
+                onClick={() => venderCartao('debito')}
+                icon={<Wallet className="w-6 h-6 text-[#8C7325]" />}
+                label="DÉBITO"
+              />
+              <PayBtn
+                onClick={() => venderOutro('pix')}
+                icon={<QrCode className="w-6 h-6 text-[#8C7325]" />}
+                label="PIX"
+              />
+              <PayBtn
+                onClick={() => venderOutro('dinheiro')}
+                icon={<Banknote className="w-6 h-6 text-[#8C7325]" />}
+                label="DINHEIRO"
+              />
+              <PayBtn
+                onClick={() => venderOutro('crediario')}
+                icon={<Receipt className="w-6 h-6 text-[#8C7325]" />}
+                label="CREDIÁRIO"
+              />
+              <PayBtn
+                onClick={() => setShowValeTroca(true)}
+                icon={<Tag className="w-6 h-6 text-[#8C7325]" />}
+                label="VALE"
+              />
+              {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
+                  fora (PIX direto ou link externo). Só registra venda +
+                  baixa estoque. Sem NFC-e automática. CPF obrigatório. */}
+              <PayBtn
+                onClick={() => venderOutro('venda_online')}
+                icon={<Globe className="w-6 h-6 text-[#8C7325]" />}
+                label="V.ONLINE"
+              />
+              {/* MARCAR — cliente leva pra provar em casa.
                       Exige cliente identificado (CPF) — senao abre modal de
                       cliente primeiro. O click executa o fluxo direto: chama
                       backend pra criar marcado + baixa estoque + fecha venda.
@@ -2316,16 +2278,10 @@ function PdvPageInner() {
                         toast('error', 'Cliente nao pode marcar', h.hint || h.title);
                       }
                     }}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <span className="text-base">📋</span>
-                        <span className="text-xs font-black text-black tracking-wide">MARCAR</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
+                    icon={<span className="text-xl leading-none">📋</span>}
+                    label="MARCAR"
+                    secondary
                   />
-                </div>
-              </div>
             </div>
           </div>
         );
