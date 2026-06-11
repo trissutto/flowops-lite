@@ -1175,7 +1175,7 @@ function PdvPageInner() {
 
   if (!storeCode) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#FAFAF7] flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-md p-6 max-w-sm w-full space-y-4">
           <Link href="/minha-loja" className="text-slate-500 text-sm flex items-center gap-1">
             <ArrowLeft className="w-4 h-4" /> Voltar
@@ -1201,14 +1201,14 @@ function PdvPageInner() {
   return (
     <div
       className="min-h-screen flex flex-col"
-      style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
+      style={{ background: '#0B0B0B' }}
     >
       <TrainingModeBanner />
       {/* ── PDV2: banner fino fixo de VERSÃO DE TESTE ── */}
-      <div className="sticky top-0 z-30 h-7 bg-amber-400 text-amber-950 text-xs font-black tracking-wide flex items-center justify-center gap-3 px-4 shadow-md">
+      <div className="sticky top-0 z-30 h-7 bg-[#D4AF37] text-black text-xs font-bold tracking-wide flex items-center justify-center gap-3 px-4 shadow-md">
         <span>PDV V2 — VERSÃO DE TESTE</span>
         <span className="opacity-40">·</span>
-        <Link href="/minha-loja/pdv" className="underline underline-offset-2 hover:text-amber-800">
+        <Link href="/minha-loja/pdv" className="text-black underline underline-offset-2 hover:text-[#161616]">
           voltar ao PDV atual
         </Link>
       </div>
@@ -1217,7 +1217,7 @@ function PdvPageInner() {
           PDV2: sticky top-7 (28px) pra ficar logo abaixo do banner de teste. */}
       <header
         className="sticky top-7 z-20"
-        style={{ background: '#0d1442' }}
+        style={{ background: '#0B0B0B' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
@@ -1234,7 +1234,7 @@ function PdvPageInner() {
             className="flex items-center gap-2 shrink-0 group"
             title="Início"
           >
-            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-amber-300/40">
+            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-[#D4AF37]/50">
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
@@ -1253,7 +1253,7 @@ function PdvPageInner() {
                 PDV · LOJA
               </span>
               {sale?.storeCode && (
-                <span className="text-[10px] font-mono font-bold text-violet-900 bg-amber-300 px-1.5 py-0.5 rounded shadow-sm leading-none">
+                <span className="text-[10px] font-mono font-bold text-black bg-[#D4AF37] px-1.5 py-0.5 rounded shadow-sm leading-none">
                   {sale.storeCode}
                 </span>
               )}
@@ -1261,7 +1261,7 @@ function PdvPageInner() {
             <h1
               className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
               style={{
-                background: 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%)',
+                background: 'linear-gradient(90deg, #D4AF37 0%, #E5C158 100%)',
                 WebkitBackgroundClip: 'text',
                 backgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
@@ -1286,17 +1286,17 @@ function PdvPageInner() {
               precisa procurar venda específica que sumiu da sessão). */}
           <button
             onClick={() => setShowOpenList(true)}
-            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
+            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition text-white bg-[#161616] border ${
               openCount > 0
-                ? 'bg-amber-400 hover:bg-amber-300 text-amber-950 ring-2 ring-amber-200/50'
-                : 'bg-white/80 hover:bg-white text-slate-600 ring-1 ring-slate-300'
+                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
             }`}
             title={openCount > 0 ? `${openCount} venda(s) pausada(s)` : 'Nenhuma venda pausada agora — clique pra ver histórico recente'}
           >
-            <Pause className="w-4 h-4" />
+            <Pause className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline">Pausadas</span>
             <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-              openCount > 0 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-600'
+              openCount > 0 ? 'bg-[#D4AF37] text-black' : 'bg-[#2A2A2A] text-white/70'
             }`}>
               {openCount}
             </span>
@@ -1315,7 +1315,7 @@ function PdvPageInner() {
                 className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
                   hasPaid
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
-                    : 'bg-violet-500 hover:bg-violet-400 text-white ring-2 ring-violet-300/50'
+                    : 'bg-[#161616] hover:bg-[#1f1f1f] text-white border border-[#2A2A2A] hover:border-[#D4AF37]'
                 }`}
                 title={
                   hasPaid
@@ -1328,7 +1328,7 @@ function PdvPageInner() {
                   {hasPaid ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!` : 'Online'}
                 </span>
                 <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-                  hasPaid ? 'bg-white text-emerald-700' : 'bg-violet-700 text-white'
+                  hasPaid ? 'bg-white text-emerald-700' : 'bg-[#D4AF37] text-black'
                 }`}>
                   {totalLinks}
                 </span>
@@ -1340,46 +1340,46 @@ function PdvPageInner() {
           <button
             onClick={() => setShowVendedora(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
               sale?.sellerName
-                ? 'bg-emerald-400 hover:bg-emerald-300 text-emerald-950 ring-2 ring-emerald-200/50'
-                : 'bg-white/90 hover:bg-white text-rose-700 ring-2 ring-rose-300/50 animate-pulse'
+                ? 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#D4AF37] hover:bg-[#1f1f1f] animate-pulse'
             }`}
             title={sale?.sellerName ? `Trocar vendedora (atalho F9) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F9)'}
           >
-            <Sparkles className="w-4 h-4" />
+            <Sparkles className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-emerald-700/20 text-emerald-950 border border-emerald-700/30 rounded px-1.5 py-0.5">F9</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F9</kbd>
           </button>
 
           {/* Botão Cliente — atalho F5 */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
               sale?.customerCpf
-                ? 'bg-amber-400 hover:bg-amber-300 text-violet-900 ring-2 ring-amber-200/50'
-                : 'bg-white hover:bg-amber-50 text-violet-800'
+                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
             }`}
             title="Identificar cliente (atalho F6)"
           >
-            <User className="w-4 h-4" />
+            <User className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F6</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F6</kbd>
           </button>
 
           {/* Botão Modo Treinamento — só aparece quando NÃO está em treino.
               Quando está em treino, o banner global cobre. */}
-          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-orange-400 hover:bg-orange-300 text-orange-950 ring-2 ring-orange-200/50" />
+          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-[#161616] hover:bg-[#1f1f1f] text-[#D4AF37] border-2 border-[#D4AF37]" />
         </div>
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
+      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-[#FAFAF7]">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
           Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
@@ -1396,7 +1396,7 @@ function PdvPageInner() {
             minHeight: '100vh',
             maxHeight: '100vh',
             overflowY: 'auto',
-            background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+            background: '#0B0B0B',
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
@@ -1404,16 +1404,16 @@ function PdvPageInner() {
             <div className="space-y-1.5">
               <Link
                 href="/minha-loja/consultar"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-teal-700 hover:bg-teal-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Consulta de produtos (F10)"
               >
-                <Search className="w-5 h-5 text-white shrink-0" />
+                <Search className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Consulta Produtos</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Buscar produto, estoque</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Buscar produto, estoque</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F10</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F10</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1423,103 +1423,103 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-green-700 hover:bg-green-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Trocas / Devolução (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-white shrink-0" />
+                <ArrowRightLeft className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Trocas</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Devolução / troca</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Devolução / troca</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F4</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F4</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-violet-700 hover:bg-violet-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-white shrink-0" />
+                <Tag className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Marcados</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Provar em casa</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Provar em casa</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-blue-700 hover:bg-blue-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-700 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#161616] disabled:hover:border-[#2A2A2A] disabled:hover:translate-y-0 disabled:hover:shadow-none"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-white shrink-0" />
+                <CreditCard className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Simular</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Simular parcelamento</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Simular parcelamento</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </button>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-orange-700 hover:bg-orange-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Baixa de Crediário"
               >
-                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Baixa Crediário</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Receber parcelas</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Receber parcelas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-amber-700 hover:bg-amber-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Retiradas, sangria, suprimento (F3)"
               >
-                <DollarSign className="w-5 h-5 text-white shrink-0" />
+                <DollarSign className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Retiradas</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Caixa, sangria</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Caixa, sangria</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F3</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F3</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/produtos-vendidos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-emerald-600 hover:bg-emerald-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Conferir vendas + trocas do turno"
               >
-                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Vendas + trocas (conferir)</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Vendas + trocas (conferir)</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Notas Fiscais emitidas"
               >
-                <FileText className="w-5 h-5 text-white shrink-0" />
+                <FileText className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Notas Fiscais</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">NFC-es emitidas</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">NFC-es emitidas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/config-impressora"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Configurar impressoras térmica e A4"
               >
-                <Printer className="w-5 h-5 text-white shrink-0" />
+                <Printer className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Impressoras</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Térmica + A4</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Térmica + A4</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
             </div>
           </div>
@@ -1593,8 +1593,8 @@ function PdvPageInner() {
             <button
               type="submit"
               disabled={!scanInput || scanLoading}
-              className="px-5 py-3 text-white font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
-              style={{ background: `linear-gradient(135deg, ${HUB_TONES.purple.from}, ${HUB_TONES.purple.to})` }}
+              className="px-5 py-3 text-black font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
+              style={{ background: 'linear-gradient(135deg, #E5C158, #D4AF37)' }}
             >
               {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
             </button>
@@ -1620,7 +1620,7 @@ function PdvPageInner() {
                     onMouseDown={(e) => { e.preventDefault(); addBySku(r.CODIGO); }}
                     onMouseEnter={() => setHighlightedIdx(idx)}
                     className={`w-full px-3 py-2 flex items-center gap-3 text-left transition border-b border-slate-50 last:border-b-0 ${
-                      isHi ? 'bg-violet-50' : 'hover:bg-slate-50'
+                      isHi ? 'bg-[#FAF6E8]' : 'hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex flex-col items-center justify-center w-12 shrink-0">
@@ -1668,9 +1668,9 @@ function PdvPageInner() {
               <button
                 type="button"
                 onClick={() => setPromoExpanded((v) => !v)}
-                className="w-full px-3 py-2 bg-fuchsia-50/50 border-b border-fuchsia-100 flex items-center justify-between gap-2 hover:bg-fuchsia-50 transition"
+                className="w-full px-3 py-2 bg-[#FAF6E8]/60 border-b border-[#E5E5E0] flex items-center justify-between gap-2 hover:bg-[#FAF6E8] transition"
               >
-                <div className="flex items-center gap-2 text-[11px] font-bold text-fuchsia-800">
+                <div className="flex items-center gap-2 text-[11px] font-bold text-[#8C7325]">
                   <span>🎁</span>
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
@@ -1679,19 +1679,19 @@ function PdvPageInner() {
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
                 </div>
-                <ChevronRight className={`w-3.5 h-3.5 text-fuchsia-700 transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
+                <ChevronRight className={`w-3.5 h-3.5 text-[#8C7325] transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => setPromoExpanded(true)}
-                className="w-full px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 hover:text-fuchsia-700 hover:bg-fuchsia-50/50 transition flex items-center justify-center gap-1.5"
+                className="w-full px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 hover:text-[#8C7325] hover:bg-[#FAF6E8]/60 transition flex items-center justify-center gap-1.5"
               >
                 🎁 <span>Aplicar campanha promocional</span>
               </button>
             )}
             {promoExpanded && (
-            <div className="px-3 py-2 bg-fuchsia-50/30 border-b border-fuchsia-100">
+            <div className="px-3 py-2 bg-[#FAF6E8]/40 border-b border-[#E5E5E0]">
               <div className="grid grid-cols-3 gap-1.5">
                 <button
                   onClick={() => setPromotion('NONE')}
@@ -1707,8 +1707,8 @@ function PdvPageInner() {
                   onClick={() => setPromotion('YEAR_BASED')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
                     sale.activePromotion === 'YEAR_BASED'
-                      ? 'bg-amber-500 text-white border-amber-500'
-                      : 'bg-white text-amber-700 border-amber-200 hover:border-amber-400'
+                      ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
+                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
                   Liquida antigos
@@ -1718,8 +1718,8 @@ function PdvPageInner() {
                   onClick={() => setPromotion('FOUR_FOR_THREE')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
                     sale.activePromotion === 'FOUR_FOR_THREE'
-                      ? 'bg-fuchsia-600 text-white border-fuchsia-600'
-                      : 'bg-white text-fuchsia-700 border-fuchsia-200 hover:border-fuchsia-400'
+                      ? 'bg-[#0B0B0B] text-[#D4AF37] border-[#0B0B0B]'
+                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
                   4 LEVA 3
@@ -1731,7 +1731,7 @@ function PdvPageInner() {
                 const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
                 if (totalPecas >= 4) {
                   return (
-                    <div className="mt-1.5 text-[11px] text-fuchsia-800 bg-fuchsia-100 rounded px-2 py-1 font-semibold">
+                    <div className="mt-1.5 text-[11px] text-[#8C7325] bg-[#FAF6E8] rounded px-2 py-1 font-semibold">
                       ✓ ATIVA — peça de menor valor saiu grátis
                     </div>
                   );
@@ -1755,9 +1755,9 @@ function PdvPageInner() {
               <div className="text-right">R$ Total</div>
               <div className="text-center">Ações</div>
             </div>
-            <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-[11px] text-violet-700 font-bold flex items-center gap-1.5">
+            <div className="px-3 py-1.5 bg-[#FAF6E8] border-b border-[#E5E5E0] text-[11px] text-[#8C7325] font-bold flex items-center gap-1.5">
               <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
-              <span className="ml-2 text-[9px] font-bold text-violet-500 uppercase tracking-wider">↓ último bipado no topo</span>
+              <span className="ml-2 text-[9px] font-bold text-[#8C7325]/70 uppercase tracking-wider">↓ último bipado no topo</span>
             </div>
             <div className="divide-y">
               {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
@@ -1773,14 +1773,14 @@ function PdvPageInner() {
                 return (
                   <div
                     key={`vt-${p.id}`}
-                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-teal-50 border-l-4 border-teal-500"
+                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-[#FAF6E8] border-l-4 border-[#D4AF37]"
                     title="Vale-troca aplicado — abate da venda"
                   >
-                    <div className="font-mono text-[10px] text-teal-700 truncate">{code || 'VALE'}</div>
-                    <div className="flex items-center justify-center text-teal-600 text-xl">↺</div>
+                    <div className="font-mono text-[10px] text-[#8C7325] truncate">{code || 'VALE'}</div>
+                    <div className="flex items-center justify-center text-[#8C7325] text-xl">↺</div>
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-teal-900 uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
-                      <div className="text-[10px] text-teal-700 font-mono">{code}</div>
+                      <div className="text-xs font-bold text-black uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
+                      <div className="text-[10px] text-[#8C7325] font-mono">{code}</div>
                     </div>
                     <div className="text-right text-[11px] text-slate-500">1×</div>
                     <div className="text-right text-[11px] text-slate-500 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
@@ -1818,8 +1818,8 @@ function PdvPageInner() {
                     it.id === lastAddedItemId
                       ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
                       : isLast
-                      ? 'bg-violet-100/70 ring-2 ring-inset ring-violet-400'
-                      : 'hover:bg-violet-50/40'
+                      ? 'bg-[#FAF6E8] shadow-[inset_3px_0_0_0_#D4AF37]'
+                      : 'hover:bg-[#FAF6E8]/50'
                   }`}
                 >
                   {/* SKU/EAN */}
@@ -1834,7 +1834,7 @@ function PdvPageInner() {
                       Ordem: SKU (col 1) -> REF (chip) -> descrição. */}
                   <div className="min-w-0 flex items-center gap-2">
                     <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                      <span className="font-mono font-black text-[11px] bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5 shrink-0 tracking-wide">
+                      <span className="font-mono font-black text-[11px] bg-white text-slate-700 border border-[#E5E5E0] rounded px-1.5 py-0.5 shrink-0 tracking-wide">
                         {it.ref || it.sku}
                       </span>
                       {it.descricao && (
@@ -1845,10 +1845,10 @@ function PdvPageInner() {
                       <span
                         className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
                           it.promoTag.includes('4 LEVA 3')
-                            ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
+                            ? 'bg-[#0B0B0B] text-[#D4AF37] border border-[#0B0B0B]'
                             : it.promoTag === 'MANUAL'
-                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                            ? 'bg-black text-[#D4AF37] border border-[#D4AF37]/50'
+                            : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
                         }`}
                         title={`Desconto: ${brl(it.desconto)}`}
                       >
@@ -1880,9 +1880,9 @@ function PdvPageInner() {
                     {brl(it.precoUnit)}
                   </div>
 
-                  {/* VAL TOTAL — verde forte, fonte grande */}
+                  {/* VAL TOTAL — preto forte, fonte grande */}
                   <div className="text-right">
-                    <div className="font-black text-emerald-700 tabular-nums text-base">{brl(it.total)}</div>
+                    <div className="font-black text-black tabular-nums text-base">{brl(it.total)}</div>
                     {it.desconto > 0 && (
                       <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
                     )}
@@ -1924,8 +1924,8 @@ function PdvPageInner() {
           </div>
         ) : sale?.status === 'open' ? (
           <div className="text-center py-16 px-6 bg-white rounded-2xl border-2 border-dashed border-slate-200">
-            <div className="w-20 h-20 mx-auto rounded-full bg-rose-50 border-2 border-rose-200 flex items-center justify-center mb-4">
-              <ShoppingCart className="w-10 h-10 text-rose-400" />
+            <div className="w-20 h-20 mx-auto rounded-full bg-[#FAF6E8] border-2 border-[#E5E5E0] flex items-center justify-center mb-4">
+              <ShoppingCart className="w-10 h-10 text-[#D4AF37]" />
             </div>
             <div className="text-lg font-bold text-slate-700 mb-1">Carrinho vazio</div>
             <div className="text-sm text-slate-500">
@@ -1947,23 +1947,23 @@ function PdvPageInner() {
           minHeight: '100vh',
           maxHeight: '100vh',
           overflowY: 'auto',
-          background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+          background: '#0B0B0B',
         }}
       >
         <div className="p-2.5 pt-3 space-y-3">
 
           {/* ─── RESUMO DA VENDA (card branco destacado) ─── */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-            <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
+            <div className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] mb-2">
               Resumo da venda
             </div>
             <div className="space-y-1 text-xs">
               {(() => {
                 const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
                 return (
-                  <div className="flex justify-between items-center bg-violet-50 border-2 border-violet-300 rounded-lg px-3 py-2.5">
-                    <span className="text-violet-700 uppercase text-xs font-black tracking-wide">Peças</span>
-                    <span className="text-3xl font-black text-violet-700 tabular-nums">{totalQty}</span>
+                  <div className="flex justify-between items-center bg-[#FAF6E8] border-2 border-[#D4AF37] rounded-lg px-3 py-2.5">
+                    <span className="text-[#8C7325] uppercase text-xs font-black tracking-wide">Peças</span>
+                    <span className="text-3xl font-black text-black tabular-nums">{totalQty}</span>
                   </div>
                 );
               })()}
@@ -2006,10 +2006,10 @@ function PdvPageInner() {
               const ehCredito = liquido < -0.01;
               return (
                 <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#8C7325]">
                     {ehCredito ? 'Sobra crédito' : 'A pagar'}
                   </span>
-                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
                     {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                   </span>
                 </div>
@@ -2022,53 +2022,53 @@ function PdvPageInner() {
           <div className="space-y-1.5">
             <Link
               href="/minha-loja"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-violet-700 hover:bg-violet-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
               title="Pedidos do site"
             >
-              <Globe className="w-5 h-5 text-white shrink-0" />
+              <Globe className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Pedidos Site</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">E-commerce</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">E-commerce</div>
               </div>
               {pedidosSitePending > 0 && (
-                <span className="bg-white text-violet-800 text-[10px] font-black rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
+                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
                   {pedidosSitePending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/realinhamento"
-              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] ${
+              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] bg-[#161616] hover:bg-[#1C1C1C] border ${
                 realignPending > 0
-                  ? 'bg-rose-700 hover:bg-rose-800 ring-2 ring-rose-300/40'
-                  : 'bg-pink-700 hover:bg-pink-800'
+                  ? 'border-[#D4AF37] ring-2 ring-[#D4AF37]/30'
+                  : 'border-[#2A2A2A] hover:border-[#D4AF37]'
               }`}
               title="Realinhamento de estoque"
             >
-              <Shuffle className="w-5 h-5 text-white shrink-0" />
+              <Shuffle className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Realinhar</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">Inter-lojas</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Inter-lojas</div>
               </div>
               {realignPending > 0 && (
-                <span className="bg-white text-rose-700 text-[10px] font-black rounded-full min-w-[22px] h-5 flex items-center justify-center px-1.5 shrink-0">
+                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[22px] h-5 flex items-center justify-center px-1.5 shrink-0">
                   {realignPending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
               title="Fechamento diário"
             >
-              <Wallet className="w-5 h-5 text-white shrink-0" />
+              <Wallet className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Fechamento</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">Fechamento diário</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Fechamento diário</div>
               </div>
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
           </div>
 
@@ -2149,13 +2149,13 @@ function PdvPageInner() {
             <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
               {/* GRUPO CRÉDITO */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-violet-700 px-1">Crédito</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Crédito</span>
                 <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-orange-50 hover:border-orange-300" />
-                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-cyan-50 hover:border-cyan-300" />
-                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-blue-50 hover:border-blue-400" />
+                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                 </div>
               </div>
 
@@ -2163,11 +2163,11 @@ function PdvPageInner() {
 
               {/* GRUPO DÉBITO */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 px-1">Débito</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Débito</span>
                 <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-yellow-50 hover:border-yellow-400" />
+                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                 </div>
               </div>
 
@@ -2175,47 +2175,47 @@ function PdvPageInner() {
 
               {/* GRUPO OUTROS */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-slate-600 px-1">Outros</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Outros</span>
                 <div className="flex gap-1.5">
                   <PayBtn
                     onClick={() => venderOutro('pix')}
                     label={
                       <span className="flex items-center gap-1">
-                        <QrCode className="w-4 h-4 text-teal-600" />
-                        <span className="text-xs font-black text-teal-700 tracking-wide">PIX</span>
+                        <QrCode className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">PIX</span>
                       </span>
                     }
-                    hoverColor="hover:bg-teal-50 hover:border-teal-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => venderOutro('dinheiro')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Banknote className="w-4 h-4 text-emerald-600" />
-                        <span className="text-xs font-black text-emerald-700 tracking-wide">DINHEIRO</span>
+                        <Banknote className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">DINHEIRO</span>
                       </span>
                     }
-                    hoverColor="hover:bg-emerald-50 hover:border-emerald-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => venderOutro('crediario')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Receipt className="w-4 h-4 text-amber-600" />
-                        <span className="text-xs font-black text-amber-700 tracking-wide">CREDIÁRIO</span>
+                        <Receipt className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">CREDIÁRIO</span>
                       </span>
                     }
-                    hoverColor="hover:bg-amber-50 hover:border-amber-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => setShowValeTroca(true)}
                     label={
                       <span className="flex items-center gap-1">
-                        <Tag className="w-4 h-4 text-fuchsia-600" />
-                        <span className="text-xs font-black text-fuchsia-700 tracking-wide">VALE</span>
+                        <Tag className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">VALE</span>
                       </span>
                     }
-                    hoverColor="hover:bg-fuchsia-50 hover:border-fuchsia-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
                       fora (PIX direto ou link externo). Só registra venda +
@@ -2224,11 +2224,11 @@ function PdvPageInner() {
                     onClick={() => venderOutro('venda_online')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Globe className="w-4 h-4 text-cyan-600" />
-                        <span className="text-xs font-black text-cyan-700 tracking-wide">V.ONLINE</span>
+                        <Globe className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">V.ONLINE</span>
                       </span>
                     }
-                    hoverColor="hover:bg-cyan-50 hover:border-cyan-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   {/* MARCAR — cliente leva pra provar em casa.
                       Exige cliente identificado (CPF) — senao abre modal de
@@ -2301,10 +2301,10 @@ function PdvPageInner() {
                     label={
                       <span className="flex items-center gap-1">
                         <span className="text-base">📋</span>
-                        <span className="text-xs font-black text-violet-700 tracking-wide">MARCAR</span>
+                        <span className="text-xs font-black text-black tracking-wide">MARCAR</span>
                       </span>
                     }
-                    hoverColor="hover:bg-violet-50 hover:border-violet-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                 </div>
               </div>
@@ -2315,7 +2315,7 @@ function PdvPageInner() {
 
       {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-2xl z-10">
+        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#D4AF37] shadow-2xl z-10">
           <div className="max-w-4xl mx-auto px-4 py-3">
             {/* Linha de detalhamento: subtotal + economia agregada (descontos itens + sale.desconto extra) */}
             {(() => {
@@ -2363,7 +2363,7 @@ function PdvPageInner() {
               <button
                 onClick={fecharDepois}
                 disabled={!sale?.items?.length}
-                className="px-4 py-3 bg-amber-400 hover:bg-amber-300 border-2 border-amber-500 text-amber-950 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Pausar venda (volta na lista Pausadas)"
               >
                 <Pause className="w-4 h-4" />
@@ -2373,12 +2373,12 @@ function PdvPageInner() {
               {/* Desconto geral — botão branco com LABEL + atalho F2 */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="px-4 py-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 text-slate-700 hover:text-amber-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
                 title="Aplicar desconto na venda toda (atalho F2)"
               >
                 <Percent className="w-4 h-4" />
                 <span className="hidden sm:inline">Desconto geral</span>
-                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 ml-1">F2</kbd>
+                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-black rounded px-1.5 py-0.5 ml-1">F2</kbd>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
@@ -2403,10 +2403,10 @@ function PdvPageInner() {
                           {brl(sale.total)} · <span className="text-emerald-600">✓ {brl(paid)} pago</span>
                         </div>
                       )}
-                      <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">
+                      <div className="text-[10px] text-[#8C7325] uppercase tracking-widest font-bold leading-none">
                         {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
                       </div>
-                      <div className={`text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      <div className={`text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
                         {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                       </div>
                     </>
@@ -2503,8 +2503,13 @@ function PdvPageInner() {
             </div>
 
             {/* ── PDV2: barra de atalhos discreta no rodapé ── */}
-            <div className="text-center text-[10px] text-slate-400 font-semibold tracking-wide select-none pt-1.5 mt-2 border-t border-slate-100">
-              F1 Bipar · F2 Desconto · F4 Troca · F6 Cliente · F8 Pagamento · F9 Vendedora · F10 Consulta · F12 Ajuda
+            <div className="text-center text-[10px] text-slate-400 font-semibold tracking-wide select-none pt-1.5 mt-2 border-t border-slate-100 flex items-center justify-center gap-x-2 gap-y-1 flex-wrap">
+              {[['F1', 'Bipar'], ['F2', 'Desconto'], ['F4', 'Troca'], ['F6', 'Cliente'], ['F8', 'Pagamento'], ['F9', 'Vendedora'], ['F10', 'Consulta'], ['F12', 'Ajuda']].map(([k, lbl]) => (
+                <span key={k} className="inline-flex items-center gap-1">
+                  <kbd className="inline-flex items-center justify-center font-mono text-[9px] bg-black text-[#D4AF37] rounded px-1 py-0.5 leading-none">{k}</kbd>
+                  <span className="text-slate-500">{lbl}</span>
+                </span>
+              ))}
             </div>
           </div>
         </footer>
