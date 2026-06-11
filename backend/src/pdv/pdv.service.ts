@@ -955,15 +955,19 @@ export class PdvService {
    * linha (UX melhor pro PDV).
    */
   async addItem(input: { saleId: string; skuOrEan: string; qty?: number }) {
-    const sale = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: input.saleId },
-      select: { id: true, status: true },
-    });
+    // PERF: lookup da venda (Postgres) e do produto (MySQL Giga) em PARALELO —
+    // são independentes e o Giga é a chamada mais lenta do bipe.
+    const [sale, info] = await Promise.all([
+      (this.prisma as any).pdvSale.findUnique({
+        where: { id: input.saleId },
+        select: { id: true, status: true },
+      }),
+      this.erp.getPdvProductInfo(input.skuOrEan),
+    ]);
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
-    const info = await this.erp.getPdvProductInfo(input.skuOrEan);
     if (!info) throw new NotFoundException(`Produto "${input.skuOrEan}" não encontrado no Giga`);
     if (info.preco <= 0)
       throw new BadRequestException(`Produto ${info.sku} sem preço cadastrado no Giga`);
@@ -1008,7 +1012,10 @@ export class PdvService {
 
     await this.applyAutoDiscounts(sale.id);
     await this.recalcTotals(sale.id);
-    return { ok: true, item };
+    // PERF: devolve a venda COMPLETA junto — o frontend não precisa fazer um
+    // segundo GET /pdv/sales/:id (eliminava ida-e-volta inteira a cada bipe).
+    const freshSale = await this.getSale(sale.id);
+    return { ok: true, item, sale: freshSale };
   }
 
   /**

@@ -644,11 +644,14 @@ function PdvPageInner() {
     setScanLoading(true);
     setError(null);
     try {
-      await api(`/pdv/sales/${sale.id}/items`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      // PERF: backend novo devolve a venda completa no POST — elimina o
+      // segundo GET (uma ida-e-volta a menos por bipe). Fallback pro GET
+      // enquanto backend antigo estiver no ar.
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
       // ── PDV2: flash verde no item recém-adicionado (novo OU qty incrementada) ──
       flashAddedItem(sale.items || [], fresh.items || []);
       setSale(fresh);
@@ -675,11 +678,11 @@ function PdvPageInner() {
     setScanLoading(true);
     setError(null);
     try {
-      await api(`/pdv/sales/${sale.id}/items`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
       // ── PDV2: flash verde também quando adiciona pelo dropdown de busca ──
       flashAddedItem(sale.items || [], fresh.items || []);
       setSale(fresh);
@@ -727,7 +730,12 @@ function PdvPageInner() {
       } finally {
         setSearchLoading(false);
       }
-    }, 300);
+      // DELAY MAIOR PRA NÚMEROS (850ms): quem digita um CÓDIGO completo
+      // devagar passava por "530" → dropdown de REF abria no meio da
+      // digitação. Com 850ms, só busca REF se a pessoa PAROU de digitar.
+      // Texto (nome da peça) mantém 300ms. Leitor de código não é afetado
+      // (envia tudo em <100ms e finaliza com Enter).
+    }, hasLetter ? 300 : 850);
     return () => clearTimeout(t);
   }, [scanInput]);
 
