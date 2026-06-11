@@ -4557,7 +4557,7 @@ function PaymentModal({
          Footer sticky no FUNDO pra botão "Adicionar/Finalizar" SEMPRE aparecer
          (antes ficava cortado em telas baixas com 12 parcelas + card grande). */}
       <div
-        className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-lg flex flex-col max-h-[95vh] sm:max-h-[92vh]"
+        className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-lg sm:max-w-2xl flex flex-col max-h-[95vh] sm:max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -4570,7 +4570,7 @@ function PaymentModal({
         </div>
 
         {/* BODY scrollável */}
-        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2 min-h-0">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-2 sm:py-3 space-y-2 sm:space-y-3 min-h-0">
 
         {/* Cabeçalho VISUAL: barra de progresso colorida por forma + valores grandes.
             Mostra de uma vez: quanto foi pago, quanto falta, e o split visual em
@@ -4826,13 +4826,13 @@ function PaymentModal({
         {needsBandeira && (
           <div className="space-y-2 pt-2 border-t">
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">Bandeira</label>
-            <div className={`grid gap-1 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            <div className={`grid gap-2 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
               {bandeiras.map((b) => (
                 <button
                   key={b}
                   type="button"
                   onClick={() => setBandeira(b)}
-                  className={`py-1.5 px-2 rounded border-2 transition-all flex items-center justify-center min-h-[36px] ${
+                  className={`py-2 px-2 rounded-lg border-2 transition-all flex items-center justify-center min-h-[44px] ${
                     bandeira === b
                       ? 'border-emerald-600 bg-emerald-50 shadow-md'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
@@ -5295,10 +5295,10 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* GRID 3 COLUNAS × 4 LINHAS — todas as 12 parcelas visíveis
-                  ao mesmo tempo, sem precisar rolar. Compactado: gap menor,
-                  py-1, sem label "à vista/s/juros" pra economizar altura. */}
-              <div className="grid grid-cols-3 gap-1">
+              {/* PDV2: COLUNA ÚNICA — uma linha por parcela, leitura limpa
+                  de cima pra baixo ("3× de R$ 15,93"). Linha selecionada
+                  vira verde. Dica de teclado: 1-9 selecionam direto. */}
+              <div className="flex flex-col gap-1 max-h-[42vh] overflow-y-auto pr-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
@@ -5308,16 +5308,21 @@ function PaymentModal({
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`flex items-center justify-center gap-1.5 px-1.5 py-1.5 rounded-md transition-all border ${
+                      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2 rounded-lg transition-all border-2 shrink-0 ${
                         ativo
-                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
-                          : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-md'
+                          : 'bg-white border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700'
                       }`}
                     >
-                      <span className={`text-[11px] font-black tabular-nums leading-none shrink-0 ${
-                        ativo ? 'text-white/90' : 'text-emerald-700'
+                      <span className={`text-sm font-black tabular-nums leading-none w-9 text-left shrink-0 ${
+                        ativo ? 'text-white' : 'text-emerald-700'
                       }`}>{p}×</span>
-                      <span className={`text-[12px] font-black tabular-nums leading-none ${
+                      <span className={`flex-1 text-left text-[11px] uppercase tracking-wide font-semibold ${
+                        ativo ? 'text-white/85' : 'text-slate-400'
+                      }`}>
+                        {p === 1 ? 'à vista' : 'de'}
+                      </span>
+                      <span className={`text-base font-black tabular-nums leading-none ${
                         ativo ? 'text-white' : 'text-slate-800'
                       }`}>
                         {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
