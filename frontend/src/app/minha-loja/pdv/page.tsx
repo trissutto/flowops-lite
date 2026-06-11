@@ -4855,7 +4855,7 @@ function PaymentModal({
                   key={b}
                   type="button"
                   onClick={() => setBandeira(b)}
-                  className={`py-2 px-2 rounded-lg border-2 transition-all flex items-center justify-center min-h-[44px] ${
+                  className={`py-3 px-2 rounded-xl border-2 transition-all flex items-center justify-center min-h-[68px] ${
                     bandeira === b
                       ? 'border-emerald-600 bg-emerald-50 shadow-md'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
@@ -6637,15 +6637,15 @@ const BANDEIRA_SRC: Record<string, string> = {
 function BandeiraLogo({ brand }: { brand: string }) {
   const src = BANDEIRA_SRC[brand];
   if (!src) {
-    return <span className="text-xs font-bold text-slate-700">{brand}</span>;
+    return <span className="text-base font-bold text-slate-700">{brand}</span>;
   }
   // VISA ELECTRON usa logo VISA + sublabel ELECTRON pra distinguir do VISANET (crédito)
   if (brand === 'VISA ELECTRON') {
     return (
-      <div className="flex flex-col items-center justify-center leading-none">
+      <div className="flex flex-col items-center justify-center leading-none gap-0.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt="Visa Electron" className="h-4 object-contain" />
-        <span className="text-[7px] font-bold tracking-wider text-[#1A1F71]">
+        <img src={src} alt="Visa Electron" className="h-7 object-contain" />
+        <span className="text-[10px] font-bold tracking-wider text-[#1A1F71]">
           ELECTRON
         </span>
       </div>
@@ -6656,7 +6656,7 @@ function BandeiraLogo({ brand }: { brand: string }) {
     <img
       src={src}
       alt={brand}
-      className="h-5 max-h-5 object-contain"
+      className="h-9 max-h-9 object-contain"
       loading="lazy"
     />
   );
