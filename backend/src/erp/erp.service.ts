@@ -2304,29 +2304,62 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       .split(/\s+/)
       .map((w) => w.trim())
       .filter((w) => w.length >= 2);
+    // REF DE MODELO: termo SÓ numérico de 3-6 dígitos = vendedora digitou a
+    // REF (etiqueta sem código de barras). Fluxo do PDV:
+    //   1º bipe (>=7 díg, direto) → 2º código manual → 3º REF do modelo.
+    // Pra REF: match EXATO primeiro — retorna a GRADE COMPLETA (tamanhos ×
+    // cores) daquele modelo, ordenada. Se exato não achar (digitação parcial),
+    // fallback por PREFIXO. NUNCA contains nem DESCRICAO pra termo numérico —
+    // era isso que trazia "referências nada a ver" no dropdown.
+    const isNumericRef = /^\d{3,6}$/.test(cleanTerm);
     try {
-      let sql: string;
-      let params: any[];
-      if (words.length >= 2) {
-        // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
-        const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
-        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
-                 FROM produtos
-                WHERE (${ands})
-                   OR CODIGO LIKE ?
-                   OR REF LIKE ?
-                LIMIT 20`;
-        params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+      let products: any[];
+      if (isNumericRef) {
+        const cols = 'CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID';
+        const [exactRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT ${cols}
+             FROM produtos
+            WHERE TRIM(REF) = ?
+            ORDER BY DESCRICAOCOMPLETA, TAMANHO, COR
+            LIMIT 80`,
+          [cleanTerm],
+        );
+        products = exactRows as any[];
+        if (!products.length) {
+          const [prefixRows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT ${cols}
+               FROM produtos
+              WHERE TRIM(REF) LIKE ?
+              ORDER BY REF, TAMANHO, COR
+              LIMIT 30`,
+            [`${cleanTerm}%`],
+          );
+          products = prefixRows as any[];
+        }
       } else {
-        // 1 palavra (ou termo curto): comportamento anterior — LIKE em tudo
-        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
-                 FROM produtos
-                WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
-                LIMIT 20`;
-        params = [fullLike, fullLike, fullLike];
+        let sql: string;
+        let params: any[];
+        if (words.length >= 2) {
+          // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
+          const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
+          sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                   FROM produtos
+                  WHERE (${ands})
+                     OR CODIGO LIKE ?
+                     OR REF LIKE ?
+                  LIMIT 20`;
+          params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+        } else {
+          // 1 palavra (texto): comportamento anterior — LIKE em tudo
+          sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                   FROM produtos
+                  WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+                  LIMIT 20`;
+          params = [fullLike, fullLike, fullLike];
+        }
+        const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+        products = prodRows as any[];
       }
-      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
-      const products = prodRows as any[];
       if (!products.length) return [];
 
       // 2) Pra cada CODIGO, soma estoque REAL na tabela `estoque`.
