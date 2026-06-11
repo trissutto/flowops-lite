@@ -71,23 +71,24 @@ export default function PagbankConfigPage() {
 
   function copyEvidence() {
     if (!testPixResult) return;
+    // Formato idêntico ao que a Nathalia enviou como exemplo
+    // (Chamado 1360753759): "Request" + JSON, depois "RESPONSE" + JSON.
     const txt =
-`=== EVIDÊNCIA HOMOLOGAÇÃO PAGBANK ===
+`Olá Nathalia, segue evidência de teste real em Sandbox conforme solicitado.
+
 Chamado: 1360753759
 Conta: matriz@lurds.com.br
-Ambiente: SANDBOX
-HTTP Status: ${testPixResult.status}
+Endpoint: ${testPixResult.request?.method} ${testPixResult.request?.url}
+HTTP Status retornado: ${testPixResult.status}
 
---- REQUEST ---
-${testPixResult.request?.method} ${testPixResult.request?.url}
-Headers: ${JSON.stringify(testPixResult.request?.headers, null, 2)}
+Request
+${JSON.stringify(testPixResult.request?.body, null, 4)}
 
-Body:
-${JSON.stringify(testPixResult.request?.body, null, 2)}
+RESPONSE
+${JSON.stringify(testPixResult.response, null, 4)}
 
---- RESPONSE ---
-${JSON.stringify(testPixResult.response, null, 2)}
-`;
+Atenciosamente,
+Thiago Rissutto — Lurd's Plus Size`;
     navigator.clipboard.writeText(txt).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 3000);
@@ -680,5 +681,5 @@ function RadioBox({ checked, onChange, title, sub, color }: { checked: boolean; 
       <div className="font-bold text-sm">{title}</div>
       <div className={`text-xs mt-1 ${checked ? '' : 'text-gray-500'}`}>{sub}</div>
     </button>
-  );
+   );
 }
