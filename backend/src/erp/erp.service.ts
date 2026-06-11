@@ -2311,9 +2311,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // cores) daquele modelo, ordenada. Se exato não achar (digitação parcial),
     // fallback por PREFIXO. NUNCA contains nem DESCRICAO pra termo numérico —
     // era isso que trazia "referências nada a ver" no dropdown.
-    const isNumericRef = /^\d{3,6}$/.test(cleanTerm);
+    // QUALQUER tamanho de REF numérica (3+ dígitos) — existem REFs com mais
+    // de 6 dígitos. Ordem: REF exata → REF prefixo → fallback genérico
+    // (CODIGO/REF/DESCRICAO contains, comportamento antigo, pra não quebrar
+    // outras telas que buscam código parcial).
+    const isNumericRef = /^\d{3,}$/.test(cleanTerm);
     try {
-      let products: any[];
+      let products: any[] = [];
       if (isNumericRef) {
         const cols = 'CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID';
         const [exactRows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -2335,6 +2339,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             [`${cleanTerm}%`],
           );
           products = prefixRows as any[];
+        }
+        if (!products.length) {
+          // Último recurso: LIKE genérico (igual comportamento antigo)
+          const [genericRows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT ${cols}
+               FROM produtos
+              WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+              LIMIT 20`,
+            [fullLike, fullLike, fullLike],
+          );
+          products = genericRows as any[];
         }
       } else {
         let sql: string;

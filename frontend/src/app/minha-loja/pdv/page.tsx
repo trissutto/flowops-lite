@@ -627,7 +627,8 @@ function PdvPageInner() {
   };
 
   // ── Bipagem ──
-  const handleScan = async (e?: React.FormEvent) => {
+  // forceRef: Shift+Enter → busca a REF/grade direto, sem tentar bipar.
+  const handleScan = async (e?: React.FormEvent, opts?: { forceRef?: boolean }) => {
     e?.preventDefault();
     if (!sale) return;
     const sku = scanInput.trim();
@@ -639,6 +640,31 @@ function PdvPageInner() {
     if (sku === '0') {
       setScanInput('');
       setShowManualItem(true);
+      return;
+    }
+    // BUSCA DE REF/GRADE — 3 gatilhos:
+    //   1. Shift+Enter (forceRef): explícito, REF de QUALQUER tamanho.
+    //   2. 3-6 dígitos + Enter: nunca é código (códigos têm 7+), vai direto.
+    //   3. Fallback no catch abaixo: código não achou → tenta como REF.
+    const buscarRef = async () => {
+      setSearchLoading(true);
+      setError(null);
+      try {
+        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(sku)}`);
+        const arr = Array.isArray(res) ? res : [];
+        setSearchResults(arr);
+        setShowResults(arr.length > 0);
+        setHighlightedIdx(arr.length > 0 ? 0 : -1);
+        if (!arr.length) setError(`REF ${sku} não encontrada no Giga`);
+      } catch (e2: any) {
+        setError(e2?.message || 'Erro ao buscar REF');
+      } finally {
+        setSearchLoading(false);
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
+    };
+    if (opts?.forceRef || /^\d{3,6}$/.test(sku)) {
+      await buscarRef();
       return;
     }
     setScanLoading(true);
@@ -657,7 +683,15 @@ function PdvPageInner() {
       setSale(fresh);
       setScanInput('');
     } catch (e: any) {
-      setError(e?.message || 'Erro ao bipar');
+      const msg = String(e?.message || '');
+      // FALLBACK REF: código numérico (7+ díg) não existe no Giga? Pode ser
+      // uma REF longa — busca a grade automaticamente antes de dar erro.
+      if (/^\d{7,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
+        setScanLoading(false);
+        await buscarRef();
+        return;
+      }
+      setError(msg || 'Erro ao bipar');
     } finally {
       setScanLoading(false);
       setTimeout(() => {
@@ -708,9 +742,13 @@ function PdvPageInner() {
   useEffect(() => {
     const term = scanInput.trim();
     const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
-    const isShortNumeric = /^\d{3,6}$/.test(term);
-    // 3+ chars com letra OU 3-6 digitos (REF) abrem busca
-    if (term.length < 3 || (!hasLetter && !isShortNumeric)) {
+    // SÓ TEXTO abre busca automática. NÚMERO nunca dispara sozinho —
+    // digitar um código devagar passava por "530" e o dropdown de REF
+    // abria no meio da digitação (e o Enter final selecionava o item
+    // errado do dropdown). REF agora é EXPLÍCITA: digita 3-6 dígitos e
+    // aperta ENTER → handleScan abre a grade do modelo. Determinístico,
+    // independe da velocidade de digitação.
+    if (term.length < 3 || !hasLetter) {
       setSearchResults([]);
       setShowResults(false);
       setHighlightedIdx(-1);
@@ -730,12 +768,7 @@ function PdvPageInner() {
       } finally {
         setSearchLoading(false);
       }
-      // DELAY MAIOR PRA NÚMEROS (850ms): quem digita um CÓDIGO completo
-      // devagar passava por "530" → dropdown de REF abria no meio da
-      // digitação. Com 850ms, só busca REF se a pessoa PAROU de digitar.
-      // Texto (nome da peça) mantém 300ms. Leitor de código não é afetado
-      // (envia tudo em <100ms e finaliza com Enter).
-    }, hasLetter ? 300 : 850);
+    }, 300);
     return () => clearTimeout(t);
   }, [scanInput]);
 
@@ -1578,6 +1611,20 @@ function PdvPageInner() {
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
               onKeyDown={(e) => {
+                // REF + ESPAÇO → abre a grade do modelo (tamanhos/cores).
+                // Só quando o campo tem APENAS números (3+ dígitos) — digitando
+                // texto (nome da peça), o espaço funciona normal.
+                if (e.key === ' ' && /^\d{3,}$/.test(scanInput.trim())) {
+                  e.preventDefault();
+                  handleScan(undefined, { forceRef: true });
+                  return;
+                }
+                // Shift+Enter → mesma busca (atalho alternativo)
+                if (e.key === 'Enter' && e.shiftKey) {
+                  e.preventDefault();
+                  handleScan(undefined, { forceRef: true });
+                  return;
+                }
                 if (!showResults || searchResults.length === 0) return;
                 if (e.key === 'ArrowDown') {
                   e.preventDefault();
@@ -1597,7 +1644,7 @@ function PdvPageInner() {
               onFocus={() => {
                 if (searchResults.length > 0) setShowResults(true);
               }}
-              placeholder="Bipe SKU/EAN ou digite parte do nome do produto…"
+              placeholder="Bipe ou digite o código + Enter · REF + ESPAÇO abre a grade · ou nome da peça…"
               disabled={scanLoading}
               className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
               autoComplete="off"
@@ -7751,6 +7798,7 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
     ['Esc', 'Fechar modal aberto'],
     ['F12 ou ?', 'Abrir / fechar esta ajuda'],
     ['0 + Enter', 'Lançar item manual (produto livre)'],
+    ['REF + Espaço', 'Abrir a grade do modelo (tamanhos/cores)'],
   ];
   return (
     <div
