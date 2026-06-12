@@ -350,6 +350,14 @@ export default function NovoPedidoPage() {
       setError('Fornecedor obrigatório');
       return;
     }
+    // FIX #3: bloqueia salvar sem CNPJ (usuario digitou nome sem clicar no autocomplete).
+    // Sem CNPJ o /receive quebra com "Fornecedor é obrigatório" e nada de estoque entra.
+    if (!fornecedorCnpj.trim()) {
+      setError(
+        'CNPJ do fornecedor está vazio. Selecione o fornecedor da lista (autocomplete) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar produtos no Wincred.',
+      );
+      return;
+    }
     if (items.length === 0) {
       setError('Adicione ao menos 1 item');
       return;
@@ -500,11 +508,23 @@ export default function NovoPedidoPage() {
                 <span className="text-[10px] text-slate-400 font-normal ml-2">
                   ({fornecedores.length} no Wincred, {fornecedoresFiltered.length} mostrados)
                 </span>
+                {fornecedorNome.trim() && !fornecedorCnpj.trim() && (
+                  <span className="ml-2 text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded uppercase">
+                    ⚠ CNPJ vazio — selecione da lista
+                  </span>
+                )}
+                {fornecedorCnpj.trim() && (
+                  <span className="ml-2 text-[10px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded uppercase">
+                    ✓ CNPJ {fornecedorCnpj}
+                  </span>
+                )}
               </label>
               <input
                 value={fornecedorNome}
                 onChange={(e) => {
                   setFornecedorNome(e.target.value);
+                  // Se user editou nome, invalida CNPJ ate clicar no autocomplete
+                  if (fornecedorCnpj) setFornecedorCnpj('');
                   setShowFornDropdown(true);
                 }}
                 onFocus={() => setShowFornDropdown(true)}
@@ -513,7 +533,13 @@ export default function NovoPedidoPage() {
                   handleFornecedorBlur();
                 }}
                 placeholder="Digite a MARCA do fornecedor (ex: MARRIE, MALWEE)..."
-                className="w-full px-3 py-2 border rounded-lg text-sm"
+                className={`w-full px-3 py-2 border-2 rounded-lg text-sm ${
+                  fornecedorNome.trim() && !fornecedorCnpj.trim()
+                    ? 'border-rose-400 bg-rose-50'
+                    : fornecedorCnpj.trim()
+                    ? 'border-emerald-300 bg-emerald-50'
+                    : 'border-slate-300'
+                }`}
               />
               {showFornDropdown && (
                 <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-violet-200 rounded-lg shadow-xl max-h-72 overflow-y-auto z-10">

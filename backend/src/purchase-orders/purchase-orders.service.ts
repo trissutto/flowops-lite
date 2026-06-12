@@ -440,6 +440,32 @@ export class PurchaseOrdersService {
       throw new BadRequestException('Pedido já foi recebido. Pra receber itens adicionados depois, use "Receber REF".');
     }
 
+    // FIX #1: se o pedido nao tem CNPJ mas tem nome do fornecedor, busca no Wincred
+    // pelo nome (RAZAOSOCIAL ou FANTASIA). Evita quebra "Fornecedor é obrigatório"
+    // no ProductReg quando user digitou nome sem clicar no autocomplete.
+    if (!order.fornecedorCnpj && order.fornecedorNome) {
+      try {
+        const cnpjFound = await (this.erp as any).findFornecedorCnpjByNome?.(order.fornecedorNome);
+        if (cnpjFound) {
+          await (this.prisma as any).purchaseOrder.update({
+            where: { id: order.id },
+            data: { fornecedorCnpj: cnpjFound },
+          });
+          order.fornecedorCnpj = cnpjFound;
+          this.logger.log(`[receive] CNPJ recuperado por nome: ${order.fornecedorNome} → ${cnpjFound}`);
+        } else {
+          throw new BadRequestException(
+            `Pedido sem CNPJ do fornecedor. Edite o fornecedor (botão lápis no header do pedido) e selecione "${order.fornecedorNome}" da lista pra pegar o CNPJ.`,
+          );
+        }
+      } catch (e: any) {
+        if (e instanceof BadRequestException) throw e;
+        throw new BadRequestException(
+          `Pedido sem CNPJ. Erro ao buscar: ${e?.message}. Edite o fornecedor manualmente.`,
+        );
+      }
+    }
+
     const itemsRecebidosMap = new Map<string, Record<string, number>>();
     for (const ir of input.itemsRecebidos || []) {
       itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
@@ -766,8 +792,31 @@ export class PurchaseOrdersService {
       },
     });
 
+    // FIX #2: aplicar estoque SE nenhum item teve estoque aplicado ainda
+    // (ou seja: receive() nunca chegou a chamar increaseStock pra esse pedido).
+    // Sem risco de duplicidade pois aplicaca por skusGerados ja salvos + flag appliedAt.
+    let stockApplied: any = null;
+    try {
+      const refreshed = await this.getById(orderId);
+      const anyApplied = (refreshed.items as any[]).some((it: any) => {
+        if (!it.skusGerados) return false;
+        try {
+          const parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+          return !!(parsed?.appliedAt);
+        } catch { return false; }
+      });
+      if (!anyApplied) {
+        this.logger.log(`[cadastrar-faltantes] nenhum item teve estoque aplicado — aplicando agora (Fix #2)`);
+        stockApplied = await this.applyStockOnly(orderId, false);
+      } else {
+        this.logger.log(`[cadastrar-faltantes] pelo menos 1 item ja tem estoque aplicado — NAO aplica (evita duplicidade)`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[cadastrar-faltantes] fix2 stock falhou: ${e?.message}`);
+    }
+
     this.logger.log(
-      `[purchase-orders] cadastrar-faltantes ${orderId}: inseridos=${totalSkusInseridos} jaExistiam=${totalSkusJaExistiam} erros=${errors.length}`,
+      `[purchase-orders] cadastrar-faltantes ${orderId}: inseridos=${totalSkusInseridos} jaExistiam=${totalSkusJaExistiam} erros=${errors.length} stockApplied=${!!stockApplied?.ok}`,
     );
 
     return {
@@ -776,6 +825,7 @@ export class PurchaseOrdersService {
       totalSkusJaExistiam,
       errors,
       log,
+      stockApplied,
     };
   }
 

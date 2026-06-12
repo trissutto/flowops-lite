@@ -6195,6 +6195,45 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Busca CNPJ de fornecedor pelo nome (RAZAOSOCIAL ou FANTASIA).
+   * Retorna null se não achar. Match exato case-insensitive primeiro,
+   * fallback LIKE.
+   */
+  async findFornecedorCnpjByNome(nome: string): Promise<string | null> {
+    if (!this.pool || !nome?.trim()) return null;
+    const n = nome.trim();
+    try {
+      // Match exato (FANTASIA ou RAZAOSOCIAL)
+      const [rows1] = await this.pool.query(
+        `SELECT CNPJ FROM fornecedores
+          WHERE TRIM(UPPER(FANTASIA)) = TRIM(UPPER(?))
+             OR TRIM(UPPER(RAZAOSOCIAL)) = TRIM(UPPER(?))
+          LIMIT 1`,
+        [n, n],
+      );
+      if ((rows1 as any[]).length > 0) {
+        const cnpj = String((rows1 as any[])[0].CNPJ || '').trim();
+        if (cnpj) return cnpj;
+      }
+      // Fallback LIKE
+      const [rows2] = await this.pool.query(
+        `SELECT CNPJ FROM fornecedores
+          WHERE FANTASIA LIKE ? OR RAZAOSOCIAL LIKE ?
+          ORDER BY LENGTH(FANTASIA), LENGTH(RAZAOSOCIAL)
+          LIMIT 1`,
+        [`%${n}%`, `%${n}%`],
+      );
+      if ((rows2 as any[]).length > 0) {
+        const cnpj = String((rows2 as any[])[0].CNPJ || '').trim();
+        if (cnpj) return cnpj;
+      }
+    } catch (e: any) {
+      this.logger.warn(`findFornecedorCnpjByNome falhou: ${e?.message}`);
+    }
+    return null;
+  }
+
+  /**
    * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponível).
    */
   async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
