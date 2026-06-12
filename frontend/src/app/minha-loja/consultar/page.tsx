@@ -953,11 +953,22 @@ function StockByStoreMatrix({ item, myStore }: {
       otherQty.set(s.code, m);
     }
 
-    // Colunas: outras lojas com estoque dessa REF, maior estoque primeiro.
+    // Colunas: outras lojas com estoque dessa REF, em ORDEM NUMÉRICA do
+    // código (02, 03, 04...) — mesmo padrão do Wincred que as vendedoras
+    // já conhecem. Código não-numérico (ex. SITE) vai pro final, alfabético.
     const stores = item.otherStores
       .filter((s) => s.qty > 0)
       .slice()
-      .sort((a, b) => b.qty - a.qty || a.code.localeCompare(b.code));
+      .sort((a, b) => {
+        const na = Number(a.code);
+        const nb = Number(b.code);
+        const aNum = !isNaN(na);
+        const bNum = !isNaN(nb);
+        if (aNum && bNum) return na - nb;
+        if (aNum) return -1;
+        if (bNum) return 1;
+        return a.code.localeCompare(b.code);
+      });
 
     // Linhas: só variações com estoque > 0 em alguma loja (minha ou outras).
     const keys = Array.from(meta.keys()).filter((k) =>
