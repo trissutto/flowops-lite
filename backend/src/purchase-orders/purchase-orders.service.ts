@@ -440,6 +440,32 @@ export class PurchaseOrdersService {
       throw new BadRequestException('Pedido já foi recebido. Pra receber itens adicionados depois, use "Receber REF".');
     }
 
+    // FIX #1: se o pedido nao tem CNPJ mas tem nome do fornecedor, busca no Wincred
+    // pelo nome (RAZAOSOCIAL ou FANTASIA). Evita quebra "Fornecedor é obrigatório"
+    // no ProductReg quando user digitou nome sem clicar no autocomplete.
+    if (!order.fornecedorCnpj && order.fornecedorNome) {
+      try {
+        const cnpjFound = await (this.erp as any).findFornecedorCnpjByNome?.(order.fornecedorNome);
+        if (cnpjFound) {
+          await (this.prisma as any).purchaseOrder.update({
+            where: { id: order.id },
+            data: { fornecedorCnpj: cnpjFound },
+          });
+          order.fornecedorCnpj = cnpjFound;
+          this.logger.log(`[receive] CNPJ recuperado por nome: ${order.fornecedorNome} → ${cnpjFound}`);
+        } else {
+          throw new BadRequestException(
+            `Pedido sem CNPJ do fornecedor. Edite o fornecedor (botão lápis no header do pedido) e selecione "${order.fornecedorNome}" da lista pra pegar o CNPJ.`,
+          );
+        }
+      } catch (e: any) {
+        if (e instanceof BadRequestException) throw e;
+        throw new BadRequestException(
+          `Pedido sem CNPJ. Erro ao buscar: ${e?.message}. Edite o fornecedor manualmente.`,
+        );
+      }
+    }
+
     const itemsRecebidosMap = new Map<string, Record<string, number>>();
     for (const ir of input.itemsRecebidos || []) {
       itemsRecebidosMap.set(ir.itemId, ir.tamanhosQty);
@@ -766,8 +792,31 @@ export class PurchaseOrdersService {
       },
     });
 
+    // FIX #2: aplicar estoque SE nenhum item teve estoque aplicado ainda
+    // (ou seja: receive() nunca chegou a chamar increaseStock pra esse pedido).
+    // Sem risco de duplicidade pois aplicaca por skusGerados ja salvos + flag appliedAt.
+    let stockApplied: any = null;
+    try {
+      const refreshed = await this.getById(orderId);
+      const anyApplied = (refreshed.items as any[]).some((it: any) => {
+        if (!it.skusGerados) return false;
+        try {
+          const parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+          return !!(parsed?.appliedAt);
+        } catch { return false; }
+      });
+      if (!anyApplied) {
+        this.logger.log(`[cadastrar-faltantes] nenhum item teve estoque aplicado — aplicando agora (Fix #2)`);
+        stockApplied = await this.applyStockOnly(orderId, false);
+      } else {
+        this.logger.log(`[cadastrar-faltantes] pelo menos 1 item ja tem estoque aplicado — NAO aplica (evita duplicidade)`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[cadastrar-faltantes] fix2 stock falhou: ${e?.message}`);
+    }
+
     this.logger.log(
-      `[purchase-orders] cadastrar-faltantes ${orderId}: inseridos=${totalSkusInseridos} jaExistiam=${totalSkusJaExistiam} erros=${errors.length}`,
+      `[purchase-orders] cadastrar-faltantes ${orderId}: inseridos=${totalSkusInseridos} jaExistiam=${totalSkusJaExistiam} erros=${errors.length} stockApplied=${!!stockApplied?.ok}`,
     );
 
     return {
@@ -776,7 +825,132 @@ export class PurchaseOrdersService {
       totalSkusJaExistiam,
       errors,
       log,
+      stockApplied,
     };
+  }
+
+  /**
+   * APPLY STOCK ONLY — re-aplica estoque dos skusGerados ja salvos no pedido.
+   * Usado quando o /receive criou os produtos no Wincred mas o increaseStock
+   * falhou (timeout, env desabilitada, etc) e os produtos ficaram zerados.
+   *
+   * SEGURO CONTRA DUPLICIDADE: marca cada item com stockAppliedAt na 1a
+   * execucao bem-sucedida. Proximas chamadas ignoram itens ja marcados.
+   * Pra forcar reaplicar (raro), passe force=true.
+   */
+  async applyStockOnly(orderId: string, force = false) {
+    const order = await this.getById(orderId);
+    if (order.status !== 'recebido' && order.status !== 'recebido_com_erro' && order.status !== 'recebido_parcial') {
+      throw new BadRequestException('Pedido precisa estar recebido');
+    }
+    const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+    const itemsParaEstoque: Array<{ sku: string; qty: number; storeCode: string; itemId: string }> = [];
+    let totalSkus = 0;
+    let totalQty = 0;
+    const itemsSkipped: string[] = [];
+
+    for (const it of order.items as any[]) {
+      if (!it.skusGerados) continue;
+      // PROTECAO DUPLICIDADE: skip items ja aplicados
+      let parsed: any = null;
+      try {
+        parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+      } catch { continue; }
+
+      // skusGerados pode ser array (legado) ou {appliedAt, skus: []} (novo formato)
+      const skus: any[] = Array.isArray(parsed) ? parsed : (parsed?.skus || []);
+      const appliedAt: string | null = Array.isArray(parsed) ? null : (parsed?.appliedAt || null);
+
+      if (appliedAt && !force) {
+        itemsSkipped.push(`${it.ref} ${it.cor} (ja aplicado em ${appliedAt})`);
+        continue;
+      }
+
+      for (const s of skus) {
+        const qty = Number(s.qty || 0);
+        if (!s.codigo || qty <= 0) continue;
+        itemsParaEstoque.push({ sku: String(s.codigo), qty, storeCode: lojaMatriz, itemId: it.id });
+        totalSkus++;
+        totalQty += qty;
+      }
+    }
+
+    if (itemsParaEstoque.length === 0) {
+      return { ok: false, error: 'Nenhum SKU pendente. Itens ja aplicados: ' + itemsSkipped.length, totalSkus: 0, totalQty: 0, itemsSkipped };
+    }
+
+    try {
+      const callItems = itemsParaEstoque.map(({ sku, qty, storeCode }) => ({ sku, qty, storeCode }));
+      const inc = await (this.erp as any).increaseStock?.(callItems);
+      this.logger.log(`[apply-stock-only] pedido ${orderId}: ${totalSkus} SKUs, ${totalQty} pecas na loja ${lojaMatriz} — ${JSON.stringify({success: inc?.success, error: inc?.error, applied: inc?.applied?.length})}`);
+
+      // Se sucesso, MARCA cada item como ja aplicado (contra duplicidade)
+      if (inc?.success) {
+        const itemIds = new Set(itemsParaEstoque.map((x) => x.itemId));
+        const appliedAt = new Date().toISOString();
+        for (const itemId of itemIds) {
+          const it = (order.items as any[]).find((x) => x.id === itemId);
+          if (!it) continue;
+          let parsed: any = null;
+          try {
+            parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+          } catch { continue; }
+          const skus = Array.isArray(parsed) ? parsed : (parsed?.skus || []);
+          const novoFormato = { appliedAt, skus };
+          await (this.prisma as any).purchaseOrderItem.update({
+            where: { id: itemId },
+            data: { skusGerados: JSON.stringify(novoFormato) },
+          });
+        }
+      }
+
+      return {
+        ok: !!inc?.success,
+        totalSkus,
+        totalQty,
+        lojaMatriz,
+        appliedCount: inc?.applied?.length || 0,
+        itemsSkipped,
+        error: inc?.error || null,
+        attempts: inc?.attempts || 1,
+      };
+    } catch (e: any) {
+      this.logger.error(`[apply-stock-only] pedido ${orderId} falhou: ${e?.message}`);
+      return { ok: false, error: e?.message || 'unknown', totalSkus, totalQty };
+    }
+  }
+
+  /**
+   * APPLY STOCK BATCH — aplica estoque pendente em TODOS os pedidos recebidos
+   * nos ultimos N dias (default 7). Idempotente — pula os ja aplicados.
+   */
+  async applyStockBatch(days = 7) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const pedidos = await (this.prisma as any).purchaseOrder.findMany({
+      where: {
+        status: { in: ['recebido', 'recebido_parcial', 'recebido_com_erro'] },
+        updatedAt: { gte: since },
+      },
+      select: { id: true, fornecedorNome: true, createdAt: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const results: any[] = [];
+    let totalAplicados = 0;
+    let totalPecas = 0;
+    for (const p of pedidos) {
+      try {
+        const r = await this.applyStockOnly(p.id, false);
+        results.push({ id: p.id, fornecedor: p.fornecedorNome, ...r });
+        if (r.ok) {
+          totalAplicados++;
+          totalPecas += Number(r.totalQty || 0);
+        }
+      } catch (e: any) {
+        results.push({ id: p.id, fornecedor: p.fornecedorNome, ok: false, error: e?.message });
+      }
+    }
+    return { totalPedidos: pedidos.length, totalAplicados, totalPecas, results };
   }
 
   /**
