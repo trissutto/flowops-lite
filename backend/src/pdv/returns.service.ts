@@ -308,6 +308,8 @@ export class ReturnsService {
     attachToSaleId?: string | null;
     userId?: string;
     userName?: string;
+    /** MODO TREINAMENTO — sessão com header x-training-mode (união com sale.isTraining) */
+    trainingRequest?: boolean;
   }) {
     const { originalSaleId, storeCode, storeName, modo, items, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
@@ -375,10 +377,11 @@ export class ReturnsService {
 
     valorTotal = Math.round(valorTotal * 100) / 100;
 
-    // ── HERDA MODO TREINAMENTO da venda original ──
+    // ── HERDA MODO TREINAMENTO da venda original OU da sessão (header) ──
     // Devolução de venda de treino é também treino: NÃO estorna estoque,
-    // NÃO gera sangria/caixa, NÃO conta em relatórios.
-    const isTraining = !!(sale as any).isTraining;
+    // NÃO gera sangria/caixa, NÃO conta em relatórios. União com o header
+    // pra sessão em treino não estornar estoque REAL de venda real.
+    const isTraining = !!(sale as any).isTraining || !!input.trainingRequest;
 
     // Sessão de caixa atual (necessária pra dinheiro → sangria)
     const cashSession = await this.cash.getCurrentSession(storeCode);
@@ -1167,9 +1170,12 @@ export class ReturnsService {
     const where: any = {
       createdAt: { gte: since, lte: until },
       stockReturnedAt: null,
+      // TREINO: devolução de treinamento NUNCA empurra estoque pro Giga,
+      // nem via retry admin (regra ouro do training.util).
+      return: { isTraining: false },
     };
     if (storeCode) {
-      where.return = { storeCode };
+      where.return = { isTraining: false, storeCode };
     }
 
     const totalPendentes = await (this.prisma as any).pdvReturnItem.count({ where });
@@ -1338,9 +1344,13 @@ export class ReturnsService {
     attachToSaleId?: string | null;
     userId?: string;
     userName?: string;
+    /** MODO TREINAMENTO — sessão com header x-training-mode: skip increaseStock/sangria */
+    trainingRequest?: boolean;
   }) {
     const { sku, storeCode, storeName, modo, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
+    // Devolução manual é órfã (sem venda original) — treino vem só do header.
+    const isTraining = !!input.trainingRequest;
 
     if (!['dinheiro', 'troca', 'credito'].includes(modo)) {
       throw new BadRequestException(`Modo inválido: ${modo}`);
@@ -1361,8 +1371,13 @@ export class ReturnsService {
     }
 
     // 2) Repõe estoque no Giga (loja atual) — uma unidade
+    // PULA se treinamento — não mexer em estoque real.
     let estoqueOk = false;
     let estoqueErr: string | null = null;
+    if (isTraining) {
+      estoqueOk = true;
+      this.logger.log(`[devolucao/manual→TREINO] devolução simulada — skip increaseStock`);
+    } else
     try {
       const r = await this.erp.increaseStock([
         { sku: produto.codigo, qty: 1, storeCode },
@@ -1419,6 +1434,7 @@ export class ReturnsService {
         userId: userId || null,
         userName: userName || null,
         motivo: motivo || 'Sem cupom (Giga)',
+        isTraining,
         items: {
           create: [
             {
@@ -1439,7 +1455,8 @@ export class ReturnsService {
     });
 
     // 5) Modo dinheiro → sangria automática
-    if ((modo === 'dinheiro' || modo === 'pix') && cashSessionId) {
+    // PULA se treinamento (não mexe no caixa real).
+    if ((modo === 'dinheiro' || modo === 'pix') && cashSessionId && !isTraining) {
       try {
         const tipoLabel = modo === 'pix' ? 'PIX devolucao manual' : 'Devolucao manual';
         await this.cash.addMovement({
@@ -1505,6 +1522,8 @@ export class ReturnsService {
       estoqueReposto: estoqueOk,
       estoqueErro: estoqueErr,
       attachedToExistingSale,
+      // campo extra só em treino — não muda o shape fora de treino
+      ...(isTraining ? { training: true } : {}),
     };
   }
 
@@ -1534,6 +1553,8 @@ export class ReturnsService {
     attachToSaleId?: string | null;
     userId?: string;
     userName?: string;
+    /** MODO TREINAMENTO — sessão com header x-training-mode (união com sale.isTraining) */
+    trainingRequest?: boolean;
   }) {
     const { vendas, storeCode, storeName, modo, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
@@ -1613,7 +1634,9 @@ export class ReturnsService {
       }
       valorParcial = Math.round(valorParcial * 100) / 100;
       valorTotalGeral += valorParcial;
-      const isTraining = !!(sale as any).isTraining;
+      // União: venda de treino OU sessão em treino (header) — em treino
+      // nenhum item entra no estorno de estoque consolidado.
+      const isTraining = !!(sale as any).isTraining || !!input.trainingRequest;
       if (isTraining) alguemTreino = true;
 
       processadas.push({ sale, itemsToCreate, valorParcial, isTraining });
@@ -1634,6 +1657,7 @@ export class ReturnsService {
     const stockOkBySku = new Map<string, { ok: boolean; error?: string }>();
     if (allItemsForStock.length === 0) {
       // tudo treino — nada a estornar
+      if (alguemTreino) this.logger.log(`[returns/batch→TREINO] devolução simulada — skip increaseStock`);
     } else {
       try {
         const erpResult = await this.erp.increaseStock(allItemsForStock);
@@ -1697,8 +1721,10 @@ export class ReturnsService {
                 qty: it.qty,
                 precoUnit: it.precoUnit,
                 total: it.total,
-                stockReturnedAt: stockOkBySku.get(it.sku)?.ok ? new Date() : null,
-                stockError: stockOkBySku.get(it.sku)?.ok ? null : stockOkBySku.get(it.sku)?.error || null,
+                // TREINO: marca como "estoque ok" (simulado) pra item de treino
+                // nunca aparecer como pendente nem ser pego pelo retry de estoque.
+                stockReturnedAt: p.isTraining ? new Date() : (stockOkBySku.get(it.sku)?.ok ? new Date() : null),
+                stockError: p.isTraining || stockOkBySku.get(it.sku)?.ok ? null : stockOkBySku.get(it.sku)?.error || null,
               })),
             },
           },

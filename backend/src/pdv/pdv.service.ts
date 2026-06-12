@@ -562,6 +562,19 @@ export class PdvService {
         where: { creditoCode: code },
       });
       if (!ret) throw new BadRequestException(`Vale-troca ${code} não encontrado`);
+      // GUARD TREINO: vale gerado em devolução de TREINAMENTO não vale
+      // dinheiro — bloqueia uso em venda real (em venda de treino, passa).
+      if (ret.isTraining) {
+        const saleVale = await (this.prisma as any).pdvSale.findUnique({
+          where: { id: input.saleId },
+          select: { isTraining: true },
+        });
+        if (!saleVale?.isTraining) {
+          throw new BadRequestException(
+            `Vale-troca ${code} foi gerado em MODO TREINAMENTO — não vale como pagamento real.`,
+          );
+        }
+      }
       if (ret.status === 'used') {
         throw new BadRequestException(
           `Vale-troca ${code} já foi usado em ${ret.creditoUsadoAt ? new Date(ret.creditoUsadoAt).toLocaleString('pt-BR') : 'data desconhecida'}`,
@@ -1493,6 +1506,10 @@ export class PdvService {
     /** Loja do usuário logado (vem do JWT) — usada como fallback se o
      *  storeCode da venda divergir do caixa aberto. */
     userStoreCode?: string;
+    /** TRAVA DE SEGURANÇA: sessão em modo treino (header x-training-mode).
+     *  Vale como treino mesmo se a venda foi criada ANTES de ligar o modo
+     *  (sem isTraining) — impede baixa de estoque/Wincred reais em treino. */
+    trainingRequest?: boolean;
   }) {
     const sale = await this.getSale(input.saleId);
     // IDEMPOTENTE: se a venda ja esta finalized, retorna OK sem refazer nada.
@@ -1672,7 +1689,23 @@ export class PdvService {
     // Venda marcada como treinamento NÃO grava no Wincred nem decrementa estoque
     // nem emite NFC-e nem mexe em marcado/Giga. Só vive no Postgres do FlowOps
     // como histórico do treino — não conta em relatórios financeiros.
-    if ((sale as any).isTraining) {
+    // UNIÃO DE SINAIS: flag da venda OU header da sessão (trainingRequest).
+    // Cobre o caso grave: vendedora liga o treino com venda já aberta — a
+    // venda não tinha isTraining e executava TUDO real com banner de treino.
+    if ((sale as any).isTraining || input.trainingRequest) {
+      if (!(sale as any).isTraining && input.trainingRequest) {
+        // Marca retroativamente: não conta em relatório e o cancelamento
+        // não tenta reverter estoque que nunca foi baixado.
+        try {
+          await (this.prisma as any).pdvSale.update({
+            where: { id: sale.id },
+            data: { isTraining: true },
+          });
+          this.logger.warn(
+            `[pdv→TREINO] Venda ${sale.id} criada FORA do treino mas finalizada com sessão em treino — marcada isTraining=true retroativamente.`,
+          );
+        } catch { /* segue — o skip abaixo já protege o ERP */ }
+      }
       this.logger.log(`[pdv→TREINO] Venda ${sale.id} é treinamento — pulando Wincred, estoque, Giga, NFC-e.`);
       return { ok: true, sale: updated, nfcePreview: null, training: true };
     }
@@ -2132,6 +2165,11 @@ export class PdvService {
       status: 'finalized',
       finalizedAt: { gte: since, lte: until },
       stockDecreasedAt: null,
+      // CRÍTICO: venda de TREINO fica finalizada SEM baixa de estoque DE
+      // PROPÓSITO (finalize pula ERP). Sem este filtro, o backfill pegava
+      // essas vendas e baixava estoque REAL no Wincred — era a causa do
+      // "modo treinamento baixando estoque" (loja 15, jun/2026).
+      isTraining: false,
     };
     if (storeCode) where.storeCode = storeCode;
 

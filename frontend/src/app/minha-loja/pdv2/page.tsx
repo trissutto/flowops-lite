@@ -412,7 +412,15 @@ function PdvPageInner() {
     if (lastSaleId) {
       api<Sale>(`/pdv/sales/${lastSaleId}`)
         .then((s) => {
-          if (s.status === 'open' && s.storeCode === storeCode) {
+          // GUARD TREINO: nunca reaproveita venda com estado de treino
+          // diferente da sessão atual. Venda real + sessão em treino (ou
+          // vice-versa) = abandona e cria nova com a flag certa. Era a
+          // brecha que fazia o treino baixar estoque REAL.
+          const sessaoTreino = (() => {
+            try { return sessionStorage.getItem('flowops_training') === '1'; } catch { return false; }
+          })();
+          const vendaTreino = !!(s as any).isTraining;
+          if (s.status === 'open' && s.storeCode === storeCode && vendaTreino === sessaoTreino) {
             setSale(s);
           } else {
             localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);

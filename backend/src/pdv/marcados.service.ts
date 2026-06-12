@@ -53,12 +53,19 @@ export class MarcadosService {
      * Ainda valida classe A e CPF identificado — só relaxa o limite.
      */
     force?: boolean;
+    /**
+     * MODO TREINAMENTO — sessão com header x-training-mode. Em treino NÃO
+     * insere em caixa do Giga e NÃO baixa estoque; só fecha a venda local
+     * (isTraining=true) e retorna sucesso simulado.
+     */
+    trainingRequest?: boolean;
   }): Promise<{
     ok: boolean;
-    controle?: number;
+    controle?: number | string;
     totalItems?: number;
     totalValor?: number;
     forced?: boolean;
+    training?: boolean;
     error?: string;
   }> {
     // 1. Carrega venda
@@ -72,6 +79,34 @@ export class MarcadosService {
     }
     if (!sale.items || sale.items.length === 0) {
       throw new BadRequestException('Venda sem items');
+    }
+
+    // ── MODO TREINAMENTO ──
+    // União: venda já criada em treino OU sessão atual em treino (header).
+    // NÃO insere em caixa do Giga, NÃO baixa estoque (regra ouro do
+    // training.util) — só fecha a venda local como treino e simula sucesso.
+    const isTraining = !!(sale as any).isTraining || !!input.trainingRequest;
+    if (isTraining) {
+      await (this.prisma as any).pdvSale.update({
+        where: { id: input.saleId },
+        data: {
+          status: 'finalized',
+          paymentMethod: 'MARCADO',
+          finalizedAt: new Date(),
+          isTraining: true,
+        },
+      });
+      this.logger.log(
+        `[marcados→TREINO] marcado simulado — skip insertCaixaMarcado/decreaseStock · ` +
+        `saleId=${input.saleId} items=${sale.items.length} total=R$${Number(sale.total).toFixed(2)}`,
+      );
+      return {
+        ok: true,
+        training: true,
+        controle: 'TREINO',
+        totalItems: sale.items.length,
+        totalValor: Number(sale.total),
+      };
     }
 
     // 2. Valida cliente

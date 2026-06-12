@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { ReturnsService } from './returns.service';
+import { isTrainingRequest } from './training.util';
 
 @UseGuards(JwtAuthGuard)
 @Controller('pdv/devolucao')
@@ -141,6 +142,9 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: u.id || u.sub,
       userName: u.name || u.email,
+      // TRAVA DE SEGURANÇA: sessão em treino (header) → devolução simulada,
+      // sem increaseStock no Giga e sem sangria real.
+      trainingRequest: isTrainingRequest(req),
     });
   }
 
@@ -179,6 +183,9 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
+      // TRAVA DE SEGURANÇA: sessão em treino (header) → devolução tratada
+      // como treino MESMO que a venda original seja real.
+      trainingRequest: isTrainingRequest(req),
     });
   }
 
@@ -228,6 +235,9 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
+      // TRAVA DE SEGURANÇA: sessão em treino (header) → batch inteiro tratado
+      // como treino MESMO que as vendas originais sejam reais.
+      trainingRequest: isTrainingRequest(req),
     });
   }
 

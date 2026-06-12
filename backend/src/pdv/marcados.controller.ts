@@ -101,6 +101,9 @@ export class MarcadosController {
       userId,
       userName,
       force: !!body.force,
+      // TRAVA DE SEGURANÇA: sessão em treino (header) → marcado simulado,
+      // sem INSERT em caixa do Giga e sem baixa de estoque.
+      trainingRequest: isTrainingRequest(req),
     });
   }
 

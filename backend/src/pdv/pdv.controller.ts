@@ -5,6 +5,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Logger,
   NotFoundException,
   Param,
   Patch,
@@ -36,6 +37,8 @@ import { ReturnsService } from './returns.service';
 @UseGuards(JwtAuthGuard)
 @Controller('pdv')
 export class PdvController {
+  private readonly logger = new Logger(PdvController.name);
+
   constructor(
     private readonly svc: PdvService,
     private readonly erp: ErpService,
@@ -528,6 +531,11 @@ export class PdvController {
       // Passa storeCode do JWT pra reconciliação automática quando a
       // venda foi criada com loja diferente do caixa atual.
       userStoreCode: req?.user?.storeCode,
+      // TRAVA DE SEGURANÇA: se a SESSÃO está em treino (header), a venda é
+      // tratada como treino MESMO que tenha sido criada antes de ligar o
+      // modo (venda aberta reaproveitada ficava sem isTraining e executava
+      // Wincred/estoque REAIS com o banner de treino na tela).
+      trainingRequest: isTrainingRequest(req),
     });
   }
 
@@ -629,6 +637,25 @@ export class PdvController {
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda já está ${sale.status}`);
     if (sale.total <= 0) throw new BadRequestException('Total da venda deve ser > 0');
+
+    // ── MODO TREINAMENTO ──
+    // União: venda criada em treino OU sessão atual em treino (header).
+    // NÃO cria cobrança real no Pagar.me — retorna cobrança FAKE claramente
+    // marcada (payload não é um BR Code válido, nenhum banco aceita).
+    if ((sale as any).isTraining || isTrainingRequest(req)) {
+      this.logger.log(
+        `[pix-charge→TREINO] cobrança simulada — skip pagarme.createPixCharge · ` +
+        `saleId=${id} valor=R$${Number(sale.total).toFixed(2)}`,
+      );
+      return {
+        txid: 'TREINO',
+        valor: sale.total,
+        qrCodeDataUrl: null,
+        payload: 'TREINO-SEM-VALOR',
+        expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        training: true,
+      };
+    }
 
     const r = await this.pagarme.createPixCharge({
       saleId: id,
@@ -1250,6 +1277,26 @@ export class PdvController {
     const valorFinanciado = Math.round((sale.total - entrada) * 100) / 100;
     if (valorFinanciado <= 0) {
       throw new BadRequestException('Entrada não pode ser maior ou igual ao total da venda');
+    }
+
+    // ── MODO TREINAMENTO ──
+    // União: venda criada em treino OU sessão atual em treino (header).
+    // NÃO consulta/grava parcelas no Giga (movimento) — retorna sucesso
+    // simulado com o mesmo shape do fluxo normal.
+    if ((sale as any).isTraining || isTrainingRequest(req)) {
+      this.logger.log(
+        `[crediario→TREINO] parcelas simuladas — skip createCrediarioParcelas · ` +
+        `saleId=${saleId} parcelas=${body.parcelas} valorFinanciado=R$${valorFinanciado.toFixed(2)}`,
+      );
+      return {
+        ok: true,
+        training: true,
+        parcelas: body.parcelas,
+        controle: 'TREINO',
+        registroInicial: null,
+        valorFinanciado,
+        entrada,
+      };
     }
 
     // Busca cliente no Giga pra pegar codCliente
