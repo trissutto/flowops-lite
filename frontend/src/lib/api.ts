@@ -66,6 +66,21 @@ function handleUnauthorized() {
     return;
   }
 
+  // GUARD: JANELA DE IMPRESSÃO (recibo, recibo-devolução, NFC-e, carnê).
+  // Se a sessão cair aqui, NÃO mostra alert nem redireciona pro login —
+  // o app desktop tem fallback que imprime a janela após 8s, e isso fazia
+  // a PÁGINA DE ERRO 401 sair impressa no cupom térmico (caso Sorocaba).
+  // Fecha a janela: nada é impresso e o PDV principal mostra o aviso de
+  // sessão na próxima ação.
+  const PRINT_ROUTES = ['/recibo/', '/recibo-devolucao/', '/nfce/', '/imprimir'];
+  if (PRINT_ROUTES.some((p) => window.location.pathname.includes(p))) {
+    try {
+      localStorage.removeItem('flowops_token');
+    } catch {}
+    setTimeout(() => { try { window.close(); } catch {} }, 100);
+    return;
+  }
+
   unauthorizedHandled = true;
 
   try {

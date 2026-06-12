@@ -50,6 +50,50 @@ export default function PagbankConfigPage() {
   const [testResult, setTestResult] = useState<any>(null);
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnoseResult, setDiagnoseResult] = useState<any>(null);
+  // PIX teste sandbox — evidência pra homologação Nathalia
+  const [testingPix, setTestingPix] = useState(false);
+  const [testPixResult, setTestPixResult] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function runTestPixSandbox() {
+    setTestingPix(true);
+    setTestPixResult(null);
+    setCopied(false);
+    try {
+      const r = await api<any>('/pagbank/pix/test-sandbox', { method: 'POST' });
+      setTestPixResult(r);
+    } catch (e: any) {
+      setTestPixResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setTestingPix(false);
+    }
+  }
+
+  function copyEvidence() {
+    if (!testPixResult) return;
+    // Formato idêntico ao que a Nathalia enviou como exemplo
+    // (Chamado 1360753759): "Request" + JSON, depois "RESPONSE" + JSON.
+    const txt =
+`Olá Nathalia, segue evidência de teste real em Sandbox conforme solicitado.
+
+Chamado: 1360753759
+Conta: matriz@lurds.com.br
+Endpoint: ${testPixResult.request?.method} ${testPixResult.request?.url}
+HTTP Status retornado: ${testPixResult.status}
+
+Request
+${JSON.stringify(testPixResult.request?.body, null, 4)}
+
+RESPONSE
+${JSON.stringify(testPixResult.response, null, 4)}
+
+Atenciosamente,
+Thiago Rissutto — Lurd's Plus Size`;
+    navigator.clipboard.writeText(txt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    });
+  }
 
   async function testConnection() {
     setTesting(true);
@@ -476,6 +520,77 @@ export default function PagbankConfigPage() {
             )}
           </Card>
 
+          {/* EVIDÊNCIA SANDBOX — homologação PagBank (Chamado 1360753759) */}
+          <Card
+            title="Gerar evidência sandbox"
+            subtitle="Cria PIX REAL de R$ 1,00 em sandbox → captura Request + Response pra enviar pra Nathalia (Chamado 1360753759)."
+          >
+            <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900 mb-3">
+              <b>Pré-requisito:</b> ambiente precisa estar em <b>SANDBOX</b> com token sandbox salvo + integração LIGADA.
+              Só funciona se cfg.ambiente = sandbox.
+            </div>
+            <button
+              onClick={runTestPixSandbox}
+              disabled={testingPix || !cfg.hasToken || cfg.ambiente !== 'sandbox' || !cfg.enabled}
+              className="w-full p-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {testingPix ? 'Gerando…' : '🔧 Gerar PIX real (R$ 1,00) em sandbox'}
+            </button>
+
+            {testPixResult && (
+              <div className="mt-3 space-y-2">
+                <div
+                  className={`rounded-lg p-3 text-sm ${
+                    testPixResult.ok
+                      ? 'bg-emerald-50 border border-emerald-300 text-emerald-900'
+                      : 'bg-red-50 border border-red-300 text-red-900'
+                  }`}
+                >
+                  <div className="font-bold mb-1 flex items-center justify-between">
+                    <span>
+                      {testPixResult.ok ? '✓ PIX gerado' : '✗ Falhou'} — HTTP {testPixResult.status}
+                    </span>
+                    {testPixResult.pagbankOrderId && (
+                      <span className="text-[10px] font-mono opacity-70">{testPixResult.pagbankOrderId}</span>
+                    )}
+                  </div>
+                  {testPixResult.error && (
+                    <div className="text-xs mt-1"><b>Erro:</b> {testPixResult.error}</div>
+                  )}
+                  {testPixResult.hint && (
+                    <div className="text-xs mt-1 italic">💡 {testPixResult.hint}</div>
+                  )}
+                  {testPixResult.qrCodeText && (
+                    <div className="mt-2 text-[10px] font-mono break-all bg-white border border-emerald-200 rounded p-2">
+                      <b>QR Code copia-e-cola:</b><br />{testPixResult.qrCodeText}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={copyEvidence}
+                  className="w-full p-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm"
+                >
+                  {copied ? '✓ Copiado!' : '📋 Copiar evidência completa pra Nathalia'}
+                </button>
+
+                <details className="bg-slate-900 text-slate-100 rounded-lg overflow-hidden">
+                  <summary className="px-3 py-2 cursor-pointer font-mono text-xs hover:bg-slate-800">
+                    📥 Request (clique pra expandir)
+                  </summary>
+                  <pre className="text-[10px] overflow-x-auto p-3 max-h-80">{JSON.stringify(testPixResult.request, null, 2)}</pre>
+                </details>
+
+                <details className="bg-slate-900 text-slate-100 rounded-lg overflow-hidden" open>
+                  <summary className="px-3 py-2 cursor-pointer font-mono text-xs hover:bg-slate-800">
+                    📤 Response (HTTP {testPixResult.status})
+                  </summary>
+                  <pre className="text-[10px] overflow-x-auto p-3 max-h-80">{JSON.stringify(testPixResult.response, null, 2)}</pre>
+                </details>
+              </div>
+            )}
+          </Card>
+
           {/* SAVE */}
           <div className="sticky bottom-3 bg-white shadow-lg rounded-2xl p-4 flex items-center justify-between gap-4">
             <div className="text-xs text-gray-600">
@@ -506,10 +621,8 @@ export default function PagbankConfigPage() {
             <h3 className="font-bold text-rose-900 mb-2">Roteiro pra primeiro teste:</h3>
             <ol className="list-decimal pl-5 space-y-1.5">
               <li>Marca <b>SANDBOX</b> + cola o Bearer Token de sandbox + clica <b>LIGAR</b> + Salvar</li>
-              <li>Vai pro PDV (<code>/minha-loja/pdv</code>), bipa um produto, clica em finalizar</li>
-              <li>Escolhe forma de pagamento <b>PIX</b> → QR aparece (gerado via PagBank)</li>
-              <li>Sandbox: simula pagamento pelo Portal Dev → webhook chega aqui → PDV finaliza venda automaticamente</li>
-              <li>Quando estiver tudo ok, troca pra <b>PRODUÇÃO</b> com Bearer Token de produção</li>
+              <li>Clica em <b>Gerar PIX real (R$ 1,00) em sandbox</b> acima → copia evidência → manda pra Nathalia</li>
+              <li>Quando Nathalia liberar PROD, troca pra <b>PRODUÇÃO</b> com Bearer Token de produção</li>
             </ol>
           </div>
         </div>
@@ -568,5 +681,5 @@ function RadioBox({ checked, onChange, title, sub, color }: { checked: boolean; 
       <div className="font-bold text-sm">{title}</div>
       <div className={`text-xs mt-1 ${checked ? '' : 'text-gray-500'}`}>{sub}</div>
     </button>
-  );
+   );
 }

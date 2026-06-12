@@ -113,7 +113,7 @@ export default function VitrinePage() {
       <div className="bg-gradient-to-r from-pink-600 via-rose-600 to-pink-600 text-white text-xs md:text-sm font-medium text-center py-2 px-4">
         <span className="inline-flex items-center gap-1.5">
           <Flame className="w-3.5 h-3.5" />
-          FRETE GRÁTIS ACIMA DE R$ 299 · 10% OFF no PIX · Parcele em até 6x sem juros
+          FRETE GRÁTIS ACIMA DE R$ 500 · 5% OFF no PIX · Parcele em até 12x sem juros
         </span>
       </div>
 
@@ -597,7 +597,7 @@ function ProductCard({
         {/* Parcelas */}
         {(p.salePrice ?? p.price) && (
           <div className="mt-0.5 text-[11px] text-slate-600">
-            ou 6x de {fmt(((p.salePrice ?? p.price ?? 0) / 6))} sem juros
+            ou 12x de {fmt(((p.salePrice ?? p.price ?? 0) / 12))} sem juros
           </div>
         )}
       </div>

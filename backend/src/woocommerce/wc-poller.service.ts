@@ -7,6 +7,7 @@ import { OrdersService } from '../orders/orders.service';
 import { QueueService } from '../queue/queue.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import { PilotService } from '../pilot/pilot.service';
+import { OrderAppHooksService } from '../customers-app/order-app-hooks.service';
 
 /**
  * Polling automático do WooCommerce.
@@ -28,6 +29,7 @@ export class WcPollerService {
     private readonly gateway: RealtimeGateway,
     @Inject(forwardRef(() => PilotService))
     private readonly pilot: PilotService,
+    private readonly appHooks: OrderAppHooksService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -76,6 +78,12 @@ export class WcPollerService {
           const saved = await this.orders.upsertFromWooCommerce(wc);
           if (saved.shouldRoute) newCount++;
           else updatedCount++;
+
+          // Hook do app (cashback + push) — sempre dispara, decide internamente
+          // se é pedido do app.lurds.com.br pelos meta_data.
+          this.appHooks
+            .handleWcOrder(wc)
+            .catch((err) => this.logger.warn(`[AppHook] #${wc.id}: ${err?.message}`));
 
           // EMITE order:new apenas quando o pedido está em PROCESSING (pago).
           // Cobre DOIS cenários:

@@ -55,6 +55,34 @@ export class PdvController {
       throw new ForbiddenException('Apenas admin ou loja');
   }
 
+  // ── CACHE DE DESCOBERTA GIGA ─────────────────────────────────────────────
+  // FLAG PDV_GIGA_CACHE (default: false):
+  //   false → comportamento atual: delega direto pro crediarios.detectClientesTable()
+  //   true  → cacheia o mapa tabela/colunas de clientes em memória por 1h,
+  //           evitando redescoberta (SHOW COLUMNS etc) a cada customer-info/
+  //           customer-search. Resultado null (Giga fora) NÃO é cacheado.
+  private readonly gigaDiscoveryCache = new Map<string, { value: any; expiresAt: number }>();
+  private static readonly GIGA_DISCOVERY_TTL_MS = 60 * 60 * 1000; // 1h
+
+  private async detectClientesTableCached(): Promise<any> {
+    const enabled =
+      String(process.env.PDV_GIGA_CACHE ?? '').trim().toLowerCase() === 'true';
+    if (!enabled) return this.crediarios.detectClientesTable();
+
+    const key = 'clientesMap';
+    const hit = this.gigaDiscoveryCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+    const value = await this.crediarios.detectClientesTable();
+    if (value) {
+      this.gigaDiscoveryCache.set(key, {
+        value,
+        expiresAt: Date.now() + PdvController.GIGA_DISCOVERY_TTL_MS,
+      });
+    }
+    return value;
+  }
+
   /**
    * GET /pdv/product-image?sku=XXX
    * Retorna URL da foto do produto no WooCommerce (cache 1h em memória).
@@ -292,6 +320,66 @@ export class PdvController {
     const nivel = validateMinLevel(body?.password, 'MASTER');
     const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
     return this.svc.masterCancelZumbi({
+      saleId: id,
+      motivo: body?.motivo || '',
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
+   * POST /pdv/sales/:id/master/estornar
+   * Body: { motivo, password }
+   *
+   * ESTORNO COMPLETO — usado pelo botão "ESTORNAR" da tela
+   * /retaguarda/faturamento (drill-down). Reverte tudo automaticamente:
+   *   - Cancela NFC-e na SEFAZ
+   *   - Devolve estoque ao Wincred
+   *   - Revoga cashback do cliente
+   *   - Marca sale como cancelled
+   *
+   * Exige senha master + motivo (>=5 chars).
+   * Retorna relatório passo-a-passo do que conseguiu reverter.
+   */
+  @Post('sales/:id/master/estornar')
+  async masterEstornar(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { motivo: string; password: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterEstornarVenda({
+      saleId: id,
+      motivo: body?.motivo || '',
+      userName: `[${nivel}] ${userName}`,
+    });
+  }
+
+  /**
+   * POST /pdv/sales/:id/master/cancel-duplicada
+   * Body: { motivo, password }
+   * Cancela QUALQUER venda finalizada (mesmo com pagamento) — caso da Hellen:
+   * mesma venda batida 2x por engano antes de imprimir cupom fiscal.
+   * Marca status=cancelled + cancelReason. NAO mexe em estoque (assume que era duplicata).
+   * Exige senha master.
+   */
+  @Post('sales/:id/master/cancel-duplicada')
+  async masterCancelDuplicada(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { motivo: string; password: string },
+  ) {
+    const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'supervisor' && role !== 'operator') {
+      throw new ForbiddenException('Apenas admin/supervisor/operator');
+    }
+    const nivel = validateMinLevel(body?.password, 'MASTER');
+    const userName = req?.user?.name || req?.user?.email || req?.user?.username || 'admin';
+    return this.svc.masterCancelDuplicada({
       saleId: id,
       motivo: body?.motivo || '',
       userName: `[${nivel}] ${userName}`,
@@ -546,6 +634,7 @@ export class PdvController {
       saleId: id,
       valor: sale.total,
       storeCode: sale.storeCode,
+      storeName: sale.storeName,
       customerName: sale.customerName || undefined,
       customerCpf: sale.customerCpf || undefined,
       customerEmail: sale.customerEmail || undefined,
@@ -597,8 +686,9 @@ export class PdvController {
       throw new BadRequestException('Mínimo 3 dígitos');
     }
 
-    // Busca cliente no Giga (tabela clientes detectada dinamicamente)
-    const cm = await this.crediarios.detectClientesTable();
+    // Busca cliente no Giga (tabela clientes detectada dinamicamente —
+    // com cache opcional de 1h via flag PDV_GIGA_CACHE)
+    const cm = await this.detectClientesTableCached();
     if (!cm) {
       return { found: false, message: 'Tabela de clientes do Giga não detectada' };
     }
@@ -816,7 +906,7 @@ export class PdvController {
     // ─── 2. SE AINDA HÁ SLOTS, BUSCA NO GIGA ──────────────────────────────
     const restante = limit - results.length;
     if (restante > 0) {
-      const cm = await this.crediarios.detectClientesTable();
+      const cm = await this.detectClientesTableCached();
       if (cm) {
         const safeText = term.replace(/['"\\;%_]/g, '').slice(0, 80);
         const safeNum = onlyDigits.slice(0, 14);

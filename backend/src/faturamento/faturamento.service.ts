@@ -25,6 +25,348 @@ export class FaturamentoService {
     private readonly erp: ErpService,
   ) {}
 
+  /** Limpa cache de resumo — chamado após estorno pra forçar refresh. */
+  clearCache() {
+    this.cache.clear();
+    this.logger.log('[faturamento] cache limpo');
+  }
+
+  /**
+   * Auditoria de paridade Wincred vs Flowops por loja+dia.
+   * Suporta migração 30/06 — detecta divergência > tolerância.
+   * Foca nas 5 lojas migradas (INDAIATUBA, ITANHAEM, MOEMA, SOROCABA, SANTOS)
+   * mas retorna TODAS pra dashboard completo.
+   */
+  async auditoriaParidade(from: string, to: string) {
+    const dInicio = this.parseDate(from, false);
+    const dFimExclusive = this.parseDate(to, true);
+
+    // 1) Faturamento Wincred por loja
+    const wincred = await this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive);
+    const wincredMap = new Map<string, { qtd: number; valor: number }>();
+    for (const w of wincred as any[]) {
+      const code = (w.loja || w.LOJA || w.code || '').toString().toUpperCase();
+      wincredMap.set(code, {
+        qtd: Number(w.cupons || w.qtd || 0),
+        valor: Number(w.valor || w.faturamento || 0),
+      });
+    }
+
+    // 2) PdvSale (flowops) por loja
+    const lojasDb = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true },
+    });
+
+    const LOJAS_MIGRADAS = ['INDAIATUBA', 'ITANHAEM', 'MOEMA', 'SOROCABA', 'SANTOS'];
+    const resultado: any[] = [];
+
+    for (const loja of lojasDb) {
+      const code = (loja.code || '').toUpperCase();
+      const name = (loja.name || '').toUpperCase();
+      const possibleCodes = [code, name].filter(Boolean);
+
+      const flowAgg = await (this.prisma as any).pdvSale.aggregate({
+        where: {
+          storeCode: { in: possibleCodes },
+          status: { in: ['finalized', 'cancelled'] },
+          isTraining: false,
+          OR: [
+            { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
+            {
+              AND: [
+                { finalizedAt: null },
+                { createdAt: { gte: dInicio, lt: dFimExclusive } },
+              ],
+            },
+          ],
+        },
+        _count: { _all: true },
+        _sum: { total: true },
+      });
+      const flowQtd = flowAgg._count?._all || 0;
+      const flowValor = Number(flowAgg._sum?.total || 0);
+
+      // Procura no Wincred por code OR name
+      const wKey = wincredMap.has(code) ? code : (wincredMap.has(name) ? name : code);
+      const w = wincredMap.get(wKey) || { qtd: 0, valor: 0 };
+
+      const isMigrada = LOJAS_MIGRADAS.some(
+        (m) => m === code || m === name,
+      );
+      const divergenciaValor = flowValor - w.valor;
+      const divergenciaPct = w.valor > 0 ? (divergenciaValor / w.valor) * 100 : 0;
+
+      // Status: ok se < 1%, alerta se < 5%, crítico se >= 5%
+      let status: 'ok' | 'alerta' | 'critico' | 'sem_dado';
+      if (!isMigrada && flowQtd === 0) {
+        status = 'sem_dado'; // loja ainda no Wincred — esperado
+      } else if (Math.abs(divergenciaPct) < 1) {
+        status = 'ok';
+      } else if (Math.abs(divergenciaPct) < 5) {
+        status = 'alerta';
+      } else {
+        status = 'critico';
+      }
+
+      resultado.push({
+        storeCode: code,
+        storeName: loja.name,
+        migrada: isMigrada,
+        wincred: { qtd: w.qtd, valor: w.valor },
+        flowops: { qtd: flowQtd, valor: flowValor },
+        divergencia: {
+          valor: Number(divergenciaValor.toFixed(2)),
+          pct: Number(divergenciaPct.toFixed(2)),
+        },
+        status,
+      });
+    }
+
+    // Ordena: críticos primeiro, depois alertas, depois OK
+    resultado.sort((a, b) => {
+      const ord: Record<string, number> = { critico: 0, alerta: 1, ok: 2, sem_dado: 3 };
+      return ord[a.status] - ord[b.status];
+    });
+
+    const sumario = {
+      total: resultado.length,
+      criticos: resultado.filter((r) => r.status === 'critico').length,
+      alertas: resultado.filter((r) => r.status === 'alerta').length,
+      ok: resultado.filter((r) => r.status === 'ok').length,
+      semDado: resultado.filter((r) => r.status === 'sem_dado').length,
+      lojasMigradas: LOJAS_MIGRADAS,
+      totalWincredBrl: Array.from(wincredMap.values()).reduce((s, w) => s + w.valor, 0),
+      totalFlowopsBrl: resultado.reduce((s, r) => s + r.flowops.valor, 0),
+    };
+
+    return { from, to, sumario, lojas: resultado };
+  }
+
+  /**
+   * Lista vendas detalhadas de uma loja num período (drill-down do faturamento).
+   * Inclui itens + payments pra mostrar tudo no modal de averiguação.
+   *
+   * @param storeCode  Código da loja (ex: 'ITANHAEM') ou 'SITE' pra Order do flowops
+   * @param from       YYYY-MM-DD inclusivo
+   * @param to         YYYY-MM-DD inclusivo
+   */
+  async getVendasDetalhadas(storeCode: string, from: string, to: string) {
+    const dInicio = this.parseDate(from, false);
+    const dFimExclusive = this.parseDate(to, true);
+
+    // SITE = pedidos do WC/flowops Order (não PdvSale)
+    if (storeCode === 'SITE' || storeCode.toUpperCase() === 'SITE') {
+      const orders = await (this.prisma as any).order.findMany({
+        where: {
+          status: 'completed',
+          createdAt: { gte: dInicio, lt: dFimExclusive },
+        },
+        select: {
+          id: true,
+          wcOrderId: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+          customerCpf: true,
+          customerName: true,
+          paymentMethod: true,
+          items: {
+            select: { sku: true, descricao: true, qty: true, unitPrice: true, total: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+      });
+      return {
+        storeCode: 'SITE',
+        source: 'flowops_order',
+        vendas: orders.map((o: any) => ({
+          id: o.id,
+          number: `#${o.wcOrderId || o.id.slice(0, 8)}`,
+          status: o.status,
+          createdAt: o.createdAt,
+          total: o.totalAmount,
+          customerCpf: o.customerCpf,
+          customerName: o.customerName,
+          paymentMethod: o.paymentMethod,
+          sellerName: null,
+          nfceStatus: null,
+          nfceNumber: null,
+          items: o.items,
+          payments: [],
+          canEstornar: false,  // pedidos site têm fluxo separado de cancelamento
+        })),
+      };
+    }
+
+    // Lojas físicas — PdvSale (PDV novo flowops)
+    const storeCodeUpper = storeCode.toUpperCase();
+
+    // Busca Store pelo code pra obter o NAME e ID — match flexível:
+    // - tabela Store usa codes do Wincred (ex: "04", "13")
+    // - mas pdv_sales.store_code pode estar gravado como "INDAIATUBA" (nome) ou "04" (code)
+    // - vendedoras antigas mexem em ambos os formatos
+    const storeRecord = await (this.prisma as any).store.findUnique({
+      where: { code: storeCodeUpper },
+      select: { code: true, name: true, id: true },
+    });
+    const storeName = storeRecord?.name?.toUpperCase() || '';
+    const possibleCodes = [storeCodeUpper, storeName].filter(Boolean);
+
+    // Filtro de data ESTRITO: a venda precisa ter algum timestamp DENTRO do
+    // período. Usa AND explícito pra evitar ambiguidade do Prisma com OR
+    // misturado com outros campos no nível top do where.
+    const dateInPeriod = {
+      OR: [
+        { finalizedAt: { gte: dInicio, lt: dFimExclusive } },
+        // Estornadas hoje (cancelledAt no período) também aparecem
+        { cancelledAt: { gte: dInicio, lt: dFimExclusive } },
+        // Vendas sem finalizedAt (legadas) — usa createdAt
+        {
+          AND: [
+            { finalizedAt: null },
+            { cancelledAt: null },
+            { createdAt: { gte: dInicio, lt: dFimExclusive } },
+          ],
+        },
+      ],
+    };
+
+    const storeFilter: any = possibleCodes.length > 1
+      ? { storeCode: { in: possibleCodes } }
+      : { storeCode: storeCodeUpper };
+
+    this.logger.log(
+      `[getVendasDetalhadas] storeCode=${storeCodeUpper} possible=${JSON.stringify(possibleCodes)} ` +
+      `period=${from}→${to} (dInicio=${dInicio.toISOString()} dFim=${dFimExclusive.toISOString()})`,
+    );
+
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        AND: [
+          storeFilter,
+          { status: { in: ['finalized', 'cancelled'] } },
+          { isTraining: false },
+          dateInPeriod,
+        ],
+      },
+      select: {
+        id: true,
+        status: true,
+        total: true,
+        subtotal: true,
+        desconto: true,
+        createdAt: true,
+        finalizedAt: true,
+        cancelledAt: true,
+        cancelReason: true,
+        sellerName: true,
+        customerCpf: true,
+        customerName: true,
+        paymentMethod: true,
+        nfceStatus: true,
+        nfceNumber: true,
+        nfceSerie: true,
+        nfceChave: true,
+        nfceAutorizadaEm: true,
+        stockDecreasedAt: true,
+        items: {
+          select: { sku: true, descricao: true, qty: true, precoUnit: true, total: true, cor: true, tamanho: true },
+        },
+        payments: {
+          select: { method: true, valor: true, details: true },
+        },
+      },
+      orderBy: [
+        { finalizedAt: 'desc' },
+        { createdAt: 'desc' },
+      ],
+      take: 500,
+    });
+
+    this.logger.log(
+      `[getVendasDetalhadas] storeCode=${storeCodeUpper} retornou ${sales.length} vendas`,
+    );
+
+    // Se PDV flowops tem vendas → retorna elas (com flag canEstornar)
+    if (sales.length > 0) {
+      return {
+        storeCode: storeCodeUpper,
+        source: 'pdv_sale',
+        appliedPeriod: { from, to },
+        vendas: sales.map((s: any) => ({
+          id: s.id,
+          number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
+          status: s.status,
+          // Mostra a data mais relevante:
+          // estornadas → cancelledAt (data do estorno)
+          // outras → finalizedAt
+          createdAt: s.status === 'cancelled'
+            ? (s.cancelledAt || s.finalizedAt || s.createdAt)
+            : (s.finalizedAt || s.createdAt),
+          total: s.total,
+          subtotal: s.subtotal,
+          desconto: s.desconto,
+          cancelledAt: s.cancelledAt,
+          cancelReason: s.cancelReason,
+          sellerName: s.sellerName,
+          customerCpf: s.customerCpf,
+          customerName: s.customerName,
+          paymentMethod: s.paymentMethod,
+          nfceStatus: s.nfceStatus,
+          nfceNumber: s.nfceNumber,
+          nfceSerie: s.nfceSerie,
+          nfceChave: s.nfceChave,
+          nfceAutorizadaEm: s.nfceAutorizadaEm,
+          stockDecreased: !!s.stockDecreasedAt,
+          items: s.items,
+          payments: s.payments,
+          canEstornar: s.status === 'finalized',
+        })),
+      };
+    }
+
+    // FALLBACK: Loja não usa PDV flowops → busca direto no Wincred (tabela caixa)
+    // Estorno NÃO disponível pra essas vendas — precisa ser feito no PDV Wincred legado.
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const caixaVendas = await this.erp.getVendasCaixa(
+      storeCodeUpper,
+      fmt(dInicio),
+      fmt(dFimExclusive),
+    );
+
+    return {
+      storeCode: storeCodeUpper,
+      source: 'wincred_caixa',
+      sourceWarning:
+        'Esta loja ainda usa o PDV Wincred legado. Estorno não disponível por aqui — faça direto no Wincred.',
+      vendas: caixaVendas.map((v: any) => ({
+        id: `wincred:${storeCodeUpper}:${v.numero}`,
+        number: `#${v.numero}`,
+        status: 'finalized',
+        createdAt: v.data,
+        total: v.total,
+        subtotal: v.total,
+        desconto: 0,
+        sellerName: v.vendedora || (v.codFuncionario ? `cod ${v.codFuncionario}` : null),
+        customerCpf: v.cpf,
+        customerName: v.cliente,
+        paymentMethod: v.fpag,
+        nfceStatus: null,
+        nfceNumber: String(v.numero),
+        nfceSerie: null,
+        nfceChave: null,
+        nfceAutorizadaEm: null,
+        stockDecreased: true,
+        items: [{ sku: '—', descricao: `${v.qtdItens} item(ns)`, qty: v.qtdItens, precoUnit: 0, total: v.total }],
+        payments: [{ method: v.fpag || '—', valor: v.total }],
+        canEstornar: false, // estorno Wincred deve ser feito no PDV legado
+      })),
+    };
+  }
+
   /**
    * Retorna faturamento agregado por loja + total rede + comparação ano
    * anterior + série temporal (pra gráfico).
@@ -67,18 +409,28 @@ export class FaturamentoService {
     );
     const siteStoreCode = siteStore?.code || 'SITE';
 
+    // ── 2a) META do MÊS = faturamento do MÊS INTEIRO do ano anterior
+    //        (do dia 1 até o último dia do mês de `from`, no ano-1).
+    //        Serve como "alvo do mês" pra UI mostrar quanto falta.
+    const anoMeta = dInicio.getFullYear() - 1;
+    const mesMeta = dInicio.getMonth();
+    const dInicioMetaMes = new Date(anoMeta, mesMeta, 1);
+    const dFimMetaMesExclusive = new Date(anoMeta, mesMeta + 1, 1);
+
     // ── 2) Giga: faturamento por loja, período atual + ano anterior em paralelo ──
-    const [gigaAtual, gigaAnterior, tsAtual, tsAnterior] = await Promise.all([
+    const [gigaAtual, gigaAnterior, gigaMetaMes, tsAtual, tsAnterior] = await Promise.all([
       this.erp.getFaturamentoPorLoja(dInicio, dFimExclusive),
       this.erp.getFaturamentoPorLoja(dInicioAnterior, dFimAnterior),
+      this.erp.getFaturamentoPorLoja(dInicioMetaMes, dFimMetaMesExclusive),
       this.erp.getFaturamentoTimeseries(dInicio, dFimExclusive, granularity),
       this.erp.getFaturamentoTimeseries(dInicioAnterior, dFimAnterior, granularity),
     ]);
 
     // ── 3) Flowops SITE: Order com status=completed no período ──
-    const [flowAtual, flowAnterior] = await Promise.all([
+    const [flowAtual, flowAnterior, flowMetaMes] = await Promise.all([
       this.getFlowopsSiteFaturamento(dInicio, dFimExclusive),
       this.getFlowopsSiteFaturamento(dInicioAnterior, dFimAnterior),
+      this.getFlowopsSiteFaturamento(dInicioMetaMes, dFimMetaMesExclusive),
     ]);
 
     // Time series Flowops SITE (mesmo formato do Giga)
@@ -86,7 +438,7 @@ export class FaturamentoService {
     const flowTsAnterior = await this.getFlowopsTimeseries(dInicioAnterior, dFimAnterior, granularity);
 
     // ── 4) Compõe SITE = Giga SITE + Flowops completed ──
-    const lojas = this.combinarLojas(
+    const lojasBase = this.combinarLojas(
       gigaAtual,
       gigaAnterior,
       flowAtual,
@@ -95,9 +447,21 @@ export class FaturamentoService {
       siteStoreCode,
     );
 
+    // ── 4b) Injeta metaMes por loja (faturamento do mês inteiro ano-1) ──
+    const mapMetaMes = new Map<string, any>(gigaMetaMes.map((r: any) => [r.storeCode, r]));
+    const lojas = lojasBase.map((l: any) => {
+      const gm = mapMetaMes.get(l.storeCode) || { faturamento: 0 };
+      const isSite = l.storeCode === siteStoreCode;
+      const metaMes = isSite
+        ? Number(gm.faturamento || 0) + Number(flowMetaMes.faturamento || 0)
+        : Number(gm.faturamento || 0);
+      return { ...l, metaMes };
+    });
+
     // ── 5) Totais ──
     const totalAtual = lojas.reduce((s, l) => s + l.atual.faturamento, 0);
     const totalAnterior = lojas.reduce((s, l) => s + l.anterior.faturamento, 0);
+    const totalMetaMes = lojas.reduce((s, l) => s + (l.metaMes || 0), 0);
     const totalCuponsAtual = lojas.reduce((s, l) => s + l.atual.cupons, 0);
     const totalPecasAtual = lojas.reduce((s, l) => s + l.atual.pecas, 0);
     const varTotal = totalAnterior > 0 ? ((totalAtual - totalAnterior) / totalAnterior) * 100 : 0;
@@ -128,6 +492,11 @@ export class FaturamentoService {
         cupons: totalCuponsAtual,
         pecas: totalPecasAtual,
         ticketMedio: totalCuponsAtual > 0 ? totalAtual / totalCuponsAtual : 0,
+        metaMes: totalMetaMes,
+      },
+      metaMesPeriodo: {
+        from: this.isoDate(dInicioMetaMes),
+        to: this.isoDate(new Date(dFimMetaMesExclusive.getTime() - 86400_000)),
       },
       lojas,
       series,

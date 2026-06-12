@@ -1,7 +1,12 @@
 'use client';
 
 /**
- * /minha-loja/pdv — Frente de caixa (PDV TESTE).
+ * /minha-loja/pdv — Frente de caixa.
+ *
+ * Cópia paralela de /minha-loja/pdv com melhorias de UX (atalhos F8/Del/F12,
+ * flash na bipagem, guard de duplo clique, barra de atalhos). Subpáginas
+ * (caixa, devolucao, recibo etc.) continuam apontando pras rotas ORIGINAIS
+ * /minha-loja/pdv/...
  *
  * Fluxo:
  *   1. Tela abre venda OPEN automaticamente (ou retoma a última)
@@ -13,6 +18,7 @@
  * Mobile-first. Listener global de teclas pra foco automático.
  */
 
+import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -269,6 +275,29 @@ function PdvPageInner() {
   // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
   // (vendedora nao precisa voltar e clicar de novo na setinha).
   const pendingScanRef = useRef<string | null>(null);
+  // PDV2: finalize pendente quando vendedora ainda nao foi escolhida.
+  // A vendedora agora é exigida no ENCERRAMENTO da venda (nao no 1º bip,
+  // pra liberar a cliente mais rapido). Apos saveVendedora, o finalize
+  // é retomado automaticamente com os mesmos argumentos.
+  const pendingFinalizeRef = useRef<{ paymentMethod: string; paymentDetails?: any } | null>(null);
+
+  // ── AUTO-FIT: escala a UI inteira pro tamanho do monitor ──
+  // Design-base: 1700px de largura. Monitor menor → zoom proporcional menor
+  // (1366px → ~0.80); maior → até 1.1. Sem config por loja, recalcula em
+  // resize. Abaixo de 1024px (tablet/celular) não aplica — breakpoints
+  // responsivos do Tailwind assumem.
+  const [uiZoom, setUiZoom] = useState(1);
+  useEffect(() => {
+    const calcZoom = () => {
+      const w = window.innerWidth;
+      if (w < 1024) { setUiZoom(1); return; }
+      const z = Math.min(1.1, Math.max(0.7, w / 1700));
+      setUiZoom(Math.round(z * 100) / 100);
+    };
+    calcZoom();
+    window.addEventListener('resize', calcZoom);
+    return () => window.removeEventListener('resize', calcZoom);
+  }, []);
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
@@ -282,6 +311,19 @@ function PdvPageInner() {
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'pix' | 'cartao' | 'crediario'>('all');
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  // ── PDV2: overlay de ajuda de atalhos (F12 ou ?) ──
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  // ── PDV2: flash visual no item recém-bipado (fundo verde ~600ms) ──
+  const [lastAddedItemId, setLastAddedItemId] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ── Modal de Desconto (% ou R$) — venda inteira ou item ──
+  // (PDV2: declarado AQUI — antes do handler global de teclado — pra evitar
+  // TDZ ao referenciar showDiscount nas deps do useEffect de atalhos)
+  const [showDiscount, setShowDiscount] = useState<
+    | null
+    | { kind: 'sale' }
+    | { kind: 'item'; itemId: string; bruto: number; atual: number }
+  >(null);
   // Ref SINCRONO pra guard de double-fire em finalizeSale (setFinalizing é
   // async — só vira true no proximo render, deixa janela pra 2a chamada
   // passar). Resetado no finally.
@@ -422,33 +464,45 @@ function PdvPageInner() {
   // Auto-abrir modal de vendedora REMOVIDO — agora vendedora é escolhida
   // a qualquer momento clicando no botão do header (cascata inline).
 
-  // ── LEMBRETE: vendedora não escolhida ao tentar fechar venda ──
-  const sellerCheckRef = useRef(false);
-  useEffect(() => {
-    if (!showPayment) {
-      sellerCheckRef.current = false;
-      return;
-    }
-    if (sellerCheckRef.current) return;
-    if (!sale || sale.sellerName) return;
-    sellerCheckRef.current = true;
-    const t = setTimeout(() => {
-      const ok = window.confirm(
-        '⚠ ATENÇÃO\n\nVocê ainda não escolheu a vendedora!\n\nA comissão NÃO será atribuída a ninguém.\n\nDeseja continuar mesmo assim?\n\n• OK = continuar sem comissão\n• Cancelar = escolher vendedora agora',
-      );
-      if (!ok) {
-        setShowPayment(false);
-        setShowVendedora(true);
-      }
-    }, 200);
-    return () => clearTimeout(t);
-  }, [showPayment, sale]);
+  // PDV2: o confirm() de "vendedora não escolhida" ao abrir pagamento foi
+  // REMOVIDO — a vendedora agora é exigida no ENCERRAMENTO (gate no
+  // finalizeSale), com retomada automática após escolher. Bipagem e
+  // pagamento fluem sem interrupção pra liberar a cliente mais rápido.
 
   // Listener global: qualquer tecla redireciona pro input + atalhos PDV
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
-    if (showCustomer || showPayment || showFinalized || showVendedora) return;
+    const anyModal =
+      showCustomer || showPayment || showFinalized || showVendedora ||
+      !!showDiscount || showShortcuts;
     const handler = (e: KeyboardEvent) => {
+      // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
+      // (no PDV v1 o listener inteiro era desativado com modal aberto) ──
+      if (e.key === 'Escape') {
+        if (showShortcuts) { e.preventDefault(); setShowShortcuts(false); return; }
+        if (showDiscount) { e.preventDefault(); setShowDiscount(null); return; }
+        if (showCustomer) { e.preventDefault(); setShowCustomer(false); return; }
+        if (showVendedora) { e.preventDefault(); setShowVendedora(false); return; }
+        // sem modal aberto → cai no comportamento original (bloco Escape abaixo)
+      }
+      // ── PDV2: F12 abre/fecha overlay de atalhos (funciona sempre) ──
+      if (e.key === 'F12') {
+        e.preventDefault();
+        setShowShortcuts((v) => !v);
+        return;
+      }
+      // Com modal aberto, demais atalhos ficam desativados (igual PDV v1)
+      if (anyModal) return;
+      // ── PDV2: ? também abre a ajuda (só fora de campos de texto) ──
+      if (e.key === '?') {
+        const ae = document.activeElement as HTMLElement | null;
+        const editing = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+        if (!editing) {
+          e.preventDefault();
+          setShowShortcuts(true);
+          return;
+        }
+      }
       // ── ATALHOS GLOBAIS (funcionam mesmo com input em foco) ──
       // F1 → foca o input de bipagem
       if (e.key === 'F1') {
@@ -503,6 +557,30 @@ function PdvPageInner() {
         window.location.href = '/minha-loja/consultar';
         return;
       }
+      // ── PDV2: F8 → abrir tela de pagamento (só com itens no carrinho) ──
+      if (e.key === 'F8') {
+        e.preventDefault();
+        if (sale.items?.length > 0) {
+          setPaymentFilter('all');
+          setShowPayment(true);
+        }
+        return;
+      }
+      // ── PDV2: Del → remove o ÚLTIMO item bipado do carrinho ──
+      // Guard: se um campo de texto COM conteúdo está focado (qty, busca...),
+      // deixa o Del agir no campo. Só remove item com input de bipe vazio /
+      // nada editável em foco.
+      if (e.key === 'Delete') {
+        const ae = document.activeElement as HTMLElement | null;
+        const editing = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+        const scanVazio = ae === inputRef.current && !scanInput.trim();
+        if (editing && !scanVazio) return;
+        if (sale.items?.length > 0) {
+          e.preventDefault();
+          removeItem(sale.items[sale.items.length - 1].id);
+        }
+        return;
+      }
       // ESC → cancelar venda só quando carrinho VAZIO (segurança)
       if (e.key === 'Escape') {
         if (sale.items?.length === 0) {
@@ -528,24 +606,35 @@ function PdvPageInner() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [sale, showCustomer, showPayment, showFinalized, showVendedora]);
+    // PDV2: removeItem fica fora das deps de propósito — é recriada a cada
+    // render e o handler já é re-registrado quando `sale` muda (captura fresca).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showDiscount, showShortcuts, scanInput]);
+
+  // ── PDV2: marca o item recém-adicionado pra dar flash verde (~600ms) ──
+  // Detecta por diff: item NOVO (id que não existia) ou qty incrementada.
+  const flashAddedItem = (prevItems: Sale['items'], freshItems: Sale['items']) => {
+    const added =
+      freshItems.find((i) => !prevItems.some((p) => p.id === i.id)) ||
+      freshItems.find((i) => {
+        const p = prevItems.find((pp) => pp.id === i.id);
+        return !!p && i.qty > p.qty;
+      });
+    if (!added) return;
+    setLastAddedItemId(added.id);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setLastAddedItemId(null), 600);
+  };
 
   // ── Bipagem ──
-  const handleScan = async (e?: React.FormEvent) => {
+  // forceRef: Shift+Enter → busca a REF/grade direto, sem tentar bipar.
+  const handleScan = async (e?: React.FormEvent, opts?: { forceRef?: boolean }) => {
     e?.preventDefault();
     if (!sale) return;
     const sku = scanInput.trim();
     if (!sku) return;
-    // GUARD: vendedora OBRIGATÓRIA antes do primeiro bipe.
-    // Sem vendedora atribuída, abre modal e bloqueia bipagem.
-    // SALVA o SKU pendente — apos saveVendedora, o bipe eh re-executado
-    // automaticamente (vendedora nao precisa voltar e bipar de novo).
-    if (!sale.sellerName) {
-      pendingScanRef.current = sku;
-      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça bipada vai entrar no carrinho automaticamente.');
-      setShowVendedora(true);
-      return;
-    }
+    // PDV2: gate de vendedora no 1º bipe REMOVIDO — vendedora é exigida
+    // no ENCERRAMENTO da venda (gate no finalizeSale). Bipagem flui direto.
     // Atalho item manual: vendedora digita "0" → abre modal pra lançar
     // produto livre (descrição + valor) sem precisar achar no Giga.
     if (sku === '0') {
@@ -553,18 +642,56 @@ function PdvPageInner() {
       setShowManualItem(true);
       return;
     }
+    // BUSCA DE REF/GRADE — 3 gatilhos:
+    //   1. Shift+Enter (forceRef): explícito, REF de QUALQUER tamanho.
+    //   2. 3-6 dígitos + Enter: nunca é código (códigos têm 7+), vai direto.
+    //   3. Fallback no catch abaixo: código não achou → tenta como REF.
+    const buscarRef = async () => {
+      setSearchLoading(true);
+      setError(null);
+      try {
+        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(sku)}`);
+        const arr = Array.isArray(res) ? res : [];
+        setSearchResults(arr);
+        setShowResults(arr.length > 0);
+        setHighlightedIdx(arr.length > 0 ? 0 : -1);
+        if (!arr.length) setError(`REF ${sku} não encontrada no Giga`);
+      } catch (e2: any) {
+        setError(e2?.message || 'Erro ao buscar REF');
+      } finally {
+        setSearchLoading(false);
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
+    };
+    if (opts?.forceRef || /^\d{3,6}$/.test(sku)) {
+      await buscarRef();
+      return;
+    }
     setScanLoading(true);
     setError(null);
     try {
-      await api(`/pdv/sales/${sale.id}/items`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      // PERF: backend novo devolve a venda completa no POST — elimina o
+      // segundo GET (uma ida-e-volta a menos por bipe). Fallback pro GET
+      // enquanto backend antigo estiver no ar.
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
+      // ── PDV2: flash verde no item recém-adicionado (novo OU qty incrementada) ──
+      flashAddedItem(sale.items || [], fresh.items || []);
       setSale(fresh);
       setScanInput('');
     } catch (e: any) {
-      setError(e?.message || 'Erro ao bipar');
+      const msg = String(e?.message || '');
+      // FALLBACK REF: código numérico (7+ díg) não existe no Giga? Pode ser
+      // uma REF longa — busca a grade automaticamente antes de dar erro.
+      if (/^\d{7,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
+        setScanLoading(false);
+        await buscarRef();
+        return;
+      }
+      setError(msg || 'Erro ao bipar');
     } finally {
       setScanLoading(false);
       setTimeout(() => {
@@ -579,22 +706,19 @@ function PdvPageInner() {
   // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
   const addBySku = useCallback(async (sku: string) => {
     if (!sale) return;
-    if (!sale.sellerName) {
-      pendingScanRef.current = sku;
-      toast('warning', 'Escolha a vendedora primeiro', 'Apos confirmar, a peça vai entrar no carrinho automaticamente.');
-      setShowVendedora(true);
-      return;
-    }
+    // PDV2: gate de vendedora removido daqui — exigida só no finalizeSale.
     setShowResults(false);
     setSearchResults([]);
     setScanLoading(true);
     setError(null);
     try {
-      await api(`/pdv/sales/${sale.id}/items`, {
+      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
         method: 'POST',
         body: JSON.stringify({ skuOrEan: sku }),
       });
-      const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
+      // ── PDV2: flash verde também quando adiciona pelo dropdown de busca ──
+      flashAddedItem(sale.items || [], fresh.items || []);
       setSale(fresh);
       setScanInput('');
     } catch (e: any) {
@@ -618,9 +742,13 @@ function PdvPageInner() {
   useEffect(() => {
     const term = scanInput.trim();
     const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
-    const isShortNumeric = /^\d{3,6}$/.test(term);
-    // 3+ chars com letra OU 3-6 digitos (REF) abrem busca
-    if (term.length < 3 || (!hasLetter && !isShortNumeric)) {
+    // SÓ TEXTO abre busca automática. NÚMERO nunca dispara sozinho —
+    // digitar um código devagar passava por "530" e o dropdown de REF
+    // abria no meio da digitação (e o Enter final selecionava o item
+    // errado do dropdown). REF agora é EXPLÍCITA: digita 3-6 dígitos e
+    // aperta ENTER → handleScan abre a grade do modelo. Determinístico,
+    // independe da velocidade de digitação.
+    if (term.length < 3 || !hasLetter) {
       setSearchResults([]);
       setShowResults(false);
       setHighlightedIdx(-1);
@@ -747,12 +875,6 @@ function PdvPageInner() {
   const notifiedPaidRef = useRef<Set<string>>(new Set());
   const [showPixAvulso, setShowPixAvulso] = useState(false);
   const [showValeTroca, setShowValeTroca] = useState(false);
-  // ── Modal de Desconto (% ou R$) — pode ser pra venda inteira ou item ──
-  const [showDiscount, setShowDiscount] = useState<
-    | null
-    | { kind: 'sale' }
-    | { kind: 'item'; itemId: string; bruto: number; atual: number }
-  >(null);
   // ── Modal Item Manual (digitar produto livre) ──
   const [showManualItem, setShowManualItem] = useState(false);
   // ── Modal Simulador de Parcelamento Cartão (mostra cliente quanto fica cada parcela) ──
@@ -911,6 +1033,16 @@ function PdvPageInner() {
         }
         setTimeout(() => inputRef.current?.focus(), 50);
       }
+
+      // PDV2: AUTO-FINALIZE — se o operador tentou fechar a venda sem
+      // vendedora, o finalize ficou pendente; retoma agora automaticamente
+      // (skipSellerGate: o `sale` na closure do finalizeSale ainda é o
+      // stale sem sellerName — o backend já tem a vendedora gravada).
+      const pendingFin = pendingFinalizeRef.current;
+      if (pendingFin) {
+        pendingFinalizeRef.current = null;
+        await finalizeSale(pendingFin.paymentMethod, pendingFin.paymentDetails, { skipSellerGate: true });
+      }
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
@@ -967,8 +1099,17 @@ function PdvPageInner() {
 
   // ── Finalizar ──
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
-  const finalizeSale = async (paymentMethod: string, paymentDetails?: any) => {
+  const finalizeSale = async (paymentMethod: string, paymentDetails?: any, opts?: { skipSellerGate?: boolean }) => {
     if (!sale) return;
+    // PDV2: vendedora OBRIGATÓRIA no ENCERRAMENTO (não no 1º bip).
+    // Sem vendedora: salva o finalize pendente, abre o modal e retoma
+    // automaticamente após a escolha (skipSellerGate evita loop na retomada).
+    if (!sale.sellerName && !opts?.skipSellerGate) {
+      pendingFinalizeRef.current = { paymentMethod, paymentDetails };
+      toast('warning', 'Escolha a vendedora pra fechar a venda', 'Após confirmar, a venda finaliza automaticamente.');
+      setShowVendedora(true);
+      return;
+    }
     // GUARD SINCRONO contra double-fire: ref muda IMEDIATAMENTE (antes do
     // setFinalizing(true) que so reflete no proximo render). Cobre o cenario
     // de auto-finalize via setTimeout(80ms) + click manual no botao Finalizar
@@ -1093,7 +1234,7 @@ function PdvPageInner() {
 
   if (!storeCode) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#FAFAF7] flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-md p-6 max-w-sm w-full space-y-4">
           <Link href="/minha-loja" className="text-slate-500 text-sm flex items-center gap-1">
             <ArrowLeft className="w-4 h-4" /> Voltar
@@ -1119,14 +1260,15 @@ function PdvPageInner() {
   return (
     <div
       className="min-h-screen flex flex-col"
-      style={{ background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)' }}
+      style={{ background: '#0B0B0B', zoom: uiZoom }}
     >
       <TrainingModeBanner />
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
-          /minha-loja/realinhamento pra unificar identidade visual. */}
+          /minha-loja/realinhamento pra unificar identidade visual.
+          */}
       <header
         className="sticky top-0 z-20"
-        style={{ background: '#0d1442' }}
+        style={{ background: '#0B0B0B' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
@@ -1143,7 +1285,7 @@ function PdvPageInner() {
             className="flex items-center gap-2 shrink-0 group"
             title="Início"
           >
-            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-amber-300/40">
+            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-[#D4AF37]/50">
               <Image
                 src="/lurds-logo.png"
                 alt="Lurd's Plus Size"
@@ -1162,7 +1304,7 @@ function PdvPageInner() {
                 PDV · LOJA
               </span>
               {sale?.storeCode && (
-                <span className="text-[10px] font-mono font-bold text-violet-900 bg-amber-300 px-1.5 py-0.5 rounded shadow-sm leading-none">
+                <span className="text-[10px] font-mono font-bold text-black bg-[#D4AF37] px-1.5 py-0.5 rounded shadow-sm leading-none">
                   {sale.storeCode}
                 </span>
               )}
@@ -1170,7 +1312,7 @@ function PdvPageInner() {
             <h1
               className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
               style={{
-                background: 'linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%)',
+                background: 'linear-gradient(90deg, #D4AF37 0%, #E5C158 100%)',
                 WebkitBackgroundClip: 'text',
                 backgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
@@ -1195,17 +1337,17 @@ function PdvPageInner() {
               precisa procurar venda específica que sumiu da sessão). */}
           <button
             onClick={() => setShowOpenList(true)}
-            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
+            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition text-white bg-[#161616] border ${
               openCount > 0
-                ? 'bg-amber-400 hover:bg-amber-300 text-amber-950 ring-2 ring-amber-200/50'
-                : 'bg-white/80 hover:bg-white text-slate-600 ring-1 ring-slate-300'
+                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
             }`}
             title={openCount > 0 ? `${openCount} venda(s) pausada(s)` : 'Nenhuma venda pausada agora — clique pra ver histórico recente'}
           >
-            <Pause className="w-4 h-4" />
+            <Pause className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline">Pausadas</span>
             <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-              openCount > 0 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-600'
+              openCount > 0 ? 'bg-[#D4AF37] text-black' : 'bg-[#2A2A2A] text-white/70'
             }`}>
               {openCount}
             </span>
@@ -1224,7 +1366,7 @@ function PdvPageInner() {
                 className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
                   hasPaid
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
-                    : 'bg-violet-500 hover:bg-violet-400 text-white ring-2 ring-violet-300/50'
+                    : 'bg-[#161616] hover:bg-[#1f1f1f] text-white border border-[#2A2A2A] hover:border-[#D4AF37]'
                 }`}
                 title={
                   hasPaid
@@ -1237,7 +1379,7 @@ function PdvPageInner() {
                   {hasPaid ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!` : 'Online'}
                 </span>
                 <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-                  hasPaid ? 'bg-white text-emerald-700' : 'bg-violet-700 text-white'
+                  hasPaid ? 'bg-white text-emerald-700' : 'bg-[#D4AF37] text-black'
                 }`}>
                   {totalLinks}
                 </span>
@@ -1249,46 +1391,46 @@ function PdvPageInner() {
           <button
             onClick={() => setShowVendedora(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
               sale?.sellerName
-                ? 'bg-emerald-400 hover:bg-emerald-300 text-emerald-950 ring-2 ring-emerald-200/50'
-                : 'bg-white/90 hover:bg-white text-rose-700 ring-2 ring-rose-300/50 animate-pulse'
+                ? 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#D4AF37] hover:bg-[#1f1f1f] animate-pulse'
             }`}
             title={sale?.sellerName ? `Trocar vendedora (atalho F9) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F9)'}
           >
-            <Sparkles className="w-4 h-4" />
+            <Sparkles className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-emerald-700/20 text-emerald-950 border border-emerald-700/30 rounded px-1.5 py-0.5">F9</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F9</kbd>
           </button>
 
           {/* Botão Cliente — atalho F5 */}
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
               sale?.customerCpf
-                ? 'bg-amber-400 hover:bg-amber-300 text-violet-900 ring-2 ring-amber-200/50'
-                : 'bg-white hover:bg-amber-50 text-violet-800'
+                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
+                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
             }`}
             title="Identificar cliente (atalho F6)"
           >
-            <User className="w-4 h-4" />
+            <User className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5">F6</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F6</kbd>
           </button>
 
           {/* Botão Modo Treinamento — só aparece quando NÃO está em treino.
               Quando está em treino, o banner global cobre. */}
-          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-orange-400 hover:bg-orange-300 text-orange-950 ring-2 ring-orange-200/50" />
+          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-[#161616] hover:bg-[#1f1f1f] text-[#D4AF37] border-2 border-[#D4AF37]" />
         </div>
       </header>
 
       {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-slate-50">
+      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-[#FAFAF7]">
 
       {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
           Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
@@ -1305,7 +1447,7 @@ function PdvPageInner() {
             minHeight: '100vh',
             maxHeight: '100vh',
             overflowY: 'auto',
-            background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+            background: '#0B0B0B',
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
@@ -1313,16 +1455,16 @@ function PdvPageInner() {
             <div className="space-y-1.5">
               <Link
                 href="/minha-loja/consultar"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-teal-700 hover:bg-teal-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Consulta de produtos (F10)"
               >
-                <Search className="w-5 h-5 text-white shrink-0" />
+                <Search className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Consulta Produtos</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Buscar produto, estoque</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Buscar produto, estoque</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F10</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F10</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1332,103 +1474,103 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-green-700 hover:bg-green-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Trocas / Devolução (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-white shrink-0" />
+                <ArrowRightLeft className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Trocas</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Devolução / troca</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Devolução / troca</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F4</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F4</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-violet-700 hover:bg-violet-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-white shrink-0" />
+                <Tag className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Marcados</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Provar em casa</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Provar em casa</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-blue-700 hover:bg-blue-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-700 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#161616] disabled:hover:border-[#2A2A2A] disabled:hover:translate-y-0 disabled:hover:shadow-none"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-white shrink-0" />
+                <CreditCard className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Simular</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Simular parcelamento</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Simular parcelamento</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </button>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-orange-700 hover:bg-orange-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Baixa de Crediário"
               >
-                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Baixa Crediário</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Receber parcelas</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Receber parcelas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-amber-700 hover:bg-amber-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Retiradas, sangria, suprimento (F3)"
               >
-                <DollarSign className="w-5 h-5 text-white shrink-0" />
+                <DollarSign className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Retiradas</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Caixa, sangria</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Caixa, sangria</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-white/20 text-white/90 px-1.5 py-0.5 rounded shrink-0">F3</span>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F3</span>
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/produtos-vendidos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-emerald-600 hover:bg-emerald-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Conferir vendas + trocas do turno"
               >
-                <Receipt className="w-5 h-5 text-white shrink-0" />
+                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Vendas + trocas (conferir)</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Vendas + trocas (conferir)</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Notas Fiscais emitidas"
               >
-                <FileText className="w-5 h-5 text-white shrink-0" />
+                <FileText className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Notas Fiscais</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">NFC-es emitidas</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">NFC-es emitidas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/config-impressora"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-slate-600 hover:bg-slate-700 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
                 title="Configurar impressoras térmica e A4"
               >
-                <Printer className="w-5 h-5 text-white shrink-0" />
+                <Printer className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Impressoras</div>
-                  <div className="text-[10px] opacity-85 leading-tight mt-0.5">Térmica + A4</div>
+                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Térmica + A4</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
             </div>
           </div>
@@ -1469,6 +1611,20 @@ function PdvPageInner() {
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
               onKeyDown={(e) => {
+                // REF + ESPAÇO → abre a grade do modelo (tamanhos/cores).
+                // Só quando o campo tem APENAS números (3+ dígitos) — digitando
+                // texto (nome da peça), o espaço funciona normal.
+                if (e.key === ' ' && /^\d{3,}$/.test(scanInput.trim())) {
+                  e.preventDefault();
+                  handleScan(undefined, { forceRef: true });
+                  return;
+                }
+                // Shift+Enter → mesma busca (atalho alternativo)
+                if (e.key === 'Enter' && e.shiftKey) {
+                  e.preventDefault();
+                  handleScan(undefined, { forceRef: true });
+                  return;
+                }
                 if (!showResults || searchResults.length === 0) return;
                 if (e.key === 'ArrowDown') {
                   e.preventDefault();
@@ -1488,7 +1644,7 @@ function PdvPageInner() {
               onFocus={() => {
                 if (searchResults.length > 0) setShowResults(true);
               }}
-              placeholder="Bipe SKU/EAN ou digite parte do nome do produto…"
+              placeholder="Bipe ou digite o código + Enter · REF + ESPAÇO abre a grade · ou nome da peça…"
               disabled={scanLoading}
               className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
               autoComplete="off"
@@ -1502,8 +1658,8 @@ function PdvPageInner() {
             <button
               type="submit"
               disabled={!scanInput || scanLoading}
-              className="px-5 py-3 text-white font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
-              style={{ background: `linear-gradient(135deg, ${HUB_TONES.purple.from}, ${HUB_TONES.purple.to})` }}
+              className="px-5 py-3 text-black font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
+              style={{ background: 'linear-gradient(135deg, #E5C158, #D4AF37)' }}
             >
               {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
             </button>
@@ -1529,7 +1685,7 @@ function PdvPageInner() {
                     onMouseDown={(e) => { e.preventDefault(); addBySku(r.CODIGO); }}
                     onMouseEnter={() => setHighlightedIdx(idx)}
                     className={`w-full px-3 py-2 flex items-center gap-3 text-left transition border-b border-slate-50 last:border-b-0 ${
-                      isHi ? 'bg-violet-50' : 'hover:bg-slate-50'
+                      isHi ? 'bg-[#FAF6E8]' : 'hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex flex-col items-center justify-center w-12 shrink-0">
@@ -1577,9 +1733,9 @@ function PdvPageInner() {
               <button
                 type="button"
                 onClick={() => setPromoExpanded((v) => !v)}
-                className="w-full px-3 py-2 bg-fuchsia-50/50 border-b border-fuchsia-100 flex items-center justify-between gap-2 hover:bg-fuchsia-50 transition"
+                className="w-full px-3 py-2 bg-[#FAF6E8]/60 border-b border-[#E5E5E0] flex items-center justify-between gap-2 hover:bg-[#FAF6E8] transition"
               >
-                <div className="flex items-center gap-2 text-[11px] font-bold text-fuchsia-800">
+                <div className="flex items-center gap-2 text-[11px] font-bold text-[#8C7325]">
                   <span>🎁</span>
                   <span className="uppercase tracking-wider">Campanha:</span>
                   <span className="font-black">
@@ -1588,19 +1744,19 @@ function PdvPageInner() {
                      <span className="text-slate-500 font-medium">Nenhuma</span>}
                   </span>
                 </div>
-                <ChevronRight className={`w-3.5 h-3.5 text-fuchsia-700 transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
+                <ChevronRight className={`w-3.5 h-3.5 text-[#8C7325] transition-transform ${promoExpanded ? 'rotate-90' : ''}`} />
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => setPromoExpanded(true)}
-                className="w-full px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 hover:text-fuchsia-700 hover:bg-fuchsia-50/50 transition flex items-center justify-center gap-1.5"
+                className="w-full px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[10px] text-slate-500 hover:text-[#8C7325] hover:bg-[#FAF6E8]/60 transition flex items-center justify-center gap-1.5"
               >
                 🎁 <span>Aplicar campanha promocional</span>
               </button>
             )}
             {promoExpanded && (
-            <div className="px-3 py-2 bg-fuchsia-50/30 border-b border-fuchsia-100">
+            <div className="px-3 py-2 bg-[#FAF6E8]/40 border-b border-[#E5E5E0]">
               <div className="grid grid-cols-3 gap-1.5">
                 <button
                   onClick={() => setPromotion('NONE')}
@@ -1616,8 +1772,8 @@ function PdvPageInner() {
                   onClick={() => setPromotion('YEAR_BASED')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
                     sale.activePromotion === 'YEAR_BASED'
-                      ? 'bg-amber-500 text-white border-amber-500'
-                      : 'bg-white text-amber-700 border-amber-200 hover:border-amber-400'
+                      ? 'bg-[#D4AF37] text-black border-[#D4AF37]'
+                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
                   Liquida antigos
@@ -1627,8 +1783,8 @@ function PdvPageInner() {
                   onClick={() => setPromotion('FOUR_FOR_THREE')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
                     sale.activePromotion === 'FOUR_FOR_THREE'
-                      ? 'bg-fuchsia-600 text-white border-fuchsia-600'
-                      : 'bg-white text-fuchsia-700 border-fuchsia-200 hover:border-fuchsia-400'
+                      ? 'bg-[#0B0B0B] text-[#D4AF37] border-[#0B0B0B]'
+                      : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
                   4 LEVA 3
@@ -1640,7 +1796,7 @@ function PdvPageInner() {
                 const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
                 if (totalPecas >= 4) {
                   return (
-                    <div className="mt-1.5 text-[11px] text-fuchsia-800 bg-fuchsia-100 rounded px-2 py-1 font-semibold">
+                    <div className="mt-1.5 text-[11px] text-[#8C7325] bg-[#FAF6E8] rounded px-2 py-1 font-semibold">
                       ✓ ATIVA — peça de menor valor saiu grátis
                     </div>
                   );
@@ -1664,9 +1820,9 @@ function PdvPageInner() {
               <div className="text-right">R$ Total</div>
               <div className="text-center">Ações</div>
             </div>
-            <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-[11px] text-violet-700 font-bold flex items-center gap-1.5">
+            <div className="px-3 py-1.5 bg-[#FAF6E8] border-b border-[#E5E5E0] text-[11px] text-[#8C7325] font-bold flex items-center gap-1.5">
               <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
-              <span className="ml-2 text-[9px] font-bold text-violet-500 uppercase tracking-wider">↓ último bipado no topo</span>
+              <span className="ml-2 text-[9px] font-bold text-[#8C7325]/70 uppercase tracking-wider">↓ último bipado no topo</span>
             </div>
             <div className="divide-y">
               {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
@@ -1682,14 +1838,14 @@ function PdvPageInner() {
                 return (
                   <div
                     key={`vt-${p.id}`}
-                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-teal-50 border-l-4 border-teal-500"
+                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-[#FAF6E8] border-l-4 border-[#D4AF37]"
                     title="Vale-troca aplicado — abate da venda"
                   >
-                    <div className="font-mono text-[10px] text-teal-700 truncate">{code || 'VALE'}</div>
-                    <div className="flex items-center justify-center text-teal-600 text-xl">↺</div>
+                    <div className="font-mono text-[10px] text-[#8C7325] truncate">{code || 'VALE'}</div>
+                    <div className="flex items-center justify-center text-[#8C7325] text-xl">↺</div>
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-teal-900 uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
-                      <div className="text-[10px] text-teal-700 font-mono">{code}</div>
+                      <div className="text-xs font-bold text-black uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
+                      <div className="text-[10px] text-[#8C7325] font-mono">{code}</div>
                     </div>
                     <div className="text-right text-[11px] text-slate-500">1×</div>
                     <div className="text-right text-[11px] text-slate-500 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
@@ -1723,10 +1879,12 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_56px_72px_96px_44px] gap-2 items-center transition ${
-                    isLast
-                      ? 'bg-violet-100/70 ring-2 ring-inset ring-violet-400'
-                      : 'hover:bg-violet-50/40'
+                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_56px_72px_96px_44px] gap-2 items-center transition-colors duration-500 ${
+                    it.id === lastAddedItemId
+                      ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
+                      : isLast
+                      ? 'bg-[#FAF6E8] shadow-[inset_3px_0_0_0_#D4AF37]'
+                      : 'hover:bg-[#FAF6E8]/50'
                   }`}
                 >
                   {/* SKU/EAN */}
@@ -1741,7 +1899,7 @@ function PdvPageInner() {
                       Ordem: SKU (col 1) -> REF (chip) -> descrição. */}
                   <div className="min-w-0 flex items-center gap-2">
                     <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                      <span className="font-mono font-black text-[11px] bg-violet-100 text-violet-800 border border-violet-300 rounded px-1.5 py-0.5 shrink-0 tracking-wide">
+                      <span className="font-mono font-black text-[11px] bg-white text-slate-700 border border-[#E5E5E0] rounded px-1.5 py-0.5 shrink-0 tracking-wide">
                         {it.ref || it.sku}
                       </span>
                       {it.descricao && (
@@ -1752,10 +1910,10 @@ function PdvPageInner() {
                       <span
                         className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
                           it.promoTag.includes('4 LEVA 3')
-                            ? 'bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300'
+                            ? 'bg-[#0B0B0B] text-[#D4AF37] border border-[#0B0B0B]'
                             : it.promoTag === 'MANUAL'
-                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                            : 'bg-amber-100 text-amber-800 border border-amber-300'
+                            ? 'bg-black text-[#D4AF37] border border-[#D4AF37]/50'
+                            : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
                         }`}
                         title={`Desconto: ${brl(it.desconto)}`}
                       >
@@ -1787,9 +1945,9 @@ function PdvPageInner() {
                     {brl(it.precoUnit)}
                   </div>
 
-                  {/* VAL TOTAL — verde forte, fonte grande */}
+                  {/* VAL TOTAL — preto forte, fonte grande */}
                   <div className="text-right">
-                    <div className="font-black text-emerald-700 tabular-nums text-base">{brl(it.total)}</div>
+                    <div className="font-black text-black tabular-nums text-base">{brl(it.total)}</div>
                     {it.desconto > 0 && (
                       <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
                     )}
@@ -1831,8 +1989,8 @@ function PdvPageInner() {
           </div>
         ) : sale?.status === 'open' ? (
           <div className="text-center py-16 px-6 bg-white rounded-2xl border-2 border-dashed border-slate-200">
-            <div className="w-20 h-20 mx-auto rounded-full bg-rose-50 border-2 border-rose-200 flex items-center justify-center mb-4">
-              <ShoppingCart className="w-10 h-10 text-rose-400" />
+            <div className="w-20 h-20 mx-auto rounded-full bg-[#FAF6E8] border-2 border-[#E5E5E0] flex items-center justify-center mb-4">
+              <ShoppingCart className="w-10 h-10 text-[#D4AF37]" />
             </div>
             <div className="text-lg font-bold text-slate-700 mb-1">Carrinho vazio</div>
             <div className="text-sm text-slate-500">
@@ -1854,23 +2012,23 @@ function PdvPageInner() {
           minHeight: '100vh',
           maxHeight: '100vh',
           overflowY: 'auto',
-          background: 'linear-gradient(180deg, #0d1442 0%, #070a26 100%)',
+          background: '#0B0B0B',
         }}
       >
         <div className="p-2.5 pt-3 space-y-3">
 
           {/* ─── RESUMO DA VENDA (card branco destacado) ─── */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-            <div className="text-[10px] font-black uppercase tracking-wider text-violet-700 mb-2">
+            <div className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] mb-2">
               Resumo da venda
             </div>
             <div className="space-y-1 text-xs">
               {(() => {
                 const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
                 return (
-                  <div className="flex justify-between items-center bg-violet-50 border-2 border-violet-300 rounded-lg px-3 py-2.5">
-                    <span className="text-violet-700 uppercase text-xs font-black tracking-wide">Peças</span>
-                    <span className="text-3xl font-black text-violet-700 tabular-nums">{totalQty}</span>
+                  <div className="flex justify-between items-center bg-[#FAF6E8] border-2 border-[#D4AF37] rounded-lg px-3 py-2.5">
+                    <span className="text-[#8C7325] uppercase text-xs font-black tracking-wide">Peças</span>
+                    <span className="text-3xl font-black text-black tabular-nums">{totalQty}</span>
                   </div>
                 );
               })()}
@@ -1913,10 +2071,10 @@ function PdvPageInner() {
               const ehCredito = liquido < -0.01;
               return (
                 <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-slate-700">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#8C7325]">
                     {ehCredito ? 'Sobra crédito' : 'A pagar'}
                   </span>
-                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
                     {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                   </span>
                 </div>
@@ -1929,53 +2087,53 @@ function PdvPageInner() {
           <div className="space-y-1.5">
             <Link
               href="/minha-loja"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-violet-700 hover:bg-violet-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
               title="Pedidos do site"
             >
-              <Globe className="w-5 h-5 text-white shrink-0" />
+              <Globe className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Pedidos Site</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">E-commerce</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">E-commerce</div>
               </div>
               {pedidosSitePending > 0 && (
-                <span className="bg-white text-violet-800 text-[10px] font-black rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
+                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
                   {pedidosSitePending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/realinhamento"
-              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] ${
+              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] bg-[#161616] hover:bg-[#1C1C1C] border ${
                 realignPending > 0
-                  ? 'bg-rose-700 hover:bg-rose-800 ring-2 ring-rose-300/40'
-                  : 'bg-pink-700 hover:bg-pink-800'
+                  ? 'border-[#D4AF37] ring-2 ring-[#D4AF37]/30'
+                  : 'border-[#2A2A2A] hover:border-[#D4AF37]'
               }`}
               title="Realinhamento de estoque"
             >
-              <Shuffle className="w-5 h-5 text-white shrink-0" />
+              <Shuffle className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Realinhar</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">Inter-lojas</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Inter-lojas</div>
               </div>
               {realignPending > 0 && (
-                <span className="bg-white text-rose-700 text-[10px] font-black rounded-full min-w-[22px] h-5 flex items-center justify-center px-1.5 shrink-0">
+                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[22px] h-5 flex items-center justify-center px-1.5 shrink-0">
                   {realignPending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-slate-700 hover:bg-slate-800 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
               title="Fechamento diário"
             >
-              <Wallet className="w-5 h-5 text-white shrink-0" />
+              <Wallet className="w-5 h-5 text-[#D4AF37] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Fechamento</div>
-                <div className="text-[10px] opacity-85 leading-tight mt-0.5">Fechamento diário</div>
+                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Fechamento diário</div>
               </div>
-              <ArrowUpRight className="w-3 h-3 text-white/50 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
           </div>
 
@@ -2056,13 +2214,13 @@ function PdvPageInner() {
             <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
               {/* GRUPO CRÉDITO */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-violet-700 px-1">Crédito</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Crédito</span>
                 <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-orange-50 hover:border-orange-300" />
-                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-cyan-50 hover:border-cyan-300" />
-                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-blue-50 hover:border-blue-400" />
+                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                 </div>
               </div>
 
@@ -2070,11 +2228,11 @@ function PdvPageInner() {
 
               {/* GRUPO DÉBITO */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 px-1">Débito</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Débito</span>
                 <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-rose-50 hover:border-rose-300" />
-                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-blue-50 hover:border-blue-300" />
-                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-yellow-50 hover:border-yellow-400" />
+                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                 </div>
               </div>
 
@@ -2082,47 +2240,47 @@ function PdvPageInner() {
 
               {/* GRUPO OUTROS */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-slate-600 px-1">Outros</span>
+                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Outros</span>
                 <div className="flex gap-1.5">
                   <PayBtn
                     onClick={() => venderOutro('pix')}
                     label={
                       <span className="flex items-center gap-1">
-                        <QrCode className="w-4 h-4 text-teal-600" />
-                        <span className="text-xs font-black text-teal-700 tracking-wide">PIX</span>
+                        <QrCode className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">PIX</span>
                       </span>
                     }
-                    hoverColor="hover:bg-teal-50 hover:border-teal-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => venderOutro('dinheiro')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Banknote className="w-4 h-4 text-emerald-600" />
-                        <span className="text-xs font-black text-emerald-700 tracking-wide">DINHEIRO</span>
+                        <Banknote className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">DINHEIRO</span>
                       </span>
                     }
-                    hoverColor="hover:bg-emerald-50 hover:border-emerald-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => venderOutro('crediario')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Receipt className="w-4 h-4 text-amber-600" />
-                        <span className="text-xs font-black text-amber-700 tracking-wide">CREDIÁRIO</span>
+                        <Receipt className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">CREDIÁRIO</span>
                       </span>
                     }
-                    hoverColor="hover:bg-amber-50 hover:border-amber-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   <PayBtn
                     onClick={() => setShowValeTroca(true)}
                     label={
                       <span className="flex items-center gap-1">
-                        <Tag className="w-4 h-4 text-fuchsia-600" />
-                        <span className="text-xs font-black text-fuchsia-700 tracking-wide">VALE</span>
+                        <Tag className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">VALE</span>
                       </span>
                     }
-                    hoverColor="hover:bg-fuchsia-50 hover:border-fuchsia-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
                       fora (PIX direto ou link externo). Só registra venda +
@@ -2131,11 +2289,11 @@ function PdvPageInner() {
                     onClick={() => venderOutro('venda_online')}
                     label={
                       <span className="flex items-center gap-1">
-                        <Globe className="w-4 h-4 text-cyan-600" />
-                        <span className="text-xs font-black text-cyan-700 tracking-wide">V.ONLINE</span>
+                        <Globe className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">V.ONLINE</span>
                       </span>
                     }
-                    hoverColor="hover:bg-cyan-50 hover:border-cyan-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                   {/* MARCAR — cliente leva pra provar em casa.
                       Exige cliente identificado (CPF) — senao abre modal de
@@ -2208,10 +2366,10 @@ function PdvPageInner() {
                     label={
                       <span className="flex items-center gap-1">
                         <span className="text-base">📋</span>
-                        <span className="text-xs font-black text-violet-700 tracking-wide">MARCAR</span>
+                        <span className="text-xs font-black text-black tracking-wide">MARCAR</span>
                       </span>
                     }
-                    hoverColor="hover:bg-violet-50 hover:border-violet-300"
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
                   />
                 </div>
               </div>
@@ -2222,7 +2380,7 @@ function PdvPageInner() {
 
       {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-2xl z-10">
+        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#D4AF37] shadow-2xl z-10">
           <div className="max-w-4xl mx-auto px-4 py-3">
             {/* Linha de detalhamento: subtotal + economia agregada (descontos itens + sale.desconto extra) */}
             {(() => {
@@ -2270,7 +2428,7 @@ function PdvPageInner() {
               <button
                 onClick={fecharDepois}
                 disabled={!sale?.items?.length}
-                className="px-4 py-3 bg-amber-400 hover:bg-amber-300 border-2 border-amber-500 text-amber-950 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Pausar venda (volta na lista Pausadas)"
               >
                 <Pause className="w-4 h-4" />
@@ -2280,12 +2438,12 @@ function PdvPageInner() {
               {/* Desconto geral — botão branco com LABEL + atalho F2 */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="px-4 py-3 bg-white hover:bg-amber-50 border-2 border-slate-200 hover:border-amber-300 text-slate-700 hover:text-amber-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
                 title="Aplicar desconto na venda toda (atalho F2)"
               >
                 <Percent className="w-4 h-4" />
                 <span className="hidden sm:inline">Desconto geral</span>
-                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 ml-1">F2</kbd>
+                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-black rounded px-1.5 py-0.5 ml-1">F2</kbd>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
@@ -2310,10 +2468,10 @@ function PdvPageInner() {
                           {brl(sale.total)} · <span className="text-emerald-600">✓ {brl(paid)} pago</span>
                         </div>
                       )}
-                      <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold leading-none">
+                      <div className="text-[10px] text-[#8C7325] uppercase tracking-widest font-bold leading-none">
                         {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
                       </div>
-                      <div className={`text-2xl sm:text-3xl md:text-4xl xl:text-5xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      <div className={`text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
                         {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                       </div>
                     </>
@@ -2343,7 +2501,7 @@ function PdvPageInner() {
                     ) : (
                       <Check className="w-5 h-5" />
                     )}
-                    FINALIZAR
+                    {finalizing ? 'Finalizando...' : 'FINALIZAR'}
                   </button>
                 );
               })()}
@@ -2408,6 +2566,16 @@ function PdvPageInner() {
                 );
               })()}
             </div>
+
+            {/* ── PDV2: barra de atalhos discreta no rodapé ── */}
+            <div className="text-center text-[10px] text-slate-400 font-semibold tracking-wide select-none pt-1.5 mt-2 border-t border-slate-100 flex items-center justify-center gap-x-2 gap-y-1 flex-wrap">
+              {[['F1', 'Bipar'], ['F2', 'Desconto'], ['F4', 'Troca'], ['F6', 'Cliente'], ['F8', 'Pagamento'], ['F9', 'Vendedora'], ['F10', 'Consulta'], ['F12', 'Ajuda']].map(([k, lbl]) => (
+                <span key={k} className="inline-flex items-center gap-1">
+                  <kbd className="inline-flex items-center justify-center font-mono text-[9px] bg-black text-[#D4AF37] rounded px-1 py-0.5 leading-none">{k}</kbd>
+                  <span className="text-slate-500">{lbl}</span>
+                </span>
+              ))}
+            </div>
           </div>
         </footer>
       )}
@@ -2438,7 +2606,12 @@ function PdvPageInner() {
         <VendedoraModal
           atual={sale.sellerName || ''}
           storeCode={sale.storeCode}
-          onClose={() => setShowVendedora(false)}
+          onClose={() => {
+            // Fechou sem escolher → descarta finalize pendente (evita
+            // finalize "fantasma" disparar numa escolha de vendedora futura)
+            pendingFinalizeRef.current = null;
+            setShowVendedora(false);
+          }}
           onSave={saveVendedora}
         />
       )}
@@ -2662,7 +2835,7 @@ function PdvPageInner() {
                                 </button>
                                 <a
                                   href={`https://wa.me/${(p.customerPhone || '').replace(/\D/g, '') ? `55${(p.customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 6x sem juros.`,
+                                    `Olá! Link pra pagamento (${brl(p.total)}):\n\n${p.paymentUrl}\n\nPIX ou cartão até 12x sem juros.`,
                                   )}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -2696,6 +2869,9 @@ function PdvPageInner() {
           </div>
         </div>
       )}
+
+      {/* ── PDV2: overlay de ajuda de atalhos (F12 / ?) ── */}
+      {showShortcuts && <ShortcutsHelpModal onClose={() => setShowShortcuts(false)} />}
 
       {/* Modal Finalizada */}
       {showFinalized && sale && sale.status === 'finalized' && (
@@ -4451,7 +4627,7 @@ function PaymentModal({
          Footer sticky no FUNDO pra botão "Adicionar/Finalizar" SEMPRE aparecer
          (antes ficava cortado em telas baixas com 12 parcelas + card grande). */}
       <div
-        className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-lg flex flex-col max-h-[95vh] sm:max-h-[92vh]"
+        className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-lg sm:max-w-2xl flex flex-col max-h-[95vh] sm:max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -4464,7 +4640,7 @@ function PaymentModal({
         </div>
 
         {/* BODY scrollável */}
-        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2 min-h-0">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-2 sm:py-3 space-y-2 sm:space-y-3 min-h-0">
 
         {/* Cabeçalho VISUAL: barra de progresso colorida por forma + valores grandes.
             Mostra de uma vez: quanto foi pago, quanto falta, e o split visual em
@@ -4720,13 +4896,13 @@ function PaymentModal({
         {needsBandeira && (
           <div className="space-y-2 pt-2 border-t">
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">Bandeira</label>
-            <div className={`grid gap-1 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
+            <div className={`grid gap-2 ${bandeiras.length === 4 ? 'grid-cols-2' : 'grid-cols-3'}`}>
               {bandeiras.map((b) => (
                 <button
                   key={b}
                   type="button"
                   onClick={() => setBandeira(b)}
-                  className={`py-1.5 px-2 rounded border-2 transition-all flex items-center justify-center min-h-[36px] ${
+                  className={`py-3 px-2 rounded-xl border-2 transition-all flex items-center justify-center min-h-[68px] ${
                     bandeira === b
                       ? 'border-emerald-600 bg-emerald-50 shadow-md'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
@@ -4889,7 +5065,7 @@ function PaymentModal({
                       </button>
                       <a
                         href={`https://wa.me/${(customerPhone || '').replace(/\D/g, '') ? `55${(customerPhone || '').replace(/\D/g, '')}` : ''}?text=${encodeURIComponent(
-                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 6x sem juros. Expira em 24h.`,
+                          `Olá ${customerName?.split(' ')[0] || ''}! Link pra pagamento (${brl(restante > 0 ? restante : total)}):\n\n${pagarmeLink.paymentUrl}\n\nPIX ou cartão até 12x sem juros. Expira em 24h.`,
                         )}`}
                         target="_blank"
                         rel="noopener noreferrer"
@@ -5189,29 +5365,35 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* GRID 3 COLUNAS × 4 LINHAS — todas as 12 parcelas visíveis
-                  ao mesmo tempo, sem precisar rolar. Compactado: gap menor,
-                  py-1, sem label "à vista/s/juros" pra economizar altura. */}
-              <div className="grid grid-cols-3 gap-1">
+              {/* PDV2: COLUNA ÚNICA — uma linha por parcela, leitura limpa
+                  de cima pra baixo ("3× de R$ 15,93"). Linha selecionada
+                  vira verde. Dica de teclado: 1-9 selecionam direto. */}
+              <div className="flex flex-col gap-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
+                  const todasIguais = calc.iguais === calc.ultima;
                   const ativo = parcelas === p;
                   return (
                     <button
                       key={p}
                       type="button"
                       onClick={() => setParcelas(p)}
-                      className={`flex items-center justify-center gap-1.5 px-1.5 py-1.5 rounded-md transition-all border ${
+                      className={`flex items-center justify-between gap-3 px-3 sm:px-4 py-2 rounded-lg transition-all border-2 shrink-0 ${
                         ativo
-                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm'
-                          : 'bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50 text-slate-700'
+                          ? 'bg-emerald-600 border-emerald-700 text-white shadow-md'
+                          : 'bg-white border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700'
                       }`}
                     >
-                      <span className={`text-[11px] font-black tabular-nums leading-none shrink-0 ${
-                        ativo ? 'text-white/90' : 'text-emerald-700'
+                      <span className={`text-sm font-black tabular-nums leading-none w-9 text-left shrink-0 ${
+                        ativo ? 'text-white' : 'text-emerald-700'
                       }`}>{p}×</span>
-                      <span className={`text-[12px] font-black tabular-nums leading-none ${
+                      <span className={`flex-1 text-left text-[11px] uppercase tracking-wide font-semibold ${
+                        ativo ? 'text-white/85' : 'text-slate-400'
+                      }`}>
+                        {p === 1 ? 'à vista' : todasIguais ? 'de' : `de · última ${brl(calc.ultima)}`}
+                      </span>
+                      <span className={`text-base font-black tabular-nums leading-none ${
                         ativo ? 'text-white' : 'text-slate-800'
                       }`}>
                         {p === 1 ? brl(baseTotal) : brl(valorMostrar)}
@@ -5221,22 +5403,9 @@ function PaymentModal({
                 })}
               </div>
 
-              {/* Card destaque ULTRA-COMPACTO — uma linha só com info essencial */}
-              {(() => {
-                const calc = calcularParcelas(baseTotal, parcelas);
-                const todasIguais = calc.iguais === calc.ultima;
-                return (
-                  <div className="bg-emerald-600 rounded-lg px-3 py-1.5 flex items-center justify-between text-white shadow-sm">
-                    <span className="text-[10px] uppercase tracking-wider font-bold opacity-90">
-                      {parcelas === 1 ? 'À vista' : 'Parcelado'}
-                      {!todasIguais && ` · últ ${brl(calc.ultima)}`}
-                    </span>
-                    <span className="text-lg font-black tabular-nums">
-                      {parcelas === 1 ? brl(baseTotal) : `${parcelas}× ${brl(calc.iguais)}`}
-                    </span>
-                  </div>
-                );
-              })()}
+              {/* PDV2: card-resumo verde REMOVIDO — redundante com a linha
+                  selecionada (que já destaca Nx + valor). A info de "última
+                  parcela ajustada" foi pra dentro da própria linha. */}
             </div>
           );
         })()}
@@ -5433,7 +5602,7 @@ function PaymentModal({
               className="w-full px-3 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-base disabled:opacity-40 flex items-center justify-center gap-2 animate-pulse"
             >
               {finalizing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-5 h-5" />}
-              Finalizar venda
+              {finalizing ? 'Finalizando...' : 'Finalizar venda'}
             </button>
           )}
 
@@ -5463,11 +5632,23 @@ function PaymentModal({
  *  - Aceita CPF com pontos/traço ou só números (limpa antes de salvar)
  *  - Após adicionar, atualiza a venda no parent via onUpdated
  */
-function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) => void }) {
+/** Handle pra parent forçar flush do CPF antes de emitir NFC-e */
+export type CpfNaNotaHandle = {
+  /** Salva o CPF se houver um input válido não persistido. Retorna true se salvou. */
+  flushPendingSave: () => Promise<boolean>;
+  /** Retorna true se há CPF digitado mas ainda não salvo no banco */
+  hasUnsavedCpf: () => boolean;
+};
+
+const CpfNaNotaInput = React.forwardRef<
+  CpfNaNotaHandle,
+  { sale: Sale; onUpdated: (s: Sale) => void }
+>(function CpfNaNotaInput({ sale, onUpdated }, ref) {
   const { toast } = usePdvToast();
   const [editing, setEditing] = useState(false);
   const [cpfInput, setCpfInput] = useState('');
   const [saving, setSaving] = useState(false);
+  const [lastSavedCpf, setLastSavedCpf] = useState<string | null>(sale.customerCpf || null);
 
   // Formata CPF pra exibição: 28665529896 → 286.655.298-96
   const fmtCpf = (raw: string | null) => {
@@ -5477,31 +5658,64 @@ function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) 
     return d;
   };
 
-  async function salvarCpf() {
-    const cpfLimpo = cpfInput.replace(/\D/g, '');
+  // Salva diretamente um CPF passado por parâmetro (versão pra debounce/flush)
+  async function salvarCpfDireto(cpfLimpo: string, opts?: { silent?: boolean }): Promise<boolean> {
     if (cpfLimpo.length !== 11) {
-      toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
-      return;
+      if (!opts?.silent) toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
+      return false;
     }
+    if (cpfLimpo === lastSavedCpf) return true; // já salvo, não precisa
     setSaving(true);
     try {
-      // Chama backend pra atualizar customerCpf da venda
       await api(`/pdv/sales/${sale.id}/customer`, {
         method: 'PATCH',
         body: JSON.stringify({ cpf: cpfLimpo }),
       });
-      // Recarrega venda completa
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       onUpdated(fresh);
+      setLastSavedCpf(cpfLimpo);
       setEditing(false);
       setCpfInput('');
-      toast('success', 'CPF adicionado', 'Vai aparecer na NFC-e quando emitir');
+      if (!opts?.silent) toast('success', 'CPF adicionado', 'Vai aparecer na NFC-e');
+      return true;
     } catch (e: any) {
       toast('error', 'Falha ao salvar CPF', e?.message || String(e));
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  async function salvarCpf() {
+    const cpfLimpo = cpfInput.replace(/\D/g, '');
+    await salvarCpfDireto(cpfLimpo);
+  }
+
+  // ─── AUTO-SAVE com debounce 600ms ───
+  // Quando vendedora digita o 11º dígito, salva sozinho (sem precisar clicar Salvar)
+  useEffect(() => {
+    const cpfLimpo = cpfInput.replace(/\D/g, '');
+    if (cpfLimpo.length !== 11) return;
+    if (cpfLimpo === lastSavedCpf) return;
+    const t = setTimeout(() => {
+      salvarCpfDireto(cpfLimpo, { silent: false });
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cpfInput, lastSavedCpf]);
+
+  // ─── Expõe API pro parent forçar flush antes de emitir NFC-e ───
+  React.useImperativeHandle(ref, () => ({
+    hasUnsavedCpf: () => {
+      const cpfLimpo = cpfInput.replace(/\D/g, '');
+      return editing && cpfLimpo.length === 11 && cpfLimpo !== lastSavedCpf;
+    },
+    flushPendingSave: async () => {
+      const cpfLimpo = cpfInput.replace(/\D/g, '');
+      if (cpfLimpo.length !== 11 || cpfLimpo === lastSavedCpf) return false;
+      return await salvarCpfDireto(cpfLimpo, { silent: true });
+    },
+  }), [cpfInput, editing, lastSavedCpf]);
 
   // Já tem CPF + não está editando: mostra resumido
   if (sale.customerCpf && !editing) {
@@ -5569,11 +5783,11 @@ function CpfNaNotaInput({ sale, onUpdated }: { sale: Sale; onUpdated: (s: Sale) 
         </button>
       </div>
       <div className="text-[10px] text-blue-700">
-        Aperta Enter pra salvar. CPF aparece na NFC-e impressa.
+        ✨ Salva sozinho ao digitar os 11 dígitos. CPF vai aparecer na NFC-e.
       </div>
     </div>
   );
-}
+});
 
 /**
  * Componente "Marcar peças" — sistema de "leva pra provar em casa".
@@ -5713,6 +5927,8 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [printingCred, setPrintingCred] = useState(false);
   const { toast } = usePdvToast();
+  // Ref pro componente de CPF — permite forçar flush antes de emitir NFC-e
+  const cpfInputRef = useRef<CpfNaNotaHandle>(null);
 
   // Detecta se a venda tem pagamento de crediário (mostra botões de impressão).
   // Cobre 2 caminhos: (1) split — payments[] tem method='crediario',
@@ -5803,10 +6019,27 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
    *   3. Fallback: window.print() abre diálogo do navegador
    */
   async function imprimirDanfeNfce() {
-    // ── Constantes da empresa (LURD'S / T.O. RISSUTTO EIRELI) ─────────
-    const RAZAO_SOCIAL = "T.O. RISSUTTO EIRELI";
-    const NOME_FANTASIA = "LURD'S PLUS SIZE";
-    const CNPJ = "20.104.813/0001-39";
+    // ── Dados da empresa: extraídos do XML AUTORIZADO pela SEFAZ ──────
+    // ANTES estava hardcoded com CNPJ da matriz (/0001-39) e razão antiga
+    // "EIRELI" (extinto em 2021). Agora puxa do <emit> do XML — que reflete
+    // a config REAL de cada loja (cada CNPJ próprio, /0006-43 pra Santos, etc).
+    const xmlAutorizado = ((sale as any).nfceXml as string | undefined) || '';
+    const emitBlock = xmlAutorizado.match(/<emit>([\s\S]*?)<\/emit>/)?.[1] || '';
+    const xmlCnpjRaw = (emitBlock.match(/<CNPJ>([^<]+)<\/CNPJ>/)?.[1] || '').trim();
+    const xmlRazao = (emitBlock.match(/<xNome>([^<]+)<\/xNome>/)?.[1] || '').trim();
+    const xmlFant = (emitBlock.match(/<xFant>([^<]+)<\/xFant>/)?.[1] || '').trim();
+
+    // Formata CNPJ "20104813000643" → "20.104.813/0006-43"
+    const formatCnpj = (c: string) => {
+      const d = c.replace(/\D/g, '').padStart(14, '0').slice(0, 14);
+      return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
+    };
+
+    // Fallbacks só usados se o XML não estiver disponível (preview antes
+    // da autorização SEFAZ, por ex). Atualizados pra razão correta atual.
+    const RAZAO_SOCIAL = xmlRazao || 'T.O. RISSUTTO LTDA';
+    const NOME_FANTASIA = xmlFant || "LURD'S PLUS SIZE";
+    const CNPJ = xmlCnpjRaw ? formatCnpj(xmlCnpjRaw) : '—';
 
     // ── Itens do cupom: descrição + qty + unitário + subtotal ────────
     const itensHtml = sale.items.map((it, idx) => {
@@ -5833,11 +6066,22 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
       : new Date().toLocaleString('pt-BR');
 
     // ── QR Code da SEFAZ-SP (NFC-e) ──────────────────────────────────
-    // Padrão: https://www.nfce.fazenda.sp.gov.br/qrcode?p=CHAVE|VERSAO|AMBIENTE|IDCSC|HASH
-    // Como não temos o CSC aqui, geramos QR só com URL de consulta pela chave.
-    const qrUrl = sale.nfceChave
-      ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1`
-      : '';
+    // Formato OFICIAL SEFAZ-SP: https://www.nfce.fazenda.sp.gov.br/qrcode?p=CHAVE|VERSAO|AMBIENTE|IDCSC|HASH
+    //
+    // BUG HISTORICO RESOLVIDO: Antes gerava URL invalida no frontend com
+    // ?chNFe=CHAVE&nVersao=100&tpAmb=1 — esse formato nao eh QR Code NFC-e,
+    // eh URL de consulta antiga que SEFAZ rejeita ao escanear ("Formato
+    // de QR-Code nao suportado"). O backend ja salvou o QR Code correto
+    // em sale.nfceQrUrl com o hash CSC valido. So precisa usar.
+    //
+    // Tenta extrair do XML autorizado tambem (fonte de verdade), com
+    // fallback pra nfceQrUrl direto. Ultimo recurso: URL antiga so pra
+    // nao quebrar cupom em casos onde o XML/qrUrl nao existem ainda.
+    const xmlForQr = ((sale as any).nfceXml as string | undefined) || '';
+    const qrFromXml = (xmlForQr.match(/<qrCode>\s*<!\[CDATA\[([^\]]+)\]\]>\s*<\/qrCode>/)?.[1] || '').trim();
+    const qrUrl = qrFromXml
+      || (sale as any).nfceQrUrl
+      || (sale.nfceChave ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1` : '');
     const qrImgUrl = qrUrl
       ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrUrl)}`
       : '';
@@ -6015,6 +6259,19 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     setEmitting(true);
     setEmitError(null);
     try {
+      // ─── FLUSH do CPF antes de emitir ───
+      // Se vendedora digitou CPF mas não clicou Salvar, salva agora.
+      // Resolve bug onde a NFC-e saía sem CPF mesmo o input tendo valor.
+      if (cpfInputRef.current?.hasUnsavedCpf()) {
+        const ok = await cpfInputRef.current.flushPendingSave();
+        if (!ok) {
+          setEmitError('Falhou ao salvar CPF antes de emitir. Confira e tente de novo.');
+          setEmitting(false);
+          return;
+        }
+        // Aguarda um tick pro state propagar antes de chamar a NFCe
+        await new Promise((r) => setTimeout(r, 100));
+      }
       const r = await api<any>(`/pdv/sales/${sale.id}/nfce`, { method: 'POST' });
       // Recarrega venda pra puxar status atualizado
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
@@ -6135,7 +6392,7 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
 
           {/* ─── Adicionar CPF na nota (só se ainda NÃO emitiu NFC-e) ─── */}
           {!isAuthorized && !isCancelled && (
-            <CpfNaNotaInput sale={sale} onUpdated={(s) => setSale(s)} />
+            <CpfNaNotaInput ref={cpfInputRef} sale={sale} onUpdated={(s) => setSale(s)} />
           )}
 
           {/* ─── Ações NFC-e ─── */}
@@ -6427,15 +6684,15 @@ const BANDEIRA_SRC: Record<string, string> = {
 function BandeiraLogo({ brand }: { brand: string }) {
   const src = BANDEIRA_SRC[brand];
   if (!src) {
-    return <span className="text-xs font-bold text-slate-700">{brand}</span>;
+    return <span className="text-base font-bold text-slate-700">{brand}</span>;
   }
   // VISA ELECTRON usa logo VISA + sublabel ELECTRON pra distinguir do VISANET (crédito)
   if (brand === 'VISA ELECTRON') {
     return (
-      <div className="flex flex-col items-center justify-center leading-none">
+      <div className="flex flex-col items-center justify-center leading-none gap-0.5">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt="Visa Electron" className="h-4 object-contain" />
-        <span className="text-[7px] font-bold tracking-wider text-[#1A1F71]">
+        <img src={src} alt="Visa Electron" className="h-7 object-contain" />
+        <span className="text-[10px] font-bold tracking-wider text-[#1A1F71]">
           ELECTRON
         </span>
       </div>
@@ -6446,7 +6703,7 @@ function BandeiraLogo({ brand }: { brand: string }) {
     <img
       src={src}
       alt={brand}
-      className="h-5 max-h-5 object-contain"
+      className="h-9 max-h-9 object-contain"
       loading="lazy"
     />
   );
@@ -7518,6 +7775,56 @@ function ManualItemModal({
             {saving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
             Adicionar
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─── PDV2: Overlay de ajuda — lista de atalhos do teclado (F12 / ?) ─── */
+function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
+  const close = useSmartBackdropClose(onClose);
+  const atalhos: Array<[string, string]> = [
+    ['F1', 'Focar campo de bipagem'],
+    ['F2', 'Desconto na venda inteira'],
+    ['F3', 'Caixa (sangria / suprimento)'],
+    ['F4', 'Troca / Devolução'],
+    ['F6', 'Identificar cliente (CPF)'],
+    ['F8', 'Abrir tela de pagamento'],
+    ['F9', 'Escolher vendedora'],
+    ['F10', 'Consultar produto (estoque / preço)'],
+    ['Del', 'Remover último item do carrinho'],
+    ['Esc', 'Fechar modal aberto'],
+    ['F12 ou ?', 'Abrir / fechar esta ajuda'],
+    ['0 + Enter', 'Lançar item manual (produto livre)'],
+    ['REF + Espaço', 'Abrir a grade do modelo (tamanhos/cores)'],
+  ];
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+      onMouseDown={close.onMouseDown}
+      onClick={close.onClick}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 bg-slate-900 text-white">
+          <div className="font-black text-sm tracking-wide">⌨ Atalhos do PDV</div>
+          <button onClick={onClose} className="text-white/70 hover:text-white transition" aria-label="Fechar">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4 grid grid-cols-1 gap-1.5 max-h-[70vh] overflow-y-auto">
+          {atalhos.map(([k, desc]) => (
+            <div key={k} className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-slate-50">
+              <kbd className="min-w-[72px] text-center text-[11px] font-mono font-bold bg-slate-100 text-slate-800 border border-slate-300 rounded px-1.5 py-1 shrink-0">
+                {k}
+              </kbd>
+              <span className="text-sm text-slate-700">{desc}</span>
+            </div>
+          ))}
+        </div>
+        <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-400 text-center">
+          Pressione Esc ou F12 pra fechar
         </div>
       </div>
     </div>

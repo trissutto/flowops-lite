@@ -1,15 +1,13 @@
 // Service Worker mínimo do LURDS ORDER ONE PWA.
 //
+// SW_VERSION: 2026-06-11-responsive — bump aqui força browsers a baixar
+// versão nova. Toda mudança no conteúdo deste arquivo dispara o
+// `updatefound` no ServiceWorkerRegister.tsx, que faz reload automático.
+// Pra forçar atualização em PWAs instalados, MUDA essa string.
+//
 // Por que existe: Android Chrome SÓ aceita instalação de PWA se houver um
 // service worker registrado (mesmo que ele não faça nada útil). Esse SW
 // implementa o mínimo: passa todas as requests direto (network-first).
-//
-// Sprint futuras podem evoluir pra:
-//  - Cache offline (vendedora consulta produto sem internet)
-//  - Push notification background (pedido novo do site)
-//  - Background sync (envia ações pendentes quando voltar online)
-//
-// Por enquanto é só "pass-through".
 
 self.addEventListener('install', (event) => {
   // skipWaiting() = ativa imediatamente, não espera fechar abas antigas

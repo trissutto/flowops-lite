@@ -63,10 +63,50 @@ export class PagarmeService {
   private readonly logger = new Logger(PagarmeService.name);
   private readonly BASE_URL = 'https://api.pagar.me/core/v5';
 
+  // Cache em memória de storeCode → storeName (24h).
+  // Usado pra construir nome da cobranca no Pagar.me ("VENDA LOJA ITANHAEM_18:52")
+  // mesmo quando o caller esquece de passar storeName.
+  private storeNameCache = new Map<string, { at: number; name: string }>();
+  private readonly STORE_NAME_CACHE_TTL = 24 * 60 * 60 * 1000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly http: HttpService,
   ) {}
+
+  /**
+   * Resolve nome da loja por storeCode com cache 24h.
+   * Fallback: storeCode se loja nao for encontrada.
+   * Garante que nome da cobranca sempre tem nome legivel da loja.
+   */
+  private async resolveStoreName(storeCode: string, hint?: string): Promise<string> {
+    if (hint && hint.trim()) return hint.trim();
+    const cached = this.storeNameCache.get(storeCode);
+    if (cached && Date.now() - cached.at < this.STORE_NAME_CACHE_TTL) {
+      return cached.name;
+    }
+    try {
+      const store = await (this.prisma as any).store.findUnique({
+        where: { code: storeCode },
+        select: { name: true },
+      });
+      const name = store?.name?.trim() || storeCode;
+      this.storeNameCache.set(storeCode, { at: Date.now(), name });
+      return name;
+    } catch {
+      return storeCode;
+    }
+  }
+
+  /** Horario atual em HH:MM Brasilia (24h). Pra anexar no nome da cobranca. */
+  private getHorarioBr(): string {
+    return new Date().toLocaleTimeString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  }
 
   // ── Config ──────────────────────────────────────────────────────────
 
@@ -238,6 +278,7 @@ export class PagarmeService {
     saleId: string;
     valor: number;
     storeCode: string;
+    storeName?: string; // pra fallback do nome do cliente (conciliação)
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
@@ -271,7 +312,17 @@ export class PagarmeService {
     // Agora geramos CPF ficticio VALIDO unico por cobranca (algoritmo + saleId
     // como semente) — assim cada cobranca vira um customer novo no Pagar.me e
     // o pagador real aparece corretamente.
-    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    //
+    // FALLBACK PRA CONCILIACAO: se nao tem nome do cliente, usa nome da loja
+    // + horario (HH:MM Brasilia). Ex: "VENDA LOJA ITANHAEM_18:52" em vez de
+    // "Cliente PDV ABC123". Facilita conciliacao do extrato Pagar.me com o
+    // caixa da loja: vendedora vê venda do PIX e bate exato com horario.
+    // Sempre busca nome da loja no banco (cache 24h) — independente do caller
+    // ter passado storeName ou nao.
+    const storeName = await this.resolveStoreName(input.storeCode, input.storeName);
+    const customerName = (
+      input.customerName || `VENDA LOJA ${storeName.toUpperCase()}_${this.getHorarioBr()}`
+    ).slice(0, 64);
     const customerEmail = input.customerEmail
       || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');
@@ -552,6 +603,7 @@ export class PagarmeService {
     saleId: string;
     valor: number;
     storeCode: string;
+    storeName?: string; // pra fallback do nome do cliente (conciliação)
     customerName?: string;
     customerCpf?: string;
     customerEmail?: string;
@@ -588,7 +640,13 @@ export class PagarmeService {
     }
 
     // Customer — mesma lógica do PIX (CPF fictício único por venda se não tem)
-    const customerName = (input.customerName || `Cliente PDV ${input.saleId.slice(-6).toUpperCase()}`).slice(0, 64);
+    // Fallback "VENDA LOJA <NOME>_HH:MM" pra facilitar conciliação.
+    // Sempre busca nome da loja no banco (cache 24h) — caller pode ou nao
+    // passar storeName, o resultado eh o mesmo.
+    const storeNameLink = await this.resolveStoreName(input.storeCode, input.storeName);
+    const customerName = (
+      input.customerName || `VENDA LOJA ${storeNameLink.toUpperCase()}_${this.getHorarioBr()}`
+    ).slice(0, 64);
     const customerEmail = input.customerEmail
       || `pdv-${input.saleId.slice(-12)}@lurds.com.br`;
     let customerDoc = (input.customerCpf || '').replace(/\D/g, '');

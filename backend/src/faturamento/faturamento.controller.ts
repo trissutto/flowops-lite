@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { FaturamentoService } from './faturamento.service';
 import { ErpService } from '../erp/erp.service';
@@ -31,8 +31,10 @@ export class FaturamentoController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('granularity') granularity?: string,
+    @Query('refresh') refresh?: string,
   ) {
     this.requireAdmin(req);
+    if (refresh === '1') this.svc.clearCache();
     const today = new Date();
     const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     const fmt = (d: Date) =>
@@ -42,6 +44,48 @@ export class FaturamentoController {
     const t = to || fmt(today);
     const g = (granularity === 'week' || granularity === 'month') ? granularity : 'day';
     return this.svc.getResumo(f, t, g);
+  }
+
+  /**
+   * GET /faturamento/auditoria-paridade?from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Compara Wincred (Giga) vs PdvSale (flowops) por loja+dia.
+   * Detecta divergências em tempo real pra suportar migração 30/06.
+   */
+  @Get('auditoria-paridade')
+  async auditoriaParidade(
+    @Req() req: any,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    this.requireAdmin(req);
+    const today = new Date();
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const f = from || fmt(today);
+    const t = to || fmt(today);
+    return this.svc.auditoriaParidade(f, t);
+  }
+
+  /**
+   * GET /faturamento/loja/:storeCode/vendas?from=YYYY-MM-DD&to=YYYY-MM-DD
+   *
+   * Lista vendas DETALHADAS (PdvSale) da loja no período pra drill-down.
+   * Usado pelo botão expandir na tabela /retaguarda/faturamento.
+   * Retorna nº NFCe, hora, vendedora, cliente, total, forma pgto, status.
+   */
+  @Get('loja/:storeCode/vendas')
+  async vendasPorLoja(
+    @Req() req: any,
+    @Param('storeCode') storeCode: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    this.requireAdmin(req);
+    if (!from || !to) {
+      return { error: 'from e to obrigatórios (YYYY-MM-DD)' };
+    }
+    return this.svc.getVendasDetalhadas(storeCode, from, to);
   }
 
   /**

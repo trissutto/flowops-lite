@@ -2304,29 +2304,77 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       .split(/\s+/)
       .map((w) => w.trim())
       .filter((w) => w.length >= 2);
+    // REF DE MODELO: termo SÓ numérico de 3-6 dígitos = vendedora digitou a
+    // REF (etiqueta sem código de barras). Fluxo do PDV:
+    //   1º bipe (>=7 díg, direto) → 2º código manual → 3º REF do modelo.
+    // Pra REF: match EXATO primeiro — retorna a GRADE COMPLETA (tamanhos ×
+    // cores) daquele modelo, ordenada. Se exato não achar (digitação parcial),
+    // fallback por PREFIXO. NUNCA contains nem DESCRICAO pra termo numérico —
+    // era isso que trazia "referências nada a ver" no dropdown.
+    // QUALQUER tamanho de REF numérica (3+ dígitos) — existem REFs com mais
+    // de 6 dígitos. Ordem: REF exata → REF prefixo → fallback genérico
+    // (CODIGO/REF/DESCRICAO contains, comportamento antigo, pra não quebrar
+    // outras telas que buscam código parcial).
+    const isNumericRef = /^\d{3,}$/.test(cleanTerm);
     try {
-      let sql: string;
-      let params: any[];
-      if (words.length >= 2) {
-        // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
-        const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
-        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
-                 FROM produtos
-                WHERE (${ands})
-                   OR CODIGO LIKE ?
-                   OR REF LIKE ?
-                LIMIT 20`;
-        params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+      let products: any[] = [];
+      if (isNumericRef) {
+        const cols = 'CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID';
+        const [exactRows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT ${cols}
+             FROM produtos
+            WHERE TRIM(REF) = ?
+            ORDER BY DESCRICAOCOMPLETA, TAMANHO, COR
+            LIMIT 80`,
+          [cleanTerm],
+        );
+        products = exactRows as any[];
+        if (!products.length) {
+          const [prefixRows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT ${cols}
+               FROM produtos
+              WHERE TRIM(REF) LIKE ?
+              ORDER BY REF, TAMANHO, COR
+              LIMIT 30`,
+            [`${cleanTerm}%`],
+          );
+          products = prefixRows as any[];
+        }
+        if (!products.length) {
+          // Último recurso: LIKE genérico (igual comportamento antigo)
+          const [genericRows] = await this.pool.query<mysql.RowDataPacket[]>(
+            `SELECT ${cols}
+               FROM produtos
+              WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+              LIMIT 20`,
+            [fullLike, fullLike, fullLike],
+          );
+          products = genericRows as any[];
+        }
       } else {
-        // 1 palavra (ou termo curto): comportamento anterior — LIKE em tudo
-        sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
-                 FROM produtos
-                WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
-                LIMIT 20`;
-        params = [fullLike, fullLike, fullLike];
+        let sql: string;
+        let params: any[];
+        if (words.length >= 2) {
+          // Multi-palavra: AND de LIKE em DESCRICAOCOMPLETA + OR fallback em CODIGO/REF
+          const ands = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
+          sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                   FROM produtos
+                  WHERE (${ands})
+                     OR CODIGO LIKE ?
+                     OR REF LIKE ?
+                  LIMIT 20`;
+          params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
+        } else {
+          // 1 palavra (texto): comportamento anterior — LIKE em tudo
+          sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
+                   FROM produtos
+                  WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
+                  LIMIT 20`;
+          params = [fullLike, fullLike, fullLike];
+        }
+        const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
+        products = prodRows as any[];
       }
-      const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
-      const products = prodRows as any[];
       if (!products.length) return [];
 
       // 2) Pra cada CODIGO, soma estoque REAL na tabela `estoque`.
@@ -7468,6 +7516,187 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * tipo VALORUNITARIO*QUANTIDADE ou VALORLIQUIDO, não o VALORTOTAL
    * (que pode incluir acréscimos/juros do crediário).
    */
+  /**
+   * Lista funcionários (vendedoras) ATIVAS de uma loja no Wincred.
+   * Filtra por status ativo + LOJA. Usado pelo sync /retaguarda/vendedoras
+   * pra popular PdvActiveSeller.
+   */
+  async getFuncionariosAtivosByLoja(storeCodes: string[]): Promise<Array<{
+    codigo: string;
+    nome: string;
+    apelido: string | null;
+    storeCode: string;
+  }>> {
+    if (!this.pool) return [];
+    const codes = storeCodes.filter(Boolean);
+    if (codes.length === 0) return [];
+    try {
+      // Tenta primeiro com FLAG_INATIVO (estrutura comum do Wincred).
+      // Se não existir essa coluna, cai pro select sem filtro e o caller filtra.
+      let rows: mysql.RowDataPacket[] = [];
+      try {
+        const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, NOME, APELIDO, LOJA
+             FROM funcionarios
+            WHERE LOJA IN (?)
+              AND (FLAG_INATIVO IS NULL OR FLAG_INATIVO = 'N' OR FLAG_INATIVO = 0)
+            ORDER BY LOJA, NOME`,
+          [codes],
+        );
+        rows = r;
+      } catch {
+        const [r] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT CODIGO, NOME, APELIDO, LOJA
+             FROM funcionarios
+            WHERE LOJA IN (?)
+            ORDER BY LOJA, NOME`,
+          [codes],
+        );
+        rows = r;
+      }
+      return (rows as any[]).map((r) => ({
+        codigo: String(r.CODIGO || '').trim(),
+        nome: String(r.NOME || '').trim(),
+        apelido: r.APELIDO ? String(r.APELIDO).trim() : null,
+        storeCode: String(r.LOJA || '').trim().toUpperCase(),
+      })).filter((r) => r.codigo && r.nome);
+    } catch (e: any) {
+      this.logger.error(`getFuncionariosAtivosByLoja falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Lista TODO o estoque (sku → qty) das lojas dadas no Wincred.
+   * Usado pelo StockMirrorService pra sync inicial e periódico.
+   * Filtra ESTOQUE > 0 pra evitar trazer 200k linhas zeradas inúteis.
+   */
+  async getEstoqueFullByLoja(storeCodes: string[]): Promise<Array<{
+    sku: string;
+    storeCode: string;
+    qty: number;
+  }>> {
+    if (!this.pool) return [];
+    const codes = storeCodes.filter(Boolean);
+    if (codes.length === 0) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
+           FROM estoque
+          WHERE LOJA IN (?)
+            AND ESTOQUE > 0`,
+        [codes],
+      );
+      return (rows as any[]).map((r) => ({
+        sku: String(r.sku || '').trim(),
+        storeCode: String(r.storeCode || '').trim().toUpperCase(),
+        qty: Number(r.qty) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getEstoqueFullByLoja falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
+  /**
+   * Marca uma venda do Wincred como CANCELADA (MARCADO='SIM').
+   * Usada no fluxo de estorno do flowops — remove a venda do faturamento + caixa
+   * sem deletar fisicamente (audit trail preservado).
+   *
+   * Match pela coluna OBS_PEDIDO = 'flowops-{saleIdShort}'.
+   * saleIdShort = primeiros 8 chars do UUID do PdvSale.
+   */
+  async marcarVendaWincredCancelada(input: {
+    saleId: string;
+    storeCode: string;
+  }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; affected?: number; error?: string }> {
+    const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
+    if (!this.pool) return { ok: false, mode, error: 'Pool não inicializado' };
+    const saleIdShort = input.saleId.replace(/-/g, '').slice(0, 8);
+    const obsPedido = `flowops-${saleIdShort}`;
+    const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
+    const sql = `UPDATE caixa SET MARCADO='SIM' WHERE OBS_PEDIDO = ? AND LOJA = ?`;
+    if (mode === 'shadow') {
+      this.logger.warn(`[wincred SHADOW] cancelar venda obsPedido=${obsPedido} loja=${lojaCode}`);
+      return { ok: true, mode };
+    }
+    try {
+      const [result] = await this.pool.query<mysql.ResultSetHeader>(sql, [obsPedido, lojaCode]);
+      const affected = result.affectedRows;
+      this.logger.log(`[wincred] CANCELADO obsPedido=${obsPedido} loja=${lojaCode} (${affected} linhas)`);
+      return { ok: true, mode, affected };
+    } catch (e: any) {
+      this.logger.error(`marcarVendaWincredCancelada falhou: ${e?.message || e}`);
+      return { ok: false, mode, error: e?.message || String(e) };
+    }
+  }
+
+  /**
+   * Lista vendas DETALHADAS de uma loja no Wincred (tabela caixa) num período.
+   * Usado pelo drill-down da tela /retaguarda/faturamento pra lojas que ainda
+   * não usam o PDV flowops (vendas direto no Wincred legado).
+   *
+   * Agrupa por NUMERO (cupom fiscal) — cada cupom é uma "venda" mesmo tendo
+   * múltiplos itens na tabela caixa.
+   */
+  async getVendasCaixa(loja: string, from: string, toExclusive: string): Promise<any[]> {
+    if (!this.pool) return [];
+    // Tenta com o code passado E com padding pra 2 dígitos (cobre "6" vs "06")
+    const codeAsIs = String(loja).trim().toUpperCase();
+    const codePadded = String(loja).padStart(2, '0').slice(-2);
+    const possibleCodes = Array.from(new Set([codeAsIs, codePadded]));
+
+    try {
+      // IMPORTANTE: usa DATAFEC igual ao ranking (getFaturamentoPorLoja).
+      // Antes usava DATA — vendas tarde da noite ficavam fora porque DATAFEC
+      // só é preenchido quando fecha o cupom (pode ser dia seguinte).
+      const sql = `
+        SELECT
+          NUMERO,
+          DATAFEC,
+          DATA,
+          LOJA,
+          MAX(NOMECLIENTE) as NOME_CLIENTE,
+          MAX(CPF) as CPFCNPJ,
+          MAX(VENDEDORA) as VENDEDORA,
+          MAX(FPAG) as FPAG,
+          MAX(VENDEDORACODE) as CODFUNCIONARIO,
+          MAX(OBS_PEDIDO) as OBS_PEDIDO,
+          ROUND(SUM(VALORUNITARIO * QUANTIDADE), 2) as VALOR_TOTAL,
+          SUM(QUANTIDADE) as QTD_ITENS,
+          COUNT(*) as QTD_LINHAS
+        FROM caixa
+        WHERE LOJA IN (?)
+          AND DATAFEC >= ?
+          AND DATAFEC <  ?
+          AND (MARCADO IS NULL OR MARCADO <> 'SIM')
+        GROUP BY NUMERO, DATAFEC, DATA, LOJA
+        ORDER BY DATAFEC DESC, NUMERO DESC
+        LIMIT 500
+      `;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [possibleCodes, from, toExclusive]);
+      this.logger.log(
+        `[getVendasCaixa] loja=${possibleCodes.join('|')} period=${from}→${toExclusive} → ${rows.length} cupons`,
+      );
+      return (rows as any[]).map((r) => ({
+        numero: r.NUMERO,
+        data: r.DATAFEC || r.DATA,
+        loja: r.LOJA,
+        cliente: r.NOME_CLIENTE,
+        cpf: r.CPFCNPJ,
+        vendedora: r.VENDEDORA,
+        fpag: r.FPAG,
+        codFuncionario: r.CODFUNCIONARIO,
+        obsPedido: r.OBS_PEDIDO,
+        total: Number(r.VALOR_TOTAL) || 0,
+        qtdItens: Number(r.QTD_ITENS) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.error(`getVendasCaixa(${loja}) falhou: ${e?.message || e}`);
+      return [];
+    }
+  }
+
   async getCaixaSchemaDiagnostic(loja: string, from: string, toExclusive: string): Promise<any> {
     if (!this.pool) return { error: 'pool não inicializado' };
     try {

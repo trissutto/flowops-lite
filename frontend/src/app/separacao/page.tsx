@@ -209,6 +209,22 @@ function SeparacaoPageInner() {
   // Mapeia FILTROS.slug → total. "enviados" é painel próprio (sem contador).
   const [tabCounts, setTabCounts] = useState<Record<string, number>>({});
 
+  // Filtro de LOJA RESPONSÁVEL pela separação
+  const [storeCode, setStoreCode] = useState<string>('');
+  const [stores, setStores] = useState<Array<{ code: string; name: string; openOrders: number }>>([]);
+
+  // Carrega lojas com contagem de pedidos em aberto
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<{ stores: Array<{ code: string; name: string; openOrders: number }> }>(
+          '/orders/wc/stores-load',
+        );
+        setStores(r.stores || []);
+      } catch {}
+    })();
+  }, []);
+
   async function loadCounts() {
     try {
       const r = await api<{ byStatus: Record<string, { name: string; total: number }> }>('/orders/wc/counts');
@@ -233,7 +249,7 @@ function SeparacaoPageInner() {
     const t = setInterval(load, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, search]);
+  }, [status, search, storeCode]);
 
   // Fetch inicial + socket listener pra issues reportados pelas lojas
   useEffect(() => {
@@ -726,12 +742,40 @@ function SeparacaoPageInner() {
     // — ícone roxo no admin do WP). Quando a integração de tracking em tempo
     // real ficar pronta, esses pedidos receberão atualizações automáticas
     // (postado → saiu pra entrega → entregue) via webhook dos Correios.
+    // Filtra localmente caso backend não suporte o query param.
+    // Match flexível: normaliza removendo acentos/case e compara code OU name.
+    const normalize = (s: any) =>
+      String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+    const target = normalize(storeCode);
+    const filterByStoreLocal = (list: WcOrderListItem[]): WcOrderListItem[] => {
+      if (!storeCode) return list;
+      const filtered = list.filter((o: any) =>
+        (o.pickOrders || []).some((p: any) =>
+          normalize(p?.storeCode) === target || normalize(p?.storeName) === target,
+        ),
+      );
+      // DEBUG: ajuda a diagnosticar se filtro não funciona
+      // eslint-disable-next-line no-console
+      console.log('[separacao filter]', {
+        storeCode,
+        target,
+        total: list.length,
+        filtered: filtered.length,
+        samplePickOrders: list.slice(0, 3).map((o: any) => ({
+          id: o.id,
+          picks: (o.pickOrders || []).map((p: any) => ({ code: p?.storeCode, name: p?.storeName })),
+        })),
+      });
+      return filtered;
+    };
+
     if (status === 'em-transito') {
       try {
         const q = new URLSearchParams({ status: 'shipped', per_page: '50' });
         if (search) q.set('search', search);
+        if (storeCode) q.set('storeCode', storeCode);
         const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
-        setOrders(res.data);
+        setOrders(filterByStoreLocal(res.data));
       } catch (e) {
         console.error(e);
       } finally {
@@ -740,10 +784,12 @@ function SeparacaoPageInner() {
       return;
     }
     try {
-      const q = new URLSearchParams({ status, per_page: '50' });
+      // Quando filtrando por loja, busca mais (per_page=100) pra compensar filtro local
+      const q = new URLSearchParams({ status, per_page: storeCode ? '100' : '50' });
       if (search) q.set('search', search);
+      if (storeCode) q.set('storeCode', storeCode);
       const res = await api<{ data: WcOrderListItem[] }>(`/orders/wc?${q}`);
-      setOrders(res.data);
+      setOrders(filterByStoreLocal(res.data));
     } catch (e) {
       console.error(e);
     } finally {
@@ -998,7 +1044,47 @@ function SeparacaoPageInner() {
             Limpar
           </button>
         )}
+
+        {/* ─── FILTRO LOJA RESPONSÁVEL ─── */}
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+            Loja:
+          </span>
+          <select
+            value={storeCode}
+            onChange={(e) => setStoreCode(e.target.value)}
+            className="px-3 py-2 border rounded text-sm bg-white min-w-[200px]"
+          >
+            <option value="">Todas as lojas</option>
+            {stores.map((s) => (
+              <option key={s.code} value={s.code}>
+                {s.name}{s.openOrders > 0 ? ` (${s.openOrders})` : ''}
+              </option>
+            ))}
+          </select>
+          {storeCode && (
+            <button
+              type="button"
+              onClick={() => setStoreCode('')}
+              className="px-2 py-1 text-xs text-slate-500 hover:text-rose-700"
+              title="Limpar filtro de loja"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </form>
+
+      {/* Aviso de filtro ativo */}
+      {storeCode && (
+        <div className="mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900 flex items-center gap-2">
+          <span>📦 Mostrando apenas pedidos da loja</span>
+          <strong>{stores.find((s) => s.code === storeCode)?.name || storeCode}</strong>
+          <span className="text-blue-700/70 ml-auto text-xs">
+            {orders.length} pedido{orders.length === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
 
       {/* Banner de issues ativos — alerta matriz que lojas reportaram problema */}
       {Object.keys(issuesByWcId).length > 0 && (
@@ -1146,8 +1232,8 @@ function SeparacaoPageInner() {
                     {isExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
                   </button>
 
-                  <div className="flex-1 grid grid-cols-12 gap-3 items-center text-sm">
-                    <div className="col-span-2">
+                  <div className="flex-1 flex flex-col gap-2 sm:grid sm:grid-cols-12 sm:gap-3 sm:items-center text-sm min-w-0">
+                    <div className="sm:col-span-2">
                       <Link
                         href={`/pedidos/wc/${o.id}`}
                         className="font-mono font-semibold text-brand hover:underline"
@@ -1156,7 +1242,7 @@ function SeparacaoPageInner() {
                       </Link>
                       <div className="text-xs text-slate-500">{fmtDate(o.dateCreatedGmt)} atrás</div>
                     </div>
-                    <div className="col-span-4 truncate">
+                    <div className="sm:col-span-4 sm:truncate min-w-0">
                       {(() => {
                         const shipBadge = classifyShipping(o.shippingMethod, o.shippingState);
                         if (!o.shippingMethod) return null;
@@ -1249,8 +1335,8 @@ function SeparacaoPageInner() {
                         </span>
                       )}
                     </div>
-                    <div className="col-span-2 font-mono text-right">{fmtMoney(o.total)}</div>
-                    <div className="col-span-4 flex justify-end gap-2">
+                    <div className="sm:col-span-2 font-mono text-left sm:text-right text-base sm:text-sm font-bold sm:font-normal">{fmtMoney(o.total)}</div>
+                    <div className="sm:col-span-4 flex flex-wrap sm:justify-end gap-1.5 sm:gap-2">
                       {hasIssue && (
                         <button
                           onClick={() => recalcularRota(o.id)}
@@ -1587,8 +1673,9 @@ function SeparacaoPageInner() {
           </div>
         </div>
       )}
-      </>
+         </>
       )}
     </AdminShell>
   );
 }
+

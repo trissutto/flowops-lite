@@ -161,6 +161,20 @@ function ReciboPdvInner() {
     return () => window.removeEventListener('afterprint', handleAfterPrint);
   }, [autoprint]);
 
+  // GUARD ANTI-PAPEL-DESPERDIÇADO: se a venda NÃO carregou (401, rede,
+  // timeout), o app desktop ainda imprime a janela via fallback de 8s —
+  // saía a página de erro impressa no cupom térmico (caso Sorocaba).
+  // Em contexto de impressão automática (electron/autoprint), fecha a
+  // janela em vez de exibir o erro.
+  useEffect(() => {
+    if (!error) return;
+    const electron = (window as any).electronAPI;
+    if (autoprint || electron) {
+      const t = setTimeout(() => { try { window.close(); } catch {} }, 400);
+      return () => clearTimeout(t);
+    }
+  }, [error, autoprint]);
+
   if (error) {
     return (
       <div style={{ padding: 16, fontFamily: 'sans-serif' }}>

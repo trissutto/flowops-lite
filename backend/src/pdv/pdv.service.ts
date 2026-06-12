@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
+import { NfceService } from './nfce.service';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -31,6 +32,7 @@ export class PdvService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly cash: CashService,
+    private readonly nfce: NfceService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -177,6 +179,315 @@ export class PdvService {
   }
 
   /**
+   * Cancela venda DUPLICADA — mesmo COM pagamento registrado.
+   * Caso real: vendedora bateu venda 2x antes de imprimir cupom.
+   * Diferente de zumbi: a venda tem pagamento mas é uma cópia da outra.
+   * Estoque NAO é alterado (assume que só uma das vendas teve peça baixada de verdade
+   * via NF emitida; ou se ambas baixaram, isso vira tarefa de reconciliação manual).
+   */
+  /**
+   * ESTORNO COMPLETO de venda finalizada — usado pelo botão "ESTORNAR"
+   * da tela /retaguarda/faturamento (drill-down).
+   *
+   * Diferente do masterCancelDuplicada: este AQUI tenta REVERTER tudo:
+   *   1. Cancela NFC-e na SEFAZ se autorizada (chama nfce.cancel)
+   *   2. Reverte estoque no Wincred (gravarVendaPdv com qty negativa)
+   *   3. Marca cashback ganho como REVOGADO (cliente perde o cashback gerado)
+   *   4. Marca a sale como cancelled
+   *   5. Logger detalhado pra auditoria
+   *
+   * Cada passo é tentado independentemente — se um falhar, os outros seguem.
+   * Retorna relatório do que funcionou e do que precisa ação manual.
+   *
+   * Requer:
+   *   - senha master (validada no controller via validateMinLevel)
+   *   - motivo (>= 5 chars)
+   *
+   * Atenção: NÃO consegue estornar pagamento de cartão fisicamente. Vendedora
+   * precisa fazer estorno manual na maquininha. O relatório avisa.
+   */
+  async masterEstornarVenda(input: {
+    saleId: string;
+    motivo: string;
+    userName: string;
+  }) {
+    const { saleId, motivo, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatório');
+    if (!motivo || motivo.trim().length < 5) {
+      throw new BadRequestException('Informe motivo (≥5 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: {
+        payments: true,
+        items: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+
+    if (sale.status === 'cancelled') {
+      return {
+        ok: true,
+        alreadyDone: true,
+        saleId,
+        message: 'Venda já estava cancelada',
+        passos: [],
+      };
+    }
+
+    if (sale.status !== 'finalized') {
+      throw new BadRequestException(`Venda no status ${sale.status} — só pode estornar finalizada`);
+    }
+
+    const passos: Array<{
+      passo: string;
+      status: 'ok' | 'falhou' | 'pulado' | 'atencao';
+      detalhe: string;
+    }> = [];
+
+    /* ─── PASSO 1: Cancelar NFC-e na SEFAZ se autorizada ─── */
+    if (sale.nfceStatus === 'authorized' && !sale.nfceCanceladaEm) {
+      try {
+        const r = await this.nfce.cancel(saleId, `Estorno: ${motivo}`.slice(0, 250));
+        if (r?.success) {
+          passos.push({
+            passo: 'NFC-e SEFAZ',
+            status: 'ok',
+            detalhe: `Cancelada. Protocolo cancelamento: ${r.nProtCancelamento || '—'}`,
+          });
+        } else {
+          passos.push({
+            passo: 'NFC-e SEFAZ',
+            status: 'falhou',
+            detalhe: r?.motivo || r?.error || 'SEFAZ rejeitou cancelamento. Verifique janela 30min.',
+          });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'NFC-e SEFAZ',
+          status: 'falhou',
+          detalhe: `Erro ao cancelar: ${e?.message || String(e)}`,
+        });
+      }
+    } else if (sale.nfceCanceladaEm) {
+      passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'Já cancelada antes' });
+    } else {
+      passos.push({ passo: 'NFC-e SEFAZ', status: 'pulado', detalhe: 'NFC-e não foi autorizada (skip)' });
+    }
+
+    /* ─── PASSO 2: Cancelar venda no Wincred (some do faturamento) ─── */
+    if (!sale.isTraining) {
+      try {
+        const r = await (this.erp as any).marcarVendaWincredCancelada({
+          saleId,
+          storeCode: sale.storeCode,
+        });
+        if (r?.ok) {
+          passos.push({
+            passo: 'Venda Wincred',
+            status: 'ok',
+            detalhe: `Marcada como cancelada (${r.affected ?? 0} linhas). Some do faturamento.`,
+          });
+        } else {
+          passos.push({
+            passo: 'Venda Wincred',
+            status: 'falhou',
+            detalhe: `Não removeu do Wincred: ${r?.error || 'erro desconhecido'}. Marque manual!`,
+          });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'Venda Wincred',
+          status: 'falhou',
+          detalhe: `Erro: ${e?.message || String(e)}`,
+        });
+      }
+    } else {
+      passos.push({
+        passo: 'Venda Wincred',
+        status: 'pulado',
+        detalhe: 'Modo treinamento',
+      });
+    }
+
+    /* ─── PASSO 2b: Devolver estoque Wincred (qty negativa) ─── */
+    if (sale.stockDecreasedAt && !sale.isTraining) {
+      try {
+        await this.erp.gravarVendaPdv({
+          storeCode: sale.storeCode,
+          items: sale.items.map((it: any) => ({
+            sku: String(it.sku || it.ean || ''),
+            qty: -Math.abs(Number(it.qty) || 1),
+            valorUnit: Number(it.precoUnit) || 0,
+            desconto: 0,
+            descricao: String(it.descricao || ''),
+          })),
+          pagamentos: [{ metodo: 'estorno', valor: -Math.abs(Number(sale.total) || 0) }],
+          obsPedido: `estorno-${saleId.slice(0, 8)}`,
+        } as any);
+        passos.push({
+          passo: 'Estoque Wincred',
+          status: 'ok',
+          detalhe: `${sale.items.length} item(ns) devolvido(s) ao estoque`,
+        });
+      } catch (e: any) {
+        passos.push({
+          passo: 'Estoque Wincred',
+          status: 'falhou',
+          detalhe: `Erro ao reverter: ${e?.message || String(e)}. Faça manual!`,
+        });
+      }
+    } else {
+      passos.push({
+        passo: 'Estoque Wincred',
+        status: 'pulado',
+        detalhe: sale.isTraining ? 'Modo treinamento' : 'Estoque não foi baixado',
+      });
+    }
+
+    /* ─── PASSO 3: Revogar cashback ganho ─── */
+    if (sale.customerCpf && !sale.isTraining) {
+      try {
+        const cpfDigits = String(sale.customerCpf).replace(/\D/g, '');
+        const totalCents = Math.round(Number(sale.total || 0) * 100);
+        const cashbackGerado = Math.floor(totalCents * 0.10); // 10% padrão
+        if (cashbackGerado > 0) {
+          // Procura a conta unificada
+          const acc = await (this.prisma as any).customerAccount.findUnique({
+            where: { cpf: cpfDigits.length === 11 ? `${cpfDigits.slice(0,3)}.${cpfDigits.slice(3,6)}.${cpfDigits.slice(6,9)}-${cpfDigits.slice(9)}` : cpfDigits },
+            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
+          }) || await (this.prisma as any).customerAccount.findUnique({
+            where: { cpf: cpfDigits },
+            select: { id: true, cashbackBalanceCents: true, cashbackEarnedCents: true },
+          });
+          if (acc) {
+            await (this.prisma as any).customerAccount.update({
+              where: { id: acc.id },
+              data: {
+                cashbackBalanceCents: Math.max(0, (acc.cashbackBalanceCents || 0) - cashbackGerado),
+                cashbackEarnedCents: { decrement: BigInt(cashbackGerado) },
+              },
+            });
+            passos.push({
+              passo: 'Cashback cliente',
+              status: 'ok',
+              detalhe: `Revogados R$ ${(cashbackGerado / 100).toFixed(2)} do cliente`,
+            });
+          } else {
+            passos.push({
+              passo: 'Cashback cliente',
+              status: 'pulado',
+              detalhe: 'Cliente não tem conta no app — nada a revogar',
+            });
+          }
+        } else {
+          passos.push({ passo: 'Cashback cliente', status: 'pulado', detalhe: 'Sem cashback gerado' });
+        }
+      } catch (e: any) {
+        passos.push({
+          passo: 'Cashback cliente',
+          status: 'falhou',
+          detalhe: `Erro: ${e?.message || String(e)}`,
+        });
+      }
+    } else {
+      passos.push({ passo: 'Cashback cliente', status: 'pulado', detalhe: 'Venda sem CPF' });
+    }
+
+    /* ─── PASSO 4: Aviso sobre pagamentos cartão ─── */
+    const temCartao = (sale.payments || []).some((p: any) =>
+      ['credito', 'debito', 'cartao'].includes(String(p.method || '').toLowerCase()),
+    );
+    if (temCartao) {
+      passos.push({
+        passo: 'Pagamento cartão',
+        status: 'atencao',
+        detalhe: '⚠️ Estorno do cartão é MANUAL na maquininha (Stone/PagBank). Faça lá pessoalmente.',
+      });
+    }
+
+    /* ─── PASSO 5: Marca a sale como cancelada ─── */
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: `[ESTORNO MASTER] ${motivo} — por ${userName}`,
+      } as any,
+    });
+    passos.push({ passo: 'Status venda', status: 'ok', detalhe: 'Marcada como cancelled' });
+
+    /* ─── Log final ─── */
+    this.logger.warn(
+      `[MASTER ESTORNO] saleId=${saleId} loja=${sale.storeCode} total=R$${sale.total} ` +
+      `cliente=${sale.customerCpf || 'avulso'} motivo="${motivo}" por ${userName} ` +
+      `— passos: ${passos.map(p => `${p.passo}:${p.status}`).join(' | ')}`,
+    );
+
+    return {
+      ok: true,
+      saleId,
+      totalEstornado: Number(sale.total || 0),
+      passos,
+      message: `Estorno concluído. ${passos.filter(p => p.status === 'falhou').length} falha(s). Veja os passos abaixo.`,
+      precisaAcaoManual: passos.some(p => p.status === 'falhou' || p.status === 'atencao'),
+    };
+  }
+
+  async masterCancelDuplicada(input: {
+    saleId: string;
+    motivo: string;
+    userName: string;
+  }) {
+    const { saleId, motivo, userName } = input;
+    if (!saleId) throw new BadRequestException('saleId obrigatorio');
+    if (!motivo || motivo.trim().length < 3) {
+      throw new BadRequestException('Informe motivo (>=3 chars)');
+    }
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: saleId },
+      include: { payments: true, items: { select: { id: true, sku: true, total: true } } },
+    });
+    if (!sale) throw new NotFoundException('Venda nao encontrada');
+
+    if (sale.status === 'cancelled') {
+      return { ok: true, alreadyDone: true, saleId, message: 'Venda ja estava cancelada' };
+    }
+
+    // Bloqueia se venda já tem NFC-e emitida (precisa cancelar cupom fiscal antes via SEFAZ)
+    if (sale.nfceStatus === 'autorizada' && !sale.nfceCanceladaEm) {
+      throw new BadRequestException(
+        'Venda tem NFC-e autorizada. Cancela o cupom fiscal primeiro (SEFAZ) e depois exclui.',
+      );
+    }
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: saleId },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: `[DUPLICADA] ${motivo} — por ${userName}`,
+      } as any,
+    });
+
+    this.logger.warn(
+      `[MASTER] CANCEL-DUPLICADA saleId=${saleId} total=R$${sale.total} ` +
+      `payments=${(sale.payments || []).length} items=${(sale.items || []).length} motivo="${motivo}" por ${userName}`,
+    );
+
+    return {
+      ok: true,
+      saleId,
+      totalCancelado: Number(sale.total || 0),
+      qtdPagamentos: (sale.payments || []).length,
+      qtdItens: (sale.items || []).length,
+      message: 'Venda duplicada cancelada. NFC-e nao foi afetada — verifica no caixa se precisa estornar o pagamento manualmente.',
+    };
+  }
+
+  /**
    * Lê venda + itens + pagamentos parciais (com totais sempre atualizados).
    */
   async getSale(id: string) {
@@ -273,8 +584,16 @@ export class PdvService {
       // (Status do pdvReturn só vira used no finalize; entre addPayment e
       // finalize, o code fica amarrado no payment.details — essa busca cobre
       // esse intervalo crítico onde 2 PDVs poderiam usar o mesmo vale.)
+      // PERF: filtra no BANCO por `details contains code` (details é String/Text
+      // com JSON serializado — o código TROCA-XXXXX aparece literal no texto).
+      // Antes carregava a tabela INTEIRA de payments vale_troca e filtrava em JS.
+      // mode insensitive garante superset do filtro JS (que faz toUpperCase).
+      // A validação JS abaixo continua como confirmação (parse + compare exato).
       const outrasOcorrencias = await (this.prisma as any).pdvSalePayment.findMany({
-        where: { method: 'vale_troca' },
+        where: {
+          method: 'vale_troca',
+          details: { contains: code, mode: 'insensitive' },
+        },
         select: { id: true, saleId: true, details: true, sale: { select: { status: true } } },
       });
       for (const p of outrasOcorrencias as any[]) {
@@ -636,15 +955,19 @@ export class PdvService {
    * linha (UX melhor pro PDV).
    */
   async addItem(input: { saleId: string; skuOrEan: string; qty?: number }) {
-    const sale = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: input.saleId },
-      select: { id: true, status: true },
-    });
+    // PERF: lookup da venda (Postgres) e do produto (MySQL Giga) em PARALELO —
+    // são independentes e o Giga é a chamada mais lenta do bipe.
+    const [sale, info] = await Promise.all([
+      (this.prisma as any).pdvSale.findUnique({
+        where: { id: input.saleId },
+        select: { id: true, status: true },
+      }),
+      this.erp.getPdvProductInfo(input.skuOrEan),
+    ]);
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
 
-    const info = await this.erp.getPdvProductInfo(input.skuOrEan);
     if (!info) throw new NotFoundException(`Produto "${input.skuOrEan}" não encontrado no Giga`);
     if (info.preco <= 0)
       throw new BadRequestException(`Produto ${info.sku} sem preço cadastrado no Giga`);
@@ -689,7 +1012,10 @@ export class PdvService {
 
     await this.applyAutoDiscounts(sale.id);
     await this.recalcTotals(sale.id);
-    return { ok: true, item };
+    // PERF: devolve a venda COMPLETA junto — o frontend não precisa fazer um
+    // segundo GET /pdv/sales/:id (eliminava ida-e-volta inteira a cada bipe).
+    const freshSale = await this.getSale(sale.id);
+    return { ok: true, item, sale: freshSale };
   }
 
   /**
@@ -1090,16 +1416,36 @@ export class PdvService {
     if (!sale) throw new NotFoundException('Venda não encontrada');
     // Permite atualizar customer se:
     //  - Venda em aberto (fluxo normal — antes de finalizar) OU
-    //  - Venda finalizada MAS NFC-e ainda não emitida (caso "CPF na nota"
-    //    pedido pelo cliente depois do pagamento mas antes da emissão)
+    //  - Venda finalizada MAS NFC-e ainda NÃO foi AUTORIZADA pela SEFAZ
+    //
+    // BUG FIX (2026-06): o canUpdate antigo era `!sale.nfceStatus`, mas o
+    // finalize() SEMPRE seta nfceStatus='preview' (do stub). Resultado: o
+    // PATCH /customer rejeitava o CPF avulso depois do pagamento mesmo
+    // antes da emissão real. Agora só bloqueia se a NFC-e foi efetivamente
+    // autorizada pela SEFAZ (XML enviado, chave de acesso protocolada).
+    // Estados aceitos pra update: 'preview' (stub local), 'rejected' (SEFAZ
+    // recusou, vendedora corrige e tenta de novo), null (skipped/sem stub).
     const canUpdate =
       sale.status === 'open' ||
-      (sale.status === 'finalized' && !sale.nfceStatus);
+      (sale.status === 'finalized' && sale.nfceStatus !== 'authorized');
     if (!canUpdate) {
       throw new BadRequestException(
-        sale.nfceStatus
-          ? 'NFC-e já foi emitida — não dá pra alterar dados do cliente'
+        sale.nfceStatus === 'authorized'
+          ? 'NFC-e já foi autorizada pela SEFAZ — não dá pra alterar dados do cliente'
           : 'Venda já finalizada',
+      );
+    }
+
+    // Quando atualiza dados do cliente em venda já finalizada com stub de
+    // NFC-e pendente (preview/rejected), invalida campos derivados pra
+    // forçar regeneração com os dados novos no próximo emit().
+    if (sale.status === 'finalized' && sale.nfceStatus && sale.nfceStatus !== 'authorized') {
+      // Não precisa limpar explicitamente — o emit() sobrescreve nfceXml/
+      // nfceChave/nfceNumero quando regenera. Mas resetar nfceStatus pra
+      // 'preview' garante consistência se vendedora vier de um 'rejected'.
+      this.logger.log(
+        `[pdv] CPF/dados atualizados em venda finalizada ${input.saleId.slice(0, 8)} ` +
+        `(nfceStatus=${sale.nfceStatus}) — emit() vai regenerar XML`,
       );
     }
 
@@ -1331,6 +1677,89 @@ export class PdvService {
       return { ok: true, sale: updated, nfcePreview: null, training: true };
     }
 
+    // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — extraído pra postFinalizeErpSync().
+    // FLAG PDV_FINALIZE_ASYNC (default: false):
+    //   false → await (comportamento atual: resposta espera Wincred + estoque)
+    //   true  → fire-and-forget (resposta volta imediata; erros só logam, igual hoje,
+    //           já que erros nesses blocos NUNCA bloquearam a venda — só warning)
+    const finalizeAsync =
+      String(process.env.PDV_FINALIZE_ASYNC ?? '').trim().toLowerCase() === 'true';
+    if (finalizeAsync) {
+      void this.postFinalizeErpSync(sale, payments as any[], finalMethod).catch((e: any) =>
+        this.logger.error(
+          `[pdv] postFinalizeErpSync (async) falhou pra venda ${sale.id}: ${e?.message || e}`,
+        ),
+      );
+    } else {
+      await this.postFinalizeErpSync(sale, payments as any[], finalMethod);
+    }
+
+    // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
+    // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
+    try {
+      const valeTrocaPayments = (payments as any[]).filter(
+        (p: any) => p.method === 'vale_troca',
+      );
+      for (const p of valeTrocaPayments) {
+        let code: string | null = null;
+        try {
+          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
+        } catch { /* ignora */ }
+        if (!code) continue;
+        const ret = await (this.prisma as any).pdvReturn.findUnique({
+          where: { creditoCode: code },
+        });
+        if (!ret) {
+          this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
+          continue;
+        }
+        if (ret.status === 'used') continue; // idempotente
+        await (this.prisma as any).pdvReturn.update({
+          where: { id: ret.id },
+          data: {
+            status: 'used',
+            creditoUsadoEm: sale.id,
+            creditoUsadoAt: new Date(),
+          },
+        });
+        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
+    }
+
+    // ── ATUALIZA CRM (Customer) ──────────────────────────────────────────
+    // Fase 4 da captura PDV: ao finalizar venda real, soma LTV/orderCount
+    // do cliente no Customer. Pula treinamento e vendas sem CPF.
+    if (sale.customerCpf && !(sale as any).isTraining) {
+      try {
+        await this._atualizarCustomerAposVenda(updated);
+      } catch (e: any) {
+        this.logger.warn(`[pdv→CRM] falha ao atualizar Customer: ${e?.message || e}`);
+      }
+    }
+
+    return { ok: true, sale: updated, nfcePreview: nfceStub };
+  }
+
+  /**
+   * PÓS-PROCESSAMENTO ERP do finalize(): gravação da venda no Wincred
+   * (tabela `caixa`) + baixa de estoque + marcação de stockDecreasedAt.
+   *
+   * Extraído do finalize() pra permitir execução assíncrona via flag
+   * PDV_FINALIZE_ASYNC (fire-and-forget). Erros aqui NUNCA bloqueiam a venda
+   * — o Postgres do flowops é a fonte da verdade; cada bloco tem try/catch
+   * próprio que só loga warning (mesmo comportamento de quando era inline).
+   *
+   * IMPORTANTE: recebe tudo por parâmetro (sale/payments/finalMethod) — não
+   * depende de estado capturado do finalize, pra ser seguro rodar destacado.
+   */
+  private async postFinalizeErpSync(
+    sale: any,
+    payments: any[],
+    finalMethod: string,
+  ): Promise<void> {
     // GRAVAÇÃO NO WINCRED — replica venda na tabela `caixa` do gigasistemas21
     // pra contabilidade/relatórios. Em modo SHADOW por padrão (PDV_ERP_WRITE_ENABLED=false)
     // só LOGA os SQLs sem executar — permite validar antes de ligar real.
@@ -1368,8 +1797,8 @@ export class PdvService {
         // Pagamentos: usa array payments (após split) ou fallback pro paymentMethod legado.
         // Quando método é credito/debito genérico, extrai a bandeira do details
         // (ex: method='credito' + details.bandeira='MASTERCARD' → mapeia como MASTERCARD).
-        pagamentos: (payments as any[]).length > 0
-          ? (payments as any[]).map((p: any) => {
+        pagamentos: payments.length > 0
+          ? payments.map((p: any) => {
               let metodo = String(p.method || '');
               const generico = metodo === 'credito' || metodo === 'debito' || metodo === 'cartao';
               if (generico && p.details) {
@@ -1479,54 +1908,6 @@ export class PdvService {
         `[pdv→estoque] Erro inesperado ao baixar estoque da venda ${sale.id}: ${e?.message || e}. Venda no flowops segue OK.`,
       );
     }
-
-    // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
-    // como pagamento nessa venda. Idempotente: se já tava 'used', segue.
-    try {
-      const valeTrocaPayments = (payments as any[]).filter(
-        (p: any) => p.method === 'vale_troca',
-      );
-      for (const p of valeTrocaPayments) {
-        let code: string | null = null;
-        try {
-          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
-          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
-        } catch { /* ignora */ }
-        if (!code) continue;
-        const ret = await (this.prisma as any).pdvReturn.findUnique({
-          where: { creditoCode: code },
-        });
-        if (!ret) {
-          this.logger.warn(`[pdv] vale-troca ${code} não achado pra marcar como usado`);
-          continue;
-        }
-        if (ret.status === 'used') continue; // idempotente
-        await (this.prisma as any).pdvReturn.update({
-          where: { id: ret.id },
-          data: {
-            status: 'used',
-            creditoUsadoEm: sale.id,
-            creditoUsadoAt: new Date(),
-          },
-        });
-        this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
-      }
-    } catch (e: any) {
-      this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
-    }
-
-    // ── ATUALIZA CRM (Customer) ──────────────────────────────────────────
-    // Fase 4 da captura PDV: ao finalizar venda real, soma LTV/orderCount
-    // do cliente no Customer. Pula treinamento e vendas sem CPF.
-    if (sale.customerCpf && !(sale as any).isTraining) {
-      try {
-        await this._atualizarCustomerAposVenda(updated);
-      } catch (e: any) {
-        this.logger.warn(`[pdv→CRM] falha ao atualizar Customer: ${e?.message || e}`);
-      }
-    }
-
-    return { ok: true, sale: updated, nfcePreview: nfceStub };
   }
 
   /**

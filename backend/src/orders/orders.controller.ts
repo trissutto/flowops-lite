@@ -61,11 +61,18 @@ export class OrdersController {
     @Query('search') search?: string,
     @Query('after') after?: string,
     @Query('before') before?: string,
+    @Query('storeCode') storeCode?: string,
   ) {
+    // Quando filtra por loja, pega per_page MAIOR pra compensar o filtro local.
+    // LIMITE 100 — WooCommerce REST API REJEITA per_page > 100 com 500.
+    const effectivePerPage = storeCode
+      ? Math.min(100, Number(perPage || 50) * 2)
+      : (perPage ? Number(perPage) : 50);
+
     const res = await this.wc.listOrders({
       status,
       page: page ? Number(page) : 1,
-      perPage: perPage ? Number(perPage) : 50,
+      perPage: effectivePerPage,
       search,
       after,
       before,
@@ -145,7 +152,192 @@ export class OrdersController {
       };
     });
 
-    return { data, total: res.total, totalPages: res.totalPages };
+    // Filtro por loja responsável (aplicado APÓS enriquecer com pickOrders)
+    // Match flexível: normaliza removendo acentos + uppercase + compara code OU name
+    const normalize = (s: any) =>
+      String(s || '')
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '') // remove diacríticos (acentos)
+        .toUpperCase()
+        .trim();
+    const targetNorm = normalize(storeCode);
+    const filteredData = storeCode
+      ? data.filter((o: any) =>
+          (o.pickOrders || []).some((p: any) => {
+            const codeN = normalize(p.storeCode);
+            const nameN = normalize(p.storeName);
+            return codeN === targetNorm || nameN === targetNorm;
+          }),
+        )
+      : data;
+
+    return {
+      data: filteredData,
+      total: storeCode ? filteredData.length : res.total,
+      totalPages: storeCode ? 1 : res.totalPages,
+      filteredByStore: !!storeCode,
+    };
+  }
+
+  /**
+   * Lista lojas com contagem de pedidos em separação por loja.
+   * Usado pelo dropdown de filtro na tela /pedidos.
+   */
+  @Get('wc/stores-load')
+  async wcStoresLoad() {
+    // Pega lojas ativas + conta pedidos cuja pick-order ainda não foi enviada
+    const stores = await (this.prisma as any).store.findMany({
+      where: { active: true },
+      select: { id: true, code: true, name: true, city: true, state: true },
+      orderBy: { name: 'asc' },
+    });
+
+    // Conta pick-orders em aberto por loja (status != shipped/cancelled)
+    const countsRaw = await (this.prisma as any).pickOrder.groupBy({
+      by: ['storeId'],
+      where: { status: { notIn: ['shipped', 'cancelled'] } },
+      _count: { _all: true },
+    });
+    const countMap = new Map<string, number>();
+    for (const c of countsRaw) countMap.set(c.storeId, c._count._all);
+
+    return {
+      stores: stores.map((s: any) => ({
+        code: s.code,
+        name: s.name,
+        city: s.city,
+        state: s.state,
+        openOrders: countMap.get(s.id) || 0,
+      })),
+    };
+  }
+
+  /**
+   * GET /orders/wc/:wcOrderId/routing-audit
+   *
+   * Auditoria COMPLETA do roteamento de um pedido:
+   *  - PickOrders atuais (lojas que estão/estavam separando)
+   *  - Items + assignedStoreId (qual loja foi responsável por cada peça)
+   *  - OrderHistory completo (mudanças de status + swaps)
+   *  - Detecção de duplicidade (lojas com mesmo item)
+   *
+   * Usado pra investigar "saiu por loja X mas começou por loja Y".
+   */
+  @Get('wc/:wcOrderId/routing-audit')
+  async routingAudit(@Param('wcOrderId') wcOrderId: string) {
+    const wcId = Number(wcOrderId);
+    if (!wcId || isNaN(wcId)) {
+      throw new Error('wcOrderId inválido');
+    }
+
+    const order = await (this.prisma as any).order.findFirst({
+      where: { wcOrderId: wcId },
+      include: {
+        items: {
+          select: {
+            id: true,
+            sku: true,
+            quantity: true,
+            assignedStoreId: true,
+          },
+        },
+        pickOrders: {
+          include: {
+            store: { select: { code: true, name: true } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        history: {
+          orderBy: { createdAt: 'asc' },
+          take: 100,
+        },
+      },
+    });
+
+    if (!order) {
+      return { found: false, wcOrderId: wcId };
+    }
+
+    // Enriquece items com nome da loja
+    const storeMap = new Map<string, { code: string; name: string }>();
+    const allStoreIds = new Set<string>();
+    order.items.forEach((it: any) => it.assignedStoreId && allStoreIds.add(it.assignedStoreId));
+    order.pickOrders.forEach((p: any) => allStoreIds.add(p.storeId));
+
+    if (allStoreIds.size > 0) {
+      const stores = await (this.prisma as any).store.findMany({
+        where: { id: { in: Array.from(allStoreIds) } },
+        select: { id: true, code: true, name: true },
+      });
+      stores.forEach((s: any) => storeMap.set(s.id, { code: s.code, name: s.name }));
+    }
+
+    // Detecta possível duplicidade: pick-orders ativos com mesmo SKU
+    const activePickOrders = order.pickOrders.filter(
+      (p: any) => !['cancelled'].includes(p.status),
+    );
+    const skusByStore: Record<string, string[]> = {};
+    for (const it of order.items) {
+      if (!it.assignedStoreId) continue;
+      const loja = storeMap.get(it.assignedStoreId);
+      const key = `${loja?.code || it.assignedStoreId}`;
+      if (!skusByStore[key]) skusByStore[key] = [];
+      skusByStore[key].push(it.sku);
+    }
+    const skuConflicts: Array<{ sku: string; stores: string[] }> = [];
+    const allSkus = new Set(order.items.map((i: any) => i.sku));
+    for (const sku of allSkus) {
+      const stores = Object.entries(skusByStore).filter(([_, skus]) => skus.includes(sku as string)).map(([s]) => s);
+      if (stores.length > 1) skuConflicts.push({ sku: sku as string, stores });
+    }
+
+    return {
+      found: true,
+      orderId: order.id,
+      wcOrderId: wcId,
+      status: order.status,
+      createdAt: order.createdAt,
+      pickOrders: order.pickOrders.map((p: any) => ({
+        id: p.id,
+        storeCode: p.store?.code,
+        storeName: p.store?.name,
+        status: p.status,
+        trackingCode: p.trackingCode,
+        carrier: p.carrier,
+        isTransfer: p.isTransfer,
+        transferToStoreCode: p.transferToStoreCode,
+        issueReason: p.issueReason,
+        issueNote: p.issueNote,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      })),
+      items: order.items.map((it: any) => ({
+        id: it.id,
+        sku: it.sku,
+        quantity: it.quantity,
+        assignedStoreCode: it.assignedStoreId ? storeMap.get(it.assignedStoreId)?.code : null,
+        assignedStoreName: it.assignedStoreId ? storeMap.get(it.assignedStoreId)?.name : null,
+      })),
+      history: order.history.map((h: any) => ({
+        id: h.id,
+        createdAt: h.createdAt,
+        fromStatus: h.fromStatus,
+        toStatus: h.toStatus,
+        note: h.note,
+        userId: h.userId,
+      })),
+      // FLAGS DE RISCO
+      activePickOrderCount: activePickOrders.length,
+      hasDuplicateRisk: skuConflicts.length > 0,
+      skuConflicts,
+      summary: {
+        totalSwaps: order.history.filter((h: any) => (h.note || '').toLowerCase().includes('swap')).length,
+        totalItems: order.items.length,
+        totalPickOrders: order.pickOrders.length,
+        firstPickOrderStore: order.pickOrders[0]?.store?.name,
+        lastPickOrderStore: order.pickOrders[order.pickOrders.length - 1]?.store?.name,
+      },
+    };
   }
 
   /** Contadores por status (pra renderizar os filtros com número exato do WC). */

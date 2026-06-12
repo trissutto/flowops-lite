@@ -9,6 +9,7 @@ import { QueueService } from '../queue/queue.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WcPollerService } from './wc-poller.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { OrderAppHooksService } from '../customers-app/order-app-hooks.service';
 
 @Controller()
 export class WooCommerceController {
@@ -20,6 +21,7 @@ export class WooCommerceController {
     private readonly queue: QueueService,
     private readonly prisma: PrismaService,
     private readonly poller: WcPollerService,
+    private readonly appHooks: OrderAppHooksService,
   ) {}
 
   /** Dispara polling agora mesmo (sem esperar o cron de 60s). */
@@ -59,6 +61,8 @@ export class WooCommerceController {
         if (saved.shouldRoute) {
           await this.queue.enqueueRoute(saved.orderId);
         }
+        // Hook do app: cashback + push se for pedido vindo do app.lurds.com.br
+        await this.appHooks.handleWcOrder(req.body);
       }
     } catch (e: any) {
       this.logger.error(`Erro processando webhook: ${e.message}`);
