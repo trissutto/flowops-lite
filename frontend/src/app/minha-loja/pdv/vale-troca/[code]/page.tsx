@@ -78,7 +78,14 @@ export default function ValeImprimirPage() {
   useEffect(() => {
     if (autoprint && info && !err) {
       const t = setTimeout(() => {
-        try { window.print(); } catch {}
+        // No app desktop, o Electron imprime (notifyPrintReady) — chamar
+        // window.print() junto duplicava o cupom do vale.
+        const electron = (window as any).electronAPI;
+        if (electron?.notifyPrintReady) {
+          try { electron.notifyPrintReady(); } catch { try { window.print(); } catch {} }
+        } else {
+          try { window.print(); } catch {}
+        }
       }, 600);
       return () => clearTimeout(t);
     }

@@ -71,7 +71,14 @@ export default function ReciboDevolucaoPage() {
   useEffect(() => {
     if (!(autoprint && info && !err)) return;
     const t = setTimeout(() => {
-      try { window.print(); } catch {}
+      // No app desktop, o Electron imprime (notifyPrintReady) — chamar
+      // window.print() junto duplicava o job (saíam 4 vias em vez de 2).
+      const electron = (window as any).electronAPI;
+      if (electron?.notifyPrintReady) {
+        try { electron.notifyPrintReady(); } catch { try { window.print(); } catch {} }
+      } else {
+        try { window.print(); } catch {}
+      }
     }, 600);
     const onAfter = () => {
       try { setTimeout(() => window.close(), 200); } catch {}

@@ -63,11 +63,20 @@ export default function SangriaImpressoPage() {
       .catch((e) => setErr(e?.message || 'Falha ao carregar'));
   }, [id, m]);
 
-  // Auto-print quando tem dados
+  // Auto-print quando tem dados.
+  // DENTRO DO APP DESKTOP: avisa o Electron via notifyPrintReady() e deixa
+  // ELE imprimir (webContents.print). Chamar window.print() aqui TAMBÉM
+  // gerava 2 jobs = SANGRIA SAINDO EM 2 VIAS. No navegador comum, imprime
+  // direto como antes.
   useEffect(() => {
     if (autoprint && m && !err) {
       const t = setTimeout(() => {
-        try { window.print(); } catch {}
+        const electron = (window as any).electronAPI;
+        if (electron?.notifyPrintReady) {
+          try { electron.notifyPrintReady(); } catch { try { window.print(); } catch {} }
+        } else {
+          try { window.print(); } catch {}
+        }
       }, 300);
       return () => clearTimeout(t);
     }
