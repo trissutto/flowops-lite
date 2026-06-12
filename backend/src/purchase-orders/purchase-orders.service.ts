@@ -871,6 +871,39 @@ export class PurchaseOrdersService {
   }
 
   /**
+   * APPLY STOCK BATCH — aplica estoque pendente em TODOS os pedidos recebidos
+   * nos ultimos N dias (default 7). Idempotente — pula os ja aplicados.
+   */
+  async applyStockBatch(days = 7) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const pedidos = await (this.prisma as any).purchaseOrder.findMany({
+      where: {
+        status: { in: ['recebido', 'recebido_parcial', 'recebido_com_erro'] },
+        updatedAt: { gte: since },
+      },
+      select: { id: true, fornecedorNome: true, createdAt: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    const results: any[] = [];
+    let totalAplicados = 0;
+    let totalPecas = 0;
+    for (const p of pedidos) {
+      try {
+        const r = await this.applyStockOnly(p.id, false);
+        results.push({ id: p.id, fornecedor: p.fornecedorNome, ...r });
+        if (r.ok) {
+          totalAplicados++;
+          totalPecas += Number(r.totalQty || 0);
+        }
+      } catch (e: any) {
+        results.push({ id: p.id, fornecedor: p.fornecedorNome, ok: false, error: e?.message });
+      }
+    }
+    return { totalPedidos: pedidos.length, totalAplicados, totalPecas, results };
+  }
+
+  /**
    * REGENERATE LABELS — SEGURO, idempotente.
    * Repopula `skusGerados` no banco buscando os CODIGOs JA existentes no Wincred
    * pela combinacao REF + COR + TAM. NAO cadastra produto novo, NAO mexe em
