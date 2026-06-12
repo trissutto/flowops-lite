@@ -780,6 +780,97 @@ export class PurchaseOrdersService {
   }
 
   /**
+   * APPLY STOCK ONLY — re-aplica estoque dos skusGerados ja salvos no pedido.
+   * Usado quando o /receive criou os produtos no Wincred mas o increaseStock
+   * falhou (timeout, env desabilitada, etc) e os produtos ficaram zerados.
+   *
+   * SEGURO CONTRA DUPLICIDADE: marca cada item com stockAppliedAt na 1a
+   * execucao bem-sucedida. Proximas chamadas ignoram itens ja marcados.
+   * Pra forcar reaplicar (raro), passe force=true.
+   */
+  async applyStockOnly(orderId: string, force = false) {
+    const order = await this.getById(orderId);
+    if (order.status !== 'recebido' && order.status !== 'recebido_com_erro' && order.status !== 'recebido_parcial') {
+      throw new BadRequestException('Pedido precisa estar recebido');
+    }
+    const lojaMatriz = process.env.PRIMARY_STORE_CODE || '01';
+    const itemsParaEstoque: Array<{ sku: string; qty: number; storeCode: string; itemId: string }> = [];
+    let totalSkus = 0;
+    let totalQty = 0;
+    const itemsSkipped: string[] = [];
+
+    for (const it of order.items as any[]) {
+      if (!it.skusGerados) continue;
+      // PROTECAO DUPLICIDADE: skip items ja aplicados
+      let parsed: any = null;
+      try {
+        parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+      } catch { continue; }
+
+      // skusGerados pode ser array (legado) ou {appliedAt, skus: []} (novo formato)
+      const skus: any[] = Array.isArray(parsed) ? parsed : (parsed?.skus || []);
+      const appliedAt: string | null = Array.isArray(parsed) ? null : (parsed?.appliedAt || null);
+
+      if (appliedAt && !force) {
+        itemsSkipped.push(`${it.ref} ${it.cor} (ja aplicado em ${appliedAt})`);
+        continue;
+      }
+
+      for (const s of skus) {
+        const qty = Number(s.qty || 0);
+        if (!s.codigo || qty <= 0) continue;
+        itemsParaEstoque.push({ sku: String(s.codigo), qty, storeCode: lojaMatriz, itemId: it.id });
+        totalSkus++;
+        totalQty += qty;
+      }
+    }
+
+    if (itemsParaEstoque.length === 0) {
+      return { ok: false, error: 'Nenhum SKU pendente. Itens ja aplicados: ' + itemsSkipped.length, totalSkus: 0, totalQty: 0, itemsSkipped };
+    }
+
+    try {
+      const callItems = itemsParaEstoque.map(({ sku, qty, storeCode }) => ({ sku, qty, storeCode }));
+      const inc = await (this.erp as any).increaseStock?.(callItems);
+      this.logger.log(`[apply-stock-only] pedido ${orderId}: ${totalSkus} SKUs, ${totalQty} pecas na loja ${lojaMatriz} — ${JSON.stringify({success: inc?.success, error: inc?.error, applied: inc?.applied?.length})}`);
+
+      // Se sucesso, MARCA cada item como ja aplicado (contra duplicidade)
+      if (inc?.success) {
+        const itemIds = new Set(itemsParaEstoque.map((x) => x.itemId));
+        const appliedAt = new Date().toISOString();
+        for (const itemId of itemIds) {
+          const it = (order.items as any[]).find((x) => x.id === itemId);
+          if (!it) continue;
+          let parsed: any = null;
+          try {
+            parsed = typeof it.skusGerados === 'string' ? JSON.parse(it.skusGerados) : it.skusGerados;
+          } catch { continue; }
+          const skus = Array.isArray(parsed) ? parsed : (parsed?.skus || []);
+          const novoFormato = { appliedAt, skus };
+          await (this.prisma as any).purchaseOrderItem.update({
+            where: { id: itemId },
+            data: { skusGerados: JSON.stringify(novoFormato) },
+          });
+        }
+      }
+
+      return {
+        ok: !!inc?.success,
+        totalSkus,
+        totalQty,
+        lojaMatriz,
+        appliedCount: inc?.applied?.length || 0,
+        itemsSkipped,
+        error: inc?.error || null,
+        attempts: inc?.attempts || 1,
+      };
+    } catch (e: any) {
+      this.logger.error(`[apply-stock-only] pedido ${orderId} falhou: ${e?.message}`);
+      return { ok: false, error: e?.message || 'unknown', totalSkus, totalQty };
+    }
+  }
+
+  /**
    * REGENERATE LABELS — SEGURO, idempotente.
    * Repopula `skusGerados` no banco buscando os CODIGOs JA existentes no Wincred
    * pela combinacao REF + COR + TAM. NAO cadastra produto novo, NAO mexe em

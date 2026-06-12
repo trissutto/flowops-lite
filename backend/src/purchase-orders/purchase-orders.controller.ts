@@ -202,6 +202,20 @@ export class PurchaseOrdersController {
   }
 
   /**
+   * POST /:id/apply-stock
+   * Aplica APENAS o estoque dos skusGerados ja existentes — usado quando o
+   * /receive cadastrou os produtos mas o increaseStock falhou (timeout, env).
+   * IDEMPOTENTE: marca cada item com appliedAt na 1a execucao; proximas chamadas
+   * pulam itens ja aplicados pra nao duplicar estoque.
+   * Body opcional: { force: true } pra forcar reaplicacao (cuidado).
+   */
+  @Post(':id/apply-stock')
+  async applyStock(@Req() req: any, @Param('id') id: string, @Body() body: { force?: boolean }) {
+    this.requireWrite(req);
+    return this.svc.applyStockOnly(id, !!body?.force);
+  }
+
+  /**
    * Etiquetas avulsas — busca produtos no Wincred por EAN, REF ou SKU.
    * POST body: { codigos: string[] }
    */
