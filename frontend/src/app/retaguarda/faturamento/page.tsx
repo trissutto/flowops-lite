@@ -101,7 +101,7 @@ export default function FaturamentoPage() {
   // Drill-down: storeCode expandida + vendas detalhadas em cache
   const [expandedStore, setExpandedStore] = useState<string | null>(null);
   const [storeVendas, setStoreVendas] = useState<Record<string, any[]>>({});
-  const [storeMeta, setStoreMeta] = useState<Record<string, { source?: string; sourceWarning?: string }>>({});
+  const [storeMeta, setStoreMeta] = useState<Record<string, { source?: string; sourceWarning?: string; zumbisOcultas?: number }>>({});
   const [loadingVendas, setLoadingVendas] = useState<string | null>(null);
   // Modal de estorno: venda alvo + estado
   const [estornoTarget, setEstornoTarget] = useState<any | null>(null);
@@ -126,7 +126,7 @@ export default function FaturamentoPage() {
             `/faturamento/loja/${encodeURIComponent(sc)}/vendas?from=${from}&to=${to}`,
           );
           setStoreVendas((prev) => ({ ...prev, [sc]: r.vendas || [] }));
-          setStoreMeta((prev) => ({ ...prev, [sc]: { source: r.source, sourceWarning: r.sourceWarning } }));
+          setStoreMeta((prev) => ({ ...prev, [sc]: { source: r.source, sourceWarning: r.sourceWarning, zumbisOcultas: (r as any).zumbisOcultas } }));
         } catch {}
         setLoadingVendas(null);
       })();
@@ -169,11 +169,11 @@ export default function FaturamentoPage() {
     if (storeVendas[storeCode]) return;
     setLoadingVendas(storeCode);
     try {
-      const r = await api<{ vendas: any[]; source?: string; sourceWarning?: string }>(
+      const r = await api<{ vendas: any[]; source?: string; sourceWarning?: string; zumbisOcultas?: number }>(
         `/faturamento/loja/${encodeURIComponent(storeCode)}/vendas?from=${from}&to=${to}`,
       );
       setStoreVendas((prev) => ({ ...prev, [storeCode]: r.vendas || [] }));
-      setStoreMeta((prev) => ({ ...prev, [storeCode]: { source: r.source, sourceWarning: r.sourceWarning } }));
+      setStoreMeta((prev) => ({ ...prev, [storeCode]: { source: r.source, sourceWarning: r.sourceWarning, zumbisOcultas: r.zumbisOcultas } }));
     } catch (e: any) {
       setErr(e?.message || 'Falha ao carregar vendas detalhadas');
     } finally {
@@ -609,6 +609,7 @@ export default function FaturamentoPage() {
                                         vendas={vendasDessaLoja}
                                         onEstornar={(v) => setEstornoTarget({ ...v, storeCode: l.storeCode, storeName: l.storeName })}
                                         periodLabel={from === to ? from : `${from} → ${to}`}
+                                        zumbisOcultas={storeMeta[l.storeCode]?.zumbisOcultas}
                                       />
                                     </>
                                   )}
@@ -788,12 +789,15 @@ function DrilldownVendas({
   vendas,
   onEstornar,
   periodLabel,
+  zumbisOcultas,
 }: {
   storeName: string;
   storeCode: string;
   vendas: any[];
   onEstornar: (v: any) => void;
   periodLabel?: string;
+  /** Vendas "zumbi" (canceladas, R$0, sem pagamento) ocultadas pelo backend */
+  zumbisOcultas?: number;
 }) {
   const fmtDate = (iso: string) =>
     iso ? new Date(iso).toLocaleString('pt-BR') : '—';
@@ -810,7 +814,12 @@ function DrilldownVendas({
           📊 {storeName} — {vendas.length} venda{vendas.length === 1 ? '' : 's'}
           {periodLabel && <span className="text-blue-700/70 font-normal"> · período {periodLabel}</span>}
           {qtdCancelled > 0 && (
-            <span className="ml-2 text-rose-700">({qtdCancelled} cancelada{qtdCancelled === 1 ? '' : 's'})</span>
+            <span className="ml-2 text-rose-700">({qtdCancelled} estorno{qtdCancelled === 1 ? '' : 's'})</span>
+          )}
+          {(zumbisOcultas || 0) > 0 && (
+            <span className="ml-2 text-slate-400 font-normal" title="Vendas abandonadas no PDV (sem nenhum pagamento), canceladas automaticamente no fechamento de caixa ou pela limpeza. Sem efeito em caixa ou estoque — não são estornos.">
+              · {zumbisOcultas} abandonada{zumbisOcultas === 1 ? '' : 's'} oculta{zumbisOcultas === 1 ? '' : 's'} (auto-limpeza)
+            </span>
           )}
         </div>
         <div className="text-blue-900 font-bold">

@@ -442,6 +442,36 @@ function PdvPageInner() {
     setLoadingSale(true);
     setError(null);
     try {
+      // ── RECICLAGEM DE ÓRFÃS ──
+      // Antes: cada abertura de PDV criava venda nova no banco; as antigas
+      // ficavam abertas pra sempre ("pausadas" fantasma) e eram canceladas
+      // em lote no fechamento de caixa (parecia estorno que ninguém fez).
+      // Agora: se existe venda aberta VAZIA (sem item, sem pagamento, sem
+      // cliente) da mesma loja e MESMO estado de treino, ADOTA ela em vez
+      // de criar outra. Zero lixo novo no banco.
+      const sessaoTreino = (() => {
+        try { return sessionStorage.getItem('flowops_training') === '1'; } catch { return false; }
+      })();
+      try {
+        const abertas = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
+        const orfaVazia = (abertas || []).find(
+          (s) =>
+            (s.items?.length || 0) === 0 &&
+            (s.payments?.length || 0) === 0 &&
+            !s.customerCpf &&
+            !!s.isTraining === sessaoTreino,
+        );
+        if (orfaVazia) {
+          const fullOrfa = await api<Sale>(`/pdv/sales/${orfaVazia.id}`);
+          if (fullOrfa.status === 'open') {
+            setSale(fullOrfa);
+            try { localStorage.setItem(`lurds_pdv_sale_${storeCode}`, fullOrfa.id); } catch {}
+            setLoadingSale(false);
+            return;
+          }
+        }
+      } catch { /* reciclagem falhou → segue criando normal */ }
+
       const s = await api<Sale>('/pdv/sales', {
         method: 'POST',
         body: JSON.stringify({ storeCode }),

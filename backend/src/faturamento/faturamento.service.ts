@@ -289,13 +289,24 @@ export class FaturamentoService {
       `[getVendasDetalhadas] storeCode=${storeCodeUpper} retornou ${sales.length} vendas`,
     );
 
+    // FILTRO ZUMBI/ABANDONADA: venda cancelada SEM NENHUM PAGAMENTO não é
+    // estorno — é venda abandonada (PDV aberto sem bipar, ou peças bipadas
+    // e largadas) cancelada em lote pelo forceCloseCash/limpeza. Zero efeito
+    // em caixa/estoque. Esconde da listagem pra não assustar o gestor
+    // ("26 canceladas" → só os estornos REAIS, que tinham pagamento).
+    const zumbis = (sales as any[]).filter(
+      (s) => s.status === 'cancelled' && (s.payments || []).length === 0,
+    );
+    const salesVisiveis = (sales as any[]).filter((s) => !zumbis.includes(s));
+
     // Se PDV flowops tem vendas → retorna elas (com flag canEstornar)
     if (sales.length > 0) {
       return {
         storeCode: storeCodeUpper,
         source: 'pdv_sale',
         appliedPeriod: { from, to },
-        vendas: sales.map((s: any) => ({
+        zumbisOcultas: zumbis.length,
+        vendas: salesVisiveis.map((s: any) => ({
           id: s.id,
           number: s.nfceNumber ? `NFCe ${s.nfceNumber}` : `#${s.id.slice(0, 8)}`,
           status: s.status,
