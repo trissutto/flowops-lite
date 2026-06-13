@@ -3145,5 +3145,3 @@ function ConsolidateDrawer({
     </>
   );
 }
-
-}

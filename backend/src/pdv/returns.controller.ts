@@ -381,5 +381,3 @@ export class ReturnsController {
     });
   }
 }
-}
-}
