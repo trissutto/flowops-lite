@@ -442,35 +442,16 @@ function PdvPageInner() {
     setLoadingSale(true);
     setError(null);
     try {
-      // ── RECICLAGEM DE ÓRFÃS ──
-      // Antes: cada abertura de PDV criava venda nova no banco; as antigas
-      // ficavam abertas pra sempre ("pausadas" fantasma) e eram canceladas
-      // em lote no fechamento de caixa (parecia estorno que ninguém fez).
-      // Agora: se existe venda aberta VAZIA (sem item, sem pagamento, sem
-      // cliente) da mesma loja e MESMO estado de treino, ADOTA ela em vez
-      // de criar outra. Zero lixo novo no banco.
-      const sessaoTreino = (() => {
-        try { return sessionStorage.getItem('flowops_training') === '1'; } catch { return false; }
-      })();
-      try {
-        const abertas = await api<any[]>(`/pdv/sales?storeCode=${storeCode}&status=open&limit=50`);
-        const orfaVazia = (abertas || []).find(
-          (s) =>
-            (s.items?.length || 0) === 0 &&
-            (s.payments?.length || 0) === 0 &&
-            !s.customerCpf &&
-            !!s.isTraining === sessaoTreino,
-        );
-        if (orfaVazia) {
-          const fullOrfa = await api<Sale>(`/pdv/sales/${orfaVazia.id}`);
-          if (fullOrfa.status === 'open') {
-            setSale(fullOrfa);
-            try { localStorage.setItem(`lurds_pdv_sale_${storeCode}`, fullOrfa.id); } catch {}
-            setLoadingSale(false);
-            return;
-          }
-        }
-      } catch { /* reciclagem falhou → segue criando normal */ }
+      // ── RECICLAGEM DE ÓRFÃS — DESABILITADA ──
+      // ANTES: PDV adotava venda VAZIA já aberta na loja, pra evitar lixo
+      // no banco. BUG GRAVE detectado em SOROCABA (jun/26): com 2 PCs na
+      // mesma loja, o PC2 adotava a venda RECÉM-CRIADA pelo PC1 (ainda
+      // vazia) → ambos os PCs ficavam controlando a MESMA venda → peça
+      // bipada num PC aparecia no outro = caos.
+      //
+      // FIX: SEMPRE criar venda nova. Lixo de vendas vazias é resolvido
+      // por job de limpeza no backend (cancel automático de vendas open
+      // sem items há mais de N horas), não no fluxo de abertura.
 
       const s = await api<Sale>('/pdv/sales', {
         method: 'POST',
