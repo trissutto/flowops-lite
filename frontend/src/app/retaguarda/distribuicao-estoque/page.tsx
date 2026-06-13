@@ -1,22 +1,22 @@
-﻿'use client';
+'use client';
 
 /**
  * /retaguarda/distribuicao-estoque
  *
- * Tela de anÃ¡lise de distribuiÃ§Ã£o de estoque PLUS SIZE entre as lojas.
+ * Tela de análise de distribuição de estoque PLUS SIZE entre as lojas.
  *
- * Caso de uso real (Lurd's): peÃ§as paradas em algumas lojas (8 unidades de
- * VLM-222 MARINHO 48 em Santos) enquanto outras estÃ£o zeradas. Essa tela
- * mostra TODAS as variaÃ§Ãµes REF+COR+TAM com qty por loja em formato igual ao
- * Wincred (consulta de produtos) â€” MAS com filtros + indicador de criticidade
- * + botÃ£o "Realinhar" pra resolver direto.
+ * Caso de uso real (Lurd's): peças paradas em algumas lojas (8 unidades de
+ * VLM-222 MARINHO 48 em Santos) enquanto outras estão zeradas. Essa tela
+ * mostra TODAS as variações REF+COR+TAM com qty por loja em formato igual ao
+ * Wincred (consulta de produtos) — MAS com filtros + indicador de criticidade
+ * + botão "Realinhar" pra resolver direto.
  *
- * CritÃ©rio de criticidade (regra do user):
- *   ALTO  â†’ alguma loja com 0 E outra com 3+
- *   MEDIO â†’ alguma com 0 E outra com 2
- *   OK    â†’ distribuÃ­do
+ * Critério de criticidade (regra do user):
+ *   ALTO  → alguma loja com 0 E outra com 3+
+ *   MEDIO → alguma com 0 E outra com 2
+ *   OK    → distribuído
  *
- * Default = sÃ³ desequilibrados + plus size + estoque total >= 3.
+ * Default = só desequilibrados + plus size + estoque total >= 3.
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback } from 'react';
@@ -68,13 +68,13 @@ const brl = (n: number) =>
 export default function DistribuicaoEstoque() {
   const router = useRouter();
 
-  // â”€â”€ Auth check â”€â”€
+  // ── Auth check ──
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     if (!token) router.push('/login');
   }, [router]);
 
-  // â”€â”€ Stores cache (pra mapear cÃ³digo â†’ nome curto) â”€â”€
+  // ── Stores cache (pra mapear código → nome curto) ──
   const [stores, setStores] = useState<Store[]>([]);
   useEffect(() => {
     api<Store[]>('/stores')
@@ -87,7 +87,7 @@ export default function DistribuicaoEstoque() {
     return map;
   }, [stores]);
 
-  // â”€â”€ Filtros â”€â”€
+  // ── Filtros ──
   const [grupos, setGrupos] = useState<GrupoItem[]>([]);
   const [subgrupos, setSubgrupos] = useState<GrupoItem[]>([]);
   const [grupoSelected, setGrupoSelected] = useState<number | null>(null);
@@ -96,29 +96,29 @@ export default function DistribuicaoEstoque() {
   const [searchDebounce, setSearchDebounce] = useState('');
   const [tamanhos, setTamanhos] = useState<string[]>(PLUS_SIZE_DEFAULT);
   const [mode, setMode] = useState<'imbalanced' | 'all'>('imbalanced');
-  // minTotal=2: anÃ¡lise faz sentido sÃ³ com 2+ peÃ§as por SKU (CODIGO)
+  // minTotal=2: análise faz sentido só com 2+ peças por SKU (CODIGO)
   const [minTotal, setMinTotal] = useState(2);
   const [showSettings, setShowSettings] = useState(false);
 
-  // â”€â”€ Drawer de realinhamento inline â”€â”€
+  // ── Drawer de realinhamento inline ──
   const [drawerGroup, setDrawerGroup] = useState<GroupDrawer | null>(null);
 
-  // â”€â”€ Modal "Realinhar TODOS" â”€â”€
+  // ── Modal "Realinhar TODOS" ──
   const [showRealignAllModal, setShowRealignAllModal] = useState(false);
 
-  // â”€â”€ Tab atual: 'raiz' | 'distribuicao' | 'config' â”€â”€
-  // raiz       = Sprint 1, visÃ£o agrupada por REF+COR (default)
-  // distribuicao = visÃ£o antiga (1 linha por variaÃ§Ã£o REF+COR+TAM)
+  // ── Tab atual: 'raiz' | 'distribuicao' | 'config' ──
+  // raiz       = Sprint 1, visão agrupada por REF+COR (default)
+  // distribuicao = visão antiga (1 linha por variação REF+COR+TAM)
   // config     = lojas que participam + scores
   const [activeTab, setActiveTab] = useState<'raiz' | 'distribuicao' | 'config'>('raiz');
 
-  // â”€â”€ Dirty tracking: filtros mudaram desde a Ãºltima busca â”€â”€
+  // ── Dirty tracking: filtros mudaram desde a última busca ──
   // Usado pra avisar visualmente "clica Atualizar pra ver os novos resultados".
   const [lastQueryKey, setLastQueryKey] = useState<string>('');
   const currentQueryKey = `${grupoSelected || ''}|${subgrupoSelected || ''}|${search}|${tamanhos.join(',')}|${mode}|${minTotal}`;
   const filtersDirty = lastQueryKey !== '' && lastQueryKey !== currentQueryKey;
 
-  // â”€â”€ Dados â”€â”€
+  // ── Dados ──
   const [data, setData] = useState<Distribution | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +140,7 @@ export default function DistribuicaoEstoque() {
       .catch(() => setSubgrupos([]));
   }, [grupoSelected]);
 
-  // Debounce do search (800ms â€” query SQL Ã© pesada, evita rodar a cada tecla)
+  // Debounce do search (800ms — query SQL é pesada, evita rodar a cada tecla)
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounce(search), 800);
     return () => clearTimeout(t);
@@ -162,22 +162,22 @@ export default function DistribuicaoEstoque() {
 
       const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
       setData(r);
-      // Marca o snapshot dos filtros usados nessa Ãºltima busca
+      // Marca o snapshot dos filtros usados nessa última busca
       setLastQueryKey(currentQueryKey);
     } catch (e: any) {
-      setError(e?.message || 'Erro ao carregar distribuiÃ§Ã£o');
+      setError(e?.message || 'Erro ao carregar distribuição');
       setData(null);
     } finally {
       setLoading(false);
     }
   }, [grupoSelected, subgrupoSelected, searchDebounce, tamanhos, mode, minTotal, currentQueryKey]);
 
-  // â”€â”€ Carregamento manual: NÃƒO carrega automaticamente em cada mudanÃ§a â”€â”€
-  // Query SQL no Giga Ã© pesada â€” sÃ³ dispara quando user clica "Atualizar"
-  // OU dÃ¡ Enter na busca. Estado inicial vazio atÃ© primeira aÃ§Ã£o.
+  // ── Carregamento manual: NÃO carrega automaticamente em cada mudança ──
+  // Query SQL no Giga é pesada — só dispara quando user clica "Atualizar"
+  // OU dá Enter na busca. Estado inicial vazio até primeira ação.
   // (Removido o useEffect que disparava automaticamente)
 
-  // â”€â”€ KPIs derivados â”€â”€
+  // ── KPIs derivados ──
   const kpis = useMemo(() => {
     if (!data) return { alto: 0, medio: 0, ok: 0, total: 0, pecas: 0 };
     let alto = 0, medio = 0, ok = 0, pecas = 0;
@@ -193,20 +193,17 @@ export default function DistribuicaoEstoque() {
   // Nome compacto da loja (CODE - nome abreviado)
   const lojaLabel = (code: string) => {
     const name = storeNameByCode.get(code) || code;
-    // Pega sÃ³ a primeira palavra do nome (SANTOS 1 â†’ SANTOS)
+    // Pega só a primeira palavra do nome (SANTOS 1 → SANTOS)
     return name.split(' ')[0].substring(0, 6).toUpperCase();
   };
 
-  // Cor da cÃ©lula de quantidade â€” regra do user (jun/26):
-  //   ZERADO  = vermelho suave
-  //   TEM 1   = amarelo suave (atenÃ§Ã£o, Ãºltima peÃ§a)
-  //   > 1     = azul suave (ok, tem peÃ§a)
-  //   < 0     = vermelho forte (erro de cadastro)
+  // Cor da célula de quantidade
   const cellBgClass = (qty: number) => {
     if (qty < 0) return 'bg-rose-200 text-rose-900 font-bold';
-    if (qty === 0) return 'bg-red-50 text-red-700';
-    if (qty === 1) return 'bg-yellow-50 text-yellow-800 font-semibold';
-    return 'bg-blue-50 text-blue-800 font-semibold';
+    if (qty === 0) return 'text-slate-300';
+    if (qty >= 5) return 'bg-emerald-200 text-emerald-900 font-bold';
+    if (qty >= 3) return 'bg-emerald-100 text-emerald-800 font-semibold';
+    return 'text-slate-700';
   };
 
   // Cor da linha conforme criticidade
@@ -216,30 +213,35 @@ export default function DistribuicaoEstoque() {
     return 'hover:bg-slate-50';
   };
 
-  // Abre DRAWER inline de realinhamento â€” nÃ£o redireciona, faz balanÃ§o aqui
+  // Abre DRAWER inline de realinhamento — não redireciona, faz balanço aqui
   const realinharGrupo = (group: GroupDrawer) => {
     setDrawerGroup(group);
   };
 
-  // Abre Drawer INSTANTANEAMENTE â€” tenta usar `data.rows` em memÃ³ria primeiro.
-  // SÃ³ faz fetch novo se a REF nÃ£o tÃ¡ na tela (caso raro: filtros restritivos).
-  // Antes esperava 2-3s do fetch sempre â€” agora abre em <50ms.
+  // Abre Drawer de realinhamento a partir da Visão Raiz (REF+COR).
+  // Busca as variações via stock-distribution, monta GroupDrawer e abre.
   const equilibrarFromRaiz = useCallback(async (refRow: {
     ref: string; cor: string | null; descricao: string; preco: number;
   }) => {
-    const corNorm = (refRow.cor || '').trim().toUpperCase();
-    const refNorm = refRow.ref.trim().toUpperCase();
-
-    const buildGroup = (rows: any[]): GroupDrawer => {
-      const items = rows.filter(
-        (row: any) =>
-          (row.ref || '').toString().trim().toUpperCase() === refNorm &&
-          (row.cor || '').toString().trim().toUpperCase() === corNorm,
+    try {
+      const params = new URLSearchParams();
+      params.set('search', refRow.ref);
+      params.set('mode', 'all');
+      params.set('minTotal', '0');
+      params.set('limit', '500');
+      const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
+      const corNorm = (refRow.cor || '').trim().toUpperCase();
+      const items = r.rows.filter(
+        (row) => (row.cor || '').trim().toUpperCase() === corNorm,
       );
+      if (items.length === 0) {
+        alert('Não encontrei variações dessa REF+COR pra equilibrar.');
+        return;
+      }
       const tamanhos = Array.from(new Set(items.map((i) => (i.tamanho || '').trim()).filter(Boolean)));
       const totalRede = items.reduce((s, i) => s + i.total, 0);
       const criticidadeAlta = items.filter((i) => i.criticidade === 'ALTO').length;
-      return {
+      const group: GroupDrawer = {
         key: `${refRow.ref}|${refRow.cor || ''}`,
         ref: refRow.ref,
         cor: refRow.cor || 'SEM COR',
@@ -250,35 +252,11 @@ export default function DistribuicaoEstoque() {
         totalRede,
         criticidadeAlta,
       };
-    };
-
-    // CACHE HIT: a REF+COR jÃ¡ tÃ¡ nos dados carregados â†’ abre na hora
-    if (data?.rows && data.rows.length > 0) {
-      const group = buildGroup(data.rows);
-      if (group.items.length > 0) {
-        setDrawerGroup(group);
-        return;
-      }
-    }
-
-    // CACHE MISS: fetch ao backend (caso raro â€” filtros muito restritivos)
-    try {
-      const params = new URLSearchParams();
-      params.set('search', refRow.ref);
-      params.set('mode', 'all');
-      params.set('minTotal', '0');
-      params.set('limit', '500');
-      const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
-      const group = buildGroup(r.rows);
-      if (group.items.length === 0) {
-        alert('NÃ£o encontrei variaÃ§Ãµes dessa REF+COR pra equilibrar.');
-        return;
-      }
       setDrawerGroup(group);
     } catch (e: any) {
-      alert(`Erro ao carregar variaÃ§Ãµes: ${e?.message || e}`);
+      alert(`Erro ao carregar variações: ${e?.message || e}`);
     }
-  }, [data]);
+  }, []);
 
   const limparFiltros = () => {
     setGrupoSelected(null);
@@ -293,20 +271,20 @@ export default function DistribuicaoEstoque() {
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="w-full px-4 py-3 flex items-center gap-3">
+        <div className="max-w-[1800px] mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/retaguarda"
             className="p-2 rounded hover:bg-slate-100"
-            title="Voltar pra GestÃ£o"
+            title="Voltar pra Gestão"
           >
             <ArrowLeft className="w-5 h-5 text-slate-600" />
           </Link>
           <div className="flex-1">
             <h1 className="text-lg font-black text-slate-800">
-              DistribuiÃ§Ã£o de Estoque
+              Distribuição de Estoque
             </h1>
             <p className="text-xs text-slate-500">
-              Detecta desequilÃ­brios entre lojas Â· PLUS SIZE
+              Detecta desequilíbrios entre lojas · PLUS SIZE
             </p>
           </div>
           {activeTab === 'distribuicao' && (
@@ -314,7 +292,7 @@ export default function DistribuicaoEstoque() {
               onClick={() => setShowRealignAllModal(true)}
               disabled={loading || !data || data.rows.filter((r) => r.criticidade !== 'OK').length === 0}
               className="flex items-center gap-1.5 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-md text-sm font-bold"
-              title="Realinhar TODAS as variaÃ§Ãµes desequilibradas com 1 clique"
+              title="Realinhar TODAS as variações desequilibradas com 1 clique"
             >
               <Shuffle className="w-4 h-4" />
               Realinhar TODOS
@@ -335,7 +313,7 @@ export default function DistribuicaoEstoque() {
             }`}
             title={
               filtersDirty
-                ? 'Filtros mudaram desde a Ãºltima busca â€” clique pra atualizar resultados'
+                ? 'Filtros mudaram desde a última busca — clique pra atualizar resultados'
                 : 'Recarregar com os filtros atuais'
             }
           >
@@ -352,7 +330,7 @@ export default function DistribuicaoEstoque() {
         </div>
       </header>
 
-      <main className="w-full p-4 space-y-4">
+      <main className="max-w-[1800px] mx-auto p-4 space-y-4">
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 w-fit">
           <button
@@ -362,9 +340,9 @@ export default function DistribuicaoEstoque() {
                 ? 'bg-fuchsia-600 text-white shadow'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
-            title="VisÃ£o por REF+COR â€” 1 linha por referÃªncia. Clica pra ver tamanhos."
+            title="Visão por REF+COR — 1 linha por referência. Clica pra ver tamanhos."
           >
-            ðŸŒ± VisÃ£o Raiz
+            🌱 Visão Raiz
           </button>
           <button
             onClick={() => setActiveTab('distribuicao')}
@@ -373,9 +351,9 @@ export default function DistribuicaoEstoque() {
                 ? 'bg-violet-600 text-white shadow'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
-            title="VisÃ£o antiga por variaÃ§Ã£o â€” 1 linha por cÃ³digo de barras"
+            title="Visão antiga por variação — 1 linha por código de barras"
           >
-            ðŸ“Š Por VariaÃ§Ã£o
+            📊 Por Variação
           </button>
           <button
             onClick={() => setActiveTab('config')}
@@ -385,7 +363,7 @@ export default function DistribuicaoEstoque() {
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            âš™ï¸ Config Realinhamento
+            ⚙️ Config Realinhamento
           </button>
         </div>
 
@@ -402,24 +380,24 @@ export default function DistribuicaoEstoque() {
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="bg-rose-100 border border-rose-300 rounded-lg p-3">
-            <div className="text-xs font-bold text-rose-700 uppercase">ðŸ”´ Alto</div>
+            <div className="text-xs font-bold text-rose-700 uppercase">🔴 Alto</div>
             <div className="text-2xl font-black text-rose-900">{kpis.alto}</div>
             <div className="text-[10px] text-rose-600">com 0 + com 3+</div>
           </div>
           <div className="bg-amber-100 border border-amber-300 rounded-lg p-3">
-            <div className="text-xs font-bold text-amber-700 uppercase">ðŸŸ¡ MÃ©dio</div>
+            <div className="text-xs font-bold text-amber-700 uppercase">🟡 Médio</div>
             <div className="text-2xl font-black text-amber-900">{kpis.medio}</div>
             <div className="text-[10px] text-amber-600">com 0 + com 2</div>
           </div>
           <div className="bg-emerald-100 border border-emerald-300 rounded-lg p-3">
-            <div className="text-xs font-bold text-emerald-700 uppercase">ðŸŸ¢ OK</div>
+            <div className="text-xs font-bold text-emerald-700 uppercase">🟢 OK</div>
             <div className="text-2xl font-black text-emerald-900">{kpis.ok}</div>
-            <div className="text-[10px] text-emerald-600">distribuÃ­do</div>
+            <div className="text-[10px] text-emerald-600">distribuído</div>
           </div>
           <div className="bg-slate-100 border border-slate-300 rounded-lg p-3">
             <div className="text-xs font-bold text-slate-700 uppercase">Total filtrado</div>
             <div className="text-2xl font-black text-slate-900">{kpis.total}</div>
-            <div className="text-[10px] text-slate-600">{kpis.pecas} peÃ§as</div>
+            <div className="text-[10px] text-slate-600">{kpis.pecas} peças</div>
           </div>
         </div>
 
@@ -432,7 +410,7 @@ export default function DistribuicaoEstoque() {
               onChange={(e) => setGrupoSelected(e.target.value ? Number(e.target.value) : null)}
               className="px-3 py-2 border rounded-md text-sm bg-white"
             >
-              <option value="">ðŸ“ Todas categorias</option>
+              <option value="">📁 Todas categorias</option>
               {grupos.map((g) => (
                 <option key={g.codigo} value={g.codigo}>{g.nome}</option>
               ))}
@@ -445,7 +423,7 @@ export default function DistribuicaoEstoque() {
                 onChange={(e) => setSubgrupoSelected(e.target.value ? Number(e.target.value) : null)}
                 className="px-3 py-2 border rounded-md text-sm bg-white"
               >
-                <option value="">â–¾ Todos subgrupos</option>
+                <option value="">▾ Todos subgrupos</option>
                 {subgrupos.map((s) => (
                   <option key={s.codigo} value={s.codigo}>{s.nome}</option>
                 ))}
@@ -465,7 +443,7 @@ export default function DistribuicaoEstoque() {
                     fetchData();
                   }
                 }}
-                placeholder="Buscar REF, descriÃ§Ã£o ou CODIGO... (Enter pra buscar)"
+                placeholder="Buscar REF, descrição ou CODIGO... (Enter pra buscar)"
                 className="w-full pl-8 pr-3 py-2 border rounded-md text-sm"
               />
             </div>
@@ -480,7 +458,7 @@ export default function DistribuicaoEstoque() {
                     : 'bg-white text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                âš–ï¸ Desequilibrados
+                ⚖️ Desequilibrados
               </button>
               <button
                 onClick={() => setMode('all')}
@@ -494,13 +472,13 @@ export default function DistribuicaoEstoque() {
               </button>
             </div>
 
-            {/* Settings avanÃ§ado */}
+            {/* Settings avançado */}
             <button
               onClick={() => setShowSettings((s) => !s)}
               className="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-md text-xs font-bold text-slate-600 flex items-center gap-1.5"
             >
               <Settings2 className="w-3.5 h-3.5" />
-              {showSettings ? 'Ocultar' : 'AvanÃ§ado'}
+              {showSettings ? 'Ocultar' : 'Avançado'}
             </button>
 
             <button
@@ -511,12 +489,12 @@ export default function DistribuicaoEstoque() {
             </button>
           </div>
 
-          {/* Settings avanÃ§ado */}
+          {/* Settings avançado */}
           {showSettings && (
             <div className="pt-2 border-t border-slate-100 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs font-semibold text-slate-700">
-                  ðŸ“ Tamanhos:
+                  📏 Tamanhos:
                 </label>
                 <div className="flex flex-wrap gap-1">
                   {PLUS_SIZE_DEFAULT.map((t) => (
@@ -540,7 +518,7 @@ export default function DistribuicaoEstoque() {
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <label className="text-xs font-semibold text-slate-700">
-                  ðŸ“Š MÃ­n. peÃ§as por variaÃ§Ã£o (cÃ³digo de barras):
+                  📊 Mín. peças por variação (código de barras):
                 </label>
                 <input
                   type="number"
@@ -551,19 +529,19 @@ export default function DistribuicaoEstoque() {
                   className="w-16 px-2 py-1 border rounded text-sm font-mono"
                 />
                 <span className="text-xs text-slate-500">
-                  â†³ cada REF + COR + TAMANHO = 1 cÃ³digo de barras (variaÃ§Ã£o). SÃ³ analisa
-                  se alguma loja tiver pelo menos essa quantidade DESSA variaÃ§Ã£o especÃ­fica.
+                  ↳ cada REF + COR + TAMANHO = 1 código de barras (variação). Só analisa
+                  se alguma loja tiver pelo menos essa quantidade DESSA variação específica.
                 </span>
               </div>
             </div>
           )}
 
-          {/* Banner: filtros mudaram desde a Ãºltima busca */}
+          {/* Banner: filtros mudaram desde a última busca */}
           {filtersDirty && (
             <div className="bg-amber-100 border-2 border-amber-400 rounded-lg p-3 flex items-center gap-3 animate-pulse">
               <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
               <div className="flex-1 text-sm text-amber-900">
-                <strong>Filtros mudaram desde a Ãºltima busca.</strong> Os dados abaixo sÃ£o da
+                <strong>Filtros mudaram desde a última busca.</strong> Os dados abaixo são da
                 consulta anterior. Clique em <strong>"Atualizar"</strong> pra ver os novos resultados.
               </div>
               <button
@@ -591,7 +569,7 @@ export default function DistribuicaoEstoque() {
           {loading ? (
             <div className="p-12 text-center">
               <Loader2 className="w-8 h-8 animate-spin text-violet-600 mx-auto" />
-              <div className="text-sm text-slate-500 mt-2">Carregando distribuiÃ§Ã£o...</div>
+              <div className="text-sm text-slate-500 mt-2">Carregando distribuição...</div>
             </div>
           ) : error ? (
             <div className="p-8 text-center">
@@ -605,14 +583,14 @@ export default function DistribuicaoEstoque() {
               </button>
             </div>
           ) : !data ? (
-            // Estado inicial â€” ainda nÃ£o fez nenhuma busca
+            // Estado inicial — ainda não fez nenhuma busca
             <div className="p-12 text-center">
               <Search className="w-12 h-12 text-violet-400 mx-auto" />
               <div className="text-base font-bold text-slate-700 mt-3">
                 Aplique os filtros desejados e clique em <span className="text-violet-700">Atualizar</span>
               </div>
               <div className="text-xs text-slate-500 mt-1">
-                A consulta Ã© pesada no Giga â€” sÃ³ carrega quando vocÃª manda.
+                A consulta é pesada no Giga — só carrega quando você manda.
                 Pode escolher categoria, tamanhos ou buscar uma REF antes.
               </div>
             </div>
@@ -621,8 +599,8 @@ export default function DistribuicaoEstoque() {
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
               <div className="text-base font-bold text-slate-700 mt-3">
                 {mode === 'imbalanced'
-                  ? 'Nenhuma variaÃ§Ã£o desequilibrada nos filtros atuais!'
-                  : 'Nenhuma variaÃ§Ã£o encontrada nos filtros'}
+                  ? 'Nenhuma variação desequilibrada nos filtros atuais!'
+                  : 'Nenhuma variação encontrada nos filtros'}
               </div>
               <div className="text-xs text-slate-500 mt-1">
                 {mode === 'imbalanced'
@@ -644,10 +622,10 @@ export default function DistribuicaoEstoque() {
           </>
         )}
 
-        {/* Legenda â€” sÃ³ mostra na aba de distribuiÃ§Ã£o */}
+        {/* Legenda — só mostra na aba de distribuição */}
         {activeTab === 'distribuicao' && (
         <div className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-600 space-y-1.5">
-          <div className="font-bold text-slate-700">Legenda das bolinhas (estoque por variaÃ§Ã£o na loja):</div>
+          <div className="font-bold text-slate-700">Legenda das bolinhas (estoque por variação na loja):</div>
           <div className="flex flex-wrap gap-x-5 gap-y-1.5 items-center">
             <span className="inline-flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-full bg-red-500" /> ZERO
@@ -659,7 +637,7 @@ export default function DistribuicaoEstoque() {
               <span className="w-3 h-3 rounded-full bg-yellow-400" /> 2 (baixo)
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-green-500" /> 3-4 saudÃ¡vel
+              <span className="w-3 h-3 rounded-full bg-green-500" /> 3-4 saudável
             </span>
             <span className="inline-flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-full bg-blue-500" /> 5-9 excesso
@@ -672,7 +650,7 @@ export default function DistribuicaoEstoque() {
         )}
       </main>
 
-      {/* â”€â”€â”€ Drawer de realinhamento inline â”€â”€â”€ */}
+      {/* ─── Drawer de realinhamento inline ─── */}
       {drawerGroup && (
         <RealignDrawer
           group={drawerGroup}
@@ -682,7 +660,7 @@ export default function DistribuicaoEstoque() {
         />
       )}
 
-      {/* â”€â”€â”€ Modal "Realinhar TODOS" â€” batch de todas as variaÃ§Ãµes desequilibradas â”€â”€â”€ */}
+      {/* ─── Modal "Realinhar TODOS" — batch de todas as variações desequilibradas ─── */}
       {showRealignAllModal && data && (
         <RealignAllModal
           rows={data.rows}
@@ -699,12 +677,12 @@ export default function DistribuicaoEstoque() {
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   VariationMapView â€” visualizaÃ§Ã£o por REF+COR com matriz LOJA Ã— TAMANHO
+/* ════════════════════════════════════════════════════════════════════════
+   VariationMapView — visualização por REF+COR com matriz LOJA × TAMANHO
    Cada card = 1 modelo de cor. Bolinha colorida codifica criticidade.
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ════════════════════════════════════════════════════════════════════════ */
 
-/* Tipo Row jÃ¡ estÃ¡ declarado no topo do arquivo (linha 32) */
+/* Tipo Row já está declarado no topo do arquivo (linha 32) */
 
 /* Tipo de grupo exportado pra usar no drawer */
 export type GroupDrawer = {
@@ -719,10 +697,10 @@ export type GroupDrawer = {
   criticidadeAlta: number;
 };
 
-/* VariationMapView â€” TABELA PLANILHÃƒO estilo Giga.
-   1 linha = 1 variaÃ§Ã£o (cÃ³digo de barras). Colunas = lojas + total + aÃ§Ãµes.
-   Bolinhas coloridas por cÃ©lula. BotÃ£o "Realinhar" passa o GROUP (REF+COR)
-   inteiro pro drawer (que mostra a matriz tamanho Ã— loja). */
+/* VariationMapView — TABELA PLANILHÃO estilo Giga.
+   1 linha = 1 variação (código de barras). Colunas = lojas + total + ações.
+   Bolinhas coloridas por célula. Botão "Realinhar" passa o GROUP (REF+COR)
+   inteiro pro drawer (que mostra a matriz tamanho × loja). */
 function VariationMapView({
   rows,
   lojas,
@@ -736,13 +714,13 @@ function VariationMapView({
   lojaLabel: (code: string) => string;
   onRealinhar: (group: GroupDrawer) => void;
 }) {
-  // Computa groups por REF+COR (necessÃ¡rio pra abrir o drawer com contexto)
+  // Computa groups por REF+COR (necessário pra abrir o drawer com contexto)
   const { groups, rowToGroup } = useMemo(() => {
     const map = new Map<string, GroupDrawer>();
-    const rowMap = new Map<string, GroupDrawer>(); // codigo â†’ group
+    const rowMap = new Map<string, GroupDrawer>(); // codigo → group
     for (const r of rows) {
       const cor = (r.cor || 'SEM COR').trim().toUpperCase();
-      const ref = r.ref || 'â€”';
+      const ref = r.ref || '—';
       const key = `${ref}|${cor}`;
       let g = map.get(key);
       if (!g) {
@@ -778,22 +756,22 @@ function VariationMapView({
     return { groups: Array.from(map.values()), rowToGroup: rowMap };
   }, [rows]);
 
-  // OrdenaÃ§Ã£o:
-  //   1Âº â€” DESCRIÃ‡ÃƒO alfabÃ©tica (ex: "VESTIDO ESTAMPA MARINHO" antes de "VESTIDO ESTAMPA PRETO")
-  //   2Âº â€” dentro da mesma descriÃ§Ã£o, TAMANHO numÃ©rico crescente (46, 48, 50, ...)
-  // CritÃ©rios numÃ©ricos pra combinaÃ§Ãµes tipo "46/48" (parse sÃ³ do primeiro nÃºmero).
+  // Ordenação:
+  //   1º — DESCRIÇÃO alfabética (ex: "VESTIDO ESTAMPA MARINHO" antes de "VESTIDO ESTAMPA PRETO")
+  //   2º — dentro da mesma descrição, TAMANHO numérico crescente (46, 48, 50, ...)
+  // Critérios numéricos pra combinações tipo "46/48" (parse só do primeiro número).
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
       const da = (a.descricao || '').toUpperCase();
       const db = (b.descricao || '').toUpperCase();
       if (da !== db) return da.localeCompare(db);
-      // mesma descriÃ§Ã£o â†’ ordena por tamanho numericamente
+      // mesma descrição → ordena por tamanho numericamente
       const ta = (a.tamanho || '').trim();
       const tb = (b.tamanho || '').trim();
       const na = parseInt(ta, 10);
       const nb = parseInt(tb, 10);
       if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
-      // fallback alfabÃ©tico se tamanho nÃ£o-numÃ©rico (P, M, G, GG, etc)
+      // fallback alfabético se tamanho não-numérico (P, M, G, GG, etc)
       return ta.localeCompare(tb);
     });
   }, [rows]);
@@ -805,13 +783,13 @@ function VariationMapView({
           <thead className="bg-slate-100 text-slate-700 sticky top-0 z-10 border-b-2 border-slate-300">
             <tr>
               <th className="px-2 py-2 text-left font-bold sticky left-0 bg-slate-100 z-20 min-w-[90px] border-r border-slate-300">
-                CÃ“DIGO
+                CÓDIGO
               </th>
               <th className="px-2 py-2 text-left font-bold sticky left-[90px] bg-slate-100 z-20 min-w-[380px] border-r border-slate-300">
-                DESCRIÃ‡ÃƒO
+                DESCRIÇÃO
               </th>
               <th className="px-2 py-2 text-right font-bold min-w-[70px] border-r border-slate-300">
-                PREÃ‡O
+                PREÇO
               </th>
               {lojas.map((lj) => (
                 <th
@@ -826,7 +804,7 @@ function VariationMapView({
                 TOT
               </th>
               <th className="px-2 py-2 text-center font-bold bg-violet-700 text-white sticky right-0 min-w-[100px]">
-                AÃ‡ÃƒO
+                AÇÃO
               </th>
             </tr>
           </thead>
@@ -850,7 +828,7 @@ function VariationMapView({
                     </div>
                   </td>
                   <td className="px-2 py-1.5 text-right font-mono text-slate-600 border-r border-slate-200">
-                    {row.preco > 0 ? brl(row.preco) : 'â€”'}
+                    {row.preco > 0 ? brl(row.preco) : '—'}
                   </td>
                   {lojas.map((lj) => {
                     const qty = row.estoquePorLoja[lj] ?? 0;
@@ -878,7 +856,7 @@ function VariationMapView({
                         Realinhar
                       </button>
                     ) : (
-                      <span className="text-emerald-600">ðŸŸ¢</span>
+                      <span className="text-emerald-600">🟢</span>
                     )}
                   </td>
                 </tr>
@@ -888,26 +866,26 @@ function VariationMapView({
         </table>
       </div>
       <div className="px-3 py-2 border-t border-slate-200 text-xs text-slate-500 bg-slate-50">
-        {sortedRows.length} variaÃ§Ã£o(Ãµes) Â· {groups.length} REF+COR Ãºnicos
+        {sortedRows.length} variação(ões) · {groups.length} REF+COR únicos
       </div>
     </div>
   );
 }
 
-/* lojaLabel estÃ¡ no componente principal â€” passado via prop pro VariationMapView.
-   VariationCard antigo (matriz LOJA Ã— TAMANHO em card) foi removido â€”
-   substituÃ­do por VariationMapView (tabela planilha 1 linha = 1 variaÃ§Ã£o). */
+/* lojaLabel está no componente principal — passado via prop pro VariationMapView.
+   VariationCard antigo (matriz LOJA × TAMANHO em card) foi removido —
+   substituído por VariationMapView (tabela planilha 1 linha = 1 variação). */
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   RealignDrawer â€” sugestÃ£o automÃ¡tica de balanÃ§o entre lojas
+/* ════════════════════════════════════════════════════════════════════════
+   RealignDrawer — sugestão automática de balanço entre lojas
    Algoritmo por TAMANHO:
      1. Soma o estoque total daquele tamanho na rede
-     2. Lojas elegÃ­veis = ativas, exceto SITE/PF, ordenadas por priorityScore desc
-     3. DistribuiÃ§Ã£o target:
+     2. Lojas elegíveis = ativas, exceto SITE/PF, ordenadas por priorityScore desc
+     3. Distribuição target:
         - Se total >= N lojas: cada uma ganha 1 base, excedente vai pras top
-        - Se total <  N lojas: sÃ³ as top recebem 1 cada
-     4. Calcula movimentos: surplus em A â†’ deficit em B
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+        - Se total <  N lojas: só as top recebem 1 cada
+     4. Calcula movimentos: surplus em A → deficit em B
+   ════════════════════════════════════════════════════════════════════════ */
 
 type Move = { from: string; to: string; tamanho: string; qty: number };
 
@@ -922,9 +900,9 @@ function RealignDrawer({
   storeNameByCode: Map<string, string>;
   onClose: () => void;
 }) {
-  // â”€â”€ Config de participaÃ§Ã£o (canSendRealign + canReceiveRealign) â”€â”€
-  // LÃª do Store. Default: ambos true (compatibilidade com sistema antigo).
-  // Filtra tambÃ©m SITE e PF que nÃ£o sÃ£o lojas fÃ­sicas.
+  // ── Config de participação (canSendRealign + canReceiveRealign) ──
+  // Lê do Store. Default: ambos true (compatibilidade com sistema antigo).
+  // Filtra também SITE e PF que não são lojas físicas.
   const ignoredCodes = new Set(['SITE', 'PF']);
   const sendableStores = useMemo(
     () =>
@@ -954,7 +932,7 @@ function RealignDrawer({
         ),
     [stores],
   );
-  // Todas as lojas que aparecem na matriz (cede OU recebe â€” pra ver atual + alvo)
+  // Todas as lojas que aparecem na matriz (cede OU recebe — pra ver atual + alvo)
   const eligibleStores = useMemo(() => {
     const set = new Map<string, Store>();
     for (const s of sendableStores) set.set(s.code, s);
@@ -964,7 +942,7 @@ function RealignDrawer({
     );
   }, [sendableStores, receivableStores]);
 
-  // Matriz atual por tamanho Ã— loja
+  // Matriz atual por tamanho × loja
   const currentMatrix = useMemo(() => {
     const m: Record<string, Record<string, number>> = {};
     for (const tam of group.tamanhos) m[tam] = {};
@@ -978,7 +956,7 @@ function RealignDrawer({
     return m;
   }, [group]);
 
-  // Calcula target por tamanho usando algoritmo de balanÃ§o
+  // Calcula target por tamanho usando algoritmo de balanço
   const { targetMatrix, moves } = useMemo(() => {
     const target: Record<string, Record<string, number>> = {};
     const allMoves: Move[] = [];
@@ -987,18 +965,18 @@ function RealignDrawer({
       target[tam] = {};
       const currentByStore = currentMatrix[tam] || {};
 
-      // Total disponÃ­vel (soma de TODAS as lojas, mesmo as nÃ£o-sendable â€”
-      // peÃ§as existem mas sÃ³ lojas sendable podem ceder)
+      // Total disponível (soma de TODAS as lojas, mesmo as não-sendable —
+      // peças existem mas só lojas sendable podem ceder)
       const totalAvailable = Object.values(currentByStore).reduce((s, v) => s + (v || 0), 0);
 
       // Inicializa target = 0 pra todas que aparecem na matriz
       for (const s of eligibleStores) target[tam][s.code] = 0;
 
-      // Distribui SÃ“ pra lojas que podem RECEBER (receivableStores)
+      // Distribui SÓ pra lojas que podem RECEBER (receivableStores)
       if (totalAvailable === 0 || receivableStores.length === 0) {
         // nada a fazer
       } else if (totalAvailable >= receivableStores.length) {
-        // 1 base pra cada loja que recebe, sobra distribuÃ­da por prioridade
+        // 1 base pra cada loja que recebe, sobra distribuída por prioridade
         let remaining = totalAvailable;
         for (const s of receivableStores) {
           target[tam][s.code] = 1;
@@ -1011,9 +989,9 @@ function RealignDrawer({
           i++;
         }
       } else {
-        // NÃ£o dÃ¡ pra todas: PROTEGE quem jÃ¡ tem estoque (nÃ£o zerar ninguÃ©m!)
-        // 1Âº: target=1 pras lojas que JÃ tÃªm â‰¥ 1 (evita movimento desnecessÃ¡rio)
-        // 2Âº: target=1 pras restantes por priorityScore atÃ© acabar
+        // Não dá pra todas: PROTEGE quem já tem estoque (não zerar ninguém!)
+        // 1º: target=1 pras lojas que JÁ têm ≥ 1 (evita movimento desnecessário)
+        // 2º: target=1 pras restantes por priorityScore até acabar
         let remaining = totalAvailable;
         const withStock = receivableStores.filter(
           (s) => (currentByStore[s.code] || 0) >= 1,
@@ -1033,7 +1011,7 @@ function RealignDrawer({
         }
       }
 
-      // Calcula movimentos: surplus de SENDABLE â†’ deficit de RECEIVABLE
+      // Calcula movimentos: surplus de SENDABLE → deficit de RECEIVABLE
       const sources: Array<{ code: string; surplus: number }> = [];
       const sinks: Array<{ code: string; deficit: number }> = [];
       const sendableCodes = new Set(sendableStores.map((s) => s.code));
@@ -1084,7 +1062,7 @@ function RealignDrawer({
     return m;
   }, [eligibleStores, group.tamanhos, currentMatrix, targetMatrix]);
 
-  // Total por tamanho (linha rodapÃ©)
+  // Total por tamanho (linha rodapé)
   const totalPorTamanho = useMemo(() => {
     const m: Record<string, { cur: number; tgt: number }> = {};
     for (const tam of group.tamanhos) {
@@ -1099,7 +1077,7 @@ function RealignDrawer({
     return m;
   }, [eligibleStores, group.tamanhos, currentMatrix, targetMatrix]);
 
-  // Ordena lojas: CEDE primeiro (vermelho), RECEBE depois (verde), OK por Ãºltimo
+  // Ordena lojas: CEDE primeiro (vermelho), RECEBE depois (verde), OK por último
   const lojasOrdenadas = useMemo(() => {
     return [...eligibleStores].sort((a, b) => {
       const da = lojaStats.get(a.code)?.diff ?? 0;
@@ -1130,8 +1108,8 @@ function RealignDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed inset-0 bg-slate-50 shadow-2xl z-40 overflow-y-auto">
-        {/* Header â€” fixo no topo */}
+      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[1200px] bg-slate-50 shadow-2xl z-40 overflow-y-auto">
+        {/* Header — fixo no topo */}
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-20">
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-3">
@@ -1142,7 +1120,7 @@ function RealignDrawer({
                 </div>
                 <div className="font-mono text-xs text-slate-500 mt-0.5">
                   REF <span className="font-bold text-slate-800">{group.ref}</span>
-                  {group.cor && <span className="ml-1">Â· {group.cor}</span>}
+                  {group.cor && <span className="ml-1">· {group.cor}</span>}
                   <span className="ml-3 text-violet-700 font-bold">{brl(group.preco)}</span>
                 </div>
               </div>
@@ -1157,27 +1135,27 @@ function RealignDrawer({
               {moves.length} movimento{moves.length === 1 ? '' : 's'}
             </span>
             <span className="px-2 py-1 bg-rose-100 text-rose-800 rounded font-bold">
-              {totalMoves} peÃ§a{totalMoves === 1 ? '' : 's'} a mover
+              {totalMoves} peça{totalMoves === 1 ? '' : 's'} a mover
             </span>
             <span className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded font-bold">
               {lojasEnvolvidas} loja{lojasEnvolvidas === 1 ? '' : 's'} envolvida{lojasEnvolvidas === 1 ? '' : 's'}
             </span>
             <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded font-bold">
-              Total rede: {totalRedeCur} peÃ§as
+              Total rede: {totalRedeCur} peças
             </span>
             <span className="text-[11px] text-slate-500 ml-auto">
-              ðŸŸ¥ Cede &nbsp;Â·&nbsp; ðŸŸ© Recebe &nbsp;Â·&nbsp; âšª OK
+              🟥 Cede &nbsp;·&nbsp; 🟩 Recebe &nbsp;·&nbsp; ⚪ OK
             </span>
           </div>
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Matriz Atual Ã— Sugerida â€” formato compacto */}
+          {/* Matriz Atual × Sugerida — formato compacto */}
           <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="bg-slate-100 px-3 py-2 border-b border-slate-200">
-              <span className="font-bold text-slate-700 text-sm">ðŸ“Š Plano por loja Ã— tamanho</span>
+              <span className="font-bold text-slate-700 text-sm">📊 Plano por loja × tamanho</span>
               <span className="text-[11px] text-slate-500 ml-2">
-                (clique nas cÃ©lulas pra entender â€” â¬‡ envia Â· â¬† recebe)
+                (clique nas células pra entender — ⬇ envia · ⬆ recebe)
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -1254,21 +1232,21 @@ function RealignDrawer({
                           let arrowEl = null;
                           if (diff > 0) {
                             cellBg = 'bg-emerald-100/80';
-                            arrowEl = <span className="text-emerald-700 font-bold">â†‘{diff}</span>;
+                            arrowEl = <span className="text-emerald-700 font-bold">↑{diff}</span>;
                           } else if (diff < 0) {
                             cellBg = 'bg-rose-100/80';
-                            arrowEl = <span className="text-rose-700 font-bold">â†“{Math.abs(diff)}</span>;
+                            arrowEl = <span className="text-rose-700 font-bold">↓{Math.abs(diff)}</span>;
                           }
                           return (
                             <td key={tam} className={`px-2 py-2 text-center border-l border-slate-100 ${cellBg}`}>
                               {diff === 0 ? (
                                 <span className="font-mono text-slate-400">
-                                  {cur === 0 ? 'â€”' : <span className="text-slate-700 font-bold">{cur}</span>}
+                                  {cur === 0 ? '—' : <span className="text-slate-700 font-bold">{cur}</span>}
                                 </span>
                               ) : (
                                 <div className="flex items-center justify-center gap-1">
                                   <span className={`font-mono font-bold ${diff < 0 ? 'text-rose-800' : 'text-slate-700'}`}>{cur}</span>
-                                  <span className="text-slate-400 text-[10px]">â†’</span>
+                                  <span className="text-slate-400 text-[10px]">→</span>
                                   <span className={`font-mono font-bold ${diff > 0 ? 'text-emerald-800' : 'text-slate-700'}`}>{tgt}</span>
                                 </div>
                               )}
@@ -1284,7 +1262,7 @@ function RealignDrawer({
                           ) : (
                             <div className="flex items-center justify-center gap-1">
                               <span className="font-mono">{stats.cur}</span>
-                              <span className="text-slate-400 text-[10px]">â†’</span>
+                              <span className="text-slate-400 text-[10px]">→</span>
                               <span className="font-mono">{stats.tgt}</span>
                             </div>
                           )}
@@ -1316,11 +1294,11 @@ function RealignDrawer({
             </div>
           </div>
 
-          {/* Lista de movimentos sugeridos â€” cards visuais */}
+          {/* Lista de movimentos sugeridos — cards visuais */}
           <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex items-center justify-between">
               <span className="font-bold text-slate-700 text-sm">
-                ðŸ“¦ TransferÃªncias sugeridas
+                📦 Transferências sugeridas
               </span>
               <span className="text-xs font-mono font-bold text-slate-600 bg-white px-2 py-0.5 rounded">
                 {moves.length} movimento{moves.length === 1 ? '' : 's'}
@@ -1329,7 +1307,7 @@ function RealignDrawer({
             {moves.length === 0 ? (
               <div className="bg-emerald-50 p-4 text-sm text-emerald-800 flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5" />
-                DistribuiÃ§Ã£o jÃ¡ estÃ¡ balanceada â€” nenhuma transferÃªncia necessÃ¡ria.
+                Distribuição já está balanceada — nenhuma transferência necessária.
               </div>
             ) : (
               <div className="divide-y divide-slate-100 max-h-[360px] overflow-y-auto">
@@ -1338,7 +1316,7 @@ function RealignDrawer({
                     {/* FROM (rosa) */}
                     <div className="flex-1 flex items-center gap-2 min-w-0">
                       <span className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-rose-100 text-rose-700 font-mono font-bold text-sm flex-shrink-0">
-                        âˆ’{m.qty}
+                        −{m.qty}
                       </span>
                       <div className="min-w-0">
                         <div className="text-[10px] font-mono text-slate-400 leading-none">{m.from}</div>
@@ -1352,7 +1330,7 @@ function RealignDrawer({
                       <span className="font-mono text-[10px] bg-violet-100 text-violet-800 px-2 py-0.5 rounded font-bold">
                         Tam {m.tamanho}
                       </span>
-                      <span className="text-slate-400 text-lg leading-none">â†’</span>
+                      <span className="text-slate-400 text-lg leading-none">→</span>
                     </div>
                     {/* TO (verde) */}
                     <div className="flex-1 flex items-center gap-2 min-w-0 justify-end">
@@ -1372,7 +1350,7 @@ function RealignDrawer({
             )}
           </div>
 
-          {/* AÃ§Ãµes */}
+          {/* Ações */}
           {moves.length > 0 && (
             <ApplyRealignment
               group={group}
@@ -1386,11 +1364,11 @@ function RealignDrawer({
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   RealignAllModal â€” processa TODAS as variaÃ§Ãµes desequilibradas de uma vez.
-   Roda o mesmo algoritmo de balanÃ§o pra cada (REF + COR + TAMANHO),
-   consolida os moves e cria todas as transferÃªncias em UMA chamada.
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+/* ════════════════════════════════════════════════════════════════════════
+   RealignAllModal — processa TODAS as variações desequilibradas de uma vez.
+   Roda o mesmo algoritmo de balanço pra cada (REF + COR + TAMANHO),
+   consolida os moves e cria todas as transferências em UMA chamada.
+   ════════════════════════════════════════════════════════════════════════ */
 
 interface AllMove {
   ref: string;
@@ -1419,7 +1397,7 @@ function RealignAllModal({
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  // Lojas elegÃ­veis (respeita canSendRealign/canReceiveRealign)
+  // Lojas elegíveis (respeita canSendRealign/canReceiveRealign)
   const ignoredCodes = new Set(['SITE', 'PF']);
   const sendableStores = useMemo(
     () =>
@@ -1448,7 +1426,7 @@ function RealignAllModal({
     [stores],
   );
 
-  // Algoritmo: pra cada variaÃ§Ã£o, calcula moves (mesmo algoritmo do drawer)
+  // Algoritmo: pra cada variação, calcula moves (mesmo algoritmo do drawer)
   const allMoves: AllMove[] = useMemo(() => {
     const result: AllMove[] = [];
     const sendableCodes = new Set(sendableStores.map((s) => s.code));
@@ -1477,7 +1455,7 @@ function RealignAllModal({
           i++;
         }
       } else {
-        // NÃ£o dÃ¡ pra todas: PROTEGE quem jÃ¡ tem estoque (nÃ£o zerar ninguÃ©m!)
+        // Não dá pra todas: PROTEGE quem já tem estoque (não zerar ninguém!)
         let remaining = totalAvailable;
         const withStock = receivableStores.filter(
           (s) => (currentByStore[s.code] || 0) >= 1,
@@ -1570,7 +1548,7 @@ function RealignAllModal({
     if (allMoves.length === 0) return;
     if (
       !confirm(
-        `Vai criar ${stats.totalMoves} ordens de transferÃªncia (${stats.totalQty} peÃ§as) ` +
+        `Vai criar ${stats.totalMoves} ordens de transferência (${stats.totalQty} peças) ` +
           `entre ${stats.lojasOrigem} lojas origem e ${stats.lojasDestino} lojas destino.\n\n` +
           `Cada loja origem vai receber cards de realinhamento na tela /minha-loja/realinhamento.\n\n` +
           `Confirma?`,
@@ -1597,20 +1575,20 @@ function RealignAllModal({
           method: 'POST',
           body: JSON.stringify({
             plan,
-            note: `Realinhamento em LOTE Â· ${stats.totalMoves} movimentos Â· gerado pela tela de DistribuiÃ§Ã£o`,
+            note: `Realinhamento em LOTE · ${stats.totalMoves} movimentos · gerado pela tela de Distribuição`,
           }),
         },
       );
 
       setResult({
         ok: true,
-        msg: `âœ“ ${res.created || allMoves.length} ordens criadas com sucesso. Lojas origem jÃ¡ recebendo notificaÃ§Ã£o.`,
+        msg: `✓ ${res.created || allMoves.length} ordens criadas com sucesso. Lojas origem já recebendo notificação.`,
       });
       setTimeout(() => onSuccess(), 2500);
     } catch (e: any) {
       setResult({
         ok: false,
-        msg: e?.message || 'Falha ao criar transferÃªncias',
+        msg: e?.message || 'Falha ao criar transferências',
       });
     } finally {
       setApplying(false);
@@ -1629,7 +1607,7 @@ function RealignAllModal({
             <div>
               <h2 className="font-bold text-slate-900 text-lg">Realinhar TODOS</h2>
               <p className="text-xs text-slate-500">
-                BalanÃ§o automÃ¡tico de todas as variaÃ§Ãµes desequilibradas
+                Balanço automático de todas as variações desequilibradas
               </p>
             </div>
           </div>
@@ -1645,7 +1623,7 @@ function RealignAllModal({
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-2" />
               <div className="font-bold text-emerald-900">Nada pra realinhar!</div>
               <div className="text-xs text-emerald-700 mt-1">
-                Todas as variaÃ§Ãµes filtradas estÃ£o equilibradas OU nÃ£o tem peÃ§as disponÃ­veis pra distribuir.
+                Todas as variações filtradas estão equilibradas OU não tem peças disponíveis pra distribuir.
               </div>
             </div>
           ) : (
@@ -1658,7 +1636,7 @@ function RealignAllModal({
                 </div>
                 <div className="bg-violet-50 border border-violet-200 rounded p-3 text-center">
                   <div className="text-2xl font-black text-violet-700">{stats.totalQty}</div>
-                  <div className="text-[10px] uppercase font-bold text-violet-800 tracking-wider">PeÃ§as</div>
+                  <div className="text-[10px] uppercase font-bold text-violet-800 tracking-wider">Peças</div>
                 </div>
                 <div className="bg-blue-50 border border-blue-200 rounded p-3 text-center">
                   <div className="text-2xl font-black text-blue-700">{stats.uniqueRefs}</div>
@@ -1666,7 +1644,7 @@ function RealignAllModal({
                 </div>
                 <div className="bg-emerald-50 border border-emerald-200 rounded p-3 text-center">
                   <div className="text-2xl font-black text-emerald-700">
-                    {stats.lojasOrigem}â†’{stats.lojasDestino}
+                    {stats.lojasOrigem}→{stats.lojasDestino}
                   </div>
                   <div className="text-[10px] uppercase font-bold text-emerald-800 tracking-wider">Lojas</div>
                 </div>
@@ -1685,7 +1663,7 @@ function RealignAllModal({
                           <span className="font-mono text-xs text-slate-400 mr-1">{code}</span>
                           {(storeNameByCode.get(code) || code).replace(/^Lurd's\s*/i, '')}
                         </span>
-                        <span className="font-mono font-bold text-rose-600">âˆ’{qty}</span>
+                        <span className="font-mono font-bold text-rose-600">−{qty}</span>
                       </div>
                     ))}
                   </div>
@@ -1711,24 +1689,24 @@ function RealignAllModal({
               {/* Preview de alguns moves */}
               <div className="border border-slate-200 rounded-lg overflow-hidden">
                 <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 text-[11px] uppercase font-bold text-slate-600 tracking-wider">
-                  PrÃ©-visualizaÃ§Ã£o (primeiros 20 movimentos)
+                  Pré-visualização (primeiros 20 movimentos)
                 </div>
                 <div className="max-h-60 overflow-y-auto divide-y divide-slate-100">
                   {allMoves.slice(0, 20).map((m, i) => (
                     <div key={i} className="px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-slate-50">
-                      <span className="font-mono text-rose-600 w-10 text-right">âˆ’{m.qty}</span>
+                      <span className="font-mono text-rose-600 w-10 text-right">−{m.qty}</span>
                       <span className="font-mono text-[10px] text-slate-400 w-8">{m.from}</span>
-                      <span className="text-slate-400">â†’</span>
+                      <span className="text-slate-400">→</span>
                       <span className="font-mono text-[10px] text-slate-400 w-8">{m.to}</span>
                       <span className="font-bold text-emerald-600 w-10">+{m.qty}</span>
                       <span className="flex-1 truncate text-slate-600">
-                        REF <strong>{m.ref}</strong> Â· {m.cor} Â· Tam {m.tamanho}
+                        REF <strong>{m.ref}</strong> · {m.cor} · Tam {m.tamanho}
                       </span>
                     </div>
                   ))}
                   {allMoves.length > 20 && (
                     <div className="px-3 py-2 text-center text-xs text-slate-500 bg-slate-50">
-                      â€¦e mais {allMoves.length - 20} movimentos
+                      …e mais {allMoves.length - 20} movimentos
                     </div>
                   )}
                 </div>
@@ -1767,7 +1745,7 @@ function RealignAllModal({
               {applying ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Criando {allMoves.length} ordensâ€¦
+                  Criando {allMoves.length} ordens…
                 </>
               ) : (
                 <>
@@ -1798,7 +1776,7 @@ function ApplyRealignment({
 
   const apply = async () => {
     if (!confirm(
-      `Vai criar ${moves.length} ordens de transferÃªncia (tipo REALINHAMENTO).\n\n` +
+      `Vai criar ${moves.length} ordens de transferência (tipo REALINHAMENTO).\n\n` +
         `Cada loja origem vai receber um card na tela /minha-loja/realinhamento ` +
         `com foto do produto e os tamanhos a separar.\n\nConfirma?`,
     )) {
@@ -1829,21 +1807,21 @@ function ApplyRealignment({
           method: 'POST',
           body: JSON.stringify({
             plan,
-            note: `Realinhamento automÃ¡tico Â· ${group.ref} ${group.cor} Â· gerado pela tela de DistribuiÃ§Ã£o`,
+            note: `Realinhamento automático · ${group.ref} ${group.cor} · gerado pela tela de Distribuição`,
           }),
         },
       );
 
       setResult({
         ok: true,
-        msg: `âœ“ ${res.created || moves.length} ordens criadas. Lojas origem jÃ¡ estÃ£o sendo notificadas.`,
+        msg: `✓ ${res.created || moves.length} ordens criadas. Lojas origem já estão sendo notificadas.`,
       });
-      // Fecha drawer apÃ³s 2s
+      // Fecha drawer após 2s
       setTimeout(() => onClose(), 2500);
     } catch (e: any) {
       setResult({
         ok: false,
-        msg: e?.message || 'Falha ao criar transferÃªncias',
+        msg: e?.message || 'Falha ao criar transferências',
       });
     } finally {
       setApplying(false);
@@ -1884,7 +1862,7 @@ function ApplyRealignment({
           ) : (
             <>
               <Shuffle className="w-4 h-4" />
-              Aplicar e criar {moves.length} transferÃªncia{moves.length > 1 ? 's' : ''}
+              Aplicar e criar {moves.length} transferência{moves.length > 1 ? 's' : ''}
             </>
           )}
         </button>
@@ -1893,11 +1871,11 @@ function ApplyRealignment({
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   RealignConfigPanel â€” aba de config de quem participa do realinhamento
-   Cada loja tem 2 toggles: pode CEDER Â· pode RECEBER
+/* ════════════════════════════════════════════════════════════════════════
+   RealignConfigPanel — aba de config de quem participa do realinhamento
+   Cada loja tem 2 toggles: pode CEDER · pode RECEBER
    Salva em batch via POST /stores/realign-config/update
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+   ════════════════════════════════════════════════════════════════════════ */
 
 type RealignConfigItem = {
   code: string;
@@ -1907,7 +1885,7 @@ type RealignConfigItem = {
   priorityScore: number;
   canSendRealign: boolean;
   canReceiveRealign: boolean;
-  // Sprint 0 â€” ConsolidaÃ§Ã£o de grade
+  // Sprint 0 — Consolidação de grade
   consolidationScore?: number;
   isOutlet?: boolean;
 };
@@ -1982,7 +1960,7 @@ function RealignConfigPanel() {
           })),
         }),
       });
-      setSaveResult({ ok: true, msg: `âœ“ ${items.length} lojas atualizadas` });
+      setSaveResult({ ok: true, msg: `✓ ${items.length} lojas atualizadas` });
       setDirty(false);
     } catch (e: any) {
       setSaveResult({ ok: false, msg: e?.message || 'Erro ao salvar' });
@@ -2003,7 +1981,7 @@ function RealignConfigPanel() {
     return (
       <div className="p-12 text-center bg-white border border-slate-200 rounded-lg">
         <Loader2 className="w-8 h-8 animate-spin text-violet-600 mx-auto" />
-        <div className="text-sm text-slate-500 mt-2">Carregando lojasâ€¦</div>
+        <div className="text-sm text-slate-500 mt-2">Carregando lojas…</div>
       </div>
     );
   }
@@ -2012,12 +1990,12 @@ function RealignConfigPanel() {
     <div className="space-y-3">
       {/* Info card */}
       <div className="bg-violet-50 border border-violet-200 rounded-lg p-3 text-sm text-violet-900">
-        <div className="font-bold mb-1">âš™ï¸ Quem participa do realinhamento automÃ¡tico</div>
+        <div className="font-bold mb-1">⚙️ Quem participa do realinhamento automático</div>
         <p className="text-xs text-violet-700">
-          Configure aqui quais lojas o sistema considera na sugestÃ£o de balanÃ§o de estoque
-          (botÃ£o "Sugerir realinhamento" nos cards da aba DistribuiÃ§Ã£o). Lojas marcadas
-          como "nÃ£o cede" nÃ£o vÃ£o aparecer como ORIGEM de transferÃªncias. Lojas marcadas
-          como "nÃ£o recebe" nÃ£o vÃ£o aparecer como DESTINO.
+          Configure aqui quais lojas o sistema considera na sugestão de balanço de estoque
+          (botão "Sugerir realinhamento" nos cards da aba Distribuição). Lojas marcadas
+          como "não cede" não vão aparecer como ORIGEM de transferências. Lojas marcadas
+          como "não recebe" não vão aparecer como DESTINO.
         </p>
       </div>
 
@@ -2028,15 +2006,15 @@ function RealignConfigPanel() {
           <div className="text-2xl font-bold text-emerald-700">{stats.both}</div>
         </div>
         <div className="bg-blue-50 border border-blue-200 rounded p-2">
-          <div className="text-xs font-bold text-blue-700 uppercase">SÃ³ cede</div>
+          <div className="text-xs font-bold text-blue-700 uppercase">Só cede</div>
           <div className="text-2xl font-bold text-blue-700">{stats.sendOnly}</div>
         </div>
         <div className="bg-amber-50 border border-amber-200 rounded p-2">
-          <div className="text-xs font-bold text-amber-700 uppercase">SÃ³ recebe</div>
+          <div className="text-xs font-bold text-amber-700 uppercase">Só recebe</div>
           <div className="text-2xl font-bold text-amber-700">{stats.receiveOnly}</div>
         </div>
         <div className="bg-slate-100 border border-slate-300 rounded p-2">
-          <div className="text-xs font-bold text-slate-600 uppercase">NÃ£o participa</div>
+          <div className="text-xs font-bold text-slate-600 uppercase">Não participa</div>
           <div className="text-2xl font-bold text-slate-600">{stats.none}</div>
         </div>
       </div>
@@ -2046,14 +2024,14 @@ function RealignConfigPanel() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">CÃ³digo</th>
+              <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Código</th>
               <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Cidade / Nome</th>
               <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Tipo</th>
               <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Prioridade</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-emerald-700 tracking-wider">Pode CEDER</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-blue-700 tracking-wider">Pode RECEBER</th>
-              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-fuchsia-700 tracking-wider" title="Score (0-200) usado pra escolher loja destino na CONSOLIDAÃ‡ÃƒO de grade. Maior = mais Ã­mÃ£.">Score Consol.</th>
-              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-orange-700 tracking-wider" title="Loja OUTLET: recebe peÃ§as velhas (>X dias) prioritariamente.">Outlet</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-fuchsia-700 tracking-wider" title="Score (0-200) usado pra escolher loja destino na CONSOLIDAÇÃO de grade. Maior = mais ímã.">Score Consol.</th>
+              <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-orange-700 tracking-wider" title="Loja OUTLET: recebe peças velhas (>X dias) prioritariamente.">Outlet</th>
               <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Status</th>
             </tr>
           </thead>
@@ -2063,10 +2041,10 @@ function RealignConfigPanel() {
                 it.canSendRealign && it.canReceiveRealign
                   ? { label: 'Cede + Recebe', cls: 'bg-emerald-100 text-emerald-800' }
                   : it.canSendRealign
-                  ? { label: 'SÃ³ cede', cls: 'bg-blue-100 text-blue-800' }
+                  ? { label: 'Só cede', cls: 'bg-blue-100 text-blue-800' }
                   : it.canReceiveRealign
-                  ? { label: 'SÃ³ recebe', cls: 'bg-amber-100 text-amber-800' }
-                  : { label: 'NÃ£o participa', cls: 'bg-slate-100 text-slate-600' };
+                  ? { label: 'Só recebe', cls: 'bg-amber-100 text-amber-800' }
+                  : { label: 'Não participa', cls: 'bg-slate-100 text-slate-600' };
               return (
                 <tr key={it.code} className="border-b border-slate-100 hover:bg-slate-50">
                   <td className="px-3 py-2 font-mono font-bold text-slate-700">{it.code}</td>
@@ -2099,7 +2077,7 @@ function RealignConfigPanel() {
                       value={it.consolidationScore ?? 50}
                       onChange={(e) => setConsolidationScore(it.code, Number(e.target.value))}
                       className="w-16 px-2 py-1 text-center text-sm font-mono font-bold text-fuchsia-700 border border-fuchsia-200 rounded focus:border-fuchsia-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-400"
-                      title="0 a 200. Maior = loja mais 'Ã­mÃ£' pra concentrar grades."
+                      title="0 a 200. Maior = loja mais 'ímã' pra concentrar grades."
                     />
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -2110,7 +2088,7 @@ function RealignConfigPanel() {
                       {status.label}
                     </span>
                     {it.isOutlet && (
-                      <div className="text-[9px] font-bold text-orange-700 mt-0.5">ðŸ·ï¸ OUTLET</div>
+                      <div className="text-[9px] font-bold text-orange-700 mt-0.5">🏷️ OUTLET</div>
                     )}
                   </td>
                 </tr>
@@ -2146,10 +2124,10 @@ function RealignConfigPanel() {
           {saving ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              Salvandoâ€¦
+              Salvando…
             </>
           ) : (
-            <>ðŸ’¾ Salvar config ({items.length} lojas)</>
+            <>💾 Salvar config ({items.length} lojas)</>
           )}
         </button>
       </div>
@@ -2186,7 +2164,7 @@ function ToggleSwitch({
   );
 }
 
-/* Bolinha colorida â€” escala visual do estoque */
+/* Bolinha colorida — escala visual do estoque */
 function Bolinha({ qty }: { qty: number }) {
   let bg = 'bg-red-500'; // 0
   if (qty === 1) bg = 'bg-orange-500';
@@ -2208,18 +2186,18 @@ function Bolinha({ qty }: { qty: number }) {
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   RefRootView â€” Sprint 1 + 2 + 3
-   VisÃ£o RAIZ: 1 linha por REF+COR. Filtros: data cadastro, categoria,
+/* ════════════════════════════════════════════════════════════════════════
+   RefRootView — Sprint 1 + 2 + 3
+   Visão RAIZ: 1 linha por REF+COR. Filtros: data cadastro, categoria,
    subgrupo, busca por token. Cada linha mostra:
-     - DESCRICAOCOMPLETA + REF Â· COR
-     - Grupo / Subgrupo / DATAALT (idade da peÃ§a em dias)
+     - DESCRICAOCOMPLETA + REF · COR
+     - Grupo / Subgrupo / DATAALT (idade da peça em dias)
      - tamanhos com estoque
      - Lojas com estoque (X/14)
-     - Total de peÃ§as
-     - MODO recomendado (Equilibrar / Consolidar / Outlet) â€” Sprint 2
-     - AÃ§Ã£o: ver detalhes (drill-down) ou consolidar (Sprint 3)
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+     - Total de peças
+     - MODO recomendado (Equilibrar / Consolidar / Outlet) — Sprint 2
+     - Ação: ver detalhes (drill-down) ou consolidar (Sprint 3)
+   ════════════════════════════════════════════════════════════════════════ */
 
 type RefRow = {
   ref: string;
@@ -2248,13 +2226,13 @@ type RefDistribution = {
 type ModoRecomendado = 'EQUILIBRAR' | 'CONSOLIDAR' | 'OUTLET' | 'OK';
 
 /**
- * Sprint 2 â€” Detector de modo automÃ¡tico.
- * Regras simples (configurÃ¡veis no futuro):
+ * Sprint 2 — Detector de modo automático.
+ * Regras simples (configuráveis no futuro):
  *   - OUTLET:     DATAALT > 180 dias + total < 15
  *   - CONSOLIDAR: total < 12 + fragmentado em 5+ lojas
- *                 OU lojas com estoque = lojas-total mas todas com 1 peÃ§a
- *   - OK:         distribuiÃ§Ã£o equilibrada (ninguÃ©m com 0 + max-min <= 1)
- *   - EQUILIBRAR: default (tem desequilÃ­brio)
+ *                 OU lojas com estoque = lojas-total mas todas com 1 peça
+ *   - OK:         distribuição equilibrada (ninguém com 0 + max-min <= 1)
+ *   - EQUILIBRAR: default (tem desequilíbrio)
  */
 function detectarModo(r: RefRow, totalLojasAtivas: number): ModoRecomendado {
   // Calcula idade em dias
@@ -2262,10 +2240,10 @@ function detectarModo(r: RefRow, totalLojasAtivas: number): ModoRecomendado {
     ? Math.floor((Date.now() - new Date(r.dataAlt).getTime()) / (1000 * 60 * 60 * 24))
     : 0;
 
-  // OUTLET: peÃ§a velha + pouco estoque restante
+  // OUTLET: peça velha + pouco estoque restante
   if (idadeDias > 180 && r.total < 15) return 'OUTLET';
 
-  // EstatÃ­sticas das lojas
+  // Estatísticas das lojas
   const vals = Object.values(r.estoquePorLoja).filter((v) => v > 0);
   if (vals.length === 0) return 'OK';
 
@@ -2273,13 +2251,13 @@ function detectarModo(r: RefRow, totalLojasAtivas: number): ModoRecomendado {
   const min = Math.min(...vals);
   const allOnes = vals.every((v) => v === 1);
 
-  // CONSOLIDAR: muito fragmentado (5+ lojas, todas com 1 peÃ§a)
-  // OU pouca peÃ§a total espalhada em muitas lojas
+  // CONSOLIDAR: muito fragmentado (5+ lojas, todas com 1 peça)
+  // OU pouca peça total espalhada em muitas lojas
   if ((vals.length >= 5 && allOnes) || (r.total < 12 && vals.length >= 4)) {
     return 'CONSOLIDAR';
   }
 
-  // OK: distribuiÃ§Ã£o jÃ¡ equilibrada (max-min <= 1 e total cobre lojas ativas)
+  // OK: distribuição já equilibrada (max-min <= 1 e total cobre lojas ativas)
   if (max - min <= 1 && vals.length >= totalLojasAtivas - 2) return 'OK';
 
   return 'EQUILIBRAR';
@@ -2294,24 +2272,24 @@ function RefRootView({
   grupos: GrupoItem[];
   onEqualize: (refRow: { ref: string; cor: string | null; descricao: string; preco: number }) => void;
 }) {
-  // â”€â”€ Estado â”€â”€
+  // ── Estado ──
   const [data, setData] = useState<RefDistribution | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // â”€â”€ Filtros â”€â”€
+  // ── Filtros ──
   const [grupoSelected, setGrupoSelected] = useState<number | null>(null);
   const [subgrupos, setSubgrupos] = useState<GrupoItem[]>([]);
   const [subgrupoSelected, setSubgrupoSelected] = useState<number | null>(null);
   const [search, setSearch] = useState('');
-  const [diasMax, setDiasMax] = useState<number | ''>(''); // peÃ§as NOVAS
-  const [diasMin, setDiasMin] = useState<number | ''>(''); // peÃ§as VELHAS
+  const [diasMax, setDiasMax] = useState<number | ''>(''); // peças NOVAS
+  const [diasMin, setDiasMin] = useState<number | ''>(''); // peças VELHAS
   const [modeFilter, setModeFilter] = useState<'imbalanced' | 'all'>('imbalanced');
   const [minTotal, setMinTotal] = useState(2);
   const [drawerRef, setDrawerRef] = useState<RefRow | null>(null);
   const [consolidateRef, setConsolidateRef] = useState<RefRow | null>(null);
 
-  // Filter local de modo (apÃ³s detectar)
+  // Filter local de modo (após detectar)
   const [filterMode, setFilterMode] = useState<'TODOS' | ModoRecomendado>('TODOS');
 
   // Subgrupos cascata
@@ -2343,7 +2321,7 @@ function RefRootView({
       const r = await api<RefDistribution>(`/intelligence/stock-distribution-by-ref?${params}`);
       setData(r);
     } catch (e: any) {
-      setError(e?.message || 'Erro ao carregar visÃ£o raiz');
+      setError(e?.message || 'Erro ao carregar visão raiz');
       setData(null);
     } finally {
       setLoading(false);
@@ -2378,7 +2356,7 @@ function RefRootView({
   }, [refsComModo]);
 
   const idadeStr = (dataAlt: string | null) => {
-    if (!dataAlt) return 'â€”';
+    if (!dataAlt) return '—';
     const dias = Math.floor((Date.now() - new Date(dataAlt).getTime()) / (1000 * 60 * 60 * 24));
     if (dias < 1) return 'hoje';
     if (dias < 30) return `${dias}d`;
@@ -2416,7 +2394,7 @@ function RefRootView({
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar (REF, descriÃ§Ã£o, corâ€¦)"
+              placeholder="Buscar (REF, descrição, cor…)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && fetchData()}
@@ -2427,19 +2405,19 @@ function RefRootView({
             <input
               type="number"
               min={1}
-              placeholder="Novas: â‰¤dias"
+              placeholder="Novas: ≤dias"
               value={diasMax}
               onChange={(e) => setDiasMax(e.target.value ? Number(e.target.value) : '')}
-              title="Filtrar peÃ§as cadastradas nos Ãºltimos X dias (DATAALT)"
+              title="Filtrar peças cadastradas nos últimos X dias (DATAALT)"
               className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
             />
             <input
               type="number"
               min={1}
-              placeholder="Velhas: â‰¥dias"
+              placeholder="Velhas: ≥dias"
               value={diasMin}
               onChange={(e) => setDiasMin(e.target.value ? Number(e.target.value) : '')}
-              title="Filtrar peÃ§as cadastradas hÃ¡ mais de X dias"
+              title="Filtrar peças cadastradas há mais de X dias"
               className="w-full px-2 py-1.5 text-sm border border-slate-300 rounded focus:border-fuchsia-500 focus:outline-none"
             />
           </div>
@@ -2473,7 +2451,7 @@ function RefRootView({
               checked={modeFilter === 'imbalanced'}
               onChange={() => setModeFilter('imbalanced')}
             />
-            SÃ³ desequilibradas
+            Só desequilibradas
           </label>
           <label className="flex items-center gap-1">
             <input
@@ -2483,7 +2461,7 @@ function RefRootView({
             />
             Todas
           </label>
-          <span className="ml-3">Min. peÃ§as total:</span>
+          <span className="ml-3">Min. peças total:</span>
           <input
             type="number"
             min={0}
@@ -2496,7 +2474,7 @@ function RefRootView({
 
       {error && (
         <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-lg p-3 text-sm">
-          âŒ {error}
+          ❌ {error}
         </div>
       )}
 
@@ -2512,7 +2490,7 @@ function RefRootView({
         >
           <div className="text-xs font-bold text-slate-600 uppercase">Total REFs</div>
           <div className="text-2xl font-bold text-slate-800">{kpis.total}</div>
-          <div className="text-[10px] text-slate-500">{kpis.pecas} peÃ§as</div>
+          <div className="text-[10px] text-slate-500">{kpis.pecas} peças</div>
         </button>
         <button
           onClick={() => setFilterMode('EQUILIBRAR')}
@@ -2523,7 +2501,7 @@ function RefRootView({
           }`}
           title="Distribuir entre as lojas (tem estoque suficiente)"
         >
-          <div className="text-xs font-bold text-violet-700 uppercase">âš–ï¸ Equilibrar</div>
+          <div className="text-xs font-bold text-violet-700 uppercase">⚖️ Equilibrar</div>
           <div className="text-2xl font-bold text-violet-800">{kpis.equilibrar}</div>
         </button>
         <button
@@ -2533,9 +2511,9 @@ function RefRootView({
               ? 'bg-orange-200 border-orange-400 shadow-inner'
               : 'bg-orange-50 border-orange-200 hover:bg-orange-100'
           }`}
-          title="Juntar fragmentos em 1 loja sÃ³ (montar grade completa)"
+          title="Juntar fragmentos em 1 loja só (montar grade completa)"
         >
-          <div className="text-xs font-bold text-orange-700 uppercase">ðŸ§² Consolidar</div>
+          <div className="text-xs font-bold text-orange-700 uppercase">🧲 Consolidar</div>
           <div className="text-2xl font-bold text-orange-800">{kpis.consolidar}</div>
         </button>
         <button
@@ -2545,9 +2523,9 @@ function RefRootView({
               ? 'bg-amber-200 border-amber-400 shadow-inner'
               : 'bg-amber-50 border-amber-200 hover:bg-amber-100'
           }`}
-          title="PeÃ§a antiga, mandar pra loja outlet"
+          title="Peça antiga, mandar pra loja outlet"
         >
-          <div className="text-xs font-bold text-amber-700 uppercase">ðŸ·ï¸ Outlet</div>
+          <div className="text-xs font-bold text-amber-700 uppercase">🏷️ Outlet</div>
           <div className="text-2xl font-bold text-amber-800">{kpis.outlet}</div>
         </button>
         <button
@@ -2557,9 +2535,9 @@ function RefRootView({
               ? 'bg-emerald-200 border-emerald-400 shadow-inner'
               : 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
           }`}
-          title="JÃ¡ estÃ¡ distribuÃ­do, sem aÃ§Ã£o necessÃ¡ria"
+          title="Já está distribuído, sem ação necessária"
         >
-          <div className="text-xs font-bold text-emerald-700 uppercase">âœ… OK</div>
+          <div className="text-xs font-bold text-emerald-700 uppercase">✅ OK</div>
           <div className="text-2xl font-bold text-emerald-800">{kpis.ok}</div>
         </button>
       </div>
@@ -2570,37 +2548,37 @@ function RefRootView({
           <div className="p-12 text-center text-slate-500">
             <Package className="w-12 h-12 mx-auto text-slate-300 mb-2" />
             <div className="text-sm font-bold mb-1">Use os filtros e clique Buscar</div>
-            <div className="text-xs">VisÃ£o por REF+COR (1 linha por referÃªncia). Clique numa linha pra ver os tamanhos.</div>
+            <div className="text-xs">Visão por REF+COR (1 linha por referência). Clique numa linha pra ver os tamanhos.</div>
           </div>
         )}
         {loading && (
           <div className="p-12 text-center">
             <Loader2 className="w-8 h-8 animate-spin text-fuchsia-600 mx-auto" />
-            <div className="text-sm text-slate-500 mt-2">Carregandoâ€¦</div>
+            <div className="text-sm text-slate-500 mt-2">Carregando…</div>
           </div>
         )}
         {data && refsFiltradas.length > 0 && (
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">DescriÃ§Ã£o / REF Â· COR</th>
+                <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Descrição / REF · COR</th>
                 <th className="px-3 py-2 text-left text-[11px] uppercase font-bold text-slate-600 tracking-wider">Grupo / Subgrupo</th>
-                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider" title="Tempo desde DATAALT (cadastro/alteraÃ§Ã£o)">Idade</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider" title="Tempo desde DATAALT (cadastro/alteração)">Idade</th>
                 <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Tamanhos</th>
                 <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Total</th>
                 <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Lojas c/ estoque</th>
-                <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">PreÃ§o</th>
+                <th className="px-3 py-2 text-right text-[11px] uppercase font-bold text-slate-600 tracking-wider">Preço</th>
                 <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Modo sugerido</th>
-                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">AÃ§Ã£o</th>
+                <th className="px-3 py-2 text-center text-[11px] uppercase font-bold text-slate-600 tracking-wider">Ação</th>
               </tr>
             </thead>
             <tbody>
               {refsFiltradas.map((r, idx) => {
                 const modoConfig = {
-                  EQUILIBRAR: { label: 'âš–ï¸ Equilibrar', cls: 'bg-violet-100 text-violet-800', acaoCls: 'bg-violet-600 hover:bg-violet-700' },
-                  CONSOLIDAR: { label: 'ðŸ§² Consolidar', cls: 'bg-orange-100 text-orange-800', acaoCls: 'bg-orange-600 hover:bg-orange-700' },
-                  OUTLET:     { label: 'ðŸ·ï¸ Outlet',     cls: 'bg-amber-100 text-amber-800',  acaoCls: 'bg-amber-600 hover:bg-amber-700' },
-                  OK:         { label: 'âœ… OK',          cls: 'bg-emerald-100 text-emerald-800', acaoCls: 'bg-slate-300 cursor-not-allowed' },
+                  EQUILIBRAR: { label: '⚖️ Equilibrar', cls: 'bg-violet-100 text-violet-800', acaoCls: 'bg-violet-600 hover:bg-violet-700' },
+                  CONSOLIDAR: { label: '🧲 Consolidar', cls: 'bg-orange-100 text-orange-800', acaoCls: 'bg-orange-600 hover:bg-orange-700' },
+                  OUTLET:     { label: '🏷️ Outlet',     cls: 'bg-amber-100 text-amber-800',  acaoCls: 'bg-amber-600 hover:bg-amber-700' },
+                  OK:         { label: '✅ OK',          cls: 'bg-emerald-100 text-emerald-800', acaoCls: 'bg-slate-300 cursor-not-allowed' },
                 };
                 const mc = modoConfig[r.modo];
                 return (
@@ -2609,12 +2587,12 @@ function RefRootView({
                       <div className="font-medium text-slate-900">{r.descricao}</div>
                       <div className="text-[11px] font-mono text-slate-500">
                         REF <span className="font-bold">{r.ref}</span>
-                        {r.cor && <span className="ml-1">Â· {r.cor}</span>}
+                        {r.cor && <span className="ml-1">· {r.cor}</span>}
                       </div>
                     </td>
                     <td className="px-3 py-2">
-                      <div className="text-xs text-slate-700 font-semibold">{r.grupoNome || 'â€”'}</div>
-                      <div className="text-[11px] text-slate-500">{r.subgrupoNome || 'â€”'}</div>
+                      <div className="text-xs text-slate-700 font-semibold">{r.grupoNome || '—'}</div>
+                      <div className="text-[11px] text-slate-500">{r.subgrupoNome || '—'}</div>
                     </td>
                     <td className="px-3 py-2 text-center">
                       <span className="text-xs font-mono text-slate-600" title={r.dataAlt || ''}>
@@ -2661,7 +2639,7 @@ function RefRootView({
                               })
                             }
                             className="px-2 py-1 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded"
-                            title="Calcular plano de equilÃ­brio entre lojas (drawer com matriz tamanhoÃ—loja)"
+                            title="Calcular plano de equilíbrio entre lojas (drawer com matriz tamanho×loja)"
                           >
                             <Shuffle className="w-3 h-3 inline -mt-0.5 mr-0.5" />
                             Equilibrar
@@ -2692,7 +2670,7 @@ function RefRootView({
         )}
         {data && data.truncated && (
           <div className="bg-amber-50 border-t border-amber-200 px-3 py-2 text-xs text-amber-800">
-            âš ï¸ Resultado truncado (limite 3000 REFs). Refina os filtros pra ver mais.
+            ⚠️ Resultado truncado (limite 3000 REFs). Refina os filtros pra ver mais.
           </div>
         )}
       </div>
@@ -2706,7 +2684,7 @@ function RefRootView({
         />
       )}
 
-      {/* Drawer consolidaÃ§Ã£o (Sprint 3) */}
+      {/* Drawer consolidação (Sprint 3) */}
       {consolidateRef && (
         <ConsolidateDrawer
           refRow={consolidateRef}
@@ -2723,9 +2701,9 @@ function RefRootView({
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   RefDetailsDrawer â€” drill-down: mostra matriz de tamanhos x lojas da REF
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+/* ════════════════════════════════════════════════════════════════════════
+   RefDetailsDrawer — drill-down: mostra matriz de tamanhos x lojas da REF
+   ════════════════════════════════════════════════════════════════════════ */
 function RefDetailsDrawer({
   refRow,
   stores,
@@ -2746,7 +2724,7 @@ function RefDetailsDrawer({
     params.set('limit', '500');
     api<Distribution>(`/intelligence/stock-distribution?${params}`)
       .then((r) => {
-        // filtra sÃ³ os da cor solicitada
+        // filtra só os da cor solicitada
         const filtered = {
           ...r,
           rows: r.rows.filter((row) =>
@@ -2772,7 +2750,7 @@ function RefDetailsDrawer({
             <div className="font-bold text-lg text-slate-800">{refRow.descricao}</div>
             <div className="text-xs font-mono text-slate-500">
               REF <span className="font-bold">{refRow.ref}</span>
-              {refRow.cor && <span className="ml-1">Â· {refRow.cor}</span>}
+              {refRow.cor && <span className="ml-1">· {refRow.cor}</span>}
               <span className="ml-3 text-fuchsia-600 font-bold">{brl(refRow.preco)}</span>
             </div>
           </div>
@@ -2817,7 +2795,7 @@ function RefDetailsDrawer({
           )}
           {detail && detail.rows.length === 0 && !loading && (
             <div className="text-center py-12 text-slate-500 text-sm">
-              Sem variaÃ§Ãµes encontradas.
+              Sem variações encontradas.
             </div>
           )}
         </div>
@@ -2826,15 +2804,15 @@ function RefDetailsDrawer({
   );
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-   ConsolidateDrawer â€” Sprint 3
-   Calcula plano de consolidaÃ§Ã£o: TODAS as peÃ§as dessa REF+COR vÃ£o pra
+/* ════════════════════════════════════════════════════════════════════════
+   ConsolidateDrawer — Sprint 3
+   Calcula plano de consolidação: TODAS as peças dessa REF+COR vão pra
    1 loja consolidadora. Escolha:
-     1. Modo OUTLET â†’ loja com isOutlet=true e maior consolidationScore
-     2. Modo CONSOLIDAR â†’ loja com maior consolidationScore (+ histÃ³rico de
-        venda como tiebreaker se disponÃ­vel)
-   Gera N moves (X loja â†’ loja consolidadora) por tamanho.
-   â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+     1. Modo OUTLET → loja com isOutlet=true e maior consolidationScore
+     2. Modo CONSOLIDAR → loja com maior consolidationScore (+ histórico de
+        venda como tiebreaker se disponível)
+   Gera N moves (X loja → loja consolidadora) por tamanho.
+   ════════════════════════════════════════════════════════════════════════ */
 function ConsolidateDrawer({
   refRow,
   stores,
@@ -2882,7 +2860,7 @@ function ConsolidateDrawer({
         for (const v of sales.vendas || []) salesMap.set(v.loja, v.qty);
         setSalesByStore(salesMap);
 
-        // Escolhe destino padrÃ£o
+        // Escolhe destino padrão
         const candidatas = config.filter((c) => c.canReceiveRealign);
         let destinoEscolhido: string | null = null;
         if (isOutletMode) {
@@ -2893,7 +2871,7 @@ function ConsolidateDrawer({
           }
         }
         if (!destinoEscolhido) {
-          // Sem outlet (ou modo nÃ£o-outlet): score + vendas como tiebreaker
+          // Sem outlet (ou modo não-outlet): score + vendas como tiebreaker
           const ranked = candidatas
             .map((c) => ({
               code: c.code,
@@ -2908,13 +2886,13 @@ function ConsolidateDrawer({
       .finally(() => setLoading(false));
   }, [refRow, isOutletMode]);
 
-  // Lojas elegÃ­veis pra ceder (canSendRealign)
+  // Lojas elegíveis pra ceder (canSendRealign)
   const sendableCodes = useMemo(
     () => new Set(configLojas.filter((c) => c.canSendRealign).map((c) => c.code)),
     [configLojas],
   );
 
-  // Calcula moves: tudo de TODAS as lojas (sendable) â†’ destino selecionado, por tamanho
+  // Calcula moves: tudo de TODAS as lojas (sendable) → destino selecionado, por tamanho
   const moves = useMemo(() => {
     if (!detail || !selectedDestino) return [] as Array<{
       sku: string; ref: string; cor: string; tamanho: string; desc: string;
@@ -2948,7 +2926,7 @@ function ConsolidateDrawer({
     if (moves.length === 0 || !selectedDestino) return;
     if (
       !confirm(
-        `Vai criar ${moves.length} transferÃªncias (${totalQty} peÃ§as) DE ${lojasOrigem} lojas PARA ${selectedDestino}.\n\n` +
+        `Vai criar ${moves.length} transferências (${totalQty} peças) DE ${lojasOrigem} lojas PARA ${selectedDestino}.\n\n` +
           `Toda essa REF/COR vai ser consolidada em ${selectedDestino}.\n\nConfirma?`,
       )
     ) return;
@@ -2957,8 +2935,8 @@ function ConsolidateDrawer({
     setResult(null);
     try {
       // Mesmo endpoint que o realinhamento normal usa: /realignment/confirm
-      // DiferenÃ§a Ã© sÃ³ o note (rastreabilidade) â€” operacionalmente as lojas
-      // veem cards idÃªnticos na tela /minha-loja/realinhamento.
+      // Diferença é só o note (rastreabilidade) — operacionalmente as lojas
+      // veem cards idênticos na tela /minha-loja/realinhamento.
       const plan = moves.map((m) => ({
         sku: m.sku,
         ref: m.ref,
@@ -2969,18 +2947,18 @@ function ConsolidateDrawer({
         toCode: m.to,
         qty: m.qty,
       }));
-      const modeLabel = isOutletMode ? 'OUTLET' : 'CONSOLIDAÃ‡ÃƒO';
+      const modeLabel = isOutletMode ? 'OUTLET' : 'CONSOLIDAÇÃO';
       const res = await api<{ created: number; errors?: any[] }>(
         '/realignment/confirm',
         {
           method: 'POST',
           body: JSON.stringify({
             plan,
-            note: `${modeLabel} Â· REF ${refRow.ref} ${refRow.cor || ''} Â· destino ${selectedDestino}`,
+            note: `${modeLabel} · REF ${refRow.ref} ${refRow.cor || ''} · destino ${selectedDestino}`,
           }),
         },
       );
-      setResult({ ok: true, msg: `âœ“ ${res.created || moves.length} ordens criadas. Lojas origem jÃ¡ notificadas.` });
+      setResult({ ok: true, msg: `✓ ${res.created || moves.length} ordens criadas. Lojas origem já notificadas.` });
       setTimeout(onSuccess, 2000);
     } catch (e: any) {
       setResult({ ok: false, msg: e?.message || 'Erro ao aplicar' });
@@ -3002,13 +2980,13 @@ function ConsolidateDrawer({
                 <span className={`text-xs font-bold px-2 py-0.5 rounded ${
                   isOutletMode ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800'
                 }`}>
-                  {isOutletMode ? 'ðŸ·ï¸ MODO OUTLET' : 'ðŸ§² CONSOLIDAR GRADE'}
+                  {isOutletMode ? '🏷️ MODO OUTLET' : '🧲 CONSOLIDAR GRADE'}
                 </span>
               </div>
               <div className="font-bold text-lg text-slate-800 mt-1">{refRow.descricao}</div>
               <div className="text-xs font-mono text-slate-500">
                 REF <span className="font-bold">{refRow.ref}</span>
-                {refRow.cor && <span className="ml-1">Â· {refRow.cor}</span>}
+                {refRow.cor && <span className="ml-1">· {refRow.cor}</span>}
               </div>
             </div>
             <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded">
@@ -3021,13 +2999,13 @@ function ConsolidateDrawer({
           {loading && (
             <div className="text-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-orange-600 mx-auto" />
-              <div className="text-sm text-slate-500 mt-2">Calculando planoâ€¦</div>
+              <div className="text-sm text-slate-500 mt-2">Calculando plano…</div>
             </div>
           )}
 
           {!loading && (
             <>
-              {/* SeleÃ§Ã£o de destino */}
+              {/* Seleção de destino */}
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div className="text-xs font-bold text-slate-600 uppercase mb-2">
                   Loja de destino (consolidadora)
@@ -3037,7 +3015,7 @@ function ConsolidateDrawer({
                   onChange={(e) => setSelectedDestino(e.target.value || null)}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:border-orange-500 focus:outline-none"
                 >
-                  <option value="">Selecioneâ€¦</option>
+                  <option value="">Selecione…</option>
                   {lojasReceptoras
                     .map((c) => {
                       const score = c.consolidationScore ?? 50;
@@ -3048,15 +3026,15 @@ function ConsolidateDrawer({
                     .sort((a, b) => b._total - a._total)
                     .map((c) => (
                       <option key={c.code} value={c.code}>
-                        {c.isOutlet ? 'ðŸ·ï¸ ' : ''}
+                        {c.isOutlet ? '🏷️ ' : ''}
                         {c.code} {c.name}
-                        {' Â· score '}{c._score}
-                        {c._vendas > 0 ? ` Â· vendeu ${c._vendas}` : ''}
+                        {' · score '}{c._score}
+                        {c._vendas > 0 ? ` · vendeu ${c._vendas}` : ''}
                       </option>
                     ))}
                 </select>
                 <div className="text-[11px] text-slate-500 mt-1">
-                  Ranking: consolidationScore + 0.5 Ã— vendas histÃ³ricas.
+                  Ranking: consolidationScore + 0.5 × vendas históricas.
                   {isOutletMode && ' Modo OUTLET prioriza lojas com flag isOutlet=true.'}
                 </div>
               </div>
@@ -3068,7 +3046,7 @@ function ConsolidateDrawer({
                   <div className="text-xl font-bold text-orange-800">{moves.length}</div>
                 </div>
                 <div className="bg-orange-50 border border-orange-200 rounded p-2">
-                  <div className="text-[10px] font-bold text-orange-700 uppercase">PeÃ§as</div>
+                  <div className="text-[10px] font-bold text-orange-700 uppercase">Peças</div>
                   <div className="text-xl font-bold text-orange-800">{totalQty}</div>
                 </div>
                 <div className="bg-orange-50 border border-orange-200 rounded p-2">
@@ -3081,7 +3059,7 @@ function ConsolidateDrawer({
               {moves.length > 0 && (
                 <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
                   <div className="bg-slate-50 px-3 py-1.5 text-[10px] font-bold uppercase text-slate-600 border-b border-slate-200">
-                    PrÃ©-visualizaÃ§Ã£o ({moves.length} movimentos)
+                    Pré-visualização ({moves.length} movimentos)
                   </div>
                   <div className="max-h-96 overflow-y-auto">
                     <table className="w-full text-xs">
@@ -3089,7 +3067,7 @@ function ConsolidateDrawer({
                         {moves.slice(0, 50).map((m, i) => (
                           <tr key={i} className="border-b border-slate-100">
                             <td className="px-2 py-1.5 font-mono text-slate-500">{m.from}</td>
-                            <td className="px-2 py-1.5 text-slate-400">â†’</td>
+                            <td className="px-2 py-1.5 text-slate-400">→</td>
                             <td className="px-2 py-1.5 font-mono text-orange-700 font-bold">{m.to}</td>
                             <td className="px-2 py-1.5 text-right tabular-nums font-bold">{m.qty}</td>
                             <td className="px-2 py-1.5 text-slate-600">Tam {m.tamanho}</td>
@@ -3098,7 +3076,7 @@ function ConsolidateDrawer({
                         {moves.length > 50 && (
                           <tr>
                             <td colSpan={5} className="px-2 py-1.5 text-center text-slate-500 italic">
-                              + {moves.length - 50} movimentosâ€¦
+                              + {moves.length - 50} movimentos…
                             </td>
                           </tr>
                         )}
@@ -3110,7 +3088,7 @@ function ConsolidateDrawer({
 
               {moves.length === 0 && selectedDestino && (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
-                  âœ“ Tudo jÃ¡ estÃ¡ em {selectedDestino}. Nada pra consolidar.
+                  ✓ Tudo já está em {selectedDestino}. Nada pra consolidar.
                 </div>
               )}
 
@@ -3135,7 +3113,7 @@ function ConsolidateDrawer({
             className="flex items-center gap-2 px-5 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-slate-300 text-white text-sm font-bold rounded"
           >
             {applying ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> Criando ordensâ€¦</>
+              <><Loader2 className="w-4 h-4 animate-spin" /> Criando ordens…</>
             ) : (
               <><Shuffle className="w-4 h-4" /> Consolidar {moves.length} movimento{moves.length === 1 ? '' : 's'}</>
             )}
