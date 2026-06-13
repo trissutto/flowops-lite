@@ -3,25 +3,28 @@
 /**
  * /impersonate?token=XXX&dest=/minha-loja/pdv
  *
- * Página intermediária quando admin clica "Entrar como PDV" em
- * /retaguarda/lojas. Recebe o JWT temporário pela URL, grava em
+ * Pagina intermediaria quando admin clica "Entrar PDV" em
+ * /retaguarda/lojas. Recebe o JWT temporario pela URL, grava em
  * sessionStorage (isolado por aba) e redireciona pro destino.
  *
- * Por que sessionStorage (e não localStorage):
- *  - localStorage é compartilhado entre TODAS as abas do mesmo domínio.
- *    Se gravássemos lá, abrir aba da loja iria DESLOGAR a aba da matriz.
- *  - sessionStorage é por aba: cada aba tem seu próprio token.
+ * Por que sessionStorage (e nao localStorage):
+ *  - localStorage e compartilhado entre TODAS as abas do mesmo dominio.
+ *    Se gravassemos la, abrir aba da loja iria DESLOGAR a aba da matriz.
+ *  - sessionStorage e por aba: cada aba tem seu proprio token.
  *
- * A api.ts e socket.ts foram ajustadas pra priorizar sessionStorage
- * sobre localStorage — assim a aba impersonada usa o token de loja
- * e a aba original (matriz) usa o token de admin do localStorage.
+ * NOTA TECNICA Next.js 14:
+ * useSearchParams() precisa estar dentro de <Suspense> para pre-render
+ * estatico funcionar. Por isso o conteudo fica em componente filho.
  */
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, AlertTriangle } from 'lucide-react';
 
-export default function ImpersonatePage() {
+// Pagina dinamica — nao tenta pre-render estatico (depende de URL params).
+export const dynamic = 'force-dynamic';
+
+function ImpersonateInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const [error, setError] = useState<string | null>(null);
@@ -31,29 +34,26 @@ export default function ImpersonatePage() {
     const dest = sp?.get('dest') || '/minha-loja/pdv';
 
     if (!token) {
-      setError('Token de impersonate ausente. Volte pra /retaguarda/lojas e clique em "Entrar PDV" de novo.');
+      setError(
+        'Token de impersonate ausente. Volte pra /retaguarda/lojas e clique em "Entrar PDV" de novo.',
+      );
       return;
     }
 
     try {
-      // sessionStorage: isolado por aba (não vaza pra outras abas)
       window.sessionStorage.setItem('flowops_token', token);
-      // marca que essa aba está em modo impersonate (pro banner saber)
       window.sessionStorage.setItem('flowops_impersonate', '1');
     } catch (e: any) {
-      setError(`Não conseguiu salvar sessão: ${e?.message || e}`);
+      setError(`Nao conseguiu salvar sessao: ${e?.message || e}`);
       return;
     }
 
-    // Limpa a URL pra não vazar token em histórico/print, e redireciona.
-    // replaceState antes de router.push pra não deixar essa URL no histórico.
     try {
       window.history.replaceState(null, '', '/impersonate');
     } catch {
       /* noop */
     }
 
-    // Pequeno delay pra storage ser visível antes do componente novo montar
     setTimeout(() => {
       router.replace(dest);
     }, 50);
@@ -83,9 +83,28 @@ export default function ImpersonatePage() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
       <div className="text-center">
         <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-600 mb-3" />
-        <div className="text-sm font-bold text-slate-700">Entrando como loja…</div>
+        <div className="text-sm font-bold text-slate-700">Entrando como loja...</div>
         <div className="text-xs text-slate-500 mt-1">Carregando PDV</div>
       </div>
     </div>
+  );
+}
+
+function LoadingFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="text-center">
+        <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-600 mb-3" />
+        <div className="text-sm font-bold text-slate-700">Preparando...</div>
+      </div>
+    </div>
+  );
+}
+
+export default function ImpersonatePage() {
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <ImpersonateInner />
+    </Suspense>
   );
 }
