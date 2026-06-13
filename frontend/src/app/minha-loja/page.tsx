@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { getSocket } from '@/lib/socket';
+import { getSocket, disconnectSocket } from '@/lib/socket';
 import { parseShippingAddress, formatPhone } from '@/lib/format-address';
 import { classifyShipping } from '@/lib/shipping-method';
 import Logo from '@/components/Logo';
@@ -567,6 +567,7 @@ export default function MinhaLojaPage() {
 
   function logout() {
     try { localStorage.removeItem('flowops_token'); } catch {}
+    try { disconnectSocket(); } catch {}
     router.push('/login');
   }
 

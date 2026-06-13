@@ -86,6 +86,7 @@ function handleUnauthorized() {
   try {
     localStorage.removeItem('flowops_token');
   } catch {}
+  try { import('./socket').then(m => m.disconnectSocket()); } catch {}
 
   // Dispara evento pra qualquer listener (ex.: layout) e também mostra alert
   // crú como fallback, garantindo que o user SEMPRE veja que a sessão caiu.

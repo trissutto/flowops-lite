@@ -41,6 +41,7 @@ export default function TopNav() {
 
   function logout() {
     try { window.localStorage.removeItem('flowops_token'); } catch {}
+    try { import('@/lib/socket').then(m => m.disconnectSocket()); } catch {}
     router.push('/login');
   }
 

@@ -71,6 +71,7 @@ export default function AdminShell({
     if (onLogout) return onLogout();
     if (typeof window !== 'undefined') {
       localStorage.removeItem('flowops_token');
+      try { import('@/lib/socket').then(m => m.disconnectSocket()); } catch {}
       router.push('/login');
     }
   }

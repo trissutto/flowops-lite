@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | null = null;
+let socketToken: string | null = null;
 
 /**
  * Resolve URL do socket em runtime — mesma lógica do api.ts.
@@ -27,11 +28,62 @@ function resolveSocketUrl(): string {
   return envUrl || 'ws://localhost:3001';
 }
 
+/**
+ * Retorna o socket conectado ao realtime.
+ *
+ * ⚠️ BUG CORRIGIDO (jun/26 — caso Sorocaba):
+ * Antes, era um singleton "burro" que reaproveitava `socket` enquanto não
+ * fosse null. Resultado catastrófico no Electron das lojas:
+ *   - Vendedora A loga (JWT_A, storeId=SOROCABA) → socket entra em
+ *     room `store:SOROCABA`. Pedidos chegam certo.
+ *   - Vendedora A sai, vendedora B loga com OUTRO usuário (JWT_B,
+ *     role=admin/operator OU storeId diferente). `localStorage.flowops_token`
+ *     muda, MAS `getSocket()` retorna o socket antigo (ainda autenticado
+ *     com JWT_A). Pior: se JWT_A era role=admin, o socket está em room
+ *     'admin' e recebe eventos de TODAS as lojas — daí o caso reportado
+ *     ("Sorocaba aparecendo pedidos de PRAIA GRANDE e CAMPINAS").
+ *
+ * Fix: comparar o token usado pra abrir o socket com o token atual do
+ * localStorage. Se mudou, fecha o socket antigo e abre um novo com o
+ * token correto (que dispara reauth no handleConnection do gateway).
+ */
 export function getSocket(): Socket {
+  const token =
+    typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+
+  // Se token mudou (ou sumiu) desde o último connect, descarta socket antigo.
+  if (socket && socketToken !== token) {
+    try {
+      socket.removeAllListeners();
+      socket.disconnect();
+    } catch {
+      /* noop */
+    }
+    socket = null;
+    socketToken = null;
+  }
+
   if (!socket) {
     const url = resolveSocketUrl();
-    const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
     socket = io(`${url}/realtime`, { auth: { token } });
+    socketToken = token;
   }
   return socket;
+}
+
+/**
+ * Desconecta o socket. Usar em logout pra garantir que a próxima conexão
+ * vai usar o JWT do próximo usuário (não fica receberndo eventos do antigo).
+ */
+export function disconnectSocket() {
+  if (socket) {
+    try {
+      socket.removeAllListeners();
+      socket.disconnect();
+    } catch {
+      /* noop */
+    }
+  }
+  socket = null;
+  socketToken = null;
 }
