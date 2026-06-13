@@ -1496,6 +1496,36 @@ export class PickOrdersService {
     }
 
     const currentStatus = current.status as PickStatus;
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  GUARD CRÍTICO — BLOQUEAR RE-ENVIO DE PEDIDO JÁ ENVIADO
+    //
+    //  Caso real (06/06 → 10/06): mesma cliente recebeu 2 pacotes do mesmo
+    //  pedido. Loja "enviou" o mesmo pedido em datas diferentes porque o
+    //  check de transição abaixo permitia shipped → shipped (a condição
+    //  `input.status !== currentStatus` vira false quando ambos são shipped).
+    //
+    //  Esse guard bloqueia explicitamente. Mostra rastreio + data do envio
+    //  anterior pra operadora entender. Se precisar reenviar de verdade
+    //  (cliente alega extravio etc.), tem que pedir admin pra resetar o
+    //  status — não pode disparar nova etiqueta + baixa Giga + nota WC
+    //  clicando "Enviar" duas vezes.
+    // ════════════════════════════════════════════════════════════════════════
+    if (currentStatus === 'shipped' && input.status === 'shipped') {
+      const dataEnvio = current.updatedAt
+        ? new Date(current.updatedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+        : 'data desconhecida';
+      const rastreio = current.trackingCode
+        ? `${current.carrier ?? ''} ${current.trackingCode}`.trim()
+        : 'sem rastreio';
+      throw new BadRequestException(
+        `🚫 ENVIO DUPLICADO BLOQUEADO. Este pedido JÁ FOI ENVIADO em ${dataEnvio} ` +
+          `(rastreio: ${rastreio}). Se a cliente alega que não recebeu, abra um ` +
+          `chamado com a transportadora — NÃO envie outro pacote sem confirmar ` +
+          `com a matriz.`,
+      );
+    }
+
     const allowed = NEXT_ALLOWED[currentStatus] ?? [];
     if (!allowed.includes(input.status) && input.status !== currentStatus) {
       throw new BadRequestException(
