@@ -24,6 +24,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Home, LogOut, ChevronRight } from 'lucide-react';
 import { useMemo } from 'react';
+import StoreSwitcher from './StoreSwitcher';
 
 // Labels amigáveis pra cada segmento da rota (quando aparece no breadcrumb)
 const SEGMENT_LABELS: Record<string, string> = {
@@ -162,6 +163,9 @@ export default function TopBreadcrumb() {
             </div>
           ))}
         </nav>
+
+        {/* Modo Master — entrar no PDV de qualquer loja em aba nova */}
+        <StoreSwitcher />
 
         {/* Sair — pílula boutique */}
         <button
