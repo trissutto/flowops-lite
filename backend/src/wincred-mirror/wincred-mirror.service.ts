@@ -24,12 +24,45 @@ import { ErpService } from '../erp/erp.service';
 @Injectable()
 export class WincredMirrorService {
   private readonly logger = new Logger(WincredMirrorService.name);
-  private readonly BATCH = 1000;
+  private readonly BATCH = 200;
+  private readonly RETRY_MAX = 5;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
   ) {}
+
+  /** Pausa em ms — usado entre batches pra liberar conexao Railway */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /**
+   * Retry generico em caso de conexao fechada (Railway derruba pool em syncs longos).
+   * Backoff exponencial: 200ms, 600ms, 1.5s, 4s, 10s.
+   */
+  private async withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    let lastErr: any = null;
+    const delays = [0, 200, 600, 1500, 4000, 10000];
+    for (let i = 0; i <= this.RETRY_MAX; i++) {
+      if (i > 0) await this.sleep(delays[i] || 10000);
+      try {
+        return await fn();
+      } catch (e: any) {
+        lastErr = e;
+        const msg = String(e?.message || '').toLowerCase();
+        const isConnErr =
+          msg.includes('server has closed') ||
+          msg.includes('connection terminated') ||
+          msg.includes('connection lost') ||
+          msg.includes('econnreset') ||
+          msg.includes('etimedout');
+        if (!isConnErr) throw e;
+        this.logger.warn(`[retry] ${label} attempt ${i + 1}/${this.RETRY_MAX + 1}: ${e.message}`);
+      }
+    }
+    throw lastErr;
+  }
 
   // ─────────────────────────────────────────────────────────────────────
   //  STATUS
@@ -131,7 +164,7 @@ export class WincredMirrorService {
       this.logger.log(`[produtos] iniciando sync — ${total} linhas no Wincred`);
 
       // Limpa tabela Postgres (full re-sync)
-      await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`);
+      await this.withRetry('truncate produtos', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`));
 
       let processed = 0;
       let offset = 0;
@@ -196,15 +229,19 @@ export class WincredMirrorService {
           }));
 
         if (data.length) {
-          await (this.prisma as any).wincredProduto.createMany({
-            data,
-            skipDuplicates: true,
-          });
+          await this.withRetry(`produtos@${offset}`, () =>
+            (this.prisma as any).wincredProduto.createMany({
+              data,
+              skipDuplicates: true,
+            }),
+          );
         }
         processed += data.length;
         offset += this.BATCH;
+        // Log + pausa a cada 10 batches (libera conexao Railway)
         if (offset % (this.BATCH * 10) === 0) {
           this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%)`);
+          await this.sleep(50);
         }
       }
 
@@ -231,7 +268,7 @@ export class WincredMirrorService {
       const total = await this.countMysql('estoque');
       this.logger.log(`[estoque] iniciando sync — ${total} linhas no Wincred`);
 
-      await this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_estoque"`);
+      await this.withRetry('truncate estoque', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_estoque"`));
 
       let processed = 0;
       let offset = 0;
@@ -261,15 +298,18 @@ export class WincredMirrorService {
           }));
 
         if (data.length) {
-          await (this.prisma as any).wincredEstoque.createMany({
-            data,
-            skipDuplicates: true,
-          });
+          await this.withRetry(`estoque@${offset}`, () =>
+            (this.prisma as any).wincredEstoque.createMany({
+              data,
+              skipDuplicates: true,
+            }),
+          );
         }
         processed += data.length;
         offset += this.BATCH;
         if (offset % (this.BATCH * 20) === 0) {
           this.logger.log(`[estoque] ${processed}/${total} (${Math.round((processed / total) * 100)}%)`);
+          await this.sleep(50);
         }
       }
 
