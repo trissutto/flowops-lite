@@ -2732,7 +2732,7 @@ function RefDetailsDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[900px] bg-white shadow-2xl z-40 overflow-y-auto">
+      <aside className="fixed inset-0 bg-white shadow-2xl z-40 overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between z-10">
           <div>
             <div className="font-bold text-lg text-slate-800">{refRow.descricao}</div>
@@ -2960,7 +2960,7 @@ function ConsolidateDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[900px] bg-white shadow-2xl z-40 overflow-y-auto">
+      <aside className="fixed inset-0 bg-white shadow-2xl z-40 overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-10">
           <div className="flex items-center justify-between">
             <div>
