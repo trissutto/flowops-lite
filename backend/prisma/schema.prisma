@@ -2726,3 +2726,135 @@ model StockMovement {
   @@map("stock_movements")
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  WINCRED MIRROR — espelho 1:1 das 6 tabelas critícas do MySQL Wincred.
+//
+//  Estrategia: sync incremental por DATAALT (quando existir) + upsert.
+//  Prefixo `wincred_*` deixa explicito que e espelho legacy. Quando
+//  cut-over 30/06 acontecer, decidimos se mantemos prefixo ou renomeamos.
+//
+//  IMPORTANTE: estes models NAO sao a fonte da verdade para operações
+//  novas (cadastro de produto, etc). Eles existem APENAS pra espelhar o
+//  Wincred. Cadastro proprio = futura tabela `Product` sem prefixo.
+// ════════════════════════════════════════════════════════════════════════
+
+/// Espelho de wincred.produtos. Catalogo de SKUs.
+/// PK = codigo (no Wincred nao tinha PK, vamos cravar — duplicatas viram update).
+model WincredProduto {
+  codigo            String    @id @db.VarChar(14)
+  grupo             Int?
+  nomeGrupo         String?   @db.VarChar(30)
+  descricaoPdv      String?   @db.VarChar(50)
+  descricaoCompleta String?   @db.VarChar(100)
+  custo             Decimal?  @db.Decimal(10, 2)
+  vendaUn           Decimal?  @db.Decimal(10, 2)
+  fornecedor        String?   @db.VarChar(18)
+  unidade           String?   @db.VarChar(2)
+  estoque           Int?
+  margem            Decimal?  @db.Decimal(10, 2)
+  dataAlt           DateTime? @db.Date
+  subgrupo          Int?
+  cor               String?   @db.VarChar(15)
+  tamanho           String?   @db.VarChar(20)
+  marca             String?   @db.VarChar(30)
+  ref               String?   @db.VarChar(10)
+  codFornecedor     Int?
+  operador          String?   @db.VarChar(15)
+  confPreco         String?   @db.VarChar(3)
+  tributo           String?   @db.VarChar(4)
+  ncm               String?   @db.VarChar(8)
+  plusSize          Int?
+  idWincred         BigInt?
+  categorias        String?   @db.VarChar(250)
+  codPis            String?   @db.Char(2)
+  aliqPis           Decimal?  @db.Decimal(10, 2)
+  codCofins         String?   @db.Char(2)
+  aliqCofins        Decimal?  @db.Decimal(10, 2)
+  aliqIcms          Decimal?  @db.Decimal(10, 2)
+  cst               String?   @db.Char(3)
+  csosn             String?   @db.Char(3)
+  cfop              Int?
+
+  // Metadata de sync
+  syncedAt          DateTime  @default(now()) @map("synced_at")
+
+  @@index([ref, cor])
+  @@index([dataAlt])
+  @@index([grupo, subgrupo])
+  @@index([plusSize, ref])
+  @@index([descricaoCompleta])
+  @@map("wincred_produtos")
+}
+
+/// Espelho de wincred.estoque. Qty por (codigo, loja).
+/// PK composta replica o UNIQUE KEY uk_codigo_loja do Wincred.
+model WincredEstoque {
+  codigo   String  @db.VarChar(14)
+  loja     String  @db.Char(2)
+  estoque  Int?
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@id([codigo, loja])
+  @@index([loja])
+  @@map("wincred_estoque")
+}
+
+/// Espelho de wincred.grupos. Categorias.
+model WincredGrupo {
+  codigo Int    @id
+  grupo  String? @db.VarChar(30)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@map("wincred_grupos")
+}
+
+/// Espelho de wincred.subgrupos. Sub-categorias.
+model WincredSubgrupo {
+  codigo   Int     @id
+  subgrupo String? @db.VarChar(30)
+  grupo    Int?
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([grupo])
+  @@map("wincred_subgrupos")
+}
+
+/// Espelho de wincred.fornecedores.
+model WincredFornecedor {
+  codigo        Int       @id
+  razaoSocial   String?   @db.VarChar(50)
+  fantasia      String?   @db.VarChar(50)
+  cnpj          String?   @db.VarChar(18)
+  ie            String?   @db.VarChar(18)
+  dataCadastro  DateTime? @db.Date
+  endereco      String?   @db.VarChar(50)
+  bairro        String?   @db.VarChar(30)
+  cidade        String?   @db.VarChar(30)
+  uf            String?   @db.Char(2)
+  ddd           String?   @db.Char(5)
+  fone          String?   @db.VarChar(16)
+  fax           String?   @db.VarChar(16)
+  cep           String?   @db.Char(10)
+  email         String?   @db.VarChar(50)
+  contato       String?   @db.VarChar(50)
+  obs           Bytes?
+
+  syncedAt      DateTime  @default(now()) @map("synced_at")
+
+  @@index([cnpj])
+  @@map("wincred_fornecedores")
+}
+
+/// Espelho de wincred.codigos. Tabela de sequencia (1 linha apenas).
+/// Wincred guarda proximo CODIGO disponivel pra cadastro.
+/// PK = codigo (a propria coluna serve como identificador).
+model WincredCodigo {
+  codigo String @id @db.VarChar(13)
+
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@map("wincred_codigos")
+}

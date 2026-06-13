@@ -12,6 +12,7 @@ import { SizeFeedbackModule } from './size-feedback/size-feedback.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { ProgressiveDiscountModule } from './progressive-discount/progressive-discount.module';
 import { StockMirrorModule } from './stock-mirror/stock-mirror.module';
+import { WincredMirrorModule } from './wincred-mirror/wincred-mirror.module';
 import { ProductsModule } from './products/products.module';
 import { StoresModule } from './stores/stores.module';
 import { StockModule } from './stock/stock.module';
@@ -67,6 +68,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     CatalogModule,
     ProgressiveDiscountModule,
     StockMirrorModule,
+    WincredMirrorModule,
     ProductsModule,
     StoresModule,
     StockModule,
