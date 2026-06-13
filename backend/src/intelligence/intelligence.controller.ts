@@ -10,6 +10,7 @@ import {
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { IntelligenceService } from './intelligence.service';
 import { ErpService } from '../erp/erp.service';
+import { WincredMirrorService } from '../wincred-mirror/wincred-mirror.service';
 
 /**
  * /intelligence — admin-only. Endpoints pra dashboard de inteligência de
@@ -24,6 +25,7 @@ export class IntelligenceController {
   constructor(
     private readonly svc: IntelligenceService,
     private readonly erp: ErpService,
+    private readonly mirror: WincredMirrorService,
   ) {}
 
   private requireAdmin(req: any) {
@@ -165,18 +167,24 @@ export class IntelligenceController {
     @Query('mode') mode?: string,
     @Query('minTotal') minTotal?: string,
     @Query('limit') limit?: string,
+    @Query('source') source?: string, // 'mirror' = Postgres, default = Giga
   ) {
     this.requireAdmin(req);
-    return this.erp.getStockDistribution({
+    const filters = {
       grupoCodigo: grupo ? Number(grupo) : null,
       subgrupoCodigo: subgrupo ? Number(subgrupo) : null,
       search: search || null,
       tamanhos: tamanhos ? tamanhos.split(',').map((s) => s.trim()).filter(Boolean) : null,
       lojas: lojas ? lojas.split(',').map((s) => s.trim()).filter(Boolean) : null,
-      mode: mode === 'all' ? 'all' : 'imbalanced',
+      mode: (mode === 'all' ? 'all' : 'imbalanced') as 'all' | 'imbalanced',
       minTotal: minTotal ? Number(minTotal) : 2,
       limit: limit ? Number(limit) : 1500,
-    });
+    };
+    // BRANCH: ?source=mirror => le do Postgres (Wincred mirror)
+    if (source === 'mirror') {
+      return this.mirror.getStockDistribution(filters);
+    }
+    return this.erp.getStockDistribution(filters);
   }
 
   /**

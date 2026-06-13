@@ -100,6 +100,21 @@ export default function DistribuicaoEstoque() {
   const [minTotal, setMinTotal] = useState(2);
   const [showSettings, setShowSettings] = useState(false);
 
+  // ── Fonte de dados: 'giga' (MySQL Wincred) | 'mirror' (Postgres espelho) ──
+  // Persiste em sessionStorage pra manter durante a sessao. Default = giga (seguro).
+  const [dataSource, setDataSourceState] = useState<'giga' | 'mirror'>(() => {
+    if (typeof window === 'undefined') return 'giga';
+    try {
+      return (window.sessionStorage.getItem('distrib_source') as 'giga' | 'mirror') || 'giga';
+    } catch { return 'giga'; }
+  });
+  const setDataSource = (s: 'giga' | 'mirror') => {
+    setDataSourceState(s);
+    try { window.sessionStorage.setItem('distrib_source', s); } catch {}
+  };
+  // Tempo da ultima chamada (ms) — pra mostrar comparativo na UI
+  const [lastFetchMs, setLastFetchMs] = useState<number | null>(null);
+
   // ── Drawer de realinhamento inline ──
   const [drawerGroup, setDrawerGroup] = useState<GroupDrawer | null>(null);
 
@@ -159,8 +174,14 @@ export default function DistribuicaoEstoque() {
       params.set('mode', mode);
       params.set('minTotal', String(minTotal));
       params.set('limit', '1500');
+      if (dataSource === 'mirror') params.set('source', 'mirror');
 
+      const t0_dx = Date.now();
+      if (dataSource === 'mirror') params.set('source', 'mirror');
+      const t0_dx = Date.now();
       const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
+      setLastFetchMs(Date.now() - t0_dx);
+      setLastFetchMs(Date.now() - t0_dx);
       setData(r);
       // Marca o snapshot dos filtros usados nessa última busca
       setLastQueryKey(currentQueryKey);
@@ -229,7 +250,10 @@ export default function DistribuicaoEstoque() {
       params.set('mode', 'all');
       params.set('minTotal', '0');
       params.set('limit', '500');
+      if (dataSource === 'mirror') params.set('source', 'mirror');
+      const t0_dx = Date.now();
       const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
+      setLastFetchMs(Date.now() - t0_dx);
       const corNorm = (refRow.cor || '').trim().toUpperCase();
       const items = r.rows.filter(
         (row) => (row.cor || '').trim().toUpperCase() === corNorm,
@@ -329,6 +353,49 @@ export default function DistribuicaoEstoque() {
           </button>
         </div>
       </header>
+
+      {/* Toggle de fonte de dados — pra teste comparativo Giga vs Mirror */}
+      <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-3 text-xs">
+        <span className="font-semibold text-slate-600">Fonte:</span>
+        <div className="inline-flex items-center bg-slate-100 rounded-lg p-1 gap-1">
+          <button
+            onClick={() => setDataSource('giga')}
+            className={`px-3 py-1 rounded text-xs font-bold transition ${
+              dataSource === 'giga'
+                ? 'bg-amber-500 text-white shadow'
+                : 'text-slate-600 hover:bg-white'
+            }`}
+            title="MySQL Wincred (Giga). Tradicional, mais lento."
+          >
+            🐢 Giga (MySQL)
+          </button>
+          <button
+            onClick={() => setDataSource('mirror')}
+            className={`px-3 py-1 rounded text-xs font-bold transition ${
+              dataSource === 'mirror'
+                ? 'bg-emerald-600 text-white shadow'
+                : 'text-slate-600 hover:bg-white'
+            }`}
+            title="Postgres espelho (sync 10min). Rapido."
+          >
+            ⚡ Mirror (Postgres)
+          </button>
+        </div>
+        {lastFetchMs !== null && (
+          <span className={`ml-2 px-2 py-1 rounded-full font-mono text-[11px] font-bold ${
+            lastFetchMs < 500 ? 'bg-emerald-100 text-emerald-800' :
+            lastFetchMs < 3000 ? 'bg-amber-100 text-amber-800' :
+            'bg-red-100 text-red-800'
+          }`}>
+            ⏱ {lastFetchMs}ms
+          </span>
+        )}
+        <span className="ml-auto text-slate-500 text-[11px]">
+          {dataSource === 'mirror'
+            ? 'Espelho atualizado a cada 10min. Use pra navegacao rapida.'
+            : 'Dados em tempo real direto do Giga. Pode demorar 15-25s.'}
+        </span>
+      </div>
 
       <main className="w-full p-4 space-y-4">
         {/* Tabs */}
@@ -2754,6 +2821,7 @@ function RefDetailsDrawer({
     params.set('mode', 'all');
     params.set('minTotal', '0');
     params.set('limit', '100'); // era 500, mas 100 cobre 99% dos casos (REF+COR ~ 8-12 linhas)
+    try { if (window.sessionStorage.getItem('distrib_source') === 'mirror') params.set('source', 'mirror'); } catch {}
     api<Distribution>(`/intelligence/stock-distribution?${params}`)
       .then((r) => {
         if (aborted) return;
@@ -2900,6 +2968,7 @@ function ConsolidateDrawer({
     params.set('mode', 'all');
     params.set('minTotal', '0');
     params.set('limit', '500');
+    try { if (window.sessionStorage.getItem('distrib_source') === 'mirror') params.set('source', 'mirror'); } catch {}
 
     Promise.all([
       api<Distribution>(`/intelligence/stock-distribution?${params}`),

@@ -364,6 +364,221 @@ export class WincredMirrorService {
     });
   }
 
+  // ─────────────────────────────────────────────────────────────────────
+  //  GET STOCK DISTRIBUTION (drop-in replacement)
+  //  Mesma assinatura/retorno do ErpService.getStockDistribution mas le do
+  //  Postgres (wincred_produtos JOIN wincred_estoque). 100-300x mais rapido.
+  // ─────────────────────────────────────────────────────────────────────
+
+  async getStockDistribution(filters: {
+    grupoCodigo?: number | null;
+    subgrupoCodigo?: number | null;
+    search?: string | null;
+    tamanhos?: string[] | null;
+    lojas?: string[] | null;
+    mode?: 'imbalanced' | 'all';
+    minTotal?: number;
+    limit?: number;
+  } = {}): Promise<{
+    rows: Array<{
+      codigo: string;
+      ref: string;
+      cor: string | null;
+      tamanho: string | null;
+      descricao: string;
+      preco: number;
+      estoquePorLoja: Record<string, number>;
+      total: number;
+      criticidade: 'ALTO' | 'MEDIO' | 'OK';
+    }>;
+    lojas: string[];
+    totalRows: number;
+    truncated: boolean;
+  }> {
+    const t0 = Date.now();
+    const limit = Math.max(50, Math.min(5000, filters.limit || 1500));
+    const mode = filters.mode || 'imbalanced';
+    const minTotal = Math.max(0, filters.minTotal ?? 2);
+
+    const defaultPlusSize = [
+      '46', '48', '50', '52', '54', '56', '58', '60',
+      '46/48', '48/50', '50/52', '52/54', '54/56', '56/58', '58/60',
+    ];
+    const tamanhos = (filters.tamanhos && filters.tamanhos.length > 0)
+      ? filters.tamanhos.map((t) => t.toUpperCase().trim()).filter(Boolean)
+      : defaultPlusSize;
+    const ignoredLojas = new Set(['SITE', 'PF']);
+
+    // ── Monta WHERE dinamico ──
+    const conds: string[] = [];
+    const params: any[] = [];
+
+    // Tamanho (TRIM + UPPER pra cobrir padding/case do Wincred)
+    conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) = ANY($${params.length + 1})`);
+    params.push(tamanhos);
+
+    // REF nao vazia
+    conds.push(`COALESCE(p.ref, '') <> ''`);
+
+    if (filters.grupoCodigo) {
+      conds.push(`p.grupo = $${params.length + 1}`);
+      params.push(filters.grupoCodigo);
+    }
+    if (filters.subgrupoCodigo) {
+      conds.push(`p.subgrupo = $${params.length + 1}`);
+      params.push(filters.subgrupoCodigo);
+    }
+    if (filters.search?.trim()) {
+      const rawSearch = filters.search.trim().toUpperCase();
+      // Fast path: REF exata (igualdade)
+      const isLikelyRef =
+        !rawSearch.includes(' ') &&
+        rawSearch.length >= 3 &&
+        rawSearch.length <= 20 &&
+        /[A-Z]/.test(rawSearch) &&
+        /[0-9\-]/.test(rawSearch);
+      if (isLikelyRef) {
+        conds.push(`UPPER(p.ref) = $${params.length + 1}`);
+        params.push(rawSearch);
+      } else {
+        const tokens = rawSearch.split(/\s+/).filter((t) => t.length > 0);
+        for (const tok of tokens) {
+          const term = `%${tok}%`;
+          conds.push(
+            `(UPPER(p.ref) LIKE $${params.length + 1} OR UPPER(COALESCE(p.descricao_completa, '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
+          );
+          params.push(term, term, term);
+        }
+      }
+    }
+
+    params.push(limit);
+    const limitParam = `$${params.length}`;
+
+    // Query principal: JOIN com agregacao usando json_object_agg
+    const sql = `
+      SELECT
+        p.codigo,
+        p.ref,
+        p.cor,
+        p.tamanho,
+        COALESCE(p.descricao_completa, '') AS descricao,
+        COALESCE(p.venda_un, 0)::float AS preco,
+        COALESCE(
+          json_object_agg(
+            e.loja, e.estoque
+          ) FILTER (WHERE e.loja IS NOT NULL),
+          '{}'::json
+        ) AS estoque_obj
+      FROM wincred_produtos p
+      LEFT JOIN wincred_estoque e ON e.codigo = p.codigo
+      WHERE ${conds.join(' AND ')}
+      GROUP BY p.codigo, p.ref, p.cor, p.tamanho, p.descricao_completa, p.venda_un
+      ORDER BY p.ref, p.cor, p.tamanho
+      LIMIT ${limitParam}
+    `;
+
+    let rawRows: any[] = [];
+    try {
+      rawRows = await this.prisma.$queryRawUnsafe(sql, ...params);
+    } catch (e) {
+      this.logger.error(`getStockDistribution falhou: ${(e as Error).message}`);
+      return { rows: [], lojas: [], totalRows: 0, truncated: false };
+    }
+    this.logger.log(`[mirror] getStockDistribution: ${rawRows.length} linhas em ${Date.now() - t0}ms`);
+
+    // Parse e calcula criticidade
+    const lojasSet = new Set<string>();
+    type Parsed = {
+      codigo: string; ref: string; cor: string | null; tamanho: string | null;
+      descricao: string; preco: number;
+      estoquePorLoja: Record<string, number>; total: number;
+      criticidade: 'ALTO' | 'MEDIO' | 'OK';
+    };
+    const parsed: Parsed[] = [];
+
+    for (const r of rawRows) {
+      const estoqueObj = r.estoque_obj || {};
+      const estoquePorLoja: Record<string, number> = {};
+      let total = 0;
+      for (const [loja, qty] of Object.entries(estoqueObj)) {
+        const lojaCode = String(loja).trim().toUpperCase();
+        if (!lojaCode || ignoredLojas.has(lojaCode)) continue;
+        const q = Number(qty) || 0;
+        estoquePorLoja[lojaCode] = (estoquePorLoja[lojaCode] || 0) + q;
+        lojasSet.add(lojaCode);
+        total += q;
+      }
+
+      // Filtro lojas
+      if (filters.lojas && filters.lojas.length > 0) {
+        const filtered: Record<string, number> = {};
+        let filteredTotal = 0;
+        for (const lj of filters.lojas) {
+          const code = lj.toUpperCase().trim();
+          const v = estoquePorLoja[code] || 0;
+          filtered[code] = v;
+          filteredTotal += v;
+        }
+        Object.assign(estoquePorLoja, filtered);
+        for (const k of Object.keys(estoquePorLoja)) {
+          if (!filters.lojas.includes(k)) delete estoquePorLoja[k];
+        }
+        total = filteredTotal;
+      }
+
+      const valores = Object.values(estoquePorLoja);
+      const temZero = valores.some((v) => v <= 0);
+      const maxQty = valores.length > 0 ? Math.max(...valores) : 0;
+      let criticidade: 'ALTO' | 'MEDIO' | 'OK' = 'OK';
+      if (temZero && maxQty >= 3) criticidade = 'ALTO';
+      else if (temZero && maxQty >= 2) criticidade = 'MEDIO';
+
+      parsed.push({
+        codigo: String(r.codigo).trim(),
+        ref: String(r.ref || '').trim(),
+        cor: r.cor ? String(r.cor).trim() : null,
+        tamanho: r.tamanho ? String(r.tamanho).trim() : null,
+        descricao: String(r.descricao || '').trim(),
+        preco: Number(r.preco) || 0,
+        estoquePorLoja, total, criticidade,
+      });
+    }
+
+    // Filtra mode + minTotal
+    let filtered = parsed;
+    if (minTotal > 0) {
+      filtered = filtered.filter((r) => {
+        const vals = Object.values(r.estoquePorLoja || {});
+        const m = vals.length > 0 ? Math.max(...vals) : 0;
+        return m >= minTotal;
+      });
+    }
+    if (mode === 'imbalanced') {
+      filtered = filtered.filter((r) => r.criticidade !== 'OK');
+    }
+
+    // Ordena
+    const ordWeight: Record<string, number> = { ALTO: 0, MEDIO: 1, OK: 2 };
+    filtered.sort((a, b) => {
+      const dw = ordWeight[a.criticidade] - ordWeight[b.criticidade];
+      if (dw !== 0) return dw;
+      return b.total - a.total;
+    });
+
+    const lojas = Array.from(lojasSet)
+      .filter((l) => !ignoredLojas.has(l))
+      .filter((l) => !filters.lojas || filters.lojas.includes(l))
+      .sort();
+
+    return {
+      rows: filtered,
+      lojas,
+      totalRows: filtered.length,
+      truncated: rawRows.length >= limit,
+    };
+  }
+
   // Helper para tabelas pequenas (1 batch so)
   private async syncSmallTable<T>(
     tableName: string,
