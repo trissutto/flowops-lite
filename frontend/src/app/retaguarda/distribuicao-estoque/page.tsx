@@ -200,10 +200,10 @@ export default function DistribuicaoEstoque() {
   // Cor da célula de quantidade
   const cellBgClass = (qty: number) => {
     if (qty < 0) return 'bg-rose-200 text-rose-900 font-bold';
-    if (qty === 0) return 'text-slate-300';
-    if (qty >= 5) return 'bg-emerald-200 text-emerald-900 font-bold';
-    if (qty >= 3) return 'bg-emerald-100 text-emerald-800 font-semibold';
-    return 'text-slate-700';
+    if (qty === 0) return 'bg-red-50 text-red-700';
+    if (qty === 1) return 'bg-yellow-50 text-yellow-800 font-semibold';
+    
+    return 'bg-blue-50 text-blue-800 font-semibold';
   };
 
   // Cor da linha conforme criticidade
@@ -271,7 +271,7 @@ export default function DistribuicaoEstoque() {
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-[1800px] mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="w-full px-4 py-3 flex items-center gap-3">
           <Link
             href="/retaguarda"
             className="p-2 rounded hover:bg-slate-100"
@@ -330,7 +330,7 @@ export default function DistribuicaoEstoque() {
         </div>
       </header>
 
-      <main className="max-w-[1800px] mx-auto p-4 space-y-4">
+      <main className="w-full p-4 space-y-4">
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 w-fit">
           <button
@@ -1108,7 +1108,7 @@ function RealignDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[1200px] bg-slate-50 shadow-2xl z-40 overflow-y-auto">
+      <aside className="fixed inset-0 bg-slate-50 shadow-2xl z-40 overflow-y-auto">
         {/* Header — fixo no topo */}
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-20">
           <div className="flex items-center justify-between mb-1.5">
