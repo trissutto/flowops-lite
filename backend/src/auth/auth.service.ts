@@ -52,6 +52,65 @@ export class AuthService {
     };
   }
 
+  /**
+   * Gera um JWT de "loja" pra admin/master operar o PDV daquela loja
+   * SEM precisar deslogar. Token tem validade curta (8h) e carrega flag
+   * `impersonatedBy` pra auditoria — qualquer rota sensível pode checar
+   * isso e bloquear/logar.
+   *
+   * Caso de uso: Thiago precisa abrir o PDV de Sorocaba pra resolver algo
+   * sem pedir senha pra vendedora. Clica "Entrar como loja" em
+   * /retaguarda/lojas, abre aba nova já logada.
+   */
+  async impersonateStore(adminUserId: string, storeCode: string) {
+    const admin = await this.prisma.user.findUnique({ where: { id: adminUserId } });
+    if (!admin || !admin.active) throw new UnauthorizedException('Admin invalido');
+    if (admin.role !== 'admin' && admin.role !== 'master') {
+      throw new UnauthorizedException('Apenas admin/master pode impersonar loja');
+    }
+
+    const store = await this.prisma.store.findUnique({
+      where: { code: storeCode },
+      select: { id: true, code: true, name: true, active: true },
+    });
+    if (!store) throw new NotFoundException(`Loja ${storeCode} nao cadastrada`);
+    if (!store.active) throw new BadRequestException(`Loja ${storeCode} esta inativa`);
+
+    const payload = {
+      sub: admin.id,
+      email: admin.email,
+      name: `${admin.name} (como ${store.name})`,
+      role: 'store' as const,
+      storeId: store.id,
+      storeCode: store.code,
+      storeName: store.name,
+      impersonatedBy: admin.id,
+      impersonatedByEmail: admin.email,
+      impersonatedByName: admin.name,
+    };
+
+    const accessToken = await this.jwt.signAsync(payload, { expiresIn: '8h' });
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[IMPERSONATE] ${admin.email} (${admin.id}) entrou como loja ${store.code} (${store.name}) em ${new Date().toISOString()}`,
+    );
+
+    return {
+      accessToken,
+      user: {
+        id: admin.id,
+        email: admin.email,
+        name: payload.name,
+        role: 'store',
+        storeId: store.id,
+        storeCode: store.code,
+        storeName: store.name,
+        impersonated: true,
+      },
+    };
+  }
+
   async changePassword(input: {
     userId: string;
     oldPassword: string;

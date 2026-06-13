@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, RefreshCw, Building2, Store as StoreIcon, Loader2, Check, AlertTriangle, Edit2, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Building2, Store as StoreIcon, Loader2, Check, AlertTriangle, Edit2, X, LogIn } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Store = {
@@ -72,6 +72,40 @@ export default function LojasPage() {
       alert(`Erro ao salvar: ${e?.message || e}`);
     } finally {
       setSavingId(null);
+    }
+  };
+
+  /**
+   * Entra como PDV daquela loja em uma aba NOVA, usando JWT temporario (8h).
+   *
+   * Fluxo:
+   *   1. POST /auth/impersonate-store { storeCode } -> recebe { accessToken }
+   *   2. Abre /impersonate?token=XXX&dest=/minha-loja/pdv em aba nova
+   *   3. A pagina /impersonate salva o token em sessionStorage (isolado por aba)
+   *      e redireciona pra /minha-loja/pdv — a aba ja esta logada como loja.
+   *   4. A aba da matriz continua intacta porque sessionStorage e por aba.
+   */
+  const enterAsStore = async (store: Store) => {
+    if (!store.active) return;
+    try {
+      const res = await api<{ accessToken: string }>('/auth/impersonate-store', {
+        method: 'POST',
+        body: JSON.stringify({ storeCode: store.code }),
+      });
+      if (!res?.accessToken) {
+        alert('Falha ao gerar acesso a loja — tente novamente.');
+        return;
+      }
+      const url = `/impersonate?token=${encodeURIComponent(res.accessToken)}&dest=${encodeURIComponent('/minha-loja/pdv')}`;
+      const w = window.open(url, `_blank_pdv_${store.code}`);
+      if (!w) {
+        alert(
+          'O navegador bloqueou abrir aba nova. Permita pop-ups pra flowops-lite.vercel.app ou ' +
+          'segura Ctrl quando clicar.',
+        );
+      }
+    } catch (e: any) {
+      alert(`Erro ao entrar como ${store.name}: ${e?.message || 'falha'}`);
     }
   };
 
@@ -258,6 +292,18 @@ export default function LojasPage() {
                   </div>
 
                   {isSaving && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+
+                  {/* ENTRAR COMO PDV — modo impersonate (admin/master) */}
+                  <button
+                    type="button"
+                    onClick={() => enterAsStore(store)}
+                    disabled={!store.active}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                    title={store.active ? `Abrir PDV da ${store.name} em aba nova (modo master)` : 'Loja inativa'}
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    Entrar PDV
+                  </button>
 
                   <button
                     type="button"

@@ -47,9 +47,19 @@ function resolveSocketUrl(): string {
  * localStorage. Se mudou, fecha o socket antigo e abre um novo com o
  * token correto (que dispara reauth no handleConnection do gateway).
  */
+function resolveToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const sessionTok = window.sessionStorage.getItem('flowops_token');
+    if (sessionTok) return sessionTok;
+  } catch {
+    /* segue pro localStorage */
+  }
+  return window.localStorage.getItem('flowops_token');
+}
+
 export function getSocket(): Socket {
-  const token =
-    typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+  const token = resolveToken();
 
   // Se token mudou (ou sumiu) desde o último connect, descarta socket antigo.
   if (socket && socketToken !== token) {

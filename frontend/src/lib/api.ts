@@ -136,11 +136,29 @@ export function setTrainingMode(on: boolean): void {
   } catch {}
 }
 
+/**
+ * Token resolver — prioriza sessionStorage (por aba) sobre localStorage (global).
+ *
+ * Por que? Pra suportar o modo IMPERSONATE (admin abre PDV de loja em aba
+ * separada): a nova aba salva em sessionStorage e a aba da matriz continua
+ * com o token original em localStorage. Cada aba enxerga so o seu token.
+ */
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const sessionTok = window.sessionStorage.getItem('flowops_token');
+    if (sessionTok) return sessionTok;
+  } catch {
+    /* sessionStorage indisponivel, segue pro localStorage */
+  }
+  return window.localStorage.getItem('flowops_token');
+}
+
 export async function api<T = any>(
   path: string,
   opts: RequestInit = {},
 ): Promise<T> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+  const token = getAuthToken();
   const training = isTrainingMode();
   try {
     const res = await fetch(`${API_URL}/api${path}`, {
