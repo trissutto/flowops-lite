@@ -7958,4 +7958,134 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return [];
     }
   }
+  /**
+   * Auto-descoberta de schema do Wincred. Retorna lista de TODAS as tabelas
+   * + DDL (CREATE TABLE) + contagem + amostra de 3 linhas. Usado pra gerar
+   * migrations Prisma equivalentes no Postgres.
+   *
+   * Tempo esperado: 5-20s dependendo do tamanho. Roda em paralelo (Promise.all)
+   * por tabela. Falhas individuais nao derrubam tudo — capturam por tabela.
+   *
+   * Seguranca: 100% READ-ONLY. Nao executa nenhum ALTER/INSERT/UPDATE/DELETE.
+   */
+  async dumpWincredSchema(opts: {
+    sampleRows?: number;
+    skipCounts?: boolean;
+    onlyPrefix?: string;
+  } = {}): Promise<{
+    connectedTo: string | null;
+    totalTables: number;
+    durationMs: number;
+    tables: Array<{
+      name: string;
+      ddl: string | null;
+      rowCount: number | null;
+      sample: any[];
+      error: string | null;
+    }>;
+  }> {
+    if (!this.pool) {
+      return {
+        connectedTo: null,
+        totalTables: 0,
+        durationMs: 0,
+        tables: [],
+      };
+    }
+
+    const t0 = Date.now();
+    const sampleN = Math.max(0, Math.min(10, opts.sampleRows ?? 3));
+    const skipCounts = !!opts.skipCounts;
+    const prefix = (opts.onlyPrefix || '').toLowerCase();
+
+    // Database atual
+    let dbName: string | null = null;
+    try {
+      const [r] = await this.pool.query<mysql.RowDataPacket[]>('SELECT DATABASE() AS db');
+      dbName = (r as any[])[0]?.db ?? null;
+    } catch (e) {
+      this.logger.warn(`dumpWincredSchema: nao conseguiu pegar DB name: ${(e as Error).message}`);
+    }
+
+    // Lista tabelas
+    let tableNames: string[] = [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>('SHOW TABLES');
+      tableNames = (rows as any[]).map((r) => Object.values(r)[0] as string).filter(Boolean);
+    } catch (e) {
+      this.logger.error(`dumpWincredSchema: SHOW TABLES falhou: ${(e as Error).message}`);
+      return {
+        connectedTo: dbName,
+        totalTables: 0,
+        durationMs: Date.now() - t0,
+        tables: [],
+      };
+    }
+
+    if (prefix) {
+      tableNames = tableNames.filter((t) => t.toLowerCase().startsWith(prefix));
+    }
+
+    // Para cada tabela: DDL + count + sample (em paralelo, mas limita 8 simultaneos)
+    const limitPerTable = 5; // ms timeout aprox por count
+    const CHUNK = 8;
+    const tables: Array<{
+      name: string;
+      ddl: string | null;
+      rowCount: number | null;
+      sample: any[];
+      error: string | null;
+    }> = [];
+
+    for (let i = 0; i < tableNames.length; i += CHUNK) {
+      const slice = tableNames.slice(i, i + CHUNK);
+      const results = await Promise.all(
+        slice.map(async (tableName) => {
+          let ddl: string | null = null;
+          let rowCount: number | null = null;
+          let sample: any[] = [];
+          let error: string | null = null;
+          try {
+            const [showRows] = await this.pool.query<mysql.RowDataPacket[]>(
+              `SHOW CREATE TABLE \`${tableName}\``,
+            );
+            const obj = (showRows as any[])[0];
+            ddl = obj ? (obj['Create Table'] || obj['Create View'] || null) : null;
+          } catch (e) {
+            error = `DDL: ${(e as Error).message}`;
+          }
+          if (!skipCounts) {
+            try {
+              const [cntRows] = await this.pool.query<mysql.RowDataPacket[]>(
+                `SELECT COUNT(*) AS c FROM \`${tableName}\``,
+              );
+              rowCount = Number((cntRows as any[])[0]?.c ?? 0);
+            } catch (e) {
+              if (!error) error = `COUNT: ${(e as Error).message}`;
+            }
+          }
+          if (sampleN > 0) {
+            try {
+              const [smp] = await this.pool.query<mysql.RowDataPacket[]>(
+                `SELECT * FROM \`${tableName}\` LIMIT ${sampleN}`,
+              );
+              sample = smp as any[];
+            } catch (e) {
+              if (!error) error = `SAMPLE: ${(e as Error).message}`;
+            }
+          }
+          return { name: tableName, ddl, rowCount, sample, error };
+        }),
+      );
+      tables.push(...results);
+    }
+
+    return {
+      connectedTo: dbName,
+      totalTables: tableNames.length,
+      durationMs: Date.now() - t0,
+      tables,
+    };
+  }
+
 }

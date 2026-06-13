@@ -3,9 +3,10 @@ import { ErpService } from './erp.service';
 import { ErpQueryController } from './erp-query.controller';
 import { NcmAuditService } from './ncm-audit.service';
 import { NcmAuditController } from './ncm-audit.controller';
+import { WincredDiscoveryController } from './wincred-discovery.controller';
 
 @Module({
-  controllers: [ErpQueryController, NcmAuditController],
+  controllers: [ErpQueryController, NcmAuditController, WincredDiscoveryController],
   providers: [ErpService, NcmAuditService],
   exports: [ErpService, NcmAuditService],
 })
