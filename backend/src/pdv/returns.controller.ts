@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   Body,
   Controller,
@@ -30,12 +30,12 @@ export class ReturnsController {
     if (role === 'admin') {
       const storeCode = override?.storeCode || req?.user?.storeCode;
       const storeName = override?.storeName || req?.user?.storeName || storeCode || '';
-      if (!storeCode) throw new BadRequestException('storeCode obrigatório');
+      if (!storeCode) throw new BadRequestException('storeCode obrigatÃ³rio');
       return { storeCode, storeName };
     }
     const storeCode = req?.user?.storeCode;
     const storeName = req?.user?.storeName || storeCode || '';
-    if (!storeCode) throw new BadRequestException('Usuário sem loja vinculada');
+    if (!storeCode) throw new BadRequestException('UsuÃ¡rio sem loja vinculada');
     return { storeCode, storeName };
   }
 
@@ -51,18 +51,18 @@ export class ReturnsController {
   /**
    * GET /pdv/devolucao/lookup-by-sku?sku=XXX&crossStore=1
    *
-   * Lista vendas finalizadas que contêm esse SKU, ordenadas da mais recente
-   * pra mais antiga. Permite vendedora bipar a peça que voltou (em vez de
+   * Lista vendas finalizadas que contÃªm esse SKU, ordenadas da mais recente
+   * pra mais antiga. Permite vendedora bipar a peÃ§a que voltou (em vez de
    * pedir o cupom da venda original).
    *
-   * Modo A2 — FILTRO POR LOJA + OVERRIDE ADMIN:
-   *   - Vendedora (role=store): SÓ vê vendas da loja dela (storeCode do JWT)
-   *   - Admin/operator: por padrão também filtra (operando uma loja física).
-   *     Mas se mandar ?crossStore=1, vê vendas de TODAS as lojas.
+   * Modo A2 â€” FILTRO POR LOJA + OVERRIDE ADMIN:
+   *   - Vendedora (role=store): SÃ“ vÃª vendas da loja dela (storeCode do JWT)
+   *   - Admin/operator: por padrÃ£o tambÃ©m filtra (operando uma loja fÃ­sica).
+   *     Mas se mandar ?crossStore=1, vÃª vendas de TODAS as lojas.
    *
-   * Regra de negócio: devolução deve ser feita na loja que emitiu a NF
-   * original (mesmo CNPJ). Override só pra casos especiais (cliente em
-   * trânsito, suporte ao consumidor, etc).
+   * Regra de negÃ³cio: devoluÃ§Ã£o deve ser feita na loja que emitiu a NF
+   * original (mesmo CNPJ). Override sÃ³ pra casos especiais (cliente em
+   * trÃ¢nsito, suporte ao consumidor, etc).
    */
   @Get('lookup-by-sku')
   async lookupBySku(
@@ -73,7 +73,7 @@ export class ReturnsController {
     this.requireRole(req);
     const role = req?.user?.role;
     const userStoreCode = req?.user?.storeCode || null;
-    // crossStore=1 só funciona se for admin/operator. Vendedora comum sempre filtra.
+    // crossStore=1 sÃ³ funciona se for admin/operator. Vendedora comum sempre filtra.
     const isAdmin = role === 'admin' || role === 'operator';
     const wantsCross = crossStore === '1' || crossStore === 'true';
     const storeCodeFilter = isAdmin && wantsCross ? null : userStoreCode;
@@ -83,14 +83,14 @@ export class ReturnsController {
   /**
    * GET /pdv/devolucao/lookup-manual?sku=XXX
    *
-   * DEVOLUÇÃO MANUAL (opção C — peça antiga sem cupom flowops).
-   * Verifica se peça foi vendida na loja atual nos últimos 60 dias (Giga).
-   * Anti-fraude: vendedora SÓ pode devolver peça que passou pelo caixa
+   * DEVOLUÃ‡ÃƒO MANUAL (opÃ§Ã£o C â€” peÃ§a antiga sem cupom flowops).
+   * Verifica se peÃ§a foi vendida na loja atual nos Ãºltimos 60 dias (Giga).
+   * Anti-fraude: vendedora SÃ“ pode devolver peÃ§a que passou pelo caixa
    * daquela loja na janela.
    *
    * Retorna:
-   *   { eligible: true, produto, vendas, salesCount } → pode devolver
-   *   { eligible: false, reason, message }            → bloqueia com motivo
+   *   { eligible: true, produto, vendas, salesCount } â†’ pode devolver
+   *   { eligible: false, reason, message }            â†’ bloqueia com motivo
    */
   @Get('lookup-manual')
   async lookupManual(
@@ -111,7 +111,7 @@ export class ReturnsController {
    *   modo: 'dinheiro'|'troca'|'credito',
    *   motivo?: string,
    *   creditoValidadeDias?: number,
-   *   storeCode?, storeName?,                 // admin pode forçar
+   *   storeCode?, storeName?,                 // admin pode forÃ§ar
    *   attachToSaleId?: string | null,
    * }
    */
@@ -142,7 +142,7 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: u.id || u.sub,
       userName: u.name || u.email,
-      // TRAVA DE SEGURANÇA: sessão em treino (header) → devolução simulada,
+      // TRAVA DE SEGURANÃ‡A: sessÃ£o em treino (header) â†’ devoluÃ§Ã£o simulada,
       // sem increaseStock no Giga e sem sangria real.
       trainingRequest: isTrainingRequest(req),
     });
@@ -185,7 +185,7 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
-      // TRAVA DE SEGURANÇA: sessão em treino (header) → devolução tratada
+      // TRAVA DE SEGURANÃ‡A: sessÃ£o em treino (header) â†’ devoluÃ§Ã£o tratada
       // como treino MESMO que a venda original seja real.
       trainingRequest: isTrainingRequest(req),
       confirmCrossStore: !!body.confirmCrossStore,
@@ -195,12 +195,12 @@ export class ReturnsController {
   /**
    * POST /pdv/devolucao/batch
    *
-   * Devolução BATCH — peças de VÁRIAS vendas originais em UMA operação.
-   * Cliente devolve peças que saíram de 2, 3 ou N compras diferentes.
+   * DevoluÃ§Ã£o BATCH â€” peÃ§as de VÃRIAS vendas originais em UMA operaÃ§Ã£o.
+   * Cliente devolve peÃ§as que saÃ­ram de 2, 3 ou N compras diferentes.
    *
    * Cria N PdvReturns (1 por venda) mas consolida:
    *  - 1 sangria total (modo dinheiro/pix)
-   *  - 1 código vale-troca master (modo troca/credito)
+   *  - 1 cÃ³digo vale-troca master (modo troca/credito)
    *  - 1 estorno de estoque consolidado
    *
    * Body: {
@@ -238,14 +238,14 @@ export class ReturnsController {
       attachToSaleId: body.attachToSaleId ?? null,
       userId: req?.user?.sub || req?.user?.id || null,
       userName: req?.user?.name || req?.user?.email || null,
-      // TRAVA DE SEGURANÇA: sessão em treino (header) → batch inteiro tratado
+      // TRAVA DE SEGURANÃ‡A: sessÃ£o em treino (header) â†’ batch inteiro tratado
       // como treino MESMO que as vendas originais sejam reais.
       trainingRequest: isTrainingRequest(req),
     });
   }
 
   /**
-   * GET /pdv/devolucao — lista devoluções da loja
+   * GET /pdv/devolucao â€” lista devoluÃ§Ãµes da loja
    */
   @Get()
   async list(
@@ -268,7 +268,7 @@ export class ReturnsController {
   }
 
   /**
-   * GET /pdv/devolucao/return/:id — busca dados de UMA devolucao pra imprimir comprovante.
+   * GET /pdv/devolucao/return/:id â€” busca dados de UMA devolucao pra imprimir comprovante.
    * Retorna PdvReturn + items + venda original (resumida).
    */
   @Get('return/:id')
@@ -278,7 +278,7 @@ export class ReturnsController {
   }
 
   /**
-   * GET /pdv/devolucao/creditos — lista vales emitidos com filtros.
+   * GET /pdv/devolucao/creditos â€” lista vales emitidos com filtros.
    * Query: from, to, storeCode, status (ativo|usado|vencido), code, customerQ, page, size
    */
   @Get('creditos')
@@ -302,7 +302,7 @@ export class ReturnsController {
   }
 
   /**
-   * GET /pdv/devolucao/credito/:code — consulta vale-troca SEM usar
+   * GET /pdv/devolucao/credito/:code â€” consulta vale-troca SEM usar
    */
   @Get('credito/:code')
   async checkCredit(@Req() req: any, @Param('code') code: string) {

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+﻿import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
@@ -9,14 +9,14 @@ import { StockEntry } from '../routing/types';
  * LEITURA: sempre habilitada.
  * ESCRITA (baixa de estoque): controlada pelo env var ERP_WRITE_ENABLED='true'.
  *   Quando OFF (default), qualquer chamada a `decreaseStock` retorna erro
- *   sem tocar no MySQL — sistema fica em SHADOW MODE.
- *   Quando ON, o UPDATE acontece em transação ACID com rollback em falha.
+ *   sem tocar no MySQL â€” sistema fica em SHADOW MODE.
+ *   Quando ON, o UPDATE acontece em transaÃ§Ã£o ACID com rollback em falha.
  *
  * Schema real (confirmado via inspect-erp):
- *   tabela `estoque`  (266k registros — estoque consolidado)
+ *   tabela `estoque`  (266k registros â€” estoque consolidado)
  *     CODIGO   varchar(14)   SKU do produto
- *     ESTOQUE  int(11)       quantidade disponível
- *     LOJA     char(2)       código da loja (01..20)
+ *     ESTOQUE  int(11)       quantidade disponÃ­vel
+ *     LOJA     char(2)       cÃ³digo da loja (01..20)
  */
 @Injectable()
 export class ErpService implements OnModuleInit, OnModuleDestroy {
@@ -25,19 +25,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   constructor(private readonly config: ConfigService) {}
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // HELPERS DE NORMALIZAÇÃO DE SKU
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // HELPERS DE NORMALIZAÃ‡ÃƒO DE SKU
   //
-  // O Giga armazena CODIGO com zeros à esquerda (ex: "0005383498"). Outros
+  // O Giga armazena CODIGO com zeros Ã  esquerda (ex: "0005383498"). Outros
   // sistemas (WC, scanner, frontend) enviam sem padding (ex: "5383498").
   // Esses helpers expandem variantes pra que queries casem em qualquer formato.
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Gera todas as variantes de um SKU (com padding zero de 3 a 14 dígitos
-   * + versão sem zeros à esquerda + original).
+   * Gera todas as variantes de um SKU (com padding zero de 3 a 14 dÃ­gitos
+   * + versÃ£o sem zeros Ã  esquerda + original).
    */
-  // Public (era private) — usado tambem pelo returns.service.ts pra lookup
+  // Public (era private) â€” usado tambem pelo returns.service.ts pra lookup
   // de troca tolerar zeros a esquerda (5210367 vs 0005210367 batem).
   //
   // Gera variantes do SKU com/sem zeros a esquerda em TODOS os tamanhos
@@ -63,7 +63,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Pra uma lista de SKUs, gera o set de variantes + um mapa
-   * variante→original (pra mapear retorno do Giga de volta pro
+   * varianteâ†’original (pra mapear retorno do Giga de volta pro
    * formato que o caller passou).
    */
   private expandSkus(skus: string[]): {
@@ -91,37 +91,37 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       password: this.config.get<string>('ERP_PASSWORD'),
       database: this.config.get<string>('ERP_DATABASE'),
       waitForConnections: true,
-      // Aumentado de 5 → 15 (2025-05) pra suportar batch concorrente de baixa
+      // Aumentado de 5 â†’ 15 (2025-05) pra suportar batch concorrente de baixa
       // em transferencias + PDV + crediario sem fila. Wincred MySQL aguenta.
       connectionLimit: 15,
       queueLimit: 0,
-      // 15s pra conectar — Giga roda atrás do NAT da loja, latência varia MUITO.
-      // 5s era curto e causava ETIMEDOUT em pico de uso / rede instável.
+      // 15s pra conectar â€” Giga roda atrÃ¡s do NAT da loja, latÃªncia varia MUITO.
+      // 5s era curto e causava ETIMEDOUT em pico de uso / rede instÃ¡vel.
       connectTimeout: 15000,
-      // Keep-alive evita que o NAT derrube conexão ociosa do pool.
+      // Keep-alive evita que o NAT derrube conexÃ£o ociosa do pool.
       enableKeepAlive: true,
       keepAliveInitialDelay: 30000,
     });
 
-    // IMPORTANTE: ping em background. NÃO bloquear o boot do Nest.
-    // Se ERP_HOST não estiver acessível do Railway, o TCP fica pendurado
-    // e trava o startup → healthcheck falha.
+    // IMPORTANTE: ping em background. NÃƒO bloquear o boot do Nest.
+    // Se ERP_HOST nÃ£o estiver acessÃ­vel do Railway, o TCP fica pendurado
+    // e trava o startup â†’ healthcheck falha.
     this.pool
       .getConnection()
       .then((conn) => {
         conn
           .ping()
           .then(() => {
-            this.logger.log('✅ ERP MySQL conectado (gigasistemas21)');
+            this.logger.log('âœ… ERP MySQL conectado (gigasistemas21)');
             conn.release();
           })
           .catch((e) => {
-            this.logger.warn(`⚠️  ERP MySQL ping falhou: ${(e as Error).message}`);
+            this.logger.warn(`âš ï¸  ERP MySQL ping falhou: ${(e as Error).message}`);
             conn.release();
           });
       })
       .catch((e) => {
-        this.logger.warn(`⚠️  ERP MySQL não conectou: ${(e as Error).message}`);
+        this.logger.warn(`âš ï¸  ERP MySQL nÃ£o conectou: ${(e as Error).message}`);
       });
   }
 
@@ -129,12 +129,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (this.pool) await this.pool.end();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // BAIXA DE ESTOQUE (WRITE) — controlado por env var ERP_WRITE_ENABLED.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //
-  // Kill-switch rápido: setar ERP_WRITE_ENABLED=false no Railway e dar
-  // redeploy (ou restart) volta o sistema pro shadow mode sem mudar código.
-  // ═══════════════════════════════════════════════════════════════════════
+  // Kill-switch rÃ¡pido: setar ERP_WRITE_ENABLED=false no Railway e dar
+  // redeploy (ou restart) volta o sistema pro shadow mode sem mudar cÃ³digo.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /** Retorna true se o env var ERP_WRITE_ENABLED='true' (case-insensitive). */
   get isWriteEnabled(): boolean {
@@ -144,8 +144,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Retorna true se o env var PDV_ERP_WRITE_ENABLED='true'. Controla a
-   * gravação de vendas do PDV flowops na tabela `caixa` do Wincred.
-   * Independente de ERP_WRITE_ENABLED (decreaseStock) — pode-se baixar
+   * gravaÃ§Ã£o de vendas do PDV flowops na tabela `caixa` do Wincred.
+   * Independente de ERP_WRITE_ENABLED (decreaseStock) â€” pode-se baixar
    * estoque sem gravar venda, ou vice-versa.
    */
   get isPdvWriteEnabled(): boolean {
@@ -154,19 +154,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Baixa estoque no Gigasistemas — executa UPDATE em `estoque` dentro de
-   * uma transação MySQL. Todos os itens caem ou nada cai (ACID).
+   * Baixa estoque no Gigasistemas â€” executa UPDATE em `estoque` dentro de
+   * uma transaÃ§Ã£o MySQL. Todos os itens caem ou nada cai (ACID).
    *
    * Regras:
-   *  - ERP_WRITE_ENABLED precisa ser 'true'. Senão retorna erro sem tocar no DB.
-   *  - Cada item: SELECT FOR UPDATE (pra travar linha durante a transação)
-   *    → checa se existe → checa se não fica negativo → UPDATE.
-   *  - Se qualquer item falhar, rollback da transação inteira.
-   *  - Sempre retorna { success, applied, error? } — nunca lança exception
+   *  - ERP_WRITE_ENABLED precisa ser 'true'. SenÃ£o retorna erro sem tocar no DB.
+   *  - Cada item: SELECT FOR UPDATE (pra travar linha durante a transaÃ§Ã£o)
+   *    â†’ checa se existe â†’ checa se nÃ£o fica negativo â†’ UPDATE.
+   *  - Se qualquer item falhar, rollback da transaÃ§Ã£o inteira.
+   *  - Sempre retorna { success, applied, error? } â€” nunca lanÃ§a exception
    *    (pra quem chama poder logar e decidir sem try/catch).
    *
-   * O `storeCode` deve estar padronizado no formato Giga: 2 dígitos (01..20).
-   * A função normaliza strings tipo "LJ01" → "01" automaticamente.
+   * O `storeCode` deve estar padronizado no formato Giga: 2 dÃ­gitos (01..20).
+   * A funÃ§Ã£o normaliza strings tipo "LJ01" â†’ "01" automaticamente.
    */
   async decreaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
@@ -178,18 +178,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     attempts?: number;
   }> {
     if (!this.isWriteEnabled) {
-      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
     if (!this.pool) {
-      return { success: false, applied: [], error: 'Pool ERP não inicializado' };
+      return { success: false, applied: [], error: 'Pool ERP nÃ£o inicializado' };
     }
     if (!items.length) {
       return { success: true, applied: [] };
     }
 
-    // RETRY em erros transientes (timeout de rede/conexão). Até 3 tentativas
-    // com backoff 0 / 1s / 3s. Erros de regra de negócio (estoque insuficiente,
-    // SKU não encontrado, etc.) NÃO são retry — falha na hora.
+    // RETRY em erros transientes (timeout de rede/conexÃ£o). AtÃ© 3 tentativas
+    // com backoff 0 / 1s / 3s. Erros de regra de negÃ³cio (estoque insuficiente,
+    // SKU nÃ£o encontrado, etc.) NÃƒO sÃ£o retry â€” falha na hora.
     const TRANSIENT_CODES = new Set(['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'PROTOCOL_CONNECTION_LOST', 'ER_LOCK_WAIT_TIMEOUT']);
     const TRANSIENT_MSG_PATTERNS = [/read ETIMEDOUT/i, /connect ETIMEDOUT/i, /Connection lost/i, /closed state/i];
     const isTransient = (err: any): boolean => {
@@ -209,7 +209,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         return { ...result, attempts: attempt };
       }
       lastError = result.error;
-      // Só faz retry se for transiente. Erro de regra de negócio → sai na hora.
+      // SÃ³ faz retry se for transiente. Erro de regra de negÃ³cio â†’ sai na hora.
       if (!isTransient({ message: lastError })) {
         return { ...result, attempts: attempt };
       }
@@ -219,12 +219,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Execução ÚNICA da baixa (sem retry) — extraída pra poder ser chamada N vezes
-   * pelo wrapper de retry acima. Toda a lógica ACID fica aqui.
+   * ExecuÃ§Ã£o ÃšNICA da baixa (sem retry) â€” extraÃ­da pra poder ser chamada N vezes
+   * pelo wrapper de retry acima. Toda a lÃ³gica ACID fica aqui.
    *
    * opts.allowNegative: se true, deixa o estoque ficar negativo em vez de
-   * abortar a transação. Usado em realinhamento/triagem onde a peça já
-   * está fisicamente em mãos (ignoramos divergência com Giga).
+   * abortar a transaÃ§Ã£o. Usado em realinhamento/triagem onde a peÃ§a jÃ¡
+   * estÃ¡ fisicamente em mÃ£os (ignoramos divergÃªncia com Giga).
    */
   private async decreaseStockOnce(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
@@ -234,7 +234,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     applied: Array<{ sku: string; storeCode: string; qty: number; previousStock: number; newStock: number }>;
     error?: string;
   }> {
-    // Normaliza storeCode: "LJ01" ou "1" → "01"
+    // Normaliza storeCode: "LJ01" ou "1" â†’ "01"
     const normalizeStoreCode = (raw: string): string => {
       const s = String(raw || '').trim().toUpperCase().replace(/^LJ/i, '');
       const n = parseInt(s, 10);
@@ -242,7 +242,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return String(n).padStart(2, '0');
     };
 
-    // ── 1. NORMALIZA + AGREGA POR (SKU, LOJA) ──────────────────────────
+    // â”€â”€ 1. NORMALIZA + AGREGA POR (SKU, LOJA) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Items duplicados (mesmo sku+loja) sao somados pra reduzir queries.
     const aggregated = new Map<string, { sku: string; qty: number; storeCode: string }>();
     for (const it of items) {
@@ -258,7 +258,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       else aggregated.set(key, { sku, qty, storeCode: store });
     }
 
-    // ── 2. AGRUPA POR LOJA ────────────────────────────────────────────
+    // â”€â”€ 2. AGRUPA POR LOJA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const byStore = new Map<string, Array<{ sku: string; qty: number }>>();
     for (const it of aggregated.values()) {
       if (!byStore.has(it.storeCode)) byStore.set(it.storeCode, []);
@@ -271,7 +271,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
 
-      // ── 3. PROCESSA UMA LOJA POR VEZ (1 SELECT + 1 UPDATE por loja) ──
+      // â”€â”€ 3. PROCESSA UMA LOJA POR VEZ (1 SELECT + 1 UPDATE por loja) â”€â”€
       for (const [storeCode, storeItems] of byStore) {
         // Coleta TODAS as variantes de TODOS os SKUs dessa loja
         const skuToVariants = new Map<string, string[]>();
@@ -292,7 +292,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           [variantArr, storeCode],
         );
 
-        // Mapa variante normalizada → { codigo, estoque }
+        // Mapa variante normalizada â†’ { codigo, estoque }
         const variantMap = new Map<string, { codigo: string; estoque: number }>();
         for (const row of rows as any[]) {
           const codigo = String(row.CODIGO).trim();
@@ -312,18 +312,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           if (!bestMatch) {
             if (opts?.skipNotFound) {
               this.logger.warn(
-                `Item sem registro em estoque — PULADO (skipNotFound): SKU=${it.sku} LOJA=${storeCode} qty=${it.qty}`,
+                `Item sem registro em estoque â€” PULADO (skipNotFound): SKU=${it.sku} LOJA=${storeCode} qty=${it.qty}`,
               );
               continue;
             }
-            throw new Error(`Registro não encontrado em estoque: SKU=${it.sku} LOJA=${storeCode}`);
+            throw new Error(`Registro nÃ£o encontrado em estoque: SKU=${it.sku} LOJA=${storeCode}`);
           }
           const previousStock = bestMatch.estoque;
           const newStock = previousStock - it.qty;
           if (newStock < 0) {
             if (opts?.allowNegative) {
               this.logger.warn(
-                `Estoque negativo aceito (allowNegative): SKU=${it.sku} (giga=${bestMatch.codigo}) LOJA=${storeCode} tem ${previousStock}, pediu ${it.qty} → newStock=${newStock}`,
+                `Estoque negativo aceito (allowNegative): SKU=${it.sku} (giga=${bestMatch.codigo}) LOJA=${storeCode} tem ${previousStock}, pediu ${it.qty} â†’ newStock=${newStock}`,
               );
             } else {
               throw new Error(
@@ -333,14 +333,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           }
           updates.push({ codigo: bestMatch.codigo, newStock, sku: it.sku, previousStock, qty: it.qty });
           // Atualiza o variantMap pra refletir o novo estoque caso outro item
-          // tente o mesmo CODIGO (defensivo — ja agregamos por sku+loja, mas
+          // tente o mesmo CODIGO (defensivo â€” ja agregamos por sku+loja, mas
           // variantes diferentes podem apontar pro mesmo CODIGO Giga).
           bestMatch.estoque = newStock;
         }
 
         if (updates.length === 0) continue;
 
-        // ── 4. BATCH UPDATE com CASE WHEN ────────────────────────────────
+        // â”€â”€ 4. BATCH UPDATE com CASE WHEN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // 1 query atualiza N linhas. Reduz round-trips MySQL drasticamente.
         // Sintaxe: UPDATE estoque SET ESTOQUE = CASE CODIGO WHEN ? THEN ? ... END
         //          WHERE LOJA = ? AND CODIGO IN (?)
@@ -352,7 +352,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const [result]: any = await conn.query(sql, [...caseParams, storeCode, codigos]);
         // affectedRows pode vir < updates.length se algum CODIGO ja tinha o
         // mesmo ESTOQUE (MySQL nao conta como modificado). Loga warning mas
-        // nao aborta — o SET foi aplicado.
+        // nao aborta â€” o SET foi aplicado.
         const affected = result?.affectedRows ?? 0;
         if (affected < updates.length) {
           this.logger.warn(
@@ -369,8 +369,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       await conn.commit();
       this.logger.log(
         `ERP baixa BATCH OK: ${applied.length} item(ns) em ${byStore.size} loja(s). ` +
-          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', ') +
-          (applied.length > 5 ? ` … (+${applied.length - 5} mais)` : ''),
+          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
+          (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
       return { success: true, applied };
     } catch (e: any) {
@@ -384,21 +384,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * INCREASE estoque no Gigasistemas — usado pela loja DESTINO ao "Dar Entrada"
+   * INCREASE estoque no Gigasistemas â€” usado pela loja DESTINO ao "Dar Entrada"
    * em uma remessa de realinhamento recebida.
    *
    * Espelho exato de `decreaseStock`:
    *  - Mesmo kill-switch ERP_WRITE_ENABLED
-   *  - Mesma transação ACID com rollback
+   *  - Mesma transaÃ§Ã£o ACID com rollback
    *  - Mesmo retry/backoff em erro transiente
-   *  - SELECT FOR UPDATE → soma → UPDATE
+   *  - SELECT FOR UPDATE â†’ soma â†’ UPDATE
    *
-   * Diferenças do decrease:
+   * DiferenÃ§as do decrease:
    *  - SOMA em vez de subtrair
-   *  - Não tem checagem de "estoque negativo" (sempre é seguro aumentar)
-   *  - Se SKU não existir na tabela `estoque` da loja destino, o registro é
-   *    INSERIDO (peça que nunca passou por essa loja antes — comum em
-   *    realinhamento. Só o INSERT, sem mexer em produtos.)
+   *  - NÃ£o tem checagem de "estoque negativo" (sempre Ã© seguro aumentar)
+   *  - Se SKU nÃ£o existir na tabela `estoque` da loja destino, o registro Ã©
+   *    INSERIDO (peÃ§a que nunca passou por essa loja antes â€” comum em
+   *    realinhamento. SÃ³ o INSERT, sem mexer em produtos.)
    */
   async increaseStock(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
@@ -409,10 +409,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     attempts?: number;
   }> {
     if (!this.isWriteEnabled) {
-      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, applied: [], error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
     if (!this.pool) {
-      return { success: false, applied: [], error: 'Pool ERP não inicializado' };
+      return { success: false, applied: [], error: 'Pool ERP nÃ£o inicializado' };
     }
     if (!items.length) {
       return { success: true, applied: [] };
@@ -445,7 +445,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     return { success: false, applied: [], error: `${lastError} (${BACKOFF_MS.length} tentativas)`, attempts: BACKOFF_MS.length };
   }
 
-  /** Execução única do INCREASE — extraída pra retry. */
+  /** ExecuÃ§Ã£o Ãºnica do INCREASE â€” extraÃ­da pra retry. */
   private async increaseStockOnce(
     items: Array<{ sku: string; qty: number; storeCode: string }>,
   ): Promise<{
@@ -460,7 +460,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return String(n).padStart(2, '0');
     };
 
-    // ── 1. NORMALIZA + AGREGA POR (SKU, LOJA) ──────────────────────────
+    // â”€â”€ 1. NORMALIZA + AGREGA POR (SKU, LOJA) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const aggregated = new Map<string, { sku: string; qty: number; storeCode: string }>();
     for (const it of items) {
       const sku = String(it.sku || '').trim();
@@ -475,7 +475,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       else aggregated.set(key, { sku, qty, storeCode: store });
     }
 
-    // ── 2. AGRUPA POR LOJA ────────────────────────────────────────────
+    // â”€â”€ 2. AGRUPA POR LOJA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const byStore = new Map<string, Array<{ sku: string; qty: number }>>();
     for (const it of aggregated.values()) {
       if (!byStore.has(it.storeCode)) byStore.set(it.storeCode, []);
@@ -488,7 +488,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
 
-      // ── 3. PROCESSA UMA LOJA POR VEZ ──────────────────────────────────
+      // â”€â”€ 3. PROCESSA UMA LOJA POR VEZ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       for (const [storeCode, storeItems] of byStore) {
         // Coleta variantes de cada SKU
         const skuToVariants = new Map<string, string[]>();
@@ -514,7 +514,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           variantMap.set(codigo, { codigo, estoque: Number(row.ESTOQUE) || 0 });
         }
 
-        // Pra cada item: existe → vai pra UPDATE batch; nao existe → vai pra INSERT
+        // Pra cada item: existe â†’ vai pra UPDATE batch; nao existe â†’ vai pra INSERT
         type Update = { codigo: string; newStock: number; sku: string; previousStock: number; qty: number };
         type Insert = { codigo: string; sku: string; qty: number };
         const updates: Update[] = [];
@@ -534,7 +534,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             updates.push({ codigo: bestMatch.codigo, newStock, sku: it.sku, previousStock, qty: it.qty });
             bestMatch.estoque = newStock; // se outro item bater no mesmo codigo
           } else {
-            // Vai pra INSERT — antes resolve CODIGO real via produtos
+            // Vai pra INSERT â€” antes resolve CODIGO real via produtos
             naoEncontradosVariantes.push(variants);
             inserts.push({ codigo: it.sku, sku: it.sku, qty: it.qty }); // codigo provisorio
           }
@@ -553,7 +553,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
               const codigo = String(row.CODIGO).trim();
               prodMap.set(codigo, codigo);
             }
-          } catch { /* ignore — usa o sku original */ }
+          } catch { /* ignore â€” usa o sku original */ }
           // Atualiza codigo dos inserts pra usar o do cadastro quando achou
           for (let i = 0; i < inserts.length; i++) {
             const variants = naoEncontradosVariantes[i];
@@ -566,7 +566,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        // ── 4a. BATCH UPDATE com CASE WHEN ──────────────────────────────
+        // â”€â”€ 4a. BATCH UPDATE com CASE WHEN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (updates.length > 0) {
           const caseClauses = updates.map(() => 'WHEN ? THEN ?').join(' ');
           const caseParams: any[] = [];
@@ -576,13 +576,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           const [result]: any = await conn.query(sql, [...caseParams, storeCode, codigos]);
           const affected = result?.affectedRows ?? 0;
           if (affected < updates.length) {
-            // CRITICAL: UPDATE não atingiu todas as linhas esperadas.
-            // Antes só fazia warn → silenciava bug e devolução ficava
-            // "pendente" sem error registrado. Agora lança erro → catch
+            // CRITICAL: UPDATE nÃ£o atingiu todas as linhas esperadas.
+            // Antes sÃ³ fazia warn â†’ silenciava bug e devoluÃ§Ã£o ficava
+            // "pendente" sem error registrado. Agora lanÃ§a erro â†’ catch
             // do try/catch principal faz rollback + retorna success:false
             // com mensagem clara pro caller (returns.service / retry).
             this.logger.error(
-              `Batch INCREASE UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode}) — codigos: ${updates.map((u) => u.codigo).join(', ')}`,
+              `Batch INCREASE UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode}) â€” codigos: ${updates.map((u) => u.codigo).join(', ')}`,
             );
             throw new Error(
               `UPDATE estoque loja ${storeCode}: afetou ${affected}/${updates.length} linhas. ` +
@@ -594,7 +594,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           }
         }
 
-        // ── 4b. BATCH INSERT (linhas novas em loja destino) ─────────────
+        // â”€â”€ 4b. BATCH INSERT (linhas novas em loja destino) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if (inserts.length > 0) {
           const placeholders = inserts.map(() => '(?, ?, ?)').join(', ');
           const values: any[] = [];
@@ -612,8 +612,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       await conn.commit();
       this.logger.log(
         `ERP entrada BATCH OK: ${applied.length} item(ns) em ${byStore.size} loja(s). ` +
-          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}→${a.newStock}`).join(', ') +
-          (applied.length > 5 ? ` … (+${applied.length - 5} mais)` : ''),
+          applied.slice(0, 5).map((a) => `${a.sku}/${a.storeCode}: ${a.previousStock}â†’${a.newStock}`).join(', ') +
+          (applied.length > 5 ? ` â€¦ (+${applied.length - 5} mais)` : ''),
       );
       return { success: true, applied };
     } catch (e: any) {
@@ -628,11 +628,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * CREATE INDEX em uma tabela do Giga (DDL admin).
-   * Usado pra criar índice composto que acelera lookup de parcelas em aberto.
+   * Usado pra criar Ã­ndice composto que acelera lookup de parcelas em aberto.
    *
-   * Idempotente: verifica via SHOW INDEX antes — se já existe, retorna ok.
-   * Em MySQL 5.6+ o CREATE INDEX é ONLINE (não bloqueia escrita).
-   * Timeout estendido pra 10min (operação lenta em tabelas grandes).
+   * Idempotente: verifica via SHOW INDEX antes â€” se jÃ¡ existe, retorna ok.
+   * Em MySQL 5.6+ o CREATE INDEX Ã© ONLINE (nÃ£o bloqueia escrita).
+   * Timeout estendido pra 10min (operaÃ§Ã£o lenta em tabelas grandes).
    */
   async createIndexIfNotExists(input: {
     table: string;
@@ -659,19 +659,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) {
       return {
         ok: false,
-        error: 'Pool ERP não inicializado',
+        error: 'Pool ERP nÃ£o inicializado',
         table: input.table,
         indexName: input.indexName,
         columns: input.columns,
       };
     }
 
-    // Sanitiza nomes (apenas letras/números/_ permitidos pra evitar injection)
+    // Sanitiza nomes (apenas letras/nÃºmeros/_ permitidos pra evitar injection)
     const safeRx = /^[a-zA-Z0-9_]+$/;
     if (!safeRx.test(input.table) || !safeRx.test(input.indexName)) {
       return {
         ok: false,
-        error: 'Nome de tabela/índice inválido',
+        error: 'Nome de tabela/Ã­ndice invÃ¡lido',
         table: input.table,
         indexName: input.indexName,
         columns: input.columns,
@@ -681,7 +681,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       if (!safeRx.test(c)) {
         return {
           ok: false,
-          error: `Nome de coluna inválido: ${c}`,
+          error: `Nome de coluna invÃ¡lido: ${c}`,
           table: input.table,
           indexName: input.indexName,
           columns: input.columns,
@@ -691,12 +691,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const conn = await this.pool.getConnection();
     try {
-      // 1. Verifica se já existe
+      // 1. Verifica se jÃ¡ existe
       const checkSql = `SHOW INDEX FROM \`${input.table}\` WHERE Key_name = ?`;
       const [rows]: any = await conn.execute(checkSql, [input.indexName]);
       if (rows && rows.length > 0) {
         this.logger.log(
-          `[createIndex] ${input.table}.${input.indexName} JÁ EXISTE (${rows.length} colunas)`,
+          `[createIndex] ${input.table}.${input.indexName} JÃ EXISTE (${rows.length} colunas)`,
         );
         return {
           ok: true,
@@ -741,18 +741,18 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * CRIA PARCELAS DE CREDIÁRIO no Giga — INSERT direto na tabela `movimento`.
+   * CRIA PARCELAS DE CREDIÃRIO no Giga â€” INSERT direto na tabela `movimento`.
    *
-   * Pega o último REGISTRO existente, incrementa pra cada nova parcela.
-   * CONTROLE compartilhado entre as parcelas da mesma compra (= número de
+   * Pega o Ãºltimo REGISTRO existente, incrementa pra cada nova parcela.
+   * CONTROLE compartilhado entre as parcelas da mesma compra (= nÃºmero de
    * compra). Cria N linhas com vencimentos mensais a partir do primeiro.
    *
-   * Padrão Wincred:
-   *   - REGISTRO  = sequencial único por linha
+   * PadrÃ£o Wincred:
+   *   - REGISTRO  = sequencial Ãºnico por linha
    *   - CONTROLE  = mesmo pra todas as parcelas da compra (numero da compra)
    *   - PARCELA   = 1, 2, 3, ..., N
-   *   - VENCIMENTO = primeiro + (parcela − 1) × 30 dias (calendário mensal)
-   *   - VALORPARCELA = ajustado pra fechar exato (última absorve diferença)
+   *   - VENCIMENTO = primeiro + (parcela âˆ’ 1) Ã— 30 dias (calendÃ¡rio mensal)
+   *   - VALORPARCELA = ajustado pra fechar exato (Ãºltima absorve diferenÃ§a)
    *   - PAGO       = 'N'
    *
    * Retorna { success, registroInicial, controleUsado, parcelas[] } ou erro.
@@ -760,11 +760,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async createCrediarioParcelas(input: {
     codCliente: string;
     nomeCliente: string;
-    valorTotal: number;          // valor financiado (já descontada entrada)
+    valorTotal: number;          // valor financiado (jÃ¡ descontada entrada)
     parcelas: number;             // qtd N
     primeiroVencimento: Date;
     dataCompra: Date;
-    loja: string;                 // código da loja onde foi feita a venda
+    loja: string;                 // cÃ³digo da loja onde foi feita a venda
     observacao?: string;
     columns: {
       registro: string | null;
@@ -790,15 +790,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     parcelas?: Array<{ parcela: number; vencimento: string; valor: number; registro: number }>;
   }> {
     if (!this.isWriteEnabled) {
-      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
-    if (!this.pool) return { success: false, error: 'Pool ERP não inicializado' };
+    if (!this.pool) return { success: false, error: 'Pool ERP nÃ£o inicializado' };
 
     const c = input.columns;
     if (!c.registro || !c.controle || !c.codCliente || !c.vencimento || !c.valorParcela || !c.parcela) {
       return {
         success: false,
-        error: 'Colunas obrigatórias não detectadas (registro/controle/codCliente/vencimento/valorParcela/parcela)',
+        error: 'Colunas obrigatÃ³rias nÃ£o detectadas (registro/controle/codCliente/vencimento/valorParcela/parcela)',
       };
     }
     if (input.parcelas < 1 || input.parcelas > 24) {
@@ -808,13 +808,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return { success: false, error: 'Valor total deve ser maior que zero' };
     }
 
-    // Cálculo das parcelas: iguais com ajuste na última pra bater o total
+    // CÃ¡lculo das parcelas: iguais com ajuste na Ãºltima pra bater o total
     const valorIgual = Math.round((input.valorTotal / input.parcelas) * 100) / 100;
     const valorUltima = Math.round((input.valorTotal - valorIgual * (input.parcelas - 1)) * 100) / 100;
 
     const conn = await this.pool.getConnection();
     try {
-      // Pega último REGISTRO + último CONTROLE pra incrementar
+      // Pega Ãºltimo REGISTRO + Ãºltimo CONTROLE pra incrementar
       const [maxRows]: any = await conn.execute(
         `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl FROM \`movimento\``,
       );
@@ -834,7 +834,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const venc = new Date(input.primeiroVencimento);
         venc.setMonth(venc.getMonth() + i);
 
-        // Monta INSERT dinâmico (só inclui colunas detectadas)
+        // Monta INSERT dinÃ¢mico (sÃ³ inclui colunas detectadas)
         const fields: string[] = [];
         const placeholders: string[] = [];
         const values: any[] = [];
@@ -848,7 +848,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
         add(c.registro, registro);
         add(c.controle, novoControle);
-        if (c.numeroCompra) add(c.numeroCompra, novoControle); // numeroCompra = controle (mesma sequência)
+        if (c.numeroCompra) add(c.numeroCompra, novoControle); // numeroCompra = controle (mesma sequÃªncia)
         add(c.codCliente, input.codCliente);
         if (c.nome) add(c.nome, input.nomeCliente);
         if (c.loja) add(c.loja, input.loja);
@@ -892,27 +892,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * BAIXA PARCELA DE CREDIÁRIO — UPDATE direto na tabela `movimento` do Giga.
+   * BAIXA PARCELA DE CREDIÃRIO â€” UPDATE direto na tabela `movimento` do Giga.
    *
    * Marca a parcela como paga (PAGO='S' + DATA_PAGAMENTO=hoje + VALOR_PAGO=valorRecebido).
-   * Os nomes reais das colunas variam por instalação — recebemos via parâmetro
-   * (CrediariosService já detectou via `detectColumns`).
+   * Os nomes reais das colunas variam por instalaÃ§Ã£o â€” recebemos via parÃ¢metro
+   * (CrediariosService jÃ¡ detectou via `detectColumns`).
    *
-   * Identificação da parcela: chave composta (REGISTRO + CONTROLE).
+   * IdentificaÃ§Ã£o da parcela: chave composta (REGISTRO + CONTROLE).
    *
-   * Retorna { success, error? } — sem retry, sem transação multi-row,
-   * pra simplicidade. A baixa local (Postgres) é a fonte da verdade pro
-   * recibo; este UPDATE é "espelho" pro Giga.
+   * Retorna { success, error? } â€” sem retry, sem transaÃ§Ã£o multi-row,
+   * pra simplicidade. A baixa local (Postgres) Ã© a fonte da verdade pro
+   * recibo; este UPDATE Ã© "espelho" pro Giga.
    */
   /**
-   * INSERT múltiplas linhas em `caixa` com MARCADO='SIM'.
+   * INSERT mÃºltiplas linhas em `caixa` com MARCADO='SIM'.
    * Usado pelo sistema MARCADOS quando vendedora cria marcado pelo PDV.
    *
    * Cada item vira 1 linha em `caixa`. Todas compartilham o mesmo CONTROLE
-   * (gerado pegando MAX(CONTROLE)+1) — assim agrupa o marcado pra o cliente
+   * (gerado pegando MAX(CONTROLE)+1) â€” assim agrupa o marcado pra o cliente
    * conseguir ver junto na consulta.
    *
-   * Retorna { success, controle, error? } — caller pode logar o controle
+   * Retorna { success, controle, error? } â€” caller pode logar o controle
    * e mostrar pra vendedora como comprovante.
    */
   async insertCaixaMarcado(input: {
@@ -929,10 +929,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     loja: string;
   }): Promise<{ success: boolean; controle?: number; error?: string }> {
     if (!this.isWriteEnabled) {
-      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
     if (!this.pool) {
-      return { success: false, error: 'Pool ERP não inicializado' };
+      return { success: false, error: 'Pool ERP nÃ£o inicializado' };
     }
     if (!input.items?.length) {
       return { success: false, error: 'Sem items pra marcar' };
@@ -941,7 +941,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
 
-      // Próximo CONTROLE — agrupa todos os items desse marcado
+      // PrÃ³ximo CONTROLE â€” agrupa todos os items desse marcado
       const [maxRows] = await conn.query<mysql.RowDataPacket[]>(
         `SELECT COALESCE(MAX(NUMERO), 0) + 1 AS proxNumero FROM caixa`,
       );
@@ -1012,27 +1012,27 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     };
   }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
     if (!this.isWriteEnabled) {
-      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
     if (!this.pool) {
-      return { success: false, error: 'Pool ERP não inicializado' };
+      return { success: false, error: 'Pool ERP nÃ£o inicializado' };
     }
     const { columns } = input;
     if (!columns.registro || !columns.controle) {
-      return { success: false, error: 'Colunas REGISTRO/CONTROLE não detectadas' };
+      return { success: false, error: 'Colunas REGISTRO/CONTROLE nÃ£o detectadas' };
     }
 
-    // Monta SET dinamicamente — só inclui colunas que existem no Giga local.
+    // Monta SET dinamicamente â€” sÃ³ inclui colunas que existem no Giga local.
     const sets: string[] = [];
     const params: any[] = [];
 
-    // CRÍTICO: PAGO é o campo que o WinCred consulta pra exibir no relatório
-    // de recebidos. Se ficar nulo, a baixa não aparece NA UI do WinCred mesmo
-    // com data preenchida. Sempre tentamos atualizar — usa nome detectado se
-    // existir, senão tenta literal "PAGO" como fallback (WinCred padrão).
+    // CRÃTICO: PAGO Ã© o campo que o WinCred consulta pra exibir no relatÃ³rio
+    // de recebidos. Se ficar nulo, a baixa nÃ£o aparece NA UI do WinCred mesmo
+    // com data preenchida. Sempre tentamos atualizar â€” usa nome detectado se
+    // existir, senÃ£o tenta literal "PAGO" como fallback (WinCred padrÃ£o).
     //
-    // VALOR: Lurd's confirmou que WinCred grava "S" (não "SIM" como pensei).
-    // O REAL problema era a coluna PAGAMENTO ficar em branco — corrigido em
+    // VALOR: Lurd's confirmou que WinCred grava "S" (nÃ£o "SIM" como pensei).
+    // O REAL problema era a coluna PAGAMENTO ficar em branco â€” corrigido em
     // detectColumns. Override por env var ERP_PAGO_VALOR_SIM se outra loja
     // precisar de outro valor.
     const pagoCol = columns.pago || 'PAGO';
@@ -1041,7 +1041,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     params.push(pagoValor);
     if (!columns.pago) {
       this.logger.warn(
-        `[crediario] coluna PAGO não detectada — usando fallback hardcoded "PAGO". ` +
+        `[crediario] coluna PAGO nÃ£o detectada â€” usando fallback hardcoded "PAGO". ` +
         `Se a tabela tem outro nome, ajuste detectColumns() ou o UPDATE pode falhar.`,
       );
     }
@@ -1054,7 +1054,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       sets.push(`\`${columns.valorPago}\` = ?`);
       params.push(input.valorPago);
     }
-    // Juros e multa: só atualiza se a coluna foi detectada E o valor foi passado.
+    // Juros e multa: sÃ³ atualiza se a coluna foi detectada E o valor foi passado.
     // Sem isso, na baixa retroativa o WinCred mostra "Juros: vazio".
     if (columns.juros && input.juros !== undefined) {
       sets.push(`\`${columns.juros}\` = ?`);
@@ -1080,7 +1080,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       if (affected === 0) {
         return {
           success: false,
-          error: `UPDATE não afetou linha (REGISTRO=${input.registro} CONTROLE=${input.controle}). Já paga ou inexistente.`,
+          error: `UPDATE nÃ£o afetou linha (REGISTRO=${input.registro} CONTROLE=${input.controle}). JÃ¡ paga ou inexistente.`,
           affectedRows: 0,
         };
       }
@@ -1100,32 +1100,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * REVERTE a baixa de uma parcela no Giga (estorno).
    * Coloca PAGO='N', limpa DATA_PAGAMENTO, VALOR_PAGO, JUROS, MULTA.
-   * Usado quando o usuário precisa desfazer uma baixa feita por engano.
+   * Usado quando o usuÃ¡rio precisa desfazer uma baixa feita por engano.
    */
   /**
-   * Deleta uma linha da tabela `caixa` no Wincred — usado quando uma peça MARCADA
-   * é devolvida ao estoque (cliente trouxe de volta). Remove a "reserva" que
+   * Deleta uma linha da tabela `caixa` no Wincred â€” usado quando uma peÃ§a MARCADA
+   * Ã© devolvida ao estoque (cliente trouxe de volta). Remove a "reserva" que
    * estava no nome do cliente.
    *
-   * Por segurança, SÓ deleta se a linha tiver MARCADO='SIM' — evita apagar
+   * Por seguranÃ§a, SÃ“ deleta se a linha tiver MARCADO='SIM' â€” evita apagar
    * vendas reais por engano.
    */
   async deleteCaixaMarcadoRow(input: {
     registro: number | string;
   }): Promise<{ success: boolean; error?: string; affectedRows?: number }> {
     if (!this.isWriteEnabled) {
-      return { success: false, error: 'ERP_WRITE_ENABLED não habilitado' };
+      return { success: false, error: 'ERP_WRITE_ENABLED nÃ£o habilitado' };
     }
     if (!this.pool) {
-      return { success: false, error: 'Pool ERP não inicializado' };
+      return { success: false, error: 'Pool ERP nÃ£o inicializado' };
     }
     const reg = Number(input.registro);
     if (!reg || isNaN(reg)) {
-      return { success: false, error: 'REGISTRO inválido' };
+      return { success: false, error: 'REGISTRO invÃ¡lido' };
     }
     try {
-      // SQL defensivo: só deleta se for marcado mesmo (MARCADO='SIM' UPPER).
-      // Tradeoff aceito: se a coluna MARCADO não existir (improvável em
+      // SQL defensivo: sÃ³ deleta se for marcado mesmo (MARCADO='SIM' UPPER).
+      // Tradeoff aceito: se a coluna MARCADO nÃ£o existir (improvÃ¡vel em
       // schema Wincred), o WHERE explode com error de coluna desconhecida.
       const [result] = await this.pool.query<mysql.OkPacket>(
         `DELETE FROM caixa WHERE REGISTRO = ? AND UPPER(COALESCE(MARCADO, '')) = 'SIM' LIMIT 1`,
@@ -1216,16 +1216,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Consulta estoque por SKU × loja na tabela `estoque` do WinCred.
-   * Retorna só registros com ESTOQUE > 0.
+   * Consulta estoque por SKU Ã— loja na tabela `estoque` do WinCred.
+   * Retorna sÃ³ registros com ESTOQUE > 0.
    *
-   * TOLERANTE A ZEROS À ESQUERDA: o WooCommerce pode enviar SKU "5383498"
-   * mas no Giga o CODIGO está cadastrado como "0005383498". Sem essa
-   * tolerância, o roteamento não acha estoque e divide pedidos errado.
+   * TOLERANTE A ZEROS Ã€ ESQUERDA: o WooCommerce pode enviar SKU "5383498"
+   * mas no Giga o CODIGO estÃ¡ cadastrado como "0005383498". Sem essa
+   * tolerÃ¢ncia, o roteamento nÃ£o acha estoque e divide pedidos errado.
    *
-   * Estratégia:
-   *   1. Pra cada SKU recebido, gera variantes com padding 3-14 dígitos
-   *   2. Consulta no Giga com a união de todas as variantes
+   * EstratÃ©gia:
+   *   1. Pra cada SKU recebido, gera variantes com padding 3-14 dÃ­gitos
+   *   2. Consulta no Giga com a uniÃ£o de todas as variantes
    *   3. No retorno, mapeia o CODIGO do Giga DE VOLTA pro SKU original
    *      do caller (pra que o resto do sistema continue trabalhando com
    *      o formato que enviou)
@@ -1239,24 +1239,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     );
     if (!uniqueOriginals.length) return [];
 
-    // PASSO 1 — Resolve CODIGO REAL de cada SKU consultando o cadastro `produtos`.
+    // PASSO 1 â€” Resolve CODIGO REAL de cada SKU consultando o cadastro `produtos`.
     //
-    // Por que NÃO basta expandir e buscar direto em `estoque`:
-    //   - SKU "5383498" pode existir no Giga como peça A (CODIGO="5383498")
-    //     E peça B totalmente diferente (CODIGO="0005383498").
+    // Por que NÃƒO basta expandir e buscar direto em `estoque`:
+    //   - SKU "5383498" pode existir no Giga como peÃ§a A (CODIGO="5383498")
+    //     E peÃ§a B totalmente diferente (CODIGO="0005383498").
     //   - Se buscamos `WHERE CODIGO IN (variantes)` direto em estoque,
-    //     misturamos peças e o roteamento envia pedido pra loja que tem
+    //     misturamos peÃ§as e o roteamento envia pedido pra loja que tem
     //     o produto ERRADO. Bug observado em prod: pedido roteado pra Pira
-    //     porque "5383498" sem zeros existe lá como outra peça.
+    //     porque "5383498" sem zeros existe lÃ¡ como outra peÃ§a.
     //
-    // Solução: descobrir, no cadastro, qual CODIGO específico é o "5383498"
-    // que o caller passou. Ele só pode ser UM (cadastro tem PK em CODIGO).
-    // Aí buscamos estoque SÓ desse CODIGO real.
+    // SoluÃ§Ã£o: descobrir, no cadastro, qual CODIGO especÃ­fico Ã© o "5383498"
+    // que o caller passou. Ele sÃ³ pode ser UM (cadastro tem PK em CODIGO).
+    // AÃ­ buscamos estoque SÃ“ desse CODIGO real.
 
     const { allVariants, variantToOriginal } = this.expandSkus(uniqueOriginals);
     if (!allVariants.length) return [];
 
-    // codigoGiga → sku original do caller
+    // codigoGiga â†’ sku original do caller
     const codigoGigaToOriginal = new Map<string, string>();
     try {
       const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -1268,16 +1268,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const originalSku = variantToOriginal.get(codigoGiga);
         if (!originalSku) continue;
         // Se 2+ variantes do mesmo SKU original existem como produtos diferentes
-        // (caso patológico), prioriza a versão MAIS LONGA (com mais zeros à
-        // esquerda), que é o padrão real do Giga (CODIGO sempre tem padding).
+        // (caso patolÃ³gico), prioriza a versÃ£o MAIS LONGA (com mais zeros Ã 
+        // esquerda), que Ã© o padrÃ£o real do Giga (CODIGO sempre tem padding).
         const existing = codigoGigaToOriginal.get(originalSku);
         if (!existing) {
-          // Primeira ocorrência: mapeia 1:1 (sku original → codigoGiga)
+          // Primeira ocorrÃªncia: mapeia 1:1 (sku original â†’ codigoGiga)
           codigoGigaToOriginal.set(codigoGiga, originalSku);
         } else {
-          // Já tem um codigoGiga mapeado pra esse original.
-          // Decisão: se o NOVO codigoGiga é mais longo (mais padding),
-          // troca; senão mantém o anterior.
+          // JÃ¡ tem um codigoGiga mapeado pra esse original.
+          // DecisÃ£o: se o NOVO codigoGiga Ã© mais longo (mais padding),
+          // troca; senÃ£o mantÃ©m o anterior.
           const previous = Array.from(codigoGigaToOriginal.entries()).find(
             ([, orig]) => orig === originalSku,
           )?.[0];
@@ -1289,11 +1289,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (e) {
       this.logger.warn(
-        `getStock: lookup em produtos falhou, caindo no modo legado (sujeito a colisão): ${(e as Error).message}`,
+        `getStock: lookup em produtos falhou, caindo no modo legado (sujeito a colisÃ£o): ${(e as Error).message}`,
       );
       // Fallback degradado: usa todas variantes (comportamento antigo).
-      // Pelo menos a chamada não morre — operação continua, ainda que
-      // possa rotear errado em casos de colisão.
+      // Pelo menos a chamada nÃ£o morre â€” operaÃ§Ã£o continua, ainda que
+      // possa rotear errado em casos de colisÃ£o.
       for (const v of allVariants) {
         const original = variantToOriginal.get(v);
         if (original) codigoGigaToOriginal.set(v, original);
@@ -1301,21 +1301,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!codigoGigaToOriginal.size) {
-      // Nenhum SKU foi achado no cadastro → não tem estoque pra rotear
+      // Nenhum SKU foi achado no cadastro â†’ nÃ£o tem estoque pra rotear
       return [];
     }
 
-    // PASSO 2 — Estoque dos CODIGOs reais resolvidos.
+    // PASSO 2 â€” Estoque dos CODIGOs reais resolvidos.
     //
-    // BUG anterior: buscava só pelo CODIGO literal encontrado em `produtos`.
+    // BUG anterior: buscava sÃ³ pelo CODIGO literal encontrado em `produtos`.
     // Mas a tabela `estoque` pode armazenar o MESMO produto com padding de
     // zeros DIFERENTE (ex: produtos="5383641", estoque="00005383641"). Como o
-    // IN da query é literal, perdia essas linhas → routing dizia ruptura
-    // mesmo com 1 un físico real (caso real do pedido WC #191547 da Lurd's).
+    // IN da query Ã© literal, perdia essas linhas â†’ routing dizia ruptura
+    // mesmo com 1 un fÃ­sico real (caso real do pedido WC #191547 da Lurd's).
     //
-    // Solução: pra cada codigoGiga resolvido em produtos, expandir TODAS as
-    // variantes de padding e procurar em estoque pelo set inteiro. Mantém o
-    // mapeamento variant → originalSku pra agregar de volta corretamente.
+    // SoluÃ§Ã£o: pra cada codigoGiga resolvido em produtos, expandir TODAS as
+    // variantes de padding e procurar em estoque pelo set inteiro. MantÃ©m o
+    // mapeamento variant â†’ originalSku pra agregar de volta corretamente.
     const codigosVariants: string[] = [];
     const codigoVariantToOriginal = new Map<string, string>();
     for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
@@ -1339,8 +1339,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             AND ESTOQUE > 0`,
         [codigosVariants, storeCodes],
       );
-      // Agrega por (originalSku, storeCode). Múltiplas variantes de padding
-      // podem casar — somamos tudo, mas logamos pra detectar caso patológico.
+      // Agrega por (originalSku, storeCode). MÃºltiplas variantes de padding
+      // podem casar â€” somamos tudo, mas logamos pra detectar caso patolÃ³gico.
       const agg = new Map<string, number>();
       for (const r of rows as any[]) {
         const codigoEstoque = String(r.sku).trim();
@@ -1363,24 +1363,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista REFs únicas cadastradas no intervalo de datas (formato YYYY-MM-DD),
-   * filtrando opcionalmente por substring na descrição.
+   * Lista REFs Ãºnicas cadastradas no intervalo de datas (formato YYYY-MM-DD),
+   * filtrando opcionalmente por substring na descriÃ§Ã£o.
    *
-   * Uso: "puxa REFs PLUS SIZE cadastradas em janeiro/2026" → vendedora insere
+   * Uso: "puxa REFs PLUS SIZE cadastradas em janeiro/2026" â†’ vendedora insere
    * no buscador de realinhamento.
    *
    * Detecta automaticamente a coluna de data cadastro. Se nenhuma existir,
    * retorna [] e loga o problema.
    *
-   * Retorna até 500 REFs distintas com descrição + contagem de variações.
+   * Retorna atÃ© 500 REFs distintas com descriÃ§Ã£o + contagem de variaÃ§Ãµes.
    *
-   * NOTA: usa strings YYYY-MM-DD direto (não Date object) pra evitar
-   * confusão de timezone — driver mysql2 às vezes converte Date pra
-   * timestamp UTC e a coluna do Giga geralmente tá em horário local.
+   * NOTA: usa strings YYYY-MM-DD direto (nÃ£o Date object) pra evitar
+   * confusÃ£o de timezone â€” driver mysql2 Ã s vezes converte Date pra
+   * timestamp UTC e a coluna do Giga geralmente tÃ¡ em horÃ¡rio local.
    */
   async searchRefsByDateRange(input: {
     inicio: string; // YYYY-MM-DD
-    fim: string;    // YYYY-MM-DD (exclusive — passe o dia SEGUINTE ao último dia desejado)
+    fim: string;    // YYYY-MM-DD (exclusive â€” passe o dia SEGUINTE ao Ãºltimo dia desejado)
     descricaoContains?: string;
   }): Promise<Array<{ ref: string; descricao: string; variantCount: number; dataCadastro: string | null }>> {
     if (!this.pool) return [];
@@ -1442,13 +1442,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * BUSCA REFs com SOBRA DE ESTOQUE — quaisquer SKUs (cor × tamanho) que
-   * tenham >= minQty unidades em estoque. Útil pra encontrar candidatas a
+   * BUSCA REFs com SOBRA DE ESTOQUE â€” quaisquer SKUs (cor Ã— tamanho) que
+   * tenham >= minQty unidades em estoque. Ãštil pra encontrar candidatas a
    * realinhamento (ex.: "todas as blusas manga curta plus size com 2+ por SKU").
    *
-   * Diferença pra getParados: aqui não filtra por "sem venda há X dias",
-   * só pelo critério bruto de sobra >= minQty POR SKU. Filtro de descrição
-   * permite restringir tipo (BLUSA, CALÇA, etc).
+   * DiferenÃ§a pra getParados: aqui nÃ£o filtra por "sem venda hÃ¡ X dias",
+   * sÃ³ pelo critÃ©rio bruto de sobra >= minQty POR SKU. Filtro de descriÃ§Ã£o
+   * permite restringir tipo (BLUSA, CALÃ‡A, etc).
    */
   async searchRefsComSobraPorSku(input: {
     minQty?: number;
@@ -1474,8 +1474,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     ];
     const vals: any[] = [minQty];
 
-    // LOJA: comparação robusta — Giga pode ter LOJA como INT (1) ou STRING
-    // com zero à esquerda ('01'). Normaliza ambos os lados.
+    // LOJA: comparaÃ§Ã£o robusta â€” Giga pode ter LOJA como INT (1) ou STRING
+    // com zero Ã  esquerda ('01'). Normaliza ambos os lados.
     if (input.storeCode) {
       const lojaNum = parseInt(input.storeCode, 10);
       const lojaStr = String(input.storeCode).trim();
@@ -1486,7 +1486,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       vals.push(lojaNum, lojaStr, lojaPadded);
     }
     // PLUS SIZE: busca em DESCRICAOCOMPLETA OU DESCRICAOPDV (alguns produtos
-    // só têm uma das duas preenchida). Aceita variações de grafia.
+    // sÃ³ tÃªm uma das duas preenchida). Aceita variaÃ§Ãµes de grafia.
     if (input.plusSizeOnly) {
       conds.push(`(
         UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) REGEXP 'PLUS[ -]?SIZE|PLUSSIZE'
@@ -1545,11 +1545,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DIAGNÓSTICO de searchRefsByDateRange — usado pra debugar quando "0 resultados".
+   * DIAGNÃ“STICO de searchRefsByDateRange â€” usado pra debugar quando "0 resultados".
    * Retorna:
    *   - qual coluna de data foi detectada
    *   - todas as colunas DATE/DATETIME existentes na tabela produtos
-   *   - contagens em diferentes cenários (com/sem filtro de data, com/sem PLUS SIZE)
+   *   - contagens em diferentes cenÃ¡rios (com/sem filtro de data, com/sem PLUS SIZE)
    *   - sample de DESCRICAOCOMPLETA pra ver o formato real
    *   - min/max da coluna de data (pra ver se tem dado nesse range)
    */
@@ -1558,7 +1558,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     fim: string;
     descricaoContains?: string;
   }): Promise<any> {
-    if (!this.pool) return { error: 'pool não inicializado' };
+    if (!this.pool) return { error: 'pool nÃ£o inicializado' };
 
     const candidatas = [
       'DATAALT', 'DATA_ALT', 'DT_ALT', 'DATAALTERACAO', 'DATA_ALTERACAO',
@@ -1588,7 +1588,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     };
 
     if (!dataCol) {
-      result.problema = 'Nenhuma coluna de data foi detectada. Veja "colunasComDataNoNome" pra ver opções.';
+      result.problema = 'Nenhuma coluna de data foi detectada. Veja "colunasComDataNoNome" pra ver opÃ§Ãµes.';
       return result;
     }
 
@@ -1603,7 +1603,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         totalComData: Number(minMaxRows[0]?.total) || 0,
       };
 
-      // Total no range (sem filtro descrição)
+      // Total no range (sem filtro descriÃ§Ã£o)
       const [rangeRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT COUNT(DISTINCT REF) AS uniqueRefs, COUNT(*) AS totalRows
            FROM produtos
@@ -1615,7 +1615,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         totalRows: Number(rangeRows[0]?.totalRows) || 0,
       };
 
-      // Total no range COM filtro descrição
+      // Total no range COM filtro descriÃ§Ã£o
       if (input.descricaoContains?.trim()) {
         const [filterRows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT COUNT(DISTINCT REF) AS uniqueRefs, COUNT(*) AS totalRows
@@ -1630,7 +1630,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           totalRows: Number(filterRows[0]?.totalRows) || 0,
         };
 
-        // Quantos produtos TEM essa descrição no banco inteiro (sem filtro de data)
+        // Quantos produtos TEM essa descriÃ§Ã£o no banco inteiro (sem filtro de data)
         const [descCountRows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT COUNT(*) AS total FROM produtos WHERE UPPER(DESCRICAOCOMPLETA) LIKE ?`,
           [`%${input.descricaoContains.trim().toUpperCase()}%`],
@@ -1638,7 +1638,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         result.descricaoTotalNoBanco = Number(descCountRows[0]?.total) || 0;
       }
 
-      // Sample de 5 produtos no range (descrições reais)
+      // Sample de 5 produtos no range (descriÃ§Ãµes reais)
       const [sampleRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT REF, DESCRICAOCOMPLETA, \`${dataCol}\` AS dataCadastro
            FROM produtos
@@ -1660,25 +1660,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca preço cheio por SKU em batch na tabela `produtos` do Giga.
+   * Busca preÃ§o cheio por SKU em batch na tabela `produtos` do Giga.
    *
-   * Detecta automaticamente qual coluna tem o preço (VENDAUN, PRECO,
-   * PRECOVENDA, PRECO_VENDA — varia entre instalações Giga).
+   * Detecta automaticamente qual coluna tem o preÃ§o (VENDAUN, PRECO,
+   * PRECOVENDA, PRECO_VENDA â€” varia entre instalaÃ§Ãµes Giga).
    *
-   * Usado pelo realinhamento pra capturar o snapshot do preço no momento
-   * da transferência (mesma lógica do `seedAndApply` em #194).
+   * Usado pelo realinhamento pra capturar o snapshot do preÃ§o no momento
+   * da transferÃªncia (mesma lÃ³gica do `seedAndApply` em #194).
    *
-   * Retorna Map<sku, preco>. SKUs sem preço (ou sem coluna de preço
-   * detectada) NÃO aparecem no map → caller deve tratar como 0.
+   * Retorna Map<sku, preco>. SKUs sem preÃ§o (ou sem coluna de preÃ§o
+   * detectada) NÃƒO aparecem no map â†’ caller deve tratar como 0.
    */
   async getProductPricesBySkus(skus: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!skus.length || !this.pool) return out;
 
-    // Descobre qual coluna tem o preço (cache no método pickCol).
-    // ORDEM CORRIGIDA: campos de preço de venda EXPLICITO vem primeiro.
+    // Descobre qual coluna tem o preÃ§o (cache no mÃ©todo pickCol).
+    // ORDEM CORRIGIDA: campos de preÃ§o de venda EXPLICITO vem primeiro.
     // VENDAUN ficava em primeiro mas em alguns Gigas eh custo/medio, nao venda
-    // — gerava obrigacoes intercompany com R$ 0,80 por peca (errado).
+    // â€” gerava obrigacoes intercompany com R$ 0,80 por peca (errado).
     // Override por env GIGA_PRECO_COL pra forcar coluna especifica.
     const envCol = (process.env.GIGA_PRECO_COL || '').trim().toUpperCase();
     const candidatas = envCol
@@ -1687,13 +1687,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const precoCol = await this.pickCol(candidatas);
     if (!precoCol) {
       this.logger.warn(
-        '[erp] getProductPricesBySkus: nenhuma coluna de preço detectada na tabela produtos',
+        '[erp] getProductPricesBySkus: nenhuma coluna de preÃ§o detectada na tabela produtos',
       );
       return out;
     }
     this.logger.log(`[erp] getProductPricesBySkus: usando coluna "${precoCol}" (envOverride=${envCol || 'none'})`);
 
-    // Dedup + limpa SKUs + EXPANDE variantes (zeros à esquerda)
+    // Dedup + limpa SKUs + EXPANDE variantes (zeros Ã  esquerda)
     const unique = Array.from(new Set(skus.map((s) => String(s).trim()).filter(Boolean)));
     if (!unique.length) return out;
     const { allVariants, variantToOriginal } = this.expandSkus(unique);
@@ -1712,9 +1712,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const originalSku = variantToOriginal.get(codigoGiga) || codigoGiga;
         const preco = Number(r.preco);
         if (!Number.isNaN(preco) && preco > 0) {
-          // VENDAUN é em centavos — divide por 100 (consistente com getPdvProductInfo)
+          // VENDAUN Ã© em centavos â€” divide por 100 (consistente com getPdvProductInfo)
           const precoFinal = (precoCol || '').toUpperCase() === 'VENDAUN' ? preco / 100 : preco;
-          // Se já tem o SKU no map, mantém o maior preço (defensivo contra duplicatas)
+          // Se jÃ¡ tem o SKU no map, mantÃ©m o maior preÃ§o (defensivo contra duplicatas)
           const existing = out.get(originalSku);
           if (!existing || precoFinal > existing) {
             out.set(originalSku, precoFinal);
@@ -1733,9 +1733,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Estoque TOTAL consolidado por SKU (soma de todas as lojas).
    * Retorna um mapa { [sku]: totalQty }.
-   * SKUs que não existem no ERP não aparecem no mapa (não ficam 0).
+   * SKUs que nÃ£o existem no ERP nÃ£o aparecem no mapa (nÃ£o ficam 0).
    *
-   * Usado pela tela /produtos pra comparar estoque WooCommerce x ERP físico.
+   * Usado pela tela /produtos pra comparar estoque WooCommerce x ERP fÃ­sico.
    */
   async getStockTotalBySkus(skus: string[]): Promise<Record<string, number>> {
     if (!skus.length || !this.pool) return {};
@@ -1745,16 +1745,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!unique.length) return {};
 
     // Expande variantes de zero-padding (Giga grava "0005383498", outros sistemas
-    // podem mandar "5383498"). Mantém map variantToOriginal pra retornar
+    // podem mandar "5383498"). MantÃ©m map variantToOriginal pra retornar
     // o resultado agrupado pelo SKU original que o caller passou.
     const { allVariants, variantToOriginal } = this.expandSkus(unique);
     if (!allVariants.length) return {};
 
     // PASSO 1: verifica quais SKUs ORIGINAIS existem no CADASTRO (tabela `produtos`).
-    // Produto pode existir em `produtos` mas NÃO em `estoque` se ele está zerado
-    // em todas as lojas (gigasistemas só cria linha em `estoque` quando há movimento).
-    // Se confundirmos "sem linha em estoque" com "não existe", as 698 variações
-    // não atualizam pra zero quando deveriam.
+    // Produto pode existir em `produtos` mas NÃƒO em `estoque` se ele estÃ¡ zerado
+    // em todas as lojas (gigasistemas sÃ³ cria linha em `estoque` quando hÃ¡ movimento).
+    // Se confundirmos "sem linha em estoque" com "nÃ£o existe", as 698 variaÃ§Ãµes
+    // nÃ£o atualizam pra zero quando deveriam.
     const existsInProducts = new Set<string>();
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -1768,10 +1768,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (e) {
       this.logger.error(`Falha ao verificar cadastro ERP: ${(e as Error).message}`);
-      // Em erro, segue pro passo 2 sem distinção (comportamento antigo)
+      // Em erro, segue pro passo 2 sem distinÃ§Ã£o (comportamento antigo)
     }
 
-    // PASSO 2: busca estoque consolidado dos que têm movimento em pelo menos uma loja.
+    // PASSO 2: busca estoque consolidado dos que tÃªm movimento em pelo menos uma loja.
     // Soma todas as variantes de cada SKU original (caso o Giga tenha as duas formas).
     const stockMap: Record<string, number> = {};
     try {
@@ -1793,9 +1793,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return {};
     }
 
-    // PASSO 3: para cada SKU que EXISTE no cadastro mas NÃO tem linha em estoque,
-    // assume estoque = 0. Pra SKU que não existe no cadastro, omite do mapa
-    // (fica como "não encontrado" — produto descatalogado, não mexer no WC).
+    // PASSO 3: para cada SKU que EXISTE no cadastro mas NÃƒO tem linha em estoque,
+    // assume estoque = 0. Pra SKU que nÃ£o existe no cadastro, omite do mapa
+    // (fica como "nÃ£o encontrado" â€” produto descatalogado, nÃ£o mexer no WC).
     const result: Record<string, number> = { ...stockMap };
     for (const sku of existsInProducts) {
       if (!(sku in result)) {
@@ -1806,15 +1806,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Estoque por SKU detalhado por loja — retorna mapa {[sku]: [{storeCode, qty}, ...]}.
-   * Útil pra detalhamento por filial na tela de produto.
+   * Estoque por SKU detalhado por loja â€” retorna mapa {[sku]: [{storeCode, qty}, ...]}.
+   * Ãštil pra detalhamento por filial na tela de produto.
    */
   async getStockBySkusDetailed(skus: string[]): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
     if (!skus.length || !this.pool) return {};
     const unique = Array.from(new Set(skus.filter((s) => s && s.trim()))).map((s) => s.trim());
     if (!unique.length) return {};
 
-    // Tolerância a zeros à esquerda: expande cada SKU pra suas variantes 3-14 dígitos
+    // TolerÃ¢ncia a zeros Ã  esquerda: expande cada SKU pra suas variantes 3-14 dÃ­gitos
     // e mapeia o resultado de volta pro SKU original que o caller passou.
     const { allVariants, variantToOriginal } = this.expandSkus(unique);
     if (!allVariants.length) return {};
@@ -1831,7 +1831,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     `;
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [allVariants]);
-      // Agrega por (sku original, storeCode) somando variantes que apareçam separadas.
+      // Agrega por (sku original, storeCode) somando variantes que apareÃ§am separadas.
       const agg = new Map<string, Map<string, number>>();
       for (const r of rows) {
         const codigoGiga = String(r.sku).trim();
@@ -1857,7 +1857,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * TRACE: executa getStock passo-a-passo e retorna cada etapa pra debug.
    * Usado pelo endpoint /intelligence/sku-trace/:sku quando routing diz ruptura
-   * mas tela /produtos diz que tem estoque — identifica em qual passo o estoque
+   * mas tela /produtos diz que tem estoque â€” identifica em qual passo o estoque
    * "some".
    */
   async traceSkuStock(sku: string, storeCodes: string[]): Promise<{
@@ -1874,12 +1874,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const notes: string[] = [];
     const cleanSku = String(sku || '').trim();
 
-    // STEP 1 — variantes do SKU (paddings)
+    // STEP 1 â€” variantes do SKU (paddings)
     const skuVariantsList = this.skuVariants(cleanSku);
     notes.push(`SKU "${cleanSku}" expandido em ${skuVariantsList.length} variante(s)`);
 
     if (!this.pool) {
-      notes.push('⚠️ Pool MySQL não inicializado');
+      notes.push('âš ï¸ Pool MySQL nÃ£o inicializado');
       return {
         input: { sku: cleanSku, storeCodes },
         step1_skuVariants: skuVariantsList,
@@ -1893,7 +1893,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    // STEP 2 — busca em produtos
+    // STEP 2 â€” busca em produtos
     const { allVariants, variantToOriginal } = this.expandSkus([cleanSku]);
     let produtosFound: Array<{ codigoGiga: string }> = [];
     try {
@@ -1904,17 +1904,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       produtosFound = (prodRows as any[]).map((r) => ({ codigoGiga: String(r.CODIGO).trim() }));
       notes.push(`PASSO 1: ${produtosFound.length} produto(s) encontrado(s) em produtos`);
     } catch (e) {
-      notes.push(`⚠️ Falha PASSO 1 (produtos): ${(e as Error).message}`);
+      notes.push(`âš ï¸ Falha PASSO 1 (produtos): ${(e as Error).message}`);
     }
 
-    // STEP 3 — mapeamento codigoGiga → originalSku
+    // STEP 3 â€” mapeamento codigoGiga â†’ originalSku
     const codigoGigaToOriginal = new Map<string, string>();
     for (const p of produtosFound) {
       const original = variantToOriginal.get(p.codigoGiga);
       if (original) codigoGigaToOriginal.set(p.codigoGiga, original);
     }
 
-    // STEP 4 — expansão dos codigosGiga em variantes (NOVO FIX)
+    // STEP 4 â€” expansÃ£o dos codigosGiga em variantes (NOVO FIX)
     const codigoVariantsForEstoque: string[] = [];
     const codigoVariantToOriginal = new Map<string, string>();
     for (const [codigoGiga, originalSku] of codigoGigaToOriginal.entries()) {
@@ -1927,7 +1927,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     notes.push(`PASSO 2: expandido em ${codigoVariantsForEstoque.length} variantes pra buscar em estoque`);
 
-    // STEP 5 — query em estoque
+    // STEP 5 â€” query em estoque
     let estoqueRows: Array<{ codigoEstoque: string; loja: string; qty: number }> = [];
     if (codigoVariantsForEstoque.length > 0 && storeCodes.length > 0) {
       try {
@@ -1944,11 +1944,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         }));
         notes.push(`PASSO 3: ${estoqueRows.length} linha(s) em estoque com ESTOQUE>0 nas lojas filtradas`);
       } catch (e) {
-        notes.push(`⚠️ Falha PASSO 3 (estoque): ${(e as Error).message}`);
+        notes.push(`âš ï¸ Falha PASSO 3 (estoque): ${(e as Error).message}`);
       }
     }
 
-    // STEP 6 — agregação final
+    // STEP 6 â€” agregaÃ§Ã£o final
     const agg = new Map<string, number>();
     for (const r of estoqueRows) {
       const original = codigoVariantToOriginal.get(r.codigoEstoque);
@@ -1961,7 +1961,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return { storeCode, sku, qty };
     });
 
-    // RAW (sem filtros) pra comparação
+    // RAW (sem filtros) pra comparaÃ§Ã£o
     const raw = await this.getStockRawBySku(cleanSku);
 
     return {
@@ -1981,19 +1981,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DIAGNÓSTICO RAW: busca TODAS as linhas da tabela `estoque` para um SKU,
+   * DIAGNÃ“STICO RAW: busca TODAS as linhas da tabela `estoque` para um SKU,
    * sem filtrar ESTOQUE > 0 e sem agregar. Revela:
-   *   - duplicatas (mesma CODIGO+LOJA com linhas múltiplas)
-   *   - linhas negativas (devoluções pendentes)
-   *   - distribuição por loja COMPLETA (inclusive zeros)
-   * Usado pra investigar por que routing escolheu uma loja que ERP "diz" não ter peça.
+   *   - duplicatas (mesma CODIGO+LOJA com linhas mÃºltiplas)
+   *   - linhas negativas (devoluÃ§Ãµes pendentes)
+   *   - distribuiÃ§Ã£o por loja COMPLETA (inclusive zeros)
+   * Usado pra investigar por que routing escolheu uma loja que ERP "diz" nÃ£o ter peÃ§a.
    */
   async getStockRawBySku(sku: string): Promise<Array<{ sku: string; storeCode: string; qty: number }>> {
     if (!sku || !this.pool) return [];
     const variants = this.skuVariants(sku);
     if (!variants.length) return [];
     try {
-      // Diagnóstico: mostra TUDO (não filtra ESTOQUE>0 e mantém o CODIGO real
+      // DiagnÃ³stico: mostra TUDO (nÃ£o filtra ESTOQUE>0 e mantÃ©m o CODIGO real
       // do Giga pra ajudar a identificar problemas de zero-padding).
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO AS sku, LOJA AS storeCode, ESTOQUE AS qty
@@ -2014,10 +2014,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Diagnóstico: lista colunas da tabela `produtos` do Gigasistemas.
-   * Usado pra descobrir qual coluna guarda o EAN13 (código de barras).
-   * Retorna também 3 registros de amostra (com TODOS os campos preenchidos)
-   * pra facilitar a identificação visual do campo certo.
+   * DiagnÃ³stico: lista colunas da tabela `produtos` do Gigasistemas.
+   * Usado pra descobrir qual coluna guarda o EAN13 (cÃ³digo de barras).
+   * Retorna tambÃ©m 3 registros de amostra (com TODOS os campos preenchidos)
+   * pra facilitar a identificaÃ§Ã£o visual do campo certo.
    */
   async describeProductsTable(): Promise<{
     columns: Array<{ field: string; type: string }>;
@@ -2042,22 +2042,22 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Diagnóstico: descreve a tabela `caixa` do Gigasistemas.
-   * Tabela `caixa` é o registro linha-a-linha de tudo que passa pelo PDV —
-   * usada tanto pra proporcionalidade (vendas por loja × últimos 30d) quanto
+   * DiagnÃ³stico: descreve a tabela `caixa` do Gigasistemas.
+   * Tabela `caixa` Ã© o registro linha-a-linha de tudo que passa pelo PDV â€”
+   * usada tanto pra proporcionalidade (vendas por loja Ã— Ãºltimos 30d) quanto
    * pra auto-baixa de VENDA CERTA (match SKU+LOJA+DATA).
    *
-   * Schema real (confirmado via LURDS ANÁLISES em 21/04/26):
-   *   DATA         — data da venda
-   *   LOJA         — código da loja (FK → lojas.CODIGO)
-   *   NUMERO       — número do cupom (DISTINCT = pedido)
-   *   CODIGO       — SKU do produto
-   *   DESCRICAO    — nome do produto
-   *   QUANTIDADE   — qty vendida
-   *   VALOR        — preço unitário
-   *   VALORTOTAL   — total da linha
-   *   VENDEDOR     — vendedor
-   *   MARCADO      — se ='SIM' → linha inválida (já validada pelo WinCred)
+   * Schema real (confirmado via LURDS ANÃLISES em 21/04/26):
+   *   DATA         â€” data da venda
+   *   LOJA         â€” cÃ³digo da loja (FK â†’ lojas.CODIGO)
+   *   NUMERO       â€” nÃºmero do cupom (DISTINCT = pedido)
+   *   CODIGO       â€” SKU do produto
+   *   DESCRICAO    â€” nome do produto
+   *   QUANTIDADE   â€” qty vendida
+   *   VALOR        â€” preÃ§o unitÃ¡rio
+   *   VALORTOTAL   â€” total da linha
+   *   VENDEDOR     â€” vendedor
+   *   MARCADO      â€” se ='SIM' â†’ linha invÃ¡lida (jÃ¡ validada pelo WinCred)
    */
   async describeSalesTable(): Promise<{
     columns: Array<{ field: string; type: string }>;
@@ -2087,12 +2087,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * VENDA BRUTA por loja num intervalo de datas (em R$).
    *
-   * Soma VALORTOTAL da tabela `caixa` entre [inicio, fim) — fim é EXCLUSIVO.
+   * Soma VALORTOTAL da tabela `caixa` entre [inicio, fim) â€” fim Ã© EXCLUSIVO.
    * Ignora linhas MARCADO='SIM' (estornadas/canceladas no PDV).
    *
-   * Usado pra calcular royalties (8%) + marketing (4%) das filiais por mês.
+   * Usado pra calcular royalties (8%) + marketing (4%) das filiais por mÃªs.
    *
-   * Retorna Map<storeCode, vendaBrutaR$>. Lojas sem venda no período NÃO
+   * Retorna Map<storeCode, vendaBrutaR$>. Lojas sem venda no perÃ­odo NÃƒO
    * aparecem no map (caller deve tratar como 0).
    */
   async getSalesGrossByStores(
@@ -2127,13 +2127,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * VENDAS POR LOJA — últimos N dias (default 30), em UNIDADES.
+   * VENDAS POR LOJA â€” Ãºltimos N dias (default 30), em UNIDADES.
    * Usado pra calcular a proporcionalidade inversa no routing:
-   *   loja que vendeu MAIS tem meta de cessão MENOR.
+   *   loja que vendeu MAIS tem meta de cessÃ£o MENOR.
    *
-   * Ignora linhas com MARCADO='SIM' (já liquidadas no WinCred).
-   * Retorna sempre todas as lojas que tiveram VENDA no período — quem não
-   * aparece no array é porque não vendeu nada (share=0).
+   * Ignora linhas com MARCADO='SIM' (jÃ¡ liquidadas no WinCred).
+   * Retorna sempre todas as lojas que tiveram VENDA no perÃ­odo â€” quem nÃ£o
+   * aparece no array Ã© porque nÃ£o vendeu nada (share=0).
    */
   async getSalesByStoreLastDays(
     days: number = 30,
@@ -2163,19 +2163,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * AUTO-MATCH VENDA CERTA — procura na tabela `caixa` se a peça enviada
-   * pra uma loja destino JÁ foi vendida no PDV de lá.
+   * AUTO-MATCH VENDA CERTA â€” procura na tabela `caixa` se a peÃ§a enviada
+   * pra uma loja destino JÃ foi vendida no PDV de lÃ¡.
    *
    * A engine recebe um array de "candidatos" (cada VENDA CERTA pending tem
    * refCode + cor + tamanho + lojaDestino + dataEnvio). Como a `caixa` indexa
-   * pelo CODIGO (SKU) do Gigasistemas e não pela REF, faço JOIN com `produtos`
-   * pra resolver REF+COR+TAMANHO → CODIGO.
+   * pelo CODIGO (SKU) do Gigasistemas e nÃ£o pela REF, faÃ§o JOIN com `produtos`
+   * pra resolver REF+COR+TAMANHO â†’ CODIGO.
    *
    * Retorna um mapa `{ [indiceDoCandidato]: { numero, data, codigo, quantidade } }`
-   * — só preenche quando bateu. Se não bateu, não tem entrada no mapa.
+   * â€” sÃ³ preenche quando bateu. Se nÃ£o bateu, nÃ£o tem entrada no mapa.
    *
-   * Processamento em batch (LOOP de queries pequenas) — o volume é baixo
-   * (dezenas a centenas de VENDA CERTA pending no máximo), então não vale
+   * Processamento em batch (LOOP de queries pequenas) â€” o volume Ã© baixo
+   * (dezenas a centenas de VENDA CERTA pending no mÃ¡ximo), entÃ£o nÃ£o vale
    * a pena montar uma query gigante com UNION.
    */
   async findVendaCertaMatches(
@@ -2195,8 +2195,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const c = candidates[i];
       if (!c.lojaDestinoCode || !c.refCode) continue;
 
-      // SQL dinâmico — cor/tamanho podem ser null no nosso lado (pedido veio
-      // sem variação especificada). Nesse caso não filtra por esses campos.
+      // SQL dinÃ¢mico â€” cor/tamanho podem ser null no nosso lado (pedido veio
+      // sem variaÃ§Ã£o especificada). Nesse caso nÃ£o filtra por esses campos.
       const conds: string[] = [
         'c.LOJA = ?',
         'p.REF = ?',
@@ -2251,11 +2251,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca produtos no Gigasistemas por uma lista de códigos que podem estar
+   * Busca produtos no Gigasistemas por uma lista de cÃ³digos que podem estar
    * em QUALQUER campo (CODIGO, EAN13, CODBARRAS, etc). Retorna um mapa
-   * codigo-procurado → CODIGO oficial do Gigasistemas.
+   * codigo-procurado â†’ CODIGO oficial do Gigasistemas.
    *
-   * Só é usada quando algum SKU não bateu em getStockTotalBySkus (padrão),
+   * SÃ³ Ã© usada quando algum SKU nÃ£o bateu em getStockTotalBySkus (padrÃ£o),
    * pra evitar query cara no fluxo normal.
    */
   async findCodigosByAny(
@@ -2263,7 +2263,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     column: string,
   ): Promise<Record<string, string>> {
     if (!candidates.length || !this.pool) return {};
-    // Whitelist de colunas pra proteger contra injeção — expandir conforme schema
+    // Whitelist de colunas pra proteger contra injeÃ§Ã£o â€” expandir conforme schema
     const allowed = new Set([
       'CODIGO',
       'EAN',
@@ -2277,7 +2277,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       'REF',
     ]);
     if (!allowed.has(column)) {
-      throw new Error(`Coluna não permitida: ${column}`);
+      throw new Error(`Coluna nÃ£o permitida: ${column}`);
     }
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -2298,7 +2298,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DIAGNÓSTICO: busca produtos no ERP por trecho (LIKE) em CODIGO, REF ou DESCRICAOCOMPLETA.
+   * DIAGNÃ“STICO: busca produtos no ERP por trecho (LIKE) em CODIGO, REF ou DESCRICAOCOMPLETA.
    * Limita a 20 resultados. Retorna os campos relevantes pra entender o match.
    */
   async searchProductsLike(term: string, storeCode?: string): Promise<any[]> {
@@ -2306,24 +2306,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const cleanTerm = String(term).trim();
     const fullLike = `%${cleanTerm}%`;
     // BUSCA MAGICA: divide o termo em palavras (>=2 chars cada) e exige
-    // que TODAS apareçam na DESCRICAOCOMPLETA, em qualquer ordem.
+    // que TODAS apareÃ§am na DESCRICAOCOMPLETA, em qualquer ordem.
     // Ex: "plus blusa size" acha "BLUSA PLUS SIZE", "PLUS SIZE BLUSA", etc.
     // CODIGO/REF continuam com match exato/contains pra busca direta por SKU.
     const words = cleanTerm
       .split(/\s+/)
       .map((w) => w.trim())
       .filter((w) => w.length >= 2);
-    // REF DE MODELO: termo SÓ numérico de 3-6 dígitos = vendedora digitou a
-    // REF (etiqueta sem código de barras). Fluxo do PDV:
-    //   1º bipe (>=7 díg, direto) → 2º código manual → 3º REF do modelo.
-    // Pra REF: match EXATO primeiro — retorna a GRADE COMPLETA (tamanhos ×
-    // cores) daquele modelo, ordenada. Se exato não achar (digitação parcial),
-    // fallback por PREFIXO. NUNCA contains nem DESCRICAO pra termo numérico —
-    // era isso que trazia "referências nada a ver" no dropdown.
-    // QUALQUER tamanho de REF numérica (3+ dígitos) — existem REFs com mais
-    // de 6 dígitos. Ordem: REF exata → REF prefixo → fallback genérico
-    // (CODIGO/REF/DESCRICAO contains, comportamento antigo, pra não quebrar
-    // outras telas que buscam código parcial).
+    // REF DE MODELO: termo SÃ“ numÃ©rico de 3-6 dÃ­gitos = vendedora digitou a
+    // REF (etiqueta sem cÃ³digo de barras). Fluxo do PDV:
+    //   1Âº bipe (>=7 dÃ­g, direto) â†’ 2Âº cÃ³digo manual â†’ 3Âº REF do modelo.
+    // Pra REF: match EXATO primeiro â€” retorna a GRADE COMPLETA (tamanhos Ã—
+    // cores) daquele modelo, ordenada. Se exato nÃ£o achar (digitaÃ§Ã£o parcial),
+    // fallback por PREFIXO. NUNCA contains nem DESCRICAO pra termo numÃ©rico â€”
+    // era isso que trazia "referÃªncias nada a ver" no dropdown.
+    // QUALQUER tamanho de REF numÃ©rica (3+ dÃ­gitos) â€” existem REFs com mais
+    // de 6 dÃ­gitos. Ordem: REF exata â†’ REF prefixo â†’ fallback genÃ©rico
+    // (CODIGO/REF/DESCRICAO contains, comportamento antigo, pra nÃ£o quebrar
+    // outras telas que buscam cÃ³digo parcial).
     const isNumericRef = /^\d{3,}$/.test(cleanTerm);
     try {
       let products: any[] = [];
@@ -2350,7 +2350,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           products = prefixRows as any[];
         }
         if (!products.length) {
-          // Último recurso: LIKE genérico (igual comportamento antigo)
+          // Ãšltimo recurso: LIKE genÃ©rico (igual comportamento antigo)
           const [genericRows] = await this.pool.query<mysql.RowDataPacket[]>(
             `SELECT ${cols}
                FROM produtos
@@ -2374,7 +2374,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
                   LIMIT 20`;
           params = [...words.map((w) => `%${w}%`), fullLike, fullLike];
         } else {
-          // 1 palavra (texto): comportamento anterior — LIKE em tudo
+          // 1 palavra (texto): comportamento anterior â€” LIKE em tudo
           sql = `SELECT CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID
                    FROM produtos
                   WHERE CODIGO LIKE ? OR REF LIKE ? OR DESCRICAOCOMPLETA LIKE ?
@@ -2422,7 +2422,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const s = stockByCodigo.get(c) || { myStore: 0, total: 0 };
         return {
           ...p,
-          ESTOQUE: s.myStore,   // legado — alguns consumers ainda leem ESTOQUE
+          ESTOQUE: s.myStore,   // legado â€” alguns consumers ainda leem ESTOQUE
           qtyMyStore: s.myStore,
           qtyTotal: s.total,
         };
@@ -2433,46 +2433,46 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // Consulta de loja — métodos específicos por tipo de busca.
-  // Cada método assume uma intenção diferente da vendedora, sem o LIMIT
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // Consulta de loja â€” mÃ©todos especÃ­ficos por tipo de busca.
+  // Cada mÃ©todo assume uma intenÃ§Ã£o diferente da vendedora, sem o LIMIT
   // agressivo do searchProductsLike (que perdia "vestido azul 48" porque
   // o ERP tem milhares de "vestido azul").
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Busca por REF base. Retorna TODAS as variações de cor/tamanho.
+   * Busca por REF base. Retorna TODAS as variaÃ§Ãµes de cor/tamanho.
    *
-   * O Lurd's tem 3 convenções de cor coexistindo no Giga:
+   * O Lurd's tem 3 convenÃ§Ãµes de cor coexistindo no Giga:
    *   1. REF exata (13015 = cor base, geralmente PRETO)
    *   2. Sufixo de letra direto sem separador (13015M = MARINHO, 13015V = VINHO)
-   *   3. Sufixo com espaço + nome cor (VMS-223 PRETO, VMS-223 VERDE)
-   *   4. Sufixo com hífen (alguns cadastros legados: BMM-100-A)
+   *   3. Sufixo com espaÃ§o + nome cor (VMS-223 PRETO, VMS-223 VERDE)
+   *   4. Sufixo com hÃ­fen (alguns cadastros legados: BMM-100-A)
    *
-   * Estratégia: SQL traz tudo que COMEÇA com a REF base (LIKE 'X%'), depois
-   * filtramos em JS pelo padrão de sufixo válido pra excluir falsos positivos
-   * (ex: pedir "9002" não pode trazer "900271" que é outra REF inteira).
+   * EstratÃ©gia: SQL traz tudo que COMEÃ‡A com a REF base (LIKE 'X%'), depois
+   * filtramos em JS pelo padrÃ£o de sufixo vÃ¡lido pra excluir falsos positivos
+   * (ex: pedir "9002" nÃ£o pode trazer "900271" que Ã© outra REF inteira).
    *
-   * Padrões aceitos como variação de cor da mesma REF base:
+   * PadrÃµes aceitos como variaÃ§Ã£o de cor da mesma REF base:
    *   - exata
-   *   - base + " ALGO"          (espaço + texto)
-   *   - base + "-ALGO"          (hífen + texto)
-   *   - base + "LETRA(S)"       (sufixo só letras maiúsculas/lowercase, sem dígito)
-   * Padrões REJEITADOS (provavelmente outra REF):
-   *   - base + dígito (ex: "9002" + "71" = "900271")
+   *   - base + " ALGO"          (espaÃ§o + texto)
+   *   - base + "-ALGO"          (hÃ­fen + texto)
+   *   - base + "LETRA(S)"       (sufixo sÃ³ letras maiÃºsculas/lowercase, sem dÃ­gito)
+   * PadrÃµes REJEITADOS (provavelmente outra REF):
+   *   - base + dÃ­gito (ex: "9002" + "71" = "900271")
    */
   async searchByRef(ref: string): Promise<any[]> {
     if (!this.pool || !ref) return [];
     const clean = String(ref).trim();
     if (!clean) return [];
     try {
-      // Busca tudo que começa com a REF base — cada cor pode estar com sufixo
+      // Busca tudo que comeÃ§a com a REF base â€” cada cor pode estar com sufixo
       // diferente no Giga. Filtramos os falsos positivos no JS abaixo.
       //
-      // ⚠ Inclui TOTAL_EST (soma estoque consolidado por CODIGO em todas as
-      // lojas) — usado pra DEDUPLICAR duplicidade no Wincred (mesma REF+COR+TAM
-      // cadastrada em 2 CODIGOs por mudança de preço, etc). Sem dedup, o
-      // realinhamento gera 2 TransferOrder pra mesma peça e a baixa Giga
+      // âš  Inclui TOTAL_EST (soma estoque consolidado por CODIGO em todas as
+      // lojas) â€” usado pra DEDUPLICAR duplicidade no Wincred (mesma REF+COR+TAM
+      // cadastrada em 2 CODIGOs por mudanÃ§a de preÃ§o, etc). Sem dedup, o
+      // realinhamento gera 2 TransferOrder pra mesma peÃ§a e a baixa Giga
       // pode ir pro CODIGO sem estoque.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT p.CODIGO, p.REF, p.DESCRICAOCOMPLETA, p.COR, p.TAMANHO, p.ESTOQUE,
@@ -2498,8 +2498,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
       const filtered = all.filter((r: any) => isVariationOf(String(r.REF || ''), clean));
 
-      // ⚠ DEDUP por (REF+COR+TAM) — escolhe CODIGO com mais TOTAL_EST.
-      // Empate → CODIGO numericamente maior (cadastro mais novo).
+      // âš  DEDUP por (REF+COR+TAM) â€” escolhe CODIGO com mais TOTAL_EST.
+      // Empate â†’ CODIGO numericamente maior (cadastro mais novo).
       const norm = (s: any) => String(s ?? '').trim().toUpperCase();
       const byKey = new Map<string, any>();
       for (const r of filtered) {
@@ -2519,7 +2519,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
       const deduped = Array.from(byKey.values());
       this.logger.log(
-        `[erp] searchByRef("${clean}"): SQL ${all.length} → filtrado ${filtered.length} → dedup ${deduped.length} variações${
+        `[erp] searchByRef("${clean}"): SQL ${all.length} â†’ filtrado ${filtered.length} â†’ dedup ${deduped.length} variaÃ§Ãµes${
           filtered.length !== deduped.length ? ` (DUPLICIDADE Wincred: ${filtered.length - deduped.length} CODIGOs descartados)` : ''
         }.`,
       );
@@ -2531,29 +2531,29 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca por SKU ou EAN (código da etiqueta). PRIMEIRO acha UMA linha que bate,
-   * pega a REF dela, e DEPOIS retorna TODAS as variações dessa REF — pra vendedora
+   * Busca por SKU ou EAN (cÃ³digo da etiqueta). PRIMEIRO acha UMA linha que bate,
+   * pega a REF dela, e DEPOIS retorna TODAS as variaÃ§Ãµes dessa REF â€” pra vendedora
    * ver os outros tamanhos/cores sem precisar buscar de novo.
    */
   async searchByCodeAndExpandRef(code: string): Promise<any[]> {
     if (!this.pool || !code) return [];
     const clean = String(code).trim();
     try {
-      // FIX zeros à esquerda: gera TODAS as variações de padding (3 a 14
-      // dígitos). Vendedora bipa "05344710" e Giga tem "5344710" — sem
-      // skuVariants o lookup falha. skuVariants já cobre todos os paddings
-      // intermediários que aparecem em diferentes pontos do Wincred.
+      // FIX zeros Ã  esquerda: gera TODAS as variaÃ§Ãµes de padding (3 a 14
+      // dÃ­gitos). Vendedora bipa "05344710" e Giga tem "5344710" â€” sem
+      // skuVariants o lookup falha. skuVariants jÃ¡ cobre todos os paddings
+      // intermediÃ¡rios que aparecem em diferentes pontos do Wincred.
       const variants = this.skuVariants(clean);
       const placeholders = variants.map(() => '?').join(',');
 
-      // 1) Tenta achar em CODIGO direto (SKU bipado) — testa todas variações
+      // 1) Tenta achar em CODIGO direto (SKU bipado) â€” testa todas variaÃ§Ãµes
       let [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT REF FROM produtos WHERE CODIGO IN (${placeholders}) LIMIT 1`,
         variants,
       );
       let ref: string | null = (rows as any[])[0]?.REF ?? null;
 
-      // 2) Se não achou, tenta colunas de EAN/código de barras
+      // 2) Se nÃ£o achou, tenta colunas de EAN/cÃ³digo de barras
       if (!ref && /^\d{6,}$/.test(clean)) {
         const eanCols = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
         for (const col of eanCols) {
@@ -2565,7 +2565,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             const found = (r as any[])[0]?.REF;
             if (found) { ref = String(found); break; }
           } catch {
-            // coluna não existe nesse schema — ignora
+            // coluna nÃ£o existe nesse schema â€” ignora
           }
         }
       }
@@ -2581,20 +2581,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca por descrição. Aqui o volume é grande — "vestido" pode retornar
-   * milhares de linhas. Estratégia:
-   *  - Quebra o termo em PALAVRAS (cada uma vira um LIKE que precisa bater — AND).
-   *    Ex: "vestido azul 48" → WHERE DESCRICAOCOMPLETA LIKE '%vestido%' AND ... '%azul%' AND ... '%48%'
-   *  - Agrupa por REF (DISTINCT) e traz uma amostra da descrição.
-   *  - Limite generoso (200 REFs) porque são só REFs únicas, não linhas.
+   * Busca por descriÃ§Ã£o. Aqui o volume Ã© grande â€” "vestido" pode retornar
+   * milhares de linhas. EstratÃ©gia:
+   *  - Quebra o termo em PALAVRAS (cada uma vira um LIKE que precisa bater â€” AND).
+   *    Ex: "vestido azul 48" â†’ WHERE DESCRICAOCOMPLETA LIKE '%vestido%' AND ... '%azul%' AND ... '%48%'
+   *  - Agrupa por REF (DISTINCT) e traz uma amostra da descriÃ§Ã£o.
+   *  - Limite generoso (200 REFs) porque sÃ£o sÃ³ REFs Ãºnicas, nÃ£o linhas.
    */
   /**
-   * Busca CODIGO por DESCRIÇÃO + COR + TAMANHO, priorizando o que tem estoque.
-   * Usado pela reconciliação de remessa quando o lookup REF+COR+TAM falha
-   * (REF cadastrada com grafia diferente, zeros à esquerda, etc).
+   * Busca CODIGO por DESCRIÃ‡ÃƒO + COR + TAMANHO, priorizando o que tem estoque.
+   * Usado pela reconciliaÃ§Ã£o de remessa quando o lookup REF+COR+TAM falha
+   * (REF cadastrada com grafia diferente, zeros Ã  esquerda, etc).
    *
-   * Estratégia: quebra a descrição em palavras (AND LIKE), filtra por cor
-   * e tamanho exatos, ordena por estoque DESC. Retorna até 5 candidatos.
+   * EstratÃ©gia: quebra a descriÃ§Ã£o em palavras (AND LIKE), filtra por cor
+   * e tamanho exatos, ordena por estoque DESC. Retorna atÃ© 5 candidatos.
    */
   async searchByDescriptionPlusCorTam(
     descricao: string,
@@ -2647,17 +2647,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const trimmed = String(term).trim();
     if (!trimmed) return [];
 
-    // ─── Detecção de REF: quando o termo é uma única palavra "REF-like" ───
-    // (só dígitos ex: "9002", ou padrão com hífen ex: "VMS-223"), busca
+    // â”€â”€â”€ DetecÃ§Ã£o de REF: quando o termo Ã© uma Ãºnica palavra "REF-like" â”€â”€â”€
+    // (sÃ³ dÃ­gitos ex: "9002", ou padrÃ£o com hÃ­fen ex: "VMS-223"), busca
     // EXATA pela coluna REF. Isso evita "9002" trazer "900246", "900201"
-    // (que contêm "9002" mas são REFs totalmente diferentes).
+    // (que contÃªm "9002" mas sÃ£o REFs totalmente diferentes).
     const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
     if (isRefLike) {
       try {
-        // Pega TODAS as variações da REF (sem GROUP BY) e agrupa por "família"
-        // em JS. Família = 1ª palavra significativa (>=4 chars, não stopword).
-        // Isso resolve o caso de REF ambígua (mesma REF 8011 pra PIJAMA E VESTIDO):
-        // antes retornava 1 linha só (MAX alfabético escondia uma família).
+        // Pega TODAS as variaÃ§Ãµes da REF (sem GROUP BY) e agrupa por "famÃ­lia"
+        // em JS. FamÃ­lia = 1Âª palavra significativa (>=4 chars, nÃ£o stopword).
+        // Isso resolve o caso de REF ambÃ­gua (mesma REF 8011 pra PIJAMA E VESTIDO):
+        // antes retornava 1 linha sÃ³ (MAX alfabÃ©tico escondia uma famÃ­lia).
         const [allRows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT REF, DESCRICAOCOMPLETA FROM produtos WHERE REF = ?`,
           [trimmed],
@@ -2665,8 +2665,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (allRows.length > 0) {
           return this.groupRowsByFamily(allRows as any[]);
         }
-        // Fallback: se não bateu exato, tenta prefixo (ex: usuário digitou
-        // só parte da REF). Evita o LIKE %term% que confunde "9002"/"900246".
+        // Fallback: se nÃ£o bateu exato, tenta prefixo (ex: usuÃ¡rio digitou
+        // sÃ³ parte da REF). Evita o LIKE %term% que confunde "9002"/"900246".
         const [prefRows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT REF, DESCRICAOCOMPLETA
              FROM produtos
@@ -2684,11 +2684,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // ─── Busca por descrição (texto livre): LIKE %palavra% por palavra ───
+    // â”€â”€â”€ Busca por descriÃ§Ã£o (texto livre): LIKE %palavra% por palavra â”€â”€â”€
     const words = trimmed
       .split(/\s+/)
       .filter((w) => w.length >= 2)
-      .slice(0, 6); // limite de palavras pra não explodir SQL
+      .slice(0, 6); // limite de palavras pra nÃ£o explodir SQL
     if (!words.length) return [];
 
     const whereClauses = words.map(() => 'DESCRICAOCOMPLETA LIKE ?').join(' AND ');
@@ -2716,16 +2716,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Agrupa rows {REF, DESCRICAOCOMPLETA} por "família" e retorna 1 linha por
-   * (REF, família). Família = 1ª palavra significativa (>=4 chars, não stopword).
+   * Agrupa rows {REF, DESCRICAOCOMPLETA} por "famÃ­lia" e retorna 1 linha por
+   * (REF, famÃ­lia). FamÃ­lia = 1Âª palavra significativa (>=4 chars, nÃ£o stopword).
    *
-   * Exemplo: REF 8011 com 35 variações onde algumas são "PIJAMA FEMININO..." e
+   * Exemplo: REF 8011 com 35 variaÃ§Ãµes onde algumas sÃ£o "PIJAMA FEMININO..." e
    * outras "VESTIDO LONGO...". Retorna 2 linhas:
    *   - { REF: 8011, DESCRICAOCOMPLETA: "PIJAMA FEMININO...", VARIANT_COUNT: 12, FAMILIA: "pijama" }
    *   - { REF: 8011, DESCRICAOCOMPLETA: "VESTIDO LONGO...", VARIANT_COUNT: 23, FAMILIA: "vestido" }
    *
-   * Antes o MAX(DESCRICAOCOMPLETA) escondia uma família. Agora frontend pode
-   * mostrar TODAS as famílias e o usuário escolhe qual quer.
+   * Antes o MAX(DESCRICAOCOMPLETA) escondia uma famÃ­lia. Agora frontend pode
+   * mostrar TODAS as famÃ­lias e o usuÃ¡rio escolhe qual quer.
    */
   private groupRowsByFamily(
     rows: Array<{ REF: string; DESCRICAOCOMPLETA: string }>,
@@ -2739,7 +2739,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       String(s || '')
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '');
+        .replace(/[Ì€-Í¯]/g, '');
     const groups = new Map<string, { ref: string; desc: string; count: number; familia: string }>();
     for (const r of rows) {
       const ref = String(r.REF || '').trim();
@@ -2767,23 +2767,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Resolve EAN13 (código de barras) para uma lista de SKUs do Gigasistemas.
+   * Resolve EAN13 (cÃ³digo de barras) para uma lista de SKUs do Gigasistemas.
    *
-   * Tenta várias colunas conhecidas (EAN13, EAN, CODBARRAS, CODIGOBARRAS,
-   * COD_BARRAS, CODIGO_BARRAS) — a primeira que retornar dados válidos ganha.
+   * Tenta vÃ¡rias colunas conhecidas (EAN13, EAN, CODBARRAS, CODIGOBARRAS,
+   * COD_BARRAS, CODIGO_BARRAS) â€” a primeira que retornar dados vÃ¡lidos ganha.
    *
-   * Retorna mapa sku → ean. SKUs sem EAN ficam fora do mapa (operador vai
+   * Retorna mapa sku â†’ ean. SKUs sem EAN ficam fora do mapa (operador vai
    * ter que bipar manualmente ou reportar).
    *
-   * Usado pela tela de bipagem da filial — operador bipa EAN, sistema resolve
-   * qual SKU é via esse mapa invertido.
+   * Usado pela tela de bipagem da filial â€” operador bipa EAN, sistema resolve
+   * qual SKU Ã© via esse mapa invertido.
    */
   async getEansBySkus(skus: string[]): Promise<Record<string, string>> {
     if (!skus.length || !this.pool) return {};
 
     const candidates = ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
-    // MERGE de TODAS as colunas (não para no primeiro hit — uma coluna pode ter 1 SKU
+    // MERGE de TODAS as colunas (nÃ£o para no primeiro hit â€” uma coluna pode ter 1 SKU
     // preenchido e outra ter o resto). Primeira a preencher ganha a prioridade.
     const map: Record<string, string> = {};
     const totalSet = new Set<string>();
@@ -2808,7 +2808,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           this.logger.log(`getEansBySkus: coluna ${column} adicionou ${hits} SKUs (total ${totalSet.size}/${skus.length})`);
         }
       } catch (e: any) {
-        // Coluna não existe nessa tabela → tenta a próxima
+        // Coluna nÃ£o existe nessa tabela â†’ tenta a prÃ³xima
         if (!/Unknown column/i.test(e?.message ?? '')) {
           this.logger.warn(`getEansBySkus(${column}) erro: ${e.message}`);
         }
@@ -2823,11 +2823,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Fallback pra bipagem: dado um EAN bipado, procura em TODAS as colunas candidatas
-   * da tabela produtos (EAN13, EAN, CODBARRAS, etc) + tenta com e sem zeros à esquerda.
+   * da tabela produtos (EAN13, EAN, CODBARRAS, etc) + tenta com e sem zeros Ã  esquerda.
    * Retorna o CODIGO (SKU oficial do Gigasistemas) ou null.
    *
-   * Usado quando o frontend bipa um EAN que não bateu no mapa local (eventualmente
-   * o SKU do WC não existe exatamente como CODIGO no Gigasistemas, ou tem padding
+   * Usado quando o frontend bipa um EAN que nÃ£o bateu no mapa local (eventualmente
+   * o SKU do WC nÃ£o existe exatamente como CODIGO no Gigasistemas, ou tem padding
    * diferente de zeros).
    */
   async findSkuByAnyEan(ean: string): Promise<string | null> {
@@ -2835,7 +2835,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const raw = ean.trim();
     if (!raw) return null;
 
-    // Gera variantes: cru, sem zeros à esquerda, padded pra 13/14 dígitos
+    // Gera variantes: cru, sem zeros Ã  esquerda, padded pra 13/14 dÃ­gitos
     const stripped = raw.replace(/^0+/, '');
     const variants = new Set<string>([raw, stripped]);
     if (/^\d+$/.test(raw)) {
@@ -2845,8 +2845,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const list = Array.from(variants).filter(Boolean);
     if (!list.length) return null;
 
-    // IMPORTANTE: busca por CODIGO primeiro — muitas confecções imprimem o código
-    // interno do ERP como barcode (não usam EAN13 internacional). Só depois
+    // IMPORTANTE: busca por CODIGO primeiro â€” muitas confecÃ§Ãµes imprimem o cÃ³digo
+    // interno do ERP como barcode (nÃ£o usam EAN13 internacional). SÃ³ depois
     // tenta as colunas de EAN propriamente ditas.
     const columns = ['CODIGO', 'EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'];
 
@@ -2858,7 +2858,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if ((rows as any[]).length) {
           const codigo = String((rows as any[])[0].CODIGO).trim();
-          this.logger.log(`findSkuByAnyEan: EAN ${raw} encontrado em ${col} → ${codigo}`);
+          this.logger.log(`findSkuByAnyEan: EAN ${raw} encontrado em ${col} â†’ ${codigo}`);
           return codigo;
         }
       } catch (e: any) {
@@ -2871,8 +2871,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DIAGNÓSTICO: dump completo de um SKU na tabela produtos — todas as colunas
-   * candidatas de EAN. Usado pra debugar quando um bip não casa.
+   * DIAGNÃ“STICO: dump completo de um SKU na tabela produtos â€” todas as colunas
+   * candidatas de EAN. Usado pra debugar quando um bip nÃ£o casa.
    */
   async debugProductEans(sku: string): Promise<Record<string, any> | null> {
     if (!this.pool || !sku) return null;
@@ -2906,12 +2906,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * DIAGNÓSTICO: lista tabelas do Gigasistemas que batem com um LIKE.
-   * Uso: `listTablesLike('%credi%')` → retorna nomes de tabelas com "credi".
-   * Se a tabela existir, também devolve schema (colunas) e 3 linhas de amostra.
+   * DIAGNÃ“STICO: lista tabelas do Gigasistemas que batem com um LIKE.
+   * Uso: `listTablesLike('%credi%')` â†’ retorna nomes de tabelas com "credi".
+   * Se a tabela existir, tambÃ©m devolve schema (colunas) e 3 linhas de amostra.
    *
    * Endpoint pensado pra eu (Claude) descobrir estrutura de tabelas sem precisar
-   * subir dump — útil pra investigar integrações (ex: crediarios do WinCred).
+   * subir dump â€” Ãºtil pra investigar integraÃ§Ãµes (ex: crediarios do WinCred).
    */
   async listTablesLike(
     pattern: string,
@@ -2944,10 +2944,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }> = [];
 
       for (const t of tables.slice(0, 10)) {
-        // Só inspeciona as 10 primeiras — evitar payload gigante
+        // SÃ³ inspeciona as 10 primeiras â€” evitar payload gigante
         try {
           const [cols] = await this.pool.query<mysql.RowDataPacket[]>(
-            // Nome de tabela não pode ser parametrizado — usamos regex pra sanitizar
+            // Nome de tabela nÃ£o pode ser parametrizado â€” usamos regex pra sanitizar
             `SHOW COLUMNS FROM \`${t.replace(/[^a-zA-Z0-9_]/g, '')}\``,
           );
           const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -2975,7 +2975,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Retorna metadados de um produto (nome, preço) direto da tabela produtos. */
+  /** Retorna metadados de um produto (nome, preÃ§o) direto da tabela produtos. */
   async getProduct(sku: string): Promise<{ name: string; price: number } | null> {
     if (!this.pool) return null;
     try {
@@ -2993,16 +2993,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // PUBLICAÇÃO NO SITE — busca de referências pra enfileirar no LURDS ORDER ONE
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // PUBLICAÃ‡ÃƒO NO SITE â€” busca de referÃªncias pra enfileirar no LURDS ORDER ONE
   //
   // Este bloco existe pra alimentar a tela /retaguarda/publicar-site (Fase 1
-  // da integração Wincred→WooCommerce). A estratégia é DEFENSIVA: nem todo
+  // da integraÃ§Ã£o Wincredâ†’WooCommerce). A estratÃ©gia Ã© DEFENSIVA: nem todo
   // Gigasistemas tem as mesmas colunas (GRUPO, SUBGRUPO, FORNECEDOR, NCM,
-  // CFOP, DATACADASTRO variam por versão/customização). Então detectamos o
-  // schema em tempo de execução via `SHOW COLUMNS` e montamos as queries
-  // só com as colunas que existem.
-  // ═══════════════════════════════════════════════════════════════════════
+  // CFOP, DATACADASTRO variam por versÃ£o/customizaÃ§Ã£o). EntÃ£o detectamos o
+  // schema em tempo de execuÃ§Ã£o via `SHOW COLUMNS` e montamos as queries
+  // sÃ³ com as colunas que existem.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   // Cache do schema da tabela `produtos` (conjunto de colunas em UPPER).
   // Evita rodar SHOW COLUMNS a cada request da tela.
@@ -3027,8 +3027,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Resolve o nome REAL da coluna no schema, dado um conjunto de candidatos
-   * comuns. Retorna o primeiro que existe, ou null. Útil pra campos que
-   * variam entre versões do Gigasistemas (ex: CUSTOUN / CUSTO / CUSTOMEDIO).
+   * comuns. Retorna o primeiro que existe, ou null. Ãštil pra campos que
+   * variam entre versÃµes do Gigasistemas (ex: CUSTOUN / CUSTO / CUSTOMEDIO).
    */
   private async pickCol(candidates: string[]): Promise<string | null> {
     const cols = await this.getProductsColumns();
@@ -3039,8 +3039,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * FACETS — valores distintos de GRUPO, SUBGRUPO, FORNECEDOR pra popular
-   * dropdowns no frontend. Cada um só é retornado se a coluna existir no
+   * FACETS â€” valores distintos de GRUPO, SUBGRUPO, FORNECEDOR pra popular
+   * dropdowns no frontend. Cada um sÃ³ Ã© retornado se a coluna existir no
    * schema. Limita 500 valores por facet (o CEO tem poucos por natureza).
    */
   async getGigaFacetsForPublish(): Promise<{
@@ -3125,20 +3125,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * BUSCA PARA PUBLICAÇÃO — retorna referências agrupadas por REF+COR.
+   * BUSCA PARA PUBLICAÃ‡ÃƒO â€” retorna referÃªncias agrupadas por REF+COR.
    *
    * Filtros (todos opcionais, combinam com AND):
-   *   - refs:         lista de REFs exatas (fast-path, usa IN). Máx 200.
-   *   - term:         busca LIKE em DESCRICAOCOMPLETA (múltiplas palavras = AND).
-   *   - grupo/subgrupo/fornecedor: exatos. Só aplicam se a coluna existir.
-   *   - diasCadastro: últimos N dias (usa DATACADASTRO/DATA_CADASTRO/DT_CADASTRO
-   *                   se existir; caso contrário ignora).
+   *   - refs:         lista de REFs exatas (fast-path, usa IN). MÃ¡x 200.
+   *   - term:         busca LIKE em DESCRICAOCOMPLETA (mÃºltiplas palavras = AND).
+   *   - grupo/subgrupo/fornecedor: exatos. SÃ³ aplicam se a coluna existir.
+   *   - diasCadastro: Ãºltimos N dias (usa DATACADASTRO/DATA_CADASTRO/DT_CADASTRO
+   *                   se existir; caso contrÃ¡rio ignora).
    *
    * Formato de retorno: array de REFs, cada uma com array de cores, cada cor
    * com array de tamanhos (CODIGO+TAMANHO+ESTOQUE). Tudo que o frontend precisa
    * pra mostrar o card e deixar o CEO marcar as cores que quer subir.
    *
-   * Limite: 200 REFs distintas por chamada (pra não travar a tela).
+   * Limite: 200 REFs distintas por chamada (pra nÃ£o travar a tela).
    */
   async searchRefsForPublish(filters: {
     refs?: string[];
@@ -3159,9 +3159,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       ncm: string | null;
       cfop: string | null;
       custo: number | null;
-      preco: number | null;          // preço PRINCIPAL (a prazo, geralmente)
-      precoVista: number | null;     // preço à vista (se diferente)
-      precoPromo: number | null;     // preço promo (se houver)
+      preco: number | null;          // preÃ§o PRINCIPAL (a prazo, geralmente)
+      precoVista: number | null;     // preÃ§o Ã  vista (se diferente)
+      precoPromo: number | null;     // preÃ§o promo (se houver)
       cores: Array<{
         cor: string;
         tamanhos: Array<{
@@ -3198,20 +3198,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const ncmCol = (await this.pickCol(['NCM', 'CODNCM', 'CODIGONCM', 'COD_NCM'])) as string | null;
     const cfopCol = (await this.pickCol(['CFOP', 'CODCFOP'])) as string | null;
     const custoCol = (await this.pickCol(['CUSTOUN', 'CUSTO', 'CUSTO_UN', 'CUSTOMEDIO', 'CUSTO_MEDIO'])) as string | null;
-    // FIX: Wincred tem MÚLTIPLAS colunas de preço (à vista, a prazo, promo, etc).
-    // VENDAUN normalmente é PREÇO À VISTA (mais BAIXO). Pra publicação no site, o
-    // CEO geralmente quer o PREÇO A PRAZO (VPRAZO/PRECOPRAZO), que é o praticado
+    // FIX: Wincred tem MÃšLTIPLAS colunas de preÃ§o (Ã  vista, a prazo, promo, etc).
+    // VENDAUN normalmente Ã© PREÃ‡O Ã€ VISTA (mais BAIXO). Pra publicaÃ§Ã£o no site, o
+    // CEO geralmente quer o PREÃ‡O A PRAZO (VPRAZO/PRECOPRAZO), que Ã© o praticado
     // no PDV. Buscamos todos e expomos no payload pra UI escolher.
     const precoCol      = (await this.pickCol(['VPRAZO', 'PRECOPRAZO', 'PRECO_PRAZO', 'VENDAPRAZO', 'PRECOVENDA', 'PRECO_VENDA', 'PRECO', 'VENDAUN'])) as string | null;
     const precoVistaCol = (await this.pickCol(['VAVISTA', 'PRECOVISTA', 'PRECO_VISTA', 'VENDAVISTA', 'VENDAUN'])) as string | null;
     const precoPromoCol = (await this.pickCol(['PRECOPROMO', 'PRECO_PROMO', 'VPROMO', 'VENDAPROMO'])) as string | null;
-    // Descrição estendida — Wincred às vezes tem campos extras (OBSERVACAO, DETALHES,
-    // INFORMACOES). Pegamos pra usar como base de descrição se houver.
+    // DescriÃ§Ã£o estendida â€” Wincred Ã s vezes tem campos extras (OBSERVACAO, DETALHES,
+    // INFORMACOES). Pegamos pra usar como base de descriÃ§Ã£o se houver.
     const descLongaCol  = (await this.pickCol(['OBSERVACAO', 'OBSERVACOES', 'DETALHES', 'INFORMACOES', 'DESCRICAOPROD', 'DESCRICAO_PROD', 'DESCRICAO'])) as string | null;
     const dataCol = (await this.pickCol(['DATAALT', 'DATA_ALT', 'DT_ALT', 'DATACADASTRO', 'DATA_CADASTRO', 'DT_CADASTRO', 'DATACRIACAO', 'DT_CRIACAO', 'CREATED_AT'])) as string | null;
     const eanCol = (await this.pickCol(['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS'])) as string | null;
 
-    // Monta SELECT dinâmico
+    // Monta SELECT dinÃ¢mico
     const selects = [
       'p.CODIGO AS codigo',
       'p.REF AS ref',
@@ -3243,17 +3243,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         .filter((r) => r.length > 0)
         .slice(0, 200);
       if (clean.length) {
-        // Wincred às vezes cadastra cada cor como uma REF separada com sufixo
-        // de espaço + letras (ex: "VMS-223" vira "VMS-223 P", "VMS-223 A",
-        // "VMS-223 V", "VMS-223 N"). Pra o CEO não precisar conhecer esse
-        // detalhe de cadastro, a busca por "VMS-223" precisa pegar também
-        // "VMS-223 X". Mesma lógica já usada em products.service (task #107).
+        // Wincred Ã s vezes cadastra cada cor como uma REF separada com sufixo
+        // de espaÃ§o + letras (ex: "VMS-223" vira "VMS-223 P", "VMS-223 A",
+        // "VMS-223 V", "VMS-223 N"). Pra o CEO nÃ£o precisar conhecer esse
+        // detalhe de cadastro, a busca por "VMS-223" precisa pegar tambÃ©m
+        // "VMS-223 X". Mesma lÃ³gica jÃ¡ usada em products.service (task #107).
         const orParts: string[] = [];
         for (const r of clean) {
           orParts.push('p.REF = ?');
           params.push(r);
           orParts.push('p.REF LIKE ?');
-          params.push(`${r} %`); // espaço + qualquer sufixo de cor
+          params.push(`${r} %`); // espaÃ§o + qualquer sufixo de cor
         }
         wheres.push(`(${orParts.join(' OR ')})`);
       }
@@ -3289,8 +3289,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const limitRefs = Math.max(1, Math.min(500, Number(filters.limit) || 200));
     // Primeiro descobre quais REFs batem (pra limitar); depois busca TODAS
     // as linhas dessas REFs (pra mostrar as cores/tamanhos completos).
-    // IMPORTANTE: usamos limite inflado (x5) pra compensar sub-REFs — o limit
-    // final vira pelo nº de REFs BASE únicas após normalização.
+    // IMPORTANTE: usamos limite inflado (x5) pra compensar sub-REFs â€” o limit
+    // final vira pelo nÂº de REFs BASE Ãºnicas apÃ³s normalizaÃ§Ã£o.
     const sqlRefs = `
       SELECT DISTINCT p.REF AS ref
         FROM produtos p
@@ -3319,9 +3319,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         },
       };
     }
-    // Deduplica pela REF base pra contar corretamente quantos produtos únicos
-    // existem. Mantém TODOS os sub-REFs na refList (passados pro IN), mas o
-    // truncate fica baseado no nº de bases únicas.
+    // Deduplica pela REF base pra contar corretamente quantos produtos Ãºnicos
+    // existem. MantÃ©m TODOS os sub-REFs na refList (passados pro IN), mas o
+    // truncate fica baseado no nÂº de bases Ãºnicas.
     const uniqBaseRefs = new Set<string>();
     for (const r of refList) {
       const base = r.replace(/\s[A-Za-z]{1,3}$/, '').trim() || r;
@@ -3331,14 +3331,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     // Agora busca TODAS as linhas dessas REFs pra montar cor/tamanho.
     // FIX: re-aplicar OS MESMOS filtros (term/grupo/subgrupo/fornecedor/dias)
-    // pra evitar trazer variações que NÃO batem. Antes, se REF=13050 tinha
-    // alguma variação com "vestido longo" mas outras eram SOUTIEN, a Fase 2
-    // trazia TODAS — incluindo o SOUTIEN. Agora só vem o que combina.
+    // pra evitar trazer variaÃ§Ãµes que NÃƒO batem. Antes, se REF=13050 tinha
+    // alguma variaÃ§Ã£o com "vestido longo" mas outras eram SOUTIEN, a Fase 2
+    // trazia TODAS â€” incluindo o SOUTIEN. Agora sÃ³ vem o que combina.
     // Usa subset dos wheres SEM o filtro de REF (substituido pelo IN).
     const detailWheres = wheres.filter(
       (w) => !w.includes('p.REF = ?') && !w.includes('p.REF LIKE ?'),
     );
-    // Reconstroi params correspondentes — remove os params do filtro REF original
+    // Reconstroi params correspondentes â€” remove os params do filtro REF original
     const detailParams: any[] = [];
     let pIdx = 0;
     for (const w of wheres) {
@@ -3368,16 +3368,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return empty as any;
     }
 
-    // Normaliza REF pra base — Wincred cadastra cada cor como sub-REF com
+    // Normaliza REF pra base â€” Wincred cadastra cada cor como sub-REF com
     // sufixo (ex: "VMS-223 P", "VMS-223 A"). O CEO pensa "VMS-223" e espera
-    // ver todas as 4 cores embaixo dessa referência única. Mesma regex usada
-    // em products.service (task #107) pra manter consistência.
+    // ver todas as 4 cores embaixo dessa referÃªncia Ãºnica. Mesma regex usada
+    // em products.service (task #107) pra manter consistÃªncia.
     const normalizeBaseRef = (ref: string): string => {
       const s = String(ref).trim();
       return s.replace(/\s[A-Za-z]{1,3}$/, '').trim() || s;
     };
 
-    // Agrupa por REF BASE → COR → tamanhos.
+    // Agrupa por REF BASE â†’ COR â†’ tamanhos.
     const byRef = new Map<string, any>();
     for (const r of detailRows) {
       const rawRef = String(r.ref).trim();
@@ -3426,7 +3426,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       refEntry.estoqueTotal += est;
     }
 
-    // Transforma Map → Array
+    // Transforma Map â†’ Array
     const refs = Array.from(byRef.values()).map((r: any) => ({
       refCode: r.refCode as string,
       descricao: r.descricao as string,
@@ -3462,7 +3462,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Retorna os dados crus de UMA REF+COR (todos os tamanhos) — usado no
+   * Retorna os dados crus de UMA REF+COR (todos os tamanhos) â€” usado no
    * momento de enfileirar pra congelar o snapshot no banco local.
    */
   async getRefColorForQueue(refCode: string, cor: string): Promise<{
@@ -3479,8 +3479,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     precoPromo: number | null;
     tamanhos: Array<{ tamanho: string | null; codigo: string; estoque: number; ean: string | null }>;
   } | null> {
-    // Normaliza caso o caller mande sub-REF ("VMS-223 P") — a busca expande
-    // sozinha, mas o matching na Map é sempre pela base.
+    // Normaliza caso o caller mande sub-REF ("VMS-223 P") â€” a busca expande
+    // sozinha, mas o matching na Map Ã© sempre pela base.
     const baseRef = String(refCode).trim().replace(/\s[A-Za-z]{1,3}$/, '').trim() || String(refCode).trim();
     const res = await this.searchRefsForPublish({ refs: [baseRef] });
     const ref = res.refs.find((r) => r.refCode === baseRef);
@@ -3506,28 +3506,28 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // EXPLORER GENÉRICO DO ERP — list/schema/run read-only
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // EXPLORER GENÃ‰RICO DO ERP â€” list/schema/run read-only
   //
   // Usado pela tela /relatorios/giga (matriz). Permite ao admin executar
-  // queries SELECT arbitrárias contra o banco do Gigasistemas pra extrair
-  // dados em tempo real (relatórios ad-hoc, exports CSV/XLSX, dashboards).
+  // queries SELECT arbitrÃ¡rias contra o banco do Gigasistemas pra extrair
+  // dados em tempo real (relatÃ³rios ad-hoc, exports CSV/XLSX, dashboards).
   //
-  // Segurança (defesa em camadas):
+  // SeguranÃ§a (defesa em camadas):
   //  1. Controller exige role admin/operator
   //  2. runReadOnly bloqueia comandos de escrita (regex blacklist)
-  //  3. runReadOnly força LIMIT global (default 1000, max 50000)
-  //  4. Pool dedicado de leitura — usa o mesmo pool, mas o user MySQL
-  //     do Gigasistemas idealmente só tem GRANT SELECT
+  //  3. runReadOnly forÃ§a LIMIT global (default 1000, max 50000)
+  //  4. Pool dedicado de leitura â€” usa o mesmo pool, mas o user MySQL
+  //     do Gigasistemas idealmente sÃ³ tem GRANT SELECT
   //  5. Timeout de 30s na query
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Health check do pool MySQL — devolve diagnóstico em formato amigável.
+   * Health check do pool MySQL â€” devolve diagnÃ³stico em formato amigÃ¡vel.
    *
-   * Não engole erro: retorna o `error.message` real pra UI mostrar o motivo
-   * (timeout, ECONNREFUSED, access denied, etc.). Também expõe se as envs
-   * obrigatórias estão setadas (sem vazar senha).
+   * NÃ£o engole erro: retorna o `error.message` real pra UI mostrar o motivo
+   * (timeout, ECONNREFUSED, access denied, etc.). TambÃ©m expÃµe se as envs
+   * obrigatÃ³rias estÃ£o setadas (sem vazar senha).
    */
   async pingHealth(): Promise<{
     ok: boolean;
@@ -3546,7 +3546,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const hasPassword = !!this.config.get<string>('ERP_PASSWORD');
 
     if (!this.pool) {
-      return { ok: false, error: 'Pool ERP não inicializado', host, port, database, hasUser, hasPassword };
+      return { ok: false, error: 'Pool ERP nÃ£o inicializado', host, port, database, hasUser, hasPassword };
     }
     const t0 = Date.now();
     try {
@@ -3567,14 +3567,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista TODAS as tabelas do banco. Estratégia robusta:
+   * Lista TODAS as tabelas do banco. EstratÃ©gia robusta:
    *   1. Tenta information_schema.TABLES (com TABLE_SCHEMA = ?). Traz rows+size.
-   *   2. Se vier vazio, fallback pra SHOW TABLES (não tem metadados, mas
-   *      funciona em user MySQL com GRANT mínimo). Tenta enriquecer com
+   *   2. Se vier vazio, fallback pra SHOW TABLES (nÃ£o tem metadados, mas
+   *      funciona em user MySQL com GRANT mÃ­nimo). Tenta enriquecer com
    *      information_schema.STATISTICS.TABLE_ROWS por tabela.
    *
    * Por que dois caminhos? O Gigasistemas usa MySQL antigo onde nem todo user
-   * tem permissão pra ler information_schema completa. SHOW TABLES funciona
+   * tem permissÃ£o pra ler information_schema completa. SHOW TABLES funciona
    * com qualquer SELECT, mesmo restrito.
    */
   async listAllTables(): Promise<Array<{ name: string; rows: number; sizeMb: number; engine: string | null }>> {
@@ -3582,7 +3582,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const dbName = this.config.get<string>('ERP_DATABASE') ?? '';
 
-    // Tentativa 1: information_schema (com schema explícito + DATABASE() como fallback)
+    // Tentativa 1: information_schema (com schema explÃ­cito + DATABASE() como fallback)
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT
@@ -3603,9 +3603,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         engine: r.engine ? String(r.engine) : null,
       }));
       if (arr.length > 0) return arr;
-      this.logger.warn('listAllTables: information_schema retornou 0 — caindo pro SHOW TABLES');
+      this.logger.warn('listAllTables: information_schema retornou 0 â€” caindo pro SHOW TABLES');
     } catch (e: any) {
-      this.logger.warn(`listAllTables information_schema falhou: ${e.message} — caindo pro SHOW TABLES`);
+      this.logger.warn(`listAllTables information_schema falhou: ${e.message} â€” caindo pro SHOW TABLES`);
     }
 
     // Tentativa 2: SHOW TABLES (mais robusto, mas sem metadados de tamanho)
@@ -3619,7 +3619,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`listAllTables: SHOW TABLES retornou ${arr.length} tabelas`);
       return arr;
     } catch (e: any) {
-      this.logger.error(`listAllTables SHOW TABLES também falhou: ${e.message}`);
+      this.logger.error(`listAllTables SHOW TABLES tambÃ©m falhou: ${e.message}`);
       return [];
     }
   }
@@ -3635,7 +3635,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     rowCount: number;
   } | null> {
     if (!this.pool) return null;
-    // Sanitiza o nome da tabela: só alfanum/underscore (mysql identifier)
+    // Sanitiza o nome da tabela: sÃ³ alfanum/underscore (mysql identifier)
     const safe = String(tableName || '').replace(/[^a-zA-Z0-9_]/g, '');
     if (!safe) return null;
     const lim = Math.max(1, Math.min(50, Number(sampleLimit) || 5));
@@ -3671,7 +3671,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Executa uma query READ-ONLY (SELECT/SHOW/DESCRIBE/EXPLAIN/WITH).
-   * Bloqueia comandos de escrita por regex e força LIMIT.
+   * Bloqueia comandos de escrita por regex e forÃ§a LIMIT.
    *
    * Retorna columns + rows + meta (executionMs, truncated).
    */
@@ -3687,51 +3687,51 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     appliedLimit: number;
   }> {
     if (!this.pool) {
-      throw new Error('Pool ERP não inicializado');
+      throw new Error('Pool ERP nÃ£o inicializado');
     }
     const sql = String(sqlRaw || '').trim();
     if (!sql) throw new Error('SQL vazio');
 
-    // Tira comentários simples e ponto-e-vírgula final pra checar a 1ª palavra
+    // Tira comentÃ¡rios simples e ponto-e-vÃ­rgula final pra checar a 1Âª palavra
     const cleaned = sql
       .replace(/^\s*--[^\n]*\n?/gm, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .trim()
       .replace(/;+\s*$/, '');
 
-    // 1. WHITELIST — só comandos read-only
+    // 1. WHITELIST â€” sÃ³ comandos read-only
     const firstWord = cleaned.split(/\s+/)[0]?.toUpperCase() ?? '';
     const allowedFirst = ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'];
     if (!allowedFirst.includes(firstWord)) {
       throw new Error(`Apenas comandos de leitura: ${allowedFirst.join(', ')}. Recebido: ${firstWord || '(vazio)'}`);
     }
 
-    // 2. BLACKLIST — não pode ter comandos de escrita em qualquer lugar
-    // (ex: SELECT 1; DELETE FROM produtos — rejeita pelo ;)
+    // 2. BLACKLIST â€” nÃ£o pode ter comandos de escrita em qualquer lugar
+    // (ex: SELECT 1; DELETE FROM produtos â€” rejeita pelo ;)
     if (/;[\s\S]+\S/.test(cleaned)) {
-      throw new Error('Múltiplos statements separados por ";" não são permitidos');
+      throw new Error('MÃºltiplos statements separados por ";" nÃ£o sÃ£o permitidos');
     }
-    // BUG FIX: REPLACE foi removido da blacklist porque colidia com a função
+    // BUG FIX: REPLACE foi removido da blacklist porque colidia com a funÃ§Ã£o
     // de string REPLACE() usada pra normalizar CPF na busca de cliente do Giga.
-    // O comando perigoso "REPLACE INTO" (escrita) já é bloqueado pela WHITELIST
-    // acima — que só aceita SELECT/SHOW/DESCRIBE/DESC/EXPLAIN/WITH como 1ª palavra.
+    // O comando perigoso "REPLACE INTO" (escrita) jÃ¡ Ã© bloqueado pela WHITELIST
+    // acima â€” que sÃ³ aceita SELECT/SHOW/DESCRIBE/DESC/EXPLAIN/WITH como 1Âª palavra.
     const blacklist = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|RENAME|GRANT|REVOKE|LOAD\s+DATA|INTO\s+OUTFILE|INTO\s+DUMPFILE|HANDLER|LOCK\s+TABLES|UNLOCK|CALL|DO\s+SLEEP|BENCHMARK\s*\()\b/i;
     const m = blacklist.exec(cleaned);
     if (m) {
-      throw new Error(`Comando bloqueado: "${m[0].toUpperCase()}". Apenas leitura é permitida.`);
+      throw new Error(`Comando bloqueado: "${m[0].toUpperCase()}". Apenas leitura Ã© permitida.`);
     }
 
-    // 3. LIMIT automático (só pra SELECT/WITH; SHOW/DESCRIBE não precisa)
+    // 3. LIMIT automÃ¡tico (sÃ³ pra SELECT/WITH; SHOW/DESCRIBE nÃ£o precisa)
     const maxRows = Math.max(1, Math.min(50000, opts.maxRows ?? 1000));
     let finalSql = cleaned;
     let appliedLimit = maxRows;
     if (firstWord === 'SELECT' || firstWord === 'WITH') {
-      // Detecta LIMIT já existente (case-insensitive, no fim)
+      // Detecta LIMIT jÃ¡ existente (case-insensitive, no fim)
       const limitMatch = cleaned.match(/\bLIMIT\s+(\d+)(\s*,\s*\d+)?\s*$/i);
       if (limitMatch) {
         const userLimit = Number(limitMatch[1]);
         if (userLimit > maxRows) {
-          // Usuário pediu acima do teto — sobrescreve
+          // UsuÃ¡rio pediu acima do teto â€” sobrescreve
           finalSql = cleaned.replace(/\bLIMIT\s+\d+(\s*,\s*\d+)?\s*$/i, `LIMIT ${maxRows}`);
         } else {
           appliedLimit = userLimit;
@@ -3748,13 +3748,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       const conn = await this.pool.getConnection();
       try {
-        // SET SESSION pra timeout — precisa ser ms (mysql usa MAX_EXECUTION_TIME hint OU SESSION var)
-        // Forma compatível com MySQL 5.7+: hint /*+ MAX_EXECUTION_TIME(N) */
-        // Mas hint não funciona em SHOW/DESCRIBE — então usa SET SESSION quando dá.
+        // SET SESSION pra timeout â€” precisa ser ms (mysql usa MAX_EXECUTION_TIME hint OU SESSION var)
+        // Forma compatÃ­vel com MySQL 5.7+: hint /*+ MAX_EXECUTION_TIME(N) */
+        // Mas hint nÃ£o funciona em SHOW/DESCRIBE â€” entÃ£o usa SET SESSION quando dÃ¡.
         try {
           await conn.query(`SET SESSION MAX_EXECUTION_TIME=${timeoutMs}`);
         } catch {
-          // MariaDB / versões antigas não suportam — segue sem timeout server-side
+          // MariaDB / versÃµes antigas nÃ£o suportam â€” segue sem timeout server-side
         }
         const [rows, fields] = await conn.query<mysql.RowDataPacket[]>(finalSql);
         const ms = Date.now() - t0;
@@ -3780,7 +3780,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Serializa rows pra JSON: Buffer→string, Date→ISO, BigInt→number. */
+  /** Serializa rows pra JSON: Bufferâ†’string, Dateâ†’ISO, BigIntâ†’number. */
   private serializeRows(rows: any[]): any[] {
     return rows.map((r) => {
       const out: any = {};
@@ -3796,14 +3796,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // INTELIGÊNCIA DE ESTOQUE — métodos pra dashboard /retaguarda/inteligencia-estoque
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // INTELIGÃŠNCIA DE ESTOQUE â€” mÃ©todos pra dashboard /retaguarda/inteligencia-estoque
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Detecta a coluna de DATA CADASTRO da tabela `produtos` (varia por versão
-   * Giga: DATACADASTRO, DATA_INC, DT_CADASTRO, CREATED_AT, etc). Cachê em
-   * memória pra evitar repetir DESCRIBE em cada query.
+   * Detecta a coluna de DATA CADASTRO da tabela `produtos` (varia por versÃ£o
+   * Giga: DATACADASTRO, DATA_INC, DT_CADASTRO, CREATED_AT, etc). CachÃª em
+   * memÃ³ria pra evitar repetir DESCRIBE em cada query.
    */
   private _cadCol: string | null | undefined = undefined;
   async getCadastroDateCol(): Promise<string | null> {
@@ -3823,8 +3823,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Converte filtro de ano (`pre2020`, `2021`, `2022`...) em condição SQL
-   * + bind params. Retorna `{ cond: '', params: [] }` se não tiver coluna
+   * Converte filtro de ano (`pre2020`, `2021`, `2022`...) em condiÃ§Ã£o SQL
+   * + bind params. Retorna `{ cond: '', params: [] }` se nÃ£o tiver coluna
    * de data ou filtro vazio.
    */
   private async buildYearFilter(
@@ -3847,10 +3847,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Estoque atual em PEÇAS por loja (somatório de ESTOQUE > 0).
-   * Filtra opcionalmente só PLUS SIZE e/ou por ANO DE CADASTRO da peça.
+   * Estoque atual em PEÃ‡AS por loja (somatÃ³rio de ESTOQUE > 0).
+   * Filtra opcionalmente sÃ³ PLUS SIZE e/ou por ANO DE CADASTRO da peÃ§a.
    *
-   * Retorna Map<storeCode, totalPecas>. Lojas sem estoque NÃO aparecem (caller trata como 0).
+   * Retorna Map<storeCode, totalPecas>. Lojas sem estoque NÃƒO aparecem (caller trata como 0).
    */
   async getStockTotalByStores(
     plusSize = false,
@@ -3889,10 +3889,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Vendas por loja num período (data inicio/fim half-open: >= inicio, < fim).
-   * Retorna peças vendidas + valor bruto. Ignora MARCADO='SIM'.
-   * Filtros opcionais: PLUS SIZE + ANO DE CADASTRO da peça.
-   * Quando há filtro de plusSize ou year, faz JOIN com `produtos`.
+   * Vendas por loja num perÃ­odo (data inicio/fim half-open: >= inicio, < fim).
+   * Retorna peÃ§as vendidas + valor bruto. Ignora MARCADO='SIM'.
+   * Filtros opcionais: PLUS SIZE + ANO DE CADASTRO da peÃ§a.
+   * Quando hÃ¡ filtro de plusSize ou year, faz JOIN com `produtos`.
    */
   async getSalesByStoresInRange(
     inicio: Date,
@@ -3917,7 +3917,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         params.push(...yf.params);
       }
 
-      // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
+      // BUG FIX padding: ignora zeros Ã  esquerda no JOIN caixaÃ—produtos
       const sql = needsJoin
         ? `SELECT c.LOJA AS storeCode,
                   SUM(c.QUANTIDADE) AS pecas,
@@ -3949,13 +3949,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * TOP REFs vendidas no período. Pode ser:
-   *   - Toda a rede (storeCode null) ou loja específica
-   *   - Ordenadas por peças OU por valor
+   * TOP REFs vendidas no perÃ­odo. Pode ser:
+   *   - Toda a rede (storeCode null) ou loja especÃ­fica
+   *   - Ordenadas por peÃ§as OU por valor
    *   - Filtro PLUS SIZE
    *
    * Junta `caixa` com `produtos` pra resolver REF (CODIGO no caixa = SKU).
-   * Retorna até `limit` linhas.
+   * Retorna atÃ© `limit` linhas.
    */
   async getTopRefsBySales(input: {
     inicio: Date;
@@ -3969,7 +3969,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const orderBy = input.orderBy === 'valor' ? 'valor' : 'pecas';
     const limit = Math.max(1, Math.min(100, input.limit || 10));
 
-    // Otimização: agrega `caixa` por CODIGO PRIMEIRO (subquery filtrada),
+    // OtimizaÃ§Ã£o: agrega `caixa` por CODIGO PRIMEIRO (subquery filtrada),
     // depois faz JOIN com produtos. Reduz drasticamente o tamanho do JOIN.
     const caixaConds: string[] = [
       'c.DATA >= ?',
@@ -3989,7 +3989,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     // BUG FIX padding: caixa.CODIGO e produtos.CODIGO podem ter padding
     // diferente (ex: "5358458" vs "0005358458"). Compara como UNSIGNED INT
-    // pra ignorar zeros à esquerda. Mesmo problema do getStock.
+    // pra ignorar zeros Ã  esquerda. Mesmo problema do getStock.
     const sql = `
       SELECT p.REF AS refCode,
              MAX(p.DESCRICAOCOMPLETA) AS descricao,
@@ -4019,15 +4019,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getTopRefsBySales falhou: ${(e as Error).message}`);
-      return []; // não throw — não quebra o Promise.all do getStoreDetail
+      return []; // nÃ£o throw â€” nÃ£o quebra o Promise.all do getStoreDetail
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // RELATÓRIO DE VENDAS — usado pela /retaguarda/inteligencia-vendas
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // RELATÃ“RIO DE VENDAS â€” usado pela /retaguarda/inteligencia-vendas
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  /** Cache do mapeamento dinâmico de colunas das tabelas caixa/produtos */
+  /** Cache do mapeamento dinÃ¢mico de colunas das tabelas caixa/produtos */
   private salesColMap: {
     vendedor: string | null;
     marca: string | null;
@@ -4035,11 +4035,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   } | null = null;
 
   /**
-   * Detecta colunas dinâmicas relevantes pra relatório de vendas:
+   * Detecta colunas dinÃ¢micas relevantes pra relatÃ³rio de vendas:
    *  - VENDEDOR na tabela `caixa` (ou `funcionario`, `vendedor_codigo`)
    *  - MARCA na tabela `produtos` (ou `fabricante`, `griffe`)
    *  - NUMCUPOM/CUPOM/NUMVENDA na tabela caixa pra contar quantas vendas
-   * Cache em memória — detecta 1× e reaproveita.
+   * Cache em memÃ³ria â€” detecta 1Ã— e reaproveita.
    */
   private async detectSalesColumns(): Promise<{
     vendedor: string | null;
@@ -4082,8 +4082,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * SUMMARY — totais agregados do período. Retorna peças, valor, número
-   * de cupons distintos (vendas), ticket médio.
+   * SUMMARY â€” totais agregados do perÃ­odo. Retorna peÃ§as, valor, nÃºmero
+   * de cupons distintos (vendas), ticket mÃ©dio.
    */
   async getSalesSummary(input: {
     inicio: Date;
@@ -4130,7 +4130,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Vendas agrupadas POR DIA — pra gráfico de linha/barra. */
+  /** Vendas agrupadas POR DIA â€” pra grÃ¡fico de linha/barra. */
   async getSalesByDay(input: {
     inicio: Date;
     fim: Date;
@@ -4170,8 +4170,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * TOP VENDEDORAS — agrupado por código (e nome se a tabela funcionarios
-   * existir e tiver coluna nome). Calcula valor + qtd peças + número de
+   * TOP VENDEDORAS â€” agrupado por cÃ³digo (e nome se a tabela funcionarios
+   * existir e tiver coluna nome). Calcula valor + qtd peÃ§as + nÃºmero de
    * vendas distintas.
    */
   async getTopVendedoras(input: {
@@ -4183,7 +4183,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return [];
     const { vendedor: vendedorCol, numCupom } = await this.detectSalesColumns();
     if (!vendedorCol) {
-      this.logger.warn('getTopVendedoras: coluna VENDEDOR não detectada na caixa');
+      this.logger.warn('getTopVendedoras: coluna VENDEDOR nÃ£o detectada na caixa');
       return [];
     }
     const limit = Math.max(1, Math.min(100, input.limit || 20));
@@ -4202,8 +4202,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       ? `COUNT(DISTINCT CONCAT(c.LOJA, '-', c.\`${numCupom}\`))`
       : `COUNT(DISTINCT CONCAT(c.LOJA, '-', DATE(c.DATA), '-', COALESCE(c.CODCLIENTE, 0)))`;
 
-    // Tenta JOIN com `funcionarios` pra trazer nome — se a tabela não existir
-    // ou não tiver coluna nome, faz só agregação por código.
+    // Tenta JOIN com `funcionarios` pra trazer nome â€” se a tabela nÃ£o existir
+    // ou nÃ£o tiver coluna nome, faz sÃ³ agregaÃ§Ã£o por cÃ³digo.
     let sqlWithJoin: string | null = null;
     try {
       const funcSchema = await this.getTableSchema('funcionarios', 1);
@@ -4227,7 +4227,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           `;
         }
       }
-    } catch {/* funcionarios não existe — sem JOIN */}
+    } catch {/* funcionarios nÃ£o existe â€” sem JOIN */}
 
     const sql = sqlWithJoin || `
       SELECT CONCAT('', c.\`${vendedorCol}\`) AS codigo,
@@ -4258,8 +4258,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Total faturado em UM MÊS específico de UM ANO específico.
-   * Usado pra montar gráfico "últimos N anos no mesmo mês".
+   * Total faturado em UM MÃŠS especÃ­fico de UM ANO especÃ­fico.
+   * Usado pra montar grÃ¡fico "Ãºltimos N anos no mesmo mÃªs".
    */
   async getMonthSalesByYear(input: {
     year: number;
@@ -4290,8 +4290,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Vendas por MÊS nos últimos N meses. Pra gráfico de linha
-   * "evolução mensal últimos 12 meses".
+   * Vendas por MÃŠS nos Ãºltimos N meses. Pra grÃ¡fico de linha
+   * "evoluÃ§Ã£o mensal Ãºltimos 12 meses".
    */
   async getSalesByMonth(input: {
     months: number;
@@ -4302,8 +4302,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const out: Array<{ year: number; month: number; pecas: number; valor: number }> = [];
     const now = new Date();
 
-    // Promise.all com N queries seria mais rápido mas pode estourar conexão.
-    // Uma só query com agregação por YEAR/MONTH é melhor.
+    // Promise.all com N queries seria mais rÃ¡pido mas pode estourar conexÃ£o.
+    // Uma sÃ³ query com agregaÃ§Ã£o por YEAR/MONTH Ã© melhor.
     const inicio = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
     const fim = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const conds: string[] = [
@@ -4326,7 +4326,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     `;
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
-      // Preenche todos os meses (mesmo zero) pra gráfico ficar contínuo
+      // Preenche todos os meses (mesmo zero) pra grÃ¡fico ficar contÃ­nuo
       const map = new Map<string, any>();
       for (const r of rows as any[]) {
         map.set(`${r.y}-${r.m}`, { pecas: Number(r.pecas) || 0, valor: Number(r.valor) || 0 });
@@ -4345,7 +4345,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Quantidade de clientes únicos no período (CODCLIENTE distinct).
+   * Quantidade de clientes Ãºnicos no perÃ­odo (CODCLIENTE distinct).
    */
   async getUniqueClientesCount(input: {
     inicio: Date;
@@ -4373,7 +4373,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** TOP MARCAS — agrupa por coluna MARCA da tabela produtos. */
+  /** TOP MARCAS â€” agrupa por coluna MARCA da tabela produtos. */
   async getTopMarcas(input: {
     inicio: Date;
     fim: Date;
@@ -4383,7 +4383,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.pool) return [];
     const { marca: marcaCol } = await this.detectSalesColumns();
     if (!marcaCol) {
-      this.logger.warn('getTopMarcas: coluna MARCA não detectada em produtos');
+      this.logger.warn('getTopMarcas: coluna MARCA nÃ£o detectada em produtos');
       return [];
     }
     const limit = Math.max(1, Math.min(100, input.limit || 15));
@@ -4397,7 +4397,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       caixaConds.push('c.LOJA = ?');
       params.push(input.storeCode);
     }
-    // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
+    // BUG FIX padding: ignora zeros Ã  esquerda no JOIN caixaÃ—produtos
     const sql = `
       SELECT UPPER(TRIM(p.\`${marcaCol}\`)) AS marca,
              SUM(agg.pecas) AS pecas,
@@ -4430,13 +4430,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * RUPTURAS — REFs que VENDERAM no período mas estão com estoque ZERO HOJE.
-   * Sinaliza necessidade de reposição urgente.
+   * RUPTURAS â€” REFs que VENDERAM no perÃ­odo mas estÃ£o com estoque ZERO HOJE.
+   * Sinaliza necessidade de reposiÃ§Ã£o urgente.
    *
-   * Pode ser global (storeCode null) ou por loja. Retorna até `limit`.
+   * Pode ser global (storeCode null) ou por loja. Retorna atÃ© `limit`.
    *
-   * Lógica: agrega vendas por REF no período, faz LEFT JOIN com estoque
-   * (somando todas as lojas se global, só a loja se específico) e filtra
+   * LÃ³gica: agrega vendas por REF no perÃ­odo, faz LEFT JOIN com estoque
+   * (somando todas as lojas se global, sÃ³ a loja se especÃ­fico) e filtra
    * onde estoque atual = 0.
    */
   async getRupturas(input: {
@@ -4448,7 +4448,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }): Promise<Array<{ refCode: string; descricao: string | null; pecasVendidas: number; estoqueAtual: number }>> {
     if (!this.pool) return [];
     const limit = Math.max(1, Math.min(100, input.limit || 10));
-    // Otimização igual getTopRefsBySales: agrega caixa por CODIGO antes do JOIN.
+    // OtimizaÃ§Ã£o igual getTopRefsBySales: agrega caixa por CODIGO antes do JOIN.
     const caixaConds: string[] = [
       'c.DATA >= ?',
       'c.DATA < ?',
@@ -4481,7 +4481,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           ) est ON est.ref = p.REF`;
     const stockParams = input.storeCode ? [input.storeCode] : [];
 
-    // BUG FIX padding: ignora zeros à esquerda no JOIN caixa×produtos
+    // BUG FIX padding: ignora zeros Ã  esquerda no JOIN caixaÃ—produtos
     const sql = `
       SELECT p.REF AS refCode,
              MAX(p.DESCRICAOCOMPLETA) AS descricao,
@@ -4511,17 +4511,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }));
     } catch (e) {
       this.logger.error(`getRupturas falhou: ${(e as Error).message}`);
-      return []; // não throw — não quebra o Promise.all
+      return []; // nÃ£o throw â€” nÃ£o quebra o Promise.all
     }
   }
 
   /**
-   * PARADOS — REFs com estoque alto mas SEM venda há N dias (default 30).
+   * PARADOS â€” REFs com estoque alto mas SEM venda hÃ¡ N dias (default 30).
    * Candidatos a realinhamento (mandar pra loja que vende mais essa REF).
    *
-   * Lógica:
+   * LÃ³gica:
    *   1. Pega REFs com SUM(estoque) >= minStock (default 5)
-   *   2. Exclui as que tiveram venda nos últimos N dias
+   *   2. Exclui as que tiveram venda nos Ãºltimos N dias
    *   3. Ordena por estoque desc
    */
   async getParados(input: {
@@ -4547,7 +4547,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const salesJoinFilter = input.storeCode ? 'AND c2.LOJA = ?' : '';
     const salesParams = input.storeCode ? [input.storeCode] : [];
 
-    // BUG FIX padding: ignora zeros à esquerda nos JOINs caixa/estoque×produtos
+    // BUG FIX padding: ignora zeros Ã  esquerda nos JOINs caixa/estoqueÃ—produtos
     const sql = `
       SELECT p.REF AS refCode,
              MAX(p.DESCRICAOCOMPLETA) AS descricao,
@@ -4587,9 +4587,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * HEATMAP REF × LOJA — matriz de estoque pra visualização cruzada.
-   * Pega top N REFs com maior estoque total (rede) e mostra distribuição
-   * por loja. Útil pra decidir realinhamento manualmente.
+   * HEATMAP REF Ã— LOJA â€” matriz de estoque pra visualizaÃ§Ã£o cruzada.
+   * Pega top N REFs com maior estoque total (rede) e mostra distribuiÃ§Ã£o
+   * por loja. Ãštil pra decidir realinhamento manualmente.
    *
    * Retorna `{ refs: [{refCode, descricao, totalRede}], lojas: [storeCode],
    *   matrix: { [refCode]: { [storeCode]: qtd } } }`
@@ -4634,7 +4634,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
       const refCodes = refs.map((r) => r.refCode);
 
-      // 2. Distribuição por loja dessas REFs
+      // 2. DistribuiÃ§Ã£o por loja dessas REFs
       const distSql = `
         SELECT p.REF AS refCode,
                e.LOJA AS storeCode,
@@ -4666,17 +4666,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // TRIAGEM DO PROVADOR — auxiliares
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // TRIAGEM DO PROVADOR â€” auxiliares
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Resolve um SKU (CODIGO Giga) pra dados completos do produto.
    *
-   * Tolerante a zeros à esquerda e EANs:
+   * Tolerante a zeros Ã  esquerda e EANs:
    *   1. Tenta CODIGO exato
-   *   2. Se não achar, tenta variantes com padding zero (5, 6, 7, 8, 13, 14 dígitos)
-   *   3. Se não achar, delega pra findSkuByAnyEan (procura em EAN13, EAN, CODBARRAS, etc)
+   *   2. Se nÃ£o achar, tenta variantes com padding zero (5, 6, 7, 8, 13, 14 dÃ­gitos)
+   *   3. Se nÃ£o achar, delega pra findSkuByAnyEan (procura em EAN13, EAN, CODBARRAS, etc)
    *
    * Retorna null se nada bater.
    */
@@ -4687,14 +4687,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     tamanho: string | null;
     descricao: string | null;
   } | null> {
-    // Wrapper bulletproof — NUNCA propaga erro pra cima.
-    // Qualquer erro de conexão / timeout / SQL → loga + retorna null.
-    // Caller (triage, etc) trata null como "produto não cadastrado" e mostra
-    // mensagem amigável em vez de 500.
+    // Wrapper bulletproof â€” NUNCA propaga erro pra cima.
+    // Qualquer erro de conexÃ£o / timeout / SQL â†’ loga + retorna null.
+    // Caller (triage, etc) trata null como "produto nÃ£o cadastrado" e mostra
+    // mensagem amigÃ¡vel em vez de 500.
     try {
       return await this._resolveSkuInfoInner(sku);
     } catch (e: any) {
-      this.logger.error(`[resolveSkuInfo] erro fatal não tratado pra "${sku}": ${e?.message || e}`);
+      this.logger.error(`[resolveSkuInfo] erro fatal nÃ£o tratado pra "${sku}": ${e?.message || e}`);
       return null;
     }
   }
@@ -4711,8 +4711,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!s) return null;
 
     // Helper: query produtos por CODIGO exato (com lista de candidatos).
-    // Usa só DESCRICAOCOMPLETA (DESCRICAO não existe no Giga).
-    // Captura erro pra não derrubar a chain inteira (erros transitórios de MySQL
+    // Usa sÃ³ DESCRICAOCOMPLETA (DESCRICAO nÃ£o existe no Giga).
+    // Captura erro pra nÃ£o derrubar a chain inteira (erros transitÃ³rios de MySQL
     // viravam 500 no /triage/suggest quando bipava EAN13).
     const tryCodigos = async (candidates: string[]): Promise<any | null> => {
       if (!candidates.length) return null;
@@ -4740,7 +4740,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const stripped = s.replace(/^0+/, '');
     if (stripped) variants.add(stripped);
     if (/^\d+$/.test(s)) {
-      // Padding completo de 3 até 14 dígitos (cobre qualquer formato Giga)
+      // Padding completo de 3 atÃ© 14 dÃ­gitos (cobre qualquer formato Giga)
       for (let len = 3; len <= 14; len++) {
         if (s.length < len) variants.add(s.padStart(len, '0'));
       }
@@ -4762,7 +4762,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!row) {
-      this.logger.warn(`resolveSkuInfo: SKU "${s}" não bateu nem com variantes nem com EANs`);
+      this.logger.warn(`resolveSkuInfo: SKU "${s}" nÃ£o bateu nem com variantes nem com EANs`);
       return null;
     }
     return {
@@ -4775,7 +4775,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Diagnóstico de SKU bipado quando resolveSkuInfo retorna null.
+   * DiagnÃ³stico de SKU bipado quando resolveSkuInfo retorna null.
    * Retorna sample de produtos com CODIGO/REF/DESCRICAO contendo o termo,
    * pra identificar como o "17" realmente aparece no Giga.
    */
@@ -4864,11 +4864,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           });
         }
       } catch {
-        // coluna não existe — ignora
+        // coluna nÃ£o existe â€” ignora
       }
     }
 
-    // Busca por descrição parcial (último recurso)
+    // Busca por descriÃ§Ã£o parcial (Ãºltimo recurso)
     if (s.length >= 3) {
       try {
         const [r4] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -4897,17 +4897,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Busca direta no Giga pelo CODIGO de uma combinação REF + cor + tamanho.
-   * Tolerante a TRIM, case e variações de espaço.
+   * Busca direta no Giga pelo CODIGO de uma combinaÃ§Ã£o REF + cor + tamanho.
+   * Tolerante a TRIM, case e variaÃ§Ãµes de espaÃ§o.
    *
    * Uso: na hora de fechar uma remessa de realinhamento, pegamos
    * REF/COR/TAM do TransferOrder e precisamos do CODIGO pra dar baixa
-   * em estoque. Esse método resolve isso direto sem depender de searchByRef.
+   * em estoque. Esse mÃ©todo resolve isso direto sem depender de searchByRef.
    *
    * Tenta em ordem:
    *   1. Match exato (case-insensitive + trim)
-   *   2. Match com LIKE (cobre variações tipo "BEGE" vs "XADREZ BEGE")
-   *   3. Match só por REF + tamanho (ignora cor — fallback)
+   *   2. Match com LIKE (cobre variaÃ§Ãµes tipo "BEGE" vs "XADREZ BEGE")
+   *   3. Match sÃ³ por REF + tamanho (ignora cor â€” fallback)
    */
   async findCodigoByRefCorTam(
     refCode: string,
@@ -4919,15 +4919,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const corClean = (cor || '').trim();
     const tamClean = (tamanho || '').trim();
 
-    // ⚠ Quando Wincred tem DUPLICIDADE (mesma REF+COR+TAM cadastrada em 2
-    // CODIGOs distintos, ex: produto re-cadastrado com preço novo), a query
-    // anterior fazia LIMIT 1 sem ORDER BY → pegava ALEATÓRIO, frequentemente
-    // o CODIGO sem estoque → app mostrava "sem estoque" e baixava SKU errado.
+    // âš  Quando Wincred tem DUPLICIDADE (mesma REF+COR+TAM cadastrada em 2
+    // CODIGOs distintos, ex: produto re-cadastrado com preÃ§o novo), a query
+    // anterior fazia LIMIT 1 sem ORDER BY â†’ pegava ALEATÃ“RIO, frequentemente
+    // o CODIGO sem estoque â†’ app mostrava "sem estoque" e baixava SKU errado.
     //
     // FIX: JOIN com tabela `estoque`, GROUP BY CODIGO, ORDER BY estoque DESC
-    // (CODIGO com estoque > 0 ganha; empate → mais novo via CODIGO DESC).
+    // (CODIGO com estoque > 0 ganha; empate â†’ mais novo via CODIGO DESC).
 
-    // 1. Match exato (com priorização por estoque)
+    // 1. Match exato (com priorizaÃ§Ã£o por estoque)
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
@@ -4966,7 +4966,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if ((rows as any[]).length) {
           return String((rows as any[])[0].CODIGO).trim();
         }
-        // Tenta o reverso (cor cadastrada está dentro da bipada)
+        // Tenta o reverso (cor cadastrada estÃ¡ dentro da bipada)
         const [rows2] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT p.CODIGO, COALESCE(SUM(e.ESTOQUE), 0) AS TOTAL_EST
             FROM produtos p
@@ -4987,7 +4987,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // 3. Último fallback: só REF + tamanho (ignora cor)
+    // 3. Ãšltimo fallback: sÃ³ REF + tamanho (ignora cor)
     if (tamClean) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -5059,7 +5059,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     if (!uniq.length) return out;
 
-    // refCore → items originais com essa core (pode haver vários com cor/tam diferentes)
+    // refCore â†’ items originais com essa core (pode haver vÃ¡rios com cor/tam diferentes)
     const byRefCore = new Map<string, typeof uniq>();
     for (const u of uniq) {
       const arr = byRefCore.get(u.refCore) || [];
@@ -5070,11 +5070,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const chunks: typeof uniq[] = [];
     for (let i = 0; i < uniq.length; i += 500) chunks.push(uniq.slice(i, i + 500));
 
-    // ⚠ DUPLICIDADE NO WINCRED: mesma REF+COR+TAM pode ter 2 CODIGOs diferentes
-    // (cadastro repetido por mudança de preço, etc). Selecionamos o CODIGO com
-    // MAIOR estoque consolidado — desempate por CODIGO DESC (mais novo).
+    // âš  DUPLICIDADE NO WINCRED: mesma REF+COR+TAM pode ter 2 CODIGOs diferentes
+    // (cadastro repetido por mudanÃ§a de preÃ§o, etc). Selecionamos o CODIGO com
+    // MAIOR estoque consolidado â€” desempate por CODIGO DESC (mais novo).
     //
-    // Score por (refCore|cor|tam): { codigo, totalEst } — guarda o melhor.
+    // Score por (refCore|cor|tam): { codigo, totalEst } â€” guarda o melhor.
     const bestByKey = new Map<string, { codigo: string; totalEst: number }>();
 
     for (const chunk of chunks) {
@@ -5109,7 +5109,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             if (m.cor === cor && m.tam === tam) {
               const k = keyOf(m.ref, m.cor, m.tam);
               const cur = bestByKey.get(k);
-              // Prefere mais estoque; empate → CODIGO numericamente maior (mais novo).
+              // Prefere mais estoque; empate â†’ CODIGO numericamente maior (mais novo).
               if (
                 !cur ||
                 totalEst > cur.totalEst ||
@@ -5130,15 +5130,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Variante do batchFindCodigosByRefCorTam que retorna TODOS os CODIGOs
-   * candidatos pra cada (REF+COR+TAM) — não só o "melhor" com mais estoque.
+   * candidatos pra cada (REF+COR+TAM) â€” nÃ£o sÃ³ o "melhor" com mais estoque.
    *
-   * USADO ESPECIFICAMENTE NO BIPE DE REMESSA: quando vendedora bipa o código
-   * de barras da peça física que chegou, esse código pode ser QUALQUER um
-   * dos cadastros duplicados no Wincred — não necessariamente o que tem mais
+   * USADO ESPECIFICAMENTE NO BIPE DE REMESSA: quando vendedora bipa o cÃ³digo
+   * de barras da peÃ§a fÃ­sica que chegou, esse cÃ³digo pode ser QUALQUER um
+   * dos cadastros duplicados no Wincred â€” nÃ£o necessariamente o que tem mais
    * estoque. Por isso precisamos comparar com TODOS os candidatos.
    *
-   * Retorna Map onde a chave é `${ref}|${cor}|${tam}` (norm) e o valor é
-   * um Set de CODIGOs (todos os cadastros pra essa combinação).
+   * Retorna Map onde a chave Ã© `${ref}|${cor}|${tam}` (norm) e o valor Ã©
+   * um Set de CODIGOs (todos os cadastros pra essa combinaÃ§Ã£o).
    */
   async batchFindAllCodigosByRefCorTam(
     items: Array<{ refCode: string; cor?: string | null; tamanho?: string | null }>,
@@ -5225,16 +5225,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   /**
    * Soma estoque de TODOS os SKUs cadastrados como mesma REF+COR+TAM em UMA loja.
    *
-   * Por que isso existe: o Giga frequentemente tem múltiplos cadastros pra
-   * exatamente a mesma peça (mesma REF+COR+TAM) com CODIGOs diferentes — porque
-   * cada peça física entrou com etiqueta única (legado de cadastros manuais).
+   * Por que isso existe: o Giga frequentemente tem mÃºltiplos cadastros pra
+   * exatamente a mesma peÃ§a (mesma REF+COR+TAM) com CODIGOs diferentes â€” porque
+   * cada peÃ§a fÃ­sica entrou com etiqueta Ãºnica (legado de cadastros manuais).
    *
-   * `findCodigoByRefCorTam` retorna só UM SKU (LIMIT 1). Se esse SKU está zerado
-   * em estoque mas OUTRO SKU da mesma peça tem estoque, a peça FÍSICA existe na
-   * loja mas o sistema acha que não tem. Esse método resolve isso somando todos.
+   * `findCodigoByRefCorTam` retorna sÃ³ UM SKU (LIMIT 1). Se esse SKU estÃ¡ zerado
+   * em estoque mas OUTRO SKU da mesma peÃ§a tem estoque, a peÃ§a FÃSICA existe na
+   * loja mas o sistema acha que nÃ£o tem. Esse mÃ©todo resolve isso somando todos.
    *
    * Caso real (Lurd's): "13015 MARINHO 50" tem CODIGOs 5383672 e 5383665 cadastrados;
-   * o precheck pegava o zerado e bloqueava a remessa mesmo tendo a peça física.
+   * o precheck pegava o zerado e bloqueava a remessa mesmo tendo a peÃ§a fÃ­sica.
    */
   /**
    * Inspeciona indices de uma tabela do Giga. Retorna lista de indices com
@@ -5277,7 +5277,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * BATCH do getStockByRefCorTamInStore — em vez de N round-trips, faz tudo
+   * BATCH do getStockByRefCorTamInStore â€” em vez de N round-trips, faz tudo
    * em 2 queries (produtos + estoque). Usado pelo precheck de remessa pra
    * evitar loop serial.
    *
@@ -5345,7 +5345,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         inputByRefCore.set(refCore, arr);
       }
 
-      // refCorTamKey (do input) → Set<codigoBase>
+      // refCorTamKey (do input) â†’ Set<codigoBase>
       const refCorTamToCodigos = new Map<string, Set<string>>();
       for (const r of prodRows as any[]) {
         const refGiga = String(r.REF || '').trim().toUpperCase();
@@ -5379,7 +5379,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const allStores = Array.from(new Set(items.map((i) => String(i.storeCode).trim())));
 
       if (allCodigoVariants.size === 0 || allStores.length === 0) {
-        // Sem CODIGOs achados → todos os items retornam 0
+        // Sem CODIGOs achados â†’ todos os items retornam 0
         for (const it of items) out.set(makeKey(it.refCode, it.cor, it.tamanho, it.storeCode), { totalQty: 0, codigos: [] });
         return out;
       }
@@ -5389,7 +5389,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         `SELECT CODIGO, LOJA, ESTOQUE FROM estoque WHERE CODIGO IN (?) AND LOJA IN (?) AND ESTOQUE > 0`,
         [Array.from(allCodigoVariants), allStores],
       );
-      // mapa (codigo-variant, loja) → estoque
+      // mapa (codigo-variant, loja) â†’ estoque
       const stockMap = new Map<string, number>();
       for (const r of stockRows as any[]) {
         const codigo = String(r.CODIGO).trim();
@@ -5459,7 +5459,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
       const variantsArr = Array.from(allVariants);
 
-      // 3) SUM(ESTOQUE) com filtro >0 — mesmo padrão de getStockBySkusDetailed
+      // 3) SUM(ESTOQUE) com filtro >0 â€” mesmo padrÃ£o de getStockBySkusDetailed
       const [stockRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT SUM(ESTOQUE) AS qty FROM estoque
           WHERE CODIGO IN (?)
@@ -5476,8 +5476,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Estoque atual de UM SKU específico em N lojas. Retorna Map<storeCode, qty>.
-   * Lojas sem o SKU (ou com 0) NÃO aparecem no map.
+   * Estoque atual de UM SKU especÃ­fico em N lojas. Retorna Map<storeCode, qty>.
+   * Lojas sem o SKU (ou com 0) NÃƒO aparecem no map.
    */
   async getStockBySkuAndStores(sku: string, storeCodes: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
@@ -5508,9 +5508,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * PDV — busca info COMPLETA de produto pra venda (SKU/EAN bipado).
+   * PDV â€” busca info COMPLETA de produto pra venda (SKU/EAN bipado).
    *
-   * Retorna tudo necessário pro carrinho + futuro NFC-e:
+   * Retorna tudo necessÃ¡rio pro carrinho + futuro NFC-e:
    *   sku, ean, ref, cor, tamanho, descricao, preco, ncm, cfop, custo
    *
    * Usa as MESMAS variantes de zero-padding + fallback EAN do resolveSkuInfo.
@@ -5533,11 +5533,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const s = String(skuOrEan || '').trim();
     if (!s) return null;
 
-    // 1. Resolve SKU (já trata zero-padding + EAN fallback)
+    // 1. Resolve SKU (jÃ¡ trata zero-padding + EAN fallback)
     const info = await this.resolveSkuInfo(s);
     if (!info) return null;
 
-    // 2. Descobre colunas disponíveis na tabela produtos
+    // 2. Descobre colunas disponÃ­veis na tabela produtos
     let priceCols: string[] = [];
     let costCol: string | null = null;
     let ncmCol: string | null = null;
@@ -5550,8 +5550,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       allColumnNames = (cols as any[]).map((c) => String(c.Field));
       const names = new Set(allColumnNames.map((n) => n.toUpperCase()));
 
-      // PREÇO — lista ampla de candidatos comuns + fallback dinâmico.
-      // ORDEM IMPORTA: VENDAUN (Gigasistemas) é o oficial — fica primeiro.
+      // PREÃ‡O â€” lista ampla de candidatos comuns + fallback dinÃ¢mico.
+      // ORDEM IMPORTA: VENDAUN (Gigasistemas) Ã© o oficial â€” fica primeiro.
       const priceCandidates = [
         'VENDAUN', 'VENDA_UN', 'VENDAUNIT',
         'PRECOVAREJO', 'PRECO_VAREJO', 'VALORVAREJO', 'VALOR_VAREJO',
@@ -5562,7 +5562,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       for (const c of priceCandidates) {
         if (names.has(c)) priceCols.push(c);
       }
-      // Fallback: qualquer coluna com PREC ou VALOR no nome (que ainda não tá na lista)
+      // Fallback: qualquer coluna com PREC ou VALOR no nome (que ainda nÃ£o tÃ¡ na lista)
       for (const n of allColumnNames) {
         const upper = n.toUpperCase();
         if (priceCols.includes(upper)) continue;
@@ -5587,7 +5587,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       for (const c of ['EAN13', 'EAN', 'CODBARRAS', 'CODIGOBARRAS', 'COD_BARRAS', 'CODIGO_BARRAS']) {
         if (names.has(c)) { eanCol = c; break; }
       }
-      // Data de cadastro (usado pra promoções por ano)
+      // Data de cadastro (usado pra promoÃ§Ãµes por ano)
       for (const c of ['DATAALT', 'DATACAD', 'DATA_CAD', 'DATACADASTRO', 'DATA_CADASTRO']) {
         if (names.has(c)) { dataCol = c; break; }
       }
@@ -5598,7 +5598,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`getPdvProductInfo SHOW COLUMNS: ${(e as Error).message}`);
     }
 
-    // 3. Monta SELECT dinâmico — traz TODAS as colunas de preço candidatas
+    // 3. Monta SELECT dinÃ¢mico â€” traz TODAS as colunas de preÃ§o candidatas
     const selects = ['CODIGO AS codigo'];
     priceCols.forEach((c, i) => selects.push(`\`${c}\` AS preco_${i}`));
     if (costCol) selects.push(`\`${costCol}\` AS custo`);
@@ -5619,7 +5619,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`getPdvProductInfo extra: ${(e as Error).message}`);
     }
 
-    // Helper: parseia preço (string com vírgula vira número)
+    // Helper: parseia preÃ§o (string com vÃ­rgula vira nÃºmero)
     const parsePrice = (v: any): number => {
       if (v == null) return 0;
       if (typeof v === 'number') return v;
@@ -5628,14 +5628,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return isNaN(n) ? 0 : n;
     };
 
-    // Colunas conhecidas que armazenam preço em CENTAVOS (precisa dividir por 100)
-    // No Giga (Lurd's), VENDAUN é centavos: 25990 = R$ 259,90
+    // Colunas conhecidas que armazenam preÃ§o em CENTAVOS (precisa dividir por 100)
+    // No Giga (Lurd's), VENDAUN Ã© centavos: 25990 = R$ 259,90
     const isCentavos = (col: string): boolean => {
       const u = col.toUpperCase();
       return u === 'VENDAUN' || u === 'VENDA_UN' || u === 'VENDAUNIT';
     };
 
-    // Pega o primeiro preço > 0 entre os candidatos
+    // Pega o primeiro preÃ§o > 0 entre os candidatos
     let preco = 0;
     let precoFonte: string | null = null;
     for (let i = 0; i < priceCols.length; i++) {
@@ -5649,8 +5649,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // PLANO B: se não achou preço em produtos, busca último preço da tabela `caixa`
-    // (último valor unitário praticado pra esse SKU em qualquer loja)
+    // PLANO B: se nÃ£o achou preÃ§o em produtos, busca Ãºltimo preÃ§o da tabela `caixa`
+    // (Ãºltimo valor unitÃ¡rio praticado pra esse SKU em qualquer loja)
     if (preco <= 0) {
       try {
         const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -5667,8 +5667,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const u = parsePrice((rows as any[])[0]?.unitario);
         if (u > 0) {
           preco = u;
-          precoFonte = 'caixa.último_unitário';
-          this.logger.log(`[pdv] Preço de ${info.codigo} via fallback caixa: R$${u.toFixed(2)}`);
+          precoFonte = 'caixa.Ãºltimo_unitÃ¡rio';
+          this.logger.log(`[pdv] PreÃ§o de ${info.codigo} via fallback caixa: R$${u.toFixed(2)}`);
         }
       } catch (e) {
         this.logger.warn(`getPdvProductInfo fallback caixa: ${(e as Error).message}`);
@@ -5676,7 +5676,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (preco > 0) {
-      this.logger.log(`[pdv] Preço de ${info.codigo}: R$${preco.toFixed(2)} (fonte: ${precoFonte})`);
+      this.logger.log(`[pdv] PreÃ§o de ${info.codigo}: R$${preco.toFixed(2)} (fonte: ${precoFonte})`);
     }
 
     // Normaliza dataCadastro pra YYYY-MM-DD
@@ -5708,7 +5708,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Vendas de uma REF (qualquer cor/tamanho) por loja nos últimos N dias.
+   * Vendas de uma REF (qualquer cor/tamanho) por loja nos Ãºltimos N dias.
    * Usado pra priorizar destino que mais vende essa REF.
    */
   async getRecentSalesByRefAndStores(
@@ -5743,14 +5743,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // CADASTRO DINÂMICO DE PRODUTOS (Cadastro Dinâmico → Wincred)
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // CADASTRO DINÃ‚MICO DE PRODUTOS (Cadastro DinÃ¢mico â†’ Wincred)
   //
   // Usado por /retaguarda/cadastro-produtos. Permite listar grupos,
   // subgrupos, cores, tamanhos, fornecedores existentes e inserir novos
-  // produtos na tabela `produtos` (uma linha por combinação cor×tamanho).
-  // INSERT controlado por ERP_WRITE_ENABLED — mesma flag do decreaseStock.
-  // ═══════════════════════════════════════════════════════════════════════
+  // produtos na tabela `produtos` (uma linha por combinaÃ§Ã£o corÃ—tamanho).
+  // INSERT controlado por ERP_WRITE_ENABLED â€” mesma flag do decreaseStock.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
    * Lista todos os grupos cadastrados no Wincred.
@@ -5776,7 +5776,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista subgrupos de um grupo específico.
+   * Lista subgrupos de um grupo especÃ­fico.
    * Tabela `subgrupos` (CODIGO PK + SUBGRUPO nome + GRUPO FK).
    */
   async listarSubgrupos(grupoCodigo: number): Promise<Array<{ codigo: number; nome: string }>> {
@@ -5800,21 +5800,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Distribuição de estoque por loja — tela de análise pra detectar excessos
-   * em algumas lojas e zero em outras pra mesma variação (REF+COR+TAM).
+   * DistribuiÃ§Ã£o de estoque por loja â€” tela de anÃ¡lise pra detectar excessos
+   * em algumas lojas e zero em outras pra mesma variaÃ§Ã£o (REF+COR+TAM).
    *
-   * Cenário típico (Lurd's): VLM-222 MARINHO 48 tem 8 em Santos, 0 em
-   * Sorocaba/Campinas/Piracicaba. Vendedora em Sorocaba não consegue vender
-   * pq não tem grade. Essa tela mostra essas distorções e linka pro
+   * CenÃ¡rio tÃ­pico (Lurd's): VLM-222 MARINHO 48 tem 8 em Santos, 0 em
+   * Sorocaba/Campinas/Piracicaba. Vendedora em Sorocaba nÃ£o consegue vender
+   * pq nÃ£o tem grade. Essa tela mostra essas distorÃ§Ãµes e linka pro
    * realinhamento.
    *
-   * Critério de criticidade (conforme regra de negócio):
-   *   - ALTO  → alguma loja com 0 E outra com 3+ unidades
-   *   - MEDIO → alguma com 0 E outra com 2 unidades
-   *   - OK    → distribuído (sem zero OU sem excesso)
+   * CritÃ©rio de criticidade (conforme regra de negÃ³cio):
+   *   - ALTO  â†’ alguma loja com 0 E outra com 3+ unidades
+   *   - MEDIO â†’ alguma com 0 E outra com 2 unidades
+   *   - OK    â†’ distribuÃ­do (sem zero OU sem excesso)
    *
    * @param filters Filtros opcionais. Default: PLUS SIZE only, modo desequilibrado.
-   * @returns Lista de variações + lojas (header) + cache hint.
+   * @returns Lista de variaÃ§Ãµes + lojas (header) + cache hint.
    */
   async getStockDistribution(filters: {
     grupoCodigo?: number | null;
@@ -5845,8 +5845,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const limit = Math.max(50, Math.min(5000, filters.limit || 1500));
     const mode = filters.mode || 'imbalanced';
-    // minTotal default = 2 (antes era 3): mostra SKUs com pelo menos 2 peças
-    // somadas na rede. Ajustado a pedido — análise faz sentido só com 2+ peças.
+    // minTotal default = 2 (antes era 3): mostra SKUs com pelo menos 2 peÃ§as
+    // somadas na rede. Ajustado a pedido â€” anÃ¡lise faz sentido sÃ³ com 2+ peÃ§as.
     const minTotal = Math.max(0, filters.minTotal ?? 2);
 
     // Default PLUS SIZE = lista atual do setting (cobre 46-60 + combos)
@@ -5858,20 +5858,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       ? filters.tamanhos.map((t) => t.toUpperCase().trim()).filter(Boolean)
       : defaultPlusSize;
 
-    // Lojas: ignora SITE e PF por padrão (regra do user)
+    // Lojas: ignora SITE e PF por padrÃ£o (regra do user)
     const ignoredLojas = new Set(['SITE', 'PF']);
 
-    // ── 1) Monta WHERE da query principal ──
-    // CRÍTICO: Wincred tem padding/case inconsistente em TAMANHO ("48 ",
-    // "  48", " 48 ", etc). Usar TRIM(UPPER(...)) é o padrão do sistema.
-    // Sem isso, IN ('48') não bate com "48 " e a query volta 0 linhas.
+    // â”€â”€ 1) Monta WHERE da query principal â”€â”€
+    // CRÃTICO: Wincred tem padding/case inconsistente em TAMANHO ("48 ",
+    // "  48", " 48 ", etc). Usar TRIM(UPPER(...)) Ã© o padrÃ£o do sistema.
+    // Sem isso, IN ('48') nÃ£o bate com "48 " e a query volta 0 linhas.
     const conds: string[] = [
       `TRIM(UPPER(COALESCE(p.TAMANHO, ''))) IN (${tamanhos.map(() => '?').join(',')})`,
     ];
     const vals: any[] = [...tamanhos];
 
-    // REF pode estar vazia em alguns produtos legados — não bloqueia, só
-    // não vai poder agrupar grade pra eles (mostra como CODIGO solto)
+    // REF pode estar vazia em alguns produtos legados â€” nÃ£o bloqueia, sÃ³
+    // nÃ£o vai poder agrupar grade pra eles (mostra como CODIGO solto)
     conds.push("COALESCE(p.REF, '') <> ''");
 
     if (filters.grupoCodigo) {
@@ -5883,9 +5883,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       vals.push(filters.subgrupoCodigo);
     }
     if (filters.search?.trim()) {
-      // Quebra busca em tokens (separados por espaço). Cada token tem que
-      // aparecer em ALGUM campo (REF, descrição ou CODIGO) — AND entre tokens,
-      // OR entre campos. Exemplo: "VLM-222 PRETO" exige que apareça
+      // Quebra busca em tokens (separados por espaÃ§o). Cada token tem que
+      // aparecer em ALGUM campo (REF, descriÃ§Ã£o ou CODIGO) â€” AND entre tokens,
+      // OR entre campos. Exemplo: "VLM-222 PRETO" exige que apareÃ§a
       // "VLM-222" E "PRETO" em algum dos campos (mesmo separados).
       const tokens = filters.search
         .trim()
@@ -5901,13 +5901,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // ── 2) Query principal: pega produto + estoque por loja agregado ──
+    // â”€â”€ 2) Query principal: pega produto + estoque por loja agregado â”€â”€
     // Performance: usa GROUP_CONCAT pra trazer todos os pares (loja, qty)
-    // em UMA linha por CODIGO. Mais rápido que múltiplas joins.
-    // FIX: Wincred Lurd's não tem coluna p.DESCRICAO nem p.PRECO.
-    // - descrição: usa DESCRICAOCOMPLETA (única que existe)
-    // - preço de venda: VENDAUN está EM REAIS direto (formato decimal),
-    //   não em centavos. Ex: 199.90 = R$ 199,90 (sem dividir).
+    // em UMA linha por CODIGO. Mais rÃ¡pido que mÃºltiplas joins.
+    // FIX: Wincred Lurd's nÃ£o tem coluna p.DESCRICAO nem p.PRECO.
+    // - descriÃ§Ã£o: usa DESCRICAOCOMPLETA (Ãºnica que existe)
+    // - preÃ§o de venda: VENDAUN estÃ¡ EM REAIS direto (formato decimal),
+    //   nÃ£o em centavos. Ex: 199.90 = R$ 199,90 (sem dividir).
     const sql = `
       SELECT
         p.CODIGO AS codigo,
@@ -5946,8 +5946,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       `[erp] getStockDistribution: ${rawRows.length} produtos retornados da query em ${Date.now() - t0}ms`,
     );
 
-    // GUARDA-CHUVA: se busca específica foi feita (search) mas nada veio,
-    // tenta sem filtro de tamanho — talvez a peça buscada não esteja na
+    // GUARDA-CHUVA: se busca especÃ­fica foi feita (search) mas nada veio,
+    // tenta sem filtro de tamanho â€” talvez a peÃ§a buscada nÃ£o esteja na
     // lista de plus size (mas o user buscou explicitamente por ela).
     if (rawRows.length === 0 && filters.search?.trim()) {
       const term = `%${filters.search.trim().toUpperCase()}%`;
@@ -5984,7 +5984,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // ── 3) Parse estoque_str → mapa por loja + descobre conjunto de lojas ──
+    // â”€â”€ 3) Parse estoque_str â†’ mapa por loja + descobre conjunto de lojas â”€â”€
     const lojasSet = new Set<string>();
     type Parsed = {
       codigo: string;
@@ -6015,7 +6015,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Filtro de lojas (se especificado): mantém SÓ as solicitadas
+      // Filtro de lojas (se especificado): mantÃ©m SÃ“ as solicitadas
       if (filters.lojas && filters.lojas.length > 0) {
         const filtered: Record<string, number> = {};
         let filteredTotal = 0;
@@ -6053,10 +6053,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    // ── 4) Filtra por modo + minTotal ──
-    // minTotal agora é "mínimo de peças em ALGUMA loja" (maxQty), não soma total.
-    // Faz sentido analítico: se a maior loja só tem 1 peça, não dá pra
-    // redistribuir nada. Análise útil só com SKUs onde alguma loja tem 2+.
+    // â”€â”€ 4) Filtra por modo + minTotal â”€â”€
+    // minTotal agora Ã© "mÃ­nimo de peÃ§as em ALGUMA loja" (maxQty), nÃ£o soma total.
+    // Faz sentido analÃ­tico: se a maior loja sÃ³ tem 1 peÃ§a, nÃ£o dÃ¡ pra
+    // redistribuir nada. AnÃ¡lise Ãºtil sÃ³ com SKUs onde alguma loja tem 2+.
     let filtered = parsed;
     if (minTotal > 0) {
       filtered = filtered.filter((r) => {
@@ -6069,7 +6069,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       filtered = filtered.filter((r) => r.criticidade !== 'OK');
     }
 
-    // ── 5) Ordena: ALTO → MEDIO → OK, dentro de cada grupo por total desc ──
+    // â”€â”€ 5) Ordena: ALTO â†’ MEDIO â†’ OK, dentro de cada grupo por total desc â”€â”€
     const ordWeight: Record<string, number> = { ALTO: 0, MEDIO: 1, OK: 2 };
     filtered.sort((a, b) => {
       const dw = ordWeight[a.criticidade] - ordWeight[b.criticidade];
@@ -6077,7 +6077,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return b.total - a.total;
     });
 
-    // ── 6) Header de lojas: ordena alfabeticamente pra ficar consistente ──
+    // â”€â”€ 6) Header de lojas: ordena alfabeticamente pra ficar consistente â”€â”€
     const lojas = Array.from(lojasSet)
       .filter((l) => !ignoredLojas.has(l))
       .filter((l) => !filters.lojas || filters.lojas.includes(l))
@@ -6093,13 +6093,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Cria um novo grupo no Wincred (tabela grupos).
-   * Reserva próximo CODIGO via MAX+1 dentro de uma transação.
+   * Reserva prÃ³ximo CODIGO via MAX+1 dentro de uma transaÃ§Ã£o.
    */
   async inserirGrupo(nome: string): Promise<{ codigo: number; nome: string }> {
     if (!this.isWriteEnabled) {
       throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar grupo no Wincred.');
     }
-    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
     const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
     if (!nomeNormalizado) throw new Error('Nome do grupo vazio');
 
@@ -6131,8 +6131,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!this.isWriteEnabled) {
       throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra criar subgrupo no Wincred.');
     }
-    if (!this.pool) throw new Error('ERP MySQL não está conectado');
-    if (!grupoCodigo) throw new Error('grupoCodigo é obrigatório');
+    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
+    if (!grupoCodigo) throw new Error('grupoCodigo Ã© obrigatÃ³rio');
     const nomeNormalizado = String(nome || '').trim().toUpperCase().slice(0, 30);
     if (!nomeNormalizado) throw new Error('Nome do subgrupo vazio');
 
@@ -6158,8 +6158,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista cores distintas usadas nos produtos. Útil pra preencher o modal
-   * de cores com sugestões + permitir digitar nova.
+   * Lista cores distintas usadas nos produtos. Ãštil pra preencher o modal
+   * de cores com sugestÃµes + permitir digitar nova.
    */
   async listarCoresDistintas(limit = 200): Promise<string[]> {
     if (!this.pool) return [];
@@ -6181,8 +6181,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista tamanhos distintos usados nos produtos. Útil pra preencher o modal
-   * de tamanhos com sugestões.
+   * Lista tamanhos distintos usados nos produtos. Ãštil pra preencher o modal
+   * de tamanhos com sugestÃµes.
    */
   async listarTamanhosDistintos(limit = 200): Promise<string[]> {
     if (!this.pool) return [];
@@ -6205,7 +6205,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Busca CNPJ de fornecedor pelo nome (RAZAOSOCIAL ou FANTASIA).
-   * Retorna null se não achar. Match exato case-insensitive primeiro,
+   * Retorna null se nÃ£o achar. Match exato case-insensitive primeiro,
    * fallback LIKE.
    */
   async findFornecedorCnpjByNome(nome: string): Promise<string | null> {
@@ -6243,11 +6243,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponível).
+   * Lista fornecedores cadastrados em produtos (CNPJ + nome se disponÃ­vel).
    */
   async listarFornecedores(limit = 5000): Promise<Array<{ cnpj: string; nome: string; fantasia?: string }>> {
     if (!this.pool) return [];
-    // FANTASIA = MARCA no Lurd's — preferir FANTASIA na exibicao quando houver.
+    // FANTASIA = MARCA no Lurd's â€” preferir FANTASIA na exibicao quando houver.
     // SCHEMA REAL: fornecedores tem CNPJ + RAZAOSOCIAL + FANTASIA (nao CGC nem NOME)
     // Tentativa 1: schema Lurd's (CNPJ/RAZAOSOCIAL/FANTASIA)
     try {
@@ -6339,11 +6339,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Busca produto(s) no Wincred por codigo (EAN, REF ou CODIGO).
-   * Usado pra imprimir etiquetas avulsas — aceita codigos misturados.
+   * Usado pra imprimir etiquetas avulsas â€” aceita codigos misturados.
    *
-   * BUG FIX: colunas reais do Wincred são REF / VENDAUN / DESCRICAOCOMPLETA /
-   * MARCA (e NÃO REFERENCIA / PRECOVENDA / DESCRICAO / FORNECEDOR). Antes a
-   * query nunca encontrava pesquisa por REF — só achava pelo CODIGO exato.
+   * BUG FIX: colunas reais do Wincred sÃ£o REF / VENDAUN / DESCRICAOCOMPLETA /
+   * MARCA (e NÃƒO REFERENCIA / PRECOVENDA / DESCRICAO / FORNECEDOR). Antes a
+   * query nunca encontrava pesquisa por REF â€” sÃ³ achava pelo CODIGO exato.
    */
   async buscarProdutoPorCodigo(codigo: string): Promise<Array<any>> {
     if (!this.pool || !codigo) return [];
@@ -6351,9 +6351,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (!c) return [];
     try {
       // Busca por CODIGO exato OU REF exata OU EAN exato (com LPAD)
-      // — todas as variantes em UPPER+TRIM pra tolerar lixo nas células do ERP.
-      // LIMIT alto (1000) pra cobrir REF com muitas cores × tamanhos.
-      // Exemplo: REF com 12 cores × 8 tamanhos = 96 SKUs; LIMIT 50 antes cortava.
+      // â€” todas as variantes em UPPER+TRIM pra tolerar lixo nas cÃ©lulas do ERP.
+      // LIMIT alto (1000) pra cobrir REF com muitas cores Ã— tamanhos.
+      // Exemplo: REF com 12 cores Ã— 8 tamanhos = 96 SKUs; LIMIT 50 antes cortava.
       const [rows] = await this.pool.query(
         `SELECT CODIGO AS codigo, REF AS referencia, COR AS cor,
                 TAMANHO AS tamanho, VENDAUN AS preco,
@@ -6384,10 +6384,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Pega o próximo CODIGO de grupo livre na tabela `grupos` (MAX+1).
+   * Pega o prÃ³ximo CODIGO de grupo livre na tabela `grupos` (MAX+1).
    */
   async proximoGrupoCodigo(): Promise<number> {
-    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
     const [rows] = await this.pool.query(
       `SELECT COALESCE(MAX(CODIGO), 0) + 1 AS proximo FROM grupos`,
     );
@@ -6395,7 +6395,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Verifica se um CODIGO já existe na tabela produtos.
+   * Verifica se um CODIGO jÃ¡ existe na tabela produtos.
    */
   async produtoExiste(codigo: string): Promise<boolean> {
     if (!this.pool) return false;
@@ -6407,11 +6407,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Insere N produtos na tabela `produtos` do Wincred em uma única
-   * transação (ACID). Todos caem ou nada cai. Idempotência: se o CODIGO
-   * já existir, ignora (insert ignore).
+   * Insere N produtos na tabela `produtos` do Wincred em uma Ãºnica
+   * transaÃ§Ã£o (ACID). Todos caem ou nada cai. IdempotÃªncia: se o CODIGO
+   * jÃ¡ existir, ignora (insert ignore).
    *
-   * Requer ERP_WRITE_ENABLED='true'. Senão lança erro sem tocar no banco.
+   * Requer ERP_WRITE_ENABLED='true'. SenÃ£o lanÃ§a erro sem tocar no banco.
    */
   async inserirProdutosBatch(produtos: Array<{
     codigo: string;
@@ -6435,9 +6435,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     estoqueInicial?: number;
   }>): Promise<{ inseridos: number; ignorados: number }> {
     if (!this.isWriteEnabled) {
-      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar inserção em produtos.');
+      throw new Error('ERP_WRITE_ENABLED=false. Setar env=true pra liberar inserÃ§Ã£o em produtos.');
     }
-    if (!this.pool) throw new Error('ERP MySQL não está conectado');
+    if (!this.pool) throw new Error('ERP MySQL nÃ£o estÃ¡ conectado');
     if (!produtos.length) return { inseridos: 0, ignorados: 0 };
 
     const conn = await this.pool.getConnection();
@@ -6446,7 +6446,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
       for (const p of produtos) {
-        // INSERT IGNORE: se CODIGO já existe (PK collision), ignora a linha
+        // INSERT IGNORE: se CODIGO jÃ¡ existe (PK collision), ignora a linha
         // sem dar rollback do batch inteiro.
         const [result]: any = await conn.query(
           `INSERT IGNORE INTO produtos (
@@ -6486,44 +6486,44 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         else ignorados++;
       }
       await conn.commit();
-      this.logger.log(`inserirProdutosBatch: ${inseridos} inseridos, ${ignorados} ignorados (já existiam)`);
+      this.logger.log(`inserirProdutosBatch: ${inseridos} inseridos, ${ignorados} ignorados (jÃ¡ existiam)`);
       return { inseridos, ignorados };
     } catch (e) {
       await conn.rollback();
-      this.logger.error(`inserirProdutosBatch falhou — rollback: ${(e as Error).message}`);
+      this.logger.error(`inserirProdutosBatch falhou â€” rollback: ${(e as Error).message}`);
       throw e;
     } finally {
       conn.release();
     }
   }
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // PDV — Gravação de venda na tabela `caixa` do Wincred (gigasistemas21)
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // PDV â€” GravaÃ§Ã£o de venda na tabela `caixa` do Wincred (gigasistemas21)
   //
   // Replica o que o PDV antigo do Wincred faz: 1 linha por ITEM da venda.
-  // O número da venda (NUMERO) é compartilhado com o PDV antigo — usamos
-  // MAX(NUMERO)+1 com FOR UPDATE pra evitar colisão.
+  // O nÃºmero da venda (NUMERO) Ã© compartilhado com o PDV antigo â€” usamos
+  // MAX(NUMERO)+1 com FOR UPDATE pra evitar colisÃ£o.
   //
-  // Modo SHADOW (PDV_ERP_WRITE_ENABLED=false, default): só LOGA os SQLs
-  // que SERIAM executados, sem tocar no banco. Permite validar geração
+  // Modo SHADOW (PDV_ERP_WRITE_ENABLED=false, default): sÃ³ LOGA os SQLs
+  // que SERIAM executados, sem tocar no banco. Permite validar geraÃ§Ã£o
   // de SQL antes de ligar real.
   //
-  // Modo REAL (PDV_ERP_WRITE_ENABLED=true): executa em transação ACID.
-  // Se qualquer item falhar → rollback total → retorna erro.
-  // ═══════════════════════════════════════════════════════════════════════
+  // Modo REAL (PDV_ERP_WRITE_ENABLED=true): executa em transaÃ§Ã£o ACID.
+  // Se qualquer item falhar â†’ rollback total â†’ retorna erro.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   /**
-   * Busca o CODIGO de um funcionário no Wincred pelo nome (ou apelido)
+   * Busca o CODIGO de um funcionÃ¡rio no Wincred pelo nome (ou apelido)
    * filtrando pela loja. Usado pra preencher VENDEDOR/OPERADOR na tabela
    * `caixa` quando flowops PDV finaliza venda.
    *
-   * Estratégia (em ordem de prioridade):
+   * EstratÃ©gia (em ordem de prioridade):
    * 1. APELIDO exato (case-insensitive) + LOJA
    * 2. NOME exato (case-insensitive) + LOJA
-   * 3. Primeiro nome (até primeiro espaço) + LOJA
+   * 3. Primeiro nome (atÃ© primeiro espaÃ§o) + LOJA
    * 4. APELIDO sem filtro de loja (fallback)
    *
-   * Retorna 0 se não achou (caller deve aceitar 0 como "sem mapeamento").
+   * Retorna 0 se nÃ£o achou (caller deve aceitar 0 como "sem mapeamento").
    */
   async lookupFuncionarioCode(nome: string, lojaCode?: string): Promise<number> {
     if (!this.pool || !nome) return 0;
@@ -6549,7 +6549,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if (r2.length) return Number(r2[0].CODIGO) || 0;
       }
-      // 3. Primeiro nome + LOJA (NOME ou APELIDO começa com)
+      // 3. Primeiro nome + LOJA (NOME ou APELIDO comeÃ§a com)
       if (loja && primeiroNome.length >= 3) {
         const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO FROM funcionarios
@@ -6578,12 +6578,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * Usado pra preencher CLIENTE na tabela `caixa` quando flowops PDV
    * finaliza venda com cliente identificado.
    *
-   * Estratégia (em ordem):
-   * 1. CPF exato (limpo de pontuação)
+   * EstratÃ©gia (em ordem):
+   * 1. CPF exato (limpo de pontuaÃ§Ã£o)
    * 2. NOME completo exato (case-insensitive)
    * 3. NOME LIKE (primeiras 3 palavras)
    *
-   * Retorna 0 se não achou.
+   * Retorna 0 se nÃ£o achou.
    */
   async lookupClienteCode(input: { cpf?: string; nome?: string; telefone?: string }): Promise<number> {
     if (!this.pool) return 0;
@@ -6611,9 +6611,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if (r2.length) return Number(r2[0].CODIGO) || 0;
       }
-      // 3. TELEFONE (FONECEL ou FONERES) — útil quando nome diferente mas mesma cliente
+      // 3. TELEFONE (FONECEL ou FONERES) â€” Ãºtil quando nome diferente mas mesma cliente
       if (tel && tel.length >= 8) {
-        const last9 = tel.slice(-9); // últimos 9 dígitos cobrem celular sem DDD
+        const last9 = tel.slice(-9); // Ãºltimos 9 dÃ­gitos cobrem celular sem DDD
         const [r3] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT CODIGO FROM clientes
             WHERE REPLACE(REPLACE(REPLACE(REPLACE(FONECEL, '(', ''), ')', ''), '-', ''), ' ', '') LIKE CONCAT('%', ?, '%')
@@ -6623,7 +6623,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         );
         if (r3.length === 1) return Number(r3[0].CODIGO) || 0;
       }
-      // 4. NOME LIKE — primeira+última palavra (cobre "MARIA DA SILVA" vs "MARIA SILVA")
+      // 4. NOME LIKE â€” primeira+Ãºltima palavra (cobre "MARIA DA SILVA" vs "MARIA SILVA")
       if (nome) {
         const palavras = nome.split(/\s+/).filter((w) => w.length > 1);
         if (palavras.length >= 2) {
@@ -6637,11 +6637,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           );
           if (r4.length === 1) return Number(r4[0].CODIGO) || 0;
           if (r4.length > 1) {
-            this.logger.warn(`[lookupClienteCode] NOME "${nome}" ambíguo (${r4.length} matches): ${r4.map((r: any) => r.NOME).join(' | ')}`);
+            this.logger.warn(`[lookupClienteCode] NOME "${nome}" ambÃ­guo (${r4.length} matches): ${r4.map((r: any) => r.NOME).join(' | ')}`);
           }
         }
       }
-      // 5. NOME LIKE prefix (3 primeiras palavras) — fallback antigo
+      // 5. NOME LIKE prefix (3 primeiras palavras) â€” fallback antigo
       if (nome) {
         const palavras = nome.split(/\s+/).filter((w) => w.length > 1);
         if (palavras.length >= 2) {
@@ -6653,9 +6653,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           if (r5.length === 1) return Number(r5[0].CODIGO) || 0;
         }
       }
-      // Não achou — loga pra debug
+      // NÃ£o achou â€” loga pra debug
       this.logger.warn(
-        `[lookupClienteCode] NÃO ACHOU cliente: cpf="${cpf}" nome="${nome}" tel="${tel}"`,
+        `[lookupClienteCode] NÃƒO ACHOU cliente: cpf="${cpf}" nome="${nome}" tel="${tel}"`,
       );
       return 0;
     } catch (e) {
@@ -6665,55 +6665,55 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Mapeia método de pagamento do flowops pro par (FORMA, coluna_específica)
-   * da tabela `fechamento` do Wincred. PIX não tem coluna específica.
+   * Mapeia mÃ©todo de pagamento do flowops pro par (FORMA, coluna_especÃ­fica)
+   * da tabela `fechamento` do Wincred. PIX nÃ£o tem coluna especÃ­fica.
    *
-   * Retorna {forma: string, coluna: string|null}. Coluna null = só FORMA+VALOR.
+   * Retorna {forma: string, coluna: string|null}. Coluna null = sÃ³ FORMA+VALOR.
    */
   private mapPagamentoFechamento(metodo: string): { forma: string; coluna: string | null } {
     const m = String(metodo || '').toUpperCase().trim();
     // Mapeamento real do flowops (cliente confirmou em 07/05/2026):
-    // - Aceitas todas as variações comuns do nome (lowercase, com/sem acento, com/sem espaço)
-    // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (não existem mais no PDV)
+    // - Aceitas todas as variaÃ§Ãµes comuns do nome (lowercase, com/sem acento, com/sem espaÃ§o)
+    // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (nÃ£o existem mais no PDV)
     // Mapeamento real do flowops (cliente confirmou em 07/05/2026):
-    // - Aceitas todas as variações comuns do nome (lowercase, com/sem acento, com/sem espaço)
-    // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (não existem mais no PDV)
+    // - Aceitas todas as variaÃ§Ãµes comuns do nome (lowercase, com/sem acento, com/sem espaÃ§o)
+    // - Removidas: CIELODEBITO, CHEQUE_VISTA, CHEQUE_PRE, SOROCRED, CREDSYSTEM, DEBITO, MARCADO (nÃ£o existem mais no PDV)
     const map: Record<string, { forma: string; coluna: string | null }> = {
       // DINHEIRO
       'DINHEIRO': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
       'CASH': { forma: 'DINHEIRO', coluna: 'DINHEIRO' },
-      // PIX (sem coluna específica em fechamento — só FORMA + VALOR)
+      // PIX (sem coluna especÃ­fica em fechamento â€” sÃ³ FORMA + VALOR)
       'PIX': { forma: 'PIX', coluna: null },
-      // CIELO (cartão crédito Cielo)
+      // CIELO (cartÃ£o crÃ©dito Cielo)
       'CIELO': { forma: 'CIELO', coluna: 'CIELO' },
       'CIELO_CREDITO': { forma: 'CIELO', coluna: 'CIELO' },
       // MASTERCARD
       'MASTERCARD': { forma: 'MASTERCARD', coluna: 'MASTERCARD' },
-      // VISA → VISANET (Visa crédito)
+      // VISA â†’ VISANET (Visa crÃ©dito)
       'VISA': { forma: 'VISANET', coluna: 'VISANET' },
       'VISANET': { forma: 'VISANET', coluna: 'VISANET' },
-      // VISA ELECTRON (Visa débito)
+      // VISA ELECTRON (Visa dÃ©bito)
       'VISA ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
       'VISA_ELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
       'VISAELECTRON': { forma: 'VISA_ELECTRON', coluna: 'VISA_ELECTRON' },
       // ELO
       'ELO': { forma: 'ELO', coluna: 'ELO' },
-      // AMERICAN EXPRESS → AMEX
+      // AMERICAN EXPRESS â†’ AMEX
       'AMERICAN EXPRESS': { forma: 'AMEX', coluna: 'AMEX' },
       'AMEX': { forma: 'AMEX', coluna: 'AMEX' },
       // HIPERCARD
       'HIPERCARD': { forma: 'HIPERCARD', coluna: 'HIPERCARD' },
-      // CREDIÁRIO (também gera parcelas em movimento)
+      // CREDIÃRIO (tambÃ©m gera parcelas em movimento)
       'CREDIARIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
-      'CREDIÁRIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
+      'CREDIÃRIO': { forma: 'CREDIARIO', coluna: 'CREDIARIO' },
       // REDE SHOP
       'REDE SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
       'REDESHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
       'REDE_SHOP': { forma: 'REDE_SHOP', coluna: 'REDE_SHOP' },
-      // VENDA ONLINE — Plus Size vende muito via WhatsApp/Instagram. Pagamento
-      // já chegou na conta (PIX direto / link externo). PDV só registra a venda
-      // pra ter histórico, comissão e baixa de estoque. Vai em FORMA dedicada
-      // pra separar no fechamento Wincred (não conta no físico de dinheiro).
+      // VENDA ONLINE â€” Plus Size vende muito via WhatsApp/Instagram. Pagamento
+      // jÃ¡ chegou na conta (PIX direto / link externo). PDV sÃ³ registra a venda
+      // pra ter histÃ³rico, comissÃ£o e baixa de estoque. Vai em FORMA dedicada
+      // pra separar no fechamento Wincred (nÃ£o conta no fÃ­sico de dinheiro).
       'VENDA_ONLINE': { forma: 'VENDA_ONLINE', coluna: null },
       'VENDA ONLINE': { forma: 'VENDA_ONLINE', coluna: null },
       'VENDA_ONLINE_PIX': { forma: 'VENDA_ONLINE', coluna: null },
@@ -6723,9 +6723,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Admin corrige bandeira de um pagamento já gravado no Wincred (operadora errou).
+   * Admin corrige bandeira de um pagamento jÃ¡ gravado no Wincred (operadora errou).
    * Usa OBS_PEDIDO da tabela `caixa` (formato 'flowops-XXXXXXXX') pra achar o NUMERO
-   * da venda, e então faz UPDATE em `fechamento`:
+   * da venda, e entÃ£o faz UPDATE em `fechamento`:
    *   - SET FORMA = newBandeira
    *   - SET coluna_antiga = 0/NULL
    *   - SET coluna_nova = valor
@@ -6741,11 +6741,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
 
     if (!this.pool) {
-      return { ok: false, mode, sqlExecuted, error: 'Pool ERP não inicializado' };
+      return { ok: false, mode, sqlExecuted, error: 'Pool ERP nÃ£o inicializado' };
     }
-    if (!input.saleId) return { ok: false, mode, sqlExecuted, error: 'saleId obrigatório' };
-    if (!input.storeCode) return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatório' };
-    if (!input.newBandeira) return { ok: false, mode, sqlExecuted, error: 'newBandeira obrigatória' };
+    if (!input.saleId) return { ok: false, mode, sqlExecuted, error: 'saleId obrigatÃ³rio' };
+    if (!input.storeCode) return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatÃ³rio' };
+    if (!input.newBandeira) return { ok: false, mode, sqlExecuted, error: 'newBandeira obrigatÃ³ria' };
 
     const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
     const saleIdShort = input.saleId.slice(0, 8);
@@ -6759,7 +6759,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     sqlExecuted.push(sqlBusca);
 
     if (mode === 'shadow') {
-      this.logger.warn(`[atualizarBandeiraFechamento SHADOW] obsPedido=${obsPedido} loja=${lojaCode} ${input.oldBandeira}→${input.newBandeira} valor=${valor}`);
+      this.logger.warn(`[atualizarBandeiraFechamento SHADOW] obsPedido=${obsPedido} loja=${lojaCode} ${input.oldBandeira}â†’${input.newBandeira} valor=${valor}`);
       return { ok: true, mode, sqlExecuted };
     }
 
@@ -6767,8 +6767,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query<any[]>(sqlBusca);
       const r = (rows as any[])[0];
       if (!r?.NUMERO) {
-        this.logger.warn(`atualizarBandeiraFechamento: venda não achada no Wincred (${obsPedido}/${lojaCode})`);
-        return { ok: false, mode, sqlExecuted, error: `Venda não localizada no Wincred (${obsPedido})` };
+        this.logger.warn(`atualizarBandeiraFechamento: venda nÃ£o achada no Wincred (${obsPedido}/${lojaCode})`);
+        return { ok: false, mode, sqlExecuted, error: `Venda nÃ£o localizada no Wincred (${obsPedido})` };
       }
       const numero = Number(r.NUMERO);
 
@@ -6780,7 +6780,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       if (newMap.coluna) {
         sets.push(`\`${newMap.coluna}\` = ${valor}`);
       }
-      // WHERE: match estrito por VENDA + LOJA + VALOR + FORMA antiga (não pega linha errada)
+      // WHERE: match estrito por VENDA + LOJA + VALOR + FORMA antiga (nÃ£o pega linha errada)
       const whereForma = oldMap.forma ? `AND FORMA = '${oldMap.forma.replace(/'/g, "''")}'` : '';
       const sqlUpdate =
         `UPDATE fechamento SET ${sets.join(', ')} ` +
@@ -6791,10 +6791,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const [updRes] = await this.pool.query<any>(sqlUpdate);
       const affected = (updRes as any)?.affectedRows ?? 0;
       if (affected === 0) {
-        this.logger.warn(`UPDATE fechamento não afetou linhas (NUMERO=${numero} LOJA=${lojaCode} FORMA=${oldMap.forma})`);
-        return { ok: false, mode, numero, sqlExecuted, error: 'Linha de fechamento não encontrada (FORMA antiga não bate)' };
+        this.logger.warn(`UPDATE fechamento nÃ£o afetou linhas (NUMERO=${numero} LOJA=${lojaCode} FORMA=${oldMap.forma})`);
+        return { ok: false, mode, numero, sqlExecuted, error: 'Linha de fechamento nÃ£o encontrada (FORMA antiga nÃ£o bate)' };
       }
-      this.logger.log(`atualizarBandeiraFechamento OK: NUMERO=${numero} LOJA=${lojaCode} ${oldMap.forma}→${newMap.forma} valor=${valor} (${affected} linha)`);
+      this.logger.log(`atualizarBandeiraFechamento OK: NUMERO=${numero} LOJA=${lojaCode} ${oldMap.forma}â†’${newMap.forma} valor=${valor} (${affected} linha)`);
       return { ok: true, mode, numero, sqlExecuted };
     } catch (e: any) {
       this.logger.error(`atualizarBandeiraFechamento ERRO: ${e?.message}`);
@@ -6804,32 +6804,32 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Grava uma venda do PDV flowops na tabela `caixa` do Wincred.
-   * Também grava 1 linha em `fechamento` por pagamento (com FORMA+VALOR).
-   * Idempotente por venda? NÃO — cada chamada gera novo NUMERO.
+   * TambÃ©m grava 1 linha em `fechamento` por pagamento (com FORMA+VALOR).
+   * Idempotente por venda? NÃƒO â€” cada chamada gera novo NUMERO.
    */
   async gravarVendaPdv(input: {
     storeCode: string;          // ex: '01' (ITANHAEM, char(2))
     items: Array<{
-      sku: string;              // CODIGO Giga (ou EAN — resolveSkuInfo na ponta)
+      sku: string;              // CODIGO Giga (ou EAN â€” resolveSkuInfo na ponta)
       qty: number;
-      valorUnit: number;        // valor unitário sem desconto
-      desconto: number;         // valor R$ do desconto (não percentual)
+      valorUnit: number;        // valor unitÃ¡rio sem desconto
+      desconto: number;         // valor R$ do desconto (nÃ£o percentual)
       descricao: string;
       grupo?: number;
       subgrupo?: number;
       fornecedor?: string;      // CNPJ
       tributo?: string;
     }>;
-    pagamentos?: Array<{        // pagamentos da venda — 1 linha por método
+    pagamentos?: Array<{        // pagamentos da venda â€” 1 linha por mÃ©todo
       metodo: string;           // 'PIX', 'DINHEIRO', 'MASTERCARD', etc.
       valor: number;
     }>;
     operadorCode?: number;      // 0 se sem mapeamento
-    operadorName?: string;      // nome do operador — faz lookup automático se code não vier
-    vendedorCode?: number;      // codigo do funcionário vendedor
-    vendedorName?: string;      // nome da vendedora — faz lookup automático se code não vier
+    operadorName?: string;      // nome do operador â€” faz lookup automÃ¡tico se code nÃ£o vier
+    vendedorCode?: number;      // codigo do funcionÃ¡rio vendedor
+    vendedorName?: string;      // nome da vendedora â€” faz lookup automÃ¡tico se code nÃ£o vier
     clienteCode?: number;       // 0 se sem cadastro
-    clienteCpf?: string;        // CPF — faz lookup em clientes pra resolver clienteCode
+    clienteCpf?: string;        // CPF â€” faz lookup em clientes pra resolver clienteCode
     nomeCliente?: string;       // vai pra coluna NOMECLIENTE em caixa (e usado no fallback do lookup)
     obsPedido?: string;
   }): Promise<{
@@ -6844,19 +6844,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
 
     if (!this.pool) {
-      return { ok: false, mode, sqlExecuted, error: 'Pool ERP não inicializado' };
+      return { ok: false, mode, sqlExecuted, error: 'Pool ERP nÃ£o inicializado' };
     }
     if (!input.items?.length) {
       return { ok: false, mode, sqlExecuted, error: 'Sem itens pra gravar' };
     }
     if (!input.storeCode) {
-      return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatório' };
+      return { ok: false, mode, sqlExecuted, error: 'storeCode obrigatÃ³rio' };
     }
 
     // Normaliza storeCode pra char(2)
     const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
 
-    // ─── MODO SHADOW: só monta SQL e loga, sem executar ───
+    // â”€â”€â”€ MODO SHADOW: sÃ³ monta SQL e loga, sem executar â”€â”€â”€
     if (mode === 'shadow') {
       sqlExecuted.push(`SELECT @numero := COALESCE(MAX(NUMERO), 0) + 1 FROM caixa FOR UPDATE`);
       for (const it of input.items) {
@@ -6876,7 +6876,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           `'${(input.obsPedido || '').replace(/'/g, "''").slice(0, 50)}', '${lojaCode}')`
         );
       }
-      // Adiciona SQLs de fechamento (1 por pagamento) também em SHADOW
+      // Adiciona SQLs de fechamento (1 por pagamento) tambÃ©m em SHADOW
       const pagamentos = input.pagamentos || [];
       for (const p of pagamentos) {
         const map = this.mapPagamentoFechamento(p.metodo);
@@ -6894,23 +6894,23 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         `total=R$${input.items.reduce((s, i) => s + (i.valorUnit * i.qty - (i.desconto || 0)), 0).toFixed(2)} | ` +
         `SQLs gerados: ${sqlExecuted.length}`,
       );
-      // Loga SQL de fechamento (mais útil pra debug que o INSERT em caixa)
+      // Loga SQL de fechamento (mais Ãºtil pra debug que o INSERT em caixa)
       const sqlFechamento = sqlExecuted.find((s) => s.includes('INTO fechamento'));
       this.logger.warn(`[gravarVendaPdv SHADOW] sample fechamento: ${sqlFechamento || sqlExecuted[1] || sqlExecuted[0]}`);
       return { ok: true, mode, sqlExecuted };
     }
 
-    // ─── MODO REAL: executa em transação ACID ───
-    // Lookup automático de VENDEDOR/OPERADOR/CLIENTE se só veio o nome/cpf
+    // â”€â”€â”€ MODO REAL: executa em transaÃ§Ã£o ACID â”€â”€â”€
+    // Lookup automÃ¡tico de VENDEDOR/OPERADOR/CLIENTE se sÃ³ veio o nome/cpf
     let vendedorCodeFinal = input.vendedorCode || 0;
     let operadorCodeFinal = input.operadorCode || 0;
     let clienteCodeFinal = input.clienteCode || 0;
     if (!vendedorCodeFinal && input.vendedorName) {
       vendedorCodeFinal = await this.lookupFuncionarioCode(input.vendedorName, lojaCode);
       if (vendedorCodeFinal) {
-        this.logger.log(`[gravarVendaPdv] vendedor "${input.vendedorName}" → CODIGO=${vendedorCodeFinal} (loja ${lojaCode})`);
+        this.logger.log(`[gravarVendaPdv] vendedor "${input.vendedorName}" â†’ CODIGO=${vendedorCodeFinal} (loja ${lojaCode})`);
       } else {
-        this.logger.warn(`[gravarVendaPdv] vendedor "${input.vendedorName}" não encontrado em funcionarios`);
+        this.logger.warn(`[gravarVendaPdv] vendedor "${input.vendedorName}" nÃ£o encontrado em funcionarios`);
       }
     }
     if (!operadorCodeFinal && input.operadorName) {
@@ -6923,7 +6923,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         telefone: (input as any).clientePhone,
       });
       if (clienteCodeFinal) {
-        this.logger.log(`[gravarVendaPdv] cliente "${input.nomeCliente || input.clienteCpf}" → CODIGO=${clienteCodeFinal}`);
+        this.logger.log(`[gravarVendaPdv] cliente "${input.nomeCliente || input.clienteCpf}" â†’ CODIGO=${clienteCodeFinal}`);
       }
     }
 
@@ -6933,7 +6933,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     try {
       await conn.beginTransaction();
 
-      // 1. Pega próximo NUMERO global com FOR UPDATE pra evitar race
+      // 1. Pega prÃ³ximo NUMERO global com FOR UPDATE pra evitar race
       const [maxRows]: any = await conn.query(
         `SELECT COALESCE(MAX(NUMERO), 0) + 1 AS prox FROM caixa FOR UPDATE`,
       );
@@ -6976,11 +6976,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           ],
         );
         registros.push(Number(result.insertId));
-        sqlExecuted.push(`INSERT caixa NUMERO=${numero} CODIGO=${it.sku} → REGISTRO=${result.insertId}`);
+        sqlExecuted.push(`INSERT caixa NUMERO=${numero} CODIGO=${it.sku} â†’ REGISTRO=${result.insertId}`);
       }
 
-      // INSERT em `fechamento` (1 linha por pagamento) — registra forma de pgto
-      // por venda. Sem isso, "Movimento Diário de Caixa" do Wincred mostra 0
+      // INSERT em `fechamento` (1 linha por pagamento) â€” registra forma de pgto
+      // por venda. Sem isso, "Movimento DiÃ¡rio de Caixa" do Wincred mostra 0
       // em DINHEIRO/PIX/etc.
       const pagamentos = input.pagamentos || [];
       for (const p of pagamentos) {
@@ -6988,7 +6988,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         const valor = Number(p.valor) || 0;
         if (valor <= 0) continue;
         // Monta INSERT dinamicamente: sempre seta FORMA e VALOR, e se houver
-        // coluna específica (DINHEIRO, MASTERCARD, etc.) seta ela tambem.
+        // coluna especÃ­fica (DINHEIRO, MASTERCARD, etc.) seta ela tambem.
         const cols = ['VENDA', 'DATA', 'FORMA', 'VALOR', 'LOJA'];
         const vals: any[] = [numero, new Date(), map.forma, valor, lojaCode];
         const placeholders = ['?', '?', '?', '?', '?'];
@@ -7002,10 +7002,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           vals,
         );
         sqlExecuted.push(`INSERT fechamento VENDA=${numero} FORMA=${map.forma} VALOR=${valor}`);
-        // Nota: NÃO fazemos UPDATE em caixa_diario — o "Processa Movimento" do
-        // Wincred lê de fechamento (DINHEIRO/PIX/CREDIARIO funcionam) e de outra
-        // fonte interna (cartões — ainda não rastreada). Qualquer UPDATE direto
-        // em caixa_diario é sobrescrito pelo Processa.
+        // Nota: NÃƒO fazemos UPDATE em caixa_diario â€” o "Processa Movimento" do
+        // Wincred lÃª de fechamento (DINHEIRO/PIX/CREDIARIO funcionam) e de outra
+        // fonte interna (cartÃµes â€” ainda nÃ£o rastreada). Qualquer UPDATE direto
+        // em caixa_diario Ã© sobrescrito pelo Processa.
       }
 
       await conn.commit();
@@ -7024,11 +7024,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════
-     Sprint 4 — Vendas históricas por REF + loja.
+  /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+     Sprint 4 â€” Vendas histÃ³ricas por REF + loja.
      Usado pra escolher loja consolidadora (top vendedora ganha desempate).
-     Default: últimos 180 dias. JOIN caixa × produtos por REF.
-     ═══════════════════════════════════════════════════════════════════════ */
+     Default: Ãºltimos 180 dias. JOIN caixa Ã— produtos por REF.
+     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
   async getSalesByRef(ref: string, dias: number = 180): Promise<{
     vendas: Array<{ loja: string; qty: number; valor: number }>;
     totalQty: number;
@@ -7073,20 +7073,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════
-     Sprint 1 — Visão RAIZ (REF + COR), uma linha por referência.
+  /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+     Sprint 1 â€” VisÃ£o RAIZ (REF + COR), uma linha por referÃªncia.
      Endpoint usado pela tela /retaguarda/distribuicao-estoque (modo "raiz").
-     ═══════════════════════════════════════════════════════════════════════
+     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-     Diferença pro getStockDistribution clássico (que retorna 1 linha por
+     DiferenÃ§a pro getStockDistribution clÃ¡ssico (que retorna 1 linha por
      CODIGO = REF+COR+TAMANHO):
        - aqui agrupa por REF+COR
        - traz DATAALT, GRUPO, SUBGRUPO pra alimentar o classificador
        - soma estoque por loja (somando todos os tamanhos)
-       - conta variações + tamanhos distintos pra detectar fragmentação
+       - conta variaÃ§Ãµes + tamanhos distintos pra detectar fragmentaÃ§Ã£o
 
-     Performance: faz 2 queries só (produtos + estoque), agrupa em memória.
-     Limite alto (default 3000 REFs) — controlável via filters.limit.
+     Performance: faz 2 queries sÃ³ (produtos + estoque), agrupa em memÃ³ria.
+     Limite alto (default 3000 REFs) â€” controlÃ¡vel via filters.limit.
   */
   async getStockDistributionByRef(filters: {
     grupoCodigo?: number | null;
@@ -7094,7 +7094,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     search?: string | null;
     tamanhos?: string[] | null;
     diasMaximos?: number | null;   // DATAALT >= NOW() - X dias
-    diasMinimos?: number | null;   // DATAALT <= NOW() - X dias  (peças "velhas")
+    diasMinimos?: number | null;   // DATAALT <= NOW() - X dias  (peÃ§as "velhas")
     mode?: 'imbalanced' | 'all';
     minTotal?: number;
     limit?: number;
@@ -7144,7 +7144,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const subgrupoCol = (await this.pickCol(['SUBGRUPO', 'SUB_GRUPO'])) as string | null;
     const grupoCol = (await this.pickCol(['GRUPO'])) as string | null;
 
-    // ── 1) Query principal: produtos agrupados por REF+COR ──
+    // â”€â”€ 1) Query principal: produtos agrupados por REF+COR â”€â”€
     const conds: string[] = [
       `TRIM(UPPER(COALESCE(p.TAMANHO, ''))) IN (${tamanhos.map(() => '?').join(',')})`,
       `COALESCE(p.REF, '') <> ''`,
@@ -7170,12 +7170,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
     if (filters.diasMaximos != null && dataCol) {
-      // peças "novas": DATAALT > NOW() - diasMaximos
+      // peÃ§as "novas": DATAALT > NOW() - diasMaximos
       conds.push(`p.\`${dataCol}\` >= DATE_SUB(NOW(), INTERVAL ? DAY)`);
       vals.push(Math.max(1, Math.round(filters.diasMaximos)));
     }
     if (filters.diasMinimos != null && dataCol) {
-      // peças "velhas": DATAALT < NOW() - diasMinimos
+      // peÃ§as "velhas": DATAALT < NOW() - diasMinimos
       conds.push(`p.\`${dataCol}\` <= DATE_SUB(NOW(), INTERVAL ? DAY)`);
       vals.push(Math.max(1, Math.round(filters.diasMinimos)));
     }
@@ -7226,7 +7226,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return { refs: [], lojas: [], totalRows: 0, truncated: false };
     }
 
-    // ── 2) Pega estoque agregado de todos os CODIGOs envolvidos ──
+    // â”€â”€ 2) Pega estoque agregado de todos os CODIGOs envolvidos â”€â”€
     const allCodigos = new Set<string>();
     for (const r of rawRefs) {
       const csv = String(r.codigos || '');
@@ -7269,7 +7269,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // ── 3) Resolve nomes de grupo/subgrupo (1 query batch) ──
+    // â”€â”€ 3) Resolve nomes de grupo/subgrupo (1 query batch) â”€â”€
     const grupoCodes = new Set<number>();
     const subgrupoCodes = new Set<number>();
     for (const r of rawRefs) {
@@ -7305,12 +7305,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           subgrupoNames.set(Number(r.CODIGO), String(r.SUBGRUPO || '').trim());
         }
       } catch (e) {
-        // Subgrupo tem CODIGO composto (GRUPO+CODIGO) em alguns schemas — ignora se falhar
+        // Subgrupo tem CODIGO composto (GRUPO+CODIGO) em alguns schemas â€” ignora se falhar
         this.logger.warn(`fetch subgrupos falhou: ${(e as Error).message}`);
       }
     }
 
-    // ── 4) Monta a lista final ──
+    // â”€â”€ 4) Monta a lista final â”€â”€
     type RefRow = {
       ref: string;
       cor: string | null;
@@ -7349,13 +7349,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         if (temEstoque) variacoesComEstoque.add(cod);
       }
 
-      // tamanhos com estoque = só os que aparecem em variacoesComEstoque
-      // (precisa puxar TAMANHO de cada codigo — usa a lista do GROUP_CONCAT)
+      // tamanhos com estoque = sÃ³ os que aparecem em variacoesComEstoque
+      // (precisa puxar TAMANHO de cada codigo â€” usa a lista do GROUP_CONCAT)
       const tamanhosCsv = String(r.tamanhos || '');
       const todosTamanhos = tamanhosCsv.split(',').map((t) => t.trim()).filter(Boolean);
-      // Não temos mapeamento codigo→tamanho aqui sem extra query.
-      // Solução barata: marcar todos como "potenciais" e refinar no frontend
-      // se necessário. Por ora, lista os tamanhos da REF+COR (independente de estoque).
+      // NÃ£o temos mapeamento codigoâ†’tamanho aqui sem extra query.
+      // SoluÃ§Ã£o barata: marcar todos como "potenciais" e refinar no frontend
+      // se necessÃ¡rio. Por ora, lista os tamanhos da REF+COR (independente de estoque).
       for (const t of todosTamanhos) tamanhosComEstoque.add(t);
 
       const lojasComEstoque = Object.values(estoquePorLoja).filter((v) => v > 0).length;
@@ -7386,13 +7386,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
-    // ── 5) Filtra: REFs sem estoque (total=0) ou abaixo do minTotal ──
+    // â”€â”€ 5) Filtra: REFs sem estoque (total=0) ou abaixo do minTotal â”€â”€
     let filtered = out.filter((r) => r.total > 0);
     if (minTotal > 0) {
       filtered = filtered.filter((r) => r.total >= minTotal);
     }
     if (mode === 'imbalanced') {
-      // "desequilibrada" no nível raiz = tem alguma loja com 0 E outra com 2+
+      // "desequilibrada" no nÃ­vel raiz = tem alguma loja com 0 E outra com 2+
       filtered = filtered.filter((r) => {
         const vals = Object.values(r.estoquePorLoja);
         if (vals.length === 0) return false;
@@ -7412,15 +7412,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════
-     Devolução manual Giga (opção C).
-     Verifica se uma peça (SKU) foi vendida numa loja específica nos últimos
-     N dias. Usado pra autorizar devolução de venda antiga sem cupom flowops.
+  /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+     DevoluÃ§Ã£o manual Giga (opÃ§Ã£o C).
+     Verifica se uma peÃ§a (SKU) foi vendida numa loja especÃ­fica nos Ãºltimos
+     N dias. Usado pra autorizar devoluÃ§Ã£o de venda antiga sem cupom flowops.
 
-     Regra: vendedora SÓ pode aceitar devolução de peça que foi vendida
+     Regra: vendedora SÃ“ pode aceitar devoluÃ§Ã£o de peÃ§a que foi vendida
      naquela loja (anti-fraude). Se SKU nunca passou pelo caixa daquela
      loja na janela, bloqueia.
-     ═══════════════════════════════════════════════════════════════════════ */
+     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
   async lookupSaleHistoryByStoreAndSku(
     storeCode: string,
     sku: string,
@@ -7441,7 +7441,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (variants.length === 0) return empty;
 
     try {
-      // 1) Busca produto + preço atual no Giga
+      // 1) Busca produto + preÃ§o atual no Giga
       const ph = variants.map(() => '?').join(',');
       const [prodRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO, COALESCE(DESCRICAOCOMPLETA, '') AS descricao,
@@ -7463,7 +7463,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           }
         : null;
 
-      // 2) Busca histórico de vendas dessa peça nessa loja na janela
+      // 2) Busca histÃ³rico de vendas dessa peÃ§a nessa loja na janela
       const [salesRows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT
             DATE_FORMAT(c.DATA, '%Y-%m-%d') AS data,
@@ -7502,25 +7502,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════
-     FATURAMENTO POR LOJA — usado pela tela /retaguarda/faturamento.
+  /* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+     FATURAMENTO POR LOJA â€” usado pela tela /retaguarda/faturamento.
 
      Agrega caixa.VALORTOTAL + caixa.QUANTIDADE + COUNT(DISTINCT NUMERO)
      por loja num intervalo de datas. Ignora MARCADO='SIM' (linhas canceladas).
 
      Resultado: lista de { storeCode, faturamento, cupons, pecas, ticketMedio }.
 
-     Não inclui composição SITE (Giga + Flowops) — quem combina é o caller
-     (controller), pra deixar service genérico.
-     ═══════════════════════════════════════════════════════════════════════ */
+     NÃ£o inclui composiÃ§Ã£o SITE (Giga + Flowops) â€” quem combina Ã© o caller
+     (controller), pra deixar service genÃ©rico.
+     â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
   async getFaturamentoPorLoja(inicio: Date, fim: Date): Promise<
     Array<{ storeCode: string; faturamento: number; cupons: number; pecas: number; ticketMedio: number }>
   > {
     if (!this.pool) return [];
     try {
-      // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), não DATA.
+      // IMPORTANTE: usa DATAFEC (data de fechamento do cupom), nÃ£o DATA.
       // O Wincred filtra por DATAFEC nas telas Vendas e Ranking. Vendas
-      // feitas tarde da noite (lançadas com DATA do dia X mas só fechadas
+      // feitas tarde da noite (lanÃ§adas com DATA do dia X mas sÃ³ fechadas
       // no dia X+1) ficavam fora no antigo filtro por DATA. Trocando pra
       // DATAFEC, bate exato com Wincred em todas as lojas.
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -7556,16 +7556,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * SCHEMA DIAGNOSTIC — retorna as colunas da tabela `caixa` + soma de
-   * TODAS as colunas numéricas pra uma loja num período. Usado pra
+   * SCHEMA DIAGNOSTIC â€” retorna as colunas da tabela `caixa` + soma de
+   * TODAS as colunas numÃ©ricas pra uma loja num perÃ­odo. Usado pra
    * descobrir qual coluna bate com "TOTAL VENDAS R$" do Wincred.
    *
-   * O Wincred mostra "produtos vendidos" — provavelmente é uma coluna
-   * tipo VALORUNITARIO*QUANTIDADE ou VALORLIQUIDO, não o VALORTOTAL
-   * (que pode incluir acréscimos/juros do crediário).
+   * O Wincred mostra "produtos vendidos" â€” provavelmente Ã© uma coluna
+   * tipo VALORUNITARIO*QUANTIDADE ou VALORLIQUIDO, nÃ£o o VALORTOTAL
+   * (que pode incluir acrÃ©scimos/juros do crediÃ¡rio).
    */
   /**
-   * Lista funcionários (vendedoras) ATIVAS de uma loja no Wincred.
+   * Lista funcionÃ¡rios (vendedoras) ATIVAS de uma loja no Wincred.
    * Filtra por status ativo + LOJA. Usado pelo sync /retaguarda/vendedoras
    * pra popular PdvActiveSeller.
    */
@@ -7580,7 +7580,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (codes.length === 0) return [];
     try {
       // Tenta primeiro com FLAG_INATIVO (estrutura comum do Wincred).
-      // Se não existir essa coluna, cai pro select sem filtro e o caller filtra.
+      // Se nÃ£o existir essa coluna, cai pro select sem filtro e o caller filtra.
       let rows: mysql.RowDataPacket[] = [];
       try {
         const [r] = await this.pool.query<mysql.RowDataPacket[]>(
@@ -7615,9 +7615,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista TODO o estoque (sku → qty) das lojas dadas no Wincred.
-   * Usado pelo StockMirrorService pra sync inicial e periódico.
-   * Filtra ESTOQUE > 0 pra evitar trazer 200k linhas zeradas inúteis.
+   * Lista TODO o estoque (sku â†’ qty) das lojas dadas no Wincred.
+   * Usado pelo StockMirrorService pra sync inicial e periÃ³dico.
+   * Filtra ESTOQUE > 0 pra evitar trazer 200k linhas zeradas inÃºteis.
    */
   async getEstoqueFullByLoja(storeCodes: string[]): Promise<Array<{
     sku: string;
@@ -7648,7 +7648,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Marca uma venda do Wincred como CANCELADA (MARCADO='SIM').
-   * Usada no fluxo de estorno do flowops — remove a venda do faturamento + caixa
+   * Usada no fluxo de estorno do flowops â€” remove a venda do faturamento + caixa
    * sem deletar fisicamente (audit trail preservado).
    *
    * Match pela coluna OBS_PEDIDO = 'flowops-{saleIdShort}'.
@@ -7659,7 +7659,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     storeCode: string;
   }): Promise<{ ok: boolean; mode: 'shadow' | 'real'; affected?: number; error?: string }> {
     const mode: 'shadow' | 'real' = this.isPdvWriteEnabled ? 'real' : 'shadow';
-    if (!this.pool) return { ok: false, mode, error: 'Pool não inicializado' };
+    if (!this.pool) return { ok: false, mode, error: 'Pool nÃ£o inicializado' };
     const saleIdShort = input.saleId.replace(/-/g, '').slice(0, 8);
     const obsPedido = `flowops-${saleIdShort}`;
     const lojaCode = String(input.storeCode).padStart(2, '0').slice(-2);
@@ -7680,24 +7680,24 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Lista vendas DETALHADAS de uma loja no Wincred (tabela caixa) num período.
+   * Lista vendas DETALHADAS de uma loja no Wincred (tabela caixa) num perÃ­odo.
    * Usado pelo drill-down da tela /retaguarda/faturamento pra lojas que ainda
-   * não usam o PDV flowops (vendas direto no Wincred legado).
+   * nÃ£o usam o PDV flowops (vendas direto no Wincred legado).
    *
-   * Agrupa por NUMERO (cupom fiscal) — cada cupom é uma "venda" mesmo tendo
-   * múltiplos itens na tabela caixa.
+   * Agrupa por NUMERO (cupom fiscal) â€” cada cupom Ã© uma "venda" mesmo tendo
+   * mÃºltiplos itens na tabela caixa.
    */
   async getVendasCaixa(loja: string, from: string, toExclusive: string): Promise<any[]> {
     if (!this.pool) return [];
-    // Tenta com o code passado E com padding pra 2 dígitos (cobre "6" vs "06")
+    // Tenta com o code passado E com padding pra 2 dÃ­gitos (cobre "6" vs "06")
     const codeAsIs = String(loja).trim().toUpperCase();
     const codePadded = String(loja).padStart(2, '0').slice(-2);
     const possibleCodes = Array.from(new Set([codeAsIs, codePadded]));
 
     try {
       // IMPORTANTE: usa DATAFEC igual ao ranking (getFaturamentoPorLoja).
-      // Antes usava DATA — vendas tarde da noite ficavam fora porque DATAFEC
-      // só é preenchido quando fecha o cupom (pode ser dia seguinte).
+      // Antes usava DATA â€” vendas tarde da noite ficavam fora porque DATAFEC
+      // sÃ³ Ã© preenchido quando fecha o cupom (pode ser dia seguinte).
       const sql = `
         SELECT
           NUMERO,
@@ -7724,7 +7724,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       `;
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, [possibleCodes, from, toExclusive]);
       this.logger.log(
-        `[getVendasCaixa] loja=${possibleCodes.join('|')} period=${from}→${toExclusive} → ${rows.length} cupons`,
+        `[getVendasCaixa] loja=${possibleCodes.join('|')} period=${from}â†’${toExclusive} â†’ ${rows.length} cupons`,
       );
       return (rows as any[]).map((r) => ({
         numero: r.NUMERO,
@@ -7746,7 +7746,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getCaixaSchemaDiagnostic(loja: string, from: string, toExclusive: string): Promise<any> {
-    if (!this.pool) return { error: 'pool não inicializado' };
+    if (!this.pool) return { error: 'pool nÃ£o inicializado' };
     try {
       // 1) Lista todas as colunas da tabela
       const [colsRows] = await this.pool.query<mysql.RowDataPacket[]>(`SHOW COLUMNS FROM caixa`);
@@ -7757,11 +7757,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         default: r.Default,
       }));
 
-      // 2) Identifica colunas numéricas
+      // 2) Identifica colunas numÃ©ricas
       const numericTypes = /^(int|tinyint|smallint|mediumint|bigint|decimal|numeric|float|double|real)/i;
       const numericCols = cols.filter((c) => numericTypes.test(c.tipo)).map((c) => c.nome);
 
-      // 3) Soma cada coluna numérica + combinações comuns
+      // 3) Soma cada coluna numÃ©rica + combinaÃ§Ãµes comuns
       const sumsParts = numericCols.map((c) => `ROUND(SUM(\`${c}\`), 2) AS \`sum_${c}\``);
       const hasUnit = numericCols.includes('VALORUNITARIO');
       const hasQtd = numericCols.includes('QUANTIDADE');
@@ -7816,12 +7816,12 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Diagnóstico DETALHADO de faturamento por loja — usado pra debugar
-   * divergência com o Wincred. Quebra cada loja em:
-   *  - total de linhas no período
+   * DiagnÃ³stico DETALHADO de faturamento por loja â€” usado pra debugar
+   * divergÃªncia com o Wincred. Quebra cada loja em:
+   *  - total de linhas no perÃ­odo
    *  - quantas com MARCADO em cada estado (null, '', 'SIM', outros)
-   *  - quantas com VALORTOTAL negativo (devoluções/estornos)
-   *  - 2 variações de soma com filtros diferentes pra ver o impacto
+   *  - quantas com VALORTOTAL negativo (devoluÃ§Ãµes/estornos)
+   *  - 2 variaÃ§Ãµes de soma com filtros diferentes pra ver o impacto
    */
   async diagnosticoFaturamento(
     from: string,
@@ -7868,7 +7868,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    *
    * Retorno:
    *   [{ bucket: '2026-05-01', storeCode: 'SITE', faturamento: 4200 }, ...]
-   * Frontend agrupa por bucket pra montar gráfico de linhas.
+   * Frontend agrupa por bucket pra montar grÃ¡fico de linhas.
    */
   async getFaturamentoTimeseries(
     inicio: Date,
@@ -7906,9 +7906,4 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       return [];
     }
   }
-}
-n [];
-    }
-  }
-
 }
