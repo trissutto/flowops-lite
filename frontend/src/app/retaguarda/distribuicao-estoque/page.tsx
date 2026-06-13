@@ -177,10 +177,7 @@ export default function DistribuicaoEstoque() {
       if (dataSource === 'mirror') params.set('source', 'mirror');
 
       const t0_dx = Date.now();
-      if (dataSource === 'mirror') params.set('source', 'mirror');
-      const t0_dx = Date.now();
       const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
-      setLastFetchMs(Date.now() - t0_dx);
       setLastFetchMs(Date.now() - t0_dx);
       setData(r);
       // Marca o snapshot dos filtros usados nessa última busca
