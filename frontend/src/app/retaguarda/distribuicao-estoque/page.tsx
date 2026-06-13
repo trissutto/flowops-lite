@@ -2692,6 +2692,14 @@ function RefRootView({
 /* ════════════════════════════════════════════════════════════════════════
    RefDetailsDrawer — drill-down: mostra matriz de tamanhos x lojas da REF
    ════════════════════════════════════════════════════════════════════════ */
+/**
+ * Cache em memoria do drawer de detalhes — evita refetch ao abrir o mesmo
+ * REF+COR duas vezes. TTL de 5 min: depois disso revalida (estoque muda).
+ * Chave: `${ref}::${cor}`. Limpa quando o componente pai recarrega a lista.
+ */
+const drawerDetailCache = new Map<string, { data: Distribution; ts: number }>();
+const DRAWER_CACHE_TTL_MS = 5 * 60 * 1000;
+
 function RefDetailsDrawer({
   refRow,
   stores,
@@ -2701,29 +2709,54 @@ function RefDetailsDrawer({
   stores: Store[];
   onClose: () => void;
 }) {
-  const [detail, setDetail] = useState<Distribution | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `${refRow.ref}::${refRow.cor || ''}`;
+  const cachedHit = (() => {
+    const c = drawerDetailCache.get(cacheKey);
+    if (!c) return null;
+    if (Date.now() - c.ts > DRAWER_CACHE_TTL_MS) {
+      drawerDetailCache.delete(cacheKey);
+      return null;
+    }
+    return c.data;
+  })();
+  const [detail, setDetail] = useState<Distribution | null>(cachedHit);
+  const [loading, setLoading] = useState(!cachedHit);
 
   useEffect(() => {
+    // Cache hit: ja tem dados em memoria, nao bate no backend.
+    if (cachedHit) {
+      setLoading(false);
+      return;
+    }
+    let aborted = false;
+    setLoading(true);
     const params = new URLSearchParams();
     params.set('search', refRow.ref);
     params.set('mode', 'all');
     params.set('minTotal', '0');
-    params.set('limit', '500');
+    params.set('limit', '100'); // era 500, mas 100 cobre 99% dos casos (REF+COR ~ 8-12 linhas)
     api<Distribution>(`/intelligence/stock-distribution?${params}`)
       .then((r) => {
-        // filtra só os da cor solicitada
+        if (aborted) return;
         const filtered = {
           ...r,
           rows: r.rows.filter((row) =>
             (row.cor || '').trim().toUpperCase() === (refRow.cor || '').trim().toUpperCase(),
           ),
         };
+        drawerDetailCache.set(cacheKey, { data: filtered, ts: Date.now() });
         setDetail(filtered);
       })
-      .catch(() => setDetail(null))
-      .finally(() => setLoading(false));
-  }, [refRow]);
+      .catch(() => {
+        if (!aborted) setDetail(null);
+      })
+      .finally(() => {
+        if (!aborted) setLoading(false);
+      });
+    return () => {
+      aborted = true;
+    };
+  }, [refRow, cacheKey, cachedHit]);
 
   const lojasAtivas = stores
     .filter((s) => s.active && !['SITE', 'PF'].includes(s.code))
@@ -2750,6 +2783,14 @@ function RefDetailsDrawer({
           {loading && (
             <div className="text-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-fuchsia-600 mx-auto" />
+              <div className="text-sm font-bold text-slate-700 mt-3">
+                Carregando estoque por loja...
+              </div>
+              <div className="text-xs text-slate-500 mt-1">
+                Consultando {refRow.ref} {refRow.cor ? `· ${refRow.cor}` : ''} em todas as filiais.
+                <br />
+                Da proxima vez vai abrir instantaneo (cache 5 min).
+              </div>
             </div>
           )}
           {detail && detail.rows.length > 0 && (
