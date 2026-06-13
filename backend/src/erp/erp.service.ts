@@ -2739,7 +2739,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       String(s || '')
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[Ì€-Í¯]/g, '');
+        .replace(/[\u0300-\u036f]/g, '');
     const groups = new Map<string, { ref: string; desc: string; count: number; familia: string }>();
     for (const r of rows) {
       const ref = String(r.REF || '').trim();
