@@ -2693,6 +2693,25 @@ function RefRootView({
    RefDetailsDrawer — drill-down: mostra matriz de tamanhos x lojas da REF
    ════════════════════════════════════════════════════════════════════════ */
 /**
+ * Quebra o nome da loja em ate 2 linhas pro cabecalho da matriz de estoque.
+ *
+ * Regra:
+ *  - 1 palavra: 1 linha
+ *  - 2 palavras: 1 palavra por linha (PRAIA / GRANDE)
+ *  - 3+ palavras: metade em cada (SAO JOSE / DOS CAMPOS)
+ *
+ * Mantemos uppercase pra ficar consistente com o resto do cabecalho.
+ */
+function formatStoreNameLines(name: string): string[] {
+  const words = (name || '').trim().toUpperCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [''];
+  if (words.length === 1) return words;
+  if (words.length === 2) return words;
+  const mid = Math.ceil(words.length / 2);
+  return [words.slice(0, mid).join(' '), words.slice(mid).join(' ')];
+}
+
+/**
  * Cache em memoria do drawer de detalhes — evita refetch ao abrir o mesmo
  * REF+COR duas vezes. TTL de 5 min: depois disso revalida (estoque muda).
  * Chave: `${ref}::${cor}`. Limpa quando o componente pai recarrega a lista.
@@ -2798,9 +2817,20 @@ function RefDetailsDrawer({
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <th className="px-2 py-1.5 text-left text-[10px] uppercase font-bold text-slate-600">Tam</th>
-                  {lojasAtivas.map((s) => (
-                    <th key={s.code} className="px-1.5 py-1.5 text-center text-[10px] uppercase font-bold text-slate-600">{s.code}</th>
-                  ))}
+                  {lojasAtivas.map((s) => {
+                    const lines = formatStoreNameLines(s.name || s.code);
+                    return (
+                      <th
+                        key={s.code}
+                        className="px-1.5 py-1.5 text-center text-[10px] uppercase font-bold text-slate-700 leading-tight"
+                        title={`${s.code} - ${s.name || ''}`}
+                      >
+                        {lines.map((line, i) => (
+                          <div key={i}>{line}</div>
+                        ))}
+                      </th>
+                    );
+                  })}
                   <th className="px-2 py-1.5 text-right text-[10px] uppercase font-bold text-slate-600">Tot</th>
                 </tr>
               </thead>
