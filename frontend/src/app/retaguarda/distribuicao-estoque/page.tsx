@@ -197,13 +197,16 @@ export default function DistribuicaoEstoque() {
     return name.split(' ')[0].substring(0, 6).toUpperCase();
   };
 
-  // Cor da célula de quantidade
+  // Cor da célula de quantidade — regra do user (jun/26):
+  //   ZERADO  = vermelho suave
+  //   TEM 1   = amarelo suave (atenção, última peça)
+  //   > 1     = azul suave (ok, tem peça)
+  //   < 0     = vermelho forte (erro de cadastro)
   const cellBgClass = (qty: number) => {
     if (qty < 0) return 'bg-rose-200 text-rose-900 font-bold';
-    if (qty === 0) return 'text-slate-300';
-    if (qty >= 5) return 'bg-emerald-200 text-emerald-900 font-bold';
-    if (qty >= 3) return 'bg-emerald-100 text-emerald-800 font-semibold';
-    return 'text-slate-700';
+    if (qty === 0) return 'bg-red-50 text-red-700';
+    if (qty === 1) return 'bg-yellow-50 text-yellow-800 font-semibold';
+    return 'bg-blue-50 text-blue-800 font-semibold';
   };
 
   // Cor da linha conforme criticidade
@@ -218,30 +221,25 @@ export default function DistribuicaoEstoque() {
     setDrawerGroup(group);
   };
 
-  // Abre Drawer de realinhamento a partir da Visão Raiz (REF+COR).
-  // Busca as variações via stock-distribution, monta GroupDrawer e abre.
+  // Abre Drawer INSTANTANEAMENTE — tenta usar `data.rows` em memória primeiro.
+  // Só faz fetch novo se a REF não tá na tela (caso raro: filtros restritivos).
+  // Antes esperava 2-3s do fetch sempre — agora abre em <50ms.
   const equilibrarFromRaiz = useCallback(async (refRow: {
     ref: string; cor: string | null; descricao: string; preco: number;
   }) => {
-    try {
-      const params = new URLSearchParams();
-      params.set('search', refRow.ref);
-      params.set('mode', 'all');
-      params.set('minTotal', '0');
-      params.set('limit', '500');
-      const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
-      const corNorm = (refRow.cor || '').trim().toUpperCase();
-      const items = r.rows.filter(
-        (row) => (row.cor || '').trim().toUpperCase() === corNorm,
+    const corNorm = (refRow.cor || '').trim().toUpperCase();
+    const refNorm = refRow.ref.trim().toUpperCase();
+
+    const buildGroup = (rows: any[]): GroupDrawer => {
+      const items = rows.filter(
+        (row: any) =>
+          (row.ref || '').toString().trim().toUpperCase() === refNorm &&
+          (row.cor || '').toString().trim().toUpperCase() === corNorm,
       );
-      if (items.length === 0) {
-        alert('Não encontrei variações dessa REF+COR pra equilibrar.');
-        return;
-      }
       const tamanhos = Array.from(new Set(items.map((i) => (i.tamanho || '').trim()).filter(Boolean)));
       const totalRede = items.reduce((s, i) => s + i.total, 0);
       const criticidadeAlta = items.filter((i) => i.criticidade === 'ALTO').length;
-      const group: GroupDrawer = {
+      return {
         key: `${refRow.ref}|${refRow.cor || ''}`,
         ref: refRow.ref,
         cor: refRow.cor || 'SEM COR',
@@ -252,11 +250,35 @@ export default function DistribuicaoEstoque() {
         totalRede,
         criticidadeAlta,
       };
+    };
+
+    // CACHE HIT: a REF+COR já tá nos dados carregados → abre na hora
+    if (data?.rows && data.rows.length > 0) {
+      const group = buildGroup(data.rows);
+      if (group.items.length > 0) {
+        setDrawerGroup(group);
+        return;
+      }
+    }
+
+    // CACHE MISS: fetch ao backend (caso raro — filtros muito restritivos)
+    try {
+      const params = new URLSearchParams();
+      params.set('search', refRow.ref);
+      params.set('mode', 'all');
+      params.set('minTotal', '0');
+      params.set('limit', '500');
+      const r = await api<Distribution>(`/intelligence/stock-distribution?${params}`);
+      const group = buildGroup(r.rows);
+      if (group.items.length === 0) {
+        alert('Não encontrei variações dessa REF+COR pra equilibrar.');
+        return;
+      }
       setDrawerGroup(group);
     } catch (e: any) {
       alert(`Erro ao carregar variações: ${e?.message || e}`);
     }
-  }, []);
+  }, [data]);
 
   const limparFiltros = () => {
     setGrupoSelected(null);
@@ -271,7 +293,7 @@ export default function DistribuicaoEstoque() {
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
-        <div className="max-w-[1800px] mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="w-full px-4 py-3 flex items-center gap-3">
           <Link
             href="/retaguarda"
             className="p-2 rounded hover:bg-slate-100"
@@ -330,7 +352,7 @@ export default function DistribuicaoEstoque() {
         </div>
       </header>
 
-      <main className="max-w-[1800px] mx-auto p-4 space-y-4">
+      <main className="w-full p-4 space-y-4">
         {/* Tabs */}
         <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-1 w-fit">
           <button
@@ -1108,7 +1130,7 @@ function RealignDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-30 backdrop-blur-sm" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full md:w-[1200px] bg-slate-50 shadow-2xl z-40 overflow-y-auto">
+      <aside className="fixed inset-0 bg-slate-50 shadow-2xl z-40 overflow-y-auto">
         {/* Header — fixo no topo */}
         <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-3 z-20">
           <div className="flex items-center justify-between mb-1.5">
@@ -3122,4 +3144,6 @@ function ConsolidateDrawer({
       </aside>
     </>
   );
+}
+
 }
