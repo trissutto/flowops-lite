@@ -631,19 +631,10 @@ export default function DistribuicaoEstoque() {
               <span className="w-3 h-3 rounded-full bg-red-500" /> ZERO
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-orange-500" /> apenas 1
+              <span className="w-3 h-3 rounded-full bg-yellow-400" /> apenas 1
             </span>
             <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-yellow-400" /> 2 (baixo)
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-green-500" /> 3-4 saudável
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-blue-500" /> 5-9 excesso
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full bg-purple-600" /> 10+ concentrando
+              <span className="w-3 h-3 rounded-full bg-blue-500" /> 2+ (tem estoque)
             </span>
           </div>
         </div>
@@ -2164,17 +2155,14 @@ function ToggleSwitch({
   );
 }
 
-/* Bolinha colorida — escala visual do estoque */
+/* Bolinha colorida — regra: 0=vermelho, 1=amarelo, >1=azul */
 function Bolinha({ qty }: { qty: number }) {
-  let bg = 'bg-red-500'; // 0
-  if (qty === 1) bg = 'bg-orange-500';
-  else if (qty === 2) bg = 'bg-yellow-400';
-  else if (qty >= 3 && qty <= 4) bg = 'bg-green-500';
-  else if (qty >= 5 && qty <= 9) bg = 'bg-blue-500';
-  else if (qty >= 10) bg = 'bg-purple-600';
+  let bg = 'bg-red-500'; // 0 = vermelho
+  if (qty === 1) bg = 'bg-yellow-400'; // 1 = amarelo
+  else if (qty >= 2) bg = 'bg-blue-500'; // >1 = azul
 
   // Texto branco em fundos escuros; preto em amarelo
-  const textColor = qty === 2 ? 'text-stone-900' : 'text-white';
+  const textColor = qty === 1 ? 'text-stone-900' : 'text-white';
 
   return (
     <span

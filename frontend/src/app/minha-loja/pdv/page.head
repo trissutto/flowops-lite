@@ -7879,10 +7879,3 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </div>
-        <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-400 text-center">
-          Pressione Esc ou F12 pra fechar
-        </div>
-      </div>
-    </div>
-  );
-}
