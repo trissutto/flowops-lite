@@ -310,6 +310,9 @@ export class ReturnsService {
     userName?: string;
     /** MODO TREINAMENTO — sessão com header x-training-mode (união com sale.isTraining) */
     trainingRequest?: boolean;
+    /** CONFIRMAÇÃO cross-store — usuário foi avisado que peça é de outra loja
+     *  e confirma que a peça VAI ENTRAR no estoque da loja atual mesmo assim. */
+    confirmCrossStore?: boolean;
   }) {
     const { originalSaleId, storeCode, storeName, modo, items, motivo, userId, userName } = input;
     const attachToSaleId = input.attachToSaleId || null;
@@ -327,6 +330,25 @@ export class ReturnsService {
     if (!sale) throw new NotFoundException('Venda original não encontrada');
     if (sale.status !== 'finalized') {
       throw new BadRequestException(`Venda está ${sale.status}, não dá pra devolver`);
+    }
+
+    // ── ALERTA CROSS-STORE ─────────────────────────────────────────────
+    // Se a venda original foi em loja DIFERENTE da loja atual da devolução,
+    // pede confirmação explícita antes de seguir. A peça VAI ENTRAR no
+    // estoque da loja atual (não da loja que vendeu).
+    const isCrossStore = sale.storeCode && storeCode && sale.storeCode !== storeCode;
+    if (isCrossStore && !input.confirmCrossStore) {
+      throw new BadRequestException({
+        crossStoreAlert: true,
+        message:
+          `Esta peça foi vendida na loja ${sale.storeName || sale.storeCode}, ` +
+          `mas a devolução está sendo feita na loja ${storeName || storeCode}. ` +
+          `Se confirmar, a peça entrará no estoque da loja ${storeName || storeCode}.`,
+        originalStoreCode: sale.storeCode,
+        originalStoreName: sale.storeName,
+        currentStoreCode: storeCode,
+        currentStoreName: storeName,
+      });
     }
 
     // Mapeia disponibilidade já considerando devoluções anteriores
@@ -1862,3 +1884,4 @@ export class ReturnsService {
     };
   }
 }
+

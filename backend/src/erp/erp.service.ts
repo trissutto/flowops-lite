@@ -576,8 +576,17 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           const [result]: any = await conn.query(sql, [...caseParams, storeCode, codigos]);
           const affected = result?.affectedRows ?? 0;
           if (affected < updates.length) {
-            this.logger.warn(
-              `Batch INCREASE UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode})`,
+            // CRITICAL: UPDATE não atingiu todas as linhas esperadas.
+            // Antes só fazia warn → silenciava bug e devolução ficava
+            // "pendente" sem error registrado. Agora lança erro → catch
+            // do try/catch principal faz rollback + retorna success:false
+            // com mensagem clara pro caller (returns.service / retry).
+            this.logger.error(
+              `Batch INCREASE UPDATE: esperado ${updates.length}, affected ${affected} (loja ${storeCode}) — codigos: ${updates.map((u) => u.codigo).join(', ')}`,
+            );
+            throw new Error(
+              `UPDATE estoque loja ${storeCode}: afetou ${affected}/${updates.length} linhas. ` +
+              `CODIGO(s) nao casaram com o que existe em estoque: ${updates.map((u) => u.codigo).join(', ')}`,
             );
           }
           for (const u of updates) {
@@ -7895,6 +7904,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     } catch (e: any) {
       this.logger.error(`getFaturamentoTimeseries falhou: ${e?.message || e}`);
       return [];
+    }
+  }
+}
+n [];
     }
   }
 
