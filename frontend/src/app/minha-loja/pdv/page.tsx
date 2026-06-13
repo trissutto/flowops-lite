@@ -2541,14 +2541,17 @@ function PdvPageInner() {
               {sale && sale.items?.length > 0 && (() => {
                 const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
                 const restante = Math.round((sale.total - paid) * 100) / 100;
+                // Caso 1: vale-troca cobriu tudo (paid > 0, total > 0, restante = 0)
+                // Caso 2: troca par com total = 0 (item negativo cancela item positivo) — finaliza sem pagamento
                 const jaCoberto = sale.total >= 0 && Math.abs(restante) < 0.01 && paid > 0;
-                if (!jaCoberto) return null;
+                const trocaParZero = Math.abs(sale.total) < 0.01 && paid === 0;
+                if (!jaCoberto && !trocaParZero) return null;
                 return (
                   <button
                     onClick={() => finalizeSale('')}
                     disabled={finalizing}
                     className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-emerald-300/60 animate-pulse"
-                    title="Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar."
+                    title={trocaParZero ? 'Troca par sem diferença — clique pra finalizar' : 'Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar.'}
                   >
                     {finalizing ? (
                       <Loader2 className="w-5 h-5 animate-spin" />
