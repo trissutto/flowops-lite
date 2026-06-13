@@ -2546,11 +2546,15 @@ function PdvPageInner() {
                 const jaCoberto = sale.total >= 0 && Math.abs(restante) < 0.01 && paid > 0;
                 const trocaParZero = Math.abs(sale.total) < 0.01 && paid === 0;
                 if (!jaCoberto && !trocaParZero) return null;
+                // Troca par zero usa visual mais discreto (sem piscar, sem ring grande)
+                // pra não sobrepor o TOTAL R$ 0,00.
+                const styleStrong = 'px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-emerald-300/60 animate-pulse';
+                const styleSubtle = 'px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-md';
                 return (
                   <button
                     onClick={() => finalizeSale('')}
                     disabled={finalizing}
-                    className="px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-emerald-300/60 animate-pulse"
+                    className={trocaParZero ? styleSubtle : styleStrong}
                     title={trocaParZero ? 'Troca par sem diferença — clique pra finalizar' : 'Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar.'}
                   >
                     {finalizing ? (
