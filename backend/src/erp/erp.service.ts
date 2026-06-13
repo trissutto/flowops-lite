@@ -5816,6 +5816,31 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * @param filters Filtros opcionais. Default: PLUS SIZE only, modo desequilibrado.
    * @returns Lista de variaÃ§Ãµes + lojas (header) + cache hint.
    */
+  /**
+   * Cache em memoria do getStockDistribution. TTL curto (60s) — estoque
+   * muda muito rapido por causa de vendas, mas dentro de 60s e razoavel
+   * servir resultado cacheado. Reduz drasticamente carga no MySQL Giga.
+   *
+   * Chave = JSON estavel dos filtros relevantes. Limpo no Map quando lota
+   * (LRU simples: 50 entradas, ejeta a mais antiga).
+   */
+  private stockDistCache: Map<string, { data: any; ts: number }> = new Map();
+  private readonly STOCK_DIST_CACHE_TTL_MS = 60 * 1000;
+  private readonly STOCK_DIST_CACHE_MAX = 50;
+
+  private stockDistCacheKey(filters: any): string {
+    return JSON.stringify({
+      g: filters.grupoCodigo ?? null,
+      sg: filters.subgrupoCodigo ?? null,
+      s: (filters.search || '').trim().toUpperCase(),
+      t: (filters.tamanhos || []).slice().sort().join(','),
+      l: (filters.lojas || []).slice().sort().join(','),
+      m: filters.mode || 'imbalanced',
+      mt: filters.minTotal ?? null,
+      lim: filters.limit ?? null,
+    });
+  }
+
   async getStockDistribution(filters: {
     grupoCodigo?: number | null;
     subgrupoCodigo?: number | null;
@@ -5842,6 +5867,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     truncated: boolean;
   }> {
     if (!this.pool) return { rows: [], lojas: [], totalRows: 0, truncated: false };
+
+    // Cache check — 60s TTL. Acelera reaberturas do drawer e cliques rapidos.
+    const cacheKey = this.stockDistCacheKey(filters);
+    const cached = this.stockDistCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this.STOCK_DIST_CACHE_TTL_MS) {
+      this.logger.log(`[erp] getStockDistribution CACHE HIT (idade=${Date.now() - cached.ts}ms)`);
+      return cached.data;
+    }
 
     const limit = Math.max(50, Math.min(5000, filters.limit || 1500));
     const mode = filters.mode || 'imbalanced';
@@ -5883,21 +5916,31 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       vals.push(filters.subgrupoCodigo);
     }
     if (filters.search?.trim()) {
-      // Quebra busca em tokens (separados por espaÃ§o). Cada token tem que
-      // aparecer em ALGUM campo (REF, descriÃ§Ã£o ou CODIGO) â€” AND entre tokens,
-      // OR entre campos. Exemplo: "VLM-222 PRETO" exige que apareÃ§a
-      // "VLM-222" E "PRETO" em algum dos campos (mesmo separados).
-      const tokens = filters.search
-        .trim()
-        .toUpperCase()
-        .split(/\s+/)
-        .filter((t) => t.length > 0);
-      for (const tok of tokens) {
-        const term = `%${tok}%`;
-        conds.push(
-          `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
-        );
-        vals.push(term, term, term);
+      const rawSearch = filters.search.trim().toUpperCase();
+      // FAST PATH: se search e UMA palavra so e parece REF (ex: "VLM-222"),
+      // usa igualdade direta p.REF = ? em vez de LIKE %x%. Isso usa indice
+      // (REF normalmente tem indice no Giga) e corta de segundos pra <50ms.
+      // Detecta REF: sem espaco + tem ao menos 1 letra + ao menos 1 numero ou hifen.
+      const isLikelyRef =
+        !rawSearch.includes(' ') &&
+        rawSearch.length >= 3 &&
+        rawSearch.length <= 20 &&
+        /[A-Z]/.test(rawSearch) &&
+        /[0-9\-]/.test(rawSearch);
+      if (isLikelyRef) {
+        // Igualdade exata na REF — usa indice
+        conds.push('p.REF = ?');
+        vals.push(rawSearch);
+      } else {
+        // Caminho generico (busca livre por descricao/codigo)
+        const tokens = rawSearch.split(/\s+/).filter((t) => t.length > 0);
+        for (const tok of tokens) {
+          const term = `%${tok}%`;
+          conds.push(
+            `(UPPER(p.REF) LIKE ? OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE ? OR p.CODIGO LIKE ?)`,
+          );
+          vals.push(term, term, term);
+        }
       }
     }
 
@@ -6083,12 +6126,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       .filter((l) => !filters.lojas || filters.lojas.includes(l))
       .sort();
 
-    return {
+    const result = {
       rows: filtered,
       lojas,
       totalRows: filtered.length,
       truncated: rawRows.length >= limit,
     };
+
+    // Salva no cache. LRU: se passar de MAX, remove a entrada mais antiga.
+    if (this.stockDistCache.size >= this.STOCK_DIST_CACHE_MAX) {
+      const oldestKey = this.stockDistCache.keys().next().value;
+      if (oldestKey) this.stockDistCache.delete(oldestKey);
+    }
+    this.stockDistCache.set(cacheKey, { data: result, ts: Date.now() });
+
+    return result;
   }
 
   /**
