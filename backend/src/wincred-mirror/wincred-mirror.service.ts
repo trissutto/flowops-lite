@@ -127,7 +127,7 @@ export class WincredMirrorService {
     const pool: any = (this.erp as any).pool;
     if (!pool) throw new Error('MySQL pool nao inicializado');
     // Filtro plus size aplicado em produtos (so sincroniza o que importa)
-    const where = table === 'produtos' ? ` WHERE PLUS_SIZE = 1` : '';
+    const where = table === 'produtos' ? ` WHERE PLUS_SIZE IN (1, 2)` : '';
     const [rows] = await pool.query(`SELECT COUNT(*) AS c FROM \`${table}\`${where}`);
     return Number((rows as any[])[0]?.c ?? 0);
   }
@@ -196,7 +196,7 @@ export class WincredMirrorService {
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                   CST, CSOSN, CFOP
              FROM produtos
-            WHERE PLUS_SIZE = 1
+            WHERE PLUS_SIZE IN (1, 2)
               AND COALESCE(CODIGO, '') > ?
             ORDER BY CODIGO
             LIMIT ?`,
