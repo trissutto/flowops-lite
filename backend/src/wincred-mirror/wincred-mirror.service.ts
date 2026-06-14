@@ -161,14 +161,21 @@ export class WincredMirrorService {
 
     try {
       const total = await this.countMysql('produtos');
-      this.logger.log(`[produtos] iniciando sync — ${total} linhas no Wincred`);
 
-      // Limpa tabela Postgres (full re-sync)
-      await this.withRetry('truncate produtos', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`));
+      // CHECKPOINT: ja existem produtos no Postgres? Retoma de onde parou.
+      // Pega o MAIOR codigo ja sincronizado e continua daquele ponto em diante.
+      // Isso permite re-rodar o sync sem perder progresso (vital com 352k linhas).
+      const checkRows: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS c, COALESCE(MAX(codigo), '') AS last FROM wincred_produtos`,
+      );
+      let processed = Number(checkRows[0]?.c ?? 0);
+      let lastCodigo: string = checkRows[0]?.last ?? '';
 
-      let processed = 0;
-      let offset = 0;
-      while (offset < total) {
+      this.logger.log(`[produtos] resume de codigo='${lastCodigo}' (${processed} ja sincronizados de ${total})`);
+
+      while (true) {
+        // Pega proximo batch ORDENADO por CODIGO > lastCodigo
+        // (cursor pagination — muito mais robusto que OFFSET)
         const [rows] = await pool.query(
           `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                   CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
@@ -177,9 +184,10 @@ export class WincredMirrorService {
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                   CST, CSOSN, CFOP
              FROM produtos
+            WHERE COALESCE(CODIGO, '') > ?
             ORDER BY CODIGO
-            LIMIT ? OFFSET ?`,
-          [this.BATCH, offset],
+            LIMIT ?`,
+          [lastCodigo, this.BATCH],
         );
         if (!(rows as any[]).length) break;
 
@@ -237,10 +245,11 @@ export class WincredMirrorService {
           );
         }
         processed += data.length;
-        offset += this.BATCH;
+        // Atualiza checkpoint pro proximo batch (cursor pagination)
+        lastCodigo = String((rows as any[])[(rows as any[]).length - 1].CODIGO || '');
         // Log + pausa a cada 10 batches (libera conexao Railway)
-        if (offset % (this.BATCH * 10) === 0) {
-          this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%)`);
+        if (processed % (this.BATCH * 10) === 0) {
+          this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%) last=${lastCodigo}`);
           await this.sleep(50);
         }
       }
