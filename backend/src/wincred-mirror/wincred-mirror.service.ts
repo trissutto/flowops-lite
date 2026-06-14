@@ -237,7 +237,7 @@ export class WincredMirrorService {
           }));
 
         if (data.length) {
-          await this.withRetry(`produtos@${offset}`, () =>
+          await this.withRetry(`produtos@${processed}`, () =>
             (this.prisma as any).wincredProduto.createMany({
               data,
               skipDuplicates: true,
