@@ -164,30 +164,18 @@ export class WincredMirrorService {
     try {
       const total = await this.countMysql('produtos');
 
-      // Filtro PLUS_SIZE: so sincronizamos os produtos relevantes (~5-10% do total).
-      // Se ja tem dados sem o filtro, TRUNCATE pra reiniciar limpo.
-      // (Detecta: se count Postgres > count Wincred filtrado, significa que tem lixo)
-      const checkRowsRaw: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS c FROM wincred_produtos`,
+      // Filtro PLUS_SIZE: so sincronizamos os produtos relevantes.
+      // Sempre TRUNCATE — full sync sempre limpo e simples.
+      this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred filtrado`);
+      await this.withRetry('truncate produtos', () =>
+        this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`),
       );
-      const pgCount = Number(checkRowsRaw[0]?.c ?? 0);
-      if (pgCount > total) {
-        this.logger.warn(`[produtos] Postgres tem ${pgCount} mas Wincred filtrado tem so ${total}. TRUNCATE pra limpar lixo.`);
-        await this.withRetry('truncate produtos', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`));
-      }
 
-      // CHECKPOINT: pega o MAIOR codigo ja sincronizado e continua daquele ponto.
-      const checkRows: any[] = await this.prisma.$queryRawUnsafe(
-        `SELECT COUNT(*)::int AS c, COALESCE(MAX(codigo), '') AS last FROM wincred_produtos`,
-      );
-      let processed = Number(checkRows[0]?.c ?? 0);
-      let lastCodigo: string = checkRows[0]?.last ?? '';
-
-      this.logger.log(`[produtos] resume de codigo='${lastCodigo}' (${processed} ja sincronizados de ${total} plus size)`);
-
-      while (true) {
-        // Pega proximo batch ORDENADO por CODIGO > lastCodigo
-        // (cursor pagination — muito mais robusto que OFFSET)
+      let processed = 0;
+      let offset = 0;
+      while (offset < total) {
+        // OFFSET pagination — mais simples e robusta que cursor com CODIGO varchar.
+        // Com 58k linhas e batch 200 = ~290 batches. OK pra performance.
         const [rows] = await pool.query(
           `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                   CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
@@ -197,10 +185,9 @@ export class WincredMirrorService {
                   CST, CSOSN, CFOP
              FROM produtos
             WHERE PLUS_SIZE IN (1, 2)
-              AND COALESCE(CODIGO, '') > ?
-            ORDER BY CODIGO
-            LIMIT ?`,
-          [lastCodigo, this.BATCH],
+            ORDER BY ID
+            LIMIT ? OFFSET ?`,
+          [this.BATCH, offset],
         );
         if (!(rows as any[]).length) break;
 
@@ -258,11 +245,10 @@ export class WincredMirrorService {
           );
         }
         processed += data.length;
-        // Atualiza checkpoint pro proximo batch (cursor pagination)
-        lastCodigo = String((rows as any[])[(rows as any[]).length - 1].CODIGO || '');
+        offset += this.BATCH;
         // Log + pausa a cada 10 batches (libera conexao Railway)
-        if (processed % (this.BATCH * 10) === 0) {
-          this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%) last=${lastCodigo}`);
+        if (offset % (this.BATCH * 10) === 0) {
+          this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%) offset=${offset}`);
           await this.sleep(50);
         }
       }
