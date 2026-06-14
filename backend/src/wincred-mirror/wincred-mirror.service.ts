@@ -126,7 +126,9 @@ export class WincredMirrorService {
   private async countMysql(table: string): Promise<number> {
     const pool: any = (this.erp as any).pool;
     if (!pool) throw new Error('MySQL pool nao inicializado');
-    const [rows] = await pool.query(`SELECT COUNT(*) AS c FROM \`${table}\``);
+    // Filtro plus size aplicado em produtos (so sincroniza o que importa)
+    const where = table === 'produtos' ? ` WHERE PLUS_SIZE = 1` : '';
+    const [rows] = await pool.query(`SELECT COUNT(*) AS c FROM \`${table}\`${where}`);
     return Number((rows as any[])[0]?.c ?? 0);
   }
 
@@ -162,16 +164,26 @@ export class WincredMirrorService {
     try {
       const total = await this.countMysql('produtos');
 
-      // CHECKPOINT: ja existem produtos no Postgres? Retoma de onde parou.
-      // Pega o MAIOR codigo ja sincronizado e continua daquele ponto em diante.
-      // Isso permite re-rodar o sync sem perder progresso (vital com 352k linhas).
+      // Filtro PLUS_SIZE: so sincronizamos os produtos relevantes (~5-10% do total).
+      // Se ja tem dados sem o filtro, TRUNCATE pra reiniciar limpo.
+      // (Detecta: se count Postgres > count Wincred filtrado, significa que tem lixo)
+      const checkRowsRaw: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT COUNT(*)::int AS c FROM wincred_produtos`,
+      );
+      const pgCount = Number(checkRowsRaw[0]?.c ?? 0);
+      if (pgCount > total) {
+        this.logger.warn(`[produtos] Postgres tem ${pgCount} mas Wincred filtrado tem so ${total}. TRUNCATE pra limpar lixo.`);
+        await this.withRetry('truncate produtos', () => this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`));
+      }
+
+      // CHECKPOINT: pega o MAIOR codigo ja sincronizado e continua daquele ponto.
       const checkRows: any[] = await this.prisma.$queryRawUnsafe(
         `SELECT COUNT(*)::int AS c, COALESCE(MAX(codigo), '') AS last FROM wincred_produtos`,
       );
       let processed = Number(checkRows[0]?.c ?? 0);
       let lastCodigo: string = checkRows[0]?.last ?? '';
 
-      this.logger.log(`[produtos] resume de codigo='${lastCodigo}' (${processed} ja sincronizados de ${total})`);
+      this.logger.log(`[produtos] resume de codigo='${lastCodigo}' (${processed} ja sincronizados de ${total} plus size)`);
 
       while (true) {
         // Pega proximo batch ORDENADO por CODIGO > lastCodigo
@@ -184,7 +196,8 @@ export class WincredMirrorService {
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                   CST, CSOSN, CFOP
              FROM produtos
-            WHERE COALESCE(CODIGO, '') > ?
+            WHERE PLUS_SIZE = 1
+              AND COALESCE(CODIGO, '') > ?
             ORDER BY CODIGO
             LIMIT ?`,
           [lastCodigo, this.BATCH],
