@@ -98,37 +98,54 @@ export class WincredMirrorController {
       ref + '%',
     );
 
-    // Pra cada codigo, ver se tem linha em wincred_estoque
+    // Pra cada codigo, ver se tem linha em wincred_estoque (com varias estrategias)
     const codigos = rows.map((r) => String(r.codigo));
-    const estoqueRows: any[] = codigos.length > 0
-      ? await prisma.$queryRawUnsafe(
-          `SELECT codigo, loja, estoque
-             FROM wincred_estoque
-            WHERE codigo = ANY($1::text[])
-            ORDER BY codigo, loja`,
-          codigos,
-        )
-      : [];
-
-    // Tambem: contar quantas linhas tem na tabela inteira pra esses codigos
     const codigosUnique = Array.from(new Set(codigos));
     const sampleCodigo = codigosUnique[0] || '';
-    const estoqueSampleRaw: any[] = sampleCodigo
+
+    // ESTRATEGIA 1: igualdade exata
+    const eqExato: any[] = sampleCodigo
       ? await prisma.$queryRawUnsafe(
-          `SELECT codigo, loja, estoque FROM wincred_estoque WHERE codigo = $1 LIMIT 20`,
+          `SELECT codigo, length(codigo) AS len, loja, estoque FROM wincred_estoque WHERE codigo = $1`,
           sampleCodigo,
         )
       : [];
 
+    // ESTRATEGIA 2: LIKE com %codigo%
+    const likePartial: any[] = sampleCodigo
+      ? await prisma.$queryRawUnsafe(
+          `SELECT codigo, length(codigo) AS len, loja, estoque FROM wincred_estoque WHERE codigo LIKE $1 LIMIT 20`,
+          `%${sampleCodigo}%`,
+        )
+      : [];
+
+    // ESTRATEGIA 3: comparacao numerica (BIGINT)
+    const numericMatch: any[] = sampleCodigo
+      ? await prisma.$queryRawUnsafe(
+          `SELECT codigo, length(codigo) AS len, loja, estoque
+             FROM wincred_estoque
+            WHERE NULLIF(REGEXP_REPLACE(codigo, '\\D', '', 'g'), '')::bigint = $1::bigint LIMIT 20`,
+          sampleCodigo,
+        )
+      : [];
+
+    // ESTRATEGIA 4: amostra geral da tabela estoque (5 linhas)
+    const estoqueGeral: any[] = await prisma.$queryRawUnsafe(
+      `SELECT codigo, length(codigo) AS len, loja FROM wincred_estoque LIMIT 5`,
+    );
+
     return {
       ref,
       total_produtos: rows.length,
-      total_estoque_linhas: estoqueRows.length,
-      sample_produtos: rows.slice(0, 5),
-      sample_estoque: estoqueRows.slice(0, 20),
-      diag_primeiro_codigo: sampleCodigo,
-      diag_estoque_pra_esse_codigo: estoqueSampleRaw,
       cores: Array.from(new Set(rows.map((r) => r.cor))),
+      diag_codigo_produto: {
+        valor: sampleCodigo,
+        length: sampleCodigo.length,
+      },
+      diag_estoque_igualdade_exata: { matches: eqExato.length, sample: eqExato.slice(0, 5) },
+      diag_estoque_like_partial: { matches: likePartial.length, sample: likePartial.slice(0, 5) },
+      diag_estoque_numeric_match: { matches: numericMatch.length, sample: numericMatch.slice(0, 5) },
+      diag_amostra_geral_estoque: estoqueGeral,
     };
   }
 }
