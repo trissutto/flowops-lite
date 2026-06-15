@@ -465,11 +465,13 @@ function Input({
   onChange,
   type = 'text',
   placeholder,
+  step,
 }: {
   value: string;
   onChange: (v: string) => void;
   type?: string;
   placeholder?: string;
+  step?: string;
 }) {
   return (
     <input
@@ -477,6 +479,7 @@ function Input({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      step={step}
       className="w-full px-3 py-2 border rounded text-sm"
     />
   );
