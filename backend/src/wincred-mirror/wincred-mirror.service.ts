@@ -461,9 +461,9 @@ export class WincredMirrorService {
     const conds: string[] = [];
     const params: any[] = [];
 
-    // Tamanho (TRIM + UPPER pra cobrir padding/case do Wincred)
-    conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) = ANY($${params.length + 1})`);
-    params.push(tamanhos);
+    // Tamanho — usa IN com lista hardcoded pra evitar problema de tipo com ANY(array)
+    const tamanhosEscaped = tamanhos.map((t) => `'${t.replace(/'/g, "''")}'`).join(',');
+    conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) IN (${tamanhosEscaped})`);
 
     // REF nao vazia
     conds.push(`COALESCE(p.ref, '') <> ''`);
@@ -486,14 +486,14 @@ export class WincredMirrorService {
         /[A-Z]/.test(rawSearch) &&
         /[0-9\-]/.test(rawSearch);
       if (isLikelyRef) {
-        conds.push(`UPPER(p.ref) = $${params.length + 1}`);
+        conds.push(`TRIM(UPPER(COALESCE(p.ref, ''))) = $${params.length + 1}`);
         params.push(rawSearch);
       } else {
         const tokens = rawSearch.split(/\s+/).filter((t) => t.length > 0);
         for (const tok of tokens) {
           const term = `%${tok}%`;
           conds.push(
-            `(UPPER(p.ref) LIKE $${params.length + 1} OR UPPER(COALESCE(p.descricao_completa, '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
+            `(TRIM(UPPER(COALESCE(p.ref, ''))) LIKE $${params.length + 1} OR UPPER(COALESCE(p.descricao_completa, '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
           );
           params.push(term, term, term);
         }
