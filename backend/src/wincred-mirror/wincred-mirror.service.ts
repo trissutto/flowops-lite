@@ -461,12 +461,16 @@ export class WincredMirrorService {
     const conds: string[] = [];
     const params: any[] = [];
 
-    // Tamanho — usa IN com lista hardcoded pra evitar problema de tipo com ANY(array)
-    const tamanhosEscaped = tamanhos.map((t) => `'${t.replace(/'/g, "''")}'`).join(',');
-    conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) IN (${tamanhosEscaped})`);
+    // Tamanho — APENAS quando NAO ha search especifica.
+    // Quando user busca um produto especifico (drawer), quer ver TODOS os
+    // tamanhos. So aplicar filtro plus size na lista geral.
+    if (!filters.search?.trim()) {
+      const tamanhosEscaped = tamanhos.map((t) => `'${t.replace(/'/g, "''")}'`).join(',');
+      conds.push(`TRIM(UPPER(COALESCE(p.tamanho, ''))) IN (${tamanhosEscaped})`);
+    }
 
-    // REF nao vazia
-    conds.push(`COALESCE(p.ref, '') <> ''`);
+    // REF nao vazia (TRIM cobre padding do Wincred)
+    conds.push(`TRIM(COALESCE(p.ref, '')) <> ''`);
 
     if (filters.grupoCodigo) {
       conds.push(`p.grupo = $${params.length + 1}`);
