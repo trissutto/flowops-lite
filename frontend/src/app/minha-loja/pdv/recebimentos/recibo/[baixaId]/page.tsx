@@ -48,6 +48,9 @@ type Baixa = {
   totalJuros: number;
   totalPago: number;
   formaPagamento: string;
+  // Pagamento MISTO: discriminacao dinheiro+PIX (preenchidos so quando misto)
+  valorDinheiro?: number | null;
+  valorPix?: number | null;
   status: string;
   paidAt: string | null;
   createdAt: string;
@@ -66,7 +69,13 @@ const fmtDate = (iso: string) => {
 };
 
 const fmtMethod = (m: string) =>
-  m === 'pix' ? 'PIX' : m === 'dinheiro' ? 'DINHEIRO' : (m || '—').toUpperCase();
+  m === 'pix'
+    ? 'PIX'
+    : m === 'dinheiro'
+    ? 'DINHEIRO'
+    : m === 'misto'
+    ? 'MISTO'
+    : (m || '—').toUpperCase();
 
 export default function ReciboBaixaPage() {
   return (
@@ -362,6 +371,25 @@ function ReciboBaixaInner() {
           <div>Forma:</div>
           <div>{fmtMethod(baixa.formaPagamento)}</div>
         </div>
+
+        {/* Discriminacao MISTO: dinheiro + PIX (so se forma=misto) */}
+        {baixa.formaPagamento === 'misto' && (
+          <div style={{ paddingLeft: 12, fontSize: 10, marginTop: 2 }}>
+            {baixa.valorDinheiro != null && baixa.valorDinheiro > 0 && (
+              <div className="row">
+                <div>↳ Em dinheiro:</div>
+                <div className="bold">{brl(baixa.valorDinheiro)}</div>
+              </div>
+            )}
+            {baixa.valorPix != null && baixa.valorPix > 0 && (
+              <div className="row">
+                <div>↳ Em PIX:</div>
+                <div className="bold">{brl(baixa.valorPix)}</div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="row" style={{ fontSize: 9 }}>
           <div>Status:</div>
           <div className="bold">{baixa.status === 'paid' ? '✓ PAGO' : 'PENDENTE'}</div>
