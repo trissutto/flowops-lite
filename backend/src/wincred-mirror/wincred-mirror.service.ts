@@ -526,7 +526,9 @@ export class WincredMirrorService {
           '{}'::json
         ) AS estoque_obj
       FROM wincred_produtos p
-      LEFT JOIN wincred_estoque e ON e.codigo = p.codigo
+      LEFT JOIN wincred_estoque e 
+        ON NULLIF(REGEXP_REPLACE(e.codigo, '\\D', '', 'g'), '')::bigint
+         = NULLIF(REGEXP_REPLACE(p.codigo, '\\D', '', 'g'), '')::bigint
       WHERE ${conds.join(' AND ')}
       GROUP BY p.codigo, p.ref, p.cor, p.tamanho, p."descricaoCompleta", p."vendaUn"
       ORDER BY p.ref, p.cor, p.tamanho
