@@ -87,19 +87,47 @@ export class WincredMirrorController {
     this.requireAdmin(req);
     const ref = String((req.query?.ref || '').toString()).trim().toUpperCase();
     if (!ref) return { error: 'ref obrigatorio' };
-    const rows: any[] = await (this.mirror as any).prisma.$queryRawUnsafe(
+    const prisma = (this.mirror as any).prisma;
+
+    const rows: any[] = await prisma.$queryRawUnsafe(
       `SELECT codigo, ref, cor, tamanho, "plusSize", "descricaoCompleta"
          FROM wincred_produtos
-        WHERE UPPER(ref) = $1
+        WHERE UPPER(TRIM(ref)) LIKE $1
         ORDER BY cor, tamanho
         LIMIT 100`,
-      ref,
+      ref + '%',
     );
+
+    // Pra cada codigo, ver se tem linha em wincred_estoque
+    const codigos = rows.map((r) => String(r.codigo));
+    const estoqueRows: any[] = codigos.length > 0
+      ? await prisma.$queryRawUnsafe(
+          `SELECT codigo, loja, estoque
+             FROM wincred_estoque
+            WHERE codigo = ANY($1::text[])
+            ORDER BY codigo, loja`,
+          codigos,
+        )
+      : [];
+
+    // Tambem: contar quantas linhas tem na tabela inteira pra esses codigos
+    const codigosUnique = Array.from(new Set(codigos));
+    const sampleCodigo = codigosUnique[0] || '';
+    const estoqueSampleRaw: any[] = sampleCodigo
+      ? await prisma.$queryRawUnsafe(
+          `SELECT codigo, loja, estoque FROM wincred_estoque WHERE codigo = $1 LIMIT 20`,
+          sampleCodigo,
+        )
+      : [];
+
     return {
       ref,
-      total: rows.length,
-      sample: rows.slice(0, 20),
-      tamanhos: Array.from(new Set(rows.map((r) => `'${r.tamanho}'`))),
+      total_produtos: rows.length,
+      total_estoque_linhas: estoqueRows.length,
+      sample_produtos: rows.slice(0, 5),
+      sample_estoque: estoqueRows.slice(0, 20),
+      diag_primeiro_codigo: sampleCodigo,
+      diag_estoque_pra_esse_codigo: estoqueSampleRaw,
       cores: Array.from(new Set(rows.map((r) => r.cor))),
     };
   }
