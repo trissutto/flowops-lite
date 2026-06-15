@@ -130,6 +130,7 @@ model Store {
   pickOrders     PickOrder[]
   orderItems     OrderItem[]
   supplyRequests SupplyRequest[]
+  commissionRules CommissionRule[]
 
   // ── CRM / Cashback (expansão 2026-05) ──
   customersOrigin       Customer[]            @relation("CustomerOriginStore")
@@ -341,9 +342,132 @@ model Seller {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   orders Order[]
+  commissionRules    CommissionRule[]
+  commissionEntries  CommissionEntry[]
 
   @@index([active, name])
   @@map("sellers")
+}
+
+// ── COMISSÕES (F4) ──────────────────────────────────────────────────
+//
+// 3 tabelas pro motor de comissão:
+//   1. CommissionRule       — regras de cálculo (% base, meta, bônus)
+//   2. CommissionPeriod     — fechamentos mensais (open/closed/paid)
+//   3. CommissionEntry      — linha de cálculo por vendedora no período
+//
+// Quando você desligar o Wincred dia 30/06, o cálculo de comissão precisa
+// rodar 100% no Flowops. Hoje vem do Giga — vamos migrar.
+//
+// Regras têm escopo hierárquico:
+//   - scope='global'  → vale pra todas as vendedoras
+//   - scope='store'   → vale só pras vendedoras da loja X
+//   - scope='seller'  → vale só pra vendedora Y (sobrescreve as outras)
+//
+// Quando calcula, busca da MAIS específica pra MENOS:
+//   seller(Y) > store(X) > global → primeira que match é a usada.
+//
+model CommissionRule {
+  id            String   @id @default(uuid())
+  scope         String   // 'global' | 'store' | 'seller'
+  storeId       String?  @map("store_id")
+  sellerId      String?  @map("seller_id")
+
+  // Cálculo: % sobre venda líquida (vendido - trocas/devoluções)
+  percentBase   Decimal  @map("percent_base")  @db.Decimal(5, 2)  // ex: 3.00 = 3%
+
+  // Meta opcional: se vendedora bater a meta no período, ganha bônus
+  meta          Decimal? @db.Decimal(12, 2)  // ex: 80000.00 = R$ 80k/mês
+  bonusPercent  Decimal? @map("bonus_percent") @db.Decimal(5, 2)  // ex: 1.00 = +1% acima da meta
+
+  // Vigência — admin pode criar regra futura ou desativar
+  validFrom     DateTime @map("valid_from")
+  validTo       DateTime? @map("valid_to")
+  active        Boolean  @default(true)
+
+  // Notas livres pra admin lembrar o motivo da regra
+  note          String?  @db.Text
+
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdBy     String?  @map("created_by")  // userId do admin
+
+  store         Store?   @relation(fields: [storeId], references: [id])
+  seller        Seller?  @relation(fields: [sellerId], references: [id])
+
+  @@index([scope, active])
+  @@index([storeId, active])
+  @@index([sellerId, active])
+  @@index([validFrom, validTo])
+  @@map("commission_rules")
+}
+
+// Período de fechamento — mensal por enquanto (yyyy-mm)
+model CommissionPeriod {
+  id          String   @id @default(uuid())
+  yearMonth   String   @unique @map("year_month")  // '2026-06'
+  startDate   DateTime @map("start_date")
+  endDate     DateTime @map("end_date")
+
+  // 'open'   — em cálculo, ainda recebe vendas
+  // 'closed' — fechado, valores finais não mudam mais
+  // 'paid'   — comissão paga pra todas as vendedoras
+  status      String   @default("open")
+  closedAt    DateTime? @map("closed_at")
+  closedBy    String?  @map("closed_by")  // userId do admin
+  paidAt      DateTime? @map("paid_at")
+
+  // Snapshot agregado pra dashboard rápido
+  totalSellers      Int     @default(0) @map("total_sellers")
+  totalCommission   Decimal @default(0) @map("total_commission") @db.Decimal(12, 2)
+  totalVendido      Decimal @default(0) @map("total_vendido") @db.Decimal(12, 2)
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  entries     CommissionEntry[]
+
+  @@index([status])
+  @@map("commission_periods")
+}
+
+// Linha de cálculo por vendedora × loja × período
+model CommissionEntry {
+  id          String   @id @default(uuid())
+  periodId    String   @map("period_id")
+  sellerId    String   @map("seller_id")
+  storeId     String   @map("store_id")
+
+  // Valores do período
+  totalVendido       Decimal @map("total_vendido") @db.Decimal(12, 2)
+  totalTrocas        Decimal @default(0) @map("total_trocas") @db.Decimal(12, 2)
+  vendidoLiquido     Decimal @map("vendido_liquido") @db.Decimal(12, 2)
+  qtdVendas          Int     @default(0) @map("qtd_vendas")
+
+  // Cálculo
+  percentApplied     Decimal @map("percent_applied") @db.Decimal(5, 2)
+  comissaoBase       Decimal @map("comissao_base") @db.Decimal(12, 2)
+  metaAtingida       Boolean @default(false) @map("meta_atingida")
+  metaValue          Decimal? @map("meta_value") @db.Decimal(12, 2)
+  bonusPercent       Decimal? @map("bonus_percent") @db.Decimal(5, 2)
+  bonusValue         Decimal @default(0) @map("bonus_value") @db.Decimal(12, 2)
+  total              Decimal @db.Decimal(12, 2)
+
+  // Auditoria: snapshot da regra que foi usada (rastreabilidade)
+  ruleSnapshot       Json    @map("rule_snapshot")
+  ruleId             String? @map("rule_id")  // opcional pra debug
+
+  calculatedAt       DateTime @default(now()) @map("calculated_at")
+  paidAt             DateTime? @map("paid_at")
+  paidBy             String?  @map("paid_by")
+
+  period             CommissionPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  seller             Seller @relation(fields: [sellerId], references: [id])
+
+  @@unique([periodId, sellerId, storeId])
+  @@index([sellerId, calculatedAt])
+  @@index([storeId, calculatedAt])
+  @@map("commission_entries")
 }
 
 // Tabela KV genérica pra config do app que precisa sobreviver a redeploys.

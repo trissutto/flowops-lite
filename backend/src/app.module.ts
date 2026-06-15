@@ -38,6 +38,8 @@ import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
 import { RealignmentModule } from './realignment/realignment.module';
 import { CrediariosModule } from './crediarios/crediarios.module';
+import { CommissionsModule } from './commissions/commissions.module';
+import { CutoverModule } from './cutover/cutover.module';
 import { FinanceiroModule } from './financeiro/financeiro.module';
 import { IntelligenceModule } from './intelligence/intelligence.module';
 import { PdvModule } from './pdv/pdv.module';
@@ -93,6 +95,8 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     SellersModule,
     RealignmentModule,
     CrediariosModule,
+    CommissionsModule,
+    CutoverModule,
     FinanceiroModule,
     IntelligenceModule,
     PdvModule,
