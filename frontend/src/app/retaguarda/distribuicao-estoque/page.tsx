@@ -103,10 +103,12 @@ export default function DistribuicaoEstoque() {
   // ── Fonte de dados: 'giga' (MySQL Wincred) | 'mirror' (Postgres espelho) ──
   // Persiste em sessionStorage pra manter durante a sessao. Default = giga (seguro).
   const [dataSource, setDataSourceState] = useState<'giga' | 'mirror'>(() => {
-    if (typeof window === 'undefined') return 'giga';
-    try {
-      return (window.sessionStorage.getItem('distrib_source') as 'giga' | 'mirror') || 'giga';
-    } catch { return 'giga'; }
+    // Mirror desabilitado temporariamente — bug no JOIN estoque sob investigacao.
+    // Sempre forca giga ate o fix ser confirmado em ambiente de teste.
+    if (typeof window !== 'undefined') {
+      try { window.sessionStorage.removeItem('distrib_source'); } catch {}
+    }
+    return 'giga';
   });
   const setDataSource = (s: 'giga' | 'mirror') => {
     setDataSourceState(s);
@@ -367,15 +369,11 @@ export default function DistribuicaoEstoque() {
             🐢 Giga (MySQL)
           </button>
           <button
-            onClick={() => setDataSource('mirror')}
-            className={`px-3 py-1 rounded text-xs font-bold transition ${
-              dataSource === 'mirror'
-                ? 'bg-emerald-600 text-white shadow'
-                : 'text-slate-600 hover:bg-white'
-            }`}
-            title="Postgres espelho (sync 10min). Rapido."
+            disabled
+            className="px-3 py-1 rounded text-xs font-bold text-slate-400 cursor-not-allowed bg-slate-50"
+            title="Mirror desabilitado temporariamente — sob investigacao do JOIN estoque"
           >
-            ⚡ Mirror (Postgres)
+            ⚡ Mirror (em manutencao)
           </button>
         </div>
         {lastFetchMs !== null && (
