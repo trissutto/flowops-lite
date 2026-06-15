@@ -156,11 +156,13 @@ export class PagbankService {
     const customerName = (input.customerName || 'Consumidor Final').slice(0, 60);
     const customerEmail = input.customerEmail || 'consumidor@lurds.com.br';
     let customerCpf = (input.customerCpf || '').replace(/\D/g, '');
-    // Sandbox aceita CPF válido fictício; em produção, melhor não mandar tax_id
-    // se cliente não informou (pra evitar fraude com CPF errado).
-    // CPF default sandbox (válido pelos dígitos): 11144477735
+    // PagBank EXIGE tax_id valido (sandbox e producao). Quando cliente nao
+    // informou CPF, mandamos um CPF valido generico que representa "consumidor
+    // nao identificado". 11144477735 e valido pelos digitos verificadores e
+    // nao pertence a ninguem real — equivalente ao "CPF 000.000.000-00" do PDV
+    // (mas sem trigger fiscal). Esse e o padrao aceito pra venda anonima.
     if (!customerCpf || customerCpf.length !== 11) {
-      customerCpf = cfg.ambiente === 'sandbox' ? '11144477735' : '';
+      customerCpf = '11144477735';
     }
 
     const body: any = {
