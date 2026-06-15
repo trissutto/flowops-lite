@@ -117,6 +117,14 @@ export default function WincredMirrorPage() {
             Espelho das 6 tabelas Wincred no Postgres. <b>Somente leitura</b> no Wincred.
           </p>
         </div>
+        <Link
+          href="/retaguarda/divergencias"
+          className="px-3 py-2 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 text-sm font-bold flex items-center gap-1"
+          title="Comparar Wincred vs Mirror"
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Divergencias
+        </Link>
         <button
           onClick={loadStatus}
           disabled={loading}

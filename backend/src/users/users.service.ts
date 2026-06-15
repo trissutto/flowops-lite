@@ -8,7 +8,10 @@ import {
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 
-const VALID_ROLES = ['admin', 'operator', 'store'] as const;
+// Roles validos. 'contador' = acesso restrito ao Relatorio Fiscal (NFC-e) — usado
+// pra dar visibilidade ao contador externo sem expor o resto do sistema.
+// 'supervisor' = pode ver relatorios fiscais mas nao mexe em config.
+const VALID_ROLES = ['admin', 'operator', 'store', 'supervisor', 'contador'] as const;
 type Role = (typeof VALID_ROLES)[number];
 
 export interface UserInput {

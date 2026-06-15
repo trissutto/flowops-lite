@@ -349,6 +349,377 @@ export class WincredMirrorService {
   }
 
   // ─────────────────────────────────────────────────────────────────────
+  //  SYNC INCREMENTAL — produtos por DATAALT, estoque por delta de produtos
+  //  Roda a cada 10min via cron. Custo: ~poucos segundos (so o que mudou).
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * Le ultimo run incremental de uma tabela.
+   * Retorna null se nunca rodou (forca primeira leitura ampla — 24h).
+   */
+  private async getSyncState(tabela: string): Promise<{ lastDataAlt: Date | null; lastRunAt: Date | null }> {
+    try {
+      const rows: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT last_data_alt AS "lastDataAlt", last_run_at AS "lastRunAt"
+           FROM wincred_sync_state WHERE tabela = $1 LIMIT 1`,
+        tabela,
+      );
+      const r = rows[0];
+      return {
+        lastDataAlt: r?.lastDataAlt ? new Date(r.lastDataAlt) : null,
+        lastRunAt: r?.lastRunAt ? new Date(r.lastRunAt) : null,
+      };
+    } catch {
+      return { lastDataAlt: null, lastRunAt: null };
+    }
+  }
+
+  /** Grava estado do sync — upsert. */
+  private async setSyncState(
+    tabela: string,
+    state: { lastDataAlt?: Date | null; rowCount: number; status: 'OK' | 'FAIL'; error?: string | null },
+  ): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO wincred_sync_state (tabela, last_run_at, last_data_alt, last_row_count, last_status, last_error)
+         VALUES ($1, NOW(), $2, $3, $4, $5)
+         ON CONFLICT (tabela) DO UPDATE SET
+           last_run_at = NOW(),
+           last_data_alt = COALESCE(EXCLUDED.last_data_alt, wincred_sync_state.last_data_alt),
+           last_row_count = EXCLUDED.last_row_count,
+           last_status = EXCLUDED.last_status,
+           last_error = EXCLUDED.last_error`,
+        tabela,
+        state.lastDataAlt ?? null,
+        state.rowCount,
+        state.status,
+        state.error ?? null,
+      );
+    } catch (e) {
+      this.logger.warn(`[sync-state] falha gravar ${tabela}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Sync incremental — pega produtos modificados desde ultimo run e
+   * re-sincroniza estoque APENAS desses produtos.
+   *
+   * Janela default: 24h se for primeiro run, senao desde lastDataAlt.
+   * Custo tipico: 50-500 linhas / 1-5s no Wincred.
+   */
+  async syncIncremental(): Promise<{ produtosAtualizados: number; estoqueAtualizado: number; durationMs: number; janelaInicio: Date }> {
+    const t0 = Date.now();
+    const pool: any = (this.erp as any).pool;
+    if (!pool) {
+      this.logger.warn('[incremental] MySQL pool nao inicializado');
+      return { produtosAtualizados: 0, estoqueAtualizado: 0, durationMs: 0, janelaInicio: new Date() };
+    }
+
+    // Determina janela: ultimo DATAALT ou 24h atras
+    const state = await this.getSyncState('produtos');
+    const janelaInicio = state.lastDataAlt || new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const isoDate = janelaInicio.toISOString().slice(0, 10);
+
+    this.logger.log(`[incremental] janela DATAALT >= ${isoDate}`);
+
+    // ── 1. Produtos modificados ──
+    let produtosAtualizados = 0;
+    let maxDataAlt: Date | null = null;
+    try {
+      const [rows] = await pool.query(
+        `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
+                CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
+                SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
+                CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
+                COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
+                CST, CSOSN, CFOP
+           FROM produtos
+          WHERE PLUS_SIZE IN (1, 2)
+            AND DATAALT IS NOT NULL
+            AND DATAALT >= ?
+          ORDER BY DATAALT`,
+        [isoDate],
+      );
+
+      const list = rows as any[];
+      this.logger.log(`[incremental] ${list.length} produtos modificados`);
+
+      const codigosModificados: string[] = [];
+      for (const r of list) {
+        const codigo = this.normalizeCodigo(r.CODIGO);
+        if (!codigo) continue;
+        codigosModificados.push(codigo);
+
+        const data = {
+          grupo: r.GRUPO != null ? Number(r.GRUPO) : null,
+          nomeGrupo: r.NOMEGRUPO || null,
+          descricaoPdv: r.DESCRICAOPDV || null,
+          descricaoCompleta: r.DESCRICAOCOMPLETA || null,
+          custo: r.CUSTO != null ? r.CUSTO : null,
+          vendaUn: r.VENDAUN != null ? r.VENDAUN : null,
+          fornecedor: r.FORNECEDOR || null,
+          unidade: r.UNIDADE || null,
+          estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
+          margem: r.MARGEM != null ? r.MARGEM : null,
+          dataAlt: r.DATAALT ? new Date(r.DATAALT) : null,
+          subgrupo: r.SUBGRUPO != null ? Number(r.SUBGRUPO) : null,
+          cor: r.COR || null,
+          tamanho: r.TAMANHO || null,
+          marca: r.MARCA || null,
+          ref: r.REF || null,
+          codFornecedor: r.CODFORNECEDOR != null ? Number(r.CODFORNECEDOR) : null,
+          operador: r.OPERADOR || null,
+          confPreco: r.CONFPRECO || null,
+          tributo: r.TRIBUTO || null,
+          ncm: r.NCM || null,
+          plusSize: r.PLUS_SIZE != null ? Number(r.PLUS_SIZE) : null,
+          idWincred: r.ID != null ? BigInt(r.ID) : null,
+          categorias: r.CATEGORIAS || null,
+          codPis: r.COD_PIS || null,
+          aliqPis: r.ALIQ_PIS != null ? r.ALIQ_PIS : null,
+          codCofins: r.COD_COFINS || null,
+          aliqCofins: r.ALIQ_COFINS != null ? r.ALIQ_COFINS : null,
+          aliqIcms: r.ALIQ_ICMS != null ? r.ALIQ_ICMS : null,
+          cst: r.CST || null,
+          csosn: r.CSOSN || null,
+          cfop: r.CFOP != null ? Number(r.CFOP) : null,
+        };
+
+        try {
+          await (this.prisma as any).wincredProduto.upsert({
+            where: { codigo },
+            create: { codigo, ...data },
+            update: data,
+          });
+          produtosAtualizados++;
+        } catch (e) {
+          this.logger.warn(`[incremental] upsert produto ${codigo}: ${(e as Error).message}`);
+        }
+
+        if (r.DATAALT) {
+          const d = new Date(r.DATAALT);
+          if (!maxDataAlt || d > maxDataAlt) maxDataAlt = d;
+        }
+      }
+
+      // ── 2. Estoque dos produtos modificados (somente eles) ──
+      let estoqueAtualizado = 0;
+      if (codigosModificados.length > 0) {
+        // Wincred guarda CODIGO em estoque com formato variavel (padding zeros, etc).
+        // Vamos buscar pelos codigos normalizados — convertemos cada para varias formas.
+        // Mais simples: SELECT estoque WHERE codigo numerico IN (lista numerica).
+        // Como nao da pra fazer cast em WHERE com MySQL eficiente, fazemos batch IN
+        // com varias representacoes (sem padding + raw).
+        // Estrategia pragmatica: SELECT WHERE CODIGO IN (?,?,?...) tentando varias formas.
+
+        // Forma 1: codigo puro
+        const codigosLote = [...new Set(codigosModificados)];
+        // Chunks de 500 (placeholder limit MySQL)
+        for (let i = 0; i < codigosLote.length; i += 500) {
+          const chunk = codigosLote.slice(i, i + 500);
+          // Inclui ambas as formas: '5387373' e '0005387373' (padding 10)
+          const variants: string[] = [];
+          for (const c of chunk) {
+            variants.push(c);                       // forma normalizada
+            variants.push(c.padStart(10, '0'));     // padding 10 (formato wincred comum)
+            variants.push(c.padStart(14, '0'));     // padding 14 (varchar max)
+          }
+          const placeholders = variants.map(() => '?').join(',');
+          const [estRows] = await pool.query(
+            `SELECT CODIGO, ESTOQUE, LOJA FROM estoque WHERE CODIGO IN (${placeholders})`,
+            variants,
+          );
+
+          // Deleta estoque desses codigos no Postgres, re-insere
+          await this.prisma.$executeRawUnsafe(
+            `DELETE FROM wincred_estoque WHERE codigo = ANY($1::text[])`,
+            chunk,
+          );
+
+          const seen = new Set<string>();
+          const dataEst = (estRows as any[])
+            .filter((r) => {
+              const c = this.normalizeCodigo(r.CODIGO);
+              const l = String(r.LOJA || '').trim();
+              if (!c || !l) return false;
+              const k = `${c}|${l}`;
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            })
+            .map((r) => ({
+              codigo: this.normalizeCodigo(r.CODIGO)!,
+              loja: String(r.LOJA).trim(),
+              estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
+            }));
+
+          if (dataEst.length) {
+            await (this.prisma as any).wincredEstoque.createMany({
+              data: dataEst,
+              skipDuplicates: true,
+            });
+            estoqueAtualizado += dataEst.length;
+          }
+        }
+      }
+
+      await this.setSyncState('produtos', {
+        lastDataAlt: maxDataAlt,
+        rowCount: produtosAtualizados,
+        status: 'OK',
+      });
+      await this.setSyncState('estoque', {
+        lastDataAlt: maxDataAlt,
+        rowCount: estoqueAtualizado,
+        status: 'OK',
+      });
+
+      const durationMs = Date.now() - t0;
+      this.logger.log(
+        `[incremental] OK — ${produtosAtualizados} produtos, ${estoqueAtualizado} estoque, ${durationMs}ms`,
+      );
+      return { produtosAtualizados, estoqueAtualizado, durationMs, janelaInicio };
+    } catch (e) {
+      const msg = (e as Error).message;
+      this.logger.error(`[incremental] FALHOU: ${msg}`);
+      await this.setSyncState('produtos', {
+        rowCount: produtosAtualizados,
+        status: 'FAIL',
+        error: msg.slice(0, 500),
+      });
+      throw e;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  //  DIVERGENCIAS — compara Wincred vs Mirror (#201)
+  // ─────────────────────────────────────────────────────────────────────
+
+  async getDivergencias(): Promise<{
+    totaisProdutos: { wincred: number; mirror: number; diff: number };
+    totaisEstoque: { wincred: number; mirror: number; diff: number };
+    syncState: Array<{ tabela: string; lastRunAt: Date | null; lastDataAlt: Date | null; lastStatus: string | null; lastRowCount: number | null; ageMin: number | null }>;
+    sampleDiffEstoque: Array<{ codigo: string; loja: string; wincred: number; mirror: number; diff: number }>;
+  }> {
+    // Totais
+    const totalProdMy = await this.countMysql('produtos');
+    const totalEstMy = await this.countMysql('estoque');
+
+    let totalProdPg = 0;
+    let totalEstPg = 0;
+    try {
+      const a: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS c FROM wincred_produtos`);
+      totalProdPg = Number(a[0]?.c || 0);
+    } catch {}
+    try {
+      const a: any[] = await this.prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS c FROM wincred_estoque`);
+      totalEstPg = Number(a[0]?.c || 0);
+    } catch {}
+
+    // Sync state
+    let syncStateRows: any[] = [];
+    try {
+      syncStateRows = await this.prisma.$queryRawUnsafe(
+        `SELECT tabela, last_run_at AS "lastRunAt", last_data_alt AS "lastDataAlt",
+                last_status AS "lastStatus", last_row_count AS "lastRowCount"
+           FROM wincred_sync_state ORDER BY tabela`,
+      );
+    } catch {}
+
+    const syncState = syncStateRows.map((r) => {
+      const lastRunAt = r.lastRunAt ? new Date(r.lastRunAt) : null;
+      const ageMin = lastRunAt ? Math.floor((Date.now() - lastRunAt.getTime()) / 60000) : null;
+      return {
+        tabela: r.tabela,
+        lastRunAt,
+        lastDataAlt: r.lastDataAlt ? new Date(r.lastDataAlt) : null,
+        lastStatus: r.lastStatus,
+        lastRowCount: r.lastRowCount,
+        ageMin,
+      };
+    });
+
+    // Sample diff estoque — pega 30 produtos PLUS_SIZE com DATAALT recente e
+    // compara estoque Wincred vs Mirror.
+    let sampleDiffEstoque: Array<{ codigo: string; loja: string; wincred: number; mirror: number; diff: number }> = [];
+    const pool: any = (this.erp as any).pool;
+    if (pool) {
+      try {
+        const [topProds] = await pool.query(
+          `SELECT CODIGO FROM produtos
+            WHERE PLUS_SIZE IN (1, 2)
+              AND CODIGO IS NOT NULL
+            ORDER BY DATAALT DESC
+            LIMIT 30`,
+        );
+        const codigosNorm: string[] = (topProds as any[])
+          .map((r) => this.normalizeCodigo(r.CODIGO))
+          .filter((c): c is string => !!c);
+
+        if (codigosNorm.length > 0) {
+          const variants: string[] = [];
+          for (const c of codigosNorm) {
+            variants.push(c);
+            variants.push(c.padStart(10, '0'));
+            variants.push(c.padStart(14, '0'));
+          }
+          const placeholders = variants.map(() => '?').join(',');
+          const [estMy] = await pool.query(
+            `SELECT CODIGO, LOJA, ESTOQUE FROM estoque WHERE CODIGO IN (${placeholders})`,
+            variants,
+          );
+          const wincredMap = new Map<string, number>();
+          for (const r of estMy as any[]) {
+            const c = this.normalizeCodigo(r.CODIGO);
+            const l = String(r.LOJA || '').trim();
+            if (!c || !l) continue;
+            wincredMap.set(`${c}|${l}`, Number(r.ESTOQUE) || 0);
+          }
+
+          const estPg: any[] = await this.prisma.$queryRawUnsafe(
+            `SELECT codigo, loja, estoque FROM wincred_estoque WHERE codigo = ANY($1::text[])`,
+            codigosNorm,
+          );
+          const mirrorMap = new Map<string, number>();
+          for (const r of estPg) {
+            const c = String(r.codigo).trim();
+            const l = String(r.loja).trim();
+            mirrorMap.set(`${c}|${l}`, Number(r.estoque) || 0);
+          }
+
+          const allKeys = new Set([...wincredMap.keys(), ...mirrorMap.keys()]);
+          for (const k of allKeys) {
+            const w = wincredMap.get(k) || 0;
+            const m = mirrorMap.get(k) || 0;
+            if (w !== m) {
+              const [codigo, loja] = k.split('|');
+              sampleDiffEstoque.push({ codigo, loja, wincred: w, mirror: m, diff: w - m });
+            }
+            if (sampleDiffEstoque.length >= 50) break;
+          }
+        }
+      } catch (e) {
+        this.logger.warn(`[divergencias] sample estoque: ${(e as Error).message}`);
+      }
+    }
+
+    return {
+      totaisProdutos: {
+        wincred: totalProdMy,
+        mirror: totalProdPg,
+        diff: totalProdMy - totalProdPg,
+      },
+      totaisEstoque: {
+        wincred: totalEstMy,
+        mirror: totalEstPg,
+        diff: totalEstMy - totalEstPg,
+      },
+      syncState,
+      sampleDiffEstoque,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
   //  SYNC GRUPOS / SUBGRUPOS / FORNECEDORES / CODIGOS (tabelas pequenas)
   // ─────────────────────────────────────────────────────────────────────
 

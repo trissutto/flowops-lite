@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Plus, Pencil, Trash2, Users as UsersIcon, X, KeyRound } from 'lucide-react';
 
-type Role = 'admin' | 'operator' | 'store';
+type Role = 'admin' | 'operator' | 'store' | 'supervisor' | 'contador';
 
 interface Store {
   id: string;
@@ -46,12 +46,16 @@ const ROLE_LABELS: Record<Role, string> = {
   admin: 'Administrador',
   operator: 'Operador',
   store: 'Loja',
+  supervisor: 'Supervisor',
+  contador: 'Contador',
 };
 
 const ROLE_COLORS: Record<Role, string> = {
   admin: 'bg-red-100 text-red-700',
   operator: 'bg-blue-100 text-blue-700',
   store: 'bg-green-100 text-green-700',
+  supervisor: 'bg-amber-100 text-amber-700',
+  contador: 'bg-violet-100 text-violet-700',
 };
 
 export default function UsuariosPage() {
@@ -318,6 +322,7 @@ export default function UsuariosPage() {
                   <option value="admin">Administrador — vê tudo, gerencia usuários</option>
                   <option value="operator">Operador — operação geral</option>
                   <option value="store">Loja — acesso restrito à loja vinculada</option>
+                  <option value="supervisor">Supervisor — ve fiscal + operacional (sem config)</option>
                   <option value="contador">Contador — só relatório fiscal (notas + XMLs)</option>
                 </select>
               </div>

@@ -6,6 +6,7 @@ import NewOrderAlert from '@/components/NewOrderAlert';
 import PwaInstallBanner from '@/components/PwaInstallBanner';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import PushSubscriptionManager from '@/components/PushSubscriptionManager';
+import ContadorGuard from '@/components/ContadorGuard';
 
 // Cormorant Garamond — serif fina e sofisticada (300/400 disponíveis).
 // Trocamos Playfair porque ela pedia peso maior pra ficar legível; Cormorant
@@ -73,6 +74,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pt-BR" className={`${display.variable} ${inter.variable}`}>
       <body className="font-sans">
+        <ContadorGuard />
         <TopBreadcrumb />
         {children}
         <NewOrderAlert />

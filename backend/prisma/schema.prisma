@@ -2858,3 +2858,18 @@ model WincredCodigo {
 
   @@map("wincred_codigos")
 }
+
+/// Estado do sync incremental. 1 linha por tabela.
+/// Cron incremental usa lastDataAlt pra pegar so produtos modificados desde
+/// o ultimo run (WHERE DATAALT > lastDataAlt). Estoque nao tem DATAALT — re-syncamos
+/// estoque apenas dos produtos modificados (delta menor).
+model WincredSyncState {
+  tabela        String   @id @db.VarChar(30)
+  lastRunAt     DateTime @default(now()) @map("last_run_at")
+  lastDataAlt   DateTime? @map("last_data_alt") @db.Date
+  lastRowCount  Int?     @map("last_row_count")
+  lastStatus    String?  @db.VarChar(20)
+  lastError     String?  @db.Text
+
+  @@map("wincred_sync_state")
+}

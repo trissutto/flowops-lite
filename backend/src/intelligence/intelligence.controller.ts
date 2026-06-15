@@ -180,8 +180,13 @@ export class IntelligenceController {
       minTotal: minTotal ? Number(minTotal) : 2,
       limit: limit ? Number(limit) : 1500,
     };
-    // BRANCH: ?source=mirror => le do Postgres (Wincred mirror)
-    if (source === 'mirror') {
+    // BRANCH:
+    //  - ?source=mirror => forca Postgres
+    //  - ?source=giga   => forca MySQL Wincred
+    //  - sem param      => respeita flag USE_LOCAL_CATALOG (default Giga)
+    const useLocalDefault = String(process.env.USE_LOCAL_CATALOG || '').trim() === '1';
+    const wantsMirror = source === 'mirror' || (!source && useLocalDefault);
+    if (wantsMirror && source !== 'giga') {
       return this.mirror.getStockDistribution(filters);
     }
     return this.erp.getStockDistribution(filters);

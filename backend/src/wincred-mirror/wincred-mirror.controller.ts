@@ -78,6 +78,41 @@ export class WincredMirrorController {
   }
 
   /**
+   * POST /admin/wincred-mirror/sync/incremental
+   * Sync incremental — apenas produtos modificados (DATAALT) e seu estoque.
+   * Custo tipico: 1-5s. Roda automaticamente via cron a cada 10min.
+   */
+  @Post('sync/incremental')
+  syncIncremental(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.mirror.syncIncremental();
+  }
+
+  /**
+   * GET /admin/wincred-mirror/divergencias
+   * Compara totais Wincred vs Mirror + sample de produtos com estoque divergente.
+   */
+  @Get('divergencias')
+  divergencias(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.mirror.getDivergencias();
+  }
+
+  /**
+   * GET /admin/wincred-mirror/config
+   * Retorna estado das flags WINCRED_MIRROR_CRON_ENABLED + USE_LOCAL_CATALOG
+   */
+  @Get('config')
+  config(@Req() req: any) {
+    this.requireAdmin(req);
+    return {
+      cronEnabled: String(process.env.WINCRED_MIRROR_CRON_ENABLED || '').trim() === '1',
+      useLocalCatalog: String(process.env.USE_LOCAL_CATALOG || '').trim() === '1',
+      cronSchedule: 'incremental: */10 * * * * | full: 0 3 * * *',
+    };
+  }
+
+  /**
    * GET /admin/wincred-mirror/peek?ref=VLM-222
    * Debug: retorna produtos do Postgres com REF dado. Util pra verificar
    * se sync pegou o produto e como ficou (TAMANHO com espaco, etc).
