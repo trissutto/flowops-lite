@@ -128,8 +128,8 @@ export class CutoverService {
 
     // ── Sample de vendas que existem em um e nao em outro ──
     // (Match por numero da venda no Wincred vs flowopsId)
-    const soInWincred: any[] = [];
-    const soInFlowops: any[] = [];
+    const soInWincred: Array<{ id: string; storeCode: string; valor: number; finalizedAt: string }> = [];
+    const soInFlowops: Array<{ id: string; storeCode: string; valor: number; finalizedAt: string }> = [];
 
     // Simplificação: apenas mostra warning se diff > 0
     // (full reconciliation por linha individual é heavy — fica pra fase 2)
@@ -169,7 +169,13 @@ export class CutoverService {
       diffPercent: number;
     }>
   > {
-    const results = [];
+    const results: Array<{
+      date: string;
+      wincredTotal: number;
+      flowopsTotal: number;
+      diff: number;
+      diffPercent: number;
+    }> = [];
     for (let i = 0; i < days; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
@@ -178,7 +184,10 @@ export class CutoverService {
         const r = await this.compareDay(dateStr);
         results.push({
           date: dateStr,
-          ...r.summary,
+          wincredTotal: r.summary.wincredTotal,
+          flowopsTotal: r.summary.flowopsTotal,
+          diff: r.summary.diff,
+          diffPercent: r.summary.diffPercent,
         });
       } catch (e) {
         this.logger.warn(`[cutover] history ${dateStr} falhou: ${(e as Error).message}`);
