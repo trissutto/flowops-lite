@@ -15,25 +15,25 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CommissionsService } from './commissions.service';
 
 /**
- * Endpoints de Comissão — F4 da migração 30/06.
+ * Endpoints de Comissão - F4 da migração 30/06.
  *
  * Rotas admin:
- *   GET  /commissions/rules                    — lista regras
- *   POST /commissions/rules                    — cria regra
- *   PUT  /commissions/rules/:id                — atualiza regra
- *   POST /commissions/rules/:id/deactivate     — desativa regra (não deleta — preserva histórico)
- *   GET  /commissions/periods                  — lista períodos
- *   GET  /commissions/periods/:yearMonth       — detalhe + entries
- *   POST /commissions/periods/:yearMonth/calculate — força recálculo
- *   POST /commissions/periods/:yearMonth/close — fecha período (não recalcula mais)
- *   POST /commissions/periods/:yearMonth/pay   — marca como pago
- *   GET  /commissions/periods/:yearMonth/report — relatório agregado por loja
+ *   GET  /commissions/rules                    - lista regras
+ *   POST /commissions/rules                    - cria regra
+ *   PUT  /commissions/rules/:id                - atualiza regra
+ *   POST /commissions/rules/:id/deactivate     - desativa regra (não deleta - preserva histórico)
+ *   GET  /commissions/periods                  - lista períodos
+ *   GET  /commissions/periods/:yearMonth       - detalhe + entries
+ *   POST /commissions/periods/:yearMonth/calculate - força recálculo
+ *   POST /commissions/periods/:yearMonth/close - fecha período (não recalcula mais)
+ *   POST /commissions/periods/:yearMonth/pay   - marca como pago
+ *   GET  /commissions/periods/:yearMonth/report - relatório agregado por loja
  *
  * Rotas vendedora:
- *   GET  /commissions/my                       — vendedora vê só dela
+ *   GET  /commissions/my                       - vendedora vê só dela
  *
  * Rotas mistas:
- *   GET  /commissions/by-seller/:sellerId      — admin vê de uma vendedora específica
+ *   GET  /commissions/by-seller/:sellerId      - admin vê de uma vendedora específica
  */
 @Controller('commissions')
 @UseGuards(JwtAuthGuard)
@@ -116,8 +116,8 @@ export class CommissionsController {
 
   /**
    * POST /commissions/rules/seed-defaults
-   * Cria as 5 regras padrão Lurd's (cargos VENDEDORA/LIDER_*/GERENTE_*).
-   * Idempotente — pula cargos que já têm regra ativa.
+   * Cria as 5 regras padrão Lurds (cargos VENDEDORA/LIDER_X/GERENTE_X).
+   * Idempotente - pula cargos que já têm regra ativa.
    */
   @Post('rules/seed-defaults')
   seedDefaults(@Req() req: any) {
