@@ -44,6 +44,7 @@ export default function CargosPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
+  const [filterStore, setFilterStore] = useState<string>('');  // '' = todas
 
   async function importFromPdv() {
     if (!confirm('Importar TODAS funcionárias do Wincred (15 lojas)?\n\n• Cria as que ainda não existem como VENDEDORA\n• Vincula código do Wincred\n• Pula as já importadas\n\nDepois você ajusta cargo e loja responsável.')) return;
@@ -123,9 +124,25 @@ export default function CargosPage() {
     }
   }
 
-  const filtered = search
-    ? sellers.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
-    : sellers;
+  const filtered = sellers.filter((s) => {
+    if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false;
+    if (filterStore) {
+      // Filtra por storeCodeOrigin OU responsibleStoreId
+      const origMatch = s.storeCodeOrigin === filterStore;
+      const respStore = stores.find((st) => st.id === s.responsibleStoreId);
+      const respMatch = respStore?.code === filterStore;
+      if (!origMatch && !respMatch) return false;
+    }
+    return true;
+  });
+
+  // Conta por loja pra mostrar no select
+  const countByStore = new Map<string, number>();
+  for (const s of sellers) {
+    if (s.storeCodeOrigin) {
+      countByStore.set(s.storeCodeOrigin, (countByStore.get(s.storeCodeOrigin) || 0) + 1);
+    }
+  }
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5">
@@ -154,16 +171,45 @@ export default function CargosPage() {
         </button>
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar vendedora..."
-          className="w-full pl-9 pr-3 py-2 border rounded-lg"
-        />
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar vendedora..."
+            className="w-full pl-9 pr-3 py-2 border rounded-lg"
+          />
+        </div>
+        <select
+          value={filterStore}
+          onChange={(e) => setFilterStore(e.target.value)}
+          className="px-3 py-2 border rounded-lg bg-white font-bold text-sm min-w-[200px]"
+        >
+          <option value="">Todas as lojas ({sellers.length})</option>
+          {stores.map((st) => {
+            const count = countByStore.get(st.code) || 0;
+            return (
+              <option key={st.id} value={st.code}>
+                {st.code} {st.name} ({count})
+              </option>
+            );
+          })}
+        </select>
+        {filterStore && (
+          <button
+            onClick={() => setFilterStore('')}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm"
+          >
+            Limpar
+          </button>
+        )}
       </div>
+      <p className="text-xs text-slate-500">
+        Mostrando <b>{filtered.length}</b> de {sellers.length} vendedoras
+        {filterStore && ` · loja ${filterStore}`}
+      </p>
 
       {loading ? (
         <Loader2 className="w-6 h-6 animate-spin mx-auto" />
