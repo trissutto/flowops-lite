@@ -38,6 +38,23 @@ export class WincredMirrorService {
   }
 
   /**
+   * Normaliza CODIGO do Wincred pra forma numerica padronizada.
+   * '5387373' -> '5387373'
+   * '0005387373' -> '5387373'
+   * '5387373 ' -> '5387373'
+   * '0' / '' / null -> null
+   * 'ABC123' -> null (nao numerico)
+   */
+  private normalizeCodigo(raw: any): string | null {
+    if (raw == null) return null;
+    const s = String(raw).replace(/\D/g, '');
+    if (!s) return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return String(n);
+  }
+
+  /**
    * Retry generico em caso de conexao fechada (Railway derruba pool em syncs longos).
    * Backoff exponencial: 200ms, 600ms, 1.5s, 4s, 10s.
    */
@@ -195,13 +212,13 @@ export class WincredMirrorService {
         const seen = new Set<string>();
         const data = (rows as any[])
           .filter((r) => {
-            const c = String(r.CODIGO || '').trim();
+            const c = this.normalizeCodigo(r.CODIGO);
             if (!c || seen.has(c)) return false;
             seen.add(c);
             return true;
           })
           .map((r) => ({
-            codigo: String(r.CODIGO).trim(),
+            codigo: this.normalizeCodigo(r.CODIGO)!,
             grupo: r.GRUPO != null ? Number(r.GRUPO) : null,
             nomeGrupo: r.NOMEGRUPO || null,
             descricaoPdv: r.DESCRICAOPDV || null,
@@ -291,7 +308,7 @@ export class WincredMirrorService {
         const seen = new Set<string>();
         const data = (rows as any[])
           .filter((r) => {
-            const c = String(r.CODIGO || '').trim();
+            const c = this.normalizeCodigo(r.CODIGO);
             const l = String(r.LOJA || '').trim();
             if (!c || !l) return false;
             const k = `${c}|${l}`;
@@ -300,7 +317,7 @@ export class WincredMirrorService {
             return true;
           })
           .map((r) => ({
-            codigo: String(r.CODIGO).trim(),
+            codigo: this.normalizeCodigo(r.CODIGO)!,
             loja: String(r.LOJA).trim(),
             estoque: r.ESTOQUE != null ? Number(r.ESTOQUE) : null,
           }));
@@ -526,9 +543,7 @@ export class WincredMirrorService {
           '{}'::json
         ) AS estoque_obj
       FROM wincred_produtos p
-      LEFT JOIN wincred_estoque e 
-        ON NULLIF(REGEXP_REPLACE(e.codigo, '\\D', '', 'g'), '')::bigint
-         = NULLIF(REGEXP_REPLACE(p.codigo, '\\D', '', 'g'), '')::bigint
+      LEFT JOIN wincred_estoque e ON e.codigo = p.codigo
       WHERE ${conds.join(' AND ')}
       GROUP BY p.codigo, p.ref, p.cor, p.tamanho, p."descricaoCompleta", p."vendaUn"
       ORDER BY p.ref, p.cor, p.tamanho
