@@ -112,8 +112,42 @@ export default function HorarioGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(value)]);
 
+  /**
+   * Update inteligente.
+   *
+   * Quando o usuario edita SEG (idx=0), propaga os campos alterados pros
+   * outros dias QUE AINDA ESTAO IGUAIS ao SEG antigo no campo correspondente
+   * (ou seja, dias "limpos" / nao customizados). Se TER ja teve um campo
+   * customizado, esse campo NAO e mais sobrescrito por SEG. Demais campos
+   * de TER continuam acompanhando SEG enquanto estiverem iguais.
+   *
+   * Folga nunca propaga — folga e individual por dia.
+   * Dias marcados como folga nao recebem propagacao de SEG.
+   */
   function update(idx: number, patch: Partial<Turno>) {
     const next = turnos.map((t, i) => (i === idx ? { ...t, ...patch } : t));
+
+    if (idx === 0) {
+      const patchKeys = Object.keys(patch).filter((k) => k !== 'dia');
+      const isFolgaOnly =
+        patchKeys.length === 1 && patchKeys[0] === 'folga';
+
+      if (!isFolgaOnly) {
+        const oldSeg = turnos[0];
+        for (let i = 1; i < next.length; i++) {
+          if (next[i].folga) continue;
+          for (const k of patchKeys) {
+            if (k === 'folga') continue;
+            const wasPristineForKey =
+              (turnos[i] as any)[k] === (oldSeg as any)[k];
+            if (wasPristineForKey) {
+              (next[i] as any)[k] = (patch as any)[k];
+            }
+          }
+        }
+      }
+    }
+
     setTurnos(next);
     onChange(next);
   }
@@ -148,7 +182,8 @@ export default function HorarioGrid({
     <div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <p className="text-xs text-slate-500">
-          Marque os dias de folga. Almoço entra no cálculo da carga horária.
+          Edite <b className="text-emerald-700">Segunda</b> — os outros dias
+          copiam automaticamente. Dias customizados ficam livres.
         </p>
         <button
           type="button"
@@ -162,19 +197,30 @@ export default function HorarioGrid({
       <div className="space-y-1.5">
         {turnos.map((t, idx) => {
           const dia = DIAS.find((d) => d.key === t.dia);
+          const isSeg = idx === 0;
           return (
             <div
               key={t.dia}
               className={`p-2.5 rounded border ${
                 t.folga
                   ? 'bg-slate-50 border-slate-200'
-                  : 'bg-white border-slate-200'
+                  : isSeg
+                    ? 'bg-emerald-50/40 border-emerald-300'
+                    : 'bg-white border-slate-200'
               }`}
             >
               {/* Linha 1: dia + folga + horas calculadas */}
               <div className="flex items-center gap-2 mb-2">
-                <div className="font-bold text-sm text-slate-700 w-20">
+                <div className="font-bold text-sm text-slate-700 w-20 flex items-center gap-1">
                   {dia?.label}
+                  {isSeg && (
+                    <span
+                      title="Edita aqui — os outros dias copiam"
+                      className="text-[9px] font-bold uppercase bg-emerald-600 text-white px-1 py-0.5 rounded"
+                    >
+                      Molde
+                    </span>
+                  )}
                 </div>
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
                   <input
