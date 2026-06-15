@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Loader2, Search } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Search, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
@@ -31,6 +31,8 @@ type Seller = {
   active: boolean;
   cargo?: Cargo | string;
   responsibleStoreId?: string | null;
+  wincredCodigo?: string | null;
+  storeCodeOrigin?: string | null;
 };
 
 type Store = { id: string; code: string; name: string; active: boolean };
@@ -41,6 +43,29 @@ export default function CargosPage() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  async function importFromPdv() {
+    if (!confirm('Importar todas funcionárias cadastradas no PDV das lojas?\n\n• Cria as que ainda não existem como VENDEDORA\n• Vincula código do Wincred\n• Pula as já importadas\n\nDepois você ajusta cargo e loja responsável.')) return;
+    setImporting(true);
+    try {
+      const r = await api<{ created: number; skipped: number; total: number }>(
+        '/sellers/import-from-pdv-active',
+        { method: 'POST' },
+      );
+      alert(
+        `Importação concluída!\n\n` +
+          `✅ Criadas: ${r.created}\n` +
+          `⏭️ Já existentes: ${r.skipped}\n` +
+          `📊 Total processadas: ${r.total}`,
+      );
+      load();
+    } catch (e: any) {
+      alert('Erro: ' + (e?.message || e));
+    } finally {
+      setImporting(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -112,12 +137,21 @@ export default function CargosPage() {
         >
           <ArrowLeft className="w-5 h-5" />
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-slate-900">Cargos das Vendedoras</h1>
           <p className="text-sm text-slate-500">
             Define cargo + loja que cada uma responde. Líder/Gerente ganham % sobre a loja toda.
           </p>
         </div>
+        <button
+          onClick={importFromPdv}
+          disabled={importing}
+          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-lg flex items-center gap-2"
+          title="Importa funcionárias cadastradas no PDV das lojas pra cá"
+        >
+          {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          Importar das lojas
+        </button>
       </div>
 
       <div className="relative">
@@ -150,7 +184,19 @@ export default function CargosPage() {
                 const isResp = cargo !== 'VENDEDORA';
                 return (
                   <tr key={s.id} className="border-t border-slate-100">
-                    <td className="px-3 py-2 font-bold">{s.name}</td>
+                    <td className="px-3 py-2 font-bold">
+                      {s.name}
+                      {s.storeCodeOrigin && (
+                        <span className="ml-2 text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">
+                          {s.storeCodeOrigin}
+                        </span>
+                      )}
+                      {s.wincredCodigo && (
+                        <span className="ml-1 text-[10px] text-slate-400 font-mono">
+                          #{s.wincredCodigo}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <select
                         value={cargo}

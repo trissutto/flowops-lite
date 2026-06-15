@@ -24,6 +24,96 @@ export class SellersService {
     });
   }
 
+  /**
+   * Importa funcionarias de PdvActiveSeller (whitelist do PDV das lojas) pra
+   * Seller. Cria Sellers que ainda nao existem (match por wincredCodigo).
+   * Idempotente: pula quem ja foi importada.
+   *
+   * Resultado: cria Seller com cargo=VENDEDORA por default. Admin depois
+   * ajusta cargo + loja responsavel pra Lideres/Gerentes.
+   */
+  async importFromPdvActive(): Promise<{
+    created: number;
+    skipped: number;
+    total: number;
+    sample: Array<{ name: string; wincredCodigo: string; storeCode: string }>;
+  }> {
+    const actives: any[] = await (this.prisma as any).pdvActiveSeller.findMany({
+      orderBy: [{ storeCode: 'asc' }, { nome: 'asc' }],
+    });
+    if (!actives.length) {
+      return { created: 0, skipped: 0, total: 0, sample: [] };
+    }
+
+    // Sellers existentes — index por wincredCodigo pra dedup
+    const existing: any[] = await (this.prisma as any).seller.findMany({
+      where: { wincredCodigo: { not: null } },
+      select: { wincredCodigo: true, name: true },
+    });
+    const existingCodes = new Set(existing.map((s) => String(s.wincredCodigo)));
+
+    let created = 0;
+    let skipped = 0;
+    const sample: Array<{ name: string; wincredCodigo: string; storeCode: string }> = [];
+
+    for (const a of actives) {
+      const codigo = String(a.codigo || '').trim();
+      const nome = String(a.nome || '').trim();
+      if (!codigo || !nome) {
+        skipped++;
+        continue;
+      }
+      if (existingCodes.has(codigo)) {
+        skipped++;
+        continue;
+      }
+      // Normaliza nome (Title Case)
+      const normalizedName = nome
+        .toLowerCase()
+        .split(/\s+/)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+      try {
+        await (this.prisma as any).seller.create({
+          data: {
+            name: normalizedName,
+            wincredCodigo: codigo,
+            storeCodeOrigin: a.storeCode,
+            cargo: 'VENDEDORA',
+            active: true,
+          },
+        });
+        existingCodes.add(codigo);
+        created++;
+        if (sample.length < 10) {
+          sample.push({ name: normalizedName, wincredCodigo: codigo, storeCode: a.storeCode });
+        }
+      } catch (e: any) {
+        // Nome ja existe sem wincredCodigo? (caso Karine cadastrada manual e tambem
+        // existir no PdvActiveSeller). Tenta UPDATE pra linkar o codigo.
+        if (e?.code === 'P2002') {
+          try {
+            await (this.prisma as any).seller.update({
+              where: { name: normalizedName },
+              data: { wincredCodigo: codigo, storeCodeOrigin: a.storeCode },
+            });
+            existingCodes.add(codigo);
+            created++;
+          } catch {
+            skipped++;
+          }
+        } else {
+          skipped++;
+        }
+      }
+    }
+
+    this.logger.log(
+      `[sellers] import PdvActive: criados=${created}, pulados=${skipped}, total=${actives.length}`,
+    );
+    return { created, skipped, total: actives.length, sample };
+  }
+
   async create(input: { name: string; whatsapp?: string }) {
     const name = (input.name || '').trim();
     if (!name) throw new BadRequestException('Nome é obrigatório.');

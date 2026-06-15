@@ -355,6 +355,13 @@ model Seller {
   // quer que ela venda — pode rodar em mais de uma loja).
   responsibleStoreId String? @map("responsible_store_id")
 
+  // Codigo da funcionaria no Wincred (importada via PdvActiveSeller).
+  // Usado pra rastrear vendas PDV físicas (codigo bipado vira sellerId).
+  // Null pra Sellers criados manualmente (Karine, Manu — só atribuem WC).
+  wincredCodigo      String? @map("wincred_codigo")
+  // Loja onde foi originalmente importada (pra agrupamento). Pode mudar.
+  storeCodeOrigin    String? @map("store_code_origin")
+
   orders Order[]
   commissionRules    CommissionRule[]
   commissionEntries  CommissionEntry[]

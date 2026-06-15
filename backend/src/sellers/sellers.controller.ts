@@ -28,11 +28,22 @@ export class SellersController {
     return this.svc.create(body);
   }
 
+  /**
+   * Importa funcionarias do PdvActiveSeller (whitelist do PDV das lojas)
+   * pra Seller. Idempotente. Resultado: cria como cargo=VENDEDORA;
+   * admin ajusta cargo + loja responsavel depois pra Lideres/Gerentes.
+   */
+  @Post('import-from-pdv-active')
+  @AdminOnly()
+  importFromPdvActive() {
+    return this.svc.importFromPdvActive();
+  }
+
   @Patch(':id')
   @AdminOnly()
   update(
     @Param('id') id: string,
-    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean },
+    @Body() body: { name?: string; whatsapp?: string | null; active?: boolean; cargo?: string; responsibleStoreId?: string | null },
   ) {
     return this.svc.update(id, body);
   }
