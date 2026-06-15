@@ -114,6 +114,17 @@ export class CommissionsController {
     return this.svc.deactivateRule(id);
   }
 
+  /**
+   * POST /commissions/rules/seed-defaults
+   * Cria as 5 regras padrão Lurd's (cargos VENDEDORA/LIDER_*/GERENTE_*).
+   * Idempotente — pula cargos que já têm regra ativa.
+   */
+  @Post('rules/seed-defaults')
+  seedDefaults(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.seedDefaultCargoRules(req?.user?.userId || req?.user?.sub);
+  }
+
   // ── Periods ────────────────────────────────────────────────────────
 
   @Get('periods')

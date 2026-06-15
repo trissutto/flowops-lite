@@ -131,6 +131,7 @@ model Store {
   orderItems     OrderItem[]
   supplyRequests SupplyRequest[]
   commissionRules CommissionRule[]
+  responsibleSellers Seller[] @relation("StoreResponsibleSellers")
 
   // ── CRM / Cashback (expansão 2026-05) ──
   customersOrigin       Customer[]            @relation("CustomerOriginStore")
@@ -341,11 +342,27 @@ model Seller {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // Cargo determina a regra de comissão:
+  //   VENDEDORA  → % sobre vendas próprias
+  //   LIDER_B    → 0,5% sobre TODA a loja que responde
+  //   LIDER_A    → 1,0% sobre TODA a loja que responde
+  //   GERENTE_B  → 1,5% sobre TODA a loja que responde
+  //   GERENTE_A  → 2,0% sobre TODA a loja que responde
+  cargo            String   @default("VENDEDORA")
+
+  // Pra LIDER/GERENTE: ID da loja pela qual responde (calcula % sobre ela toda).
+  // Se cargo=VENDEDORA, fica null (comissão é sobre vendas próprias dela onde
+  // quer que ela venda — pode rodar em mais de uma loja).
+  responsibleStoreId String? @map("responsible_store_id")
+
   orders Order[]
   commissionRules    CommissionRule[]
   commissionEntries  CommissionEntry[]
+  responsibleStore   Store? @relation("StoreResponsibleSellers", fields: [responsibleStoreId], references: [id])
 
   @@index([active, name])
+  @@index([cargo, active])
+  @@index([responsibleStoreId])
   @@map("sellers")
 }
 
@@ -369,9 +386,17 @@ model Seller {
 //
 model CommissionRule {
   id            String   @id @default(uuid())
-  scope         String   // 'global' | 'store' | 'seller'
+  // Escopo: por cargo (mais comum), global, store específica ou seller específica
+  scope         String   // 'cargo' | 'global' | 'store' | 'seller'
+  cargo         String?  // quando scope='cargo': VENDEDORA | LIDER_B | LIDER_A | GERENTE_B | GERENTE_A
   storeId       String?  @map("store_id")
   sellerId      String?  @map("seller_id")
+
+  // Como calcular:
+  //   'on_self'              → % sobre vendas próprias da vendedora
+  //   'on_responsible_store' → % sobre TOTAL da loja responsável (cargo líder/gerente)
+  // Default 'on_self' pra retrocompatibilidade.
+  calcMode      String   @default("on_self") @map("calc_mode")
 
   // Cálculo: % sobre venda líquida (vendido - trocas/devoluções)
   percentBase   Decimal  @map("percent_base")  @db.Decimal(5, 2)  // ex: 3.00 = 3%
@@ -396,6 +421,7 @@ model CommissionRule {
   seller        Seller?  @relation(fields: [sellerId], references: [id])
 
   @@index([scope, active])
+  @@index([cargo, active])
   @@index([storeId, active])
   @@index([sellerId, active])
   @@index([validFrom, validTo])

@@ -134,9 +134,17 @@ export class CommissionsService {
 
   /**
    * Resolve qual regra aplicar pra uma vendedora numa loja específica.
-   * Hierarquia: seller > store > global.
+   * Hierarquia: seller > cargo > store > global.
+   *
+   * Pra LIDER/GERENTE → busca regra do cargo dela (que tem calcMode=on_responsible_store).
+   * Pra VENDEDORA → busca regra de cargo VENDEDORA (calcMode=on_self).
    */
-  async resolveRuleFor(sellerId: string, storeId: string, refDate: Date): Promise<any | null> {
+  async resolveRuleFor(
+    sellerId: string,
+    storeId: string,
+    cargo: string,
+    refDate: Date,
+  ): Promise<any | null> {
     const where = (extra: any) => ({
       active: true,
       validFrom: { lte: refDate },
@@ -144,26 +152,69 @@ export class CommissionsService {
       ...extra,
     });
 
-    // 1. seller-specific
+    // 1. seller-specific (override raro pra vendedora especial)
     let r = await (this.prisma as any).commissionRule.findFirst({
       where: where({ scope: 'seller', sellerId }),
       orderBy: { validFrom: 'desc' },
     });
     if (r) return r;
 
-    // 2. store-specific
+    // 2. por cargo (caminho principal — modelo Lurd's)
+    r = await (this.prisma as any).commissionRule.findFirst({
+      where: where({ scope: 'cargo', cargo }),
+      orderBy: { validFrom: 'desc' },
+    });
+    if (r) return r;
+
+    // 3. store-specific
     r = await (this.prisma as any).commissionRule.findFirst({
       where: where({ scope: 'store', storeId }),
       orderBy: { validFrom: 'desc' },
     });
     if (r) return r;
 
-    // 3. global
+    // 4. global
     r = await (this.prisma as any).commissionRule.findFirst({
       where: where({ scope: 'global' }),
       orderBy: { validFrom: 'desc' },
     });
     return r;
+  }
+
+  /**
+   * Cria as regras-padrão dos 5 cargos Lurd's. Idempotente: pula se já existir
+   * regra ativa com o mesmo cargo. Útil pro setup inicial via tela.
+   */
+  async seedDefaultCargoRules(createdBy?: string) {
+    const today = new Date();
+    const defaults = [
+      { cargo: 'VENDEDORA',  percentBase: 2.0, calcMode: 'on_self',              label: 'Vendedora 2% sobre vendas próprias' },
+      { cargo: 'LIDER_B',    percentBase: 0.5, calcMode: 'on_responsible_store', label: 'Líder B 0,5% sobre loja responsável' },
+      { cargo: 'LIDER_A',    percentBase: 1.0, calcMode: 'on_responsible_store', label: 'Líder A 1,0% sobre loja responsável' },
+      { cargo: 'GERENTE_B',  percentBase: 1.5, calcMode: 'on_responsible_store', label: 'Gerente B 1,5% sobre loja responsável' },
+      { cargo: 'GERENTE_A',  percentBase: 2.0, calcMode: 'on_responsible_store', label: 'Gerente A 2,0% sobre loja responsável' },
+    ];
+    const created: any[] = [];
+    for (const d of defaults) {
+      const existing = await (this.prisma as any).commissionRule.findFirst({
+        where: { scope: 'cargo', cargo: d.cargo, active: true },
+      });
+      if (existing) continue;
+      const r = await (this.prisma as any).commissionRule.create({
+        data: {
+          scope: 'cargo',
+          cargo: d.cargo,
+          calcMode: d.calcMode,
+          percentBase: d.percentBase,
+          validFrom: today,
+          active: true,
+          note: d.label,
+          createdBy: createdBy || null,
+        },
+      });
+      created.push(r);
+    }
+    return { created: created.length, total: defaults.length };
   }
 
   // ── Period CRUD ────────────────────────────────────────────────────
@@ -230,10 +281,46 @@ export class CommissionsService {
       this.logger.warn(`[commissions] Recalculando período CLOSED ${yearMonth} (override admin)`);
     }
 
-    // Buscar vendas finalizadas no período, agrupadas por vendedora × loja
-    const sales: any[] = await this.prisma.$queryRawUnsafe(
+    // 1) Soma de vendas + trocas POR LOJA (pra cargo=on_responsible_store)
+    const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT
-         "sellerId", "storeCode",
+         "storeCode",
+         COUNT(*)::int AS qtd,
+         SUM("totalAmount")::float AS total
+       FROM "PdvSale"
+       WHERE "finalizedAt" >= $1
+         AND "finalizedAt" <= $2
+         AND status = 'finalizada'
+       GROUP BY "storeCode"`,
+      period.startDate,
+      period.endDate,
+    );
+    const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT "storeCode", SUM("totalAmount")::float AS total
+       FROM "PdvSale"
+       WHERE "finalizedAt" >= $1 AND "finalizedAt" <= $2
+         AND status IN ('estornada', 'devolvida')
+       GROUP BY "storeCode"`,
+      period.startDate,
+      period.endDate,
+    );
+    const storeTotals = new Map<string, { vendido: number; trocas: number; qtd: number }>();
+    for (const r of salesByStore) {
+      storeTotals.set(r.storeCode, {
+        vendido: Number(r.total) || 0,
+        trocas: 0,
+        qtd: Number(r.qtd) || 0,
+      });
+    }
+    for (const r of trocasByStore) {
+      const cur = storeTotals.get(r.storeCode) || { vendido: 0, trocas: 0, qtd: 0 };
+      cur.trocas = Number(r.total) || 0;
+      storeTotals.set(r.storeCode, cur);
+    }
+
+    // 2) Soma de vendas POR (vendedora × loja) (pra cargo=on_self da VENDEDORA)
+    const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT "sellerId", "storeCode",
          COUNT(*)::int AS qtd,
          SUM("totalAmount")::float AS total
        FROM "PdvSale"
@@ -245,49 +332,74 @@ export class CommissionsService {
       period.startDate,
       period.endDate,
     );
-
-    if (sales.length === 0) {
-      this.logger.warn(`[commissions] Sem vendas no período ${yearMonth}`);
-      return { entries: [], total: 0 };
-    }
-
-    // Buscar trocas/devoluções pra deduzir
-    const trocas: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT
-         "sellerId", "storeCode",
-         SUM("totalAmount")::float AS total
+    const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
+      `SELECT "sellerId", "storeCode", SUM("totalAmount")::float AS total
        FROM "PdvSale"
-       WHERE "finalizedAt" >= $1
-         AND "finalizedAt" <= $2
+       WHERE "finalizedAt" >= $1 AND "finalizedAt" <= $2
          AND "sellerId" IS NOT NULL
          AND status IN ('estornada', 'devolvida')
        GROUP BY "sellerId", "storeCode"`,
       period.startDate,
       period.endDate,
     );
-    const trocasMap = new Map<string, number>();
-    for (const t of trocas) {
-      trocasMap.set(`${t.sellerId}|${t.storeCode}`, Number(t.total) || 0);
+    const sellerSalesMap = new Map<string, { vendido: number; trocas: number; qtd: number }>();
+    for (const r of salesBySeller) {
+      sellerSalesMap.set(`${r.sellerId}|${r.storeCode}`, {
+        vendido: Number(r.total) || 0,
+        trocas: 0,
+        qtd: Number(r.qtd) || 0,
+      });
+    }
+    for (const r of trocasBySeller) {
+      const k = `${r.sellerId}|${r.storeCode}`;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
+      cur.trocas = Number(r.total) || 0;
+      sellerSalesMap.set(k, cur);
     }
 
     const stores = await this.prisma.store.findMany({ select: { id: true, code: true } });
     const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
+    const storeIdToCode = new Map(stores.map((s) => [s.id, s.code]));
+
+    // 3) Lista TODAS as vendedoras/líderes/gerentes ativas — pra cobrir
+    //    quem ganha sobre a loja toda mesmo se não vendeu.
+    const allSellers: any[] = await (this.prisma as any).seller.findMany({
+      where: { active: true },
+    });
 
     const entries: any[] = [];
     let totalGeral = 0;
 
-    for (const s of sales) {
-      const storeId = storeCodeToId.get(s.storeCode);
-      if (!storeId) {
-        this.logger.warn(`[commissions] storeCode ${s.storeCode} não tem id mapeado`);
-        continue;
-      }
-      const sellerId = s.sellerId;
-      const totalVendido = Number(s.total) || 0;
-      const totalTrocas = trocasMap.get(`${sellerId}|${s.storeCode}`) || 0;
-      const vendidoLiquido = Math.max(0, totalVendido - totalTrocas);
+    // Wrapper genérico pra processar uma "entry candidata"
+    // sellerId × storeCode → calcula segundo cargo/regra
+    const processEntry = async (sellerId: string, sellerCargo: string, storeCode: string) => {
+      const storeId = storeCodeToId.get(storeCode);
+      if (!storeId) return;
 
-      const rule = await this.resolveRuleFor(sellerId, storeId, period.endDate);
+      const rule = await this.resolveRuleFor(sellerId, storeId, sellerCargo, period.endDate);
+      const calcMode = rule?.calcMode || 'on_self';
+
+      let totalVendido = 0;
+      let totalTrocas = 0;
+      let qtdVendas = 0;
+
+      if (calcMode === 'on_responsible_store') {
+        // Base é a loja toda (cargo Líder/Gerente)
+        const st = storeTotals.get(storeCode);
+        if (!st) return;
+        totalVendido = st.vendido;
+        totalTrocas = st.trocas;
+        qtdVendas = st.qtd;
+      } else {
+        // 'on_self' — base é só as vendas da vendedora
+        const sl = sellerSalesMap.get(`${sellerId}|${storeCode}`);
+        if (!sl) return;
+        totalVendido = sl.vendido;
+        totalTrocas = sl.trocas;
+        qtdVendas = sl.qtd;
+      }
+
+      const vendidoLiquido = Math.max(0, totalVendido - totalTrocas);
 
       let percentApplied = 0;
       let comissaoBase = 0;
@@ -295,7 +407,10 @@ export class CommissionsService {
       let bonusValue = 0;
       let metaValue: number | null = null;
       let bonusPercent: number | null = null;
-      let ruleSnapshot: any = { warning: 'sem regra aplicável — comissão zero' };
+      let ruleSnapshot: any = {
+        warning: 'sem regra aplicável — comissão zero',
+        cargo: sellerCargo,
+      };
 
       if (rule) {
         percentApplied = Number(rule.percentBase) || 0;
@@ -311,6 +426,8 @@ export class CommissionsService {
         ruleSnapshot = {
           id: rule.id,
           scope: rule.scope,
+          cargo: rule.cargo,
+          calcMode: rule.calcMode,
           percentBase: rule.percentBase,
           meta: rule.meta,
           bonusPercent: rule.bonusPercent,
@@ -318,6 +435,8 @@ export class CommissionsService {
       }
 
       const total = comissaoBase + bonusValue;
+      const storeIdResolved = storeCodeToId.get(storeCode);
+      if (!storeIdResolved) return;
 
       // upsert entry
       const entry = await (this.prisma as any).commissionEntry.upsert({
@@ -325,17 +444,17 @@ export class CommissionsService {
           periodId_sellerId_storeId: {
             periodId: period.id,
             sellerId,
-            storeId,
+            storeId: storeIdResolved,
           },
         },
         create: {
           periodId: period.id,
           sellerId,
-          storeId,
+          storeId: storeIdResolved,
           totalVendido,
           totalTrocas,
           vendidoLiquido,
-          qtdVendas: s.qtd,
+          qtdVendas,
           percentApplied,
           comissaoBase,
           metaAtingida,
@@ -350,7 +469,7 @@ export class CommissionsService {
           totalVendido,
           totalTrocas,
           vendidoLiquido,
-          qtdVendas: s.qtd,
+          qtdVendas,
           percentApplied,
           comissaoBase,
           metaAtingida,
@@ -365,6 +484,31 @@ export class CommissionsService {
       });
       entries.push(entry);
       totalGeral += total;
+    };
+
+    // === FLUXO 1: vendedoras (cargo=VENDEDORA) — uma entry por loja onde vendeu ===
+    for (const [key, sl] of sellerSalesMap) {
+      const [sellerId, storeCode] = key.split('|');
+      const seller = allSellers.find((x) => x.id === sellerId);
+      const cargo = seller?.cargo || 'VENDEDORA';
+      // Vendedoras puras só entram aqui. Líderes/gerentes são processadas no fluxo 2.
+      if (cargo !== 'VENDEDORA') continue;
+      await processEntry(sellerId, cargo, storeCode);
+    }
+
+    // === FLUXO 2: líderes/gerentes — uma entry pela loja responsável ===
+    for (const seller of allSellers) {
+      const cargo = seller.cargo || 'VENDEDORA';
+      if (cargo === 'VENDEDORA') continue;
+      if (!seller.responsibleStoreId) {
+        this.logger.warn(
+          `[commissions] ${seller.name} cargo=${cargo} sem responsibleStoreId — pulando`,
+        );
+        continue;
+      }
+      const storeCode = storeIdToCode.get(seller.responsibleStoreId);
+      if (!storeCode) continue;
+      await processEntry(seller.id, cargo, storeCode);
     }
 
     // Atualiza agregados do período

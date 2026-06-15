@@ -19,9 +19,29 @@ import {
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
+type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
+
+const CARGO_LABELS: Record<Cargo, string> = {
+  VENDEDORA: 'Vendedora',
+  LIDER_B: 'Líder B',
+  LIDER_A: 'Líder A',
+  GERENTE_B: 'Gerente B',
+  GERENTE_A: 'Gerente A',
+};
+
+const CARGO_COLORS: Record<Cargo, string> = {
+  VENDEDORA: 'bg-emerald-100 text-emerald-700',
+  LIDER_B: 'bg-blue-100 text-blue-700',
+  LIDER_A: 'bg-blue-200 text-blue-800',
+  GERENTE_B: 'bg-violet-100 text-violet-700',
+  GERENTE_A: 'bg-violet-200 text-violet-800',
+};
+
 type Rule = {
   id: string;
-  scope: 'global' | 'store' | 'seller';
+  scope: 'cargo' | 'global' | 'store' | 'seller';
+  cargo: Cargo | null;
+  calcMode: 'on_self' | 'on_responsible_store';
   storeId: string | null;
   sellerId: string | null;
   percentBase: number | string;
@@ -75,6 +95,12 @@ export default function ComissoesPage() {
             Engine de cálculo Flowops (substitui Wincred a partir de 30/06).
           </p>
         </div>
+        <Link
+          href="/retaguarda/comissoes/cargos"
+          className="bg-violet-100 hover:bg-violet-200 text-violet-800 font-bold px-3 py-2 rounded-lg text-sm"
+        >
+          Cargos das vendedoras
+        </Link>
       </div>
 
       <div className="flex gap-1 border-b border-slate-200">
@@ -171,19 +197,28 @@ function RulesTab() {
         <div className="text-center py-10 bg-amber-50 border border-amber-200 rounded-lg">
           <AlertTriangle className="w-8 h-8 mx-auto text-amber-600 mb-2" />
           <p className="font-bold text-amber-800">Nenhuma regra cadastrada</p>
-          <p className="text-sm text-amber-700 mt-1">
-            Cadastra ao menos uma regra <b>global</b> pra cálculo nunca dar zero.
+          <p className="text-sm text-amber-700 mt-1 mb-3">
+            Use o setup inicial Lurd&apos;s pra criar as 5 regras padrão por cargo de uma vez.
           </p>
+          <button
+            onClick={async () => {
+              if (!confirm('Criar regras padrão Lurd\'s?\n\n• VENDEDORA 2% sobre vendas próprias\n• LIDER B 0,5% sobre loja toda\n• LIDER A 1,0% sobre loja toda\n• GERENTE B 1,5% sobre loja toda\n• GERENTE A 2,0% sobre loja toda')) return;
+              await api('/commissions/rules/seed-defaults', { method: 'POST' });
+              load();
+            }}
+            className="bg-amber-700 hover:bg-amber-800 text-white font-bold px-5 py-2 rounded"
+          >
+            ⚡ Setup inicial Lurd&apos;s (5 cargos)
+          </button>
         </div>
       ) : (
         <table className="w-full bg-white rounded-xl border border-slate-200 overflow-hidden">
           <thead className="bg-slate-50 text-xs uppercase text-slate-600">
             <tr>
-              <th className="text-left px-3 py-2">Escopo</th>
-              <th className="text-left px-3 py-2">Loja / Vendedora</th>
+              <th className="text-left px-3 py-2">Escopo / Cargo</th>
+              <th className="text-left px-3 py-2">Aplica em</th>
+              <th className="text-left px-3 py-2">Calcula</th>
               <th className="text-right px-3 py-2">% Base</th>
-              <th className="text-right px-3 py-2">Meta</th>
-              <th className="text-right px-3 py-2">Bônus</th>
               <th className="text-left px-3 py-2">Vigência</th>
               <th className="text-center px-3 py-2">Ações</th>
             </tr>
@@ -192,33 +227,40 @@ function RulesTab() {
             {rules.map((r) => (
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="px-3 py-2">
-                  <span
-                    className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
-                      r.scope === 'global'
-                        ? 'bg-slate-100 text-slate-700'
-                        : r.scope === 'store'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-violet-100 text-violet-700'
-                    }`}
-                  >
-                    {r.scope}
-                  </span>
+                  {r.scope === 'cargo' && r.cargo ? (
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${CARGO_COLORS[r.cargo]}`}>
+                      {CARGO_LABELS[r.cargo]}
+                    </span>
+                  ) : (
+                    <span
+                      className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
+                        r.scope === 'global'
+                          ? 'bg-slate-100 text-slate-700'
+                          : r.scope === 'store'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-violet-100 text-violet-700'
+                      }`}
+                    >
+                      {r.scope}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-sm">
                   {r.scope === 'store' && r.store
                     ? `${r.store.code} — ${r.store.name}`
                     : r.scope === 'seller' && r.seller
                     ? r.seller.name
+                    : r.scope === 'cargo'
+                    ? 'Todas vendedoras do cargo'
                     : '—'}
+                </td>
+                <td className="px-3 py-2 text-xs text-slate-600">
+                  {r.calcMode === 'on_responsible_store'
+                    ? '🏪 sobre loja toda'
+                    : '👤 sobre vendas próprias'}
                 </td>
                 <td className="px-3 py-2 text-right font-bold tabular-nums">
                   {Number(r.percentBase).toFixed(2)}%
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-xs">
-                  {r.meta ? brl(r.meta) : '—'}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums text-xs">
-                  {r.bonusPercent ? `+${Number(r.bonusPercent).toFixed(2)}%` : '—'}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">
                   {new Date(r.validFrom).toLocaleDateString('pt-BR')}
@@ -268,7 +310,11 @@ function RuleEditModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [scope, setScope] = useState<'global' | 'store' | 'seller'>(rule.scope || 'global');
+  const [scope, setScope] = useState<'cargo' | 'global' | 'store' | 'seller'>(rule.scope || 'cargo');
+  const [cargo, setCargo] = useState<Cargo>(rule.cargo || 'VENDEDORA');
+  const [calcMode, setCalcMode] = useState<'on_self' | 'on_responsible_store'>(
+    rule.calcMode || 'on_self',
+  );
   const [storeId, setStoreId] = useState(rule.storeId || '');
   const [sellerId, setSellerId] = useState(rule.sellerId || '');
   const [percentBase, setPercentBase] = useState(String(rule.percentBase ?? '3'));
@@ -286,11 +332,17 @@ function RuleEditModal({
     try {
       const body: any = {
         scope,
+        calcMode,
         percentBase: Number(percentBase),
         validFrom,
         active: true,
         note,
       };
+      if (scope === 'cargo') {
+        body.cargo = cargo;
+        // Auto-define calcMode pelo cargo: VENDEDORA=on_self, demais=on_responsible_store
+        body.calcMode = cargo === 'VENDEDORA' ? 'on_self' : 'on_responsible_store';
+      }
       if (scope === 'store') body.storeId = storeId;
       if (scope === 'seller') body.sellerId = sellerId;
       if (meta.trim()) body.meta = Number(meta);
@@ -319,15 +371,17 @@ function RuleEditModal({
             <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
               Escopo
             </label>
-            <div className="flex gap-2">
-              {(['global', 'store', 'seller'] as const).map((s) => (
+            <div className="flex gap-2 flex-wrap">
+              {(['cargo', 'global', 'store', 'seller'] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
                   onClick={() => setScope(s)}
-                  className={`flex-1 py-2 rounded-lg font-bold text-sm ${
+                  className={`flex-1 min-w-[80px] py-2 rounded-lg font-bold text-sm ${
                     scope === s
-                      ? s === 'global'
+                      ? s === 'cargo'
+                        ? 'bg-emerald-600 text-white'
+                        : s === 'global'
                         ? 'bg-slate-700 text-white'
                         : s === 'store'
                         ? 'bg-blue-600 text-white'
@@ -340,9 +394,33 @@ function RuleEditModal({
               ))}
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Global vale pra todas. Store sobrescreve global. Seller sobrescreve store.
+              <b>Cargo</b> (recomendado): aplica a todas vendedoras do cargo. Hierarquia: seller &gt; cargo &gt; store &gt; global.
             </p>
           </div>
+
+          {scope === 'cargo' && (
+            <div>
+              <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
+                Cargo
+              </label>
+              <select
+                value={cargo}
+                onChange={(e) => {
+                  const c = e.target.value as Cargo;
+                  setCargo(c);
+                  // Auto-define calcMode
+                  setCalcMode(c === 'VENDEDORA' ? 'on_self' : 'on_responsible_store');
+                }}
+                className="w-full px-3 py-2 border rounded"
+              >
+                <option value="VENDEDORA">Vendedora (sobre vendas próprias)</option>
+                <option value="LIDER_B">Líder B (sobre loja toda)</option>
+                <option value="LIDER_A">Líder A (sobre loja toda)</option>
+                <option value="GERENTE_B">Gerente B (sobre loja toda)</option>
+                <option value="GERENTE_A">Gerente A (sobre loja toda)</option>
+              </select>
+            </div>
+          )}
 
           {scope === 'store' && (
             <div>

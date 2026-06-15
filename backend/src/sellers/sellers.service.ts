@@ -51,7 +51,16 @@ export class SellersService {
     }
   }
 
-  async update(id: string, input: { name?: string; whatsapp?: string | null; active?: boolean }) {
+  async update(
+    id: string,
+    input: {
+      name?: string;
+      whatsapp?: string | null;
+      active?: boolean;
+      cargo?: string;
+      responsibleStoreId?: string | null;
+    },
+  ) {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
     if (!seller) throw new NotFoundException('Vendedora não encontrada.');
 
@@ -67,6 +76,21 @@ export class SellersService {
     }
     if (input.whatsapp !== undefined) data.whatsapp = input.whatsapp?.trim() || null;
     if (input.active !== undefined) data.active = !!input.active;
+
+    if (input.cargo !== undefined) {
+      const validCargos = ['VENDEDORA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
+      if (!validCargos.includes(input.cargo)) {
+        throw new BadRequestException(`cargo inválido. Use: ${validCargos.join(', ')}`);
+      }
+      data.cargo = input.cargo;
+      // Se virou VENDEDORA, zera responsibleStoreId (não responde por loja)
+      if (input.cargo === 'VENDEDORA' && input.responsibleStoreId === undefined) {
+        data.responsibleStoreId = null;
+      }
+    }
+    if (input.responsibleStoreId !== undefined) {
+      data.responsibleStoreId = input.responsibleStoreId || null;
+    }
 
     try {
       return await this.prisma.seller.update({ where: { id }, data });
