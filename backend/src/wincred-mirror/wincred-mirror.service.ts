@@ -470,7 +470,7 @@ export class WincredMirrorService {
     }
 
     // REF nao vazia (TRIM cobre padding do Wincred)
-    conds.push(`REGEXP_REPLACE(COALESCE(p.ref, ''), '\\s+', '', 'g') <> ''`);
+    conds.push(`TRIM(COALESCE(p.ref, '')) <> ''`);
 
     if (filters.grupoCodigo) {
       conds.push(`p.grupo = $${params.length + 1}`);
@@ -490,10 +490,10 @@ export class WincredMirrorService {
         /[A-Z]/.test(rawSearch) &&
         /[0-9\-]/.test(rawSearch);
       if (isLikelyRef) {
-        // REGEXP_REPLACE remove TODO tipo de whitespace (TRIM so pega ' ').
-        // LIKE com prefixo tolerante: 'VLM-222' bate com 'VLM-222', 'VLM-222 ', 'VLM-222A'.
-        // Isso resolve REF com padding ou variantes de COR no mesmo prefix.
-        conds.push(`REGEXP_REPLACE(UPPER(COALESCE(p.ref, '')), '\\s+', '', 'g') LIKE $${params.length + 1}`);
+        // LIKE com prefixo tolerante ao padding e variantes do REF.
+        // 'VLM-222' bate com 'VLM-222', 'VLM-222 ', 'VLM-222EM', 'VLM-222MO', etc.
+        // Usa UPPER + TRIM nas duas pontas pra ser case/padding insensible.
+        conds.push(`UPPER(TRIM(COALESCE(p.ref, ''))) LIKE $${params.length + 1}`);
         params.push(`${rawSearch}%`);
       } else {
         const tokens = rawSearch.split(/\s+/).filter((t) => t.length > 0);
