@@ -80,9 +80,6 @@ export default function VendedorasPage() {
   const [filterStore, setFilterStore] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('active');
 
-  const [novoNome, setNovoNome] = useState('');
-  const [novoWhatsapp, setNovoWhatsapp] = useState('');
-  const [criando, setCriando] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const load = async () => {
@@ -107,28 +104,6 @@ export default function VendedorasPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function criar() {
-    const nome = novoNome.trim();
-    if (!nome) {
-      alert('Digite um nome.');
-      return;
-    }
-    setCriando(true);
-    try {
-      await api('/sellers', {
-        method: 'POST',
-        body: JSON.stringify({ name: nome, whatsapp: novoWhatsapp.trim() || undefined }),
-      });
-      setNovoNome('');
-      setNovoWhatsapp('');
-      await load();
-    } catch (e: any) {
-      alert('Erro: ' + (e?.message || e));
-    } finally {
-      setCriando(false);
-    }
-  }
 
   async function toggleAtivo(seller: Seller, e: React.MouseEvent) {
     e.stopPropagation();  // nao abre prontuario
@@ -199,39 +174,24 @@ export default function VendedorasPage() {
       </header>
 
       <div className="max-w-6xl mx-auto p-4 space-y-4">
-        {/* Cadastro rapido */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Plus className="w-4 h-4 text-emerald-600" />
-            <span className="font-bold text-sm">Cadastrar nova funcionária</span>
+        {/* CTA Nova funcionária */}
+        <div className="bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-xl p-5 shadow flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+            <Plus className="w-6 h-6" />
           </div>
-          <div className="flex gap-2 flex-wrap">
-            <input
-              type="text"
-              value={novoNome}
-              onChange={(e) => setNovoNome(e.target.value)}
-              placeholder="Nome (ex: Karine)"
-              className="flex-1 min-w-[200px] px-3 py-2 border rounded"
-            />
-            <input
-              type="text"
-              value={novoWhatsapp}
-              onChange={(e) => setNovoWhatsapp(e.target.value)}
-              placeholder="WhatsApp (opcional)"
-              className="flex-1 min-w-[180px] px-3 py-2 border rounded"
-            />
-            <button
-              onClick={criar}
-              disabled={criando}
-              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded flex items-center gap-1"
-            >
-              <Plus className="w-4 h-4" />
-              Adicionar
-            </button>
+          <div className="flex-1">
+            <h2 className="font-bold text-lg">Cadastrar nova funcionária</h2>
+            <p className="text-sm text-white/90">
+              Dados pessoais, contrato, comissão. CEP auto-preenche endereço.
+            </p>
           </div>
-          <p className="text-[11px] text-slate-500 mt-2">
-            Cadastro rápido. Pra preencher contrato, RG, férias, docs → <b>clica na funcionária</b> pra abrir o prontuário.
-          </p>
+          <Link
+            href="/retaguarda/vendedoras/nova"
+            className="bg-white text-emerald-700 hover:bg-emerald-50 font-bold px-5 py-3 rounded-lg shadow flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Nova funcionária
+          </Link>
         </div>
 
         {/* Filtros */}

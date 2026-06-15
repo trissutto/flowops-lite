@@ -265,7 +265,28 @@ export class SellersService {
     return { created, skipped, total: actives.length, sample };
   }
 
-  async create(input: { name: string; whatsapp?: string }) {
+  async create(input: {
+    name: string;
+    whatsapp?: string;
+    cargo?: string;
+    responsibleStoreId?: string | null;
+    cpf?: string;
+    rg?: string;
+    email?: string;
+    dataNascimento?: string | null;
+    endereco?: string;
+    cidade?: string;
+    uf?: string;
+    cep?: string;
+    dataAdmissao?: string | null;
+    contratoTipo?: string;
+    cargoFuncao?: string;
+    salarioBase?: number;
+    dataInicioFerias?: string | null;
+    dataFimFerias?: string | null;
+    observacoes?: string;
+    storeCodeOrigin?: string;
+  }) {
     const name = (input.name || '').trim();
     if (!name) throw new BadRequestException('Nome é obrigatório.');
     if (name.length > 60) throw new BadRequestException('Nome muito longo (máx 60).');
@@ -277,12 +298,40 @@ export class SellersService {
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
       .join(' ');
 
+    // Valida cargo se enviado
+    let cargo = 'VENDEDORA';
+    if (input.cargo) {
+      const valid = ['VENDEDORA', 'LIDER_B', 'LIDER_A', 'GERENTE_B', 'GERENTE_A'];
+      if (!valid.includes(input.cargo)) {
+        throw new BadRequestException(`cargo inválido. Use: ${valid.join(', ')}`);
+      }
+      cargo = input.cargo;
+    }
+
     try {
       return await this.prisma.seller.create({
         data: {
           name: normalized,
           whatsapp: input.whatsapp?.trim() || null,
-        },
+          cargo,
+          responsibleStoreId: cargo !== 'VENDEDORA' ? input.responsibleStoreId || null : null,
+          cpf: input.cpf?.replace(/\D/g, '') || null,
+          rg: input.rg || null,
+          email: input.email?.trim().toLowerCase() || null,
+          dataNascimento: input.dataNascimento ? new Date(input.dataNascimento) : null,
+          endereco: input.endereco || null,
+          cidade: input.cidade || null,
+          uf: input.uf?.toUpperCase().slice(0, 2) || null,
+          cep: input.cep?.replace(/\D/g, '') || null,
+          dataAdmissao: input.dataAdmissao ? new Date(input.dataAdmissao) : null,
+          contratoTipo: input.contratoTipo || null,
+          cargoFuncao: input.cargoFuncao || null,
+          salarioBase: input.salarioBase != null ? input.salarioBase : null,
+          dataInicioFerias: input.dataInicioFerias ? new Date(input.dataInicioFerias) : null,
+          dataFimFerias: input.dataFimFerias ? new Date(input.dataFimFerias) : null,
+          observacoes: input.observacoes || null,
+          storeCodeOrigin: input.storeCodeOrigin || null,
+        } as any,
       });
     } catch (e: any) {
       if (e?.code === 'P2002') {
