@@ -1,7 +1,24 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import { SellersService } from './sellers.service';
+import { SellerDocumentsService } from './seller-documents.service';
+import { SellersCronService } from './sellers-cron.service';
 
 /**
  * Rotas de vendedoras.
@@ -15,7 +32,11 @@ import { SellersService } from './sellers.service';
 @UseGuards(JwtAuthGuard, AdminOnlyGuard)
 @Controller('sellers')
 export class SellersController {
-  constructor(private readonly svc: SellersService) {}
+  constructor(
+    private readonly svc: SellersService,
+    private readonly docs: SellerDocumentsService,
+    private readonly cron: SellersCronService,
+  ) {}
 
   @Get()
   list(@Query('includeInactive') includeInactive?: string) {
@@ -73,6 +94,79 @@ export class SellersController {
   ) {
     const by = req?.user?.email || req?.user?.id || 'unknown';
     return this.svc.assignToOrder(Number(wcOrderId), body?.sellerId ?? null, by);
+  }
+
+  // ── DOCUMENTOS (RH FASE 2) ──────────────────────────────────────
+  /**
+   * Lista documentos da funcionaria agrupados por categoria.
+   *
+   *   GET /sellers/:id/documents
+   *
+   * Retorna:
+   *   { total: 5, grouped: { contrato: [...], atestado: [...], ... } }
+   */
+  @Get(':id/documents')
+  listDocuments(@Param('id') id: string) {
+    return this.docs.listBySeller(id);
+  }
+
+  /**
+   * Upload de documento (multipart/form-data).
+   *
+   *   POST /sellers/:id/documents
+   *   form-data:
+   *     file:           File (max 10MB)
+   *     categoria:      documento_pessoal | contrato | recibo_pagamento | atestado | ferias | outro
+   *     titulo:         string (opcional — usa filename original se vazio)
+   *     dataReferencia: ISO date (opcional)
+   *     observacoes:    string (opcional)
+   */
+  @Post(':id/documents')
+  @AdminOnly()
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  uploadDocument(
+    @Param('id') id: string,
+    @UploadedFile() file: any,
+    @Body('categoria') categoria: string,
+    @Body('titulo') titulo?: string,
+    @Body('dataReferencia') dataReferencia?: string,
+    @Body('observacoes') observacoes?: string,
+    @Req() req?: any,
+  ) {
+    if (!categoria) throw new BadRequestException('categoria obrigatoria');
+    const userId = req?.user?.id || req?.user?.sub || req?.user?.email || null;
+    return this.docs.upload(
+      id,
+      file,
+      { categoria, titulo, dataReferencia, observacoes },
+      userId,
+    );
+  }
+
+  /**
+   * Remove documento (apaga do R2 + DB).
+   *
+   *   DELETE /sellers/documents/:docId
+   */
+  @Delete('documents/:docId')
+  @AdminOnly()
+  deleteDocument(@Param('docId') docId: string) {
+    return this.docs.remove(docId);
+  }
+
+  // ── FERIAS — ALERTA MANUAL ───────────────────────────────────────
+  /**
+   * Dispara o check de ferias sob demanda (debug do cron).
+   *
+   *   GET /sellers/ferias/check
+   *
+   * Retorna lista de funcionarias com ferias vencendo em <= 60 dias
+   * sem dataInicioFerias marcada no ciclo atual.
+   * Tambem envia push pros admins (se houver subscriptions).
+   */
+  @Get('ferias/check')
+  checkFerias() {
+    return this.cron.checkVacationAlerts();
   }
 
   @Get('report')

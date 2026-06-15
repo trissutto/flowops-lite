@@ -18,8 +18,11 @@ import Link from 'next/link';
 import {
   ArrowLeft, Save, Loader2, User, FileText, DollarSign, Calendar,
   Phone, Mail, MapPin, Briefcase, Plane, Power, AlertCircle, Paperclip,
+  Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import DocumentsSection from '@/components/rh/DocumentsSection';
+import HorarioGrid from '@/components/rh/HorarioGrid';
 
 type Seller = {
   id: string;
@@ -138,6 +141,7 @@ export default function ProntuarioPage() {
           salarioBase: data.salarioBase ? Number(data.salarioBase) : null,
           dataInicioFerias: data.dataInicioFerias || null,
           dataFimFerias: data.dataFimFerias || null,
+          horarioTrabalho: data.horarioTrabalho ?? null,
           observacoes: data.observacoes,
         }),
       });
@@ -371,6 +375,14 @@ export default function ProntuarioPage() {
           )}
         </Section>
 
+        {/* HORARIO DE TRABALHO */}
+        <Section icon={<Clock className="w-4 h-4" />} title="Horário de trabalho">
+          <HorarioGrid
+            value={data.horarioTrabalho}
+            onChange={(v) => update('horarioTrabalho', v)}
+          />
+        </Section>
+
         {/* COMISSAO */}
         <Section icon={<DollarSign className="w-4 h-4" />} title="Comissão">
           <p className="text-sm text-slate-600">
@@ -387,15 +399,9 @@ export default function ProntuarioPage() {
           </Link>
         </Section>
 
-        {/* DOCUMENTOS — FASE 2 */}
+        {/* DOCUMENTOS — FASE 2 ATIVO */}
         <Section icon={<Paperclip className="w-4 h-4" />} title="Documentos">
-          <div className="text-center py-6 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-            <FileText className="w-8 h-8 mx-auto text-slate-400 mb-2" />
-            <p className="text-sm text-slate-600 font-bold">Upload de documentos em breve</p>
-            <p className="text-xs text-slate-500 mt-1">
-              Contrato, atestados, recibos, RG/CPF — em desenvolvimento (Fase 2).
-            </p>
-          </div>
+          <DocumentsSection sellerId={id} />
         </Section>
 
         {/* OBSERVACOES */}
