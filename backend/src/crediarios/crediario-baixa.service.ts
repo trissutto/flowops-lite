@@ -28,6 +28,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
+import { PagbankService } from '../pagbank/pagbank.service';
 
 export interface JurosConfig {
   diasCarencia: number;
@@ -68,7 +69,84 @@ export class CrediarioBaixaService {
     private readonly erp: ErpService,
     private readonly crediarios: CrediariosService,
     private readonly pagarme: PagarmeService,
+    private readonly pagbank: PagbankService,
   ) {}
+
+  /**
+   * Gera PIX pra crediario com estrategia 2-providers (PagBank preferido).
+   * Retorna sempre o mesmo formato pra nao quebrar o resto do codigo
+   * (campos chamam pagarmeOrderId/qrCodeImageUrl por motivos historicos,
+   * mas armazenam o ID/dado do gateway que efetivamente gerou).
+   *
+   * Fluxo:
+   *  1. Tenta PagBank usando config da loja (cada loja com seu CNPJ/conta)
+   *  2. Se falhar, cai pra Pagar.me como fallback
+   *  3. Resposta unificada — campo `provider` marca quem gerou pra rastreio
+   */
+  private async createPixForCrediario(input: {
+    saleId: string;
+    valor: number;
+    storeCode: string;
+    customerName?: string;
+    customerCpf?: string;
+    customerPhone?: string;
+    customerEmail?: string;
+    expiresInMinutes?: number;
+  }): Promise<{
+    provider: 'pagbank' | 'pagarme';
+    orderId: string;
+    qrCodeText: string;
+    qrCodeImageUrl: string;
+  }> {
+    // 1) PagBank primeiro
+    try {
+      const pb = await this.pagbank.createPixCharge({
+        saleId: input.saleId,
+        valor: input.valor,
+        storeCode: input.storeCode,
+        customerName: input.customerName,
+        customerCpf: input.customerCpf,
+        customerEmail: input.customerEmail,
+        expiresInMinutes: input.expiresInMinutes || 15,
+      });
+      this.logger.log(
+        `[crediario-pix] PagBank OK — saleId=${input.saleId} order=${pb.pagbankOrderId} loja=${input.storeCode}`,
+      );
+      return {
+        provider: 'pagbank',
+        orderId: pb.pagbankOrderId,
+        qrCodeText: pb.qrCodeText,
+        // PagBank entrega base64; converte pra data URL pro frontend renderizar igual.
+        qrCodeImageUrl: pb.qrCodeImageB64
+          ? `data:image/png;base64,${pb.qrCodeImageB64}`
+          : '',
+      };
+    } catch (e: any) {
+      this.logger.warn(
+        `[crediario-pix] PagBank falhou (${e?.message?.slice(0, 80)}), tentando Pagar.me...`,
+      );
+    }
+    // 2) Fallback Pagar.me
+    const pm = await this.pagarme.createPixCharge({
+      saleId: input.saleId,
+      valor: input.valor,
+      storeCode: input.storeCode,
+      customerName: input.customerName,
+      customerCpf: input.customerCpf,
+      customerEmail: input.customerEmail,
+      customerPhone: input.customerPhone,
+      expiresInMinutes: input.expiresInMinutes || 15,
+    });
+    this.logger.log(
+      `[crediario-pix] Pagar.me fallback OK — saleId=${input.saleId} order=${pm.pagarmeOrderId} loja=${input.storeCode}`,
+    );
+    return {
+      provider: 'pagarme',
+      orderId: pm.pagarmeOrderId,
+      qrCodeText: pm.qrCodeText,
+      qrCodeImageUrl: pm.qrCodeImageUrl || '',
+    };
+  }
 
   // ── Config (juros) ─────────────────────────────────────────────────
 
@@ -942,8 +1020,8 @@ export class CrediarioBaixaService {
       origem: input.origem || 'presencial',
     });
 
-    // Gera PIX no Pagar.me — usa o baixaId como saleId pra rastreio
-    const pix = await this.pagarme.createPixCharge({
+    // Gera PIX (PagBank preferido, Pagar.me fallback) — saleId=baixaId
+    const pix = await this.createPixForCrediario({
       saleId: baixaId,
       valor: preview.totalPago,
       storeCode: input.lojaCode,
@@ -954,15 +1032,17 @@ export class CrediarioBaixaService {
       expiresInMinutes: input.expiresInMinutes || 15,
     });
 
-    // Vincula a order Pagar.me ao header da baixa
+    // Vincula o orderId (PagBank ou Pagar.me) ao header da baixa.
+    // Campo se chama pagarmeOrderId por motivos historicos — agora pode
+    // armazenar ID do PagBank tambem (provider marcado em log).
     await (this.prisma as any).crediarioBaixa.update({
       where: { id: baixaId },
-      data: { pagarmeOrderId: pix.pagarmeOrderId },
+      data: { pagarmeOrderId: pix.orderId },
     });
 
     return {
       baixaId,
-      pagarmeOrderId: pix.pagarmeOrderId,
+      pagarmeOrderId: pix.orderId,
       qrCodeText: pix.qrCodeText,
       qrCodeImageUrl: pix.qrCodeImageUrl,
       valor: preview.totalPago,
@@ -1034,7 +1114,7 @@ export class CrediarioBaixaService {
       valorPix,
     });
 
-    const pix = await this.pagarme.createPixCharge({
+    const pix = await this.createPixForCrediario({
       saleId: baixaId,
       valor: valorPix,
       storeCode: input.lojaCode,
@@ -1047,12 +1127,12 @@ export class CrediarioBaixaService {
 
     await (this.prisma as any).crediarioBaixa.update({
       where: { id: baixaId },
-      data: { pagarmeOrderId: pix.pagarmeOrderId },
+      data: { pagarmeOrderId: pix.orderId },
     });
 
     return {
       baixaId,
-      pagarmeOrderId: pix.pagarmeOrderId,
+      pagarmeOrderId: pix.orderId,
       qrCodeText: pix.qrCodeText,
       qrCodeImageUrl: pix.qrCodeImageUrl,
       valor: valorPix,
