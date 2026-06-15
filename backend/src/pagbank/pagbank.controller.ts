@@ -60,6 +60,56 @@ export class PagbankController {
     return this.svc.createTestPixSandbox();
   }
 
+  /**
+   * GET /pagbank/store-configs — lista config por loja (sem expor tokens)
+   * Retorna array com 1 entry por loja que tem config cadastrada.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('store-configs')
+  async listStoreConfigs(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.listStoreConfigs();
+  }
+
+  /**
+   * GET /pagbank/store-config/:storeCode — config especifica de uma loja
+   * Retorna null se loja nao tem config (vai usar singleton matriz como fallback).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('store-config/:storeCode')
+  async getStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.getStoreConfig(storeCode);
+  }
+
+  /** POST /pagbank/store-config/:storeCode — admin salva config de uma loja especifica */
+  @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode')
+  async setStoreConfig(
+    @Req() req: any,
+    @Param('storeCode') storeCode: string,
+    @Body()
+    body: {
+      ambiente?: 'sandbox' | 'production';
+      email?: string;
+      bearerToken?: string;
+      webhookSecret?: string;
+      enabled?: boolean;
+      contaLabel?: string;
+    },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.setStoreConfig(storeCode, body);
+  }
+
+  /** DELETE /pagbank/store-config/:storeCode — remove config da loja (volta a usar singleton) */
+  @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode/remove')
+  async removeStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.removeStoreConfig(storeCode);
+  }
+
   /** POST /pagbank/config — admin salva token + ambiente */
   @UseGuards(JwtAuthGuard)
   @Post('config')

@@ -104,11 +104,133 @@ export class PagbankService {
     return cfg;
   }
 
+  /**
+   * Resolve config PagBank pra uma loja. Prioridade:
+   *  1. PagbankStoreConfig com storeCode = X e enabled=true → conta PROPRIA
+   *  2. Fallback: singleton PagbankConfig (matriz)
+   *
+   * Retorna config completa (com token+secret) pra uso interno.
+   * Identifica fonte via campo `source` ('store' | 'singleton') pra log.
+   */
+  private async getConfigInternalForStore(storeCode: string): Promise<any> {
+    if (storeCode) {
+      try {
+        const storeCfg = await (this.prisma as any).pagbankStoreConfig.findUnique({
+          where: { storeCode },
+        });
+        if (storeCfg && storeCfg.enabled && storeCfg.bearerToken) {
+          this.logger.log(`[pagbank] usando config da loja ${storeCode} (conta: ${storeCfg.contaLabel || 'sem label'})`);
+          return { ...storeCfg, source: 'store' };
+        }
+      } catch (e) {
+        // tabela pode nao existir ainda em dev — segue pro singleton
+        this.logger.warn(`[pagbank] PagbankStoreConfig nao acessivel: ${(e as Error).message}`);
+      }
+    }
+    const singleton = await this.getConfigInternal();
+    this.logger.log(`[pagbank] usando config singleton (matriz) — loja ${storeCode} sem config propria`);
+    return { ...singleton, source: 'singleton' };
+  }
+
   isEnabled(): Promise<boolean> {
     return (this.prisma as any).pagbankConfig
       .findUnique({ where: { id: 'singleton' } })
       .then((c: any) => !!(c?.enabled && c?.bearerToken))
       .catch(() => false);
+  }
+
+  // ── Config por loja ────────────────────────────────────────────────
+
+  /**
+   * Lista configs por loja (sem expor tokens/secrets) + info da matriz.
+   * Usado pela tela admin pra mostrar status de cada loja.
+   */
+  async listStoreConfigs(): Promise<Array<{
+    storeCode: string;
+    ambiente: string;
+    email: string | null;
+    enabled: boolean;
+    hasToken: boolean;
+    hasWebhookSecret: boolean;
+    contaLabel: string | null;
+  }>> {
+    const rows: any[] = await (this.prisma as any).pagbankStoreConfig.findMany({
+      orderBy: { storeCode: 'asc' },
+    });
+    return rows.map((r) => ({
+      storeCode: r.storeCode,
+      ambiente: r.ambiente,
+      email: r.email || null,
+      enabled: r.enabled,
+      hasToken: !!r.bearerToken,
+      hasWebhookSecret: !!r.webhookSecret,
+      contaLabel: r.contaLabel || null,
+    }));
+  }
+
+  async getStoreConfig(storeCode: string): Promise<{
+    storeCode: string;
+    ambiente: string;
+    email: string | null;
+    enabled: boolean;
+    hasToken: boolean;
+    hasWebhookSecret: boolean;
+    contaLabel: string | null;
+  } | null> {
+    const r: any = await (this.prisma as any).pagbankStoreConfig.findUnique({
+      where: { storeCode },
+    });
+    if (!r) return null;
+    return {
+      storeCode: r.storeCode,
+      ambiente: r.ambiente,
+      email: r.email || null,
+      enabled: r.enabled,
+      hasToken: !!r.bearerToken,
+      hasWebhookSecret: !!r.webhookSecret,
+      contaLabel: r.contaLabel || null,
+    };
+  }
+
+  async setStoreConfig(storeCode: string, input: {
+    ambiente?: 'sandbox' | 'production';
+    email?: string;
+    bearerToken?: string;
+    webhookSecret?: string;
+    enabled?: boolean;
+    contaLabel?: string;
+  }): Promise<any> {
+    if (!storeCode) throw new BadRequestException('storeCode obrigatorio');
+    const data: any = {};
+    if (input.ambiente) data.ambiente = input.ambiente;
+    if (input.email != null) data.email = input.email.trim() || null;
+    if (input.enabled != null) data.enabled = input.enabled;
+    if (input.contaLabel != null) data.contaLabel = input.contaLabel.trim().slice(0, 80) || null;
+    // Sensiveis: so sobrescreve se vier valor preenchido
+    if (input.bearerToken && input.bearerToken.trim()) {
+      data.bearerToken = input.bearerToken
+        .replace(/\s+/g, '')
+        .replace(/^Bearer/i, '')
+        .trim();
+    }
+    if (input.webhookSecret && input.webhookSecret.trim()) {
+      data.webhookSecret = input.webhookSecret.trim();
+    }
+    await (this.prisma as any).pagbankStoreConfig.upsert({
+      where: { storeCode },
+      create: { storeCode, ...data },
+      update: data,
+    });
+    return this.getStoreConfig(storeCode);
+  }
+
+  async removeStoreConfig(storeCode: string): Promise<{ ok: boolean }> {
+    try {
+      await (this.prisma as any).pagbankStoreConfig.delete({ where: { storeCode } });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
   }
 
   // ── PIX — criar order ──────────────────────────────────────────────
@@ -136,12 +258,15 @@ export class PagbankService {
     expiresAt: Date;
     valor: number;
   }> {
-    const cfg = await this.getConfigInternal();
-
     if (!input.saleId) throw new BadRequestException('saleId obrigatório');
     if (!input.valor || input.valor <= 0)
       throw new BadRequestException('Valor deve ser > 0');
     if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
+
+    // CRITICO: resolve config da LOJA (com fallback pra singleton matriz).
+    // Cada loja tem seu CNPJ + conta PagBank propria. Dinheiro cai direto
+    // na conta correta sem depender de transfer manual depois.
+    const cfg = await this.getConfigInternalForStore(input.storeCode);
 
     // Centavos (PagBank espera amount.value em centavos)
     const valorCentavos = Math.round(input.valor * 100);
@@ -299,9 +424,24 @@ export class PagbankService {
 
   /**
    * Consulta status atual da order (polling fallback se webhook atrasar).
+   * Busca PagbankPayment pra descobrir QUAL loja criou — assim usa o
+   * token CORRETO daquela loja pra consultar.
    */
   async checkOrderStatus(pagbankOrderId: string) {
-    const cfg = await this.getConfigInternal();
+    // Descobre loja que originou a order pra usar o token correto.
+    let storeCode = '';
+    try {
+      const p: any = await (this.prisma as any).pagbankPayment.findUnique({
+        where: { pagbankOrderId },
+        select: { storeCode: true },
+      });
+      storeCode = p?.storeCode || '';
+    } catch {
+      // continua sem storeCode — vai pro singleton
+    }
+    const cfg = storeCode
+      ? await this.getConfigInternalForStore(storeCode)
+      : await this.getConfigInternal();
     const url = `${this.getBaseUrl(cfg.ambiente)}/orders/${pagbankOrderId}`;
 
     const resp = await firstValueFrom(

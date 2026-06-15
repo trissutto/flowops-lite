@@ -184,13 +184,28 @@ Thiago Rissutto — Lurd's Plus Size`;
         <div className="flex items-start justify-between mb-6 flex-wrap gap-3">
           <div>
             <h1 className="text-2xl md:text-3xl font-black bg-gradient-to-r from-rose-700 to-pink-600 bg-clip-text text-transparent">
-              PagBank — PIX
+              PagBank — PIX (Matriz / Default)
             </h1>
             <p className="text-sm text-gray-600 mt-1">
-              Integração com Order API (Bearer Token). PIX gerado pelo PDV cai direto na sua conta PagBank.
+              Config global PagBank. Cada loja com CNPJ proprio pode ter token separado em{' '}
+              <Link
+                href="/config/pagbank/por-loja"
+                className="text-emerald-700 font-bold underline hover:text-emerald-900"
+              >
+                Por Loja
+              </Link>
+              .
             </p>
           </div>
-          <StatusBadge enabled={cfg.enabled} ready={isReady} ambiente={cfg.ambiente} />
+          <div className="flex items-center gap-2">
+            <Link
+              href="/config/pagbank/por-loja"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold px-3 py-2 rounded-lg shadow-sm"
+            >
+              + Por Loja
+            </Link>
+            <StatusBadge enabled={cfg.enabled} ready={isReady} ambiente={cfg.ambiente} />
+          </div>
         </div>
 
         {msg && (

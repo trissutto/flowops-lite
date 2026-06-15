@@ -1339,6 +1339,30 @@ model PagbankConfig {
   @@map("pagbank_config")
 }
 
+/// Config PagBank por loja. Cada loja com CNPJ proprio tem sua conta PagBank
+/// e token independente. Se nao cadastrar, usa o singleton PagbankConfig
+/// como fallback. Permite migracao gradual (matriz primeiro, lojas depois).
+///
+/// Quando o PDV cria PIX, o backend resolve config nesta ordem:
+///   1. PagbankStoreConfig WHERE storeCode = X AND enabled = true
+///   2. fallback: PagbankConfig singleton
+model PagbankStoreConfig {
+  storeCode       String   @id @map("store_code")
+  ambiente        String   @default("production")
+  email           String?
+  bearerToken     String?  @map("bearer_token") @db.Text
+  webhookSecret   String?  @map("webhook_secret")
+  enabled         Boolean  @default(false)
+  // Identificacao visual: razao social ou nome curto da conta PagBank
+  // (ajuda admin lembrar qual conta esta vinculada a essa loja)
+  contaLabel      String?  @map("conta_label") @db.VarChar(80)
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("pagbank_store_config")
+}
+
 // Cada cobrança PIX gerada vira um registro aqui pra rastrear status.
 // Vinculada à PdvSalePayment (split payment) — quando webhook chega
 // confirmando, o payment é marcado como pago e a venda finaliza.
