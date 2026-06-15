@@ -391,21 +391,32 @@ Thiago Rissutto — Lurd's Plus Size`;
               <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
                 Status
               </label>
-              <div
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
-                  cfg.hasWebhookSecret
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-gray-200 text-gray-700'
-                }`}
-              >
-                {cfg.hasWebhookSecret ? (
-                  <>
-                    <CheckCircle2 size={14} /> Secret configurado
-                  </>
-                ) : (
-                  <>
-                    <Lock size={14} /> Nenhum secret
-                  </>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                    cfg.hasWebhookSecret
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  {cfg.hasWebhookSecret ? (
+                    <>
+                      <CheckCircle2 size={14} /> Secret configurado
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={14} /> Nenhum secret
+                    </>
+                  )}
+                </div>
+                {cfg.hasWebhookSecret && revealedSecret === null && (
+                  <button
+                    onClick={revealStored}
+                    disabled={revealing}
+                    className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-bold px-3 py-1.5 rounded-full disabled:opacity-50"
+                  >
+                    {revealing ? 'Carregando...' : 'Revelar valor salvo'}
+                  </button>
                 )}
               </div>
               {revealedSecret !== null && (
