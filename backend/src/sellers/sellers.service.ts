@@ -145,6 +145,36 @@ export class SellersService {
     });
   }
 
+  /** Detalhe completo do prontuario + documentos. */
+  async getById(id: string) {
+    const seller: any = await (this.prisma as any).seller.findUnique({
+      where: { id },
+      include: {
+        documents: { orderBy: { uploadedAt: 'desc' } },
+      },
+    });
+    if (!seller) throw new NotFoundException('Vendedora nao encontrada');
+
+    // Resolve loja responsavel (nome) pra UI
+    let responsibleStore: any = null;
+    if (seller.responsibleStoreId) {
+      responsibleStore = await (this.prisma as any).store.findUnique({
+        where: { id: seller.responsibleStoreId },
+        select: { id: true, code: true, name: true },
+      });
+    }
+
+    return {
+      ...seller,
+      responsibleStore,
+      horarioTrabalho: seller.horarioTrabalho ? this.tryParseJson(seller.horarioTrabalho) : null,
+    };
+  }
+
+  private tryParseJson(s: string) {
+    try { return JSON.parse(s); } catch { return s; }
+  }
+
   /**
    * Importa funcionarias de PdvActiveSeller (whitelist do PDV das lojas) pra
    * Seller. Cria Sellers que ainda nao existem (match por wincredCodigo).
@@ -270,6 +300,23 @@ export class SellersService {
       active?: boolean;
       cargo?: string;
       responsibleStoreId?: string | null;
+      // Prontuario RH
+      cpf?: string | null;
+      rg?: string | null;
+      dataNascimento?: string | null;
+      email?: string | null;
+      endereco?: string | null;
+      cidade?: string | null;
+      uf?: string | null;
+      cep?: string | null;
+      dataAdmissao?: string | null;
+      contratoTipo?: string | null;
+      cargoFuncao?: string | null;
+      salarioBase?: number | null;
+      horarioTrabalho?: any;
+      dataInicioFerias?: string | null;
+      dataFimFerias?: string | null;
+      observacoes?: string | null;
     },
   ) {
     const seller = await this.prisma.seller.findUnique({ where: { id } });
@@ -301,6 +348,30 @@ export class SellersService {
     }
     if (input.responsibleStoreId !== undefined) {
       data.responsibleStoreId = input.responsibleStoreId || null;
+    }
+
+    // ── PRONTUARIO RH ──
+    if (input.cpf !== undefined) data.cpf = input.cpf?.replace(/\D/g, '') || null;
+    if (input.rg !== undefined) data.rg = input.rg || null;
+    if (input.email !== undefined) data.email = input.email?.trim().toLowerCase() || null;
+    if (input.endereco !== undefined) data.endereco = input.endereco || null;
+    if (input.cidade !== undefined) data.cidade = input.cidade || null;
+    if (input.uf !== undefined) data.uf = input.uf?.toUpperCase().slice(0, 2) || null;
+    if (input.cep !== undefined) data.cep = input.cep?.replace(/\D/g, '') || null;
+    if (input.contratoTipo !== undefined) data.contratoTipo = input.contratoTipo || null;
+    if (input.cargoFuncao !== undefined) data.cargoFuncao = input.cargoFuncao || null;
+    if (input.salarioBase !== undefined) data.salarioBase = input.salarioBase;
+    if (input.observacoes !== undefined) data.observacoes = input.observacoes || null;
+    if (input.dataNascimento !== undefined) data.dataNascimento = input.dataNascimento ? new Date(input.dataNascimento) : null;
+    if (input.dataAdmissao !== undefined) data.dataAdmissao = input.dataAdmissao ? new Date(input.dataAdmissao) : null;
+    if (input.dataInicioFerias !== undefined) data.dataInicioFerias = input.dataInicioFerias ? new Date(input.dataInicioFerias) : null;
+    if (input.dataFimFerias !== undefined) data.dataFimFerias = input.dataFimFerias ? new Date(input.dataFimFerias) : null;
+    if (input.horarioTrabalho !== undefined) {
+      data.horarioTrabalho = input.horarioTrabalho
+        ? typeof input.horarioTrabalho === 'string'
+          ? input.horarioTrabalho
+          : JSON.stringify(input.horarioTrabalho)
+        : null;
     }
 
     try {

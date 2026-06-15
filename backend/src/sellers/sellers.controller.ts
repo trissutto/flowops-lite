@@ -50,6 +50,12 @@ export class SellersController {
     return this.svc.importFromWincred();
   }
 
+  /** Detalhe completo do prontuario + documentos. */
+  @Get(':id/detail')
+  getDetail(@Param('id') id: string) {
+    return this.svc.getById(id);
+  }
+
   @Patch(':id')
   @AdminOnly()
   update(

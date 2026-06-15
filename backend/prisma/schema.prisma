@@ -362,6 +362,30 @@ model Seller {
   // Loja onde foi originalmente importada (pra agrupamento). Pode mudar.
   storeCodeOrigin    String? @map("store_code_origin")
 
+  // ── PRONTUARIO RH ────────────────────────────────────────────────
+  cpf                String?  @db.VarChar(14)
+  rg                 String?  @db.VarChar(20)
+  dataNascimento     DateTime? @map("data_nascimento") @db.Date
+  email              String?  @db.VarChar(120)
+  endereco           String?  @db.VarChar(200)
+  cidade             String?  @db.VarChar(80)
+  uf                 String?  @db.Char(2)
+  cep                String?  @db.VarChar(10)
+  // Contratacao
+  dataAdmissao       DateTime? @map("data_admissao") @db.Date
+  contratoTipo       String?  @map("contrato_tipo") @db.VarChar(30)  // CLT, PJ, ESTAGIO, FREELA
+  cargoFuncao        String?  @map("cargo_funcao") @db.VarChar(60)   // titulo do cargo (Vendedora Junior, etc)
+  salarioBase        Decimal? @map("salario_base") @db.Decimal(10, 2)
+  // Horario trabalho: JSON com array de turnos {dia, inicio, fim}
+  // Ex: [{dia:'SEG', inicio:'09:00', fim:'18:00'}, ...]
+  horarioTrabalho    String?  @map("horario_trabalho") @db.Text
+  // Ferias
+  dataInicioFerias   DateTime? @map("data_inicio_ferias") @db.Date
+  dataFimFerias      DateTime? @map("data_fim_ferias") @db.Date
+  // Saude/dados sensiveis
+  observacoes        String?  @db.Text
+  documents          SellerDocument[]
+
   orders Order[]
   commissionRules    CommissionRule[]
   commissionEntries  CommissionEntry[]
@@ -370,7 +394,38 @@ model Seller {
   @@index([active, name])
   @@index([cargo, active])
   @@index([responsibleStoreId])
+  @@index([cpf])
+  @@index([dataAdmissao])
   @@map("sellers")
+}
+
+/// Documentos do prontuario da funcionaria — contrato, atestados,
+/// recibos, RG/CPF, etc. Armazena URL do arquivo no R2 + metadata.
+model SellerDocument {
+  id          String   @id @default(uuid())
+  sellerId    String   @map("seller_id")
+  // Categoria — pra agrupar no prontuario
+  // 'documento_pessoal' | 'contrato' | 'recibo_pagamento' | 'atestado' | 'ferias' | 'outro'
+  categoria   String   @db.VarChar(30)
+  // Nome legivel (ex: "RG frente", "Atestado dr Silva 12/06")
+  titulo      String   @db.VarChar(200)
+  // URL no R2 (objects.lurds.com.br/...)
+  fileUrl     String   @map("file_url") @db.Text
+  fileSize    Int?     @map("file_size")
+  mimeType    String?  @map("mime_type") @db.VarChar(80)
+  // Data referencia do documento (ex: data do atestado, mes do recibo)
+  dataReferencia DateTime? @map("data_referencia") @db.Date
+  // Notas livres
+  observacoes String?  @db.Text
+
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+  uploadedBy  String?  @map("uploaded_by")  // userId
+
+  seller      Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, categoria])
+  @@index([sellerId, uploadedAt])
+  @@map("seller_documents")
 }
 
 // ── COMISSÕES (F4) ──────────────────────────────────────────────────
