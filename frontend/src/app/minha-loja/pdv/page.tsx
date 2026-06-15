@@ -4398,42 +4398,74 @@ function PaymentModal({
   }, [selected]);
 
   // ── POLLING (Pagar.me ou PagBank) ──
-  // Quando PIX foi gerado via provider externo, faz polling a cada 1s
-  // (era 3s — reduzido pra UX no caixa: confirmação <1.5s após pagamento).
-  // Webhook → marca paid no banco + backend Pagar.me consulta ao vivo
-  // como fallback → polling pega → setPixPaid(true).
+  // Estrategia 2-em-1: a cada 1s consulta o status local (que webhook
+  // atualiza). MAS a cada 3s tambem chama /pix/check que consulta DIRETO
+  // na API do gateway — assim NAO ficamos refens do webhook chegar.
+  // Funciona mesmo se webhook estiver bloqueado/atrasado/desabilitado.
   useEffect(() => {
     if (!pixCharge || pixPaid) return;
     if (pixCharge.provider !== 'pagarme' && pixCharge.provider !== 'pagbank') return;
 
-    const endpoint =
+    const statusEndpoint =
       pixCharge.provider === 'pagarme'
         ? `/pagarme/pix/status/${saleId}`
         : `/pagbank/pix/status/${saleId}`;
 
+    // Endpoint /pix/check vai direto na API do gateway perguntar
+    // status atualizado (independente do webhook ter chegado).
+    const orderId =
+      pixCharge.provider === 'pagarme'
+        ? pixCharge.pagarmeOrderId
+        : pixCharge.pagbankOrderId;
+    const checkEndpoint = orderId
+      ? pixCharge.provider === 'pagarme'
+        ? `/pagarme/pix/check/${orderId}`
+        : `/pagbank/pix/check/${orderId}`
+      : null;
+
     let cancelled = false;
+    let tickCount = 0;
+
+    const handleResult = (status: string, isFailed?: boolean) => {
+      if (cancelled) return;
+      if (status === 'paid') {
+        setPixPaid(true);
+      } else if (status === 'failed' || status === 'canceled' || isFailed) {
+        toast(
+          'error',
+          'PIX falhou / cancelado',
+          'Gateway reportou erro. NAO finalize — peca pra cliente pagar de novo ou trocar de forma.',
+        );
+        setPixCharge(null);
+      }
+    };
+
     const tick = async () => {
+      tickCount++;
+      // SEMPRE consulta status local (webhook pode ter chegado)
       try {
-        const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(endpoint);
-        if (cancelled) return;
-        if (r.status === 'paid') {
-          setPixPaid(true);
-        } else if (r.status === 'failed' || r.status === 'canceled' || r.isFailed) {
-          // FIX CRÍTICO: PIX falhou na Pagar.me — alerta a vendedora e NÃO
-          // finaliza a venda. Antes desse fix, status revertido pro failed
-          // depois de webhook paid podia deixar a venda finalizada errada.
-          toast(
-            'error',
-            'PIX falhou / cancelado',
-            'A Pagar.me reportou erro no pagamento. NÃO finalize — peça pra cliente pagar de novo ou trocar de forma.',
-          );
-          // Limpa pra forçar nova geração de QR
-          setPixCharge(null);
-        }
+        const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(statusEndpoint);
+        handleResult(r.status, r.isFailed);
       } catch {
         // silencioso
       }
+
+      // A cada 3 ticks (3s), FORCA consulta na API do gateway
+      // pra cobrir caso de webhook nao ter chegado.
+      if (checkEndpoint && tickCount % 3 === 0 && !cancelled) {
+        try {
+          const r = await api<{ status: string; paid?: boolean }>(checkEndpoint, {
+            method: 'POST',
+          });
+          if (r.status === 'paid' || r.paid) {
+            handleResult('paid');
+          }
+        } catch {
+          // silencioso — endpoint check pode falhar temporariamente
+        }
+      }
     };
+
     tick();
     const id = setInterval(tick, 1000);
     return () => {
