@@ -500,7 +500,7 @@ export class WincredMirrorService {
         for (const tok of tokens) {
           const term = `%${tok}%`;
           conds.push(
-            `(TRIM(UPPER(COALESCE(p.ref, ''))) LIKE $${params.length + 1} OR UPPER(COALESCE(p.descricao_completa, '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
+            `(TRIM(UPPER(COALESCE(p.ref, ''))) LIKE $${params.length + 1} OR UPPER(COALESCE(p."descricaoCompleta", '')) LIKE $${params.length + 2} OR p.codigo LIKE $${params.length + 3})`,
           );
           params.push(term, term, term);
         }
@@ -517,8 +517,8 @@ export class WincredMirrorService {
         p.ref,
         p.cor,
         p.tamanho,
-        COALESCE(p.descricao_completa, '') AS descricao,
-        COALESCE(p.venda_un, 0)::float AS preco,
+        COALESCE(p."descricaoCompleta", '') AS descricao,
+        COALESCE(p."vendaUn", 0)::float AS preco,
         COALESCE(
           json_object_agg(
             e.loja, e.estoque
@@ -528,7 +528,7 @@ export class WincredMirrorService {
       FROM wincred_produtos p
       LEFT JOIN wincred_estoque e ON e.codigo = p.codigo
       WHERE ${conds.join(' AND ')}
-      GROUP BY p.codigo, p.ref, p.cor, p.tamanho, p.descricao_completa, p.venda_un
+      GROUP BY p.codigo, p.ref, p.cor, p.tamanho, p."descricaoCompleta", p."vendaUn"
       ORDER BY p.ref, p.cor, p.tamanho
       LIMIT ${limitParam}
     `;

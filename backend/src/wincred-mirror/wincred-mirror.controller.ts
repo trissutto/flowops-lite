@@ -88,7 +88,7 @@ export class WincredMirrorController {
     const ref = String((req.query?.ref || '').toString()).trim().toUpperCase();
     if (!ref) return { error: 'ref obrigatorio' };
     const rows: any[] = await (this.mirror as any).prisma.$queryRawUnsafe(
-      `SELECT codigo, ref, cor, tamanho, plus_size, descricao_completa
+      `SELECT codigo, ref, cor, tamanho, "plusSize", "descricaoCompleta"
          FROM wincred_produtos
         WHERE UPPER(ref) = $1
         ORDER BY cor, tamanho
