@@ -39,11 +39,17 @@ export default function PagbankConfigPage() {
     hasWebhookSecret: false,
   });
 
-  // Sensíveis: write-only
+  // Sensíveis: write-only por padrao, mas admin pode revelar
   const [bearerToken, setBearerToken] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
+  // Valores REVELADOS do token/secret salvos (so depois de clicar Revelar)
+  const [revealedToken, setRevealedToken] = useState<string | null>(null);
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+  const [tokenCopied, setTokenCopied] = useState(false);
+  const [secretCopied, setSecretCopied] = useState(false);
 
   // Testar conexão
   const [testing, setTesting] = useState(false);
@@ -54,6 +60,36 @@ export default function PagbankConfigPage() {
   const [testingPix, setTestingPix] = useState(false);
   const [testPixResult, setTestPixResult] = useState<any>(null);
   const [copied, setCopied] = useState(false);
+
+  // Revela token+secret SALVOS pra admin copiar (ex: replicar pra outro sistema)
+  async function revealStored() {
+    if (!window.confirm('Revelar o Bearer Token e Webhook Secret salvos? Eles ficarao visiveis na tela ate fechar a pagina.')) return;
+    setRevealing(true);
+    try {
+      const r = await api<{ bearerToken?: string; webhookSecret?: string }>('/pagbank/config?reveal=1');
+      setRevealedToken(r.bearerToken || '');
+      setRevealedSecret(r.webhookSecret || '');
+    } catch (e: any) {
+      alert('Erro ao revelar: ' + (e?.message || e));
+    } finally {
+      setRevealing(false);
+    }
+  }
+
+  async function copyToClipboard(text: string, which: 'token' | 'secret') {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (which === 'token') {
+        setTokenCopied(true);
+        setTimeout(() => setTokenCopied(false), 2000);
+      } else {
+        setSecretCopied(true);
+        setTimeout(() => setSecretCopied(false), 2000);
+      }
+    } catch {
+      window.prompt('Copia manualmente (Ctrl+C):', text);
+    }
+  }
 
   async function runTestPixSandbox() {
     setTestingPix(true);
@@ -270,23 +306,51 @@ Thiago Rissutto — Lurd's Plus Size`;
               <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
                 Status
               </label>
-              <div
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
-                  cfg.hasToken
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-gray-200 text-gray-700'
-                }`}
-              >
-                {cfg.hasToken ? (
-                  <>
-                    <CheckCircle2 size={14} /> Token cadastrado
-                  </>
-                ) : (
-                  <>
-                    <Lock size={14} /> Nenhum token
-                  </>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                    cfg.hasToken
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  {cfg.hasToken ? (
+                    <>
+                      <CheckCircle2 size={14} /> Token cadastrado
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={14} /> Nenhum token
+                    </>
+                  )}
+                </div>
+                {cfg.hasToken && revealedToken === null && (
+                  <button
+                    onClick={revealStored}
+                    disabled={revealing}
+                    className="text-xs bg-rose-600 hover:bg-rose-700 text-white font-bold px-3 py-1.5 rounded-full disabled:opacity-50"
+                  >
+                    {revealing ? 'Carregando...' : 'Revelar valor salvo'}
+                  </button>
                 )}
               </div>
+
+              {revealedToken !== null && (
+                <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold uppercase text-amber-900">Token salvo</span>
+                    <button
+                      onClick={() => copyToClipboard(revealedToken, 'token')}
+                      className="text-xs bg-amber-700 hover:bg-amber-800 text-white px-2 py-1 rounded"
+                    >
+                      {tokenCopied ? 'Copiado!' : 'Copiar'}
+                    </button>
+                  </div>
+                  <code className="block text-xs font-mono break-all bg-white border border-amber-200 rounded p-2 select-all">
+                    {revealedToken || '(vazio)'}
+                  </code>
+                </div>
+              )}
             </div>
 
             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">
@@ -344,6 +408,22 @@ Thiago Rissutto — Lurd's Plus Size`;
                   </>
                 )}
               </div>
+              {revealedSecret !== null && (
+                <div className="mt-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold uppercase text-amber-900">Secret salvo</span>
+                    <button
+                      onClick={() => copyToClipboard(revealedSecret, 'secret')}
+                      className="text-xs bg-amber-700 hover:bg-amber-800 text-white px-2 py-1 rounded"
+                    >
+                      {secretCopied ? 'Copiado!' : 'Copiar'}
+                    </button>
+                  </div>
+                  <code className="block text-xs font-mono break-all bg-white border border-amber-200 rounded p-2 select-all">
+                    {revealedSecret || '(vazio)'}
+                  </code>
+                </div>
+              )}
             </div>
 
             <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">

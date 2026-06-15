@@ -21,13 +21,17 @@ export class PagbankController {
 
   // ── Config (admin only) ────────────────────────────────────────────
 
-  /** GET /pagbank/config — status (sem expor token) */
+  /**
+   * GET /pagbank/config — status (sem expor token).
+   * Com ?reveal=1, retorna token+secret em texto puro (admin only).
+   * Util pra admin copiar/colar tokens em outros sistemas.
+   */
   @UseGuards(JwtAuthGuard)
   @Get('config')
-  async getConfig(@Req() req: any) {
+  async getConfig(@Req() req: any, @Query('reveal') reveal?: string) {
     const role = req?.user?.role;
     if (role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.svc.getConfig();
+    return this.svc.getConfig(reveal === '1' || reveal === 'true');
   }
 
   /** POST /pagbank/test — testa conexão com o token salvo */
@@ -72,14 +76,18 @@ export class PagbankController {
   }
 
   /**
-   * GET /pagbank/store-config/:storeCode — config especifica de uma loja
-   * Retorna null se loja nao tem config (vai usar singleton matriz como fallback).
+   * GET /pagbank/store-config/:storeCode — config especifica de uma loja.
+   * Com ?reveal=1, retorna token+secret em texto puro (admin only).
    */
   @UseGuards(JwtAuthGuard)
   @Get('store-config/:storeCode')
-  async getStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+  async getStoreConfig(
+    @Req() req: any,
+    @Param('storeCode') storeCode: string,
+    @Query('reveal') reveal?: string,
+  ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
-    return this.svc.getStoreConfig(storeCode);
+    return this.svc.getStoreConfig(storeCode, reveal === '1' || reveal === 'true');
   }
 
   /** POST /pagbank/store-config/:storeCode — admin salva config de uma loja especifica */

@@ -39,7 +39,12 @@ export class PagbankService {
 
   // ── Config ──────────────────────────────────────────────────────────
 
-  async getConfig() {
+  /**
+   * GET config. Se reveal=true, retorna token+secret em texto puro
+   * (usado pelo admin pra copiar/colar — ex: replicar pra outro sistema).
+   * Sem reveal, retorna apenas flags `hasToken`/`hasWebhookSecret`.
+   */
+  async getConfig(reveal: boolean = false) {
     let cfg = await (this.prisma as any).pagbankConfig.findUnique({
       where: { id: 'singleton' },
     });
@@ -49,14 +54,21 @@ export class PagbankService {
         data: { id: 'singleton' },
       });
     }
-    return {
+    const base = {
       ambiente: cfg.ambiente,
       enabled: cfg.enabled,
       email: cfg.email || null,
       hasToken: !!cfg.bearerToken,
       hasWebhookSecret: !!cfg.webhookSecret,
-      // Token em si NÃO retorna (só status)
     };
+    if (reveal) {
+      return {
+        ...base,
+        bearerToken: cfg.bearerToken || null,
+        webhookSecret: cfg.webhookSecret || null,
+      };
+    }
+    return base;
   }
 
   async setConfig(input: {
@@ -168,20 +180,12 @@ export class PagbankService {
     }));
   }
 
-  async getStoreConfig(storeCode: string): Promise<{
-    storeCode: string;
-    ambiente: string;
-    email: string | null;
-    enabled: boolean;
-    hasToken: boolean;
-    hasWebhookSecret: boolean;
-    contaLabel: string | null;
-  } | null> {
+  async getStoreConfig(storeCode: string, reveal: boolean = false): Promise<any> {
     const r: any = await (this.prisma as any).pagbankStoreConfig.findUnique({
       where: { storeCode },
     });
     if (!r) return null;
-    return {
+    const base = {
       storeCode: r.storeCode,
       ambiente: r.ambiente,
       email: r.email || null,
@@ -190,6 +194,14 @@ export class PagbankService {
       hasWebhookSecret: !!r.webhookSecret,
       contaLabel: r.contaLabel || null,
     };
+    if (reveal) {
+      return {
+        ...base,
+        bearerToken: r.bearerToken || null,
+        webhookSecret: r.webhookSecret || null,
+      };
+    }
+    return base;
   }
 
   async setStoreConfig(storeCode: string, input: {
