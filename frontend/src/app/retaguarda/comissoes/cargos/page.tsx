@@ -46,11 +46,11 @@ export default function CargosPage() {
   const [importing, setImporting] = useState(false);
 
   async function importFromPdv() {
-    if (!confirm('Importar todas funcionárias cadastradas no PDV das lojas?\n\n• Cria as que ainda não existem como VENDEDORA\n• Vincula código do Wincred\n• Pula as já importadas\n\nDepois você ajusta cargo e loja responsável.')) return;
+    if (!confirm('Importar TODAS funcionárias do Wincred (15 lojas)?\n\n• Cria as que ainda não existem como VENDEDORA\n• Vincula código do Wincred\n• Pula as já importadas\n\nDepois você ajusta cargo e loja responsável.')) return;
     setImporting(true);
     try {
       const r = await api<{ created: number; skipped: number; total: number }>(
-        '/sellers/import-from-pdv-active',
+        '/sellers/import-from-wincred',
         { method: 'POST' },
       );
       alert(

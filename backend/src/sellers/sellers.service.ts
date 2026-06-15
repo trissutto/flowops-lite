@@ -1,5 +1,6 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * SellersService — CRUD de vendedoras + atribuição de pedido + relatório.
@@ -14,7 +15,127 @@ import { PrismaService } from '../prisma/prisma.service';
 export class SellersService {
   private readonly logger = new Logger(SellersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly erp: ErpService,
+  ) {}
+
+  /**
+   * Importa funcionarias diretamente do MySQL Wincred (tabela funcionarios).
+   * Pega TODAS as funcionarias ativas de TODAS as lojas — diferente do
+   * importFromPdvActive() que so pega quem tem whitelist no PDV.
+   *
+   * Cria como cargo=VENDEDORA por default. Admin ajusta depois.
+   * Match por CODIGO (Wincred) — idempotente.
+   */
+  async importFromWincred(): Promise<{
+    created: number;
+    skipped: number;
+    total: number;
+    sample: Array<{ name: string; codigo: string; loja: string }>;
+  }> {
+    const pool: any = (this.erp as any).pool;
+    if (!pool) {
+      throw new BadRequestException('MySQL Wincred não conectado');
+    }
+
+    let funcionarios: any[] = [];
+    try {
+      // Tabela funcionarios do Wincred. Colunas variam — tentamos campos comuns.
+      // CODIGO + NOME sao garantidos. APELIDO e LOJA variam.
+      const [rows] = await pool.query(
+        `SELECT CODIGO, NOME, APELIDO, LOJA
+           FROM funcionarios
+          WHERE NOME IS NOT NULL
+            AND TRIM(NOME) <> ''
+          ORDER BY LOJA, NOME`,
+      );
+      funcionarios = rows as any[];
+    } catch (e: any) {
+      // Fallback: sem APELIDO
+      try {
+        const [rows] = await pool.query(
+          `SELECT CODIGO, NOME, LOJA FROM funcionarios WHERE NOME IS NOT NULL AND TRIM(NOME) <> '' ORDER BY LOJA, NOME`,
+        );
+        funcionarios = rows as any[];
+      } catch (e2: any) {
+        throw new BadRequestException(`Erro consultando funcionarios no Wincred: ${e2.message}`);
+      }
+    }
+
+    if (!funcionarios.length) {
+      return { created: 0, skipped: 0, total: 0, sample: [] };
+    }
+
+    // Sellers existentes por código pra dedup
+    const existing: any[] = await (this.prisma as any).seller.findMany({
+      where: { wincredCodigo: { not: null } },
+      select: { wincredCodigo: true },
+    });
+    const existingCodes = new Set(existing.map((s) => String(s.wincredCodigo)));
+
+    let created = 0;
+    let skipped = 0;
+    const sample: Array<{ name: string; codigo: string; loja: string }> = [];
+
+    for (const f of funcionarios) {
+      const codigo = String(f.CODIGO || '').trim();
+      const nome = String(f.NOME || '').trim();
+      const apelido = String(f.APELIDO || '').trim();
+      const loja = String(f.LOJA || '').trim().padStart(2, '0');
+      if (!codigo || !nome) {
+        skipped++;
+        continue;
+      }
+      if (existingCodes.has(codigo)) {
+        skipped++;
+        continue;
+      }
+      // Usa APELIDO se preenchido (mais curto no PDV); senao NOME
+      const displayName = (apelido || nome)
+        .toLowerCase()
+        .split(/\s+/)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+      try {
+        await (this.prisma as any).seller.create({
+          data: {
+            name: displayName,
+            wincredCodigo: codigo,
+            storeCodeOrigin: loja || null,
+            cargo: 'VENDEDORA',
+            active: true,
+          },
+        });
+        existingCodes.add(codigo);
+        created++;
+        if (sample.length < 15) {
+          sample.push({ name: displayName, codigo, loja });
+        }
+      } catch (e: any) {
+        // Conflito por nome unique — tenta linkar codigo via UPDATE
+        if (e?.code === 'P2002') {
+          try {
+            await (this.prisma as any).seller.update({
+              where: { name: displayName },
+              data: { wincredCodigo: codigo, storeCodeOrigin: loja || null },
+            });
+            existingCodes.add(codigo);
+            created++;
+          } catch {
+            skipped++;
+          }
+        } else {
+          skipped++;
+        }
+      }
+    }
+
+    this.logger.log(
+      `[sellers] import Wincred: criadas=${created}, puladas=${skipped}, total=${funcionarios.length}`,
+    );
+    return { created, skipped, total: funcionarios.length, sample };
+  }
 
   /** Lista vendedoras — por default só ativas. `includeInactive=true` pra admin. */
   async list(includeInactive = false) {

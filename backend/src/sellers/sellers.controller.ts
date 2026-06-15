@@ -39,6 +39,17 @@ export class SellersController {
     return this.svc.importFromPdvActive();
   }
 
+  /**
+   * Importa TODAS as funcionarias diretamente da tabela funcionarios
+   * do MySQL Wincred. Cobre as 15 lojas — diferente do PdvActiveSeller
+   * que e whitelist manual por loja.
+   */
+  @Post('import-from-wincred')
+  @AdminOnly()
+  importFromWincred() {
+    return this.svc.importFromWincred();
+  }
+
   @Patch(':id')
   @AdminOnly()
   update(
