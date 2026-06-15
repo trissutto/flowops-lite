@@ -36,6 +36,12 @@ export interface StoreInput {
    * baixo giro). Quando true, peças velhas vão pra essa loja.
    */
   isOutlet?: boolean;
+  /**
+   * Gateway PIX da loja: 'auto' (default — tenta PagBank, fallback Pagar.me),
+   * 'pagbank' (forca PagBank), 'pagarme' (forca Pagar.me).
+   * Em todos: cai pro PIX local se gateway falhar.
+   */
+  pixProvider?: 'auto' | 'pagbank' | 'pagarme';
 }
 
 @Injectable()
@@ -44,6 +50,20 @@ export class StoresService {
 
   list() {
     return this.prisma.store.findMany({ orderBy: { code: 'asc' } });
+  }
+
+  /**
+   * Retorna config do gateway PIX da loja. Default 'auto' se nunca configurada.
+   * Usada pelo PDV antes de gerar QR Code pra escolher qual gateway tentar.
+   */
+  async getPixProvider(code: string): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' }> {
+    const store = await this.prisma.store.findUnique({
+      where: { code },
+      select: { pixProvider: true } as any,
+    });
+    const p = (store as any)?.pixProvider || 'auto';
+    if (p === 'pagbank' || p === 'pagarme') return { provider: p };
+    return { provider: 'auto' };
   }
 
   /**
@@ -180,6 +200,9 @@ export class StoresService {
           ? Math.max(0, Math.min(200, Number(data.consolidationScore) || 50))
           : undefined,
         isOutlet: data.isOutlet !== undefined ? !!data.isOutlet : undefined,
+        pixProvider: data.pixProvider && ['auto', 'pagbank', 'pagarme'].includes(data.pixProvider)
+          ? data.pixProvider
+          : undefined,
       } as any,
     });
   }

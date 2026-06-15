@@ -116,6 +116,16 @@ model Store {
   expectedCnpj      String?  @map("expected_cnpj")
   expectedRazaoSocial String? @map("expected_razao_social")
 
+  // ── Gateway de pagamento PIX ──
+  // Define qual provider PIX a loja usa no PDV. Permite migracao gradual
+  // (ex: ITANHAEM em PagBank piloto, demais ainda em Pagar.me).
+  //   'auto'    = tenta PagBank primeiro, Pagar.me como fallback (default)
+  //   'pagbank' = forca PagBank, sem fallback de gateway externo
+  //   'pagarme' = forca Pagar.me, sem fallback de gateway externo
+  // Em todos os casos, se o provider escolhido falhar, cai pro PIX local
+  // (chave celular) como ultima opcao.
+  pixProvider       String   @default("auto") @map("pix_provider")
+
   users          User[]
   pickOrders     PickOrder[]
   orderItems     OrderItem[]

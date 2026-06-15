@@ -4268,73 +4268,104 @@ function PaymentModal({
       // Coleta motivos de falha de cada provider pra debug se cair no local
       const failures: string[] = [];
 
-      // 1) Tenta Pagar.me primeiro (provider preferido)
+      // Le configuracao da loja: qual gateway PIX usar.
+      //   'auto'    = tenta PagBank, fallback Pagar.me
+      //   'pagbank' = forca so PagBank (sem cair pra Pagar.me)
+      //   'pagarme' = forca so Pagar.me
+      // Default 'auto' se nao conseguir ler config (rede falhou, etc).
+      let storePixProvider: 'auto' | 'pagbank' | 'pagarme' = 'auto';
       try {
-        const pm = await api<{
-          pagarmeOrderId: string;
-          qrCodeText: string;
-          qrCodeImageUrl: string;
-          expiresAt: string;
-          valor: number;
-        }>('/pagarme/pix/create', {
-          method: 'POST',
-          body: JSON.stringify(customerPayload),
-        });
-        setPixCharge({
-          txid: pm.pagarmeOrderId,
-          chave: 'Pagar.me',
-          payload: pm.qrCodeText,
-          qrCodeDataUrl: pm.qrCodeImageUrl || '',
-          provider: 'pagarme',
-          pagarmeOrderId: pm.pagarmeOrderId,
-          expiresAt: pm.expiresAt,
-        });
-        return;
+        const cfg = await api<{ provider: 'auto' | 'pagbank' | 'pagarme' }>(
+          `/stores/by-code/${storeCode}/pix-provider`,
+        );
+        if (cfg?.provider) storePixProvider = cfg.provider;
       } catch (e: any) {
-        const msg = String(e?.message || e);
-        const status = e?.status || e?.response?.status;
-        let reason = '';
-        if (status === 404 || /Cannot (POST|GET).*pagarme/i.test(msg))
-          reason = 'backend antigo (deploy pendente)';
-        else if (/desabilitado/i.test(msg)) reason = 'desligado';
-        else if (/não configurado|API Key/i.test(msg)) reason = 'sem key';
-        else reason = msg.slice(0, 80);
-        failures.push(`Pagar.me: ${reason}`);
-        console.warn('[pdv] Pagar.me PIX falhou:', msg);
+        console.warn('[pdv] falha lendo pixProvider da loja, usando auto:', e?.message);
       }
 
-      // 2) Tenta PagBank (segundo provider)
-      try {
-        const pb = await api<{
-          pagbankOrderId: string;
-          qrCodeText: string;
-          qrCodeImageB64: string;
-          expiresAt: string;
-          valor: number;
-        }>('/pagbank/pix/create', {
-          method: 'POST',
-          body: JSON.stringify(customerPayload),
-        });
-        setPixCharge({
-          txid: pb.pagbankOrderId,
-          chave: 'PagBank',
-          payload: pb.qrCodeText,
-          qrCodeDataUrl: pb.qrCodeImageB64
-            ? `data:image/png;base64,${pb.qrCodeImageB64}`
-            : '',
-          provider: 'pagbank',
-          pagbankOrderId: pb.pagbankOrderId,
-          expiresAt: pb.expiresAt,
-        });
-        return;
-      } catch (e: any) {
-        const msg = String(e?.message || e);
-        let reason = '';
-        if (/desabilitado/i.test(msg)) reason = 'desligado';
-        else if (/não configurado|Token/i.test(msg)) reason = 'sem token';
-        else reason = msg.slice(0, 80);
-        failures.push(`PagBank: ${reason}`);
-        console.warn('[pdv] PagBank PIX falhou:', msg);
+      // Helpers: cada gateway encapsulado, retorna true se OK / false se falhou
+      const tryPagbank = async (): Promise<boolean> => {
+        try {
+          const pb = await api<{
+            pagbankOrderId: string;
+            qrCodeText: string;
+            qrCodeImageB64: string;
+            expiresAt: string;
+            valor: number;
+          }>('/pagbank/pix/create', {
+            method: 'POST',
+            body: JSON.stringify(customerPayload),
+          });
+          setPixCharge({
+            txid: pb.pagbankOrderId,
+            chave: 'PagBank',
+            payload: pb.qrCodeText,
+            qrCodeDataUrl: pb.qrCodeImageB64 ? `data:image/png;base64,${pb.qrCodeImageB64}` : '',
+            provider: 'pagbank',
+            pagbankOrderId: pb.pagbankOrderId,
+            expiresAt: pb.expiresAt,
+          });
+          return true;
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          let reason = '';
+          if (/desabilitado/i.test(msg)) reason = 'desligado';
+          else if (/não configurado|Token/i.test(msg)) reason = 'sem token';
+          else reason = msg.slice(0, 80);
+          failures.push(`PagBank: ${reason}`);
+          console.warn('[pdv] PagBank PIX falhou:', msg);
+          return false;
+        }
+      };
+
+      const tryPagarme = async (): Promise<boolean> => {
+        try {
+          const pm = await api<{
+            pagarmeOrderId: string;
+            qrCodeText: string;
+            qrCodeImageUrl: string;
+            expiresAt: string;
+            valor: number;
+          }>('/pagarme/pix/create', {
+            method: 'POST',
+            body: JSON.stringify(customerPayload),
+          });
+          setPixCharge({
+            txid: pm.pagarmeOrderId,
+            chave: 'Pagar.me',
+            payload: pm.qrCodeText,
+            qrCodeDataUrl: pm.qrCodeImageUrl || '',
+            provider: 'pagarme',
+            pagarmeOrderId: pm.pagarmeOrderId,
+            expiresAt: pm.expiresAt,
+          });
+          return true;
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          const status = e?.status || e?.response?.status;
+          let reason = '';
+          if (status === 404 || /Cannot (POST|GET).*pagarme/i.test(msg))
+            reason = 'backend antigo (deploy pendente)';
+          else if (/desabilitado/i.test(msg)) reason = 'desligado';
+          else if (/não configurado|API Key/i.test(msg)) reason = 'sem key';
+          else reason = msg.slice(0, 80);
+          failures.push(`Pagar.me: ${reason}`);
+          console.warn('[pdv] Pagar.me PIX falhou:', msg);
+          return false;
+        }
+      };
+
+      // Estrategia conforme config da loja:
+      if (storePixProvider === 'pagbank') {
+        // Forca PagBank — se falhar, NAO tenta Pagar.me, vai direto pro PIX local
+        if (await tryPagbank()) return;
+      } else if (storePixProvider === 'pagarme') {
+        // Forca Pagar.me
+        if (await tryPagarme()) return;
+      } else {
+        // AUTO: PagBank primeiro, depois Pagar.me
+        if (await tryPagbank()) return;
+        if (await tryPagarme()) return;
       }
 
       // Se chegou aqui, ambos providers falharam

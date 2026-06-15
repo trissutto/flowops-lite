@@ -47,6 +47,16 @@ export class StoresController {
     return this.stores.performance(id);
   }
 
+  /**
+   * GET /stores/by-code/:code/pix-provider
+   * Retorna qual gateway PIX a loja usa. Consumido pelo PDV antes de gerar QR.
+   * Resposta: { provider: 'auto' | 'pagbank' | 'pagarme' }
+   */
+  @Get('by-code/:code/pix-provider')
+  async getPixProvider(@Param('code') code: string) {
+    return this.stores.getPixProvider(code);
+  }
+
   @Post()
   create(@Body() body: StoreInput) {
     return this.stores.create(body);

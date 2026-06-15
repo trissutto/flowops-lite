@@ -17,6 +17,8 @@ import Link from 'next/link';
 import { ArrowLeft, RefreshCw, Building2, Store as StoreIcon, Loader2, Check, AlertTriangle, Edit2, X, LogIn } from 'lucide-react';
 import { api } from '@/lib/api';
 
+type PixProvider = 'auto' | 'pagbank' | 'pagarme';
+
 type Store = {
   id: string;
   code: string;
@@ -27,6 +29,7 @@ type Store = {
   tipo?: 'REDE' | 'FILIAL' | string | null;
   expectedCnpj?: string | null;
   expectedRazaoSocial?: string | null;
+  pixProvider?: PixProvider | string | null;
 };
 
 const fmtCnpj = (c?: string | null) => {
@@ -68,6 +71,27 @@ export default function LojasPage() {
         body: JSON.stringify({ tipo: newTipo }),
       });
       setItems((prev) => prev.map((s) => (s.id === store.id ? { ...s, tipo: newTipo } : s)));
+    } catch (e: any) {
+      alert(`Erro ao salvar: ${e?.message || e}`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  // Define qual gateway PIX a loja usa: auto/pagbank/pagarme.
+  // Default 'auto' = tenta PagBank, fallback Pagar.me.
+  const setPixProvider = async (store: Store, provider: PixProvider) => {
+    const current = (store.pixProvider as PixProvider) || 'auto';
+    if (current === provider) return;
+    setSavingId(store.id);
+    try {
+      await api(`/stores/${store.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pixProvider: provider }),
+      });
+      setItems((prev) =>
+        prev.map((s) => (s.id === store.id ? { ...s, pixProvider: provider } : s)),
+      );
     } catch (e: any) {
       alert(`Erro ao salvar: ${e?.message || e}`);
     } finally {
@@ -289,6 +313,52 @@ export default function LojasPage() {
                     >
                       FRANQUIA
                     </button>
+                  </div>
+
+                  {/* Toggle Gateway PIX: auto / pagbank / pagarme */}
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">PIX</span>
+                    <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setPixProvider(store, 'auto')}
+                        disabled={isSaving}
+                        title="Tenta PagBank primeiro, Pagar.me como fallback"
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition ${
+                          ((store.pixProvider as PixProvider) || 'auto') === 'auto'
+                            ? 'bg-slate-700 text-white shadow'
+                            : 'text-slate-600 hover:bg-white'
+                        } disabled:opacity-50`}
+                      >
+                        AUTO
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPixProvider(store, 'pagbank')}
+                        disabled={isSaving}
+                        title="Forca PagBank"
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition ${
+                          store.pixProvider === 'pagbank'
+                            ? 'bg-emerald-600 text-white shadow'
+                            : 'text-slate-600 hover:bg-white'
+                        } disabled:opacity-50`}
+                      >
+                        PAGBANK
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPixProvider(store, 'pagarme')}
+                        disabled={isSaving}
+                        title="Forca Pagar.me"
+                        className={`px-2 py-1 rounded text-[10px] font-bold transition ${
+                          store.pixProvider === 'pagarme'
+                            ? 'bg-violet-600 text-white shadow'
+                            : 'text-slate-600 hover:bg-white'
+                        } disabled:opacity-50`}
+                      >
+                        PAGAR.ME
+                      </button>
+                    </div>
                   </div>
 
                   {isSaving && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
