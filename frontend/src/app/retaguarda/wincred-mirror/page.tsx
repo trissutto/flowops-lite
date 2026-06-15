@@ -155,6 +155,9 @@ export default function WincredMirrorPage() {
         </button>
       </div>
 
+      {/* Teste rapido: peek de uma REF no Postgres */}
+      <PeekRefBox />
+
       {/* Status por tabela */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
         <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
@@ -253,6 +256,58 @@ export default function WincredMirrorPage() {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+
+function PeekRefBox() {
+  const [ref, setRef] = useState('VLM-222');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await api(`/admin/wincred-mirror/peek?ref=${encodeURIComponent(ref)}`);
+      setResult(r);
+    } catch (e: any) {
+      setError(e?.message || 'erro');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <h2 className="font-bold text-amber-900">Debug: Testar REF no Postgres</h2>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={ref}
+          onChange={(e) => setRef(e.target.value)}
+          placeholder="VLM-222"
+          className="px-3 py-2 border border-amber-300 rounded-lg text-sm w-48"
+        />
+        <button
+          onClick={run}
+          disabled={loading || !ref.trim()}
+          className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold disabled:opacity-50"
+        >
+          {loading ? 'Buscando...' : 'Testar'}
+        </button>
+      </div>
+      {error && <div className="mt-2 text-sm text-red-700">{error}</div>}
+      {result && (
+        <pre className="mt-3 bg-slate-900 text-emerald-300 p-3 rounded text-[11px] overflow-x-auto font-mono">
+{JSON.stringify(result, null, 2)}
+        </pre>
       )}
     </div>
   );
