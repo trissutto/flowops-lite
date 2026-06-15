@@ -2900,20 +2900,32 @@ function RefDetailsDrawer({
                 </tr>
               </thead>
               <tbody>
-                {detail.rows.map((row) => (
-                  <tr key={row.codigo} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-2 py-1.5 font-bold text-slate-800">{row.tamanho}</td>
-                    {lojasAtivas.map((s) => {
-                      const qty = row.estoquePorLoja[s.code] || 0;
-                      return (
-                        <td key={s.code} className="px-1 py-1.5 text-center">
-                          <Bolinha qty={qty} />
-                        </td>
-                      );
-                    })}
-                    <td className="px-2 py-1.5 text-right font-bold tabular-nums">{row.total}</td>
-                  </tr>
-                ))}
+                {[...detail.rows]
+                  .sort((a, b) => {
+                    // Ordena tamanhos NUMERICAMENTE: 46, 48, 50, 52, 54, 56, 58, 60.
+                    // Pra tamanhos hibridos tipo "46/48", pega o primeiro numero.
+                    const ta = (a.tamanho || '').trim();
+                    const tb = (b.tamanho || '').trim();
+                    const na = parseInt(ta, 10);
+                    const nb = parseInt(tb, 10);
+                    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+                    // Fallback alfabetico pra tamanhos nao-numericos (P, M, G, GG)
+                    return ta.localeCompare(tb);
+                  })
+                  .map((row) => (
+                    <tr key={row.codigo} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-2 py-1.5 font-bold text-slate-800">{row.tamanho}</td>
+                      {lojasAtivas.map((s) => {
+                        const qty = row.estoquePorLoja[s.code] || 0;
+                        return (
+                          <td key={s.code} className="px-1 py-1.5 text-center">
+                            <Bolinha qty={qty} />
+                          </td>
+                        );
+                      })}
+                      <td className="px-2 py-1.5 text-right font-bold tabular-nums">{row.total}</td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           )}
