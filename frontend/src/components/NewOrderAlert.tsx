@@ -113,9 +113,33 @@ export default function NewOrderAlert() {
   const isLoginPage = pathname === '/login' || pathname?.startsWith('/login');
   const isStorePage = !!pathname?.startsWith('/minha-loja');
 
+  // GUARD DE ROLE: popup de pedido novo so faz sentido pra admin/operator.
+  // Vendedora (role=store) NUNCA deve receber, mesmo se cadastrada errado
+  // como admin no sistema. Decodifica o JWT salvo pra ler role/storeId.
+  // Isso evita o bug de Sorocaba (ou qualquer loja) recebendo pedidos cruzados.
+  const [userRole, setUserRole] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const token = window.localStorage?.getItem('flowops_token');
+      if (!token) return;
+      // Decode JWT payload (parte 2 do "header.payload.signature")
+      const parts = token.split('.');
+      if (parts.length !== 3) return;
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+      setUserRole(payload?.role || null);
+      LOG('Role do usuario logado:', payload?.role, 'storeId:', payload?.storeId);
+    } catch (e) {
+      LOG('Falha ao decodificar JWT pra detectar role:', e);
+    }
+  }, []);
+  const isStoreUser = userRole === 'store';
+
   // ───── WEBSOCKET ─────
   useEffect(() => {
-    if (isLoginPage || isStorePage) return;
+    if (isLoginPage || isStorePage || isStoreUser) {
+      if (isStoreUser) LOG('Bloqueado: usuario role=store nao recebe popup de pedidos.');
+      return;
+    }
     const token =
       typeof window !== 'undefined' ? window.localStorage?.getItem('flowops_token') : null;
     if (!token) {
@@ -146,13 +170,13 @@ export default function NewOrderAlert() {
       socket.off('order:new', onNew);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoginPage, isStorePage]);
+  }, [isLoginPage, isStorePage, isStoreUser]);
 
   // ───── POLLING FALLBACK ─────
   // Compara lista de pedidos em "processing" do WC a cada 30s.
   // Se apareceu ID que não estava antes → dispara popup.
   useEffect(() => {
-    if (isLoginPage || isStorePage) return;
+    if (isLoginPage || isStorePage || isStoreUser) return;
     const token =
       typeof window !== 'undefined' ? window.localStorage?.getItem('flowops_token') : null;
     if (!token) return;
