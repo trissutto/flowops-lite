@@ -1,22 +1,27 @@
 'use client';
 
 /**
- * HorarioGrid — turno por dia da semana.
+ * HorarioGrid — turno por dia da semana com intervalo de almoço (intrajornada CLT).
  *
- * Estrutura armazenada (string JSON em sellers.horarioTrabalho):
+ * Estrutura JSON armazenada em sellers.horarioTrabalho:
  *   [
- *     { dia: 'SEG', inicio: '09:00', fim: '18:00', folga: false },
- *     { dia: 'TER', inicio: '09:00', fim: '18:00', folga: false },
- *     ...
+ *     {
+ *       dia: 'SEG',
+ *       inicio: '09:00',
+ *       fim: '18:00',
+ *       almocoInicio: '12:00',
+ *       almocoFim: '13:00',
+ *       temAlmoco: true,
+ *       folga: false
+ *     },
  *     { dia: 'DOM', folga: true }
  *   ]
  *
- * Se "folga: true" → não exibe horario.
- * Onload aceita JSON parseado ou string serializada.
+ * Default: 09-18 com almoço 12-13 (1h CLT). Folga: domingo.
  */
 
 import { useEffect, useState } from 'react';
-import { Clock } from 'lucide-react';
+import { Clock, Coffee, Utensils } from 'lucide-react';
 
 const DIAS = [
   { key: 'SEG', label: 'Segunda' },
@@ -32,6 +37,9 @@ type Turno = {
   dia: string;
   inicio?: string;
   fim?: string;
+  almocoInicio?: string;
+  almocoFim?: string;
+  temAlmoco?: boolean;
   folga?: boolean;
 };
 
@@ -50,12 +58,44 @@ function parseValue(v: any): Turno[] {
 }
 
 function normalize(turnos: Turno[]): Turno[] {
-  // Garante 7 dias sempre
   return DIAS.map((d) => {
     const existing = turnos.find((t) => t.dia === d.key);
-    if (existing) return existing;
-    return { dia: d.key, inicio: '09:00', fim: '18:00', folga: false };
+    if (existing) {
+      // Backfill almoço default caso prontuario antigo nao tenha o campo
+      return {
+        temAlmoco: existing.folga ? false : existing.temAlmoco ?? true,
+        almocoInicio: existing.almocoInicio || '12:00',
+        almocoFim: existing.almocoFim || '13:00',
+        ...existing,
+      };
+    }
+    return {
+      dia: d.key,
+      inicio: '09:00',
+      fim: '18:00',
+      almocoInicio: '12:00',
+      almocoFim: '13:00',
+      temAlmoco: true,
+      folga: false,
+    };
   });
+}
+
+/** HH:MM → minutos */
+function toMin(s?: string): number {
+  if (!s) return 0;
+  const [h, m] = s.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function calcHoras(t: Turno): string {
+  if (t.folga) return '—';
+  let total = toMin(t.fim) - toMin(t.inicio);
+  if (t.temAlmoco) total -= toMin(t.almocoFim) - toMin(t.almocoInicio);
+  if (total <= 0) return '0h';
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`;
 }
 
 export default function HorarioGrid({
@@ -79,29 +119,43 @@ export default function HorarioGrid({
   }
 
   function aplicarPadrao() {
-    // 9-18 seg-sab, dom folga
+    // 9-18 seg-sab, almoço 12-13, dom folga
     const padrao = DIAS.map((d) => ({
       dia: d.key,
       inicio: '09:00',
       fim: '18:00',
+      almocoInicio: '12:00',
+      almocoFim: '13:00',
+      temAlmoco: d.key !== 'DOM',
       folga: d.key === 'DOM',
     }));
     setTurnos(padrao);
     onChange(padrao);
   }
 
+  // Soma semanal
+  const totalSemanaMin = turnos.reduce((acc, t) => {
+    if (t.folga) return acc;
+    let m = toMin(t.fim) - toMin(t.inicio);
+    if (t.temAlmoco) m -= toMin(t.almocoFim) - toMin(t.almocoInicio);
+    return acc + Math.max(0, m);
+  }, 0);
+  const totalHorasSemana =
+    Math.floor(totalSemanaMin / 60) +
+    (totalSemanaMin % 60 ? `:${String(totalSemanaMin % 60).padStart(2, '0')}` : 'h');
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <p className="text-xs text-slate-500">
-          Marque os dias de folga. Edite horários por turno.
+          Marque os dias de folga. Almoço entra no cálculo da carga horária.
         </p>
         <button
           type="button"
           onClick={aplicarPadrao}
           className="text-xs text-emerald-700 font-bold hover:underline"
         >
-          Aplicar padrão (9-18, dom folga)
+          Aplicar padrão (9-18, almoço 12-13, dom folga)
         </button>
       </div>
 
@@ -111,14 +165,17 @@ export default function HorarioGrid({
           return (
             <div
               key={t.dia}
-              className={`grid grid-cols-12 gap-2 items-center p-2 rounded border ${
-                t.folga ? 'bg-slate-50 border-slate-200' : 'bg-white border-slate-200'
+              className={`p-2.5 rounded border ${
+                t.folga
+                  ? 'bg-slate-50 border-slate-200'
+                  : 'bg-white border-slate-200'
               }`}
             >
-              <div className="col-span-3 text-sm font-bold text-slate-700">
-                {dia?.label}
-              </div>
-              <div className="col-span-3">
+              {/* Linha 1: dia + folga + horas calculadas */}
+              <div className="flex items-center gap-2 mb-2">
+                <div className="font-bold text-sm text-slate-700 w-20">
+                  {dia?.label}
+                </div>
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
                   <input
                     type="checkbox"
@@ -128,36 +185,98 @@ export default function HorarioGrid({
                   />
                   Folga
                 </label>
+                <div className="flex-1" />
+                <div className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                  {calcHoras(t)}
+                </div>
               </div>
-              {!t.folga ? (
+
+              {!t.folga && (
                 <>
-                  <div className="col-span-3 flex items-center gap-1">
-                    <Clock className="w-3 h-3 text-slate-400" />
-                    <input
-                      type="time"
-                      value={t.inicio || '09:00'}
-                      onChange={(e) => update(idx, { inicio: e.target.value })}
-                      className="flex-1 px-2 py-1 border rounded text-sm"
-                    />
+                  {/* Linha 2: entrada e saída */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                      <Clock className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                      <span className="w-12">Entra</span>
+                      <input
+                        type="time"
+                        value={t.inicio || '09:00'}
+                        onChange={(e) => update(idx, { inicio: e.target.value })}
+                        className="flex-1 px-2 py-1 border rounded text-sm"
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                      <Clock className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                      <span className="w-12">Sai</span>
+                      <input
+                        type="time"
+                        value={t.fim || '18:00'}
+                        onChange={(e) => update(idx, { fim: e.target.value })}
+                        className="flex-1 px-2 py-1 border rounded text-sm"
+                      />
+                    </label>
                   </div>
-                  <div className="col-span-3 flex items-center gap-1">
-                    <span className="text-xs text-slate-400">às</span>
-                    <input
-                      type="time"
-                      value={t.fim || '18:00'}
-                      onChange={(e) => update(idx, { fim: e.target.value })}
-                      className="flex-1 px-2 py-1 border rounded text-sm"
-                    />
+
+                  {/* Linha 3: almoço */}
+                  <div className="mt-2 pt-2 border-t border-dashed border-slate-200">
+                    <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer mb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={!!t.temAlmoco}
+                        onChange={(e) =>
+                          update(idx, { temAlmoco: e.target.checked })
+                        }
+                        className="w-3.5 h-3.5"
+                      />
+                      <Utensils className="w-3 h-3 text-amber-600" />
+                      <span className="font-bold">Intervalo de almoço</span>
+                    </label>
+                    {t.temAlmoco && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                          <Coffee className="w-3 h-3 text-amber-600 flex-shrink-0" />
+                          <span className="w-12">Saída</span>
+                          <input
+                            type="time"
+                            value={t.almocoInicio || '12:00'}
+                            onChange={(e) =>
+                              update(idx, { almocoInicio: e.target.value })
+                            }
+                            className="flex-1 px-2 py-1 border rounded text-sm bg-amber-50/50"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                          <Coffee className="w-3 h-3 text-amber-600 flex-shrink-0" />
+                          <span className="w-12">Volta</span>
+                          <input
+                            type="time"
+                            value={t.almocoFim || '13:00'}
+                            onChange={(e) =>
+                              update(idx, { almocoFim: e.target.value })
+                            }
+                            className="flex-1 px-2 py-1 border rounded text-sm bg-amber-50/50"
+                          />
+                        </label>
+                      </div>
+                    )}
                   </div>
                 </>
-              ) : (
-                <div className="col-span-6 text-xs text-slate-500 italic">
-                  — dia de folga
-                </div>
               )}
             </div>
           );
         })}
+      </div>
+
+      {/* Total semanal */}
+      <div className="mt-3 flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+        <span className="text-sm font-bold text-emerald-800">
+          Carga horária semanal
+        </span>
+        <span className="text-lg font-bold text-emerald-700">
+          {typeof totalHorasSemana === 'string'
+            ? totalHorasSemana
+            : `${totalHorasSemana}h`}
+        </span>
       </div>
     </div>
   );

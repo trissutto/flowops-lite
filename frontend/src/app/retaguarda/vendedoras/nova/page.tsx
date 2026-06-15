@@ -17,9 +17,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, Save, Loader2, User, Briefcase, Plane, DollarSign,
-  FileText, Calendar, MapPin, AlertCircle,
+  FileText, Calendar, MapPin, AlertCircle, Clock,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import HorarioGrid from '@/components/rh/HorarioGrid';
 
 type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
 
@@ -61,6 +62,8 @@ export default function NovaFuncionariaPage() {
   // Férias
   const [dataInicioFerias, setDataInicioFerias] = useState('');
   const [dataFimFerias, setDataFimFerias] = useState('');
+  // Horário de trabalho (com almoço)
+  const [horarioTrabalho, setHorarioTrabalho] = useState<any>(null);
   // Obs
   const [observacoes, setObservacoes] = useState('');
 
@@ -126,6 +129,7 @@ export default function NovaFuncionariaPage() {
         salarioBase: salarioBase ? Number(salarioBase) : undefined,
         dataInicioFerias: dataInicioFerias || undefined,
         dataFimFerias: dataFimFerias || undefined,
+        horarioTrabalho: horarioTrabalho ?? undefined,
         observacoes: observacoes || undefined,
         storeCodeOrigin: storeCodeOrigin || undefined,
       };
@@ -309,6 +313,11 @@ export default function NovaFuncionariaPage() {
               />
             </Field>
           </Grid>
+        </Section>
+
+        {/* HORÁRIO DE TRABALHO */}
+        <Section icon={<Clock />} title="Horário de trabalho (com almoço)">
+          <HorarioGrid value={horarioTrabalho} onChange={setHorarioTrabalho} />
         </Section>
 
         {/* FÉRIAS */}

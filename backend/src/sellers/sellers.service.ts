@@ -284,6 +284,7 @@ export class SellersService {
     salarioBase?: number;
     dataInicioFerias?: string | null;
     dataFimFerias?: string | null;
+    horarioTrabalho?: any;
     observacoes?: string;
     storeCodeOrigin?: string;
   }) {
@@ -329,6 +330,12 @@ export class SellersService {
           salarioBase: input.salarioBase != null ? input.salarioBase : null,
           dataInicioFerias: input.dataInicioFerias ? new Date(input.dataInicioFerias) : null,
           dataFimFerias: input.dataFimFerias ? new Date(input.dataFimFerias) : null,
+          horarioTrabalho:
+            input.horarioTrabalho != null
+              ? typeof input.horarioTrabalho === 'string'
+                ? input.horarioTrabalho
+                : JSON.stringify(input.horarioTrabalho)
+              : null,
           observacoes: input.observacoes || null,
           storeCodeOrigin: input.storeCodeOrigin || null,
         } as any,
