@@ -169,32 +169,40 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
 
     (async () => {
       try {
-        setStatusMsg('Baixando engine (~7MB, 1ª vez)...');
-        await loadFaceApiScript();
-        if (cancelled) return;
+        // 1) Dispara getUserMedia IMEDIATAMENTE em paralelo com tudo.
+        // Câmera USB demora 1-3s pra inicializar — não faz sentido esperar
+        // os modelos carregarem antes de chamar getUserMedia.
+        setStatusMsg('Inicializando câmera + modelos em paralelo...');
+        const cameraPromise = navigator.mediaDevices
+          .getUserMedia({
+            video: {
+              width: { ideal: VIDEO_W },
+              height: { ideal: VIDEO_H },
+              facingMode: 'user',
+              frameRate: { ideal: 15 },
+            },
+            audio: false,
+          })
+          .catch((e) => {
+            throw new Error(`Câmera: ${e?.message || e}`);
+          });
 
-        setStatusMsg('Carregando modelo...');
-        await loadModels();
-        if (cancelled) return;
+        // 2) Em paralelo: carrega face-api script + modelos + warm-up.
+        const enginePromise = (async () => {
+          await loadFaceApiScript();
+          if (cancelled) return;
+          await loadModels();
+          if (cancelled) return;
+          await warmUp();
+        })();
 
-        setStatusMsg('Pré-aquecendo (1ª inferência)...');
-        await warmUp();
-        if (cancelled) return;
-
-        setStatusMsg('Acessando câmera...');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: VIDEO_W },
-            height: { ideal: VIDEO_H },
-            facingMode: 'user',
-            frameRate: { ideal: 15 }, // 15fps é suficiente, economiza CPU
-          },
-          audio: false,
-        });
+        // 3) Aguarda ambos
+        const [stream] = await Promise.all([cameraPromise, enginePromise]);
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
