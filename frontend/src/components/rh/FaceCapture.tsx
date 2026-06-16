@@ -23,7 +23,11 @@ import {
 import { Camera, Loader2, AlertTriangle } from 'lucide-react';
 
 const FACE_API_CDN = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
-const MODELS_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+// Pesos hospedados LOCALMENTE no Vercel (/public/face-models/).
+// Antes vinha do CDN GitHub — agora vem do mesmo domínio:
+//   ✓ 1ª visita: download direto do Vercel CDN
+//   ✓ 2ª visita: Service Worker serve do cache → INSTANTÂNEO
+const MODELS_URL = '/face-models';
 
 // Resolução do <video> e dos buffers de processamento.
 // 320×240 é suficiente pra reconhecimento + 4× mais rápido que 640×480.
