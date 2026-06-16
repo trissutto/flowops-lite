@@ -32,6 +32,13 @@
   ],
   "shortcuts": [
     {
+      "name": "Bater Ponto",
+      "short_name": "Ponto",
+      "description": "Ponto eletrônico (reconhecimento facial)",
+      "url": "/minha-loja/ponto",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
       "name": "PDV",
       "short_name": "PDV",
       "description": "Frente de caixa",
