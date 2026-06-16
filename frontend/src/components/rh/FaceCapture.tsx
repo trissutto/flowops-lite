@@ -31,10 +31,11 @@ const VIDEO_W = 320;
 const VIDEO_H = 240;
 
 // 2 inputSizes: rápido pra triagem (frame vazio), preciso pra match.
-// 128 = ultra rápido (~30-50ms), só pra dizer "tem rosto sim ou não".
-// 224 = balanceado (~200-300ms), usado quando vai extrair descriptor.
-const DETECTOR_INPUT_SIZE_FAST = 128;   // triagem
-const DETECTOR_INPUT_SIZE_FULL = 224;   // match completo
+// 96  = ultra rápido (~20-40ms), só pra dizer "tem rosto sim ou não".
+// 192 = OK (~150-250ms), usado quando vai extrair descriptor.
+// (Antes era 128/224 — caímos pra 96/192 pra hardware fraco.)
+const DETECTOR_INPUT_SIZE_FAST = 96;
+const DETECTOR_INPUT_SIZE_FULL = 192;
 const DETECTOR_SCORE_THRESHOLD = 0.5;
 
 declare global {
@@ -73,9 +74,17 @@ async function loadModels(): Promise<void> {
       if (f.tf && typeof f.tf.setBackend === 'function') {
         await f.tf.setBackend('webgl');
         await f.tf.ready();
+        const backend = f.tf.getBackend();
+        // eslint-disable-next-line no-console
+        console.log(`[FaceCapture] TF.js backend ativo: ${backend}`);
+        if (backend !== 'webgl') {
+          // eslint-disable-next-line no-console
+          console.warn(`[FaceCapture] ⚠️ WebGL não disponível — usando "${backend}" (lento). Verifique chrome://gpu`);
+        }
       }
-    } catch (e) {
-      // Sem WebGL → cai pro default (provavelmente CPU)
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.warn(`[FaceCapture] falha setBackend: ${e?.message || e}`);
     }
 
     await Promise.all([

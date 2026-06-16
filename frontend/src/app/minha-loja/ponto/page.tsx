@@ -196,10 +196,13 @@ export default function PontoPage() {
       ) {
         setAlreadyDone({ name: match.seller.name });
         cooldownRef.current.add(match.seller.id);
+        // Cooldown 90s pra mesma vendedora — ela já bateu, vai pra casa.
+        // Antes era 5min. Reduzido pq vendedora pode esquecer e voltar.
         setTimeout(() => {
           cooldownRef.current.delete(match.seller.id);
-        }, 5 * 60_000); // 5 min cooldown
-        setTimeout(() => setAlreadyDone(null), 6000);
+        }, 90_000);
+        // Card "ja bateu" some em 2s (antes 6s). Suficiente pra ler.
+        setTimeout(() => setAlreadyDone(null), 2000);
       } else {
         setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
         cooldownRef.current.add(match.seller.id);
