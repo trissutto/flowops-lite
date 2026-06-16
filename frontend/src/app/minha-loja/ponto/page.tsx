@@ -98,7 +98,8 @@ function findBestMatch(
 
 export default function PontoPage() {
   const captureRef = useRef<FaceCaptureHandle>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Flag: loop de detecção ativo? Usado pra parar o self-scheduling. */
+  const loopActiveRef = useRef<boolean>(false);
   const cooldownRef = useRef<Set<string>>(new Set());
 
   const [me, setMe] = useState<Me | null>(null);
