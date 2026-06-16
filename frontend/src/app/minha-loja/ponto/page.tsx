@@ -1,23 +1,23 @@
 'use client';
 
 /**
- * /minha-loja/ponto — Bater ponto eletrônico no PDV (face recognition).
+ * /minha-loja/ponto — Bater ponto eletrônico (modo AUTOMÁTICO).
  *
  * Fluxo:
  *  1. Carrega face-api.js + descriptors das vendedoras da loja
- *  2. Camera ativa em loop: a cada 1.2s, detecta rosto e compara
- *  3. Se distância < THRESHOLD (0.5) com algum descriptor → exibe nome + 4 botões
- *  4. Vendedora confirma tipo → POST /ponto/registrar → toast "ok, bateu"
- *  5. Volta pro modo "aguardando"
- *
- * Threshold 0.5 = ~80% de confiança (padrão face-api.js é 0.6).
- * Quanto MENOR a distância, MAIS parecido. 0 = idêntico, 1 = nada a ver.
+ *  2. Camera ativa em loop: a cada 1.2s detecta rosto e compara
+ *  3. Match (dist < 0.5) → backend resolve qual tipo bater (auto):
+ *       - 1ª do dia: entrada
+ *       - 2ª: saída almoço
+ *       - 3ª: volta almoço
+ *       - 4ª: saída
+ *  4. Tela mostra "✓ Olá Thiago, Entrada Registrada"
+ *  5. Cooldown 60s por vendedora pra não bater igual em sequência
  */
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, Camera, CheckCircle2, LogIn, LogOut, Coffee, Utensils,
-  Loader2, AlertTriangle, History, RotateCcw,
+  ArrowLeft, Camera, CheckCircle2, History, Loader2, AlertTriangle,
 } from 'lucide-react';
 import Link from 'next/link';
 import FaceCapture, { FaceCaptureHandle } from '@/components/rh/FaceCapture';
@@ -32,39 +32,16 @@ type SellerDescriptors = {
 
 type Me = { id: string; storeId: string; storeName: string };
 
-const MATCH_THRESHOLD = 0.5; // distância euclidiana — menor = mais parecido
+const MATCH_THRESHOLD = 0.5; // < = mais parecido
 const DETECT_INTERVAL_MS = 1200;
+const COOLDOWN_AFTER_REGISTER_MS = 60_000; // 60s sem matchar o mesmo seller
 
-const TIPOS = [
-  {
-    key: 'entrada',
-    label: 'ENTRADA',
-    icon: LogIn,
-    color: 'bg-emerald-500 hover:bg-emerald-600',
-    light: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  },
-  {
-    key: 'saida_almoco',
-    label: 'SAÍDA ALMOÇO',
-    icon: Utensils,
-    color: 'bg-amber-500 hover:bg-amber-600',
-    light: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  {
-    key: 'volta_almoco',
-    label: 'VOLTA ALMOÇO',
-    icon: Coffee,
-    color: 'bg-amber-600 hover:bg-amber-700',
-    light: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  {
-    key: 'saida',
-    label: 'SAÍDA',
-    icon: LogOut,
-    color: 'bg-rose-500 hover:bg-rose-600',
-    light: 'bg-rose-50 text-rose-700 border-rose-200',
-  },
-];
+const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }> = {
+  entrada:      { texto: 'Entrada Registrada',           cor: 'bg-emerald-500', emoji: '🟢' },
+  saida_almoco: { texto: 'Saída para almoço Registrada', cor: 'bg-amber-500',   emoji: '🍽️' },
+  volta_almoco: { texto: 'Volta do almoço Registrada',   cor: 'bg-amber-600',   emoji: '☕' },
+  saida:        { texto: 'Saída Registrada',             cor: 'bg-rose-500',    emoji: '🔴' },
+};
 
 function euclidean(a: number[], b: number[]): number {
   let sum = 0;
@@ -94,24 +71,26 @@ function findBestMatch(
 export default function PontoPage() {
   const captureRef = useRef<FaceCaptureHandle>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cooldownRef = useRef<Set<string>>(new Set());
 
   const [me, setMe] = useState<Me | null>(null);
   const [sellers, setSellers] = useState<SellerDescriptors[]>([]);
-  const [matched, setMatched] = useState<{ seller: SellerDescriptors; distance: number } | null>(null);
-  const [registering, setRegistering] = useState<string | null>(null);
-  const [lastSuccess, setLastSuccess] = useState<{ name: string; tipo: string; at: Date } | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [lastSuccess, setLastSuccess] = useState<{
+    name: string;
+    tipo: string;
+    at: Date;
+  } | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Carrega "me" pra pegar storeId
   useEffect(() => {
     api<Me>('/auth/me')
       .then((m) => setMe(m))
       .catch((e) => setErrorMsg(e?.message || 'Falha ao carregar usuário'));
   }, []);
 
-  // Quando tem storeId, carrega descriptors
   useEffect(() => {
     if (!me?.storeId) return;
     setLoadingDescriptors(true);
@@ -121,9 +100,54 @@ export default function PontoPage() {
       .finally(() => setLoadingDescriptors(false));
   }, [me?.storeId]);
 
+  async function baterAuto(match: { seller: SellerDescriptors; distance: number }) {
+    if (!me?.storeId) return;
+    setRegistering(true);
+    setErrorMsg(null);
+    try {
+      const snapshot = captureRef.current?.captureSnapshot() || undefined;
+      const confidence = 1 - match.distance;
+      const r = await api<{ ok: boolean; tipo: string }>('/ponto/registrar', {
+        method: 'POST',
+        body: JSON.stringify({
+          sellerId: match.seller.id,
+          storeId: me.storeId,
+          tipo: 'auto',
+          source: 'face_pdv',
+          faceConfidence: confidence,
+          snapshot,
+        }),
+      });
+      setLastSuccess({
+        name: match.seller.name,
+        tipo: r.tipo,
+        at: new Date(),
+      });
+      // Cooldown: evita re-bater o mesmo seller logo em seguida
+      cooldownRef.current.add(match.seller.id);
+      setTimeout(() => {
+        cooldownRef.current.delete(match.seller.id);
+      }, COOLDOWN_AFTER_REGISTER_MS);
+
+      // Volta ao "aguardando" depois de 5s
+      setTimeout(() => setLastSuccess(null), 5000);
+    } catch (e: any) {
+      const msg = e?.message || 'Falha ao registrar';
+      setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
+      // Cooldown também em erro (evita spam de erros)
+      cooldownRef.current.add(match.seller.id);
+      setTimeout(() => {
+        cooldownRef.current.delete(match.seller.id);
+      }, 15_000); // 15s em caso de erro
+      setTimeout(() => setErrorMsg(null), 5000);
+    } finally {
+      setRegistering(false);
+    }
+  }
+
   // Loop de detecção
   useEffect(() => {
-    if (!ready || sellers.length === 0 || matched || registering) {
+    if (!ready || sellers.length === 0 || registering || lastSuccess) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -132,16 +156,20 @@ export default function PontoPage() {
     }
 
     intervalRef.current = setInterval(async () => {
-      if (!captureRef.current || matched || registering) return;
+      if (!captureRef.current || registering) return;
       try {
         const desc = await captureRef.current.captureDescriptor();
         if (!desc) return;
         const best = findBestMatch(desc, sellers);
-        if (best && best.distance < MATCH_THRESHOLD) {
-          setMatched(best);
+        if (
+          best &&
+          best.distance < MATCH_THRESHOLD &&
+          !cooldownRef.current.has(best.seller.id)
+        ) {
+          await baterAuto(best);
         }
       } catch (e) {
-        // silently ignore — próximo frame tenta de novo
+        // ignora frame
       }
     }, DETECT_INTERVAL_MS);
 
@@ -151,51 +179,10 @@ export default function PontoPage() {
         intervalRef.current = null;
       }
     };
-  }, [ready, sellers, matched, registering]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, sellers, registering, lastSuccess]);
 
-  async function bater(tipo: string) {
-    if (!matched || !me?.storeId) return;
-    setRegistering(tipo);
-    setErrorMsg(null);
-    try {
-      const snapshot = captureRef.current?.captureSnapshot() || undefined;
-      const confidence = 1 - matched.distance; // distância → confiança
-      await api('/ponto/registrar', {
-        method: 'POST',
-        body: JSON.stringify({
-          sellerId: matched.seller.id,
-          storeId: me.storeId,
-          tipo,
-          source: 'face_pdv',
-          faceConfidence: confidence,
-          snapshot,
-        }),
-      });
-      setLastSuccess({
-        name: matched.seller.name,
-        tipo,
-        at: new Date(),
-      });
-      // Volta pra modo aguardando após 4s
-      setTimeout(() => {
-        setLastSuccess(null);
-        setMatched(null);
-      }, 4000);
-    } catch (e: any) {
-      setErrorMsg(e?.message || 'Falha ao registrar');
-      setTimeout(() => {
-        setMatched(null);
-        setErrorMsg(null);
-      }, 3500);
-    } finally {
-      setRegistering(null);
-    }
-  }
-
-  function cancelar() {
-    setMatched(null);
-    setErrorMsg(null);
-  }
+  const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -228,78 +215,45 @@ export default function PontoPage() {
           showStatus={false}
         />
 
-        {/* Sucesso! */}
-        {lastSuccess && (
-          <div className="bg-emerald-500 text-white rounded-xl p-5 text-center shadow-lg animate-in fade-in zoom-in">
-            <CheckCircle2 className="w-12 h-12 mx-auto mb-2" />
-            <p className="text-sm uppercase font-bold opacity-90">
-              {TIPOS.find((t) => t.key === lastSuccess.tipo)?.label}
+        {/* Sucesso */}
+        {lastSuccess && tipoInfo && (
+          <div className={`${tipoInfo.cor} text-white rounded-xl p-6 text-center shadow-lg animate-in fade-in zoom-in`}>
+            <CheckCircle2 className="w-14 h-14 mx-auto mb-3" />
+            <p className="text-3xl font-bold">
+              Olá, {lastSuccess.name.split(' ')[0]}
             </p>
-            <p className="text-2xl font-bold mt-1">{lastSuccess.name}</p>
-            <p className="text-xs opacity-80 mt-1">
+            <p className="text-xl font-bold mt-2 opacity-95">
+              {tipoInfo.emoji} {tipoInfo.texto}
+            </p>
+            <p className="text-sm opacity-80 mt-2">
               {lastSuccess.at.toLocaleTimeString('pt-BR')}
             </p>
-          </div>
-        )}
-
-        {/* Match — escolhe tipo */}
-        {matched && !lastSuccess && (
-          <div className="bg-white border-2 border-emerald-500 rounded-xl p-4 shadow-lg">
-            <div className="text-center mb-3">
-              <p className="text-xs uppercase font-bold text-emerald-700">
-                ✓ Reconhecida ({(100 - matched.distance * 100).toFixed(0)}% confiança)
-              </p>
-              <h2 className="text-2xl font-bold text-slate-800">
-                Oi, {matched.seller.name.split(' ')[0]}!
-              </h2>
-              <p className="text-xs text-slate-500">{matched.seller.cargo}</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              {TIPOS.map((t) => {
-                const Icon = t.icon;
-                const isThis = registering === t.key;
-                return (
-                  <button
-                    key={t.key}
-                    onClick={() => bater(t.key)}
-                    disabled={!!registering}
-                    className={`${t.color} disabled:opacity-50 text-white font-bold py-4 px-3 rounded-lg flex flex-col items-center gap-1 transition`}
-                  >
-                    {isThis ? (
-                      <Loader2 className="w-6 h-6 animate-spin" />
-                    ) : (
-                      <Icon className="w-6 h-6" />
-                    )}
-                    <span className="text-xs">{t.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              onClick={cancelar}
-              disabled={!!registering}
-              className="w-full text-xs text-slate-500 hover:text-slate-700 mt-1 flex items-center justify-center gap-1"
-            >
-              <RotateCcw className="w-3 h-3" />
-              Não sou eu / cancelar
-            </button>
-          </div>
-        )}
-
-        {/* Aguardando — instrução */}
-        {!matched && !lastSuccess && ready && sellers.length > 0 && (
-          <div className="bg-slate-800 border border-slate-700 text-white rounded-xl p-5 text-center">
-            <Camera className="w-10 h-10 mx-auto mb-2 text-emerald-400 animate-pulse" />
-            <p className="font-bold text-lg">Aguardando reconhecimento...</p>
-            <p className="text-sm text-white/60 mt-1">
-              Posicione o rosto na câmera
+            <p className="text-xs opacity-70 mt-3 italic">
+              Pode sair da câmera, ponto registrado ✓
             </p>
           </div>
         )}
 
-        {/* Sem descriptors */}
+        {/* Registrando */}
+        {registering && !lastSuccess && (
+          <div className="bg-emerald-600 text-white rounded-xl p-5 text-center shadow-lg">
+            <Loader2 className="w-10 h-10 mx-auto animate-spin mb-2" />
+            <p className="text-lg font-bold">Registrando...</p>
+          </div>
+        )}
+
+        {/* Aguardando */}
+        {!registering && !lastSuccess && ready && sellers.length > 0 && (
+          <div className="bg-slate-800 border border-slate-700 text-white rounded-xl p-6 text-center">
+            <Camera className="w-12 h-12 mx-auto mb-2 text-emerald-400 animate-pulse" />
+            <p className="font-bold text-xl">Posicione o rosto na câmera</p>
+            <p className="text-sm text-white/60 mt-1">
+              Reconhecimento automático em segundos
+            </p>
+          </div>
+        )}
+
+        {/* Sem cadastradas */}
         {!loadingDescriptors && sellers.length === 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
             <AlertTriangle className="w-8 h-8 text-amber-600 mx-auto mb-2" />

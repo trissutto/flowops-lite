@@ -31,6 +31,14 @@ export class PontoService {
     'saida',
   ];
 
+  /** Sequência canônica do dia. Usado pra auto-detectar próxima batida. */
+  static readonly SEQUENCIA_DIA = [
+    'entrada',
+    'saida_almoco',
+    'volta_almoco',
+    'saida',
+  ];
+
   static readonly SOURCES_VALIDOS = ['face_pdv', 'pwa_selfie', 'manual_admin'];
 
   /** Janela mínima entre duas batidas IGUAIS (evita duplo-clique). */
@@ -198,6 +206,27 @@ export class PontoService {
 
   // ── REGISTRAR PONTO ───────────────────────────────────────────────
 
+  /**
+   * Retorna o próximo tipo da sequência do dia que ainda NÃO foi batido.
+   * Retorna null se já completou os 4.
+   */
+  async getNextTipoForSeller(sellerId: string): Promise<string | null> {
+    const now = new Date();
+    const inicioDia = new Date(now);
+    inicioDia.setHours(0, 0, 0, 0);
+
+    const batidas = await (this.prisma as any).pontoRegistro.findMany({
+      where: {
+        sellerId,
+        timestamp: { gte: inicioDia, lte: now },
+      },
+      select: { tipo: true },
+    });
+
+    const batidasSet = new Set(batidas.map((b: any) => b.tipo));
+    return PontoService.SEQUENCIA_DIA.find((t) => !batidasSet.has(t)) || null;
+  }
+
   async registrar(input: {
     sellerId: string;
     storeId: string;
@@ -210,10 +239,23 @@ export class PontoService {
     ip?: string;
     observacoes?: string;
   }) {
-    const tipo = (input.tipo || '').toLowerCase();
+    let tipo = (input.tipo || '').toLowerCase();
+
+    // tipo === 'auto' → backend detecta a próxima batida da sequência do dia.
+    // Vendedora não escolhe nada; primeira do dia vira entrada, segunda saída-almoço, etc.
+    if (tipo === 'auto') {
+      const next = await this.getNextTipoForSeller(input.sellerId);
+      if (!next) {
+        throw new BadRequestException(
+          'Você já bateu os 4 pontos do dia. Volta amanhã!',
+        );
+      }
+      tipo = next;
+    }
+
     if (!PontoService.TIPOS_VALIDOS.includes(tipo)) {
       throw new BadRequestException(
-        `Tipo inválido. Use: ${PontoService.TIPOS_VALIDOS.join(', ')}`,
+        `Tipo inválido. Use: ${PontoService.TIPOS_VALIDOS.join(', ')} ou "auto"`,
       );
     }
     const source = (input.source || 'face_pdv').toLowerCase();
@@ -278,6 +320,7 @@ export class PontoService {
 
     return {
       ok: true,
+      tipo, // tipo final que foi registrado (resolved se veio "auto")
       registro: reg,
       seller: { id: seller.id, name: seller.name },
     };

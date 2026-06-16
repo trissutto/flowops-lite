@@ -34,6 +34,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
+  Fingerprint,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -872,7 +873,7 @@ function openPrintWindow(pickOrderId: string) {
 // card cheia-largura com badge pra ficar impossível de ignorar.
 function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { realignmentPending?: number; shipmentsIncoming?: number }) {
   // 7 cards grandes coloridos — mesmo estilo da retaguarda (/site, /loja, etc.)
-  type Tone = 'teal' | 'rose' | 'orange' | 'purple' | 'amber' | 'sky' | 'green';
+  type Tone = 'teal' | 'rose' | 'orange' | 'purple' | 'amber' | 'sky' | 'green' | 'indigo';
   const items: Array<{
     href: string;
     icon: any;
@@ -889,6 +890,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/materiais',     icon: Package2,     label: 'Materiais',      subtitle: 'Suprimentos', description: 'Sacolas, etiquetas…',      tone: 'amber'  },
     { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
+    { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
   ];
 
   const TONES: Record<Tone, { from: string; to: string }> = {
@@ -899,6 +901,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     amber:  { from: '#c9a96e', to: '#8a7340' },
     sky:    { from: '#3b82a8', to: '#1f5f80' },
     green:  { from: '#5b9b3e', to: '#3f7029' },
+    indigo: { from: '#4f46e5', to: '#312e81' },
   };
 
   return (
