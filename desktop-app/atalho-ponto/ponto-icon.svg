@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Fundo circular verde Lurd's -->
+  <circle cx="128" cy="128" r="120" fill="#0e7e87"/>
+  <circle cx="128" cy="128" r="100" fill="#ffffff"/>
+
+  <!-- Marcadores de hora (12, 3, 6, 9) -->
+  <rect x="123" y="36" width="10" height="22" rx="2" fill="#0e7e87"/>
+  <rect x="198" y="123" width="22" height="10" rx="2" fill="#0e7e87"/>
+  <rect x="123" y="198" width="10" height="22" rx="2" fill="#0e7e87"/>
+  <rect x="36"  y="123" width="22" height="10" rx="2" fill="#0e7e87"/>
+
+  <!-- Marcadores menores -->
+  <circle cx="180" cy="68"  r="4" fill="#94a3b8"/>
+  <circle cx="220" cy="103" r="4" fill="#94a3b8"/>
+  <circle cx="220" cy="153" r="4" fill="#94a3b8"/>
+  <circle cx="180" cy="188" r="4" fill="#94a3b8"/>
+  <circle cx="76"  cy="188" r="4" fill="#94a3b8"/>
+  <circle cx="36"  cy="153" r="4" fill="#94a3b8"/>
+  <circle cx="36"  cy="103" r="4" fill="#94a3b8"/>
+  <circle cx="76"  cy="68"  r="4" fill="#94a3b8"/>
+
+  <!-- Ponteiro de hora (apontando 10h) -->
+  <line x1="128" y1="128" x2="86" y2="86" stroke="#0e7e87" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- Ponteiro de minuto (apontando 12) -->
+  <line x1="128" y1="128" x2="128" y2="52" stroke="#0e7e87" stroke-width="7" stroke-linecap="round"/>
+
+  <!-- Ponteiro de segundos (vermelho) -->
+  <line x1="128" y1="128" x2="172" y2="140" stroke="#e11d48" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Centro -->
+  <circle cx="128" cy="128" r="10" fill="#0e7e87"/>
+  <circle cx="128" cy="128" r="4" fill="#ffffff"/>
+</svg>
