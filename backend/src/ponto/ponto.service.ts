@@ -180,18 +180,33 @@ export class PontoService {
   }
 
   /**
-   * Retorna descriptors de TODAS as vendedoras ativas da loja.
+   * Retorna descriptors das vendedoras ATIVAS dessa loja específica.
    * Usado pelo PDV pra fazer matching local sem ir no servidor a cada frame.
-   * Não retorna o snapshot (a foto referencia) — só ID + nome + descriptors.
+   *
+   * IMPORTANTE — escopo da loja:
+   *   - VENDEDORA: filtrada por storeCodeOrigin = code da loja
+   *   - LIDER/GERENTE: filtrada por responsibleStoreId = id da loja
+   *
+   * BUG ANTERIOR (16/06): o filtro era `storeCodeOrigin: { not: null }`
+   * (qualquer storeCodeOrigin), retornando TODAS as vendedoras das 15 lojas.
+   * Pra Itanhaém vinham ~100 sellers com descriptors → resposta de 500KB+
+   * causando timeout no PDV.
    */
   async listDescriptorsForStore(storeId: string) {
+    // Lookup do code da loja (storeCodeOrigin armazena o CODE, não o ID)
+    const store = await (this.prisma as any).store.findUnique({
+      where: { id: storeId },
+      select: { code: true },
+    });
+    if (!store) return [];
+
     const sellers = await (this.prisma as any).seller.findMany({
       where: {
         active: true,
         faceDescriptors: { not: null },
         OR: [
-          { responsibleStoreId: storeId },
-          { storeCodeOrigin: { not: null } }, // fallback compat
+          { responsibleStoreId: storeId },   // líderes/gerentes dessa loja
+          { storeCodeOrigin: store.code },    // vendedoras importadas dessa loja
         ],
       },
       select: {
