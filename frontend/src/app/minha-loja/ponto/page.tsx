@@ -38,7 +38,8 @@ const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 
 const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
 const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
 const DETECT_INTERVAL_MS = 500;
-const COOLDOWN_AFTER_REGISTER_MS = 60_000;
+const COOLDOWN_AFTER_REGISTER_MS = 15_000; // antes 60s — fila anda mais rapido
+const SUCCESS_DISPLAY_MS = 2_000; // antes 5s — proxima pessoa atende rapido
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 
@@ -175,7 +176,7 @@ export default function PontoPage() {
       }, COOLDOWN_AFTER_REGISTER_MS);
 
       // Volta ao "aguardando" depois de 5s
-      setTimeout(() => setLastSuccess(null), 5000);
+      setTimeout(() => setLastSuccess(null), SUCCESS_DISPLAY_MS);
     } catch (e: any) {
       const msg = e?.message || 'Falha ao registrar';
       // Caso especial: já bateu os 4 do dia
@@ -273,6 +274,8 @@ export default function PontoPage() {
   }, [ready, sellers, registering, lastSuccess, alreadyDone]);
 
   const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
+  // Calculado fora do JSX pra evitar parser confundir o operador < com tag JSX
+  const bestIsOk = diag.bestDist !== null && diag.bestDist < MATCH_THRESHOLD;
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -360,7 +363,7 @@ export default function PontoPage() {
                 {diag.detected ? 'SIM' : 'NÃO'}
               </div>
               <div>Melhor match:</div>
-              <div className={diag.bestDist !== null && diag.bestDist < MATCH_THRESHOLD ? 'text-emerald-400' : 'text-amber-400'}>
+              <div className={bestIsOk ? 'text-emerald-400' : 'text-amber-400'}>
                 {diag.bestName || '—'} {diag.bestDist !== null && `(${diag.bestDist.toFixed(3)})`}
               </div>
               <div>2ª melhor:</div>
@@ -408,4 +411,36 @@ export default function PontoPage() {
               {tipoInfo.emoji} {tipoInfo.texto}
             </p>
             <p className="text-sm opacity-80 mt-2">
-              {lastSuccess.at.toLocaleTimeString
+              {lastSuccess.at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        )}
+
+        {/* Erro */}
+        {errorMsg && (
+          <div className="bg-rose-100 border-2 border-rose-300 text-rose-800 rounded-xl p-4 text-center">
+            <AlertTriangle className="w-6 h-6 mx-auto mb-2" />
+            <p className="font-bold">{errorMsg}</p>
+          </div>
+        )}
+
+        {/* Loading descriptors */}
+        {loadingDescriptors && (
+          <div className="text-center text-white/60 text-sm">
+            <Loader2 className="w-5 h-5 animate-spin inline-block mr-2" />
+            Carregando funcionárias...
+          </div>
+        )}
+
+        {/* Vazio */}
+        {!loadingDescriptors && sellers.length === 0 && ready && (
+          <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl p-4 text-center">
+            <Camera className="w-6 h-6 mx-auto mb-2" />
+            <p className="font-bold">Nenhuma funcionária cadastrada com biometria</p>
+            <p className="text-sm mt-1">Acesse Retaguarda → RH → Face Enroll</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
