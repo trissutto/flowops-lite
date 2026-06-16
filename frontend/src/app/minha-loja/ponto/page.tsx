@@ -32,8 +32,10 @@ type SellerDescriptors = {
 
 type Me = { id: string; storeId: string; storeName: string };
 
-const MATCH_THRESHOLD = 0.5; // < = mais parecido
-const DETECT_INTERVAL_MS = 1200;
+// Nivel 1+2 (jun/2026): otimizado pra velocidade e robustez no PDV.
+const MATCH_THRESHOLD = 0.55; // antes 0.5 (muito restritivo, gerava falso negativo)
+const RATIO_THRESHOLD = 0.85; // best/secondBest — rejeita se ambiguo (2 vendedoras parecidas)
+const DETECT_INTERVAL_MS = 500; // antes 1200ms — quase tempo real
 const COOLDOWN_AFTER_REGISTER_MS = 60_000; // 60s sem matchar o mesmo seller
 
 const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }> = {
@@ -52,20 +54,41 @@ function euclidean(a: number[], b: number[]): number {
   return Math.sqrt(sum);
 }
 
+/** Calcula o CENTROIDE (média) dos N descriptors de uma vendedora.
+ *  Mais robusto a variacao de angulo/luz do que comparar com cada um separado. */
+function centroid(descriptors: number[][]): number[] {
+  if (!descriptors.length) return [];
+  const dim = descriptors[0].length;
+  const out = new Array(dim).fill(0);
+  for (const d of descriptors) {
+    for (let i = 0; i < dim; i++) out[i] += d[i];
+  }
+  for (let i = 0; i < dim; i++) out[i] /= descriptors.length;
+  return out;
+}
+
+/** Match com centroide + ratio test (Lowe's ratio).
+ *  Calcula distancia DO descriptor capturado ate o centroide de CADA vendedora.
+ *  Aceita o melhor SE: distancia < threshold E best/secondBest < ratio. */
 function findBestMatch(
   descriptor: number[],
   sellers: SellerDescriptors[],
-): { seller: SellerDescriptors; distance: number } | null {
-  let best: { seller: SellerDescriptors; distance: number } | null = null;
+): { seller: SellerDescriptors; distance: number; ambiguous: boolean; second?: { seller: SellerDescriptors; distance: number } | null } | null {
+  const matches: Array<{ seller: SellerDescriptors; distance: number }> = [];
   for (const s of sellers) {
-    for (const d of s.descriptors) {
-      const dist = euclidean(descriptor, d);
-      if (!best || dist < best.distance) {
-        best = { seller: s, distance: dist };
-      }
-    }
+    if (!s.descriptors?.length) continue;
+    // Centroide (cached no proprio objeto pra nao recalcular a cada frame)
+    if (!(s as any)._centroid) (s as any)._centroid = centroid(s.descriptors);
+    const dist = euclidean(descriptor, (s as any)._centroid);
+    matches.push({ seller: s, distance: dist });
   }
-  return best;
+  if (!matches.length) return null;
+  matches.sort((a, b) => a.distance - b.distance);
+  const best = matches[0];
+  const second = matches[1] || null;
+  // Ratio test: se a 2a melhor distancia é proxima da 1a, é ambiguo
+  const ambiguous = !!(second && best.distance / second.distance > RATIO_THRESHOLD);
+  return { ...best, ambiguous, second };
 }
 
 export default function PontoPage() {
@@ -85,6 +108,17 @@ export default function PontoPage() {
   const [alreadyDone, setAlreadyDone] = useState<{ name: string } | null>(null);
   const [ready, setReady] = useState(false);
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
+  // PAINEL DIAGNOSTICO (jun/2026) — pra debugar lentidao/divergencia
+  const [diag, setDiag] = useState<{
+    ms: number;
+    detected: boolean;
+    bestName: string | null;
+    bestDist: number | null;
+    secondName: string | null;
+    secondDist: number | null;
+    ambiguous: boolean;
+    rejected: string | null; // motivo se nao bateu
+  }>({ ms: 0, detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: null });
 
   useEffect(() => {
     api<Me>('/auth/me')
@@ -170,17 +204,35 @@ export default function PontoPage() {
 
     intervalRef.current = setInterval(async () => {
       if (!captureRef.current || registering) return;
+      const t0 = performance.now();
       try {
         const desc = await captureRef.current.captureDescriptor();
-        if (!desc) return;
-        const best = findBestMatch(desc, sellers);
-        if (
-          best &&
-          best.distance < MATCH_THRESHOLD &&
-          !cooldownRef.current.has(best.seller.id)
-        ) {
-          await baterAuto(best);
+        const t1 = performance.now();
+        if (!desc) {
+          setDiag({ ms: Math.round(t1 - t0), detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_rosto' });
+          return;
         }
+        const best = findBestMatch(desc, sellers);
+        if (!best) {
+          setDiag({ ms: Math.round(t1 - t0), detected: true, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_match' });
+          return;
+        }
+        // Atualiza painel de diagnostico
+        let rejected: string | null = null;
+        if (best.distance >= MATCH_THRESHOLD) rejected = `distancia ${best.distance.toFixed(3)} >= ${MATCH_THRESHOLD}`;
+        else if (best.ambiguous) rejected = `ambiguo (best/second=${(best.distance / (best.second?.distance || 1)).toFixed(2)})`;
+        else if (cooldownRef.current.has(best.seller.id)) rejected = 'cooldown';
+        setDiag({
+          ms: Math.round(t1 - t0),
+          detected: true,
+          bestName: best.seller.name,
+          bestDist: best.distance,
+          secondName: best.second?.seller.name || null,
+          secondDist: best.second?.distance ?? null,
+          ambiguous: best.ambiguous,
+          rejected,
+        });
+        if (!rejected) await baterAuto(best);
       } catch (e) {
         // ignora frame
       }
@@ -227,6 +279,41 @@ export default function PontoPage() {
           onError={(err) => setErrorMsg(err)}
           showStatus={false}
         />
+
+        {/* PAINEL DIAGNOSTICO — mostra status de cada frame.
+            Pra esconder: adicionar ?debug=0 na URL. */}
+        {ready && typeof window !== 'undefined' && !window.location.search.includes('debug=0') && (
+          <div className="bg-slate-900 text-white rounded-xl p-3 text-[11px] font-mono space-y-1 shadow">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-1 mb-1">
+              <span className="text-emerald-400 font-bold">⚡ DIAG</span>
+              <span className="opacity-60">{diag.ms}ms · {sellers.length} vend cadastradas</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              <div>Rosto detectado:</div>
+              <div className={diag.detected ? 'text-emerald-400' : 'text-rose-400'}>
+                {diag.detected ? 'SIM' : 'NÃO'}
+              </div>
+              <div>Melhor match:</div>
+              <div className={diag.bestDist !== null && diag.bestDist < MATCH_THRESHOLD ? 'text-emerald-400' : 'text-amber-400'}>
+                {diag.bestName || '—'} {diag.bestDist !== null && `(${diag.bestDist.toFixed(3)})`}
+              </div>
+              <div>2ª melhor:</div>
+              <div className="text-slate-400">
+                {diag.secondName || '—'} {diag.secondDist !== null && `(${diag.secondDist.toFixed(3)})`}
+              </div>
+              <div>Threshold:</div>
+              <div className="text-slate-400">{MATCH_THRESHOLD} · ratio {RATIO_THRESHOLD}</div>
+              <div>Ambíguo:</div>
+              <div className={diag.ambiguous ? 'text-rose-400' : 'text-emerald-400'}>
+                {diag.ambiguous ? 'SIM (rejeitando)' : 'não'}
+              </div>
+              <div>Status:</div>
+              <div className={diag.rejected ? 'text-rose-400' : 'text-emerald-400 font-bold'}>
+                {diag.rejected || 'OK → registrando'}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Já bateu os 4 do dia */}
         {alreadyDone && (

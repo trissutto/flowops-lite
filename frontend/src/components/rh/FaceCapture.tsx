@@ -23,10 +23,11 @@ import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 're
 import { Camera, Loader2, AlertTriangle } from 'lucide-react';
 
 const FACE_API_CDN = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
-// Os pesos dos modelos NAO ficam no npm — sao publicados so no GitHub.
-// CDN jsdelivr suporta servir direto do GH via /gh/<owner>/<repo>@<ref>/<path>.
-// (Fallback alternativo: https://justadudewhohacks.github.io/face-api.js/weights)
-const MODELS_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+// Modelos hospedados LOCALMENTE em /public/face-models/ (jun/2026).
+// Antes vinha de CDN jsdelivr (jsdelivr.net/gh/...) — eliminamos dependencia
+// externa pra evitar lentidao quando jsdelivr esta degradado ou bloqueado.
+// Vercel serve /public direto, latencia minima.
+const MODELS_URL = '/face-models';
 
 declare global {
   interface Window {
@@ -142,8 +143,14 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
     async captureDescriptor() {
       if (!videoRef.current || !window.faceapi) return null;
       const f = window.faceapi;
+      // Otimizado pra PDV (jun/2026): inputSize=320 (3x mais rapido que default 416)
+      // + scoreThreshold=0.4 (aceita rostos com qualidade media — luz variavel).
+      const detectorOpts = new f.TinyFaceDetectorOptions({
+        inputSize: 320,
+        scoreThreshold: 0.4,
+      });
       const result = await f
-        .detectSingleFace(videoRef.current, new f.TinyFaceDetectorOptions())
+        .detectSingleFace(videoRef.current, detectorOpts)
         .withFaceLandmarks()
         .withFaceDescriptor();
       if (!result?.descriptor) return null;
