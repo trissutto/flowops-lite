@@ -18,7 +18,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Save, Loader2, User, FileText, DollarSign, Calendar,
   Phone, Mail, MapPin, Briefcase, Plane, Power, AlertCircle, Paperclip,
-  Clock,
+  Clock, Camera,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import DocumentsSection from '@/components/rh/DocumentsSection';
@@ -59,6 +59,8 @@ type Seller = {
     fileUrl: string;
     uploadedAt: string;
   }>;
+  faceEnrolledAt?: string | null;
+  faceSnapshotUrl?: string | null;
 };
 
 const brl = (n: any) =>
@@ -397,6 +399,52 @@ export default function ProntuarioPage() {
           >
             Editar cargo + loja responsável →
           </Link>
+        </Section>
+
+        {/* PONTO ELETRÔNICO — Cadastro facial */}
+        <Section icon={<Camera className="w-4 h-4" />} title="Ponto eletrônico (face)">
+          {data.faceEnrolledAt ? (
+            <div className="flex items-center gap-3">
+              {data.faceSnapshotUrl && (
+                <img
+                  src={data.faceSnapshotUrl}
+                  alt="Foto referência"
+                  className="w-16 h-16 rounded-lg object-cover border-2 border-emerald-300"
+                />
+              )}
+              <div className="flex-1">
+                <p className="text-sm font-bold text-emerald-700">
+                  ✓ Rosto cadastrado
+                </p>
+                <p className="text-xs text-slate-500">
+                  Cadastrado em {fmtDate(data.faceEnrolledAt)}
+                </p>
+              </div>
+              <Link
+                href={`/retaguarda/rh/face-enroll/${id}`}
+                className="text-sm text-emerald-700 font-bold hover:underline"
+              >
+                Refazer
+              </Link>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <div>
+                <p className="text-sm font-bold text-amber-800">
+                  Sem cadastro facial
+                </p>
+                <p className="text-xs text-amber-700">
+                  Sem ele, {data.name.split(' ')[0]} não consegue bater ponto no PDV.
+                </p>
+              </div>
+              <Link
+                href={`/retaguarda/rh/face-enroll/${id}`}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm px-3 py-2 rounded-lg whitespace-nowrap"
+              >
+                Cadastrar
+              </Link>
+            </div>
+          )}
         </Section>
 
         {/* DOCUMENTOS — FASE 2 ATIVO */}

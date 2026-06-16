@@ -132,6 +132,7 @@ model Store {
   supplyRequests SupplyRequest[]
   commissionRules CommissionRule[]
   responsibleSellers Seller[] @relation("StoreResponsibleSellers")
+  pontoRegistros  PontoRegistro[]
 
   // ── CRM / Cashback (expansão 2026-05) ──
   customersOrigin       Customer[]            @relation("CustomerOriginStore")
@@ -386,6 +387,15 @@ model Seller {
   observacoes        String?  @db.Text
   documents          SellerDocument[]
 
+  // ── PONTO ELETRONICO (FACE-API.JS) ────────────────────────────
+  // Array JSON de descriptors faciais (cada um 128 floats).
+  // Gerados pelo face-api.js no browser durante o cadastro do rosto
+  // (3 capturas em angulos diferentes pra ganho de precisao).
+  faceDescriptors    String?   @map("face_descriptors") @db.Text
+  faceEnrolledAt     DateTime? @map("face_enrolled_at")
+  faceSnapshotUrl    String?   @map("face_snapshot_url") @db.Text  // foto de referencia (audit)
+  pontoRegistros     PontoRegistro[]
+
   orders Order[]
   commissionRules    CommissionRule[]
   commissionEntries  CommissionEntry[]
@@ -426,6 +436,58 @@ model SellerDocument {
   @@index([sellerId, categoria])
   @@index([sellerId, uploadedAt])
   @@map("seller_documents")
+}
+
+/// PontoRegistro — registro de ponto eletronico (REP-A Portaria 671/2021).
+///
+/// Cada batida e UMA linha aqui. Tipos:
+///   - entrada       : inicio do expediente
+///   - saida_almoco  : saida pro intervalo intrajornada
+///   - volta_almoco  : retorno do intervalo
+///   - saida         : encerramento do expediente
+///
+/// Source identifica a origem do registro pra audit:
+///   - face_pdv     : reconhecimento facial na webcam do PDV (face-api.js)
+///   - pwa_selfie   : selfie + geolocalizacao no PWA da funcionaria
+///   - manual_admin : registro manual ou correcao pelo admin RH
+///
+/// Timestamp e sempre do servidor (nunca do cliente) pra integridade.
+model PontoRegistro {
+  id          String   @id @default(uuid())
+  sellerId    String   @map("seller_id")
+  storeId     String   @map("store_id")    // loja onde bateu
+  tipo        String   @db.VarChar(20)     // entrada | saida_almoco | volta_almoco | saida
+  timestamp   DateTime @default(now())     // batido pelo servidor
+
+  source      String   @db.VarChar(20)     // face_pdv | pwa_selfie | manual_admin
+  // Confianca do match facial (1 - distancia euclidiana). Mais perto de 1 = mais confiante.
+  faceConfidence Float?  @map("face_confidence")
+  // URL R2 da selfie do momento da batida (so face_pdv/pwa_selfie). Audit + duvida.
+  faceSnapshot   String? @map("face_snapshot") @db.Text
+
+  // Geolocalizacao (so pwa_selfie geralmente)
+  lat         Float?
+  lng         Float?
+  ip          String?  @db.VarChar(45)
+
+  // Audit do bater fora do padrao
+  observacoes String?  @db.Text
+
+  // Marcador de "registro originalmente faltante, corrigido manualmente pelo admin"
+  justificado    Boolean @default(false)
+  justificativa  String? @db.Text
+  justificadoBy  String? @map("justificado_by")   // userId admin
+  justificadoAt  DateTime? @map("justificado_at")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id])
+
+  @@index([sellerId, timestamp])
+  @@index([storeId, timestamp])
+  @@index([timestamp])
+  @@map("ponto_registros")
 }
 
 // ── COMISSÕES (F4) ──────────────────────────────────────────────────

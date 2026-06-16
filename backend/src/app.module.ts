@@ -36,6 +36,7 @@ import { IntegrationLogsModule } from './integration-logs/integration-logs.modul
 import { TrackingModule } from './tracking/tracking.module';
 import { PilotModule } from './pilot/pilot.module';
 import { SellersModule } from './sellers/sellers.module';
+import { PontoModule } from './ponto/ponto.module';
 import { RealignmentModule } from './realignment/realignment.module';
 import { CrediariosModule } from './crediarios/crediarios.module';
 import { CommissionsModule } from './commissions/commissions.module';
@@ -93,6 +94,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     TrackingModule,
     PilotModule,
     SellersModule,
+    PontoModule,
     RealignmentModule,
     CrediariosModule,
     CommissionsModule,
