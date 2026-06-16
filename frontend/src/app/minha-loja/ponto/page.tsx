@@ -37,7 +37,10 @@ type Me = { id: string; storeId: string; storeName: string };
 const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
 const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
 const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
-const DETECT_INTERVAL_MS = 500;
+// Self-scheduling loop — só agenda próximo tick depois do anterior terminar.
+// 150ms é um respiro pro browser não travar UI/eventos. Como cada inferência
+// já demora >300ms na maioria dos PCs, na prática o ritmo é ~3-4 tentativas/s.
+const DETECT_INTERVAL_MS = 150;
 const COOLDOWN_AFTER_REGISTER_MS = 15_000; // antes 60s — fila anda mais rapido
 const SUCCESS_DISPLAY_MS = 2_000; // antes 5s — proxima pessoa atende rapido
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
@@ -204,35 +207,41 @@ export default function PontoPage() {
     }
   }
 
-  // Loop de detecção
+  // Loop de detecção — SELF-SCHEDULING (sem overlap).
+  // Diferente de setInterval: só agenda a próxima tentativa DEPOIS que a
+  // anterior terminou. Em hardware fraco, isso evita fila de detecções
+  // travando a UI e burnando CPU.
   useEffect(() => {
     if (!ready || sellers.length === 0 || registering || lastSuccess || alreadyDone || pendingConfirm) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      loopActiveRef.current = false;
       return;
     }
 
-    intervalRef.current = setInterval(async () => {
-      if (!captureRef.current || registering) return;
+    loopActiveRef.current = true;
+    let cancelled = false;
+
+    async function tick() {
+      if (cancelled || !loopActiveRef.current) return;
+      if (!captureRef.current || registering) {
+        if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
+        return;
+      }
       const t0 = performance.now();
       try {
         const desc = await captureRef.current.captureDescriptor();
+        if (cancelled) return;
         const t1 = performance.now();
         if (!desc) {
           setDiag({ ms: Math.round(t1 - t0), detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_rosto' });
+          if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
         }
         const best = findBestMatch(desc, sellers);
         if (!best) {
           setDiag({ ms: Math.round(t1 - t0), detected: true, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_match' });
+          if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
         }
-        // Atualiza painel de diagnostico + decide acao em 3 zonas:
-        //  - dist >= 0.52  → REJEITA (falso positivo provavel)
-        //  - 0.40-0.52    → PEDE CONFIRMACAO (zona cinza)
-        //  - < 0.40        → registra AUTO (alta confianca)
         let rejected: string | null = null;
         let needsConfirm = false;
         if (best.distance >= MATCH_CONFIRM_THRESHOLD) {
@@ -242,7 +251,6 @@ export default function PontoPage() {
         } else if (cooldownRef.current.has(best.seller.id)) {
           rejected = 'cooldown';
         } else if (best.distance >= MATCH_AUTO_THRESHOLD) {
-          // Zona cinza — pede confirmacao manual
           needsConfirm = true;
         }
         setDiag({
@@ -257,19 +265,24 @@ export default function PontoPage() {
         });
         if (needsConfirm && !pendingConfirm) {
           setPendingConfirm({ seller: best.seller, distance: best.distance });
+          return; // efeito re-roda quando pendingConfirm limpar
         } else if (!rejected && !needsConfirm) {
           await baterAuto(best);
+          return; // efeito re-roda quando lastSuccess limpar
         }
+        if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
       } catch (e) {
-        // ignora frame
+        if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
       }
-    }, DETECT_INTERVAL_MS);
+    }
+
+    // Pequeno delay inicial pra UI montar antes do primeiro tick
+    const startTimer = setTimeout(tick, 100);
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      cancelled = true;
+      loopActiveRef.current = false;
+      clearTimeout(startTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, sellers, registering, lastSuccess, alreadyDone]);
