@@ -8,6 +8,40 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
+ * Retorna chave YYYY-MM-DD da data NA TIMEZONE DE SÃO PAULO (UTC-3).
+ * Usar isso pra agrupar batidas por dia — toISOString() usaria UTC e
+ * jogaria batidas das 22h pro dia seguinte (bug calssico jun/2026).
+ */
+function dateKeyBrasil(d: Date): string {
+  // 'en-CA' formata como 'YYYY-MM-DD' nativamente; timeZone faz a conversao.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+/** Retorna dia-da-semana (0=DOM..6=SAB) na timezone de São Paulo. */
+function dayOfWeekBrasil(d: Date): number {
+  const ymd = dateKeyBrasil(d).split('-').map(Number);
+  // Cria Date local em UTC com YMD do BR pra pegar weekday sem nova conversão
+  const fake = new Date(Date.UTC(ymd[0], ymd[1] - 1, ymd[2]));
+  return fake.getUTCDay();
+}
+
+/**
+ * Retorna o INÍCIO do dia (00:00:00) NA TIMEZONE BRASIL, como Date UTC.
+ * Ex: 00:00:00 BR de 15/06 = 03:00:00 UTC de 15/06.
+ * Usar pra queries tipo "batidas de hoje" sem cair no dia errado.
+ */
+function inicioDoDiaBrasil(ref: Date): Date {
+  const ymd = dateKeyBrasil(ref).split('-').map(Number);
+  // 00:00:00 horário BR (UTC-3) = 03:00:00 UTC
+  return new Date(Date.UTC(ymd[0], ymd[1] - 1, ymd[2], 3, 0, 0, 0));
+}
+
+/**
  * PontoService — registro e consulta de ponto eletrônico (REP-A).
  *
  * Funcionalidades:
@@ -212,8 +246,9 @@ export class PontoService {
    */
   async getNextTipoForSeller(sellerId: string): Promise<string | null> {
     const now = new Date();
-    const inicioDia = new Date(now);
-    inicioDia.setHours(0, 0, 0, 0);
+    // Usa "inicio do dia em BR" pra a janela bater com o conceito de "hoje"
+    // do funcionario. setHours(0,0,0,0) usaria TZ do servidor (UTC no Railway).
+    const inicioDia = inicioDoDiaBrasil(now);
 
     const batidas = await (this.prisma as any).pontoRegistro.findMany({
       where: {
@@ -380,10 +415,11 @@ export class PontoService {
     }
     const DIAS_KEY = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB'];
 
-    // Agrupa por dia
+    // Agrupa por dia — USA TIMEZONE BRASIL (jun/2026: bug de batida 22:32 BR
+    // virava 01:32 UTC do dia seguinte e aparecia no dia errado no espelho)
     const diasMap: Record<string, any[]> = {};
     for (const r of registros) {
-      const dKey = r.timestamp.toISOString().slice(0, 10);
+      const dKey = dateKeyBrasil(r.timestamp);
       if (!diasMap[dKey]) diasMap[dKey] = [];
       diasMap[dKey].push(r);
     }
@@ -394,9 +430,11 @@ export class PontoService {
     let totalMinPrevisto = 0;
 
     for (let d = 1; d <= lastDay; d++) {
-      const dt = new Date(ano, mes - 1, d);
-      const dKey = dt.toISOString().slice(0, 10);
-      const diaSemana = DIAS_KEY[dt.getDay()];
+      // Cria data alvo as 12h (meio-dia) pra fugir de qualquer borda de TZ.
+      // dateKeyBrasil() vai retornar o YYYY-MM-DD correto na zona BR.
+      const dt = new Date(ano, mes - 1, d, 12, 0, 0);
+      const dKey = dateKeyBrasil(dt);
+      const diaSemana = DIAS_KEY[dayOfWeekBrasil(dt)];
       const expected = horarioExpected.find((h: any) => h.dia === diaSemana);
       const batidas = diasMap[dKey] || [];
 
