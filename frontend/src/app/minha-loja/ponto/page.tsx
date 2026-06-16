@@ -32,11 +32,15 @@ type SellerDescriptors = {
 
 type Me = { id: string; storeId: string; storeName: string };
 
-// Nivel 1+2 (jun/2026): otimizado pra velocidade e robustez no PDV.
-const MATCH_THRESHOLD = 0.55; // antes 0.5 (muito restritivo, gerava falso negativo)
-const RATIO_THRESHOLD = 0.85; // best/secondBest — rejeita se ambiguo (2 vendedoras parecidas)
-const DETECT_INTERVAL_MS = 500; // antes 1200ms — quase tempo real
-const COOLDOWN_AFTER_REGISTER_MS = 60_000; // 60s sem matchar o mesmo seller
+// Anti-falso-positivo (jun/2026 v3): aperta threshold + ratio + modo confirmacao.
+// Caso documentado: Thiago foi reconhecido como Elisa com dist=0.474.
+const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
+const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
+const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
+const DETECT_INTERVAL_MS = 500;
+const COOLDOWN_AFTER_REGISTER_MS = 60_000;
+// Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
+const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 
 const TIPO_LABELS: Record<string, { texto: string; cor: string; emoji: string }> = {
   entrada:      { texto: 'Entrada Registrada',           cor: 'bg-emerald-500', emoji: '🟢' },
@@ -109,6 +113,12 @@ export default function PontoPage() {
   const [ready, setReady] = useState(false);
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
   // PAINEL DIAGNOSTICO (jun/2026) — pra debugar lentidao/divergencia
+  // Modal de confirmação manual (zona dist 0.40-0.52)
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    seller: SellerDescriptors;
+    distance: number;
+  } | null>(null);
+
   const [diag, setDiag] = useState<{
     ms: number;
     detected: boolean;
@@ -194,7 +204,7 @@ export default function PontoPage() {
 
   // Loop de detecção
   useEffect(() => {
-    if (!ready || sellers.length === 0 || registering || lastSuccess || alreadyDone) {
+    if (!ready || sellers.length === 0 || registering || lastSuccess || alreadyDone || pendingConfirm) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -217,11 +227,22 @@ export default function PontoPage() {
           setDiag({ ms: Math.round(t1 - t0), detected: true, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_match' });
           return;
         }
-        // Atualiza painel de diagnostico
+        // Atualiza painel de diagnostico + decide acao em 3 zonas:
+        //  - dist >= 0.52  → REJEITA (falso positivo provavel)
+        //  - 0.40-0.52    → PEDE CONFIRMACAO (zona cinza)
+        //  - < 0.40        → registra AUTO (alta confianca)
         let rejected: string | null = null;
-        if (best.distance >= MATCH_THRESHOLD) rejected = `distancia ${best.distance.toFixed(3)} >= ${MATCH_THRESHOLD}`;
-        else if (best.ambiguous) rejected = `ambiguo (best/second=${(best.distance / (best.second?.distance || 1)).toFixed(2)})`;
-        else if (cooldownRef.current.has(best.seller.id)) rejected = 'cooldown';
+        let needsConfirm = false;
+        if (best.distance >= MATCH_CONFIRM_THRESHOLD) {
+          rejected = `dist ${best.distance.toFixed(3)} muito alta (max ${MATCH_CONFIRM_THRESHOLD})`;
+        } else if (best.ambiguous) {
+          rejected = `ambiguo: ${best.seller.name} (${best.distance.toFixed(3)}) vs ${best.second?.seller.name} (${best.second?.distance.toFixed(3)})`;
+        } else if (cooldownRef.current.has(best.seller.id)) {
+          rejected = 'cooldown';
+        } else if (best.distance >= MATCH_AUTO_THRESHOLD) {
+          // Zona cinza — pede confirmacao manual
+          needsConfirm = true;
+        }
         setDiag({
           ms: Math.round(t1 - t0),
           detected: true,
@@ -230,9 +251,13 @@ export default function PontoPage() {
           secondName: best.second?.seller.name || null,
           secondDist: best.second?.distance ?? null,
           ambiguous: best.ambiguous,
-          rejected,
+          rejected: needsConfirm ? 'aguardando confirmacao' : rejected,
         });
-        if (!rejected) await baterAuto(best);
+        if (needsConfirm && !pendingConfirm) {
+          setPendingConfirm({ seller: best.seller, distance: best.distance });
+        } else if (!rejected && !needsConfirm) {
+          await baterAuto(best);
+        }
       } catch (e) {
         // ignora frame
       }
@@ -279,6 +304,47 @@ export default function PontoPage() {
           onError={(err) => setErrorMsg(err)}
           showStatus={false}
         />
+
+        {/* MODAL CONFIRMAÇÃO — zona cinza (0.40 ≤ dist < 0.52).
+            Bloqueia detecção até user clicar Sim ou Não. */}
+        {pendingConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl animate-in zoom-in">
+              <div className="bg-amber-100 text-amber-700 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-black text-slate-800 mb-2">
+                Você é {pendingConfirm.seller.name.split(' ')[0]}?
+              </h2>
+              <p className="text-sm text-slate-500 mb-6">
+                Confiança: <b>{Math.round((1 - pendingConfirm.distance) * 100)}%</b> — preciso confirmar manualmente.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => {
+                    // NÃO SOU EU — cooldown 30s pra não pedir confirmação de novo logo
+                    cooldownRef.current.add(pendingConfirm.seller.id);
+                    setTimeout(() => cooldownRef.current.delete(pendingConfirm.seller.id), 30_000);
+                    setPendingConfirm(null);
+                  }}
+                  className="px-4 py-3 border-2 border-rose-300 text-rose-700 hover:bg-rose-50 rounded-xl font-bold"
+                >
+                  ✗ NÃO SOU EU
+                </button>
+                <button
+                  onClick={async () => {
+                    const conf = pendingConfirm;
+                    setPendingConfirm(null);
+                    await baterAuto({ seller: conf.seller, distance: conf.distance });
+                  }}
+                  className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold"
+                >
+                  ✓ SIM, SOU EU
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* PAINEL DIAGNOSTICO — mostra status de cada frame.
             Pra esconder: adicionar ?debug=0 na URL. */}
@@ -342,54 +408,4 @@ export default function PontoPage() {
               {tipoInfo.emoji} {tipoInfo.texto}
             </p>
             <p className="text-sm opacity-80 mt-2">
-              {lastSuccess.at.toLocaleTimeString('pt-BR')}
-            </p>
-            <p className="text-xs opacity-70 mt-3 italic">
-              Pode sair da câmera, ponto registrado ✓
-            </p>
-          </div>
-        )}
-
-        {/* Registrando */}
-        {registering && !lastSuccess && !alreadyDone && (
-          <div className="bg-emerald-600 text-white rounded-xl p-5 text-center shadow-lg">
-            <Loader2 className="w-10 h-10 mx-auto animate-spin mb-2" />
-            <p className="text-lg font-bold">Registrando...</p>
-          </div>
-        )}
-
-        {/* Aguardando */}
-        {!registering && !lastSuccess && !alreadyDone && ready && sellers.length > 0 && (
-          <div className="bg-slate-800 border border-slate-700 text-white rounded-xl p-6 text-center">
-            <Camera className="w-12 h-12 mx-auto mb-2 text-emerald-400 animate-pulse" />
-            <p className="font-bold text-xl">Posicione o rosto na câmera</p>
-            <p className="text-sm text-white/60 mt-1">
-              Reconhecimento automático em segundos
-            </p>
-          </div>
-        )}
-
-        {/* Sem cadastradas */}
-        {!loadingDescriptors && sellers.length === 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
-            <AlertTriangle className="w-8 h-8 text-amber-600 mx-auto mb-2" />
-            <p className="font-bold text-amber-800">
-              Nenhuma vendedora cadastrada
-            </p>
-            <p className="text-sm text-amber-700 mt-1">
-              Peça pro admin cadastrar o rosto das funcionárias na retaguarda.
-            </p>
-          </div>
-        )}
-
-        {/* Erro */}
-        {errorMsg && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-red-700">{errorMsg}</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+              {lastSuccess.at.toLocaleTimeString
