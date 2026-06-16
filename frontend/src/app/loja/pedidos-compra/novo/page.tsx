@@ -197,10 +197,42 @@ export default function NovoPedidoPage() {
 
   // Quando o user digita um nome que nao esta na lista, ja preenche MARCA automaticamente
   // (porque FANTASIA = MARCA = nome do fornecedor cadastrado livremente)
+  // E TAMBEM: se o nome bate com algum fornecedor cadastrado, puxa o CNPJ
+  // automaticamente — evita o user esquecer de clicar no autocomplete.
   const handleFornecedorBlur = () => {
     const digitado = fornecedorNome.trim().toUpperCase();
-    if (digitado && !marca.trim()) {
-      setMarca(digitado);
+    if (!digitado) return;
+    if (!marca.trim()) setMarca(digitado);
+
+    // Auto-match CNPJ se nome bater EXATO com fantasia ou nome do fornecedor
+    if (!fornecedorCnpj.trim()) {
+      const match = fornecedores.find((f) => {
+        const fant = (f.fantasia || '').trim().toUpperCase();
+        const nome = (f.nome || '').trim().toUpperCase();
+        return fant === digitado || nome === digitado;
+      });
+      if (match) {
+        setFornecedorCnpj(match.cnpj);
+        const fant = (match.fantasia || '').trim();
+        const nomeReal = (match.nome || '').trim();
+        setFornecedorNome(fant || nomeReal);
+        setMarca(fant || nomeReal);
+        return;
+      }
+      // Fallback: tenta match parcial (nome digitado é substring única)
+      const partial = fornecedores.filter((f) => {
+        const fant = (f.fantasia || '').trim().toUpperCase();
+        const nome = (f.nome || '').trim().toUpperCase();
+        return fant.includes(digitado) || nome.includes(digitado);
+      });
+      if (partial.length === 1) {
+        const m = partial[0];
+        setFornecedorCnpj(m.cnpj);
+        const fant = (m.fantasia || '').trim();
+        const nomeReal = (m.nome || '').trim();
+        setFornecedorNome(fant || nomeReal);
+        setMarca(fant || nomeReal);
+      }
     }
   };
 
@@ -350,11 +382,30 @@ export default function NovoPedidoPage() {
       setError('Fornecedor obrigatório');
       return;
     }
+    // ULTIMA TENTATIVA de auto-match CNPJ (se user nao clicou no autocomplete)
+    let cnpjFinal = fornecedorCnpj.trim();
+    if (!cnpjFinal && fornecedores.length > 0) {
+      const digitado = fornecedorNome.trim().toUpperCase();
+      const exact = fornecedores.find((f) => {
+        const fant = (f.fantasia || '').trim().toUpperCase();
+        const nome = (f.nome || '').trim().toUpperCase();
+        return fant === digitado || nome === digitado;
+      });
+      const partial = !exact ? fornecedores.filter((f) => {
+        const fant = (f.fantasia || '').trim().toUpperCase();
+        const nome = (f.nome || '').trim().toUpperCase();
+        return fant.includes(digitado) || nome.includes(digitado);
+      }) : [];
+      const match = exact || (partial.length === 1 ? partial[0] : null);
+      if (match) {
+        cnpjFinal = match.cnpj;
+        setFornecedorCnpj(match.cnpj);
+      }
+    }
     // FIX #3: bloqueia salvar sem CNPJ (usuario digitou nome sem clicar no autocomplete).
-    // Sem CNPJ o /receive quebra com "Fornecedor é obrigatório" e nada de estoque entra.
-    if (!fornecedorCnpj.trim()) {
+    if (!cnpjFinal) {
       setError(
-        'CNPJ do fornecedor está vazio. Selecione o fornecedor da lista (autocomplete) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar produtos no Wincred.',
+        `CNPJ do fornecedor "${fornecedorNome}" não encontrado. Selecione o fornecedor da lista (autocomplete dropdown abaixo do campo) pra pegar o CNPJ. Sem CNPJ o sistema não consegue cadastrar produtos no Wincred.`,
       );
       return;
     }
@@ -448,7 +499,7 @@ export default function NovoPedidoPage() {
         method: 'POST',
         body: JSON.stringify({
           fornecedorNome,
-          fornecedorCnpj,
+          fornecedorCnpj: cnpjFinal,
           marca,
           dataPrevista: dataPrevista || null,
           nfNumero,
