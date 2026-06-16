@@ -166,7 +166,11 @@ export class PontoController {
     if (!body?.justificativa) {
       throw new BadRequestException('justificativa obrigatória');
     }
-    return this.svc.justificar(registroId, body.justificativa, this.currentUser(req));
+    return this.svc.justificar(
+      registroId,
+      body.justificativa,
+      this.currentUser(req) ?? undefined,
+    );
   }
 
   @Post('manual')
