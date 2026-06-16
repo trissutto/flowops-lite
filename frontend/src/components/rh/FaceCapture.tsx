@@ -58,11 +58,35 @@ async function loadModels(): Promise<void> {
   modelsLoadingPromise = (async () => {
     const f = window.faceapi;
     if (!f) throw new Error('face-api.js não está carregado');
+    // OTIMIZACAO (jun/2026): força backend WebGL (GPU) explicitamente.
+    // Sem isso, em alguns navegadores cai pra CPU e fica 2-3s por inferencia.
+    try {
+      if (f.tf?.setBackend) {
+        await f.tf.setBackend('webgl');
+        await f.tf.ready();
+        // eslint-disable-next-line no-console
+        console.log('[face-api] backend ativo:', f.tf.getBackend?.());
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[face-api] setBackend webgl falhou, segue com default', e);
+    }
     await Promise.all([
       f.nets.tinyFaceDetector.loadFromUri(MODELS_URL),
       f.nets.faceLandmark68Net.loadFromUri(MODELS_URL),
       f.nets.faceRecognitionNet.loadFromUri(MODELS_URL),
     ]);
+    // Warmup: primeira inferencia eh sempre lenta (compila shaders WebGL).
+    // Fazemos uma vez com um canvas fake pra "aquecer" o GPU.
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 224; canvas.height = 224;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#888'; ctx.fillRect(0, 0, 224, 224);
+      await f.detectSingleFace(canvas, new f.TinyFaceDetectorOptions({ inputSize: 224 }));
+      // eslint-disable-next-line no-console
+      console.log('[face-api] warmup ok');
+    } catch { /* warmup falhou, segue */ }
   })();
   return modelsLoadingPromise;
 }
@@ -107,7 +131,14 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
 
         setStatusMsg('Solicitando acesso à câmera...');
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' },
+          // Resolucao otimizada pra PDV: 480x360 eh suficiente pra rosto
+          // a 1m de distancia. Menor = inferencia mais rapida.
+          video: {
+            width: { ideal: 480 },
+            height: { ideal: 360 },
+            facingMode: 'user',
+            frameRate: { ideal: 15 }, // 15fps eh suficiente, reduz CPU
+          },
           audio: false,
         });
         if (cancelled) {
@@ -146,8 +177,8 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
       // Otimizado pra PDV (jun/2026): inputSize=320 (3x mais rapido que default 416)
       // + scoreThreshold=0.4 (aceita rostos com qualidade media — luz variavel).
       const detectorOpts = new f.TinyFaceDetectorOptions({
-        inputSize: 320,
-        scoreThreshold: 0.4,
+        inputSize: 224, // antes 320 — face-api recomenda 224/320/416/512/608
+        scoreThreshold: 0.35, // levemente mais permissivo pra compensar inputSize menor
       });
       const result = await f
         .detectSingleFace(videoRef.current, detectorOpts)
