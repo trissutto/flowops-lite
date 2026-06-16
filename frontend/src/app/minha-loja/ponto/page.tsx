@@ -37,9 +37,9 @@ type Me = { id: string; storeId: string; storeName: string };
 const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
 const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
 const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
-const DETECT_INTERVAL_MS = 500;
-const COOLDOWN_AFTER_REGISTER_MS = 15_000; // antes 60s — fila anda mais rapido
-const SUCCESS_DISPLAY_MS = 2_000; // antes 5s — proxima pessoa atende rapido
+const DETECT_INTERVAL_MS = 250;
+const COOLDOWN_AFTER_REGISTER_MS = 3_000; // antes 15s — agora 3s pra fluxo instantaneo
+const SUCCESS_DISPLAY_MS = 1_200; // outra pessoa derruba antes
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 
@@ -257,6 +257,12 @@ export default function PontoPage() {
         if (needsConfirm && !pendingConfirm) {
           setPendingConfirm({ seller: best.seller, distance: best.distance });
         } else if (!rejected && !needsConfirm) {
+          // Se outra pessoa diferente esta na tela, limpa antes (UX fluida)
+          const ls: any = lastSuccess;
+          const newName: string = (best.seller as any).name;
+          if (ls && ls.name !== newName) {
+            setLastSuccess(null);
+          }
           await baterAuto(best);
         }
       } catch (e) {
@@ -435,9 +441,8 @@ export default function PontoPage() {
         {/* Vazio */}
         {!loadingDescriptors && sellers.length === 0 && ready && (
           <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl p-4 text-center">
-            <Camera className="w-6 h-6 mx-auto mb-2" />
             <p className="font-bold">Nenhuma funcionária cadastrada com biometria</p>
-            <p className="text-sm mt-1">Acesse Retaguarda → RH → Face Enroll</p>
+            <p className="text-sm mt-1">Acesse Retaguarda - RH - Face Enroll</p>
           </div>
         )}
       </div>
