@@ -41,8 +41,13 @@ const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que 
 // 150ms é um respiro pro browser não travar UI/eventos. Como cada inferência
 // já demora >300ms na maioria dos PCs, na prática o ritmo é ~3-4 tentativas/s.
 const DETECT_INTERVAL_MS = 150;
-const COOLDOWN_AFTER_REGISTER_MS = 15_000; // antes 60s — fila anda mais rapido
-const SUCCESS_DISPLAY_MS = 2_000; // antes 5s — proxima pessoa atende rapido
+// Cooldown por vendedora (impede re-bater mesmo rosto em sequência).
+// Reduzido pra 8s — suficiente pra ela sair da câmera e dar espaço pra próxima.
+const COOLDOWN_AFTER_REGISTER_MS = 8_000;
+// Tempo que o card de sucesso fica visível. Reduzido pra 1.2s — fila anda rápido.
+// IMPORTANTE: loop de detecção NÃO para mais durante este período, então
+// vendedora B já pode bater enquanto card de A ainda desaparece.
+const SUCCESS_DISPLAY_MS = 1_200;
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 
@@ -212,7 +217,10 @@ export default function PontoPage() {
   // anterior terminou. Em hardware fraco, isso evita fila de detecções
   // travando a UI e burnando CPU.
   useEffect(() => {
-    if (!ready || sellers.length === 0 || registering || lastSuccess || alreadyDone || pendingConfirm) {
+    // Loop NÃO para por lastSuccess: assim vendedora B já pode bater
+    // enquanto card de sucesso de A ainda está visível. Cooldown impede
+    // a própria A de re-bater no mesmo período.
+    if (!ready || sellers.length === 0 || registering || alreadyDone || pendingConfirm) {
       loopActiveRef.current = false;
       return;
     }
@@ -267,8 +275,11 @@ export default function PontoPage() {
           setPendingConfirm({ seller: best.seller, distance: best.distance });
           return; // efeito re-roda quando pendingConfirm limpar
         } else if (!rejected && !needsConfirm) {
+          // Bate ponto SEM bloquear o loop. Cooldown impede re-match do mesmo seller.
+          // Loop continua → próxima vendedora pode ser detectada em paralelo.
           await baterAuto(best);
-          return; // efeito re-roda quando lastSuccess limpar
+          if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
+          return;
         }
         if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
       } catch (e) {
