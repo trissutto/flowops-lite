@@ -238,6 +238,34 @@ export class PontoService {
     return { ok: true };
   }
 
+  /**
+   * Fire-and-forget: sobe snapshot pro R2 e dá UPDATE no PontoRegistro.
+   * Não retorna Promise — é chamado SEM await pra não bloquear a resposta.
+   * Erros são silenciosamente logados — registro continua válido sem foto.
+   */
+  private uploadSnapshotAndUpdate(
+    registroId: string,
+    sellerId: string,
+    snapshotBase64: string,
+    prefix: string,
+  ): void {
+    // setImmediate libera o event loop pra responder antes
+    setImmediate(async () => {
+      try {
+        const url = await this.uploadSnapshot(sellerId, snapshotBase64, prefix);
+        if (!url) return;
+        await (this.prisma as any).pontoRegistro.update({
+          where: { id: registroId },
+          data: { faceSnapshot: url },
+        });
+      } catch (e: any) {
+        this.logger.warn(
+          `[ponto] upload bg snapshot falhou (registro ${registroId}): ${e?.message}`,
+        );
+      }
+    });
+  }
+
   // ── REGISTRAR PONTO ───────────────────────────────────────────────
 
   /**
@@ -329,11 +357,13 @@ export class PontoService {
       );
     }
 
-    // Sobe snapshot pro R2 (audit)
-    const snapshotUrl = input.snapshotBase64
-      ? await this.uploadSnapshot(input.sellerId, input.snapshotBase64, tipo)
-      : null;
-
+    // PERFORMANCE: cria registro SEM esperar upload do snapshot R2.
+    // R2 upload pode levar 500-2000ms (rede externa) — bloquear a resposta
+    // fazia o PDV mostrar "Registrando..." por 2 segundos. Solução:
+    //  1) Salva DB imediatamente (faceSnapshot=null)
+    //  2) Retorna sucesso pro frontend (resposta em ~50ms)
+    //  3) Em background, sobe snapshot pro R2 e dá UPDATE no registro
+    // Se upload falhar, o registro continua válido — só perde a foto de audit.
     const reg = await (this.prisma as any).pontoRegistro.create({
       data: {
         sellerId: input.sellerId,
@@ -341,13 +371,18 @@ export class PontoService {
         tipo,
         source,
         faceConfidence: input.faceConfidence ?? null,
-        faceSnapshot: snapshotUrl,
+        faceSnapshot: null,
         lat: input.lat ?? null,
         lng: input.lng ?? null,
         ip: input.ip ?? null,
         observacoes: input.observacoes ?? null,
       },
     });
+
+    // Fire-and-forget: sobe a foto em background e atualiza o registro
+    if (input.snapshotBase64) {
+      this.uploadSnapshotAndUpdate(reg.id, input.sellerId, input.snapshotBase64, tipo);
+    }
 
     this.logger.log(
       `[ponto] ${seller.name} → ${tipo} @ ${store.name} (conf=${input.faceConfidence?.toFixed(2) ?? '-'})`,
