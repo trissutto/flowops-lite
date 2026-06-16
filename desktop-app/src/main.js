@@ -621,6 +621,92 @@ ipcMain.handle('flowops:open-external', (_evt, url) => {
   return { ok: true };
 });
 
+/**
+ * Cria atalho "Bater Ponto Lurds" na área de trabalho com ícone de relógio.
+ * - Idempotente: se já existe, não faz nada.
+ * - Usa Chrome em modo --app pra abrir janela limpa (sem abas).
+ * - Vendedora só precisa pinar na barra de tarefas uma vez.
+ *
+ * Fluxo:
+ *  1. Verifica se Chrome está instalado.
+ *  2. Copia o icon-ponto.ico (bundled em extraResources) pra %LOCALAPPDATA%\LurdsPonto.
+ *  3. Cria o .lnk via PowerShell COM (WScript.Shell).
+ */
+function createPontoShortcutIfMissing() {
+  try {
+    // Idempotência: se já criou nessa instalação, pula
+    if (store.get('pontoShortcutCreated')) {
+      return;
+    }
+
+    const desktop = path.join(require('os').homedir(), 'Desktop');
+    const shortcutPath = path.join(desktop, 'Bater Ponto Lurds.lnk');
+
+    // Se já existe (criado manualmente ou em instalação anterior), só marca flag
+    if (require('fs').existsSync(shortcutPath)) {
+      store.set('pontoShortcutCreated', true);
+      log.info('[ponto-shortcut] já existia em ' + shortcutPath);
+      return;
+    }
+
+    // Acha Chrome
+    const candidates = [
+      path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(process.env.PROGRAMFILES || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(process.env['PROGRAMFILES(X86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ];
+    const chromePath = candidates.find((p) => p && require('fs').existsSync(p));
+    if (!chromePath) {
+      log.warn('[ponto-shortcut] Chrome não encontrado — atalho não criado');
+      return;
+    }
+
+    // Copia ícone bundled (build/icon-ponto.ico) pra pasta permanente do user
+    const iconSrc = app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'icon-ponto.ico')
+      : path.join(__dirname, '..', 'build', 'icon-ponto.ico');
+    const iconDir = path.join(process.env.LOCALAPPDATA || require('os').tmpdir(), 'LurdsPonto');
+    const iconDest = path.join(iconDir, 'icon-ponto.ico');
+
+    if (!require('fs').existsSync(iconSrc)) {
+      log.warn('[ponto-shortcut] icon-ponto.ico não encontrado em ' + iconSrc);
+      return;
+    }
+    require('fs').mkdirSync(iconDir, { recursive: true });
+    require('fs').copyFileSync(iconSrc, iconDest);
+
+    const url = 'https://flowops-lite.vercel.app/minha-loja/ponto';
+
+    // Cria .lnk via PowerShell COM
+    const psScript = `
+$shell = New-Object -COM WScript.Shell
+$lnk = $shell.CreateShortcut("${shortcutPath}")
+$lnk.TargetPath = "${chromePath}"
+$lnk.Arguments = "--app=${url} --new-window --window-size=900,700"
+$lnk.IconLocation = "${iconDest}"
+$lnk.Description = "Bater ponto eletronico Lurds (reconhecimento facial)"
+$lnk.WorkingDirectory = "${require('os').homedir()}"
+$lnk.Save()
+    `.trim();
+
+    const { execFile } = require('child_process');
+    execFile(
+      'powershell',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript],
+      (err) => {
+        if (err) {
+          log.error('[ponto-shortcut] PowerShell falhou: ' + err.message);
+          return;
+        }
+        store.set('pontoShortcutCreated', true);
+        log.info('[ponto-shortcut] criado em ' + shortcutPath);
+      }
+    );
+  } catch (e) {
+    log.error('[ponto-shortcut] erro: ' + (e?.message || e));
+  }
+}
+
 // ----------------- Lifecycle -----------------
 app.whenReady().then(async () => {
   // ⚠ NÃO usar `await session.clearCache()` no caminho crítico — em PCs
@@ -650,6 +736,12 @@ app.whenReady().then(async () => {
   applyAutoLaunch(!!store.get('autoLaunch'));
   createWindow();
   createTray();
+
+  // ── AUTO-CRIA ATALHO "BATER PONTO" NA AREA DE TRABALHO ──
+  // Roda 1× por instalacao. Cria atalho com icone de relogio verde apontando
+  // pra Chrome --app=URL/minha-loja/ponto. Funcionaria so precisa fixar uma
+  // vez na barra de tarefas (botao direito → Fixar). Depois fica fixo sempre.
+  setTimeout(() => createPontoShortcutIfMissing(), 5000);
 
   // ── AUTO-UPDATE ──
   // Verifica updates 30s após boot (deixa o app abrir tranquilo primeiro)
