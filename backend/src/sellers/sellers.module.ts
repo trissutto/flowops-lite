@@ -7,10 +7,11 @@ import { SellersController } from './sellers.controller';
 import { SellersService } from './sellers.service';
 import { SellerDocumentsService } from './seller-documents.service';
 import { SellersCronService } from './sellers-cron.service';
+import { RhResumoController } from './rh-resumo.controller';
 
 @Module({
   imports: [AuthModule, PrismaModule, ErpModule, PushModule],
-  controllers: [SellersController],
+  controllers: [SellersController, RhResumoController],
   providers: [SellersService, SellerDocumentsService, SellersCronService],
   exports: [SellersService],
 })

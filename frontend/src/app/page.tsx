@@ -20,7 +20,7 @@ import {
   LayoutDashboard, Globe2, Store, BarChart3, Settings, Instagram,
   RefreshCw, Zap, Bot, ArrowUpRight, type LucideIcon,
   ShoppingBag, Shuffle, Package2, AlertTriangle, Truck, CreditCard, Bell,
-  Building2,
+  Building2, Users,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { isPilotOn, fetchPilotStatus, togglePilotServer, PilotStatus } from '@/lib/auto-send-order';
@@ -256,12 +256,13 @@ export default function DashboardHome() {
       {/* === ALERTAS · só mostra o que tem ação pendente === */}
       <AlertsSection alerts={alerts} />
 
-      {/* === Atalhos pros 6 hubs (cores combinadas com KPIs) === */}
-      <section className="grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4 mb-5">
+      {/* === Atalhos pros 7 hubs (cores combinadas com KPIs) === */}
+      <section className="grid grid-cols-2 lg:grid-cols-7 gap-3 sm:gap-4 mb-5">
         <HubCard href="/site"               label="Site"      subtitle="E-commerce"      description="Pedidos · Marketing · Vitrine" tone="teal"   icon={Globe2} />
         <HubCard href="/loja"               label="Loja"      subtitle="Operação física" description="Estoque · Crediário · Materiais" tone="green"  icon={Store} />
         <HubCard href="/retaguarda/instagram-hub" label="Instagram" subtitle="Redes & Live"  description="Inbox · Live · Conta @lurdsplussize" tone="rose" icon={Instagram} />
         <HubCard href="/retaguarda"         label="Gestão"    subtitle="Estratégico"     description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
+        <HubCard href="/retaguarda/rh"      label="RH"        subtitle="Recursos Humanos" description="Funcionárias · Ponto · Comissão · Treinamento" tone="slate" icon={Users} />
         <HubCard href="/imobiliario"        label="Imóveis"   subtitle="Patrimônio"      description="Cadastro · IPTU · Contas · Cartório" tone="amber" icon={Building2} />
         <HubCard href="/config"             label="Config"    subtitle="Setup técnico"   description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
       </section>
@@ -281,6 +282,8 @@ const HUB_TONES = {
   rose:   { from: '#e11d6c', to: '#b91754' },
   // Amber/dourado pro hub Imobiliário — tom premium discreto
   amber:  { from: '#c9a96e', to: '#8a7340' },
+  // Slate/navy pro hub RH — sério, gestão de pessoas
+  slate:  { from: '#475569', to: '#1e293b' },
 } as const;
 
 function HubCard({
