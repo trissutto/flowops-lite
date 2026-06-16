@@ -1185,19 +1185,42 @@ export class CrediarioBaixaService {
 
     let status = baixa.status;
     // Se PIX pendente (formaPagamento='pix' OU 'misto' com parte PIX),
-    // consulta Pagar.me ao vivo + auto-confirma.
+    // consulta provider ao vivo + auto-confirma.
     if (
       status === 'pending'
-      && baixa.pagarmeOrderId
       && (baixa.formaPagamento === 'pix' || baixa.formaPagamento === 'misto')
     ) {
+      // FIX jun/2026: PagBank tambem precisa ser consultado pro polling pegar.
+      // Sem isso, se o webhook PagBank falhar, parcela ficava em pending eterno.
+      // Estrategia: tenta achar PagbankPayment por saleId=baixaId (= como salvamos),
+      // consulta PagBank ao vivo se ainda pending. Senao, tenta Pagar.me como antes.
       try {
-        const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
-        if (live.isPaid) {
-          await this.confirmBaixaPix(baixaId);
-          status = 'paid';
+        const pb = await (this.prisma as any).pagbankPayment.findFirst({
+          where: { saleId: baixaId, status: 'pending' },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (pb?.pagbankOrderId) {
+          const live = await (this.pagbank as any).checkOrderStatus?.(pb.pagbankOrderId);
+          if (live?.isPaid || live?.status === 'paid') {
+            // Confirma pelo wrapper (atualiza PagbankPayment + dispara executeGigaUpdates)
+            await this.confirmBaixaPixIfExists(baixaId);
+            status = 'paid';
+            this.logger.log(`[getBaixaStatus] PagBank auto-confirmou ${baixaId}`);
+          }
         }
-      } catch {/* mantém pending */}
+      } catch (e: any) {
+        this.logger.warn(`[getBaixaStatus] PagBank check falhou: ${e?.message}`);
+      }
+      // Fallback Pagar.me (legado)
+      if (status === 'pending' && baixa.pagarmeOrderId) {
+        try {
+          const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
+          if (live.isPaid) {
+            await this.confirmBaixaPix(baixaId);
+            status = 'paid';
+          }
+        } catch {/* mantém pending */}
+      }
     }
 
     return { found: true, status, isPaid: status === 'paid' };
