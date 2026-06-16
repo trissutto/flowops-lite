@@ -4,13 +4,9 @@ title Instalar atalho Bater Ponto Lurd's
 
 REM ============================================================
 REM  Cria um atalho "Bater Ponto Lurd's" na area de trabalho.
-REM  O atalho abre o Chrome em modo APP (janela limpa, sem
-REM  abas/navegador) apontando direto pra tela de bater ponto.
+REM  O atalho abre o Chrome em modo APP (janela limpa)
+REM  apontando direto pra tela de bater ponto.
 REM  Icone proprio (relogio verde Lurd's).
-REM
-REM  Depois de criar, basta clicar com botao DIREITO no atalho
-REM  na area de trabalho ou na barra de tarefas e escolher
-REM  "Fixar na barra de tarefas" pra deixar sempre visivel.
 REM
 REM  Pre-requisito: Google Chrome instalado.
 REM ============================================================
@@ -44,7 +40,7 @@ set "ICON_DEST=%LOCALAPPDATA%\LurdsPonto"
 if not exist "%ICON_DEST%" mkdir "%ICON_DEST%"
 copy /Y "%~dp0ponto-icon.ico" "%ICON_DEST%\ponto-icon.ico" >nul
 if errorlevel 1 (
-  echo [ERRO] Nao consegui copiar o icone. Verifique permissoes.
+  echo [ERRO] Nao consegui copiar o icone.
   pause
   exit /b 1
 )
@@ -54,22 +50,34 @@ echo.
 
 REM URL da tela de bater ponto
 set "URL=https://flowops-lite.vercel.app/minha-loja/ponto"
-
-REM Caminho final do atalho (na area de trabalho)
 set "SHORTCUT=%USERPROFILE%\Desktop\Bater Ponto Lurds.lnk"
 
-REM Usa PowerShell pra criar o .lnk com icone customizado
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$s = (New-Object -COM WScript.Shell).CreateShortcut('%SHORTCUT%'); ^
-   $s.TargetPath = '%CHROME%'; ^
-   $s.Arguments = '--app=%URL% --new-window --window-size=900,700'; ^
-   $s.IconLocation = '%ICON_DEST%\ponto-icon.ico'; ^
-   $s.Description = 'Bater ponto eletronico Lurds (reconhecimento facial)'; ^
-   $s.WorkingDirectory = '%USERPROFILE%'; ^
-   $s.Save()"
+REM Gera um script .ps1 temporario e executa
+set "PS1=%TEMP%\lurds-criar-atalho-ponto.ps1"
 
-if errorlevel 1 (
-  echo [ERRO] Falha ao criar o atalho.
+(
+echo $shell = New-Object -COM WScript.Shell
+echo $lnk = $shell.CreateShortcut^("%SHORTCUT%"^)
+echo $lnk.TargetPath = "%CHROME%"
+echo $lnk.Arguments = "--app=%URL% --new-window --window-size=900,700"
+echo $lnk.IconLocation = "%ICON_DEST%\ponto-icon.ico"
+echo $lnk.Description = "Bater ponto eletronico Lurds (reconhecimento facial)"
+echo $lnk.WorkingDirectory = "%USERPROFILE%"
+echo $lnk.Save^(^)
+) > "%PS1%"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+set "PS_EXIT=%ERRORLEVEL%"
+del "%PS1%" >nul 2>&1
+
+if not %PS_EXIT% == 0 (
+  echo [ERRO] Falha ao criar o atalho. PowerShell retornou %PS_EXIT%.
+  pause
+  exit /b %PS_EXIT%
+)
+
+if not exist "%SHORTCUT%" (
+  echo [ERRO] Atalho nao foi criado. Verifique permissoes da area de trabalho.
   pause
   exit /b 1
 )
@@ -88,8 +96,5 @@ echo   2. Procure o atalho "Bater Ponto Lurds" (icone de relogio verde)
 echo   3. Botao DIREITO no atalho -^> "Fixar na barra de tarefas"
 echo   4. Pronto! Agora basta clicar nele que abre direto a tela
 echo      de bater ponto com camera + reconhecimento facial
-echo.
-echo  Dica: voce pode mover o atalho pra qualquer lugar
-echo        (start menu, etc) que ele continua funcionando.
 echo.
 pause
