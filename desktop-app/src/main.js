@@ -137,6 +137,28 @@ function showWindow() {
   setTimeout(() => mainWindow && mainWindow.setAlwaysOnTop(false), 800);
 }
 
+/**
+ * Abre/navega pra tela de Bater Ponto. Usado pelo atalho na tray.
+ * Se mainWindow já tá em /minha-loja/ponto, só foca. Senão navega.
+ */
+function openPonto() {
+  if (!mainWindow) return;
+  const base = (store.get('url') || 'https://flowops-lite.vercel.app/minha-loja').replace(
+    /\/minha-loja.*$/,
+    '/minha-loja',
+  );
+  const pontoUrl = `${base}/ponto`;
+  try {
+    const current = mainWindow.webContents.getURL();
+    if (!current || !current.includes('/minha-loja/ponto')) {
+      mainWindow.loadURL(pontoUrl);
+    }
+  } catch (e) {
+    mainWindow.loadURL(pontoUrl);
+  }
+  showWindow();
+}
+
 // ----------------- Tray -----------------
 function createTray() {
   const iconPath = path.join(__dirname, '..', 'build', 'icon-tray.png');
@@ -159,7 +181,7 @@ function createTray() {
       showWindow();
     }
   });
-  tray.on('double-click', () => showWindow());
+  tray.on('double-click', () => openPonto());
 }
 
 function buildTrayMenu() {
@@ -203,6 +225,10 @@ function buildTrayMenu() {
 
   return Menu.buildFromTemplate([
     { label: 'Abrir LURDS ORDER ONE', click: () => showWindow() },
+    {
+      label: '⏰ Bater Ponto (reconhecimento facial)',
+      click: () => openPonto(),
+    },
     { type: 'separator' },
     {
       label: 'Iniciar com o Windows',

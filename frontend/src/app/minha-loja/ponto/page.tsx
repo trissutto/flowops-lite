@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, Camera, CheckCircle2, History, Loader2, AlertTriangle,
+  ArrowLeft, Camera, CheckCircle2, History, Loader2, AlertTriangle, PartyPopper,
 } from 'lucide-react';
 import Link from 'next/link';
 import FaceCapture, { FaceCaptureHandle } from '@/components/rh/FaceCapture';
@@ -82,6 +82,7 @@ export default function PontoPage() {
     at: Date;
   } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [alreadyDone, setAlreadyDone] = useState<{ name: string } | null>(null);
   const [ready, setReady] = useState(false);
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
 
@@ -133,13 +134,25 @@ export default function PontoPage() {
       setTimeout(() => setLastSuccess(null), 5000);
     } catch (e: any) {
       const msg = e?.message || 'Falha ao registrar';
-      setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
-      // Cooldown também em erro (evita spam de erros)
-      cooldownRef.current.add(match.seller.id);
-      setTimeout(() => {
-        cooldownRef.current.delete(match.seller.id);
-      }, 15_000); // 15s em caso de erro
-      setTimeout(() => setErrorMsg(null), 5000);
+      // Caso especial: já bateu os 4 do dia
+      if (
+        msg.toLowerCase().includes('já bateu') ||
+        msg.toLowerCase().includes('4 pontos')
+      ) {
+        setAlreadyDone({ name: match.seller.name });
+        cooldownRef.current.add(match.seller.id);
+        setTimeout(() => {
+          cooldownRef.current.delete(match.seller.id);
+        }, 5 * 60_000); // 5 min cooldown
+        setTimeout(() => setAlreadyDone(null), 6000);
+      } else {
+        setErrorMsg(`${match.seller.name.split(' ')[0]}: ${msg}`);
+        cooldownRef.current.add(match.seller.id);
+        setTimeout(() => {
+          cooldownRef.current.delete(match.seller.id);
+        }, 15_000);
+        setTimeout(() => setErrorMsg(null), 5000);
+      }
     } finally {
       setRegistering(false);
     }
@@ -147,7 +160,7 @@ export default function PontoPage() {
 
   // Loop de detecção
   useEffect(() => {
-    if (!ready || sellers.length === 0 || registering || lastSuccess) {
+    if (!ready || sellers.length === 0 || registering || lastSuccess || alreadyDone) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -180,7 +193,7 @@ export default function PontoPage() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sellers, registering, lastSuccess]);
+  }, [ready, sellers, registering, lastSuccess, alreadyDone]);
 
   const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
 
@@ -215,8 +228,24 @@ export default function PontoPage() {
           showStatus={false}
         />
 
+        {/* Já bateu os 4 do dia */}
+        {alreadyDone && (
+          <div className="bg-indigo-600 text-white rounded-xl p-6 text-center shadow-lg animate-in fade-in zoom-in">
+            <PartyPopper className="w-14 h-14 mx-auto mb-3" />
+            <p className="text-3xl font-bold">
+              Olá, {alreadyDone.name.split(' ')[0]}
+            </p>
+            <p className="text-xl font-bold mt-2 opacity-95">
+              Você já bateu todos os pontos hoje! 🎉
+            </p>
+            <p className="text-sm opacity-80 mt-3 italic">
+              Boa noite e até amanhã ✨
+            </p>
+          </div>
+        )}
+
         {/* Sucesso */}
-        {lastSuccess && tipoInfo && (
+        {lastSuccess && tipoInfo && !alreadyDone && (
           <div className={`${tipoInfo.cor} text-white rounded-xl p-6 text-center shadow-lg animate-in fade-in zoom-in`}>
             <CheckCircle2 className="w-14 h-14 mx-auto mb-3" />
             <p className="text-3xl font-bold">
@@ -235,7 +264,7 @@ export default function PontoPage() {
         )}
 
         {/* Registrando */}
-        {registering && !lastSuccess && (
+        {registering && !lastSuccess && !alreadyDone && (
           <div className="bg-emerald-600 text-white rounded-xl p-5 text-center shadow-lg">
             <Loader2 className="w-10 h-10 mx-auto animate-spin mb-2" />
             <p className="text-lg font-bold">Registrando...</p>
@@ -243,7 +272,7 @@ export default function PontoPage() {
         )}
 
         {/* Aguardando */}
-        {!registering && !lastSuccess && ready && sellers.length > 0 && (
+        {!registering && !lastSuccess && !alreadyDone && ready && sellers.length > 0 && (
           <div className="bg-slate-800 border border-slate-700 text-white rounded-xl p-6 text-center">
             <Camera className="w-12 h-12 mx-auto mb-2 text-emerald-400 animate-pulse" />
             <p className="font-bold text-xl">Posicione o rosto na câmera</p>
