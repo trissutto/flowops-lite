@@ -495,6 +495,173 @@ export class PontoService {
     return { storeId, ano, mes, items };
   }
 
+  // ── BANCO DE HORAS + HORA EXTRA (CLT 44h) ────────────────────────
+
+  /**
+   * Banco de Horas + Hora Extra (referência: CLT Art. 7º + Lei 13.467/2017).
+   *
+   * Regras aplicadas:
+   *  - Jornada máxima legal: 44h/semana (8h/dia + 4h sábado é padrão comércio)
+   *  - Limite diário absoluto: 10h (8h normais + 2h extras)
+   *  - HE em dia útil (seg-sáb): +50% sobre hora normal
+   *  - HE em domingo/feriado: +100%
+   *  - Adicional noturno (22h-5h): +20% → não aplicado aqui (varejo não trabalha de noite)
+   *  - Valor hora = salário base / 220h mensais (padrão CLT)
+   *
+   * Compara com a JORNADA CADASTRADA (sellers.horarioTrabalho):
+   *  - Horas previstas vs trabalhadas por dia
+   *  - Saldo banco de horas (acumulado do mês)
+   *  - Flags de irregularidade:
+   *      cadastro_acima_44h → cadastro tem mais de 44h/sem (problema)
+   *      dia_acima_10h     → algum dia ultrapassou 10h trabalhadas
+   *      sem_almoco_obrigatorio → jornada >6h sem intervalo
+   */
+  async getBancoHorasMensal(
+    sellerId: string,
+    ano: number,
+    mes: number,
+  ) {
+    const espelho = await this.getEspelhoMensal(sellerId, ano, mes);
+
+    const seller = await (this.prisma as any).seller.findUnique({
+      where: { id: sellerId },
+      select: {
+        id: true,
+        name: true,
+        cargo: true,
+        salarioBase: true,
+        horarioTrabalho: true,
+      },
+    });
+    if (!seller) throw new NotFoundException('Funcionária não encontrada');
+
+    // Parse horário cadastrado pra calcular jornada semanal prevista
+    let horarioExpected: any[] = [];
+    try {
+      horarioExpected = seller.horarioTrabalho
+        ? JSON.parse(seller.horarioTrabalho)
+        : [];
+    } catch {
+      horarioExpected = [];
+    }
+
+    const toMin = (s: string) => {
+      const [h, m] = (s || '0:0').split(':').map(Number);
+      return (h || 0) * 60 + (m || 0);
+    };
+
+    // Total semanal previsto (do cadastro)
+    let minSemanaPrevisto = 0;
+    for (const h of horarioExpected) {
+      if (h.folga) continue;
+      let m = toMin(h.fim) - toMin(h.inicio);
+      if (h.almocoInicio && h.almocoFim) {
+        const a = toMin(h.almocoFim) - toMin(h.almocoInicio);
+        if (a > 0) m -= a;
+      }
+      minSemanaPrevisto += Math.max(0, m);
+    }
+
+    // Limites CLT
+    const LIMITE_SEMANAL_LEGAL_MIN = 44 * 60; // 2640 min
+    const LIMITE_DIARIO_MAX_MIN = 10 * 60; // 600 min
+    const MINUTOS_JORNADA_MENSAL = 220 * 60; // 13200 min = base CLT
+
+    // Valor hora (R$)
+    const salarioBase = Number(seller.salarioBase || 0);
+    const valorHoraNormal = salarioBase > 0 ? salarioBase / 220 : 0;
+    const valorHoraExtra50 = valorHoraNormal * 1.5;
+    const valorHoraExtra100 = valorHoraNormal * 2.0;
+
+    // Processa dias do espelho — separa HE 50% (dia útil) vs HE 100% (dom/feriado)
+    const dias = espelho.dias.map((d: any) => {
+      const isDomingo = d.diaSemana === 'DOM';
+      const previsto = d.minPrevisto;
+      const trabalhado = d.minTrabalhado;
+
+      // Saldo do dia (positivo = HE; negativo = falta a compensar)
+      const saldo = trabalhado - previsto;
+
+      // Hora extra: só conta o excesso sobre o previsto
+      let heMin50 = 0;
+      let heMin100 = 0;
+      if (saldo > 0) {
+        if (isDomingo || d.folga) {
+          // Trabalhou em folga/domingo = 100% TUDO que trabalhou (não tem previsto pra descontar)
+          heMin100 = trabalhado;
+        } else {
+          heMin50 = saldo;
+        }
+      }
+
+      // Irregularidades
+      const diaAcima10h = trabalhado > LIMITE_DIARIO_MAX_MIN;
+
+      return {
+        ...d,
+        heMin50,
+        heMin100,
+        diaAcima10h,
+        valorHe50: (heMin50 / 60) * valorHoraExtra50,
+        valorHe100: (heMin100 / 60) * valorHoraExtra100,
+      };
+    });
+
+    // Totais do mês
+    const totalHe50Min = dias.reduce((acc: number, d: any) => acc + d.heMin50, 0);
+    const totalHe100Min = dias.reduce((acc: number, d: any) => acc + d.heMin100, 0);
+    const totalHeMin = totalHe50Min + totalHe100Min;
+    const saldoBancoMin = espelho.totais.minTrabalhado - espelho.totais.minPrevisto;
+    const diasAcima10h = dias.filter((d: any) => d.diaAcima10h).length;
+
+    // Valor financeiro
+    const valorHe50 = (totalHe50Min / 60) * valorHoraExtra50;
+    const valorHe100 = (totalHe100Min / 60) * valorHoraExtra100;
+    const valorTotalHe = valorHe50 + valorHe100;
+
+    // Flags de irregularidade no CADASTRO
+    const cadastroAcima44h = minSemanaPrevisto > LIMITE_SEMANAL_LEGAL_MIN;
+    const semAlmocoObrigatorio = horarioExpected.some(
+      (h: any) =>
+        !h.folga &&
+        toMin(h.fim) - toMin(h.inicio) > 360 && // > 6h
+        (!h.almocoInicio ||
+          !h.almocoFim ||
+          toMin(h.almocoFim) - toMin(h.almocoInicio) < 60),
+    );
+
+    return {
+      seller: { id: seller.id, name: seller.name, cargo: seller.cargo },
+      periodo: { ano, mes },
+      cadastro: {
+        minSemanaPrevisto,
+        horasSemanaPrevisto: minSemanaPrevisto / 60,
+        limiteSemanalLegal: LIMITE_SEMANAL_LEGAL_MIN / 60, // 44h
+        cadastroAcima44h,
+        semAlmocoObrigatorio,
+      },
+      salario: {
+        salarioBase,
+        valorHoraNormal,
+        valorHoraExtra50,
+        valorHoraExtra100,
+      },
+      totais: {
+        minPrevisto: espelho.totais.minPrevisto,
+        minTrabalhado: espelho.totais.minTrabalhado,
+        saldoBancoMin,
+        totalHe50Min,
+        totalHe100Min,
+        totalHeMin,
+        diasAcima10h,
+        valorHe50,
+        valorHe100,
+        valorTotalHe,
+      },
+      dias,
+    };
+  }
+
   // ── JUSTIFICATIVA / CORREÇÃO MANUAL ──────────────────────────────
 
   async justificar(

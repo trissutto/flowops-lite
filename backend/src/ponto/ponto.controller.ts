@@ -145,6 +145,28 @@ export class PontoController {
     return this.svc.getEspelhoStore(storeId, a, m);
   }
 
+  /**
+   * Banco de horas + hora extra mensal (CLT 44h/semana).
+   *
+   *   GET /ponto/banco-horas?sellerId=&ano=&mes=
+   *
+   * Calcula HE 50% (dias úteis) e HE 100% (domingo/feriado), valor em R$
+   * baseado no salarioBase (220h padrão CLT). Sinaliza irregularidades
+   * (cadastro > 44h/sem, dias acima de 10h trabalhadas, sem almoço obrigatório).
+   */
+  @Get('banco-horas')
+  bancoHoras(
+    @Query('sellerId') sellerId: string,
+    @Query('ano') ano?: string,
+    @Query('mes') mes?: string,
+  ) {
+    if (!sellerId) throw new BadRequestException('sellerId obrigatório');
+    const now = new Date();
+    const a = ano ? Number(ano) : now.getFullYear();
+    const m = mes ? Number(mes) : now.getMonth() + 1;
+    return this.svc.getBancoHorasMensal(sellerId, a, m);
+  }
+
   @Get('ultimos/:sellerId')
   ultimos(
     @Param('sellerId') sellerId: string,
