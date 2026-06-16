@@ -30,9 +30,11 @@ const MODELS_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@ma
 const VIDEO_W = 320;
 const VIDEO_H = 240;
 
-// inputSize do TinyFaceDetector. 224 é ~3,5× mais rápido que 416 (default).
-// Em hardware fraco, 160 é ainda mais rápido (perde um pouco de precisão).
-const DETECTOR_INPUT_SIZE = 224;
+// 2 inputSizes: rápido pra triagem (frame vazio), preciso pra match.
+// 128 = ultra rápido (~30-50ms), só pra dizer "tem rosto sim ou não".
+// 224 = balanceado (~200-300ms), usado quando vai extrair descriptor.
+const DETECTOR_INPUT_SIZE_FAST = 128;   // triagem
+const DETECTOR_INPUT_SIZE_FULL = 224;   // match completo
 const DETECTOR_SCORE_THRESHOLD = 0.5;
 
 declare global {
@@ -96,18 +98,24 @@ async function warmUp(): Promise<void> {
     const f = window.faceapi;
     if (!f) return;
     const canvas = document.createElement('canvas');
-    canvas.width = DETECTOR_INPUT_SIZE;
-    canvas.height = DETECTOR_INPUT_SIZE;
+    canvas.width = DETECTOR_INPUT_SIZE_FULL;
+    canvas.height = DETECTOR_INPUT_SIZE_FULL;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.fillStyle = '#888';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
-    const opts = new f.TinyFaceDetectorOptions({
-      inputSize: DETECTOR_INPUT_SIZE,
+    // Warm-up das DUAS escalas (fast + full)
+    const optsFast = new f.TinyFaceDetectorOptions({
+      inputSize: DETECTOR_INPUT_SIZE_FAST,
       scoreThreshold: DETECTOR_SCORE_THRESHOLD,
     });
-    await f.detectSingleFace(canvas, opts).withFaceLandmarks().withFaceDescriptor();
+    const optsFull = new f.TinyFaceDetectorOptions({
+      inputSize: DETECTOR_INPUT_SIZE_FULL,
+      scoreThreshold: DETECTOR_SCORE_THRESHOLD,
+    });
+    await f.detectSingleFace(canvas, optsFast);
+    await f.detectSingleFace(canvas, optsFull).withFaceLandmarks().withFaceDescriptor();
     warmedUp = true;
   } catch (e) {
     // ignora — primeiro frame real vai pagar o custo, paciência
@@ -204,7 +212,7 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
       if (!videoRef.current || !window.faceapi) return null;
       const f = window.faceapi;
       const opts = new f.TinyFaceDetectorOptions({
-        inputSize: DETECTOR_INPUT_SIZE,
+        inputSize: DETECTOR_INPUT_SIZE_FULL,
         scoreThreshold: DETECTOR_SCORE_THRESHOLD,
       });
       const result = await f
@@ -215,10 +223,12 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
       return Array.from(result.descriptor as Float32Array);
     },
     async detectOnly() {
+      // ULTRA RÁPIDO: só usa inputSize=128 + sem landmarks + sem descriptor.
+      // Tempo típico: 30-80ms (vs 200-400ms do captureDescriptor).
       if (!videoRef.current || !window.faceapi) return false;
       const f = window.faceapi;
       const opts = new f.TinyFaceDetectorOptions({
-        inputSize: DETECTOR_INPUT_SIZE,
+        inputSize: DETECTOR_INPUT_SIZE_FAST,
         scoreThreshold: DETECTOR_SCORE_THRESHOLD,
       });
       const result = await f.detectSingleFace(videoRef.current, opts);

@@ -37,10 +37,11 @@ type Me = { id: string; storeId: string; storeName: string };
 const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
 const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
 const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
-// Self-scheduling loop — só agenda próximo tick depois do anterior terminar.
-// 150ms é um respiro pro browser não travar UI/eventos. Como cada inferência
-// já demora >300ms na maioria dos PCs, na prática o ritmo é ~3-4 tentativas/s.
-const DETECT_INTERVAL_MS = 150;
+// 2-STAGE detection:
+//   Stage 1 (rápido): detectOnly @ inputSize 128 → 30-80ms — câmera vazia roda nisso
+//   Stage 2 (completo): captureDescriptor @ inputSize 224 → só se Stage 1 detectou rosto
+// Tick muito curto pq Stage 1 é rápido. Quando vazio, vira loop a ~100ms.
+const DETECT_INTERVAL_MS = 50;
 // Cooldown por vendedora (impede re-bater mesmo rosto em sequência).
 // Reduzido pra 8s — suficiente pra ela sair da câmera e dar espaço pra próxima.
 const COOLDOWN_AFTER_REGISTER_MS = 8_000;
@@ -236,6 +237,19 @@ export default function PontoPage() {
       }
       const t0 = performance.now();
       try {
+        // ── STAGE 1: detecção rápida (inputSize 128, ~30-80ms) ──
+        // Só pergunta "tem rosto?". Se não tem, próximo tick imediato.
+        const hasFace = await captureRef.current.detectOnly();
+        if (cancelled) return;
+        if (!hasFace) {
+          const t1 = performance.now();
+          setDiag({ ms: Math.round(t1 - t0), detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_rosto' });
+          if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
+          return;
+        }
+
+        // ── STAGE 2: descriptor completo (inputSize 224, ~200-400ms) ──
+        // Só roda quando confirmamos que existe rosto.
         const desc = await captureRef.current.captureDescriptor();
         if (cancelled) return;
         const t1 = performance.now();
