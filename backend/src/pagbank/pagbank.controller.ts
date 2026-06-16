@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  forwardRef,
   Get,
   Headers,
+  Inject,
   Param,
   Post,
   Query,
@@ -13,11 +15,16 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { PagbankService } from './pagbank.service';
+import { CrediarioBaixaService } from '../crediarios/crediario-baixa.service';
 import type { Request } from 'express';
 
 @Controller('pagbank')
 export class PagbankController {
-  constructor(private readonly svc: PagbankService) {}
+  constructor(
+    private readonly svc: PagbankService,
+    @Inject(forwardRef(() => CrediarioBaixaService))
+    private readonly crediarioBaixa: CrediarioBaixaService,
+  ) {}
 
   // ── Config (admin only) ────────────────────────────────────────────
 
@@ -208,6 +215,23 @@ export class PagbankController {
   ) {
     const rawBody = JSON.stringify(body);
     const result = await this.svc.handleWebhook(body, rawBody, signature);
+
+    // FIX PIX-LINK CREDIÁRIO (16/06/2026):
+    // Quando webhook PagBank reporta paid PELA PRIMEIRA VEZ (statusChanged=true),
+    // dispara baixa Giga automaticamente — mesmo padrão do Pagar.me.
+    // Sem isso, parcela ficava em aberto + recibo não emitia.
+    if (
+      result.ok &&
+      result.saleId &&
+      result.status === 'paid' &&
+      result.statusChanged
+    ) {
+      try {
+        await this.crediarioBaixa.confirmBaixaPixIfExists(result.saleId);
+      } catch (e: any) {
+        // Não bloqueia ack do webhook — só loga. PagBank reenvia em falha.
+      }
+    }
     // PagBank espera 200 OK pra não retentar
     return { received: true, ...result };
   }
