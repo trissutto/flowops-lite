@@ -42,19 +42,39 @@ export class CrediarioBaixaPublicController {
       throw new BadRequestException('Essa baixa não é PIX');
     }
 
-    // Busca QR Code do PagarmePayment vinculado
+    // Busca QR Code — tenta PagBank PRIMEIRO (default no createPixForCrediario)
+    // depois Pagar.me como fallback. Antes (bug jun/2026): so buscava em
+    // pagarmePayment, retornava null pra PIX gerado via PagBank, cliente
+    // abria o link e nao via QR.
     let qrCodeText: string | null = null;
     let qrCodeImageUrl: string | null = null;
     let expiresAt: Date | null = null;
-    if (baixa.pagarmeOrderId) {
-      const pp: any = await (this.prisma as any).pagarmePayment.findUnique({
-        where: { pagarmeOrderId: baixa.pagarmeOrderId },
+    // 1) PagBank (preferido)
+    try {
+      const pb: any = await (this.prisma as any).pagbankPayment.findFirst({
+        where: { saleId: baixaId },
+        orderBy: { createdAt: 'desc' },
       });
-      if (pp) {
-        qrCodeText = pp.qrCodeText;
-        qrCodeImageUrl = pp.qrCodeImageUrl;
-        expiresAt = pp.expiresAt;
+      if (pb) {
+        qrCodeText = pb.qrCodeText || null;
+        qrCodeImageUrl = pb.qrCodeImageB64
+          ? 'data:image/png;base64,' + pb.qrCodeImageB64
+          : null;
+        expiresAt = pb.expiresAt;
       }
+    } catch { /* segue pra fallback */ }
+    // 2) Pagar.me (fallback)
+    if (!qrCodeText && baixa.pagarmeOrderId) {
+      try {
+        const pp: any = await (this.prisma as any).pagarmePayment.findUnique({
+          where: { pagarmeOrderId: baixa.pagarmeOrderId },
+        });
+        if (pp) {
+          qrCodeText = pp.qrCodeText;
+          qrCodeImageUrl = pp.qrCodeImageUrl;
+          expiresAt = pp.expiresAt;
+        }
+      } catch { /* ignora */ }
     }
 
     // Anonimiza dados sensíveis (mostra parcial)
