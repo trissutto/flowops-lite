@@ -1412,17 +1412,49 @@ export class CrediarioBaixaService {
    */
   async confirmBaixaPixIfExists(baixaIdOrOrderId: string): Promise<{ confirmed: boolean; reason?: string }> {
     try {
-      // Busca por id direto (saleId no PagarmePayment é a baixaId quando é crediário)
+      // 1) Busca por id direto (saleId no payment eh a baixaId quando crediario)
       let baixa = await (this.prisma as any).crediarioBaixa.findUnique({
         where: { id: baixaIdOrOrderId },
       });
-      // Fallback: tenta por pagarmeOrderId
+      // 2) Fallback Pagar.me orderId
       if (!baixa) {
         baixa = await (this.prisma as any).crediarioBaixa.findUnique({
           where: { pagarmeOrderId: baixaIdOrOrderId },
         });
       }
+      // 3) FALLBACK CRITICO (jun/2026): PagBank webhook pode mandar o pagbankOrderId
+      // em vez de saleId. Busca PagbankPayment por pagbankOrderId, pega saleId (=baixaId)
       if (!baixa) {
+        try {
+          const pb = await (this.prisma as any).pagbankPayment.findUnique({
+            where: { pagbankOrderId: baixaIdOrOrderId },
+          });
+          if (pb?.saleId) {
+            baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+              where: { id: pb.saleId },
+            });
+            if (baixa) {
+              this.logger.log('[confirmBaixaPixIfExists] achou via PagBank orderId ' + baixaIdOrOrderId + ' -> baixaId ' + pb.saleId);
+            }
+          }
+        } catch { /* segue */ }
+      }
+      // 4) FALLBACK extra: PagbankPayment pode ter saleId armazenado direto
+      if (!baixa) {
+        try {
+          const pb = await (this.prisma as any).pagbankPayment.findFirst({
+            where: { saleId: baixaIdOrOrderId },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (pb?.saleId) {
+            baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+              where: { id: pb.saleId },
+            });
+          }
+        } catch { /* segue */ }
+      }
+      if (!baixa) {
+        this.logger.warn('[confirmBaixaPixIfExists] baixa NAO ENCONTRADA — id=' + baixaIdOrOrderId);
         return { confirmed: false, reason: 'baixa_nao_encontrada' };
       }
       if (baixa.status === 'paid') {
