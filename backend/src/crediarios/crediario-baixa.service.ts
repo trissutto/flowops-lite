@@ -1149,13 +1149,46 @@ export class CrediarioBaixaService {
     const baixa = await (this.prisma as any).crediarioBaixa.findUnique({
       where: { id: baixaId },
     });
-    if (!baixa) throw new NotFoundException('Baixa não encontrada');
+    if (!baixa) throw new NotFoundException('Baixa nao encontrada');
     if (baixa.status === 'paid') return { confirmed: false };
 
-    // Verifica status real na Pagar.me
-    if (!baixa.pagarmeOrderId) throw new BadRequestException('Baixa sem order Pagar.me vinculada');
-    const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
-    if (!live.isPaid) {
+    // FIX CRITICO (jun/2026): suporta PagBank E Pagar.me.
+    // Antes so funcionava com Pagar.me — se baixa veio do PagBank,
+    // dava exception e baixa ficava em pending eternamente.
+    let isPaid = false;
+    try {
+      const pb = await (this.prisma as any).pagbankPayment.findFirst({
+        where: { saleId: baixaId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (pb) {
+        if (pb.status === 'paid') {
+          isPaid = true;
+        } else if (pb.pagbankOrderId) {
+          const live = await (this.pagbank as any).checkOrderStatus?.(pb.pagbankOrderId);
+          if (live?.isPaid || live?.status === 'paid') {
+            isPaid = true;
+            try {
+              await (this.prisma as any).pagbankPayment.update({
+                where: { id: pb.id },
+                data: { status: 'paid', paidAt: new Date() },
+              });
+            } catch {/* nao bloqueia */}
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn('[confirmBaixaPix] PagBank check falhou: ' + e?.message);
+    }
+    if (!isPaid && baixa.pagarmeOrderId) {
+      try {
+        const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
+        if (live.isPaid) isPaid = true;
+      } catch (e: any) {
+        this.logger.warn('[confirmBaixaPix] Pagar.me check falhou: ' + e?.message);
+      }
+    }
+    if (!isPaid) {
       return { confirmed: false };
     }
 
@@ -1164,9 +1197,9 @@ export class CrediarioBaixaService {
       data: { status: 'paid', paidAt: new Date() },
     });
 
-    // Executa UPDATE no Giga
     await this.executeGigaUpdates(baixaId);
     this.clearListCache();
+    this.logger.log('[confirmBaixaPix] baixa ' + baixaId + ' confirmada + Giga atualizado');
     return { confirmed: true };
   }
 
