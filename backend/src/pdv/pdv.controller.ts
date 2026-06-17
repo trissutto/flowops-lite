@@ -1274,10 +1274,23 @@ export class PdvController {
       throw new BadRequestException('primeiroVencimento inválido (formato YYYY-MM-DD)');
     }
     const entrada = Math.max(0, Math.round((body.entrada || 0) * 100) / 100);
-    const valorFinanciado = Math.round((sale.total - entrada) * 100) / 100;
+    // FIX CRITICO (jun/2026): desconta TAMBEM pagamentos ja registrados na venda
+    // (PIX, dinheiro, cartao). Antes: sale.total - entrada (ignorava PIX em split misto)
+    // Caso real: venda 2968, PIX 1068, crediario virava 2968/6=494 ao inves de 1900/6=316
+    const jaPago = Math.round((await this.svc.sumPaidValue(saleId)) * 100) / 100;
+    const valorFinanciado = Math.round((sale.total - entrada - jaPago) * 100) / 100;
     if (valorFinanciado <= 0) {
-      throw new BadRequestException('Entrada não pode ser maior ou igual ao total da venda');
+      throw new BadRequestException(
+        'Crediario invalido: total=' + sale.total.toFixed(2) +
+        ' entrada=' + entrada.toFixed(2) +
+        ' jaPago=' + jaPago.toFixed(2) +
+        ' financiado=' + valorFinanciado.toFixed(2) +
+        '. Venda ja esta toda paga?'
+      );
     }
+    this.logger.log(
+      '[crediario] saleId=' + saleId + ' total=' + sale.total + ' entrada=' + entrada + ' jaPago=' + jaPago + ' -> financiado=' + valorFinanciado + ' em ' + body.parcelas + 'x'
+    );
 
     // ── MODO TREINAMENTO ──
     // União: venda criada em treino OU sessão atual em treino (header).

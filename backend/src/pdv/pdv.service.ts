@@ -508,8 +508,9 @@ export class PdvService {
 
   /**
    * Soma o valor já pago (todos os pagamentos parciais).
+   * PUBLIC (jun/2026): controller usa pra calcular residual do crediário.
    */
-  private async sumPaidValue(saleId: string): Promise<number> {
+  async sumPaidValue(saleId: string): Promise<number> {
     const payments = await (this.prisma as any).pdvSalePayment.findMany({
       where: { saleId },
       select: { valor: true },
