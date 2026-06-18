@@ -140,4 +140,84 @@ export class CarrinhosAbandonadosService {
       return { abandonados: 0, valorAbandonado: 0, recuperados: 0, valorRecuperado: 0, taxaRecuperacaoPct: 0, dias: input.dias };
     }
   }
+
+  /**
+   * Diagnostico: verifica conexao + existencia da tabela + sample row.
+   * Retorna estrutura clara sobre o que esta ou nao funcionando.
+   */
+  async diag() {
+    const result: any = {
+      ok: false,
+      step: 'init',
+      hasPool: false,
+      env: {
+        WP_DB_HOST: process.env.WP_DB_HOST ? 'set' : 'MISSING',
+        WP_DB_PORT: process.env.WP_DB_PORT ? 'set' : 'default(3306)',
+        WP_DB_USER: process.env.WP_DB_USER ? 'set' : 'MISSING',
+        WP_DB_PASSWORD: process.env.WP_DB_PASSWORD ? 'set' : 'MISSING',
+        WP_DB_DATABASE: process.env.WP_DB_DATABASE ? 'set' : 'MISSING',
+      },
+    };
+
+    const pool = (this.wpDb as any).getPool ? (this.wpDb as any).getPool() : null;
+    if (!pool) {
+      result.step = 'no-pool';
+      result.error = 'WpDbService nao tem pool. Variaveis WP_DB_* faltando ou nao conectou. Setar no Railway: WP_DB_HOST, WP_DB_PORT, WP_DB_USER, WP_DB_PASSWORD, WP_DB_DATABASE';
+      return result;
+    }
+    result.hasPool = true;
+
+    try {
+      result.step = 'ping';
+      await pool.query('SELECT 1');
+      result.connected = true;
+    } catch (e: any) {
+      result.step = 'connect-failed';
+      result.error = `Falha ao conectar: ${e?.message}. Provavel: IP do Railway nao liberado no hosting do WP. Pedir pro hosting liberar acesso externo MySQL.`;
+      return result;
+    }
+
+    try {
+      result.step = 'show-tables';
+      const tables = await this.wpDb.query<any>("SHOW TABLES LIKE '%cartflows%'");
+      result.tabelasCartflows = tables.map((t: any) => Object.values(t)[0]);
+    } catch (e: any) {
+      result.step = 'show-tables-failed';
+      result.error = `SHOW TABLES falhou: ${e?.message}`;
+      return result;
+    }
+
+    try {
+      result.step = 'count-cart-history';
+      const cnt = await this.wpDb.query<any>('SELECT COUNT(*) as total FROM wp_cartflows_ca_cart_history');
+      result.totalRows = Number((cnt as any)[0]?.total ?? 0);
+    } catch (e: any) {
+      result.step = 'count-failed';
+      result.error = `Tabela wp_cartflows_ca_cart_history nao acessivel: ${e?.message}. Talvez prefix nao seja wp_. Veja tabelasCartflows acima.`;
+      return result;
+    }
+
+    try {
+      result.step = 'sample';
+      const sample = await this.wpDb.query<any>('SELECT id, email, cart_total, order_status, time FROM wp_cartflows_ca_cart_history ORDER BY time DESC LIMIT 1');
+      result.sample = (sample as any)[0] ?? null;
+    } catch (e: any) {
+      result.error = `Falha ao pegar sample: ${e?.message}`;
+      return result;
+    }
+
+    try {
+      result.step = 'count-last-7d';
+      const cnt7 = await this.wpDb.query<any>("SELECT COUNT(*) as total FROM wp_cartflows_ca_cart_history WHERE time >= NOW() - INTERVAL 7 DAY");
+      result.rowsUltimos7Dias = Number((cnt7 as any)[0]?.total ?? 0);
+      const cnt7ab = await this.wpDb.query<any>("SELECT COUNT(*) as total FROM wp_cartflows_ca_cart_history WHERE time >= NOW() - INTERVAL 7 DAY AND order_status = 'abandoned'");
+      result.abandonadosUltimos7Dias = Number((cnt7ab as any)[0]?.total ?? 0);
+    } catch (e: any) {
+      result.error = `Falha contagem: ${e?.message}`;
+    }
+
+    result.ok = true;
+    result.step = 'done';
+    return result;
+  }
 }

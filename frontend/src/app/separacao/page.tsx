@@ -1685,9 +1685,9 @@ function SeparacaoPageInner() {
 
 
 // =================================================================================
-// CarrinhosTab — aba "Carrinhos" da tela de separação.
-// Lê do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via WP-DB.
-// Mostra clientes que largaram o checkout sem pagar + botão de WhatsApp.
+// CarrinhosTab — aba "Carrinhos" da tela de separacao.
+// Le do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via endpoint
+// /carrinhos-abandonados (que consulta a tabela wp_cartflows_ca_cart_history).
 // =================================================================================
 type CarrinhoAB = {
   id: number; email: string; nome: string; telefone: string;
@@ -1704,12 +1704,16 @@ function CarrinhosTab() {
   const [items, setItems] = useState<CarrinhoAB[]>([]);
   const [resumo, setResumo] = useState<ResumoAB | null>(null);
   const [loading, setLoading] = useState(true);
+  const [erro, setErro] = useState<string | null>(null);
   const [dias, setDias] = useState(7);
   const [statusF, setStatusF] = useState<'abandoned' | 'completed' | 'all'>('abandoned');
   const [search, setSearch] = useState('');
+  const [showDiag, setShowDiag] = useState(false);
+  const [diag, setDiag] = useState<any>(null);
 
   async function load() {
     setLoading(true);
+    setErro(null);
     try {
       const [list, res] = await Promise.all([
         api<CarrinhoAB[]>(`/carrinhos-abandonados/list?dias=${dias}&status=${statusF}`),
@@ -1717,13 +1721,26 @@ function CarrinhosTab() {
       ]);
       setItems(Array.isArray(list) ? list : []);
       setResumo(res);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setErro(e?.message || 'Erro ao buscar carrinhos. Conexao com banco do site falhou.');
+      setItems([]);
     } finally {
       setLoading(false);
     }
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [dias, statusF]);
+
+  async function runDiag() {
+    try {
+      const d = await api<any>(`/carrinhos-abandonados/diag`);
+      setDiag(d);
+      setShowDiag(true);
+    } catch (e: any) {
+      setDiag({ ok: false, error: e?.message || 'falha' });
+      setShowDiag(true);
+    }
+  }
 
   function whatsapp(c: CarrinhoAB) {
     const tel = (c.telefone || '').replace(/\D/g, '');
@@ -1746,6 +1763,25 @@ function CarrinhosTab() {
 
   return (
     <div className="space-y-3">
+      {/* Erro */}
+      {erro && (
+        <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-3 text-sm text-rose-800 flex items-center justify-between">
+          <div><strong>Erro:</strong> {erro}</div>
+          <button onClick={runDiag} className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded">Diagnosticar</button>
+        </div>
+      )}
+
+      {/* Diagnostico */}
+      {showDiag && diag && (
+        <div className="bg-slate-900 text-emerald-300 border-2 border-slate-700 rounded-lg p-3 text-[11px] font-mono">
+          <div className="flex justify-between mb-1">
+            <strong>Diagnostico</strong>
+            <button onClick={() => setShowDiag(false)} className="text-slate-400 hover:text-white">x</button>
+          </div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-all">{JSON.stringify(diag, null, 2)}</pre>
+        </div>
+      )}
+
       {/* KPIs */}
       {resumo && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
@@ -1765,7 +1801,7 @@ function CarrinhosTab() {
             <div className="text-[11px] text-violet-700">Ultimos {resumo.dias} dias</div>
           </div>
           <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-3">
-            <div className="text-[10px] font-bold uppercase text-amber-700">Receita Perdida</div>
+            <div className="text-[10px] font-bold uppercase text-amber-700">Receita Pendente</div>
             <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(resumo.valorAbandonado)}</div>
             <div className="text-[11px] text-amber-700">se nada recuperar</div>
           </div>
@@ -1789,6 +1825,7 @@ function CarrinhosTab() {
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
+        <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Verificar conexao com banco do site">Diag</button>
         <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}</span>
       </div>
 
@@ -1796,7 +1833,10 @@ function CarrinhosTab() {
       {loading ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Carregando do site...</div>
       ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Nenhum carrinho com esses filtros.</div>
+        <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
+          Nenhum carrinho com esses filtros.
+          {!erro && <div className="text-[11px] mt-2 text-slate-500">Se voce sabe que tem carrinhos no plugin do WP, clique em <strong>Diag</strong> pra ver se o backend esta conectando.</div>}
+        </div>
       ) : (
         <div className="space-y-2">
           {filtered.map((c) => {
