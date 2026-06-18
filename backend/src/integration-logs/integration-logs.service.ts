@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface ListIntegrationLogsFilters {
@@ -42,7 +43,42 @@ export interface IntegrationLogRow {
  */
 @Injectable()
 export class IntegrationLogsService {
+  private readonly logger = new Logger(IntegrationLogsService.name);
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Retenção: a tabela integration_logs cresce ~dezenas de milhares de linhas/dia
+   * (webhooks + poller + baixas). Sem limpeza, vira milhões de linhas e os índices
+   * incham. Roda 3h da manhã, apaga em lotes (não trava num DELETE gigante).
+   * Janela configurável via INTEGRATION_LOG_RETENTION_DAYS (default 90 dias).
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_3AM)
+  async purgeOldLogs() {
+    const days = Number(process.env.INTEGRATION_LOG_RETENTION_DAYS) || 90;
+    const cutoff = new Date(Date.now() - days * 86_400_000);
+    let totalDeleted = 0;
+
+    // No máx. 100 lotes de 5k = 500k/execução. Em regime permanente sobra;
+    // numa primeira limpeza de base antiga, drena ao longo de alguns dias.
+    for (let i = 0; i < 100; i++) {
+      const batch = await this.prisma.integrationLog.findMany({
+        where: { createdAt: { lt: cutoff } },
+        select: { id: true },
+        take: 5000,
+        orderBy: { id: 'asc' },
+      });
+      if (batch.length === 0) break;
+      const res = await this.prisma.integrationLog.deleteMany({
+        where: { id: { in: batch.map((b) => b.id) } },
+      });
+      totalDeleted += res.count;
+      if (batch.length < 5000) break;
+    }
+
+    if (totalDeleted > 0) {
+      this.logger.log(`IntegrationLog purge: ${totalDeleted} registros > ${days}d removidos.`);
+    }
+  }
 
   async list(filters: ListIntegrationLogsFilters): Promise<{
     rows: IntegrationLogRow[];

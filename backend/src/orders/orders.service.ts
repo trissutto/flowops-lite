@@ -9,10 +9,43 @@ export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
+   * Cache em memória das lojas ativas (TTL 5 min).
+   * Evita um findMany em CADA import de pedido (webhook + cada item do poller).
+   * Lojas mudam raríssimas vezes; 5 min de defasagem é aceitável.
+   */
+  private activeStoresCache: { data: Array<{ code: string; name: string; city: string | null }>; expires: number } | null = null;
+  private static readonly ACTIVE_STORES_TTL = 5 * 60_000;
+
+  private async getActiveStores() {
+    const now = Date.now();
+    if (this.activeStoresCache && this.activeStoresCache.expires > now) {
+      return this.activeStoresCache.data;
+    }
+    const data = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, city: true },
+    });
+    this.activeStoresCache = { data, expires: now + OrdersService.ACTIVE_STORES_TTL };
+    return data;
+  }
+
+  /** Invalida o cache de lojas ativas (chamar após criar/editar/desativar loja). */
+  invalidateActiveStoresCache() {
+    this.activeStoresCache = null;
+  }
+
+  /**
    * Upsert de pedido vindo do WooCommerce.
    * Retorna o id interno + se deve disparar roteamento.
+   * Quando shouldRoute=true, devolve também os campos usados na emissão WS
+   * (evita um findUnique redundante no poller).
    */
-  async upsertFromWooCommerce(wc: any): Promise<{ orderId: string; shouldRoute: boolean; wasCreated: boolean }> {
+  async upsertFromWooCommerce(wc: any): Promise<{
+    orderId: string;
+    shouldRoute: boolean;
+    wasCreated: boolean;
+    order?: { id: string; wcOrderNumber: string | null; customerName: string | null; totalAmount: number | null; status: string; createdAt: Date };
+  }> {
     const wcOrderId = Number(wc.id);
     const items = (wc.line_items ?? []).map((li: any) => ({
       sku: String(li.sku || `wc-${li.product_id}`),
@@ -35,10 +68,8 @@ export class OrdersService {
     const customerCpf = extractCpf(wc);
 
     // Detecta retirada em loja — precisa das stores ativas pra mapear a loja escolhida
-    const activeStores = await this.prisma.store.findMany({
-      where: { active: true },
-      select: { code: true, name: true, city: true },
-    });
+    // (cacheado em memória; ver getActiveStores)
+    const activeStores = await this.getActiveStores();
     const pickup = detectPickup(wc, activeStores);
 
     if (pickup.isPickup && !pickup.pickupStoreCode) {
@@ -80,10 +111,21 @@ export class OrdersService {
         data: { ...payload, status: nextStatus },
       });
       this.logger.log(`Order #${wc.id} atualizado (${existing.status} → ${nextStatus}).`);
+      const shouldRoute = canOverwriteStatus && nextStatus === OrderStatus.processing;
       return {
         orderId: existing.id,
-        shouldRoute: canOverwriteStatus && nextStatus === OrderStatus.processing,
+        shouldRoute,
         wasCreated: false,
+        order: shouldRoute
+          ? {
+              id: existing.id,
+              wcOrderNumber: payload.wcOrderNumber,
+              customerName: payload.customerName,
+              totalAmount: payload.totalAmount,
+              status: nextStatus,
+              createdAt: existing.createdAt,
+            }
+          : undefined,
       };
     }
 
@@ -95,10 +137,21 @@ export class OrdersService {
       },
     });
     this.logger.log(`Order #${wc.id} criado (internal ${created.id}, ${items.length} itens, status ${status}).`);
+    const shouldRouteCreated = status === OrderStatus.processing;
     return {
       orderId: created.id,
-      shouldRoute: status === OrderStatus.processing,
+      shouldRoute: shouldRouteCreated,
       wasCreated: true,
+      order: shouldRouteCreated
+        ? {
+            id: created.id,
+            wcOrderNumber: created.wcOrderNumber,
+            customerName: created.customerName,
+            totalAmount: created.totalAmount,
+            status: created.status,
+            createdAt: created.createdAt,
+          }
+        : undefined,
     };
   }
 

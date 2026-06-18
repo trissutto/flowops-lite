@@ -32,11 +32,17 @@ type SellerDescriptors = {
 
 type Me = { id: string; storeId: string; storeName: string };
 
-// Anti-falso-positivo (jun/2026 v3): aperta threshold + ratio + modo confirmacao.
-// Caso documentado: Thiago foi reconhecido como Elisa com dist=0.474.
-const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
-const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
-const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
+// Anti-falso-positivo + VELOCIDADE (jun/2026 v4):
+// Estratégia nova — aceite instantâneo quando o rosto é distinto e perto;
+// na zona cinza (0.44–0.52), confirma por VOTAÇÃO multi-frame (NÃO por clique
+// manual, que travava a estação). O ratio test (best vs 2º) continua barrando
+// sósias — é o que pega o caso Thiago→Elisa (dist=0.474, mas pouco distinto).
+const MATCH_AUTO_THRESHOLD = 0.44;    // < 0.44 + distinto = registra na hora
+const MATCH_CONFIRM_THRESHOLD = 0.52; // teto absoluto: acima disso NUNCA aceita
+const RATIO_THRESHOLD = 0.75;         // best tem que ser bem melhor que o 2º
+// Zona 0.44–0.52: aceita automático após N frames seguidos na MESMA pessoa,
+// cada um passando o ratio test. ~2 frames ≈ 0,4–0,8s, sem clique manual.
+const VOTE_FRAMES = 2;
 // 2-STAGE detection (jun/2026 v2): tick muito curto + stage 1 rapido.
 // Quando vazio, vira loop a ~100ms. Reconhece pessoa quase instantaneo.
 const DETECT_INTERVAL_MS = 50;
@@ -106,6 +112,12 @@ export default function PontoPage() {
   /** Flag: loop de detecção ativo? Usado pra parar o self-scheduling. */
   const loopActiveRef = useRef<boolean>(false);
   const cooldownRef = useRef<Set<string>>(new Set());
+  // Refs espelhando estado pro loop NÃO remontar a cada batida (perf):
+  // o tick lê sempre o valor atual via ref, sem entrar nas deps do useEffect.
+  const sellersRef = useRef<SellerDescriptors[]>([]);
+  const lastSuccessRef = useRef<{ name: string } | null>(null);
+  // Votação multi-frame da zona cinza: acumula frames seguidos na mesma pessoa.
+  const voteRef = useRef<{ sellerId: string; count: number } | null>(null);
 
   const [me, setMe] = useState<Me | null>(null);
   const [sellers, setSellers] = useState<SellerDescriptors[]>([]);
@@ -120,12 +132,6 @@ export default function PontoPage() {
   const [ready, setReady] = useState(false);
   const [loadingDescriptors, setLoadingDescriptors] = useState(true);
   // PAINEL DIAGNOSTICO (jun/2026) — pra debugar lentidao/divergencia
-  // Modal de confirmação manual (zona dist 0.40-0.52)
-  const [pendingConfirm, setPendingConfirm] = useState<{
-    seller: SellerDescriptors;
-    distance: number;
-  } | null>(null);
-
   const [diag, setDiag] = useState<{
     ms: number;
     detected: boolean;
@@ -145,15 +151,41 @@ export default function PontoPage() {
 
   useEffect(() => {
     if (!me?.storeId) return;
-    setLoadingDescriptors(true);
+    const cacheKey = `ponto_desc_${me.storeId}`;
+    // 1) Cache local: mostra na hora (revisita = instantâneo). Revalida em bg.
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const arr = JSON.parse(cached) as SellerDescriptors[];
+        if (Array.isArray(arr) && arr.length) {
+          setSellers(arr);
+          setLoadingDescriptors(false);
+        }
+      }
+    } catch {}
+    // 2) Sempre revalida no servidor e atualiza o cache (pega novos enrolls).
     api<SellerDescriptors[]>(`/ponto/face/descriptors/${me.storeId}`)
-      .then((arr) => setSellers(arr || []))
+      .then((arr) => {
+        const list = arr || [];
+        setSellers(list);
+        try { localStorage.setItem(cacheKey, JSON.stringify(list)); } catch {}
+      })
       .catch((e) => setErrorMsg(e?.message || 'Falha ao carregar descriptors'))
       .finally(() => setLoadingDescriptors(false));
   }, [me?.storeId]);
 
+  // Espelha estado em refs pro loop de detecção (evita remontar o loop).
+  useEffect(() => { sellersRef.current = sellers; }, [sellers]);
+  useEffect(() => {
+    lastSuccessRef.current = lastSuccess ? { name: lastSuccess.name } : null;
+  }, [lastSuccess]);
+
   async function baterAuto(match: { seller: SellerDescriptors; distance: number }) {
     if (!me?.storeId) return;
+    // Cooldown SÍNCRONO já na entrada: o loop continua detectando a PRÓXIMA
+    // pessoa enquanto este POST roda, sem re-bater esta aqui. Zera o voto.
+    cooldownRef.current.add(match.seller.id);
+    voteRef.current = null;
     setRegistering(true);
     setErrorMsg(null);
     try {
@@ -213,14 +245,12 @@ export default function PontoPage() {
   }
 
   // Loop de detecção — SELF-SCHEDULING (sem overlap).
-  // Diferente de setInterval: só agenda a próxima tentativa DEPOIS que a
-  // anterior terminou. Em hardware fraco, isso evita fila de detecções
-  // travando a UI e burnando CPU.
+  // PERF v4: o loop NÃO depende mais de sellers/registering/lastSuccess/confirm
+  // (lê tudo via ref) — assim ele NÃO remonta a cada batida. Só (re)inicia
+  // quando a câmera fica pronta e os descriptors carregam.
+  const hasSellers = sellers.length > 0;
   useEffect(() => {
-    // Loop NÃO para por lastSuccess: assim vendedora B já pode bater
-    // enquanto card de sucesso de A ainda está visível. Cooldown impede
-    // a própria A de re-bater no mesmo período.
-    if (!ready || sellers.length === 0 || registering || alreadyDone || pendingConfirm) {
+    if (!ready || !hasSellers) {
       loopActiveRef.current = false;
       return;
     }
@@ -230,25 +260,26 @@ export default function PontoPage() {
 
     async function tick() {
       if (cancelled || !loopActiveRef.current) return;
-      if (!captureRef.current || registering) {
+      if (!captureRef.current) {
         if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
         return;
       }
+      // NÃO pausa em `registering`: o cooldown síncrono (em baterAuto) já evita
+      // re-bater a mesma pessoa, então o loop segue detectando a PRÓXIMA.
       const t0 = performance.now();
       try {
-        // ── STAGE 1: detecção rápida (inputSize 128, ~30-80ms) ──
-        // Só pergunta "tem rosto?". Se não tem, próximo tick imediato.
+        // ── STAGE 1: detecção rápida (~30-80ms) — só "tem rosto?" ──
         const hasFace = await captureRef.current.detectOnly();
         if (cancelled) return;
         if (!hasFace) {
+          voteRef.current = null; // rosto saiu → zera votação
           const t1 = performance.now();
           setDiag({ ms: Math.round(t1 - t0), detected: false, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_rosto' });
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
         }
 
-        // ── STAGE 2: descriptor completo (inputSize 224, ~200-400ms) ──
-        // Só roda quando confirmamos que existe rosto.
+        // ── STAGE 2: descriptor completo (~200-400ms) ──
         const desc = await captureRef.current.captureDescriptor();
         if (cancelled) return;
         const t1 = performance.now();
@@ -257,23 +288,43 @@ export default function PontoPage() {
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
         }
-        const best = findBestMatch(desc, sellers);
+        const best = findBestMatch(desc, sellersRef.current);
         if (!best) {
+          voteRef.current = null;
           setDiag({ ms: Math.round(t1 - t0), detected: true, bestName: null, bestDist: null, secondName: null, secondDist: null, ambiguous: false, rejected: 'sem_match' });
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;
         }
+
+        // ── DECISÃO: aceita na hora, vota, ou rejeita ──
         let rejected: string | null = null;
-        let needsConfirm = false;
+        let accept = false;
         if (best.distance >= MATCH_CONFIRM_THRESHOLD) {
-          rejected = `dist ${best.distance.toFixed(3)} muito alta (max ${MATCH_CONFIRM_THRESHOLD})`;
+          rejected = `dist ${best.distance.toFixed(3)} alta (max ${MATCH_CONFIRM_THRESHOLD})`;
+          voteRef.current = null;
         } else if (best.ambiguous) {
           rejected = `ambiguo: ${best.seller.name} (${best.distance.toFixed(3)}) vs ${best.second?.seller.name} (${best.second?.distance.toFixed(3)})`;
+          voteRef.current = null;
         } else if (cooldownRef.current.has(best.seller.id)) {
           rejected = 'cooldown';
-        } else if (best.distance >= MATCH_AUTO_THRESHOLD) {
-          needsConfirm = true;
+        } else if (best.distance < MATCH_AUTO_THRESHOLD) {
+          // Distinto e perto → aceita IMEDIATO.
+          accept = true;
+          voteRef.current = null;
+        } else {
+          // Zona cinza (0.44–0.52), distinto, sem cooldown → VOTAÇÃO multi-frame.
+          const v = voteRef.current;
+          if (v && v.sellerId === best.seller.id) v.count += 1;
+          else voteRef.current = { sellerId: best.seller.id, count: 1 };
+          const count = voteRef.current!.count;
+          if (count >= VOTE_FRAMES) {
+            accept = true;
+            voteRef.current = null;
+          } else {
+            rejected = `votando ${count}/${VOTE_FRAMES}`;
+          }
         }
+
         setDiag({
           ms: Math.round(t1 - t0),
           detected: true,
@@ -282,22 +333,16 @@ export default function PontoPage() {
           secondName: best.second?.seller.name || null,
           secondDist: best.second?.distance ?? null,
           ambiguous: best.ambiguous,
-          rejected: needsConfirm ? 'aguardando confirmacao' : rejected,
+          rejected: accept ? null : rejected,
         });
-        if (needsConfirm && !pendingConfirm) {
-          setPendingConfirm({ seller: best.seller, distance: best.distance });
-          return; // efeito re-roda quando pendingConfirm limpar
-        } else if (!rejected && !needsConfirm) {
-          // Se outra pessoa diferente esta na tela, limpa o card antes (UX fluida).
-          // Loop NAO para durante o success — proxima pessoa bate em paralelo.
-          const ls: any = lastSuccess;
-          const newName: string = (best.seller as any).name;
-          if (ls && ls.name !== newName) {
-            setLastSuccess(null);
-          }
-          await baterAuto(best);
-          if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
-          return;
+
+        if (accept) {
+          // Se outra pessoa estava no card de sucesso, troca na hora (UX fluida).
+          const ls = lastSuccessRef.current;
+          if (ls && ls.name !== best.seller.name) setLastSuccess(null);
+          // NÃO dá await: baterAuto já marcou cooldown síncrono — o loop segue
+          // pra detectar a próxima pessoa enquanto o POST roda em paralelo.
+          baterAuto(best);
         }
         if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
       } catch (e) {
@@ -314,7 +359,7 @@ export default function PontoPage() {
       clearTimeout(startTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sellers, registering, lastSuccess, alreadyDone]);
+  }, [ready, hasSellers]);
 
   const tipoInfo = lastSuccess ? TIPO_LABELS[lastSuccess.tipo] : null;
   // Calculado fora do JSX pra evitar parser confundir o operador < com tag JSX
@@ -350,47 +395,6 @@ export default function PontoPage() {
           onError={(err) => setErrorMsg(err)}
           showStatus={false}
         />
-
-        {/* MODAL CONFIRMAÇÃO — zona cinza (0.40 ≤ dist < 0.52).
-            Bloqueia detecção até user clicar Sim ou Não. */}
-        {pendingConfirm && (
-          <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl animate-in zoom-in">
-              <div className="bg-amber-100 text-amber-700 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
-                <AlertTriangle className="w-8 h-8" />
-              </div>
-              <h2 className="text-2xl font-black text-slate-800 mb-2">
-                Você é {pendingConfirm.seller.name.split(' ')[0]}?
-              </h2>
-              <p className="text-sm text-slate-500 mb-6">
-                Confiança: <b>{Math.round((1 - pendingConfirm.distance) * 100)}%</b> — preciso confirmar manualmente.
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => {
-                    // NÃO SOU EU — cooldown 30s pra não pedir confirmação de novo logo
-                    cooldownRef.current.add(pendingConfirm.seller.id);
-                    setTimeout(() => cooldownRef.current.delete(pendingConfirm.seller.id), 30_000);
-                    setPendingConfirm(null);
-                  }}
-                  className="px-4 py-3 border-2 border-rose-300 text-rose-700 hover:bg-rose-50 rounded-xl font-bold"
-                >
-                  ✗ NÃO SOU EU
-                </button>
-                <button
-                  onClick={async () => {
-                    const conf = pendingConfirm;
-                    setPendingConfirm(null);
-                    await baterAuto({ seller: conf.seller, distance: conf.distance });
-                  }}
-                  className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold"
-                >
-                  ✓ SIM, SOU EU
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* PAINEL DIAGNOSTICO — mostra status de cada frame.
             Pra esconder: adicionar ?debug=0 na URL. */}

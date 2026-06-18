@@ -85,25 +85,23 @@ export class StockMirrorService {
         let updated = 0;
         let sameQty = 0;
         const movements: any[] = [];
+        const now = new Date();
+        const unchangedSkus: string[] = [];
 
         for (const [sku, newQty] of skuQty.entries()) {
           const oldQty = existingMap.get(sku) ?? 0;
           if (oldQty === newQty) {
             sameQty++;
-            // Atualiza só syncedAt
-            try {
-              await (this.prisma as any).stock.update({
-                where: { storeCode_sku: { storeCode, sku } },
-                data: { syncedAt: new Date() },
-              });
-            } catch {}
+            // SKU não mudou: só precisa bumpar syncedAt. Acumula pra um
+            // único updateMany no fim (em vez de 1 UPDATE por SKU).
+            unchangedSkus.push(sku);
             continue;
           }
 
           await (this.prisma as any).stock.upsert({
             where: { storeCode_sku: { storeCode, sku } },
-            update: { qty: newQty, syncedAt: new Date() },
-            create: { storeCode, sku, qty: newQty, syncedAt: new Date() },
+            update: { qty: newQty, syncedAt: now },
+            create: { storeCode, sku, qty: newQty, syncedAt: now },
           });
 
           if (existingMap.has(sku)) updated++;
@@ -117,6 +115,15 @@ export class StockMirrorService {
             qtyAfter: newQty,
             reason: 'sync_giga',
             note: 'Sync full do Giga',
+          });
+        }
+
+        // Bump de syncedAt dos SKUs inalterados em lote (chunks pra não estourar o IN).
+        for (let i = 0; i < unchangedSkus.length; i += 1000) {
+          const chunk = unchangedSkus.slice(i, i + 1000);
+          await (this.prisma as any).stock.updateMany({
+            where: { storeCode, sku: { in: chunk } },
+            data: { syncedAt: now },
           });
         }
 
@@ -219,14 +226,21 @@ export class StockMirrorService {
     const movements: any[] = [];
     const warnings: string[] = [];
 
+    // Lê todos os SKUs do lote em uma query só (evita N findUnique).
+    const wantedSkus = Array.from(
+      new Set(input.items.map((it) => String(it.sku).trim()).filter(Boolean)),
+    );
+    const stockRows = await (this.prisma as any).stock.findMany({
+      where: { storeCode, sku: { in: wantedSkus } },
+    });
+    const stockMap = new Map<string, any>(stockRows.map((s: any) => [s.sku, s]));
+
     for (const it of input.items) {
       const sku = String(it.sku).trim();
       const qty = Math.abs(Number(it.qty) || 1);
       if (!sku || qty === 0) continue;
 
-      const stock = await (this.prisma as any).stock.findUnique({
-        where: { storeCode_sku: { storeCode, sku } },
-      });
+      const stock = stockMap.get(sku);
 
       if (!stock) {
         warnings.push(`SKU ${sku} não existe em ${storeCode}`);

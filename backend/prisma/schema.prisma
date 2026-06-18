@@ -707,6 +707,10 @@ model OrderHistory {
   order Order @relation(fields: [orderId], references: [id])
   user  User? @relation(fields: [userId], references: [id])
 
+  // Histórico carregado por pedido (include history orderBy createdAt desc) e
+  // contado por usuário (users.service). Sem índice, era full-scan.
+  @@index([orderId, createdAt(sort: Desc)])
+  @@index([userId])
   @@map("order_history")
 }
 
@@ -2125,6 +2129,9 @@ model Customer {
   @@index([originStoreId])
   @@index([targetStoreId])
   @@index([lastOrderAt])
+  // Dashboard CRM filtra por loja e ordena por recência — composto evita
+  // combinar dois índices single-column (filtro + sort).
+  @@index([originStoreId, lastOrderAt(sort: Desc)])
   @@map("customers")
 }
 

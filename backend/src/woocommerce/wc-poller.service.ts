@@ -20,6 +20,10 @@ export class WcPollerService {
   private readonly logger = new Logger(WcPollerService.name);
   private lastCheck: Date | null = null;
   private running = false;
+  // Backoff adaptativo: conta ciclos e quantos vieram vazios em sequência.
+  // Em movimento, roda a cada minuto; ocioso, reduz a frequência efetiva.
+  private cycleCount = 0;
+  private emptyStreak = 0;
 
   constructor(
     private readonly config: ConfigService,
@@ -38,6 +42,13 @@ export class WcPollerService {
       this.logger.debug('Polling anterior ainda rodando, pulando ciclo.');
       return;
     }
+
+    // Backoff adaptativo: ocioso há ≥10 min → roda a cada 5 min; ≥3 min → a cada 2 min.
+    // A janela modified_after usa lastCheck-2min, então nenhum pedido se perde nos ciclos pulados.
+    this.cycleCount++;
+    const effectiveInterval = this.emptyStreak >= 10 ? 5 : this.emptyStreak >= 3 ? 2 : 1;
+    if (this.cycleCount % effectiveInterval !== 0) return;
+
     this.running = true;
 
     try {
@@ -68,9 +79,11 @@ export class WcPollerService {
 
       const list: any[] = res.data ?? [];
       if (list.length === 0) {
+        this.emptyStreak++;
         this.lastCheck = new Date();
         return;
       }
+      this.emptyStreak = 0;
 
       let newCount = 0, updatedCount = 0;
       for (const wc of list) {
@@ -91,10 +104,8 @@ export class WcPollerService {
           //   b) pedido existente que TRANSICIONOU pra processing (pagamento acabou de aprovar)
           // shouldRoute cobre os dois.
           if (saved.shouldRoute) {
-            const full = await this.prisma.order.findUnique({
-              where: { id: saved.orderId },
-              select: { id: true, wcOrderNumber: true, customerName: true, totalAmount: true, status: true, createdAt: true },
-            });
+            // upsertFromWooCommerce já devolve os campos da emissão quando shouldRoute=true
+            const full = saved.order;
             if (full) {
               this.gateway.emitOrderNew(full);
               this.logger.log(

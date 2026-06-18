@@ -232,7 +232,35 @@ export class PontoService {
           descriptors,
         };
       })
-      .filter((s: any) => s.descriptors.length > 0);
+      .filter((s: any) => s.descriptors.length > 0)
+      .map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        cargo: s.cargo,
+        // PERF: envia só o CENTROIDE (1×128) em vez dos N descriptors crus.
+        // O matching no cliente já compara contra o centroide, então o
+        // resultado é IDÊNTICO, mas o payload cai ~N× e o parse no PC fraco
+        // da loja fica instantâneo. Floats arredondados (4 casas) pra encolher
+        // ainda mais o JSON sem perda prática de precisão.
+        descriptors: [PontoService.roundVec(PontoService.centroidOf(s.descriptors))],
+      }));
+  }
+
+  /** Centroide (média) de N descriptors faciais. */
+  private static centroidOf(descriptors: number[][]): number[] {
+    if (!descriptors.length) return [];
+    const dim = descriptors[0].length;
+    const out = new Array(dim).fill(0);
+    for (const d of descriptors) {
+      for (let i = 0; i < dim; i++) out[i] += d[i];
+    }
+    for (let i = 0; i < dim; i++) out[i] /= descriptors.length;
+    return out;
+  }
+
+  /** Arredonda cada componente pra 4 casas (encolhe o JSON). */
+  private static roundVec(v: number[]): number[] {
+    return v.map((x) => Math.round(x * 1e4) / 1e4);
   }
 
   /** Remove o cadastro facial (vendedora pediu pra refazer ou foi desligada). */
