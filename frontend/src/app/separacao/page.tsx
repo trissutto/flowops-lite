@@ -1765,7 +1765,7 @@ function CarrinhosTab() {
     setDetail(null);
     setDetailLoading(true);
     try {
-      const d = await api<any>(`/abandoned-carts/${c.id}`);
+      const d = await api<any>(`/abandoned-carts/${c.id}/full`);
       setDetail(d);
     } catch (e) {
       console.error(e);
@@ -1966,11 +1966,26 @@ function CarrinhosTab() {
 
               {detail?.other_fields && (
                 <section>
-                  <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Endereco</h3>
+                  <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Endereco completo</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm bg-slate-50 rounded-lg p-3 border border-slate-200">
-                    {detail.other_fields.wcf_billing_address_1 && <div><span className="text-slate-500">Endereco:</span> <b>{detail.other_fields.wcf_billing_address_1}{detail.other_fields.wcf_billing_address_2 ? `, ${detail.other_fields.wcf_billing_address_2}` : ''}</b></div>}
-                    {detail.other_fields.wcf_billing_city && <div><span className="text-slate-500">Cidade:</span> <b>{detail.other_fields.wcf_billing_city}{detail.other_fields.wcf_billing_state ? `/${detail.other_fields.wcf_billing_state}` : ''}</b></div>}
-                    {detail.other_fields.wcf_billing_postcode && <div><span className="text-slate-500">CEP:</span> <b>{detail.other_fields.wcf_billing_postcode}</b></div>}
+                    {detail.other_fields.wcf_billing_address_1 && (
+                      <div className="sm:col-span-2"><span className="text-slate-500">Endereco:</span> <b>{detail.other_fields.wcf_billing_address_1}</b></div>
+                    )}
+                    {detail.other_fields.wcf_billing_address_2 && (
+                      <div className="sm:col-span-2"><span className="text-slate-500">Complemento:</span> <b>{detail.other_fields.wcf_billing_address_2}</b></div>
+                    )}
+                    {detail.other_fields.wcf_billing_city && (
+                      <div><span className="text-slate-500">Cidade:</span> <b>{detail.other_fields.wcf_billing_city}</b></div>
+                    )}
+                    {detail.other_fields.wcf_billing_state && (
+                      <div><span className="text-slate-500">UF:</span> <b>{detail.other_fields.wcf_billing_state}</b></div>
+                    )}
+                    {detail.other_fields.wcf_billing_postcode && (
+                      <div><span className="text-slate-500">CEP:</span> <b>{detail.other_fields.wcf_billing_postcode}</b></div>
+                    )}
+                    {detail.other_fields.wcf_billing_country && (
+                      <div><span className="text-slate-500">Pais:</span> <b>{detail.other_fields.wcf_billing_country}</b></div>
+                    )}
                   </div>
                 </section>
               )}
@@ -1980,28 +1995,32 @@ function CarrinhosTab() {
                 {!detail?.cart_items || detail.cart_items.length === 0 ? (
                   <div className="text-sm text-slate-400 italic">Sem detalhe de produtos disponivel.</div>
                 ) : (
-                  <div className="border-2 border-slate-200 rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-100 text-[11px] uppercase text-slate-600">
-                        <tr>
-                          <th className="text-left p-2">Produto</th>
-                          <th className="text-center p-2 w-16">Qty</th>
-                          <th className="text-right p-2 w-24">Subtotal</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detail.cart_items.map((p: any, i: number) => (
-                          <tr key={i} className="border-t border-slate-100">
-                            <td className="p-2">
-                              <div className="font-medium text-slate-800">{p.name || `Produto #${p.product_id}`}</div>
-                              {p.sku && <div className="text-[10px] text-slate-500">SKU: {p.sku}</div>}
-                            </td>
-                            <td className="p-2 text-center font-bold">{p.quantity || 1}</td>
-                            <td className="p-2 text-right font-mono">{BRL(Number(p.line_subtotal || p.line_total || 0))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="space-y-2">
+                    {detail.cart_items.map((p: any, i: number) => (
+                      <div key={i} className="flex items-center gap-3 bg-white border-2 border-slate-200 rounded-lg p-2">
+                        {p.image ? (
+                          <img src={p.image} alt={p.name || 'Produto'} className="w-16 h-16 object-cover rounded border border-slate-200 flex-shrink-0" />
+                        ) : (
+                          <div className="w-16 h-16 bg-slate-100 border border-slate-200 rounded flex items-center justify-center text-[10px] text-slate-400 flex-shrink-0">sem foto</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          {p.permalink ? (
+                            <a href={p.permalink} target="_blank" rel="noreferrer" className="font-bold text-sm text-blue-700 hover:underline truncate block">{p.name || `Produto #${p.product_id}`}</a>
+                          ) : (
+                            <div className="font-bold text-sm text-slate-800 truncate">{p.name || `Produto #${p.product_id}`}</div>
+                          )}
+                          <div className="text-[11px] text-slate-500 flex flex-wrap gap-2 mt-0.5">
+                            {p.sku && <span>SKU: <b>{p.sku}</b></span>}
+                            {p.categories && <span>{p.categories}</span>}
+                            {p.stock_status && <span className={p.stock_status === 'instock' ? 'text-emerald-700' : 'text-rose-700'}>{p.stock_status === 'instock' ? 'em estoque' : 'sem estoque'}</span>}
+                          </div>
+                        </div>
+                        <div className="text-right whitespace-nowrap">
+                          <div className="text-[11px] text-slate-500">{p.quantity || 1}x {BRL(Number(p.price || p.line_subtotal || 0))}</div>
+                          <div className="font-black text-slate-900 tabular-nums">{BRL(Number(p.line_subtotal || p.line_total || (Number(p.price || 0) * Number(p.quantity || 1))))}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </section>

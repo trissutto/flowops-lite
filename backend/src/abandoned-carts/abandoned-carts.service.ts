@@ -392,4 +392,45 @@ export class AbandonedCartsService {
       recovery_rate: result.recovery_rate,
     };
   }
+
+  /**
+   * Detalhe HIDRATADO: pega o detail do plugin PHP + enriquece cada cart_item
+   * com dados completos do produto via WC REST (name, image, sku, price).
+   */
+  async detailFull(id: number) {
+    const base = (await this.detail(id)) as any;
+    if (!base || base.ok === false || !this.wcBase) return base;
+    const items: any[] = Array.isArray(base?.cart_items) ? base.cart_items : [];
+    if (items.length === 0) return base;
+
+    const enriched = await Promise.all(items.map(async (it) => {
+      const pid = it.variation_id || it.product_id;
+      if (!pid) return it;
+      try {
+        const res = await firstValueFrom(
+          this.http.get(`${this.wcBase}/products/${pid}`, {
+            auth: this.wcAuth, timeout: 15_000,
+          }),
+        );
+        const p: any = res.data || {};
+        const img = Array.isArray(p.images) && p.images.length > 0 ? p.images[0].src : null;
+        return {
+          ...it,
+          name: p.name || it.name || `Produto #${pid}`,
+          sku: p.sku || it.sku || '',
+          permalink: p.permalink || null,
+          image: img,
+          price: Number(p.price ?? 0),
+          regular_price: Number(p.regular_price ?? 0),
+          stock_status: p.stock_status || null,
+          categories: Array.isArray(p.categories) ? p.categories.map((c: any) => c.name).join(', ') : '',
+        };
+      } catch (e: any) {
+        this.logger.warn(`Falha ao hidratar produto ${pid}: ${e?.message ?? ''}`);
+        return { ...it, name: it.name || `Produto #${pid}` };
+      }
+    }));
+
+    return { ...base, cart_items: enriched };
+  }
 }

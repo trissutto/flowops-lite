@@ -95,4 +95,14 @@ export class AbandonedCartsController {
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id);
   }
+
+  /**
+   * Detalhe HIDRATADO: pega o detail do plugin + busca cada produto no WC REST
+   * pra trazer nome, imagem, SKU, preco. Necessario porque o plugin PHP do
+   * CartFlows so guarda product_id e quantity no cart_contents.
+   */
+  @Get(':id/full')
+  detailFull(@Param('id', ParseIntPipe) id: number) {
+    return this.service.detailFull(id);
+  }
 }
