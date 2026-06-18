@@ -6187,9 +6187,10 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
     const qrUrl = qrFromXml
       || (sale as any).nfceQrUrl
       || (sale.nfceChave ? `https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=${sale.nfceChave}&nVersao=100&tpAmb=1` : '');
-    const qrImgUrl = qrUrl
-      ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=0&data=${encodeURIComponent(qrUrl)}`
-      : '';
+    // Antes: usava api.qrserver.com (CDN externo) — falhava na impressao silenciosa
+    // do Electron porque a imagem nao carregava a tempo OU bloqueada por sandbox.
+    // Agora: gera QR Code 100% local via qrcode-generator inline no proprio HTML
+    // do cupom. Zero dependencia de internet.
 
     // ── Quantidade total de itens ────────────────────────────────────
     const qtdItens = sale.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
@@ -6292,7 +6293,7 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="sep"></div>
 
   <!-- QR Code -->
-  ${qrImgUrl ? `<img src="${qrImgUrl}" class="qr" alt="QR Code NFC-e" width="180" height="180" />` : ''}
+  ${qrUrl ? `<canvas id="qr" width="180" height="180" style="display:block;margin:0 auto;image-rendering:pixelated;"></canvas>` : ''}
 
   <!-- Protocolo -->
   <div class="center xs">Protocolo de autorização:</div>
@@ -6303,17 +6304,40 @@ function FinalizedModal({ sale: initialSale, onNew }: { sale: Sale; onNew: () =>
   <div class="center sm bold">Obrigado pela preferência!</div>
   <div class="center xs">Volte sempre 💖</div>
 
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
   <script>
-    // Espera o QR code carregar antes de imprimir
-    window.onload = function() {
-      var img = document.querySelector('img.qr');
-      if (img && !img.complete) {
-        img.onload = function() { setTimeout(function() { window.print(); }, 200); };
-        img.onerror = function() { setTimeout(function() { window.print(); }, 200); };
-      } else {
-        setTimeout(function() { window.print(); }, 300);
+    (function() {
+      function renderAndPrint() {
+        try {
+          var canvas = document.getElementById('qr');
+          var url = JSON.stringify(qrUrl);
+          if (canvas && url && typeof qrcode === 'function') {
+            var qr = qrcode(0, 'M');
+            qr.addData(url);
+            qr.make();
+            var ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, 180, 180);
+            ctx.fillStyle = '#000';
+            var n = qr.getModuleCount();
+            var size = Math.floor(180 / n);
+            var offset = Math.floor((180 - size * n) / 2);
+            for (var r = 0; r < n; r++) {
+              for (var col = 0; col < n; col++) {
+                if (qr.isDark(r, col)) {
+                  ctx.fillRect(offset + col * size, offset + r * size, size, size);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Se gerar QR falhar, segue pra impressao (cupom sai sem QR, mas sai)
+        }
+        setTimeout(function() { window.print(); }, 200);
       }
-    };
+      if (document.readyState === 'complete') renderAndPrint();
+      else window.addEventListener('load', renderAndPrint);
+    })();
   </script>
 </body></html>`;
 
