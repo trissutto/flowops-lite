@@ -2294,7 +2294,7 @@ function PdvPageInner() {
         );
         return (
           <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
-            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-3 overflow-x-auto">
+            <div className="w-fit max-w-full mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-3 overflow-x-auto">
               {/* GRUPO CRÉDITO */}
               <div className="flex flex-col gap-1 shrink-0">
                 <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Crédito</span>
