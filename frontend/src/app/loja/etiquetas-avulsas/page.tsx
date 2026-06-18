@@ -17,7 +17,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Printer, Search, Loader2, AlertCircle, Tags, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Printer, Search, Loader2, AlertCircle, Tags, Plus, Trash2, Settings, RotateCcw } from 'lucide-react';
 import { api } from '@/lib/api';
 import EtiquetaPrint from '@/components/EtiquetaPrint';
 
@@ -31,6 +31,32 @@ type Label = {
   descricao: string;
 };
 
+type EtiquetaConfig = {
+  pageWidthMm: number;
+  cellWidthMm: number;
+  cellHeightMm: number;
+  gridColumnGapMm: number;
+  paddingTopMm: number;
+  paddingLeftMm: number;
+  cellPadTopMm: number;
+  cellPadRightMm: number;
+  cellPadBottomMm: number;
+  cellPadLeftMm: number;
+  barcodeWidth: number;
+  barcodeHeightPx: number;
+  barcodeFontSize: number;
+  refMaxFontPx: number;
+  descMaxHeightMm: number;
+};
+
+const DEFAULT_ETIQUETA_CONFIG: EtiquetaConfig = {
+  pageWidthMm: 108, cellWidthMm: 48, cellHeightMm: 30,
+  gridColumnGapMm: 6, paddingTopMm: 21, paddingLeftMm: 3,
+  cellPadTopMm: 1.2, cellPadRightMm: 1.5, cellPadBottomMm: 0.8, cellPadLeftMm: 1.5,
+  barcodeWidth: 1.8, barcodeHeightPx: 32, barcodeFontSize: 18,
+  refMaxFontPx: 12, descMaxHeightMm: 5.2,
+};
+
 export default function EtiquetasAvulsasPage() {
   const [input, setInput] = useState('');
   const [labels, setLabels] = useState<Label[]>([]);
@@ -39,6 +65,51 @@ export default function EtiquetasAvulsasPage() {
   const [notFound, setNotFound] = useState<string[]>([]);
   // Qty pra IMPRIMIR de cada SKU (key = codigo). Default 1.
   const [qty, setQty] = useState<Record<string, number>>({});
+  // Config etiqueta (persiste no Postgres via /etiqueta-config)
+  const [showConfig, setShowConfig] = useState(false);
+  const [config, setConfig] = useState<EtiquetaConfig>(DEFAULT_ETIQUETA_CONFIG);
+  const [configForm, setConfigForm] = useState<EtiquetaConfig>(DEFAULT_ETIQUETA_CONFIG);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api<EtiquetaConfig>('/etiqueta-config').then((c) => {
+      const merged = { ...DEFAULT_ETIQUETA_CONFIG, ...c };
+      setConfig(merged);
+      setConfigForm(merged);
+    }).catch(() => { /* mantem default */ });
+  }, []);
+
+  async function salvarConfig() {
+    setConfigSaving(true);
+    setConfigError(null);
+    try {
+      const saved = await api<EtiquetaConfig>('/etiqueta-config', { method: 'POST', body: JSON.stringify(configForm) });
+      const merged = { ...DEFAULT_ETIQUETA_CONFIG, ...saved };
+      setConfig(merged);
+      setConfigForm(merged);
+      setShowConfig(false);
+    } catch (e: any) {
+      setConfigError(e?.message || 'Erro ao salvar');
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  async function resetarConfig() {
+    if (!confirm('Voltar pros valores padrao? (vai sobrescrever a config salva)')) return;
+    setConfigSaving(true);
+    try {
+      const saved = await api<EtiquetaConfig>('/etiqueta-config/reset', { method: 'POST' });
+      const merged = { ...DEFAULT_ETIQUETA_CONFIG, ...saved };
+      setConfig(merged);
+      setConfigForm(merged);
+    } catch (e: any) {
+      setConfigError(e?.message || 'Erro');
+    } finally {
+      setConfigSaving(false);
+    }
+  }
 
   // Carrega JsBarcode via CDN
   useEffect(() => {
@@ -164,6 +235,14 @@ export default function EtiquetasAvulsasPage() {
             <h1 className="text-lg font-black text-slate-800">Etiquetas Avulsas</h1>
             <p className="text-xs text-slate-500">Imprimir por REF, SKU ou EAN — útil pra reposição</p>
           </div>
+          <button
+            onClick={() => { setConfigForm(config); setShowConfig(true); }}
+            className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-800 text-white font-semibold text-sm rounded-lg print:hidden"
+            title="Editar parametros visuais da etiqueta (salvos no banco)"
+          >
+            <Settings className="w-4 h-4" />
+            <span className="hidden sm:inline">Configurar Etiqueta</span>
+          </button>
           {labels.length > 0 && (
             <>
               <button
@@ -348,6 +427,87 @@ export default function EtiquetasAvulsasPage() {
         )}
       </main>
 
+
+      {/* MODAL Configurar Etiqueta — parametros visuais persistidos */}
+      {showConfig && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto print:hidden" onClick={() => setShowConfig(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-2xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 bg-gradient-to-r from-slate-700 to-slate-900 text-white flex items-center justify-between">
+              <div>
+                <h2 className="font-black text-lg flex items-center gap-2"><Settings className="w-5 h-5" /> Configurar Etiqueta</h2>
+                <p className="text-[11px] opacity-90">Os valores sao salvos no banco — nao somem em deploys.</p>
+              </div>
+              <button onClick={() => setShowConfig(false)} className="text-white hover:bg-white/20 rounded-lg w-8 h-8 flex items-center justify-center text-xl font-bold">x</button>
+            </div>
+            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
+              {configError && <div className="bg-rose-50 border border-rose-300 text-rose-800 text-sm p-2 rounded">{configError}</div>}
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Pagina (rolo)</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <NumField label="Largura pagina (mm)" value={configForm.pageWidthMm} step={1} onChange={(v) => setConfigForm({ ...configForm, pageWidthMm: v })} />
+                  <NumField label="Padding topo (mm)" value={configForm.paddingTopMm} step={0.5} onChange={(v) => setConfigForm({ ...configForm, paddingTopMm: v })} />
+                  <NumField label="Padding esquerda (mm)" value={configForm.paddingLeftMm} step={0.5} onChange={(v) => setConfigForm({ ...configForm, paddingLeftMm: v })} />
+                  <NumField label="Espaco entre colunas (mm)" value={configForm.gridColumnGapMm} step={0.5} onChange={(v) => setConfigForm({ ...configForm, gridColumnGapMm: v })} />
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Etiqueta (celula)</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <NumField label="Largura etiqueta (mm)" value={configForm.cellWidthMm} step={0.5} onChange={(v) => setConfigForm({ ...configForm, cellWidthMm: v })} />
+                  <NumField label="Altura etiqueta (mm)" value={configForm.cellHeightMm} step={0.5} onChange={(v) => setConfigForm({ ...configForm, cellHeightMm: v })} />
+                  <NumField label="Pad interno cima (mm)" value={configForm.cellPadTopMm} step={0.1} onChange={(v) => setConfigForm({ ...configForm, cellPadTopMm: v })} />
+                  <NumField label="Pad interno direita (mm)" value={configForm.cellPadRightMm} step={0.1} onChange={(v) => setConfigForm({ ...configForm, cellPadRightMm: v })} />
+                  <NumField label="Pad interno baixo (mm)" value={configForm.cellPadBottomMm} step={0.1} onChange={(v) => setConfigForm({ ...configForm, cellPadBottomMm: v })} />
+                  <NumField label="Pad interno esquerda (mm)" value={configForm.cellPadLeftMm} step={0.1} onChange={(v) => setConfigForm({ ...configForm, cellPadLeftMm: v })} />
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Codigo de barras</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <NumField label="Largura linha" value={configForm.barcodeWidth} step={0.1} onChange={(v) => setConfigForm({ ...configForm, barcodeWidth: v })} />
+                  <NumField label="Altura (px)" value={configForm.barcodeHeightPx} step={1} onChange={(v) => setConfigForm({ ...configForm, barcodeHeightPx: v })} />
+                  <NumField label="Fonte numero (px)" value={configForm.barcodeFontSize} step={1} onChange={(v) => setConfigForm({ ...configForm, barcodeFontSize: v })} />
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Textos</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <NumField label="Fonte REF max (px)" value={configForm.refMaxFontPx} step={1} onChange={(v) => setConfigForm({ ...configForm, refMaxFontPx: v })} />
+                  <NumField label="Altura descricao max (mm)" value={configForm.descMaxHeightMm} step={0.2} onChange={(v) => setConfigForm({ ...configForm, descMaxHeightMm: v })} />
+                </div>
+              </section>
+            </div>
+            <div className="px-5 py-3 bg-slate-50 border-t flex flex-wrap gap-2 justify-end">
+              <button onClick={resetarConfig} disabled={configSaving} className="px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-1 disabled:opacity-50">
+                <RotateCcw className="w-4 h-4" /> Resetar
+              </button>
+              <button onClick={() => setShowConfig(false)} className="px-4 py-2 text-sm font-semibold border-2 border-slate-300 hover:bg-slate-100 rounded-lg">Cancelar</button>
+              <button onClick={salvarConfig} disabled={configSaving} className="px-4 py-2 text-sm font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-50 flex items-center gap-2">
+                {configSaving && <Loader2 className="w-4 h-4 animate-spin" />} Salvar e fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function NumField({ label, value, step, onChange }: { label: string; value: number; step?: number; onChange: (v: number) => void }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-bold uppercase text-slate-500">{label}</span>
+      <input
+        type="number"
+        value={value}
+        step={step || 1}
+        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        className="px-2 py-1.5 border-2 border-slate-200 rounded text-sm font-mono tabular-nums focus:border-blue-500 outline-none"
+      />
+    </label>
   );
 }

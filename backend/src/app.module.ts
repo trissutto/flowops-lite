@@ -24,6 +24,7 @@ import { WebsocketModule } from './websocket/websocket.module';
 import { WpDbModule } from './wp-db/wp-db.module';
 import { AbandonedCartsModule } from './abandoned-carts/abandoned-carts.module';
 import { CarrinhosAbandonadosModule } from './carrinhos-abandonados/carrinhos-abandonados.module';
+import { EtiquetaConfigModule } from './etiqueta-config/etiqueta-config.module';
 import { HealthModule } from './health/health.module';
 import { ReportsModule } from './reports/reports.module';
 import { UsersModule } from './users/users.module';
@@ -84,6 +85,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     WpDbModule,
     AbandonedCartsModule,
     CarrinhosAbandonadosModule,
+    EtiquetaConfigModule,
     HealthModule,
     UsersModule,
     PickOrdersModule,
