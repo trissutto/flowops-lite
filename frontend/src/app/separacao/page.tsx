@@ -21,7 +21,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { classifyShipping } from '@/lib/shipping-method';
@@ -179,16 +179,34 @@ export default function SeparacaoPage() {
 
 function SeparacaoPageInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const initialTab = (() => {
     const t = searchParams?.get('tab');
-    // Só aceita slug válido. Se vier lixo, default pra 'processing'.
     if (t && FILTROS.some((f) => f.slug === t)) return t;
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem('separacao_tab');
+      if (saved && FILTROS.some((f) => f.slug === saved)) return saved;
+    }
     return 'processing';
   })();
 
   const [orders, setOrders] = useState<WcOrderListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<string>(initialTab);
+
+  // Persiste tab em URL + localStorage pra sobreviver back do navegador
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('separacao_tab', status);
+    }
+    if (pathname) {
+      const sp = new URLSearchParams(searchParams?.toString() || '');
+      sp.set('tab', status);
+      router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -1738,6 +1756,24 @@ function CarrinhosTab() {
   const [search, setSearch] = useState('');
   const [showDiag, setShowDiag] = useState(false);
   const [diag, setDiag] = useState<any>(null);
+  const [selected, setSelected] = useState<CarrinhoAB | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  async function openCart(c: CarrinhoAB) {
+    setSelected(c);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      const d = await api<any>(`/abandoned-carts/${c.id}`);
+      setDetail(d);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+  function closeCart() { setSelected(null); setDetail(null); }
 
   async function load() {
     setLoading(true);
@@ -1878,7 +1914,7 @@ function CarrinhosTab() {
             const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
             const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
-              <div key={c.id} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
+              <div key={c.id} onClick={() => openCart(c)} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 cursor-pointer hover:shadow-md hover:border-blue-400 transition ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-sm text-slate-800 truncate">
                     {nome}
@@ -1894,11 +1930,93 @@ function CarrinhosTab() {
                 </div>
                 <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
                 {!isCompleted && !c.unsubscribed && c.phone && (
-                  <button onClick={() => whatsapp(c)} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
+                  <button onClick={(e) => { e.stopPropagation(); whatsapp(c); }} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
                 )}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Modal detalhes do carrinho */}
+      {selected && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-start justify-center p-4 overflow-y-auto" onClick={closeCart}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl my-8 overflow-hidden shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-3 bg-gradient-to-r from-rose-600 to-pink-600 text-white flex items-center justify-between">
+              <div>
+                <h2 className="font-black text-lg">Carrinho abandonado #{selected.id}</h2>
+                <p className="text-[11px] opacity-90">Dados pra contato direto via WhatsApp ou ligacao.</p>
+              </div>
+              <button onClick={closeCart} className="text-white hover:bg-white/20 rounded-lg w-8 h-8 flex items-center justify-center text-xl font-bold">x</button>
+            </div>
+            <div className="p-5 space-y-4">
+              {detailLoading && <div className="text-center text-slate-400 py-2">Carregando detalhes...</div>}
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Dados da cliente</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  <div><span className="text-slate-500">Nome:</span> <b>{`${selected.first_name || ''} ${selected.last_name || ''}`.trim() || '-'}</b></div>
+                  <div><span className="text-slate-500">Email:</span> <b>{selected.email || '-'}</b></div>
+                  <div><span className="text-slate-500">Telefone:</span> <b className="text-emerald-700">{selected.phone || '-'}</b></div>
+                  <div><span className="text-slate-500">Total:</span> <b className="text-rose-700">{BRL(Number(selected.total ?? selected.cart_total ?? selected.cart_total_brl ?? 0))}</b></div>
+                  <div><span className="text-slate-500">Abandonado em:</span> {fmt(selected.time)}</div>
+                  <div><span className="text-slate-500">Status:</span> {selected.order_status || selected.status || '-'}</div>
+                </div>
+              </section>
+
+              {detail?.other && (
+                <section>
+                  <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Endereco</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm bg-slate-50 rounded-lg p-3 border border-slate-200">
+                    {detail.other.wcf_billing_address_1 && <div><span className="text-slate-500">Endereco:</span> <b>{detail.other.wcf_billing_address_1}{detail.other.wcf_billing_address_2 ? `, ${detail.other.wcf_billing_address_2}` : ''}</b></div>}
+                    {detail.other.wcf_billing_city && <div><span className="text-slate-500">Cidade:</span> <b>{detail.other.wcf_billing_city}{detail.other.wcf_billing_state ? `/${detail.other.wcf_billing_state}` : ''}</b></div>}
+                    {detail.other.wcf_billing_postcode && <div><span className="text-slate-500">CEP:</span> <b>{detail.other.wcf_billing_postcode}</b></div>}
+                  </div>
+                </section>
+              )}
+
+              <section>
+                <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Produtos no carrinho</h3>
+                {!detail?.cart || detail.cart.length === 0 ? (
+                  <div className="text-sm text-slate-400 italic">Sem detalhe de produtos disponivel.</div>
+                ) : (
+                  <div className="border-2 border-slate-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-100 text-[11px] uppercase text-slate-600">
+                        <tr>
+                          <th className="text-left p-2">Produto</th>
+                          <th className="text-center p-2 w-16">Qty</th>
+                          <th className="text-right p-2 w-24">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.cart.map((p: any, i: number) => (
+                          <tr key={i} className="border-t border-slate-100">
+                            <td className="p-2">
+                              <div className="font-medium text-slate-800">{p.name || `Produto #${p.product_id}`}</div>
+                              {p.sku && <div className="text-[10px] text-slate-500">SKU: {p.sku}</div>}
+                            </td>
+                            <td className="p-2 text-center font-bold">{p.quantity || 1}</td>
+                            <td className="p-2 text-right font-mono">{BRL(Number(p.line_subtotal || p.line_total || 0))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <section className="flex flex-wrap gap-2 pt-2 border-t border-slate-200">
+                {selected.phone && !selected.unsubscribed && (
+                  <button onClick={() => whatsapp(selected)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-sm">WhatsApp pra finalizar</button>
+                )}
+                {selected.email && (
+                  <a href={`mailto:${selected.email}`} className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-bold text-sm">Email</a>
+                )}
+                <button onClick={closeCart} className="px-4 py-2 bg-white border-2 border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg font-bold text-sm ml-auto">Fechar</button>
+              </section>
+            </div>
+          </div>
         </div>
       )}
     </div>
