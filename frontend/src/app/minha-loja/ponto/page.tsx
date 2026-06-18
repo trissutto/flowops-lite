@@ -37,24 +37,14 @@ type Me = { id: string; storeId: string; storeName: string };
 const MATCH_AUTO_THRESHOLD = 0.40;  // < 0.40 = registra automatico (confiança 60%+)
 const MATCH_CONFIRM_THRESHOLD = 0.52; // 0.40-0.52 = pede confirmacao manual
 const RATIO_THRESHOLD = 0.75; // antes 0.85 — best precisa ser bem melhor que second
-<<<<<<< HEAD
-const DETECT_INTERVAL_MS = 250;
-const COOLDOWN_AFTER_REGISTER_MS = 3_000; // antes 15s — agora 3s pra fluxo instantaneo
-const SUCCESS_DISPLAY_MS = 1_200; // outra pessoa derruba antes
-=======
-// 2-STAGE detection:
-//   Stage 1 (rápido): detectOnly @ inputSize 128 → 30-80ms — câmera vazia roda nisso
-//   Stage 2 (completo): captureDescriptor @ inputSize 224 → só se Stage 1 detectou rosto
-// Tick muito curto pq Stage 1 é rápido. Quando vazio, vira loop a ~100ms.
+// 2-STAGE detection (jun/2026 v2): tick muito curto + stage 1 rapido.
+// Quando vazio, vira loop a ~100ms. Reconhece pessoa quase instantaneo.
 const DETECT_INTERVAL_MS = 50;
-// Cooldown por vendedora (impede re-bater mesmo rosto em sequência).
-// Reduzido pra 8s — suficiente pra ela sair da câmera e dar espaço pra próxima.
+// Cooldown da mesma pessoa apos bater. 8s = sai da camera, da espaco proxima.
 const COOLDOWN_AFTER_REGISTER_MS = 8_000;
-// Tempo que o card de sucesso fica visível. Reduzido pra 1.2s — fila anda rápido.
-// IMPORTANTE: loop de detecção NÃO para mais durante este período, então
-// vendedora B já pode bater enquanto card de A ainda desaparece.
+// Tempo que o card "Ola X" fica visivel. Loop continua durante esse tempo —
+// se OUTRA pessoa aparecer, derruba o card e bate na hora.
 const SUCCESS_DISPLAY_MS = 1_200;
->>>>>>> 268b7019b7ce5c797019c48078045bc2859dec63
 // Compat com codigo que ainda referencia MATCH_THRESHOLD (diagnostico)
 const MATCH_THRESHOLD = MATCH_CONFIRM_THRESHOLD;
 
@@ -298,17 +288,13 @@ export default function PontoPage() {
           setPendingConfirm({ seller: best.seller, distance: best.distance });
           return; // efeito re-roda quando pendingConfirm limpar
         } else if (!rejected && !needsConfirm) {
-<<<<<<< HEAD
-          // Se outra pessoa diferente esta na tela, limpa antes (UX fluida)
+          // Se outra pessoa diferente esta na tela, limpa o card antes (UX fluida).
+          // Loop NAO para durante o success — proxima pessoa bate em paralelo.
           const ls: any = lastSuccess;
           const newName: string = (best.seller as any).name;
           if (ls && ls.name !== newName) {
             setLastSuccess(null);
           }
-=======
-          // Bate ponto SEM bloquear o loop. Cooldown impede re-match do mesmo seller.
-          // Loop continua → próxima vendedora pode ser detectada em paralelo.
->>>>>>> 268b7019b7ce5c797019c48078045bc2859dec63
           await baterAuto(best);
           if (!cancelled) setTimeout(tick, DETECT_INTERVAL_MS);
           return;

@@ -15,14 +15,15 @@ import Link from 'next/link';
 import { ArrowLeft, Save, Loader2, Search, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 
-type Cargo = 'VENDEDORA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
+type Cargo = 'VENDEDORA' | 'CAIXA' | 'LIDER_B' | 'LIDER_A' | 'GERENTE_B' | 'GERENTE_A';
 
 const CARGOS: { value: Cargo; label: string; pct: string; color: string }[] = [
-  { value: 'VENDEDORA', label: 'Vendedora', pct: '2% próprias', color: 'bg-emerald-100 text-emerald-700' },
-  { value: 'LIDER_B',   label: 'Líder B',   pct: '0,5% loja',   color: 'bg-blue-100 text-blue-700' },
-  { value: 'LIDER_A',   label: 'Líder A',   pct: '1,0% loja',   color: 'bg-blue-200 text-blue-800' },
-  { value: 'GERENTE_B', label: 'Gerente B', pct: '1,5% loja',   color: 'bg-violet-100 text-violet-700' },
-  { value: 'GERENTE_A', label: 'Gerente A', pct: '2,0% loja',   color: 'bg-violet-200 text-violet-800' },
+  { value: 'VENDEDORA', label: 'Vendedora', pct: '2% próprias',           color: 'bg-emerald-100 text-emerald-700' },
+  { value: 'CAIXA',     label: 'Caixa',     pct: '2% próprias (on/off)',  color: 'bg-amber-100 text-amber-700' },
+  { value: 'LIDER_B',   label: 'Líder B',   pct: '0,5% loja',             color: 'bg-blue-100 text-blue-700' },
+  { value: 'LIDER_A',   label: 'Líder A',   pct: '1,0% loja',             color: 'bg-blue-200 text-blue-800' },
+  { value: 'GERENTE_B', label: 'Gerente B', pct: '1,5% loja',             color: 'bg-violet-100 text-violet-700' },
+  { value: 'GERENTE_A', label: 'Gerente A', pct: '2,0% loja',             color: 'bg-violet-200 text-violet-800' },
 ];
 
 type Seller = {
@@ -96,7 +97,7 @@ export default function CargosPage() {
       setSellers((prev) =>
         prev.map((s) =>
           s.id === seller.id
-            ? { ...s, cargo, responsibleStoreId: cargo === 'VENDEDORA' ? null : s.responsibleStoreId }
+            ? { ...s, cargo, responsibleStoreId: (cargo === 'VENDEDORA' || cargo === 'CAIXA') ? null : s.responsibleStoreId }
             : s,
         ),
       );

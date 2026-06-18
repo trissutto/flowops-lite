@@ -189,6 +189,7 @@ export class CommissionsService {
     const today = new Date();
     const defaults = [
       { cargo: 'VENDEDORA',  percentBase: 2.0, calcMode: 'on_self',              label: 'Vendedora 2% sobre vendas próprias' },
+      { cargo: 'CAIXA',      percentBase: 2.0, calcMode: 'on_self',              label: 'Caixa 2% sobre vendas próprias (on+off)' },
       { cargo: 'LIDER_B',    percentBase: 0.5, calcMode: 'on_responsible_store', label: 'Líder B 0,5% sobre loja responsável' },
       { cargo: 'LIDER_A',    percentBase: 1.0, calcMode: 'on_responsible_store', label: 'Líder A 1,0% sobre loja responsável' },
       { cargo: 'GERENTE_B',  percentBase: 1.5, calcMode: 'on_responsible_store', label: 'Gerente B 1,5% sobre loja responsável' },
@@ -491,15 +492,15 @@ export class CommissionsService {
       const [sellerId, storeCode] = key.split('|');
       const seller = allSellers.find((x) => x.id === sellerId);
       const cargo = seller?.cargo || 'VENDEDORA';
-      // Vendedoras puras só entram aqui. Líderes/gerentes são processadas no fluxo 2.
-      if (cargo !== 'VENDEDORA') continue;
+      // Vendedoras + Caixa entram aqui (calcMode=on_self). Lideres/gerentes no fluxo 2.
+      if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') continue;
       await processEntry(sellerId, cargo, storeCode);
     }
 
     // === FLUXO 2: líderes/gerentes — uma entry pela loja responsável ===
     for (const seller of allSellers) {
       const cargo = seller.cargo || 'VENDEDORA';
-      if (cargo === 'VENDEDORA') continue;
+      if (cargo === 'VENDEDORA' || cargo === 'CAIXA') continue;
       if (!seller.responsibleStoreId) {
         this.logger.warn(
           `[commissions] ${seller.name} cargo=${cargo} sem responsibleStoreId — pulando`,

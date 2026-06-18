@@ -1149,13 +1149,46 @@ export class CrediarioBaixaService {
     const baixa = await (this.prisma as any).crediarioBaixa.findUnique({
       where: { id: baixaId },
     });
-    if (!baixa) throw new NotFoundException('Baixa não encontrada');
+    if (!baixa) throw new NotFoundException('Baixa nao encontrada');
     if (baixa.status === 'paid') return { confirmed: false };
 
-    // Verifica status real na Pagar.me
-    if (!baixa.pagarmeOrderId) throw new BadRequestException('Baixa sem order Pagar.me vinculada');
-    const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
-    if (!live.isPaid) {
+    // FIX CRITICO (jun/2026): suporta PagBank E Pagar.me.
+    // Antes so funcionava com Pagar.me — se baixa veio do PagBank,
+    // dava exception e baixa ficava em pending eternamente.
+    let isPaid = false;
+    try {
+      const pb = await (this.prisma as any).pagbankPayment.findFirst({
+        where: { saleId: baixaId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (pb) {
+        if (pb.status === 'paid') {
+          isPaid = true;
+        } else if (pb.pagbankOrderId) {
+          const live = await (this.pagbank as any).checkOrderStatus?.(pb.pagbankOrderId);
+          if (live?.isPaid || live?.status === 'paid') {
+            isPaid = true;
+            try {
+              await (this.prisma as any).pagbankPayment.update({
+                where: { id: pb.id },
+                data: { status: 'paid', paidAt: new Date() },
+              });
+            } catch {/* nao bloqueia */}
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn('[confirmBaixaPix] PagBank check falhou: ' + e?.message);
+    }
+    if (!isPaid && baixa.pagarmeOrderId) {
+      try {
+        const live = await this.pagarme.checkOrderStatus(baixa.pagarmeOrderId);
+        if (live.isPaid) isPaid = true;
+      } catch (e: any) {
+        this.logger.warn('[confirmBaixaPix] Pagar.me check falhou: ' + e?.message);
+      }
+    }
+    if (!isPaid) {
       return { confirmed: false };
     }
 
@@ -1164,9 +1197,9 @@ export class CrediarioBaixaService {
       data: { status: 'paid', paidAt: new Date() },
     });
 
-    // Executa UPDATE no Giga
     await this.executeGigaUpdates(baixaId);
     this.clearListCache();
+    this.logger.log('[confirmBaixaPix] baixa ' + baixaId + ' confirmada + Giga atualizado');
     return { confirmed: true };
   }
 
@@ -1379,17 +1412,49 @@ export class CrediarioBaixaService {
    */
   async confirmBaixaPixIfExists(baixaIdOrOrderId: string): Promise<{ confirmed: boolean; reason?: string }> {
     try {
-      // Busca por id direto (saleId no PagarmePayment é a baixaId quando é crediário)
+      // 1) Busca por id direto (saleId no payment eh a baixaId quando crediario)
       let baixa = await (this.prisma as any).crediarioBaixa.findUnique({
         where: { id: baixaIdOrOrderId },
       });
-      // Fallback: tenta por pagarmeOrderId
+      // 2) Fallback Pagar.me orderId
       if (!baixa) {
         baixa = await (this.prisma as any).crediarioBaixa.findUnique({
           where: { pagarmeOrderId: baixaIdOrOrderId },
         });
       }
+      // 3) FALLBACK CRITICO (jun/2026): PagBank webhook pode mandar o pagbankOrderId
+      // em vez de saleId. Busca PagbankPayment por pagbankOrderId, pega saleId (=baixaId)
       if (!baixa) {
+        try {
+          const pb = await (this.prisma as any).pagbankPayment.findUnique({
+            where: { pagbankOrderId: baixaIdOrOrderId },
+          });
+          if (pb?.saleId) {
+            baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+              where: { id: pb.saleId },
+            });
+            if (baixa) {
+              this.logger.log('[confirmBaixaPixIfExists] achou via PagBank orderId ' + baixaIdOrOrderId + ' -> baixaId ' + pb.saleId);
+            }
+          }
+        } catch { /* segue */ }
+      }
+      // 4) FALLBACK extra: PagbankPayment pode ter saleId armazenado direto
+      if (!baixa) {
+        try {
+          const pb = await (this.prisma as any).pagbankPayment.findFirst({
+            where: { saleId: baixaIdOrOrderId },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (pb?.saleId) {
+            baixa = await (this.prisma as any).crediarioBaixa.findUnique({
+              where: { id: pb.saleId },
+            });
+          }
+        } catch { /* segue */ }
+      }
+      if (!baixa) {
+        this.logger.warn('[confirmBaixaPixIfExists] baixa NAO ENCONTRADA — id=' + baixaIdOrOrderId);
         return { confirmed: false, reason: 'baixa_nao_encontrada' };
       }
       if (baixa.status === 'paid') {
