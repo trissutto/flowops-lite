@@ -142,6 +142,7 @@ const FILTROS = [
   { slug: 'processing',  label: 'Processando',         color: 'bg-emerald-100 text-emerald-800' },
   { slug: 'pending',     label: 'Pagto pendente',      color: 'bg-amber-100 text-amber-800' },
   { slug: 'on-hold',     label: 'Aguardando',          color: 'bg-yellow-100 text-yellow-800' },
+  { slug: 'carrinhos',   label: 'Carrinhos',           color: 'bg-rose-100 text-rose-800' },
   { slug: 'separacao',   label: 'Em separação',        color: 'bg-blue-100 text-blue-800' },
   // "Enviados por Loja" não é um status de pedido WC — é um painel diferente
   // (tracking do dia por filial). Reaproveitamos a aba pra evitar que a matriz
@@ -1185,7 +1186,9 @@ function SeparacaoPageInner() {
       )}
 
       {/* Lista */}
-      {!loading && orders.length === 0 ? (
+      {status === 'carrinhos' ? (
+        <CarrinhosTab />
+      ) : !loading && orders.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
           Nenhum pedido com esse status no momento. 🎉
         </div>
@@ -1679,3 +1682,149 @@ function SeparacaoPageInner() {
   );
 }
 
+
+
+// =================================================================================
+// CarrinhosTab — aba "Carrinhos" da tela de separação.
+// Lê do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via WP-DB.
+// Mostra clientes que largaram o checkout sem pagar + botão de WhatsApp.
+// =================================================================================
+type CarrinhoAB = {
+  id: number; email: string; nome: string; telefone: string;
+  total: number; status: string; unsubscribed: boolean; abandonadoEm: string;
+  produtos: Array<{ nome: string; qty: number; preco: number }>;
+};
+type ResumoAB = {
+  abandonados: number; valorAbandonado: number;
+  recuperados: number; valorRecuperado: number;
+  taxaRecuperacaoPct: number; dias: number;
+};
+
+function CarrinhosTab() {
+  const [items, setItems] = useState<CarrinhoAB[]>([]);
+  const [resumo, setResumo] = useState<ResumoAB | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [dias, setDias] = useState(7);
+  const [statusF, setStatusF] = useState<'abandoned' | 'completed' | 'all'>('abandoned');
+  const [search, setSearch] = useState('');
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [list, res] = await Promise.all([
+        api<CarrinhoAB[]>(`/carrinhos-abandonados/list?dias=${dias}&status=${statusF}`),
+        api<ResumoAB>(`/carrinhos-abandonados/resumo?dias=${dias}`),
+      ]);
+      setItems(Array.isArray(list) ? list : []);
+      setResumo(res);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dias, statusF]);
+
+  function whatsapp(c: CarrinhoAB) {
+    const tel = (c.telefone || '').replace(/\D/g, '');
+    if (!tel || tel.length < 10) { alert('Cliente sem telefone valido.'); return; }
+    const phone = `55${tel}`;
+    const nome = c.nome?.split(' ')[0] || 'cliente';
+    const brl = c.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const msg = `Ola, ${nome}! Aqui e da Lurd's Plus Size. Vi que voce separou pecas no valor de ${brl} no nosso site. Posso te ajudar a finalizar?`;
+    window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+  }
+
+  const fmt = (s: string | null) => s ? new Date(s).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-';
+  const BRL = (v: number) => (v || 0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+
+  const filtered = items.filter((it) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return (it.email?.toLowerCase().includes(q) || it.nome?.toLowerCase().includes(q) || it.telefone?.includes(q));
+  });
+
+  return (
+    <div className="space-y-3">
+      {/* KPIs */}
+      {resumo && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <div className="border-2 border-rose-300 bg-rose-50 rounded-lg p-3">
+            <div className="text-[10px] font-bold uppercase text-rose-700">Abandonados</div>
+            <div className="text-2xl font-black tabular-nums text-rose-800">{resumo.abandonados}</div>
+            <div className="text-[11px] text-rose-700">{BRL(resumo.valorAbandonado)}</div>
+          </div>
+          <div className="border-2 border-emerald-300 bg-emerald-50 rounded-lg p-3">
+            <div className="text-[10px] font-bold uppercase text-emerald-700">Recuperados</div>
+            <div className="text-2xl font-black tabular-nums text-emerald-800">{resumo.recuperados}</div>
+            <div className="text-[11px] text-emerald-700">{BRL(resumo.valorRecuperado)}</div>
+          </div>
+          <div className="border-2 border-violet-300 bg-violet-50 rounded-lg p-3">
+            <div className="text-[10px] font-bold uppercase text-violet-700">Taxa Recuperacao</div>
+            <div className="text-2xl font-black tabular-nums text-violet-800">{resumo.taxaRecuperacaoPct}%</div>
+            <div className="text-[11px] text-violet-700">Ultimos {resumo.dias} dias</div>
+          </div>
+          <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-3">
+            <div className="text-[10px] font-bold uppercase text-amber-700">Receita Perdida</div>
+            <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(resumo.valorAbandonado)}</div>
+            <div className="text-[11px] text-amber-700">se nada recuperar</div>
+          </div>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-2 bg-white p-3 rounded-lg border">
+        <select value={dias} onChange={(e) => setDias(Number(e.target.value))} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white">
+          <option value={1}>Hoje</option>
+          <option value={3}>3 dias</option>
+          <option value={7}>7 dias</option>
+          <option value={15}>15 dias</option>
+          <option value={30}>30 dias</option>
+          <option value={90}>90 dias</option>
+        </select>
+        <select value={statusF} onChange={(e) => setStatusF(e.target.value as any)} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white">
+          <option value="abandoned">Abandonados</option>
+          <option value="completed">Recuperados</option>
+          <option value="all">Todos</option>
+        </select>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
+        <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}</span>
+      </div>
+
+      {/* Lista */}
+      {loading ? (
+        <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Carregando do site...</div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Nenhum carrinho com esses filtros.</div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((c) => {
+            const isCompleted = c.status === 'completed';
+            return (
+              <div key={c.id} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm text-slate-800 truncate">
+                    {c.nome || c.email?.split('@')[0] || 'Cliente'}
+                    {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
+                    {c.unsubscribed && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                    <span>{c.email || '-'}</span>
+                    {c.telefone && <span>{c.telefone}</span>}
+                    <span>{fmt(c.abandonadoEm)}</span>
+                    {c.produtos.length > 0 && <span>{c.produtos.length} {c.produtos.length === 1 ? 'item' : 'itens'}</span>}
+                  </div>
+                </div>
+                <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(c.total)}</div>
+                {!isCompleted && !c.unsubscribed && c.telefone && (
+                  <button onClick={() => whatsapp(c)} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
