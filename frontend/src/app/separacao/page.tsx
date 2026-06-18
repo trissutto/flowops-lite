@@ -1686,23 +1686,51 @@ function SeparacaoPageInner() {
 
 // =================================================================================
 // CarrinhosTab — aba "Carrinhos" da tela de separacao.
-// Le do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via endpoint
-// /carrinhos-abandonados (que consulta a tabela wp_cartflows_ca_cart_history).
+// Le do plugin Cart Abandonment Recovery for WooCommerce (CartFlows) via
+// REST autenticada (HTTPS, sem precisar de MySQL externo).
+// Endpoint: /abandoned-carts (que chama /wp-json/flowops/v1/abandoned-carts/list)
+// Requer plugin PHP flowops-abandoned-carts em wp-content/mu-plugins/ do WP +
+// vars FLOWOPS_WP_BASE e FLOWOPS_WP_KEY no Railway.
 // =================================================================================
 type CarrinhoAB = {
-  id: number; email: string; nome: string; telefone: string;
-  total: number; status: string; unsubscribed: boolean; abandonadoEm: string;
-  produtos: Array<{ nome: string; qty: number; preco: number }>;
+  id: number;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  total?: number;
+  cart_total?: number;
+  cart_total_brl?: number;
+  status?: string;
+  order_status?: string;
+  time?: string | null;
+  unsubscribed?: number | boolean;
+  items_count?: number;
 };
-type ResumoAB = {
-  abandonados: number; valorAbandonado: number;
-  recuperados: number; valorRecuperado: number;
-  taxaRecuperacaoPct: number; dias: number;
+
+type StatsAB = {
+  abandoned?: number;
+  recovered?: number;
+  completed?: number;
+  lost?: number;
+  recovery_rate?: number;
+  total_abandoned_value?: number;
+  total_recovered_value?: number;
+};
+
+type ListResp = {
+  ok?: boolean;
+  items?: CarrinhoAB[];
+  rows?: CarrinhoAB[];
+  total?: number;
+  stats?: StatsAB;
+  error?: string;
+  warning?: string;
 };
 
 function CarrinhosTab() {
   const [items, setItems] = useState<CarrinhoAB[]>([]);
-  const [resumo, setResumo] = useState<ResumoAB | null>(null);
+  const [stats, setStats] = useState<StatsAB | null>(null);
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [dias, setDias] = useState(7);
@@ -1715,15 +1743,26 @@ function CarrinhosTab() {
     setLoading(true);
     setErro(null);
     try {
-      const [list, res] = await Promise.all([
-        api<CarrinhoAB[]>(`/carrinhos-abandonados/list?dias=${dias}&status=${statusF}`),
-        api<ResumoAB>(`/carrinhos-abandonados/resumo?dias=${dias}`),
+      const since = new Date(Date.now() - dias * 86400000).toISOString().slice(0, 10);
+      const sParam = statusF === 'all' ? '' : statusF;
+      const qsList = new URLSearchParams({ since, per_page: '200' });
+      if (sParam) qsList.set('status', sParam);
+      if (search) qsList.set('search', search);
+      const [listResp, statsResp] = await Promise.all([
+        api<ListResp>(`/abandoned-carts?${qsList}`).catch((e) => ({ ok: false, error: e?.message } as ListResp)),
+        api<any>(`/abandoned-carts/stats?since=${since}`).catch(() => null),
       ]);
-      setItems(Array.isArray(list) ? list : []);
-      setResumo(res);
+      if ((listResp as any)?.ok === false || (listResp as any)?.error) {
+        setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
+        setItems([]);
+      } else {
+        const arr = (listResp as any).items || (listResp as any).rows || [];
+        setItems(Array.isArray(arr) ? arr : []);
+      }
+      const st = (statsResp as any)?.stats || (statsResp as any) || null;
+      setStats(st);
     } catch (e: any) {
-      console.error(e);
-      setErro(e?.message || 'Erro ao buscar carrinhos. Conexao com banco do site falhou.');
+      setErro(e?.message || 'Erro de rede');
       setItems([]);
     } finally {
       setLoading(false);
@@ -1733,45 +1772,44 @@ function CarrinhosTab() {
 
   async function runDiag() {
     try {
-      const d = await api<any>(`/carrinhos-abandonados/diag`);
+      const d = await api<any>(`/abandoned-carts/schema`);
       setDiag(d);
-      setShowDiag(true);
     } catch (e: any) {
       setDiag({ ok: false, error: e?.message || 'falha' });
-      setShowDiag(true);
     }
+    setShowDiag(true);
   }
 
   function whatsapp(c: CarrinhoAB) {
-    const tel = (c.telefone || '').replace(/\D/g, '');
+    const tel = (c.phone || '').replace(/\D/g, '');
     if (!tel || tel.length < 10) { alert('Cliente sem telefone valido.'); return; }
     const phone = `55${tel}`;
-    const nome = c.nome?.split(' ')[0] || 'cliente';
-    const brl = c.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    const msg = `Ola, ${nome}! Aqui e da Lurd's Plus Size. Vi que voce separou pecas no valor de ${brl} no nosso site. Posso te ajudar a finalizar?`;
+    const nome = (c.first_name || '').split(' ')[0] || 'cliente';
+    const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
+    const brl = valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    const msg = `Ola, ${nome}! Aqui e da Lurd\'s Plus Size. Vi que voce separou pecas no valor de ${brl} no nosso site. Posso te ajudar a finalizar?`;
     window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
   }
 
-  const fmt = (s: string | null) => s ? new Date(s).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-';
+  const fmt = (s: string | null | undefined) => s ? new Date(s + (typeof s === 'string' && s.endsWith('Z') ? '' : ' UTC')).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '-';
   const BRL = (v: number) => (v || 0).toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
 
   const filtered = items.filter((it) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    return (it.email?.toLowerCase().includes(q) || it.nome?.toLowerCase().includes(q) || it.telefone?.includes(q));
+    const nome = `${it.first_name || ''} ${it.last_name || ''}`.toLowerCase();
+    return (it.email?.toLowerCase().includes(q) || nome.includes(q) || it.phone?.includes(q));
   });
 
   return (
     <div className="space-y-3">
-      {/* Erro */}
       {erro && (
-        <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-3 text-sm text-rose-800 flex items-center justify-between">
-          <div><strong>Erro:</strong> {erro}</div>
-          <button onClick={runDiag} className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded">Diagnosticar</button>
+        <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-3 text-sm text-rose-800 flex items-center justify-between gap-2">
+          <div className="flex-1"><strong>Erro:</strong> {erro}</div>
+          <button onClick={runDiag} className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded whitespace-nowrap">Diagnosticar</button>
         </div>
       )}
 
-      {/* Diagnostico */}
       {showDiag && diag && (
         <div className="bg-slate-900 text-emerald-300 border-2 border-slate-700 rounded-lg p-3 text-[11px] font-mono">
           <div className="flex justify-between mb-1">
@@ -1782,33 +1820,29 @@ function CarrinhosTab() {
         </div>
       )}
 
-      {/* KPIs */}
-      {resumo && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-          <div className="border-2 border-rose-300 bg-rose-50 rounded-lg p-3">
-            <div className="text-[10px] font-bold uppercase text-rose-700">Abandonados</div>
-            <div className="text-2xl font-black tabular-nums text-rose-800">{resumo.abandonados}</div>
-            <div className="text-[11px] text-rose-700">{BRL(resumo.valorAbandonado)}</div>
-          </div>
-          <div className="border-2 border-emerald-300 bg-emerald-50 rounded-lg p-3">
-            <div className="text-[10px] font-bold uppercase text-emerald-700">Recuperados</div>
-            <div className="text-2xl font-black tabular-nums text-emerald-800">{resumo.recuperados}</div>
-            <div className="text-[11px] text-emerald-700">{BRL(resumo.valorRecuperado)}</div>
-          </div>
-          <div className="border-2 border-violet-300 bg-violet-50 rounded-lg p-3">
-            <div className="text-[10px] font-bold uppercase text-violet-700">Taxa Recuperacao</div>
-            <div className="text-2xl font-black tabular-nums text-violet-800">{resumo.taxaRecuperacaoPct}%</div>
-            <div className="text-[11px] text-violet-700">Ultimos {resumo.dias} dias</div>
-          </div>
-          <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-3">
-            <div className="text-[10px] font-bold uppercase text-amber-700">Receita Pendente</div>
-            <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(resumo.valorAbandonado)}</div>
-            <div className="text-[11px] text-amber-700">se nada recuperar</div>
-          </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        <div className="border-2 border-rose-300 bg-rose-50 rounded-lg p-3">
+          <div className="text-[10px] font-bold uppercase text-rose-700">Abandonados</div>
+          <div className="text-2xl font-black tabular-nums text-rose-800">{stats?.abandoned ?? 0}</div>
+          <div className="text-[11px] text-rose-700">{BRL(stats?.total_abandoned_value ?? 0)}</div>
         </div>
-      )}
+        <div className="border-2 border-emerald-300 bg-emerald-50 rounded-lg p-3">
+          <div className="text-[10px] font-bold uppercase text-emerald-700">Recuperados</div>
+          <div className="text-2xl font-black tabular-nums text-emerald-800">{(stats?.recovered ?? stats?.completed) ?? 0}</div>
+          <div className="text-[11px] text-emerald-700">{BRL(stats?.total_recovered_value ?? 0)}</div>
+        </div>
+        <div className="border-2 border-violet-300 bg-violet-50 rounded-lg p-3">
+          <div className="text-[10px] font-bold uppercase text-violet-700">Taxa Recuperacao</div>
+          <div className="text-2xl font-black tabular-nums text-violet-800">{Number(stats?.recovery_rate ?? 0).toFixed(1)}%</div>
+          <div className="text-[11px] text-violet-700">Ultimos {dias} dias</div>
+        </div>
+        <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-3">
+          <div className="text-[10px] font-bold uppercase text-amber-700">Receita Pendente</div>
+          <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(stats?.total_abandoned_value ?? 0)}</div>
+          <div className="text-[11px] text-amber-700">se nada recuperar</div>
+        </div>
+      </div>
 
-      {/* Filtros */}
       <div className="flex flex-wrap items-center gap-2 bg-white p-3 rounded-lg border">
         <select value={dias} onChange={(e) => setDias(Number(e.target.value))} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white">
           <option value={1}>Hoje</option>
@@ -1825,39 +1859,41 @@ function CarrinhosTab() {
         </select>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
-        <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Verificar conexao com banco do site">Diag</button>
+        <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
         <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}</span>
       </div>
 
-      {/* Lista */}
       {loading ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Carregando do site...</div>
       ) : filtered.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">
           Nenhum carrinho com esses filtros.
-          {!erro && <div className="text-[11px] mt-2 text-slate-500">Se voce sabe que tem carrinhos no plugin do WP, clique em <strong>Diag</strong> pra ver se o backend esta conectando.</div>}
+          {!erro && <div className="text-[11px] mt-2 text-slate-500">Se voce sabe que tem carrinhos no plugin do WP, clique em <strong>Diag</strong> pra ver schema da tabela.</div>}
         </div>
       ) : (
         <div className="space-y-2">
           {filtered.map((c) => {
-            const isCompleted = c.status === 'completed';
+            const status = (c.order_status || c.status || '').toString();
+            const isCompleted = status === 'completed' || status === 'recovered';
+            const nome = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.email?.split('@')[0] || 'Cliente';
+            const valor = Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0);
             return (
               <div key={c.id} className={`bg-white border-2 rounded-lg p-3 flex items-center gap-3 ${isCompleted ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'}`}>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-sm text-slate-800 truncate">
-                    {c.nome || c.email?.split('@')[0] || 'Cliente'}
+                    {nome}
                     {isCompleted && <span className="ml-2 text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">Recuperado</span>}
-                    {c.unsubscribed && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
+                    {Boolean(c.unsubscribed) && <span className="ml-2 text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-bold uppercase">Optout</span>}
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
                     <span>{c.email || '-'}</span>
-                    {c.telefone && <span>{c.telefone}</span>}
-                    <span>{fmt(c.abandonadoEm)}</span>
-                    {c.produtos.length > 0 && <span>{c.produtos.length} {c.produtos.length === 1 ? 'item' : 'itens'}</span>}
+                    {c.phone && <span>{c.phone}</span>}
+                    <span>{fmt(c.time)}</span>
+                    {Number(c.items_count) > 0 && <span>{c.items_count} {Number(c.items_count) === 1 ? 'item' : 'itens'}</span>}
                   </div>
                 </div>
-                <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(c.total)}</div>
-                {!isCompleted && !c.unsubscribed && c.telefone && (
+                <div className="font-black text-rose-700 tabular-nums text-lg whitespace-nowrap">{BRL(valor)}</div>
+                {!isCompleted && !c.unsubscribed && c.phone && (
                   <button onClick={() => whatsapp(c)} className="px-3 py-2 rounded-lg font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white whitespace-nowrap">WhatsApp</button>
                 )}
               </div>
