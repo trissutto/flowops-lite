@@ -19,7 +19,7 @@
  */
 
 import * as React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import {
@@ -228,6 +228,331 @@ function calcularParcelas(total: number, n: number): {
   return { iguais, ultima, qtdIguais: n - 1 };
 }
 
+// ===========================================================================
+// ScanBar — barra de bipagem ISOLADA (estado local).
+//
+// Antes, o `scanInput` morava no PdvPageInner (componente de ~2.800 linhas).
+// Cada tecla digitada re-renderizava a árvore inteira E re-registrava o
+// listener global de teclado (scanInput estava nas deps dele). Em máquina
+// fraca de loja isso engasgava a bipagem.
+//
+// Aqui o valor digitado fica DENTRO da ScanBar: digitar re-renderiza só esta
+// barra. As 3 funções do campo são preservadas 1:1:
+//   1. Leitor de código de barras (digita rápido + Enter)
+//   2. Digitação manual do código (Enter)
+//   3. Busca por REF: REF+ESPAÇO ou Shift+Enter (grade), 3-6 díg+Enter (REF
+//      curta), texto com letra (busca por descrição, debounce), e fallback
+//      automático de código 7+ díg não encontrado → tenta como REF.
+//
+// O pai interage só via ref imperativo (focus/focusSelect/clear/isActiveEmpty)
+// e callbacks (onScanResult/onError/onRequestManualItem).
+// ===========================================================================
+type ScanBarHandle = {
+  focus: () => void;
+  focusSelect: () => void;
+  clear: () => void;
+  isActiveEmpty: () => boolean;
+};
+
+type ScanBarProps = {
+  saleId: string;
+  onScanResult: (fresh: Sale) => void;     // pai faz flashAddedItem + setSale
+  onError: (msg: string | null) => void;   // pai faz setError
+  onRequestManualItem: () => void;         // pai abre o modal de item manual
+};
+
+const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
+  { saleId, onScanResult, onError, onRequestManualItem },
+  ref,
+) {
+  type ErpSearchHit = {
+    CODIGO: string;
+    REF: string;
+    DESCRICAOCOMPLETA?: string;
+    COR?: string | null;
+    TAMANHO?: string | null;
+    ESTOQUE?: number;       // legado — alias de qtyMyStore
+    qtyMyStore?: number;    // estoque na loja do usuario
+    qtyTotal?: number;      // estoque total da rede (todas lojas)
+  };
+
+  const [scanInput, setScanInput] = useState('');
+  const [searchResults, setSearchResults] = useState<ErpSearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [highlightedIdx, setHighlightedIdx] = useState(-1);
+  const [scanLoading, setScanLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => inputRef.current?.focus(),
+    focusSelect: () => { inputRef.current?.focus(); inputRef.current?.select(); },
+    clear: () => setScanInput(''),
+    isActiveEmpty: () => document.activeElement === inputRef.current && !scanInput.trim(),
+  }), [scanInput]);
+
+  // ── Bipagem ──
+  // forceRef: Shift+Enter / REF+ESPAÇO → busca a REF/grade direto, sem tentar bipar.
+  const handleScan = async (e?: React.FormEvent, opts?: { forceRef?: boolean }) => {
+    e?.preventDefault();
+    if (!saleId) return;
+    const sku = scanInput.trim();
+    if (!sku) return;
+    // Atalho item manual: vendedora digita "0" → abre modal pra lançar
+    // produto livre (descrição + valor) sem precisar achar no Giga.
+    if (sku === '0') {
+      setScanInput('');
+      onRequestManualItem();
+      return;
+    }
+    // BUSCA DE REF/GRADE — 3 gatilhos:
+    //   1. forceRef (Shift+Enter / REF+ESPAÇO): explícito, REF de QUALQUER tamanho.
+    //   2. 3-6 dígitos + Enter: nunca é código (códigos têm 7+), vai direto.
+    //   3. Fallback no catch abaixo: código não achou → tenta como REF.
+    const buscarRef = async () => {
+      setSearchLoading(true);
+      onError(null);
+      try {
+        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(sku)}`);
+        const arr = Array.isArray(res) ? res : [];
+        setSearchResults(arr);
+        setShowResults(arr.length > 0);
+        setHighlightedIdx(arr.length > 0 ? 0 : -1);
+        if (!arr.length) onError(`REF ${sku} não encontrada no Giga`);
+      } catch (e2: any) {
+        onError(e2?.message || 'Erro ao buscar REF');
+      } finally {
+        setSearchLoading(false);
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
+    };
+    if (opts?.forceRef || /^\d{3,6}$/.test(sku)) {
+      await buscarRef();
+      return;
+    }
+    setScanLoading(true);
+    onError(null);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ skuOrEan: sku }),
+      });
+      // PERF: backend novo devolve a venda completa no POST — elimina o
+      // segundo GET. Fallback pro GET enquanto backend antigo estiver no ar.
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
+      onScanResult(fresh);
+      setScanInput('');
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      // FALLBACK REF: código numérico (7+ díg) não existe no Giga? Pode ser
+      // uma REF longa — busca a grade automaticamente antes de dar erro.
+      if (/^\d{7,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
+        setScanLoading(false);
+        await buscarRef();
+        return;
+      }
+      onError(msg || 'Erro ao bipar');
+    } finally {
+      setScanLoading(false);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
+    }
+  };
+
+  // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
+  const addBySku = useCallback(async (sku: string) => {
+    if (!saleId) return;
+    setShowResults(false);
+    setSearchResults([]);
+    setScanLoading(true);
+    onError(null);
+    try {
+      const r = await api<any>(`/pdv/sales/${saleId}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ skuOrEan: sku }),
+      });
+      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${saleId}`));
+      onScanResult(fresh);
+      setScanInput('');
+    } catch (e: any) {
+      onError(e?.message || 'Erro ao adicionar');
+    } finally {
+      setScanLoading(false);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
+    }
+  }, [saleId, onScanResult, onError]);
+
+  // ── Effect: busca inline com debounce ──
+  // Se digitar texto (com letra), busca por descricao no Giga.
+  // Numeros (REF/codigo) NAO acionam dropdown automatico — sao explicitos
+  // (Enter pra bipe/REF curta, ESPAÇO pra grade). Determinístico, independe
+  // da velocidade de digitação.
+  useEffect(() => {
+    const term = scanInput.trim();
+    const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
+    if (term.length < 3 || !hasLetter) {
+      setSearchResults([]);
+      setShowResults(false);
+      setHighlightedIdx(-1);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(term)}`);
+        const arr = Array.isArray(res) ? res : [];
+        setSearchResults(arr);
+        setShowResults(arr.length > 0);
+        setHighlightedIdx(arr.length > 0 ? 0 : -1);
+      } catch {
+        setSearchResults([]);
+        setShowResults(false);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [scanInput]);
+
+  return (
+    <div className="relative w-full">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          // Se tem item destacado no dropdown, escolhe ele. Senao bipe normal.
+          if (showResults && highlightedIdx >= 0 && searchResults[highlightedIdx]) {
+            addBySku(searchResults[highlightedIdx].CODIGO);
+          } else {
+            handleScan(e);
+          }
+        }}
+        className="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-md flex items-center gap-3 w-full"
+      >
+        <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={scanInput}
+          onChange={(e) => setScanInput(e.target.value)}
+          onKeyDown={(e) => {
+            // REF + ESPAÇO → abre a grade do modelo (tamanhos/cores).
+            // Só quando o campo tem APENAS números (3+ dígitos) — digitando
+            // texto (nome da peça), o espaço funciona normal.
+            if (e.key === ' ' && /^\d{3,}$/.test(scanInput.trim())) {
+              e.preventDefault();
+              handleScan(undefined, { forceRef: true });
+              return;
+            }
+            // Shift+Enter → mesma busca (atalho alternativo)
+            if (e.key === 'Enter' && e.shiftKey) {
+              e.preventDefault();
+              handleScan(undefined, { forceRef: true });
+              return;
+            }
+            if (!showResults || searchResults.length === 0) return;
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              setHighlightedIdx((i) => Math.min(searchResults.length - 1, i + 1));
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              setHighlightedIdx((i) => Math.max(0, i - 1));
+            } else if (e.key === 'Escape') {
+              setShowResults(false);
+              setHighlightedIdx(-1);
+            }
+          }}
+          onBlur={() => {
+            // delay pra permitir click no item antes do dropdown fechar
+            setTimeout(() => setShowResults(false), 150);
+          }}
+          onFocus={() => {
+            if (searchResults.length > 0) setShowResults(true);
+          }}
+          placeholder="Bipe ou digite o código + Enter · REF + ESPAÇO abre a grade · ou nome da peça…"
+          disabled={scanLoading}
+          className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+        />
+        {searchLoading && (
+          <Loader2 className="w-4 h-4 text-slate-400 animate-spin shrink-0" />
+        )}
+        <button
+          type="submit"
+          disabled={!scanInput || scanLoading}
+          className="px-5 py-3 text-black font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
+          style={{ background: 'linear-gradient(135deg, #E5C158, #D4AF37)' }}
+        >
+          {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
+        </button>
+      </form>
+
+      {/* DROPDOWN DE BUSCA — aparece abaixo do input quando ha resultados */}
+      {showResults && searchResults.length > 0 && (
+        <div className="absolute z-30 left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-[420px] overflow-y-auto">
+          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-[10px] uppercase tracking-wider font-black text-slate-500 flex items-center justify-between">
+            <span>{searchResults.length} resultado(s) — clique pra adicionar</span>
+            <span className="text-[9px] font-normal">↑↓ navegar · Enter escolher · Esc fechar</span>
+          </div>
+          {searchResults.map((r, idx) => {
+            const isHi = idx === highlightedIdx;
+            const desc = (r.DESCRICAOCOMPLETA || '').trim();
+            const corTam = [r.COR, r.TAMANHO].filter(Boolean).join(' / ');
+            const qtyLoja = Number(r.qtyMyStore ?? r.ESTOQUE) || 0;
+            const qtyRede = Number(r.qtyTotal ?? 0) || 0;
+            return (
+              <button
+                key={`${r.CODIGO}-${idx}`}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); addBySku(r.CODIGO); }}
+                onMouseEnter={() => setHighlightedIdx(idx)}
+                className={`w-full px-3 py-2 flex items-center gap-3 text-left transition border-b border-slate-50 last:border-b-0 ${
+                  isHi ? 'bg-[#FAF6E8]' : 'hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex flex-col items-center justify-center w-12 shrink-0">
+                  <div className="font-mono text-[10px] text-slate-400">SKU</div>
+                  <div className="font-mono font-bold text-[11px] text-slate-700">{r.CODIGO}</div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-black text-sm text-slate-900">{r.REF}</span>
+                    {corTam && <span className="text-[10px] font-bold text-slate-500">{corTam}</span>}
+                  </div>
+                  {desc && (
+                    <div className="text-xs text-slate-700 truncate font-semibold">{desc}</div>
+                  )}
+                </div>
+                <div className="shrink-0 text-right flex items-center gap-3">
+                  <div>
+                    <div className="text-[9px] uppercase text-slate-400 font-bold">Sua loja</div>
+                    <div className={`text-base font-black tabular-nums ${qtyLoja > 0 ? 'text-emerald-700' : 'text-rose-400'}`}>{qtyLoja}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase text-slate-400 font-bold">Rede</div>
+                    <div className={`text-sm font-bold tabular-nums ${qtyRede > 0 ? 'text-slate-700' : 'text-slate-400'}`}>{qtyRede}</div>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
 export default function PdvPage() {
   return (
     <PdvToastProvider>
@@ -250,27 +575,9 @@ function PdvPageInner() {
   const [loadingSale, setLoadingSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [scanInput, setScanInput] = useState('');
-
-  // ── BUSCA INLINE POR DESCRICAO ──
-  // Quando vendedora digita texto (nao codigo de barras), aparece dropdown
-  // com sugestoes do Giga em tempo real. Click adiciona ao carrinho.
-  type ErpSearchHit = {
-    CODIGO: string;
-    REF: string;
-    DESCRICAOCOMPLETA?: string;
-    COR?: string | null;
-    TAMANHO?: string | null;
-    ESTOQUE?: number;       // legado — alias de qtyMyStore
-    qtyMyStore?: number;    // estoque na loja do usuario
-    qtyTotal?: number;      // estoque total da rede (todas lojas)
-  };
-  const [searchResults, setSearchResults] = useState<ErpSearchHit[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [showResults, setShowResults] = useState(false);
-  const [highlightedIdx, setHighlightedIdx] = useState(-1);
-  const [scanLoading, setScanLoading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  // Barra de bipagem isolada — o estado digitado vive DENTRO do componente
+  // ScanBar (ver definição acima). O pai fala com ela só via ref imperativo.
+  const scanBarRef = useRef<ScanBarHandle>(null);
   // SKU pendente quando vendedora ainda nao foi escolhida — bipe fica em
   // espera. Apos saveVendedora, dispara handleScan automatico com esse SKU
   // (vendedora nao precisa voltar e clicar de novo na setinha).
@@ -476,7 +783,7 @@ function PdvPageInner() {
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
     if (!showCustomer && !showVendedora && !showPayment && !showFinalized) {
-      inputRef.current?.focus();
+      scanBarRef.current?.focus();
     }
   }, [sale, showCustomer, showVendedora, showPayment, showFinalized]);
 
@@ -526,8 +833,7 @@ function PdvPageInner() {
       // F1 → foca o input de bipagem
       if (e.key === 'F1') {
         e.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
+        scanBarRef.current?.focusSelect();
         return;
       }
       // F2 → abre tela de desconto da venda inteira
@@ -592,7 +898,8 @@ function PdvPageInner() {
       if (e.key === 'Delete') {
         const ae = document.activeElement as HTMLElement | null;
         const editing = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
-        const scanVazio = ae === inputRef.current && !scanInput.trim();
+        // "campo de bipe vazio" agora é consultado na ScanBar (estado local dela).
+        const scanVazio = scanBarRef.current?.isActiveEmpty() ?? false;
         if (editing && !scanVazio) return;
         if (sale.items?.length > 0) {
           e.preventDefault();
@@ -620,15 +927,17 @@ function PdvPageInner() {
       ) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key.length === 1 || e.key === 'Enter' || e.key === 'Backspace') {
-        inputRef.current?.focus();
+        scanBarRef.current?.focus();
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
     // PDV2: removeItem fica fora das deps de propósito — é recriada a cada
     // render e o handler já é re-registrado quando `sale` muda (captura fresca).
+    // PERF: `scanInput` saiu das deps — o valor digitado agora vive na ScanBar,
+    // então o listener NÃO é mais re-registrado a cada tecla.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showDiscount, showShortcuts, scanInput]);
+  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showDiscount, showShortcuts]);
 
   // ── PDV2: marca o item recém-adicionado pra dar flash verde (~600ms) ──
   // Detecta por diff: item NOVO (id que não existia) ou qty incrementada.
@@ -644,152 +953,6 @@ function PdvPageInner() {
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     flashTimerRef.current = setTimeout(() => setLastAddedItemId(null), 600);
   };
-
-  // ── Bipagem ──
-  // forceRef: Shift+Enter → busca a REF/grade direto, sem tentar bipar.
-  const handleScan = async (e?: React.FormEvent, opts?: { forceRef?: boolean }) => {
-    e?.preventDefault();
-    if (!sale) return;
-    const sku = scanInput.trim();
-    if (!sku) return;
-    // PDV2: gate de vendedora no 1º bipe REMOVIDO — vendedora é exigida
-    // no ENCERRAMENTO da venda (gate no finalizeSale). Bipagem flui direto.
-    // Atalho item manual: vendedora digita "0" → abre modal pra lançar
-    // produto livre (descrição + valor) sem precisar achar no Giga.
-    if (sku === '0') {
-      setScanInput('');
-      setShowManualItem(true);
-      return;
-    }
-    // BUSCA DE REF/GRADE — 3 gatilhos:
-    //   1. Shift+Enter (forceRef): explícito, REF de QUALQUER tamanho.
-    //   2. 3-6 dígitos + Enter: nunca é código (códigos têm 7+), vai direto.
-    //   3. Fallback no catch abaixo: código não achou → tenta como REF.
-    const buscarRef = async () => {
-      setSearchLoading(true);
-      setError(null);
-      try {
-        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(sku)}`);
-        const arr = Array.isArray(res) ? res : [];
-        setSearchResults(arr);
-        setShowResults(arr.length > 0);
-        setHighlightedIdx(arr.length > 0 ? 0 : -1);
-        if (!arr.length) setError(`REF ${sku} não encontrada no Giga`);
-      } catch (e2: any) {
-        setError(e2?.message || 'Erro ao buscar REF');
-      } finally {
-        setSearchLoading(false);
-        setTimeout(() => inputRef.current?.focus(), 50);
-      }
-    };
-    if (opts?.forceRef || /^\d{3,6}$/.test(sku)) {
-      await buscarRef();
-      return;
-    }
-    setScanLoading(true);
-    setError(null);
-    try {
-      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
-        method: 'POST',
-        body: JSON.stringify({ skuOrEan: sku }),
-      });
-      // PERF: backend novo devolve a venda completa no POST — elimina o
-      // segundo GET (uma ida-e-volta a menos por bipe). Fallback pro GET
-      // enquanto backend antigo estiver no ar.
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
-      // ── PDV2: flash verde no item recém-adicionado (novo OU qty incrementada) ──
-      flashAddedItem(sale.items || [], fresh.items || []);
-      setSale(fresh);
-      setScanInput('');
-    } catch (e: any) {
-      const msg = String(e?.message || '');
-      // FALLBACK REF: código numérico (7+ díg) não existe no Giga? Pode ser
-      // uma REF longa — busca a grade automaticamente antes de dar erro.
-      if (/^\d{7,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
-        setScanLoading(false);
-        await buscarRef();
-        return;
-      }
-      setError(msg || 'Erro ao bipar');
-    } finally {
-      setScanLoading(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }, 50);
-    }
-  };
-
-  // ── Adiciona peca direto por SKU (usado pelo dropdown de busca) ──
-  const addBySku = useCallback(async (sku: string) => {
-    if (!sale) return;
-    // PDV2: gate de vendedora removido daqui — exigida só no finalizeSale.
-    setShowResults(false);
-    setSearchResults([]);
-    setScanLoading(true);
-    setError(null);
-    try {
-      const r = await api<any>(`/pdv/sales/${sale.id}/items`, {
-        method: 'POST',
-        body: JSON.stringify({ skuOrEan: sku }),
-      });
-      const fresh: Sale = r?.sale || (await api<Sale>(`/pdv/sales/${sale.id}`));
-      // ── PDV2: flash verde também quando adiciona pelo dropdown de busca ──
-      flashAddedItem(sale.items || [], fresh.items || []);
-      setSale(fresh);
-      setScanInput('');
-    } catch (e: any) {
-      setError(e?.message || 'Erro ao adicionar');
-    } finally {
-      setScanLoading(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }, 50);
-    }
-  }, [sale, toast]);
-
-  // ── Effect: busca inline com debounce ──
-  // Se digitar texto (com letra), busca por descricao no Giga.
-  // Se digitar so numero pequeno (3-6 digitos = REF curta), tambem busca.
-  // Numeros >=7 digitos (CODIGO Wincred / EAN) NAO acionam dropdown — sao bipados direto
-  // (evita conflito: bipe de 7 dig usado pra abrir dropdown E enviar pro handleScan).
-  useEffect(() => {
-    const term = scanInput.trim();
-    const hasLetter = /[a-zA-ZÀ-ÿ]/.test(term);
-    // SÓ TEXTO abre busca automática. NÚMERO nunca dispara sozinho —
-    // digitar um código devagar passava por "530" e o dropdown de REF
-    // abria no meio da digitação (e o Enter final selecionava o item
-    // errado do dropdown). REF agora é EXPLÍCITA: digita 3-6 dígitos e
-    // aperta ENTER → handleScan abre a grade do modelo. Determinístico,
-    // independe da velocidade de digitação.
-    if (term.length < 3 || !hasLetter) {
-      setSearchResults([]);
-      setShowResults(false);
-      setHighlightedIdx(-1);
-      return;
-    }
-    const t = setTimeout(async () => {
-      setSearchLoading(true);
-      try {
-        const res = await api<ErpSearchHit[]>(`/products/erp-search?q=${encodeURIComponent(term)}`);
-        const arr = Array.isArray(res) ? res : [];
-        setSearchResults(arr);
-        setShowResults(arr.length > 0);
-        setHighlightedIdx(arr.length > 0 ? 0 : -1);
-      } catch {
-        setSearchResults([]);
-        setShowResults(false);
-      } finally {
-        setSearchLoading(false);
-      }
-    }, 300);
-    return () => clearTimeout(t);
-  }, [scanInput]);
 
   // ── Atualizar qty/desconto do item ──
   const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number }) => {
@@ -1037,7 +1200,7 @@ function PdvPageInner() {
       const pending = pendingScanRef.current;
       if (pending) {
         pendingScanRef.current = null;
-        setScanInput('');
+        scanBarRef.current?.clear();
         try {
           await api(`/pdv/sales/${sale.id}/items`, {
             method: 'POST',
@@ -1050,7 +1213,7 @@ function PdvPageInner() {
           const h = humanizeError(e);
           toast('error', `Falha ao adicionar ${pending}`, h.hint || h.title);
         }
-        setTimeout(() => inputRef.current?.focus(), 50);
+        setTimeout(() => scanBarRef.current?.focus(), 50);
       }
 
       // PDV2: AUTO-FINALIZE — se o operador tentou fechar a venda sem
@@ -1625,133 +1788,18 @@ function PdvPageInner() {
         )}
 
         {/* Input bipagem — FULL-WIDTH (estilo mockup) com botão grande à direita */}
-        {sale?.status === 'open' && (
-          <div className="relative w-full">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              // Se tem item destacado no dropdown, escolhe ele. Senao bipe normal.
-              if (showResults && highlightedIdx >= 0 && searchResults[highlightedIdx]) {
-                addBySku(searchResults[highlightedIdx].CODIGO);
-              } else {
-                handleScan(e);
-              }
+        {sale?.status === 'open' && sale && (
+          <ScanBar
+            ref={scanBarRef}
+            saleId={sale.id}
+            onScanResult={(fresh) => {
+              // flash verde no item recém-adicionado + atualiza a venda.
+              flashAddedItem(sale.items || [], fresh.items || []);
+              setSale(fresh);
             }}
-            className="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-md flex items-center gap-3 w-full"
-          >
-            <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
-            <input
-              ref={inputRef}
-              type="text"
-              value={scanInput}
-              onChange={(e) => setScanInput(e.target.value)}
-              onKeyDown={(e) => {
-                // REF + ESPAÇO → abre a grade do modelo (tamanhos/cores).
-                // Só quando o campo tem APENAS números (3+ dígitos) — digitando
-                // texto (nome da peça), o espaço funciona normal.
-                if (e.key === ' ' && /^\d{3,}$/.test(scanInput.trim())) {
-                  e.preventDefault();
-                  handleScan(undefined, { forceRef: true });
-                  return;
-                }
-                // Shift+Enter → mesma busca (atalho alternativo)
-                if (e.key === 'Enter' && e.shiftKey) {
-                  e.preventDefault();
-                  handleScan(undefined, { forceRef: true });
-                  return;
-                }
-                if (!showResults || searchResults.length === 0) return;
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setHighlightedIdx((i) => Math.min(searchResults.length - 1, i + 1));
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setHighlightedIdx((i) => Math.max(0, i - 1));
-                } else if (e.key === 'Escape') {
-                  setShowResults(false);
-                  setHighlightedIdx(-1);
-                }
-              }}
-              onBlur={() => {
-                // delay pra permitir click no item antes do dropdown fechar
-                setTimeout(() => setShowResults(false), 150);
-              }}
-              onFocus={() => {
-                if (searchResults.length > 0) setShowResults(true);
-              }}
-              placeholder="Bipe ou digite o código + Enter · REF + ESPAÇO abre a grade · ou nome da peça…"
-              disabled={scanLoading}
-              className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-            />
-            {searchLoading && (
-              <Loader2 className="w-4 h-4 text-slate-400 animate-spin shrink-0" />
-            )}
-            <button
-              type="submit"
-              disabled={!scanInput || scanLoading}
-              className="px-5 py-3 text-black font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
-              style={{ background: 'linear-gradient(135deg, #E5C158, #D4AF37)' }}
-            >
-              {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
-            </button>
-          </form>
-
-          {/* DROPDOWN DE BUSCA — aparece abaixo do input quando ha resultados */}
-          {showResults && searchResults.length > 0 && (
-            <div className="absolute z-30 left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-[420px] overflow-y-auto">
-              <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-[10px] uppercase tracking-wider font-black text-slate-500 flex items-center justify-between">
-                <span>{searchResults.length} resultado(s) — clique pra adicionar</span>
-                <span className="text-[9px] font-normal">↑↓ navegar · Enter escolher · Esc fechar</span>
-              </div>
-              {searchResults.map((r, idx) => {
-                const isHi = idx === highlightedIdx;
-                const desc = (r.DESCRICAOCOMPLETA || '').trim();
-                const corTam = [r.COR, r.TAMANHO].filter(Boolean).join(' / ');
-                const qtyLoja = Number(r.qtyMyStore ?? r.ESTOQUE) || 0;
-                const qtyRede = Number(r.qtyTotal ?? 0) || 0;
-                return (
-                  <button
-                    key={`${r.CODIGO}-${idx}`}
-                    type="button"
-                    onMouseDown={(e) => { e.preventDefault(); addBySku(r.CODIGO); }}
-                    onMouseEnter={() => setHighlightedIdx(idx)}
-                    className={`w-full px-3 py-2 flex items-center gap-3 text-left transition border-b border-slate-50 last:border-b-0 ${
-                      isHi ? 'bg-[#FAF6E8]' : 'hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex flex-col items-center justify-center w-12 shrink-0">
-                      <div className="font-mono text-[10px] text-slate-400">SKU</div>
-                      <div className="font-mono font-bold text-[11px] text-slate-700">{r.CODIGO}</div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono font-black text-sm text-slate-900">{r.REF}</span>
-                        {corTam && <span className="text-[10px] font-bold text-slate-500">{corTam}</span>}
-                      </div>
-                      {desc && (
-                        <div className="text-xs text-slate-700 truncate font-semibold">{desc}</div>
-                      )}
-                    </div>
-                    <div className="shrink-0 text-right flex items-center gap-3">
-                      <div>
-                        <div className="text-[9px] uppercase text-slate-400 font-bold">Sua loja</div>
-                        <div className={`text-base font-black tabular-nums ${qtyLoja > 0 ? 'text-emerald-700' : 'text-rose-400'}`}>{qtyLoja}</div>
-                      </div>
-                      <div>
-                        <div className="text-[9px] uppercase text-slate-400 font-bold">Rede</div>
-                        <div className={`text-sm font-bold tabular-nums ${qtyRede > 0 ? 'text-slate-700' : 'text-slate-400'}`}>{qtyRede}</div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          </div>
+            onError={setError}
+            onRequestManualItem={() => setShowManualItem(true)}
+          />
         )}
 
         {/* Carrinho */}
@@ -2955,7 +3003,7 @@ function PdvPageInner() {
             setSale(fresh);
             setShowManualItem(false);
             toast('success', 'Item manual adicionado', 'Confira descrição e valor no carrinho');
-            setTimeout(() => inputRef.current?.focus(), 50);
+            setTimeout(() => scanBarRef.current?.focus(), 50);
           }}
         />
       )}
