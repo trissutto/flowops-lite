@@ -51,6 +51,9 @@ declare global {
 let scriptLoadingPromise: Promise<void> | null = null;
 let modelsLoadingPromise: Promise<void> | null = null;
 let warmedUp = false;
+// Backend TF.js ativo ('webgl' = rápido, 'cpu' = lento). Exposto pra avisar
+// o operador quando a máquina da loja cai pro CPU (causa de lentidão).
+let activeBackend = '';
 
 function loadFaceApiScript(): Promise<void> {
   if (typeof window === 'undefined') return Promise.reject(new Error('SSR'));
@@ -79,6 +82,7 @@ async function loadModels(): Promise<void> {
         await f.tf.setBackend('webgl');
         await f.tf.ready();
         const backend = f.tf.getBackend();
+        activeBackend = backend;
         // eslint-disable-next-line no-console
         console.log(`[FaceCapture] TF.js backend ativo: ${backend}`);
         if (backend !== 'webgl') {
@@ -162,6 +166,8 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
   const streamRef = useRef<MediaStream | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [statusMsg, setStatusMsg] = useState('Carregando engine facial...');
+  // Avisa quando a máquina não tem WebGL (roda no CPU → reconhecimento lento).
+  const [perfWarn, setPerfWarn] = useState(false);
 
   useEffect(() => {
     if (!autoStart) return;
@@ -210,6 +216,7 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
         }
         setStatus('ready');
         setStatusMsg('Pronto');
+        if (activeBackend && activeBackend !== 'webgl') setPerfWarn(true);
         onReady?.(window.faceapi);
       } catch (e: any) {
         if (cancelled) return;
@@ -306,6 +313,12 @@ const FaceCapture = forwardRef<FaceCaptureHandle, Props>(function FaceCapture(
           <div className="absolute top-2 right-2 bg-emerald-500/90 text-white text-xs font-bold px-2 py-1 rounded-full flex items-center gap-1">
             <Camera className="w-3 h-3" />
             AO VIVO
+          </div>
+        )}
+        {status === 'ready' && perfWarn && (
+          <div className="absolute bottom-2 left-2 right-2 bg-amber-500/95 text-white text-[11px] font-bold px-2 py-1 rounded-lg flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            Sem WebGL nesta máquina — reconhecimento lento. Veja chrome://gpu
           </div>
         )}
       </div>
