@@ -163,7 +163,7 @@ export default function EtiquetaPrint({ labels }: Props) {
           display: grid;
           grid-template-columns: 48mm 48mm;
           gap: 0 6mm;
-          padding: 21mm 0 0 3mm; /* ajuste jun/2026: +3mm baixo + 3mm esquerda */
+          padding: 24mm 3mm 0 6mm; /* ajuste jun/2026 v2: voltar 3mm da esquerda pra direita + abaixar +3mm */
           width: 108mm;
           margin: 0 auto;
           background: #fff;
@@ -270,7 +270,7 @@ export default function EtiquetaPrint({ labels }: Props) {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 21mm 0 0 3mm; /* ajuste jun/2026: +3mm baixo + 3mm esquerda */
+            padding: 24mm 3mm 0 6mm; /* ajuste jun/2026 v2: voltar 3mm da esquerda pra direita + abaixar +3mm */
             page-break-inside: auto;
           }
           .etiqueta {
