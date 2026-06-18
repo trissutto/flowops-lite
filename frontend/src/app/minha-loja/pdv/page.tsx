@@ -2294,10 +2294,10 @@ function PdvPageInner() {
         );
         return (
           <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
-            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-2 overflow-x-auto">
+            <div className="max-w-6xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2.5 pointer-events-auto flex items-stretch gap-4 overflow-x-auto">
               {/* GRUPO CRÉDITO */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Crédito</span>
+              <div className="flex flex-col gap-1.5 shrink-0 rounded-xl border border-slate-200 bg-slate-50/80 px-2.5 py-1.5 shadow-sm">
+                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Crédito</span>
                 <div className="flex gap-1.5">
                   <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                   <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
@@ -2307,11 +2307,9 @@ function PdvPageInner() {
                 </div>
               </div>
 
-              <div className="w-px bg-slate-200 mx-0.5" />
-
               {/* GRUPO DÉBITO */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Débito</span>
+              <div className="flex flex-col gap-1.5 shrink-0 rounded-xl border border-slate-200 bg-slate-50/80 px-2.5 py-1.5 shadow-sm">
+                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Débito</span>
                 <div className="flex gap-1.5">
                   <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
                   <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
@@ -2319,11 +2317,9 @@ function PdvPageInner() {
                 </div>
               </div>
 
-              <div className="w-px bg-slate-200 mx-0.5" />
-
               {/* GRUPO OUTROS */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[9px] font-black uppercase tracking-wider text-[#8C7325] px-1">Outros</span>
+              <div className="flex flex-col gap-1.5 shrink-0 rounded-xl border border-slate-200 bg-slate-50/80 px-2.5 py-1.5 shadow-sm">
+                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Outros</span>
                 <div className="flex gap-1.5">
                   <PayBtn
                     onClick={() => venderOutro('pix')}
