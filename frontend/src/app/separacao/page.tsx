@@ -1964,20 +1964,20 @@ function CarrinhosTab() {
                 </div>
               </section>
 
-              {detail?.other && (
+              {detail?.other_fields && (
                 <section>
                   <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Endereco</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm bg-slate-50 rounded-lg p-3 border border-slate-200">
-                    {detail.other.wcf_billing_address_1 && <div><span className="text-slate-500">Endereco:</span> <b>{detail.other.wcf_billing_address_1}{detail.other.wcf_billing_address_2 ? `, ${detail.other.wcf_billing_address_2}` : ''}</b></div>}
-                    {detail.other.wcf_billing_city && <div><span className="text-slate-500">Cidade:</span> <b>{detail.other.wcf_billing_city}{detail.other.wcf_billing_state ? `/${detail.other.wcf_billing_state}` : ''}</b></div>}
-                    {detail.other.wcf_billing_postcode && <div><span className="text-slate-500">CEP:</span> <b>{detail.other.wcf_billing_postcode}</b></div>}
+                    {detail.other_fields.wcf_billing_address_1 && <div><span className="text-slate-500">Endereco:</span> <b>{detail.other_fields.wcf_billing_address_1}{detail.other_fields.wcf_billing_address_2 ? `, ${detail.other_fields.wcf_billing_address_2}` : ''}</b></div>}
+                    {detail.other_fields.wcf_billing_city && <div><span className="text-slate-500">Cidade:</span> <b>{detail.other_fields.wcf_billing_city}{detail.other_fields.wcf_billing_state ? `/${detail.other_fields.wcf_billing_state}` : ''}</b></div>}
+                    {detail.other_fields.wcf_billing_postcode && <div><span className="text-slate-500">CEP:</span> <b>{detail.other_fields.wcf_billing_postcode}</b></div>}
                   </div>
                 </section>
               )}
 
               <section>
                 <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Produtos no carrinho</h3>
-                {!detail?.cart || detail.cart.length === 0 ? (
+                {!detail?.cart_items || detail.cart_items.length === 0 ? (
                   <div className="text-sm text-slate-400 italic">Sem detalhe de produtos disponivel.</div>
                 ) : (
                   <div className="border-2 border-slate-200 rounded-lg overflow-hidden">
@@ -1990,7 +1990,7 @@ function CarrinhosTab() {
                         </tr>
                       </thead>
                       <tbody>
-                        {detail.cart.map((p: any, i: number) => (
+                        {detail.cart_items.map((p: any, i: number) => (
                           <tr key={i} className="border-t border-slate-100">
                             <td className="p-2">
                               <div className="font-medium text-slate-800">{p.name || `Produto #${p.product_id}`}</div>
