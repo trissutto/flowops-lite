@@ -1151,7 +1151,23 @@ export default function PedidoDetailPage() {
         </table>
       </div>
 
-      {/* SEPARAÇÃO — rotear pra loja + WhatsApp */}
+      {/* SEPARAÇÃO — bloqueada se pagamento nao confirmado (on-hold/pending/failed/cancelled) */}
+      {['on-hold', 'pending', 'failed', 'cancelled'].includes(status) ? (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded shadow p-5 mb-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="font-bold text-amber-900 text-sm uppercase tracking-wide">Separacao bloqueada — pagamento nao confirmado</div>
+              <div className="text-amber-800 text-sm mt-1">
+                O pedido esta com status <b>{STATUS_OPTIONS.find((s) => s.slug === status)?.label || status}</b>. Aguarde o cliente confirmar o pagamento antes de gerar a separacao.
+              </div>
+              <div className="text-amber-700 text-xs mt-2">
+                Depois que o status mudar para <b>Processando</b> ou <b>Em separacao</b>, o botao de gerar separacao aparece automaticamente.
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="bg-white rounded shadow p-5 mb-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-sm text-slate-600 uppercase tracking-wide flex items-center gap-2">
@@ -1810,6 +1826,7 @@ export default function PedidoDetailPage() {
           </>
         )}
       </div>
+      )}
 
       {/* EDIÇÃO — status, rastreio, nota */}
       <div className="bg-white rounded shadow p-5 mb-4">
