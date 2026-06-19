@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { startOfDayBR } from '../lib/date-br';
 import { OrdersService } from './orders.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { OrderStatus } from '../common/enums';
@@ -363,8 +364,7 @@ export class OrdersController {
    */
   @Get('wc/completed-today')
   async wcCompletedToday() {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    const start = startOfDayBR();
     const res = await this.wc.listOrders({
       status: 'completed',
       perPage: 1,

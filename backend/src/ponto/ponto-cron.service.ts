@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { startOfDayBR } from '../lib/date-br';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushService } from '../push/push.service';
 
@@ -51,8 +52,7 @@ export class PontoCronService {
       });
 
       const alertas: Array<{ name: string; expected: string }> = [];
-      const inicioDia = new Date(now);
-      inicioDia.setHours(0, 0, 0, 0);
+      const inicioDia = startOfDayBR(now);
 
       for (const s of sellers) {
         let horario: any[] = [];

@@ -3,6 +3,7 @@ import type { Response } from 'express';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const archiver = require('archiver');
 import { PrismaService } from '../prisma/prisma.service';
+import { dayBoundsFromUtcDate } from '../lib/date-br';
 
 /**
  * Relatório fiscal — auditoria de NFC-e emitidas com filtros pra contador
@@ -42,10 +43,9 @@ export class FiscalReportService {
     maxValor?: number | null;
     onlyInconsistent?: boolean;
   }) {
-    const fromStart = new Date(input.from);
-    fromStart.setHours(0, 0, 0, 0);
-    const toEnd = new Date(input.to);
-    toEnd.setHours(23, 59, 59, 999);
+    // Janela no fuso BR — input.from/to chegam como meia-noite UTC da data.
+    const fromStart = dayBoundsFromUtcDate(input.from).start;
+    const toEnd = dayBoundsFromUtcDate(input.to).end;
 
     // Mapa loja → CNPJ esperado (pra detectar inconsistência)
     const stores = await this.prisma.store.findMany({
@@ -308,10 +308,9 @@ export class FiscalReportService {
       cnpjs?: string[] | null;
     },
   ): Promise<void> {
-    const fromStart = new Date(input.from);
-    fromStart.setHours(0, 0, 0, 0);
-    const toEnd = new Date(input.to);
-    toEnd.setHours(23, 59, 59, 999);
+    // Janela no fuso BR — input.from/to chegam como meia-noite UTC da data.
+    const fromStart = dayBoundsFromUtcDate(input.from).start;
+    const toEnd = dayBoundsFromUtcDate(input.to).end;
 
     const where: any = {
       status: 'finalized',

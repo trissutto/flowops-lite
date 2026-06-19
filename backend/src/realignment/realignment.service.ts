@@ -1,4 +1,5 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { startOfDayBR } from '../lib/date-br';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -910,8 +911,7 @@ export class RealignmentService {
     });
     if (!store?.code) return [];
 
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDay = startOfDayBR();
 
     const orders = await this.prisma.transferOrder.findMany({
       where: {
