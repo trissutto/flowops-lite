@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { startOfDayBR, endOfDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd } from '../lib/date-br';
 
 /**
  * ProdutosVendidosService — Relatório de produtos vendidos no PDV.
@@ -65,12 +66,9 @@ export class ProdutosVendidosService {
 
   private async _getReportImpl(filters: ProdutosVendidosFilters = {}) {
     const includeReturns = filters.includeReturns !== false;
-    const fromDate = filters.from
-      ? new Date(filters.from + 'T00:00:00')
-      : new Date(new Date().setHours(0, 0, 0, 0));
-    const toDate = filters.to
-      ? new Date(filters.to + 'T23:59:59')
-      : new Date(new Date().setHours(23, 59, 59, 999));
+    // Janela no fuso BR (servidor roda em UTC).
+    const fromDate = filters.from ? startOfDayBRFromYmd(filters.from) : startOfDayBR();
+    const toDate = filters.to ? endOfDayBRFromYmd(filters.to) : endOfDayBR();
 
     // ─── VENDAS ───────────────────────────────────────────────────────────
     // Estratégia: 2 passos

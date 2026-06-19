@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd } from '../lib/date-br';
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
@@ -816,21 +817,14 @@ export class PdvService {
   }): Promise<any> {
     const limit = Math.min(500, Math.max(10, input.limit || 100));
 
-    // Default: hoje
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    let dateStart: Date = today;
-    let dateEnd: Date = tomorrow;
+    // Default: hoje (no fuso BR — servidor roda em UTC).
+    let dateStart: Date = startOfDayBR();
+    let dateEnd: Date = startOfNextDayBR();
     if (input.startDate) {
-      const [y, m, d] = input.startDate.split('-').map(Number);
-      dateStart = new Date(y, m - 1, d, 0, 0, 0, 0);
+      dateStart = startOfDayBRFromYmd(input.startDate);
     }
     if (input.endDate) {
-      const [y, m, d] = input.endDate.split('-').map(Number);
-      dateEnd = new Date(y, m - 1, d, 23, 59, 59, 999);
+      dateEnd = endOfDayBRFromYmd(input.endDate);
     }
 
     const where: any = {
@@ -922,19 +916,10 @@ export class PdvService {
     ticketMedio: number;
   }> {
     if (!storeCode) return { count: 0, total: 0, ticketMedio: 0 };
-    // Início do dia em Brasília (UTC-3) → converte pra UTC pra query
-    const now = new Date();
-    const inicioBrasilia = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      0,
-      0,
-      0,
-    );
-    // Ajusta pro timezone local do servidor (Railway = UTC)
-    // Brasília hoje 00:00 = UTC hoje 03:00
-    const inicioUtc = new Date(inicioBrasilia.getTime() + 3 * 60 * 60 * 1000);
+    // Início do dia em Brasília (UTC-3) como instante UTC pra query.
+    // (O cálculo manual com now.getDate() usava a DATA em UTC → depois das 21h
+    // pulava pro dia seguinte. startOfDayBR resolve no fuso BR.)
+    const inicioUtc = startOfDayBR();
 
     try {
       const sales = await (this.prisma as any).pdvSale.findMany({

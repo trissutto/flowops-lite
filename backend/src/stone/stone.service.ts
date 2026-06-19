@@ -12,6 +12,7 @@
  */
 import { Injectable, Logger, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import * as crypto from 'crypto';
+import { dayBoundsFromUtcDate } from '../lib/date-br';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -348,10 +349,8 @@ export class StoneService {
       status: 'ok' | 'atencao' | 'divergente' | 'sem_stone';
     }>;
   }> {
-    const from = new Date(date);
-    from.setHours(0, 0, 0, 0);
-    const to = new Date(date);
-    to.setHours(23, 59, 59, 999);
+    // Dia no fuso BR (servidor roda em UTC). `date` chega como meia-noite UTC.
+    const { start: from, end: to } = dayBoundsFromUtcDate(date);
 
     // 1) Vendas PDV com PIX, do dia, agrupadas por loja
     const salesPix = await (this.prisma as any).pdvSale.findMany({
@@ -460,10 +459,8 @@ export class StoneService {
     sales: Array<any>;
     orfas: Array<any>;
   }> {
-    const from = new Date(date);
-    from.setHours(0, 0, 0, 0);
-    const to = new Date(date);
-    to.setHours(23, 59, 59, 999);
+    // Dia no fuso BR (servidor roda em UTC). `date` chega como meia-noite UTC.
+    const { start: from, end: to } = dayBoundsFromUtcDate(date);
 
     // Vendas cartão do dia
     const sales = await (this.prisma as any).pdvSale.findMany({

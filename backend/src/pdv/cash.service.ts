@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { startOfDayBR, dayBoundsFromUtcDate } from '../lib/date-br';
 
 /**
  * Caixa diário do PDV — abertura, sangria/suprimento, fechamento.
@@ -524,8 +525,7 @@ export class CashService {
         // Sessão só conta como "atual" se foi aberta HOJE (após 00:00 local).
         // Se for de ontem (esqueceram de fechar), trata como SEM sessão e marca
         // sessaoPendente=true pro frontend exibir alerta.
-        const today00 = new Date();
-        today00.setHours(0, 0, 0, 0);
+        const today00 = startOfDayBR();
         const sessionFromToday =
           rawSession && rawSession.openedAt && new Date(rawSession.openedAt) >= today00;
         const session: any = sessionFromToday ? rawSession : null;
@@ -597,7 +597,7 @@ export class CashService {
         // Crediarios recebidos hoje nessa loja (baixas pagas no dia)
         // Inclui baixas em DINHEIRO direto + PIX presencial + PIX-link + MISTO (split).
         // Pra MISTO contabiliza o valorDinheiro em dinheiro e valorPix em pix.
-        const inicioHoje = new Date(); inicioHoje.setHours(0, 0, 0, 0);
+        const inicioHoje = startOfDayBR();
         const recebimentosRaw = await (this.prisma as any).crediarioBaixa.findMany({
           where: {
             lojaCode: s.code,
@@ -715,10 +715,10 @@ export class CashService {
    */
   async getSuperPainelHistorico(from: Date, to: Date): Promise<any> {
     // Normaliza range: from=00:00:00, to=23:59:59 do dia
-    const fromStart = new Date(from);
-    fromStart.setHours(0, 0, 0, 0);
-    const toEnd = new Date(to);
-    toEnd.setHours(23, 59, 59, 999);
+    // Limites no fuso BR. `from`/`to` chegam como meia-noite UTC da data
+    // escolhida (controller: new Date('YYYY-MM-DD'+'T00:00:00')) → lê o YMD.
+    const fromStart = dayBoundsFromUtcDate(from).start;
+    const toEnd = dayBoundsFromUtcDate(to).end;
 
     const stores = await this.prisma.store.findMany({
       where: { active: true } as any,
@@ -1040,8 +1040,7 @@ export class CashService {
       // o demonstrativo do dia salvo e abrir um caixa novo limpo HOJE.
       // Mesma logica do Wincred: ao abrir caixa, ele gera "retirada final"
       // do dia anterior automaticamente.
-      const inicioHoje = new Date();
-      inicioHoje.setHours(0, 0, 0, 0);
+      const inicioHoje = startOfDayBR();
       const openedAt = new Date(existing.openedAt);
       const ehDeOntemOuAntes = openedAt < inicioHoje;
       if (ehDeOntemOuAntes) {
@@ -1336,8 +1335,7 @@ export class CashService {
     const open = await this.getCurrentSession(storeCode);
     if (open) return open;
     // Tenta ultima fechada do dia
-    const inicioHoje = new Date();
-    inicioHoje.setHours(0, 0, 0, 0);
+    const inicioHoje = startOfDayBR();
     const closed = await (this.prisma as any).pdvCashSession.findFirst({
       where: {
         storeCode,
@@ -1929,8 +1927,7 @@ export class CashService {
   }
 
   async autoCloseExpiredSessions(): Promise<{ closed: number; details: any[] }> {
-    const inicioHoje = new Date();
-    inicioHoje.setHours(0, 0, 0, 0);
+    const inicioHoje = startOfDayBR();
 
     const expired = await (this.prisma as any).pdvCashSession.findMany({
       where: {

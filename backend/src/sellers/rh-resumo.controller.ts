@@ -1,6 +1,7 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { startOfDayBR, startOfNextDayBR } from '../lib/date-br';
 
 /**
  * /rh/resumo — dashboard do hub /retaguarda/rh.
@@ -20,10 +21,8 @@ export class RhResumoController {
 
   @Get('resumo')
   async resumo() {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const today = startOfDayBR();
+    const tomorrow = startOfNextDayBR();
 
     // Semana atual (segunda → domingo)
     const dow = today.getDay() || 7; // 1..7
