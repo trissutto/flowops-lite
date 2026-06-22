@@ -7,6 +7,7 @@ import { RealignmentReportService } from './realignment-report.service';
  *
  * Endpoints:
  *  GET /                  → relatório completo (cards, tabela, matriz, evolução)
+ *  GET /rede-franquia     → síntese por tipo de loja (REDE × FILIAL)
  *  GET /shipment/:id      → detalhe de uma transferência (itens + timeline)
  *
  * Query params:
@@ -21,6 +22,12 @@ export class RealignmentReportController {
   @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
   async getReport(@Query('period') period: string = '90d') {
     return this.report.getReport(period);
+  }
+
+  @Get('rede-franquia')
+  @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
+  async getRedeFranquia(@Query('period') period: string = '90d') {
+    return this.report.getRedeFranquiaSummary(period);
   }
 
   @Get('shipment/:id')

@@ -339,6 +339,191 @@ export class RealignmentReportService {
   }
 
   /**
+   * Relatório SINTÉTICO por TIPO de loja (REDE × FRANQUIA/FILIAL).
+   *
+   * Diferente do getReport (que agrega loja-a-loja), este consolida o fluxo
+   * por categoria operacional, respondendo: "quanto a REDE mandou pra FILIAL
+   * e vice-versa". Gera os 4 cruzamentos possíveis:
+   *   REDE → FILIAL · FILIAL → REDE · REDE → REDE · FILIAL → FILIAL
+   *
+   * Métricas por fluxo (decisão do Thiago):
+   *   - pecas      → soma de qtyOrigem (peças enviadas, exceto canceladas)
+   *   - valorTotal → soma de qty × preço de venda (VENDAUN/Giga)
+   *   - valorCusto → valorTotal ÷ 2,5  (mesmo divisor das obrigações intercompany)
+   *
+   * O fluxo é classificado pela DIREÇÃO DA REMESSA (tipo da loja origem →
+   * tipo da loja destino), considerando o que foi ENVIADO no período.
+   */
+  async getRedeFranquiaSummary(period: string = '90d') {
+    const { from, to } = this.periodToDates(period);
+    const DIVISOR = 2.5;
+
+    // 1. Mapa code→{tipo,name} de TODAS as lojas (inclui inativas, pra não
+    //    perder classificação de loja desativada que aparece em remessa antiga)
+    const stores = await this.prisma.store.findMany({
+      select: { code: true, name: true, tipo: true } as any,
+    });
+    const tipoMap = new Map<string, string>();
+    const nameMap = new Map<string, string>();
+    for (const s of stores as any[]) {
+      tipoMap.set(s.code, s.tipo === 'FILIAL' ? 'FILIAL' : 'REDE');
+      nameMap.set(s.code, s.name);
+    }
+    const tipoOf = (code: string) => tipoMap.get(code) || 'REDE';
+
+    // 2. Remessas + orders do período (mesma fonte do getReport)
+    const shipments = await this.prisma.realignmentShipment.findMany({
+      where: {
+        openedAt: { gte: from, lte: to },
+        status: { in: ['open', 'in_transit', 'received', 'cancelled'] },
+      },
+    });
+    const shipmentIds = shipments.map((s) => s.id);
+    const orders =
+      shipmentIds.length > 0
+        ? await this.prisma.transferOrder.findMany({
+            where: { shipmentId: { in: shipmentIds } },
+          })
+        : [];
+
+    // 3. Preços em batch (idêntico ao getReport)
+    const codigos = Array.from(
+      new Set(orders.map((o) => (o.codigoBipado || '').trim()).filter((c) => c.length > 0)),
+    );
+    const refs = Array.from(
+      new Set(orders.map((o) => (o.refCode || '').trim()).filter((r) => r.length > 0)),
+    );
+    const priceMap = await this.pricing.getPricesByCodigos(codigos);
+    const refPriceMap = await this.pricing.getPricesByRefs(refs);
+    const priceOf = (o: any) => {
+      const codigo = (o.codigoBipado || '').trim();
+      const ref = (o.refCode || '').trim();
+      let preco = codigo ? priceMap.get(codigo) || 0 : 0;
+      if (preco === 0 && ref) preco = refPriceMap.get(ref) || 0;
+      return preco;
+    };
+
+    // shipmentId → {from,to}
+    const shipInfo = new Map<string, { from: string; to: string }>();
+    for (const s of shipments) shipInfo.set(s.id, { from: s.fromStoreCode, to: s.toStoreCode });
+
+    // 4. Acumuladores: 4 fluxos + pares loja-a-loja (drill-down)
+    const blank = () => ({ pecas: 0, valorTotal: 0 });
+    const flows = {
+      redeToFilial: blank(),
+      filialToRede: blank(),
+      redeToRede: blank(),
+      filialToFilial: blank(),
+    } as Record<string, { pecas: number; valorTotal: number }>;
+    const flowKey = (fTipo: string, tTipo: string) =>
+      fTipo === 'REDE'
+        ? tTipo === 'FILIAL'
+          ? 'redeToFilial'
+          : 'redeToRede'
+        : tTipo === 'REDE'
+          ? 'filialToRede'
+          : 'filialToFilial';
+
+    const pairMap = new Map<
+      string,
+      { from: string; to: string; fromName: string; toName: string; fromTipo: string; toTipo: string; direction: string; pecas: number; valorTotal: number }
+    >();
+
+    let withoutPriceCount = 0;
+    for (const o of orders) {
+      if (o.realignmentStatus === 'cancelled') continue;
+      const info = shipInfo.get(o.shipmentId || '');
+      if (!info) continue;
+      const fTipo = tipoOf(info.from);
+      const tTipo = tipoOf(info.to);
+      const qty = o.qtyOrigem || 0;
+      const price = priceOf(o);
+      if (price === 0) withoutPriceCount++;
+      const value = qty * price;
+
+      const key = flowKey(fTipo, tTipo);
+      flows[key].pecas += qty;
+      flows[key].valorTotal += value;
+
+      const pk = `${info.from}->${info.to}`;
+      let p = pairMap.get(pk);
+      if (!p) {
+        p = {
+          from: info.from,
+          to: info.to,
+          fromName: nameMap.get(info.from) || info.from,
+          toName: nameMap.get(info.to) || info.to,
+          fromTipo: fTipo,
+          toTipo: tTipo,
+          direction: key,
+          pecas: 0,
+          valorTotal: 0,
+        };
+        pairMap.set(pk, p);
+      }
+      p.pecas += qty;
+      p.valorTotal += value;
+    }
+
+    // 5. Contagem de remessas por fluxo (exclui canceladas)
+    const shipCountByFlow: Record<string, number> = {
+      redeToFilial: 0,
+      filialToRede: 0,
+      redeToRede: 0,
+      filialToFilial: 0,
+    };
+    for (const s of shipments) {
+      if (s.status === 'cancelled') continue;
+      shipCountByFlow[flowKey(tipoOf(s.fromStoreCode), tipoOf(s.toStoreCode))]++;
+    }
+
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+    const buildFlow = (k: string) => ({
+      pecas: flows[k].pecas,
+      valorTotal: round2(flows[k].valorTotal),
+      valorCusto: round2(flows[k].valorTotal / DIVISOR),
+      shipments: shipCountByFlow[k],
+    });
+
+    const totalPecas = Object.values(flows).reduce((s, f) => s + f.pecas, 0);
+    const totalValor = Object.values(flows).reduce((s, f) => s + f.valorTotal, 0);
+    const totalShip = Object.values(shipCountByFlow).reduce((s, n) => s + n, 0);
+
+    const pairs = Array.from(pairMap.values())
+      .map((p) => ({
+        ...p,
+        valorTotal: round2(p.valorTotal),
+        valorCusto: round2(p.valorTotal / DIVISOR),
+      }))
+      .sort((a, b) => b.valorTotal - a.valorTotal);
+
+    return {
+      period: {
+        from: from.toISOString().slice(0, 10),
+        to: to.toISOString().slice(0, 10),
+      },
+      divisor: DIVISOR,
+      flows: {
+        redeToFilial: buildFlow('redeToFilial'),
+        filialToRede: buildFlow('filialToRede'),
+        redeToRede: buildFlow('redeToRede'),
+        filialToFilial: buildFlow('filialToFilial'),
+      },
+      totals: {
+        pecas: totalPecas,
+        valorTotal: round2(totalValor),
+        valorCusto: round2(totalValor / DIVISOR),
+        shipments: totalShip,
+      },
+      pairs,
+      meta: {
+        ordersWithoutPrice: withoutPriceCount,
+        ordersTotal: orders.length,
+      },
+    };
+  }
+
+  /**
    * Detalhe completo de uma transferência específica (modal Nível 3).
    */
   async getShipmentDetail(shipmentId: string) {
