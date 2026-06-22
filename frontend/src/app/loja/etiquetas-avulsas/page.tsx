@@ -423,7 +423,7 @@ export default function EtiquetasAvulsasPage() {
             <div className="font-bold">Defina a quantidade de pelo menos 1 peça acima pra imprimir</div>
           </div>
         ) : (
-          <EtiquetaPrint labels={labelsExpandidos.map(l => ({ ...l, descricao: l.descricao || '' }))} />
+          <EtiquetaPrint labels={labelsExpandidos.map(l => ({ ...l, descricao: l.descricao || '' }))} config={config} />
         )}
       </main>
 
@@ -507,7 +507,6 @@ function NumField({ label, value, step, onChange }: { label: string; value: numb
         step={step || 1}
         onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
         className="px-2 py-1.5 border-2 border-slate-200 rounded text-sm font-mono tabular-nums focus:border-blue-500 outline-none"
-      />
-    </label>
+      /></label>
   );
 }

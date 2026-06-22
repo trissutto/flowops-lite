@@ -25,8 +25,35 @@ export interface EtiquetaLabel {
   marca?: string | null;
 }
 
+export interface EtiquetaConfig {
+  pageWidthMm: number;
+  cellWidthMm: number;
+  cellHeightMm: number;
+  gridColumnGapMm: number;
+  paddingTopMm: number;
+  paddingLeftMm: number;
+  cellPadTopMm: number;
+  cellPadRightMm: number;
+  cellPadBottomMm: number;
+  cellPadLeftMm: number;
+  barcodeWidth: number;
+  barcodeHeightPx: number;
+  barcodeFontSize: number;
+  refMaxFontPx: number;
+  descMaxHeightMm: number;
+}
+
+const DEFAULT_CFG: EtiquetaConfig = {
+  pageWidthMm: 108, cellWidthMm: 48, cellHeightMm: 30,
+  gridColumnGapMm: 6, paddingTopMm: 24, paddingLeftMm: 6,
+  cellPadTopMm: 1.2, cellPadRightMm: 1.5, cellPadBottomMm: 0.8, cellPadLeftMm: 1.5,
+  barcodeWidth: 1.8, barcodeHeightPx: 32, barcodeFontSize: 18,
+  refMaxFontPx: 12, descMaxHeightMm: 5.2,
+};
+
 interface Props {
   labels: EtiquetaLabel[];
+  config?: Partial<EtiquetaConfig>;
 }
 
 /**
@@ -57,7 +84,8 @@ function refFontSize(ref: string): string {
   return '6pt';
 }
 
-export default function EtiquetaPrint({ labels }: Props) {
+export default function EtiquetaPrint({ labels, config }: Props) {
+  const cfg: EtiquetaConfig = { ...DEFAULT_CFG, ...(config || {}) };
   // ── Carrega JsBarcode + renderiza códigos ─────────────────────────────
   useEffect(() => {
     if (!labels || labels.length === 0) return;
@@ -79,10 +107,10 @@ export default function EtiquetaPrint({ labels }: Props) {
           // @ts-expect-error JsBarcode global
           window.JsBarcode(el, code, {
             format: 'EAN13',
-            width: 1.8,
-            height: 32,
+            width: cfg.barcodeWidth,
+            height: cfg.barcodeHeightPx,
             displayValue: true,
-            fontSize: 18,
+            fontSize: cfg.barcodeFontSize,
             fontOptions: 'bold',
             textMargin: 3,
             margin: 0,
@@ -96,10 +124,10 @@ export default function EtiquetaPrint({ labels }: Props) {
             // @ts-expect-error
             window.JsBarcode(el, code, {
               format: 'CODE128',
-              width: 1.8,
-              height: 32,
+              width: cfg.barcodeWidth,
+              height: cfg.barcodeHeightPx,
               displayValue: true,
-              fontSize: 18,
+              fontSize: cfg.barcodeFontSize,
               fontOptions: 'bold',
               textMargin: 3,
               margin: 0,
@@ -161,18 +189,18 @@ export default function EtiquetaPrint({ labels }: Props) {
         /* Grid: 2 colunas de 48mm em rolo de 108mm (Argox padrão) */
         .etiquetas-grid {
           display: grid;
-          grid-template-columns: 48mm 48mm;
-          gap: 0 6mm;
-          padding: 24mm 3mm 0 6mm; /* ajuste jun/2026 v2: voltar 3mm da esquerda pra direita + abaixar +3mm */
-          width: 108mm;
+          grid-template-columns: ${cfg.cellWidthMm}mm ${cfg.cellWidthMm}mm;
+          gap: 0 ${cfg.gridColumnGapMm}mm;
+          padding: ${cfg.paddingTopMm}mm 0 0 ${cfg.paddingLeftMm}mm;
+          width: ${cfg.pageWidthMm}mm;
           margin: 0 auto;
           background: #fff;
         }
         .etiqueta {
-          width: 48mm;
-          height: 30mm;
+          width: ${cfg.cellWidthMm}mm;
+          height: ${cfg.cellHeightMm}mm;
           box-sizing: border-box;
-          padding: 1.2mm 1.5mm 0.8mm 1.5mm;
+          padding: ${cfg.cellPadTopMm}mm ${cfg.cellPadRightMm}mm ${cfg.cellPadBottomMm}mm ${cfg.cellPadLeftMm}mm;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
@@ -193,7 +221,7 @@ export default function EtiquetaPrint({ labels }: Props) {
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
-          max-height: 5.2mm;
+          max-height: ${cfg.descMaxHeightMm}mm;
           flex-shrink: 0;
         }
         .et-destaque {
@@ -270,7 +298,7 @@ export default function EtiquetaPrint({ labels }: Props) {
             margin: 0;
           }
           .etiquetas-grid {
-            padding: 24mm 3mm 0 6mm; /* ajuste jun/2026 v2: voltar 3mm da esquerda pra direita + abaixar +3mm */
+            padding: ${cfg.paddingTopMm}mm 0 0 ${cfg.paddingLeftMm}mm;
             page-break-inside: auto;
           }
           .etiqueta {
