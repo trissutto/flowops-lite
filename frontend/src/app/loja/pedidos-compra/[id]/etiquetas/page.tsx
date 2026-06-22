@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Printer, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '@/lib/api';
-import EtiquetaPrint from '@/components/EtiquetaPrint';
+import EtiquetaPrint, { type EtiquetaConfig } from '@/components/EtiquetaPrint';
 
 type Label = {
   ref: string;
@@ -37,6 +37,8 @@ export default function EtiquetasPage() {
   const refFromUrl = searchParams?.get('ref') || '';
 
   const [labels, setLabels] = useState<Label[]>([]);
+  const [etiquetaCfg, setEtiquetaCfg] = useState<EtiquetaConfig | undefined>(undefined);
+  useEffect(() => { api<EtiquetaConfig>('/etiqueta-config').then(setEtiquetaCfg).catch(() => {}); }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterRef, setFilterRef] = useState(refFromUrl);
@@ -137,7 +139,7 @@ export default function EtiquetasPage() {
             </Link>
           </div>
         ) : (
-          <EtiquetaPrint labels={filtered} />
+          <EtiquetaPrint labels={filtered} config={etiquetaCfg} />
         )}
       </main>
 

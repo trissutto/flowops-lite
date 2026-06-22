@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { ArrowLeft, Search, Loader2, Plus, Trash2, CheckCircle2, Printer, Package } from 'lucide-react';
 import { api } from '@/lib/api';
 import ProductPhoto from '@/components/ProductPhoto';
-import EtiquetaPrint from '@/components/EtiquetaPrint';
+import EtiquetaPrint, { type EtiquetaConfig } from '@/components/EtiquetaPrint';
 
 type Produto = {
   codigo: string;
@@ -43,6 +43,8 @@ const brl = (n: number) =>
 
 export default function ReposicaoPage() {
   const [busca, setBusca] = useState('');
+  const [etiquetaCfg, setEtiquetaCfg] = useState<EtiquetaConfig | undefined>(undefined);
+  useEffect(() => { api<EtiquetaConfig>('/etiqueta-config').then(setEtiquetaCfg).catch(() => {}); }, []);
   const [resultados, setResultados] = useState<Produto[]>([]);
   const [loading, setLoading] = useState(false);
   const [selecionados, setSelecionados] = useState<Selecionado[]>([]);
@@ -352,7 +354,7 @@ export default function ReposicaoPage() {
 
       {/* Etiquetas (visiveis na impressao) — componente compartilhado */}
       {resultado && resultado.labels && (
-        <EtiquetaPrint labels={resultado.labels} />
+        <EtiquetaPrint labels={resultado.labels} config={etiquetaCfg} />
       )}
 
     </div>
