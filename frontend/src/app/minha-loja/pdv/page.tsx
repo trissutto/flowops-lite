@@ -5830,11 +5830,12 @@ const CpfNaNotaInput = React.forwardRef<
   const [saving, setSaving] = useState(false);
   const [lastSavedCpf, setLastSavedCpf] = useState<string | null>(sale.customerCpf || null);
 
-  // Formata CPF pra exibição: 28665529896 → 286.655.298-96
+  // Formata CPF (11) → 286.655.298-96 ou CNPJ (14) → 04.174.338/0001-10
   const fmtCpf = (raw: string | null) => {
     if (!raw) return '';
     const d = String(raw).replace(/\D/g, '');
     if (d.length === 11) return `${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;
+    if (d.length === 14) return `${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;
     return d;
   };
 
@@ -5903,7 +5904,7 @@ const CpfNaNotaInput = React.forwardRef<
       <div className="bg-blue-50 border-2 border-blue-200 rounded p-2.5 flex items-center gap-2">
         <Check className="w-4 h-4 text-blue-700 flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-blue-700 font-bold uppercase">CPF na nota</div>
+          <div className="text-xs text-blue-700 font-bold uppercase">{sale.customerCpf && sale.customerCpf.replace(/\D/g, '').length === 14 ? 'CNPJ na nota' : 'CPF na nota'}</div>
           <div className="text-sm font-mono font-bold text-blue-900">{fmtCpf(sale.customerCpf)}</div>
           {sale.customerName && (
             <div className="text-[11px] text-blue-700 truncate">{sale.customerName}</div>
@@ -5934,7 +5935,7 @@ const CpfNaNotaInput = React.forwardRef<
   // Modo edição: input + botões
   return (
     <div className="bg-blue-50 border-2 border-blue-300 rounded p-3 space-y-2">
-      <label className="text-xs font-bold text-blue-900 uppercase">CPF do cliente</label>
+      <label className="text-xs font-bold text-blue-900 uppercase">CPF / CNPJ do cliente</label>
       <div className="flex gap-2">
         <input
           type="text"
@@ -5949,7 +5950,7 @@ const CpfNaNotaInput = React.forwardRef<
         />
         <button
           onClick={salvarCpf}
-          disabled={saving || cpfInput.replace(/\D/g, '').length !== 11}
+          disabled={saving || ![11, 14].includes(cpfInput.replace(/\D/g, '').length)}
           className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded text-sm"
         >
           {saving ? '…' : 'Salvar'}
