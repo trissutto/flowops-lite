@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * /retaguarda/live-pdv — Console de Live Commerce (operado pela apresentadora)
+ * /minha-loja/live-pdv — Console de Live Commerce (operado pela apresentadora/loja)
  *
  * Fluxo otimizado pra menos de 5s por item:
  *   1. Digita REF/código/SKU/nome → ENTER
@@ -397,7 +397,7 @@ export default function LivePdvPage() {
         >
           ▶ Iniciar nova live
         </button>
-        <Link href="/retaguarda" className="text-sm text-slate-400 hover:text-slate-600">
+        <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
       </div>
@@ -408,7 +408,7 @@ export default function LivePdvPage() {
     <div className="min-h-screen bg-slate-100">
       {/* Header */}
       <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
-        <Link href="/retaguarda" className="text-slate-400 hover:text-slate-600">
+        <Link href="/minha-loja" className="text-slate-400 hover:text-slate-600">
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <Zap className="h-5 w-5 text-rose-500" />

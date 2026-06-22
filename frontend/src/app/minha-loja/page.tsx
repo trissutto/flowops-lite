@@ -34,7 +34,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint,
+  Fingerprint, Zap, Radio,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -873,7 +873,7 @@ function openPrintWindow(pickOrderId: string) {
 // card cheia-largura com badge pra ficar impossível de ignorar.
 function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { realignmentPending?: number; shipmentsIncoming?: number }) {
   // 7 cards grandes coloridos — mesmo estilo da retaguarda (/site, /loja, etc.)
-  type Tone = 'teal' | 'rose' | 'orange' | 'purple' | 'amber' | 'sky' | 'green' | 'indigo';
+  type Tone = 'teal' | 'rose' | 'orange' | 'purple' | 'amber' | 'sky' | 'green' | 'indigo' | 'fuchsia';
   const items: Array<{
     href: string;
     icon: any;
@@ -884,6 +884,8 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     badge?: number;
   }> = [
     { href: '/minha-loja/pdv',           icon: ShoppingCart, label: 'PDV',            subtitle: 'Venda',       description: 'Frente de caixa',          tone: 'teal'   },
+    { href: '/minha-loja/live-pdv',      icon: Radio,        label: 'Live',           subtitle: 'Ao vivo',     description: 'Vender na live',           tone: 'fuchsia' },
+    { href: '/minha-loja/live-expedicao',icon: Zap,          label: 'Expedir Live',   subtitle: 'Live',        description: 'Separar e despachar',      tone: 'purple' },
     { href: '/minha-loja/consultar',     icon: Search,       label: 'Consultar',      subtitle: 'Estoque',     description: 'Buscar na rede',           tone: 'rose'   },
     { href: '/minha-loja/historico',     icon: History,      label: 'Transferências', subtitle: 'Histórico',   description: 'Eu pedi · me pediram',     tone: 'orange' },
     { href: '/minha-loja/triagem',       icon: Package,      label: 'Triagem',        subtitle: 'Bipar',       description: 'Distribuir mercadoria',    tone: 'purple' },
@@ -902,6 +904,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     sky:    { from: '#3b82a8', to: '#1f5f80' },
     green:  { from: '#5b9b3e', to: '#3f7029' },
     indigo: { from: '#4f46e5', to: '#312e81' },
+    fuchsia:{ from: '#c026d3', to: '#86198f' },
   };
 
   return (

@@ -26,8 +26,12 @@ export class RealignmentReportController {
 
   @Get('rede-franquia')
   @Header('Cache-Control', 'no-store, no-cache, must-revalidate')
-  async getRedeFranquia(@Query('period') period: string = '90d') {
-    return this.report.getRedeFranquiaSummary(period);
+  async getRedeFranquia(
+    @Query('period') period: string = '90d',
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.report.getRedeFranquiaSummary(period, from, to);
   }
 
   @Get('shipment/:id')

@@ -54,6 +54,23 @@ export class RealignmentReportService {
   }
 
   /**
+   * Resolve o intervalo de datas. Se um período personalizado for informado
+   * (from + to no formato YYYY-MM-DD), usa-o; senão cai no preset.
+   * `from` ancora em 00:00:00 e `to` em 23:59:59.999 do dia escolhido.
+   */
+  private resolveRange(period: string, fromStr?: string, toStr?: string): { from: Date; to: Date } {
+    const valid = (s?: string) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (valid(fromStr) && valid(toStr)) {
+      const from = new Date(`${fromStr}T00:00:00`);
+      const to = new Date(`${toStr}T23:59:59.999`);
+      if (!isNaN(from.getTime()) && !isNaN(to.getTime()) && from <= to) {
+        return { from, to };
+      }
+    }
+    return this.periodToDates(period);
+  }
+
+  /**
    * Gera o relatório completo.
    */
   async getReport(period: string = '90d') {
@@ -354,8 +371,8 @@ export class RealignmentReportService {
    * O fluxo é classificado pela DIREÇÃO DA REMESSA (tipo da loja origem →
    * tipo da loja destino), considerando o que foi ENVIADO no período.
    */
-  async getRedeFranquiaSummary(period: string = '90d') {
-    const { from, to } = this.periodToDates(period);
+  async getRedeFranquiaSummary(period: string = '90d', fromStr?: string, toStr?: string) {
+    const { from, to } = this.resolveRange(period, fromStr, toStr);
     const DIVISOR = 2.5;
 
     // 1. Mapa code→{tipo,name} de TODAS as lojas (inclui inativas, pra não
