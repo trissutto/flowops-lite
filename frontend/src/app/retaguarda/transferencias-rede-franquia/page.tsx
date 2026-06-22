@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Building2,
+  Calendar,
   ChevronDown,
   ChevronRight,
   Download,
@@ -91,18 +92,32 @@ const brl = (n: number) =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const num = (n: number) => n.toLocaleString('pt-BR');
 
+const ymd = (d: Date) => d.toISOString().slice(0, 10);
+
 export default function TransferenciasRedeFranquiaPage() {
   const [period, setPeriod] = useState('90d');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  const isCustom = period === 'custom';
+
   useEffect(() => {
+    // No modo personalizado só busca quando as duas datas estão preenchidas.
+    if (isCustom && (!customFrom || !customTo)) {
+      setLoading(false);
+      return;
+    }
     let alive = true;
     setLoading(true);
     setError(null);
-    api<Summary>(`/transferencias/rede-franquia?period=${period}`)
+    const qs = isCustom
+      ? `from=${customFrom}&to=${customTo}`
+      : `period=${period}`;
+    api<Summary>(`/transferencias/rede-franquia?${qs}`)
       .then((d) => {
         if (alive) setData(d);
       })
@@ -115,7 +130,19 @@ export default function TransferenciasRedeFranquiaPage() {
     return () => {
       alive = false;
     };
-  }, [period]);
+  }, [period, customFrom, customTo, isCustom]);
+
+  /** Ativa o modo personalizado, pré-preenchendo os últimos 30 dias. */
+  function enableCustom() {
+    if (!customFrom || !customTo) {
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - 30);
+      setCustomFrom(ymd(from));
+      setCustomTo(ymd(to));
+    }
+    setPeriod('custom');
+  }
 
   const pairsByFlow = useMemo(() => {
     const map: Record<string, Pair[]> = {
@@ -154,7 +181,8 @@ export default function TransferenciasRedeFranquiaPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transferencias-rede-franquia-${period}.csv`;
+    const suffix = isCustom && data.period ? `${data.period.from}_a_${data.period.to}` : period;
+    a.download = `transferencias-rede-franquia-${suffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -179,7 +207,7 @@ export default function TransferenciasRedeFranquiaPage() {
               Consolidado por tipo de loja — quanto cada categoria enviou pra outra.
             </p>
           </div>
-          <div className="flex items-center gap-2 print:hidden">
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
             <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white">
               {PERIODS.map((p) => (
                 <button
@@ -194,7 +222,34 @@ export default function TransferenciasRedeFranquiaPage() {
                   {p.label}
                 </button>
               ))}
+              <button
+                onClick={enableCustom}
+                className={`inline-flex items-center gap-1 border-l border-slate-300 px-3 py-1.5 text-sm font-medium transition ${
+                  isCustom ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Calendar className="h-4 w-4" /> Personalizado
+              </button>
             </div>
+            {isCustom && (
+              <div className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-2 py-1">
+                <input
+                  type="date"
+                  value={customFrom}
+                  max={customTo || undefined}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+                />
+                <span className="text-sm text-slate-500">até</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  min={customFrom || undefined}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+                />
+              </div>
+            )}
             <button
               onClick={exportCsv}
               disabled={!data}
