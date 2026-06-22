@@ -24,7 +24,7 @@ import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
-  Bot, TrendingUp, Network,
+  Bot, TrendingUp, Network, Zap,
 } from 'lucide-react';
 
 type NavItem = {
@@ -81,6 +81,7 @@ const GROUPS: NavGroup[] = [
     label: 'Instagram / Live',
     color: 'rose',
     items: [
+      { href: '/retaguarda/live-pdv',            label: 'Live Commerce (PDV)', icon: Zap },
       { href: '/retaguarda/instagram-hub',       label: 'Hub Instagram',      icon: Instagram },
       { href: '/retaguarda/dm',                  label: 'DM Inbox Pro',       icon: MessageSquare },
       { href: '/retaguarda/live-pro',            label: 'Live Commerce Pro',  icon: Radio },

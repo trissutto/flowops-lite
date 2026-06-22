@@ -56,6 +56,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { ProductPhotosModule } from './product-photos/product-photos.module';
 import { PushModule } from './push/push.module';
 import { FaturamentoModule } from './faturamento/faturamento.module';
+import { LivePdvModule } from './live-pdv/live-pdv.module';
 
 @Module({
   imports: [
@@ -114,6 +115,7 @@ import { FaturamentoModule } from './faturamento/faturamento.module';
     ProductPhotosModule,
     PushModule,
     FaturamentoModule,
+    LivePdvModule,
     ReportsModule,
   ],
 })
