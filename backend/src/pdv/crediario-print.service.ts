@@ -200,11 +200,16 @@ export class CrediarioPrintService {
   }
 
   // Razão social do beneficiário (vai no campo "A ___ pagar" da promissória).
-  // Empresa juridicamente responsável pela cobrança.
-  private readonly RAZAO_SOCIAL = 'T.O. RISSUTTO EIRELI';
+  // Empresa juridicamente responsável pela cobrança. É UMA entidade pra todas
+  // as lojas (credora do crediário), por isso não é por-loja. Configurável via
+  // env PROMISSORIA_RAZAO_SOCIAL pra não exigir deploy de código se mudar.
+  private readonly RAZAO_SOCIAL =
+    (process.env.PROMISSORIA_RAZAO_SOCIAL || '').trim() || 'T.O. RISSUTTO EIRELI';
   // CNPJ da empresa beneficiária (vai no campo "C.P.F. C.N.P.J." ao lado da
   // razão social — esse campo identifica a EMPRESA que recebe, NÃO o cliente).
-  private readonly CNPJ_BENEFICIARIO = '20.104.813/0001-39';
+  // Configurável via env PROMISSORIA_CNPJ.
+  private readonly CNPJ_BENEFICIARIO =
+    (process.env.PROMISSORIA_CNPJ || '').trim() || '20.104.813/0001-39';
 
   // ═══════════════════════════════════════════════════════════════════════
   // CALIBRAÇÃO — ajuste essas constantes pra alinhar nas folhas Lurd's

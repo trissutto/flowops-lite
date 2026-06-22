@@ -26,6 +26,13 @@ type Config = {
   diasCarencia: number;
   taxaMensalPercent: number;
   enabled: boolean;
+  // Multa + teto de juros
+  multaPercent: number;
+  jurosMaxPercentParcela: number;
+  // Limite de crédito (bloqueio no PDV)
+  limiteEnabled: boolean;
+  limiteMaxParcelasVencidas: number;
+  limiteMaxValorEmAberto: number;
 };
 
 export default function CrediarioJurosConfigPage() {
@@ -36,6 +43,11 @@ export default function CrediarioJurosConfigPage() {
     diasCarencia: 0,
     taxaMensalPercent: 0,
     enabled: false,
+    multaPercent: 0,
+    jurosMaxPercentParcela: 0,
+    limiteEnabled: false,
+    limiteMaxParcelasVencidas: 0,
+    limiteMaxValorEmAberto: 0,
   });
 
   // Simulação ao vivo
@@ -95,9 +107,17 @@ export default function CrediarioJurosConfigPage() {
   const diasN = Number(simDias) || 0;
   const diasComJuros = Math.max(0, diasN - cfg.diasCarencia);
   const jurosDia = (cfg.taxaMensalPercent / 30) / 100;
-  const jurosCalc = cfg.enabled && diasN > cfg.diasCarencia
-    ? Math.round(valorN * jurosDia * diasComJuros * 100) / 100
-    : 0;
+  // Espelha o backend calcJuros: juros diário + multa fixa, limitado pelo teto.
+  let jurosCalc = 0;
+  if (cfg.enabled && diasN > cfg.diasCarencia) {
+    jurosCalc = valorN * jurosDia * diasComJuros;
+    if (cfg.multaPercent > 0) jurosCalc += valorN * (cfg.multaPercent / 100);
+    if (cfg.jurosMaxPercentParcela > 0) {
+      const teto = valorN * (cfg.jurosMaxPercentParcela / 100);
+      if (jurosCalc > teto) jurosCalc = teto;
+    }
+    jurosCalc = Math.round(jurosCalc * 100) / 100;
+  }
   const totalCalc = Math.round((valorN + jurosCalc) * 100) / 100;
   const brl = (n: number) => n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -224,6 +244,106 @@ export default function CrediarioJurosConfigPage() {
             </div>
             <div className="mt-2 text-xs text-gray-500">
               Ao dia: <b>{((cfg.taxaMensalPercent / 30) || 0).toFixed(4)}%</b>
+            </div>
+          </div>
+
+          {/* MULTA + TETO */}
+          <div className="bg-white rounded-2xl shadow-sm p-5">
+            <h2 className="text-lg font-bold text-amber-900 mb-1">Multa e teto de juros</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              <b>Multa</b>: cobrada <b>uma única vez</b> quando a parcela entra em atraso (padrão BR: 2%).
+              <b> Teto</b>: limita o total de juros+multa a uma % da parcela (evita juros maiores que a dívida). <b>0</b> = sem limite.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold uppercase text-gray-700">Multa (%)</label>
+                <input
+                  type="number"
+                  step={0.5}
+                  min={0}
+                  max={100}
+                  value={cfg.multaPercent}
+                  onChange={(e) => setCfg({ ...cfg, multaPercent: Math.max(0, Number(e.target.value || 0)) })}
+                  className="w-full p-3 border-2 rounded-lg text-center text-xl font-bold tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase text-gray-700">Teto juros (% da parcela)</label>
+                <input
+                  type="number"
+                  step={5}
+                  min={0}
+                  max={1000}
+                  value={cfg.jurosMaxPercentParcela}
+                  onChange={(e) => setCfg({ ...cfg, jurosMaxPercentParcela: Math.max(0, Number(e.target.value || 0)) })}
+                  className="w-full p-3 border-2 rounded-lg text-center text-xl font-bold tabular-nums"
+                />
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Ex: teto <b>100</b> = juros+multa nunca passam do valor da parcela.
+            </div>
+          </div>
+
+          {/* LIMITE DE CRÉDITO */}
+          <div className="bg-white rounded-2xl shadow-sm p-5 border-2 border-rose-200">
+            <div className="flex items-start justify-between gap-3 mb-1">
+              <h2 className="text-lg font-bold text-rose-900">Limite de crédito (bloqueio no PDV)</h2>
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold text-xs whitespace-nowrap ${
+                  cfg.limiteEnabled ? 'bg-rose-100 text-rose-800' : 'bg-gray-200 text-gray-700'
+                }`}
+              >
+                <Power size={12} /> {cfg.limiteEnabled ? 'BLOQUEANDO' : 'DESLIGADO'}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">
+              Quando ligado, o PDV <b>bloqueia novo crediário</b> pra cliente acima do limite.
+              A vendedora libera com <b>senha de supervisor</b>. <b>0</b> em um campo = ignora aquele critério.
+            </p>
+
+            <button
+              onClick={() => setCfg({ ...cfg, limiteEnabled: !cfg.limiteEnabled })}
+              className={`w-full p-3 mb-3 rounded-xl border-2 flex items-center justify-between transition ${
+                cfg.limiteEnabled
+                  ? 'bg-rose-50 border-rose-400 text-rose-900'
+                  : 'bg-gray-50 border-gray-300 text-gray-700 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <Power size={16} /> Bloqueio {cfg.limiteEnabled ? 'LIGADO' : 'DESLIGADO'}
+              </div>
+              <div className={`w-11 h-6 rounded-full p-1 transition ${cfg.limiteEnabled ? 'bg-rose-500' : 'bg-gray-300'}`}>
+                <div className={`w-4 h-4 bg-white rounded-full shadow transition-transform ${cfg.limiteEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+              </div>
+            </button>
+
+            <div className={`grid grid-cols-2 gap-3 transition ${cfg.limiteEnabled ? '' : 'opacity-50 pointer-events-none'}`}>
+              <div>
+                <label className="text-xs font-bold uppercase text-gray-700">Máx. parcelas vencidas</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={999}
+                  value={cfg.limiteMaxParcelasVencidas}
+                  onChange={(e) => setCfg({ ...cfg, limiteMaxParcelasVencidas: Math.max(0, Math.floor(Number(e.target.value || 0))) })}
+                  className="w-full p-3 border-2 rounded-lg text-center text-xl font-bold tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase text-gray-700">Máx. em aberto (R$)</label>
+                <input
+                  type="number"
+                  step={50}
+                  min={0}
+                  value={cfg.limiteMaxValorEmAberto}
+                  onChange={(e) => setCfg({ ...cfg, limiteMaxValorEmAberto: Math.max(0, Number(e.target.value || 0)) })}
+                  className="w-full p-3 border-2 rounded-lg text-center text-xl font-bold tabular-nums"
+                />
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Ex: máx <b>3</b> vencidas e <b>R$ 1.000</b> em aberto → acima disso, só com senha de supervisor.
             </div>
           </div>
 

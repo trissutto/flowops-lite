@@ -63,6 +63,24 @@ export interface OpenInstallment {
   obs: string | null;
 }
 
+/**
+ * Nomes de "cliente" que na verdade são cartões/adquirentes/avulso lançados no
+ * Giga (não são pessoas com crediário). Filtrados das listagens de parcelas.
+ * FONTE ÚNICA (antes estava duplicado em 4 pontos). Ancorado em ^...$ — só casa
+ * o nome EXATO, então um cliente real "VISA STORE" NÃO é excluído.
+ * Extensível via env CREDIARIO_EXTRA_CARD_NAMES (lista separada por vírgula).
+ */
+const CARD_NAME_REGEX: RegExp = (() => {
+  const base = 'VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\\s|CREDICARD|CREDI[\\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\\s?PAGO|PIC\\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O';
+  const extra = String(process.env.CREDIARIO_EXTRA_CARD_NAMES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); // escapa regex
+  const all = extra.length ? `${base}|${extra.join('|')}` : base;
+  return new RegExp(`^(${all})$`, 'i');
+})();
+
 @Injectable()
 export class CrediarioBaixaService {
   private readonly logger = new Logger(CrediarioBaixaService.name);
@@ -364,7 +382,7 @@ export class CrediarioBaixaService {
     const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes);
 
     // Filtra cartões pelo nome
-    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+    const cardRegex = CARD_NAME_REGEX;
     const cardCodes = new Set<string>();
     const cm = await this.crediarios.detectClientesTable();
     if (cm && cm.nome && codClientes.length > 0) {
@@ -541,7 +559,7 @@ export class CrediarioBaixaService {
     const result = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
     this.logger.log(`[crediario-baixa] listAllClientes retornou ${result.rows.length} em ${Date.now() - t0}ms`);
 
-    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+    const cardRegex = CARD_NAME_REGEX;
 
     // DEDUP por COD+NOME — antes era só por cod, mas se a tabela tem múltiplos
     // registros com mesmo CODCLIENTE (legado de cadastros antigos, troca de nome,
@@ -623,7 +641,7 @@ export class CrediarioBaixaService {
     const r = await this.erp.runReadOnly(sql, { maxRows: 30, timeoutMs: 8000 });
 
     // Regex pra excluir clientes-cartão
-    const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+    const cardRegex = CARD_NAME_REGEX;
 
     const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
     for (const row of r.rows as any[]) {
@@ -823,7 +841,7 @@ export class CrediarioBaixaService {
         const sql = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${codClientes.length + 100}`;
         try {
           const r = await this.erp.runReadOnly(sql, { maxRows: codClientes.length + 100, timeoutMs: 10000 });
-          const cardRegex = /^(VISANET|VISA|MASTER(CARD)?|AMEX|HIPER(CARD)?|REDESHOP|REDE\s|CREDICARD|CREDI[\s-]?CARD|ELO|DINERS|CABAL|TICKET|SODEXO|VR\s|BANRICOMPRAS|GETNET|CIELO|STONE|PAGSEGURO|MERCADO\s?PAGO|PIC\s?PAY|AVULSO|BALC[ÃA]O|CART[ÃA]O)$/i;
+          const cardRegex = CARD_NAME_REGEX;
           const cardCodes = new Set(
             r.rows.filter((row: any) => cardRegex.test(String(row.nome || '').trim())).map((row: any) => String(row.cod)),
           );

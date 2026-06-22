@@ -228,6 +228,31 @@ function calcularParcelas(total: number, n: number): {
   return { iguais, ultima, qtdIguais: n - 1 };
 }
 
+// Cria as parcelas de crediário no Giga. Se o backend bloquear por LIMITE DE
+// CRÉDITO (403 com "limite"), pede a senha de SUPERVISOR e tenta de novo com
+// overridePassword. Cancelar o prompt propaga o erro original (venda não passa).
+async function postCrediarioComOverride(saleId: string, payload: any): Promise<any> {
+  try {
+    return await api<any>(`/pdv/sales/${saleId}/crediario`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    const ehLimite = /^403/.test(msg) && /limite de cr[eé]dito/i.test(msg);
+    if (!ehLimite || typeof window === 'undefined') throw e;
+    const senha = window.prompt(
+      'Cliente acima do LIMITE DE CRÉDITO.\n\n' +
+        'Digite a senha de SUPERVISOR para liberar o crediário (ou cancele para abortar):',
+    );
+    if (!senha) throw e;
+    return await api<any>(`/pdv/sales/${saleId}/crediario`, {
+      method: 'POST',
+      body: JSON.stringify({ ...payload, overridePassword: senha }),
+    });
+  }
+}
+
 // ===========================================================================
 // ScanBar — barra de bipagem ISOLADA (estado local).
 //
@@ -4210,19 +4235,20 @@ function PaymentModal({
       // CRIA PARCELAS NO GIGA (só se for crediário) — escreve N linhas em movimento
       if (selected === 'crediario' && valorFinanciado > 0) {
         try {
-          const r = await api<any>(`/pdv/sales/${saleId}/crediario`, {
-            method: 'POST',
-            body: JSON.stringify({
-              parcelas,
-              primeiroVencimento: credVencto,
-              entrada: entradaNum,
-              observacao: credObs || undefined,
-            }),
+          const r = await postCrediarioComOverride(saleId, {
+            parcelas,
+            primeiroVencimento: credVencto,
+            entrada: entradaNum,
+            observacao: credObs || undefined,
           });
           toast(
             'success',
-            `${parcelas}× parcela(s) criada(s) no Giga`,
-            `Controle ${r.controle} · ${brl(valorFinanciado)} dividido em ${parcelas}×`,
+            r.idempotent
+              ? `Parcelas já existiam no Giga (controle ${r.controle})`
+              : `${parcelas}× parcela(s) criada(s) no Giga`,
+            r.idempotent
+              ? 'Crediário não foi duplicado.'
+              : `Controle ${r.controle} · ${brl(valorFinanciado)} dividido em ${parcelas}×`,
           );
         } catch (e: any) {
           // Se falhar a criação no Giga, ainda mantém os pagamentos no PDV mas avisa
@@ -4744,19 +4770,20 @@ function PaymentModal({
       const valorFinanciado = Math.max(0, Math.round((valorPraCobrar - entradaNum) * 100) / 100);
       if (valorFinanciado > 0) {
         try {
-          const r = await api<any>(`/pdv/sales/${saleId}/crediario`, {
-            method: 'POST',
-            body: JSON.stringify({
-              parcelas,
-              primeiroVencimento: credVencto,
-              entrada: entradaNum,
-              observacao: credObs || undefined,
-            }),
+          const r = await postCrediarioComOverride(saleId, {
+            parcelas,
+            primeiroVencimento: credVencto,
+            entrada: entradaNum,
+            observacao: credObs || undefined,
           });
           toast(
             'success',
-            `${parcelas}× parcelas criadas no Giga`,
-            `Controle ${r.controle} · ${brl(valorFinanciado)} dividido`,
+            r.idempotent
+              ? `Parcelas já existiam no Giga (controle ${r.controle})`
+              : `${parcelas}× parcelas criadas no Giga`,
+            r.idempotent
+              ? 'Crediário não foi duplicado.'
+              : `Controle ${r.controle} · ${brl(valorFinanciado)} dividido`,
           );
         } catch (e: any) {
           const h = humanizeError(e);
