@@ -5,6 +5,7 @@ import { ErpModule } from '../erp/erp.module';
 import { RoutingModule } from '../routing/routing.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { ProductPhotosModule } from '../product-photos/product-photos.module';
+import { RealignmentModule } from '../realignment/realignment.module';
 import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
 import { LivePdvService } from './live-pdv.service';
@@ -24,6 +25,7 @@ import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
     RoutingModule,
     PagarmeModule,
     ProductPhotosModule,
+    RealignmentModule,
     WebsocketModule,
   ],
   controllers: [LivePdvController],

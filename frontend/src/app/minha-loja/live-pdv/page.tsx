@@ -18,11 +18,8 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Package,
-  Plus,
   QrCode,
   Search,
   ShoppingCart,
@@ -102,6 +99,51 @@ const STATUS_LABEL: Record<string, string> = {
   expired: 'Expirado',
 };
 
+/* ─── Grade (matriz cor × tamanho) ─── */
+const SIZE_LETTER_ORDER = [
+  'PP', 'P', 'M', 'G', 'GG', 'XG', 'XGG', 'EG', 'EGG',
+  'XXG', 'XXGG', '2G', '3G', '4G', '5G', '6G',
+  'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7',
+];
+function sortSizes(a: string, b: string): number {
+  const ua = (a || '').toUpperCase().trim();
+  const ub = (b || '').toUpperCase().trim();
+  const ai = SIZE_LETTER_ORDER.indexOf(ua);
+  const bi = SIZE_LETTER_ORDER.indexOf(ub);
+  if (ai !== -1 && bi !== -1) return ai - bi;
+  if (ai !== -1) return -1;
+  if (bi !== -1) return 1;
+  const na = Number(ua);
+  const nb = Number(ub);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return ua.localeCompare(ub);
+}
+function buildGrade(product: GradeResult) {
+  const cells = product.cells || [];
+  const sizeSet = new Set<string>();
+  const colorSet = new Set<string>();
+  const cellByKey = new Map<string, GradeCell>();
+  const totalsByColor = new Map<string, number>();
+  const totalsBySize = new Map<string, number>();
+  for (const c of cells) {
+    const cor = (c.cor || '—').trim();
+    const tam = (c.tamanho || '—').trim();
+    colorSet.add(cor);
+    sizeSet.add(tam);
+    cellByKey.set(`${cor}|${tam}`, c);
+    totalsByColor.set(cor, (totalsByColor.get(cor) || 0) + c.available);
+    totalsBySize.set(tam, (totalsBySize.get(tam) || 0) + c.available);
+  }
+  const sizes = Array.from(sizeSet).sort(sortSizes);
+  const colors = Array.from(colorSet).sort((a, b) => {
+    const ta = totalsByColor.get(a) || 0;
+    const tb = totalsByColor.get(b) || 0;
+    if (ta !== tb) return tb - ta;
+    return a.localeCompare(b);
+  });
+  return { sizes, colors, cellByKey, totalsByColor, totalsBySize };
+}
+
 export default function LivePdvPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
@@ -112,7 +154,6 @@ export default function LivePdvPage() {
   const [term, setTerm] = useState('');
   const [product, setProduct] = useState<GradeResult | null>(null);
   const [searching, setSearching] = useState(false);
-  const [expandedCell, setExpandedCell] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Cliente / carrinho
@@ -488,62 +529,109 @@ export default function LivePdvPage() {
                   </div>
                 </div>
 
-                {/* Grade */}
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-                  {(product.cells || []).map((cell) => {
-                    const out = cell.available <= 0;
-                    const isOpen = expandedCell === cell.itemKey;
-                    return (
-                      <div key={cell.itemKey} className="rounded-lg border border-slate-200">
-                        <button
-                          onClick={() => clickCell(cell)}
-                          disabled={out || adding === cell.itemKey}
-                          className={`flex w-full flex-col items-start gap-0.5 rounded-t-lg p-2.5 text-left transition ${
-                            out
-                              ? 'cursor-not-allowed bg-slate-50 opacity-50'
-                              : 'bg-white hover:border-rose-300 hover:bg-rose-50'
-                          }`}
-                        >
-                          <div className="flex w-full items-center justify-between">
-                            <span className="font-bold text-slate-800">{cell.cor || '—'}</span>
-                            {adding === cell.itemKey ? (
-                              <Loader2 className="h-4 w-4 animate-spin text-rose-500" />
-                            ) : (
-                              <Plus className={`h-4 w-4 ${out ? 'text-slate-300' : 'text-rose-500'}`} />
-                            )}
-                          </div>
-                          <div className="text-2xl font-extrabold leading-none text-slate-900">
-                            {cell.tamanho || '—'}
-                          </div>
-                          <div
-                            className={`text-xs font-semibold ${
-                              cell.available <= 2 ? 'text-amber-600' : 'text-emerald-600'
-                            }`}
-                          >
-                            {cell.available} disp.
-                          </div>
-                        </button>
-                        <button
-                          onClick={() => setExpandedCell(isOpen ? null : cell.itemKey)}
-                          className="flex w-full items-center justify-center gap-1 border-t border-slate-100 py-1 text-[11px] text-slate-400 hover:text-slate-600"
-                        >
-                          {isOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                          por loja
-                        </button>
-                        {isOpen && (
-                          <div className="space-y-0.5 border-t border-slate-100 px-2.5 py-1.5 text-[11px] text-slate-600">
-                            {cell.perStore.length === 0 && <div className="text-slate-400">sem estoque</div>}
-                            {cell.perStore.map((ps) => (
-                              <div key={ps.storeCode} className="flex justify-between">
-                                <span className="truncate">{ps.storeName}</span>
-                                <span className="font-semibold">{ps.qty}</span>
-                              </div>
+                {/* Grade — matriz cor × tamanho (clique na célula adiciona ao carrinho) */}
+                {(() => {
+                  const g = buildGrade(product);
+                  if (!g.colors.length) {
+                    return <div className="text-sm text-slate-400">Sem grade disponível.</div>;
+                  }
+                  return (
+                    <div className="overflow-x-auto rounded-lg border border-slate-200">
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 bg-slate-100">
+                            <th className="sticky left-0 z-10 min-w-[90px] bg-slate-100 px-3 py-2 text-left font-bold text-slate-700">
+                              Cor
+                            </th>
+                            {g.sizes.map((s) => (
+                              <th key={s} className="min-w-[48px] px-2 py-2 text-center font-bold text-slate-700">
+                                {s}
+                              </th>
                             ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                            <th className="min-w-[48px] bg-slate-200 px-2 py-2 text-center font-bold text-slate-700">
+                              Total
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.colors.map((cor) => {
+                            const colorTotal = g.totalsByColor.get(cor) || 0;
+                            return (
+                              <tr key={cor} className="border-b border-slate-100 hover:bg-slate-50">
+                                <td className="sticky left-0 z-10 border-r border-slate-100 bg-white px-3 py-2 font-semibold text-slate-800">
+                                  <span className="flex items-center gap-2">
+                                    <span className={`h-2 w-2 rounded-full ${colorTotal > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                    <span className="max-w-[110px] truncate" title={cor}>{cor}</span>
+                                  </span>
+                                </td>
+                                {g.sizes.map((s) => {
+                                  const cell = g.cellByKey.get(`${cor}|${s}`);
+                                  const qty = cell?.available ?? 0;
+                                  const busy = !!cell && adding === cell.itemKey;
+                                  const low = qty > 0 && qty <= 2;
+                                  const title =
+                                    cell && cell.perStore.length
+                                      ? cell.perStore.map((ps) => `${ps.storeName}: ${ps.qty}`).join('  ·  ')
+                                      : 'Sem estoque';
+                                  return (
+                                    <td key={s} className="p-0.5 text-center">
+                                      <button
+                                        type="button"
+                                        disabled={!cell || qty <= 0 || busy}
+                                        onClick={() => cell && clickCell(cell)}
+                                        title={title}
+                                        className={`mx-auto flex h-10 w-full items-center justify-center rounded font-extrabold transition ${
+                                          qty <= 0
+                                            ? 'cursor-not-allowed bg-slate-50 text-slate-300'
+                                            : low
+                                            ? 'border border-amber-300 bg-amber-100 text-amber-900 hover:bg-amber-200 active:scale-95'
+                                            : 'border border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200 active:scale-95'
+                                        }`}
+                                      >
+                                        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : qty > 0 ? qty : '—'}
+                                      </button>
+                                    </td>
+                                  );
+                                })}
+                                <td className={`bg-slate-50 px-2 py-2 text-center font-bold ${colorTotal > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                  {colorTotal}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="border-t-2 border-slate-300 bg-slate-100">
+                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-slate-100 px-3 py-2 font-bold text-slate-700">
+                              Total
+                            </td>
+                            {g.sizes.map((s) => {
+                              const t = g.totalsBySize.get(s) || 0;
+                              return (
+                                <td key={s} className={`px-2 py-2 text-center font-bold ${t > 0 ? 'text-slate-800' : 'text-slate-400'}`}>
+                                  {t}
+                                </td>
+                              );
+                            })}
+                            <td className="bg-slate-200 px-2 py-2 text-center font-extrabold text-emerald-700">
+                              {product.totalRede}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+
+                <div className="mt-2 flex flex-wrap items-center gap-3 px-1 text-[11px] text-slate-500">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-3 w-3 rounded border border-emerald-300 bg-emerald-100" /> disponível
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-3 w-3 rounded border border-amber-300 bg-amber-100" /> acabando (≤2)
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-3 w-3 rounded border border-slate-200 bg-slate-50" /> sem estoque
+                  </span>
+                  <span>· clique na célula pra adicionar · passe o mouse pra ver por loja</span>
                 </div>
               </div>
             )}
