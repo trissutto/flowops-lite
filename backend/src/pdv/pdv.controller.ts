@@ -1354,6 +1354,52 @@ export class PdvController {
     };
   }
 
+  /**
+   * GET /pdv/sales/crediario-orfaos?dias=10
+   * Lista vendas que TEM pagamento method='crediario' no PdvSalePayment mas
+   * NAO tem parcelas correspondentes no Giga (movimento).
+   * Usado pra identificar vendas perdidas pelo bug do sumPaidValue.
+   */
+  @Get('sales/crediario-orfaos')
+  async listarCrediariosOrfaos(@Query('dias') diasQ?: string) {
+    const dias = Math.min(60, Math.max(1, Number(diasQ) || 10));
+    const since = new Date(Date.now() - dias * 86400000);
+    const vendas = await (this.prisma as any).pdvSale.findMany({
+      where: {
+        status: 'finalized',
+        createdAt: { gte: since },
+        payments: { some: { method: 'crediario' } },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        total: true,
+        storeCode: true,
+        customerName: true,
+        customerCpf: true,
+        payments: { select: { method: true, valor: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      ok: true,
+      dias,
+      total: vendas.length,
+      atencao: 'cruze cada venda manualmente com o Giga (modulo movimento) — esta lista mostra vendas com crediario REGISTRADO no PDV, voce precisa conferir caso a caso se as parcelas existem no Giga.',
+      vendas: vendas.map((v: any) => ({
+        id: v.id,
+        numero: v.id.slice(-6).toUpperCase(),
+        data: v.createdAt,
+        loja: v.storeCode,
+        cliente: v.customerName || '-',
+        cpf: v.customerCpf || '-',
+        total: v.total,
+        valorCrediario: v.payments.filter((p: any) => p.method === 'crediario').reduce((s: number, p: any) => s + (p.valor || 0), 0),
+        valorOutros: v.payments.filter((p: any) => p.method !== 'crediario').reduce((s: number, p: any) => s + (p.valor || 0), 0),
+      })),
+    };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // IMPRESSÃO — Promissórias e Carnê pré-impressos da Lurd's
   // ═══════════════════════════════════════════════════════════════════════
