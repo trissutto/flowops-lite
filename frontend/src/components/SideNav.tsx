@@ -24,7 +24,7 @@ import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
-  Bot, TrendingUp,
+  Bot, TrendingUp, Network,
 } from 'lucide-react';
 
 type NavItem = {
@@ -73,6 +73,7 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/diagnostico-erp', label: 'Diagnóstico ERP',  icon: Database },
       { href: '/retaguarda/auditoria-ncm',         label: 'Auditoria NCM',          icon: FileSearch },
       { href: '/retaguarda/transferencias-report', label: 'Transferências (relatório)', icon: TrendingUp },
+      { href: '/retaguarda/transferencias-rede-franquia', label: 'Transferências REDE × Franquia', icon: Network },
     ],
   },
   {
