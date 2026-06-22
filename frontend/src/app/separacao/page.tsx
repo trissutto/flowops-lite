@@ -1759,6 +1759,13 @@ function CarrinhosTab() {
   const [selected, setSelected] = useState<CarrinhoAB | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  // Auto-refresh a cada 60s pra capturar carrinhos novos do site
+  useEffect(() => {
+    const t = setInterval(() => { load(); }, 60000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dias, statusF, search]);
 
   async function openCart(c: CarrinhoAB) {
     setSelected(c);
@@ -1784,10 +1791,13 @@ function CarrinhosTab() {
       const qsList = new URLSearchParams({ since, per_page: '200' });
       if (sParam) qsList.set('status', sParam);
       if (search) qsList.set('search', search);
+      // Cache-bust pra forcar request fresh (Vercel/CDN/browser cache)
+      qsList.set('_t', String(Date.now()));
       const [listResp, statsResp] = await Promise.all([
         api<ListResp>(`/abandoned-carts?${qsList}`).catch((e) => ({ ok: false, error: e?.message } as ListResp)),
-        api<any>(`/abandoned-carts/stats?since=${since}`).catch(() => null),
+        api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
       ]);
+      setLastFetch(new Date());
       if ((listResp as any)?.ok === false || (listResp as any)?.error) {
         setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
         setItems([]);
@@ -1896,7 +1906,7 @@ function CarrinhosTab() {
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar nome, email ou telefone..." className="flex-1 min-w-[200px] px-3 py-2 border-2 rounded text-sm" />
         <button onClick={load} className="px-3 py-2 border-2 rounded text-sm font-bold bg-white hover:bg-slate-50">Atualizar</button>
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
 
       {loading ? (
