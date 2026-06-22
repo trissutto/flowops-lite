@@ -1277,7 +1277,8 @@ export class PdvController {
     // FIX CRITICO (jun/2026): desconta TAMBEM pagamentos ja registrados na venda
     // (PIX, dinheiro, cartao). Antes: sale.total - entrada (ignorava PIX em split misto)
     // Caso real: venda 2968, PIX 1068, crediario virava 2968/6=494 ao inves de 1900/6=316
-    const jaPago = Math.round((await this.svc.sumPaidValue(saleId)) * 100) / 100;
+    // FIX: exclui 'crediario' do soma pra nao contar o proprio payment que o frontend criou ANTES de chamar este endpoint.
+    const jaPago = Math.round((await this.svc.sumPaidValue(saleId, ['crediario'])) * 100) / 100;
     const valorFinanciado = Math.round((sale.total - entrada - jaPago) * 100) / 100;
     if (valorFinanciado <= 0) {
       throw new BadRequestException(
