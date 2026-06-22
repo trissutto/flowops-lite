@@ -4,6 +4,7 @@ import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
+import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 import type { StoreInput, StockEntry } from '../routing/types';
 
@@ -35,6 +36,7 @@ export class LivePdvService {
     private readonly routing: RoutingEngine,
     private readonly pagarme: PagarmeService,
     private readonly photos: ProductPhotosService,
+    private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
   ) {}
 
@@ -202,7 +204,10 @@ export class LivePdvService {
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
     const detailed = await this.erp.getStockBySkusDetailed(codigos);
-    const prices = await this.erp.getProductPricesBySkus(codigos);
+    // Preço pelo serviço do relatório: trata VENDAUN como REAIS (correto p/ Lurd's).
+    const prices = await this.pricing.getPricesByCodigos(codigos);
+    const refPriceMap = await this.pricing.getPricesByRefs([ref]);
+    const refPrice = refPriceMap.get(ref) || 0;
     const storesMap = await this.storesMap();
 
     // 3) Reservas ativas pra descontar.
@@ -270,7 +275,7 @@ export class LivePdvService {
         cor: c.cor,
         tamanho: c.tamanho,
         codigos: c.codigos,
-        priceCents: c.priceCents,
+        priceCents: c.priceCents || this.reaisToCents(refPrice),
         available,
         perStore,
       };
@@ -282,7 +287,7 @@ export class LivePdvService {
       return this.norm(a.tamanho).localeCompare(this.norm(b.tamanho), undefined, { numeric: true });
     });
 
-    const priceCents = cells.find((c) => c.priceCents > 0)?.priceCents || 0;
+    const priceCents = cells.find((c) => c.priceCents > 0)?.priceCents || this.reaisToCents(refPrice);
     const photoUrl =
       (cors.length ? photoBatch[`${this.norm(ref)}|${this.norm(cors[0])}`] : null) ||
       genericPhoto?.url ||
@@ -462,11 +467,15 @@ export class LivePdvService {
     }
     const chosen = result.assignments[0];
 
-    // Preço
+    // Preço (VENDAUN em reais, via serviço do relatório) com fallback por REF
     const priceMap = bestCodigo
-      ? await this.erp.getProductPricesBySkus([bestCodigo])
+      ? await this.pricing.getPricesByCodigos([bestCodigo])
       : new Map<string, number>();
-    const priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
+    let priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
+    if (priceReais === 0) {
+      const refPriceMap = await this.pricing.getPricesByRefs([ref]);
+      priceReais = refPriceMap.get(ref) || 0;
+    }
     const priceCents = this.reaisToCents(priceReais);
 
     // Descrição
