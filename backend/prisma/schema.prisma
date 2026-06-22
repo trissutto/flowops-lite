@@ -3209,3 +3209,115 @@ model WincredSyncState {
 
   @@map("wincred_sync_state")
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE COMMERCE (operador) — módulo "Live PDV"
+//
+// Diferente do módulo Live/Instagram (orientado a comentários + estoque
+// virtual). Aqui a APRESENTADORA opera ao vivo: busca REF, clica no tam/cor,
+// identifica a cliente e reserva contra o ESTOQUE REAL CONSOLIDADO da rede.
+//
+// Fluxo:
+//   1. Sessão da live aberta (loja da live = Anália Franco por padrão).
+//   2. Operadora busca produto e clica numa célula da grade → cria LivePdvItem
+//      (reserva com TTL). A loja de ORIGEM é escolhida automaticamente pelo
+//      RoutingEngine (maior estoque → folga → prioridade → proximidade).
+//   3. Reserva expira sozinha (cron) se não pagar dentro do TTL.
+//   4. Pagamento PIX (Pagar.me/PagBank) confirma → itens viram 'paid' e
+//      geram ordem de separação pra cada loja de origem.
+//   5. Loja origem separa/despacha → cria TransferOrder (tipo LIVE) origem→
+//      loja-da-live + InterStoreObligation (÷2,5) pra conciliação contábil.
+// ═══════════════════════════════════════════════════════════════════════════
+model LivePdvSession {
+  id                String   @id @default(uuid())
+  title             String
+  status            String   @default("live")          // scheduled | live | ended
+  liveStoreCode     String   @map("live_store_code")    // loja "dona" da venda (Anália Franco)
+  liveStoreName     String   @map("live_store_name")
+  reservationTtlMin Int      @default(30) @map("reservation_ttl_min")
+  startedAt         DateTime? @map("started_at")
+  endedAt           DateTime? @map("ended_at")
+  createdByUserId   String?  @map("created_by_user_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  carts             LivePdvCart[]
+  items             LivePdvItem[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@map("live_pdv_sessions")
+}
+
+model LivePdvCart {
+  id                String   @id @default(uuid())
+  sessionId         String   @map("session_id")
+  customerId        String?  @map("customer_id")        // FK lógico p/ Customer (sem relação p/ não tocar Customer)
+  customerName      String   @map("customer_name")
+  customerPhone     String   @map("customer_phone")
+  customerInstagram String?  @map("customer_instagram")
+  customerCpf       String?  @map("customer_cpf")
+  customerEmail     String?  @map("customer_email")
+  customerCep       String?  @map("customer_cep")
+  // open | awaiting_payment | paid | separating | shipped | delivered | cancelled
+  status            String   @default("open")
+  subtotalCents     Int      @default(0) @map("subtotal_cents")
+  freteCents        Int      @default(0) @map("frete_cents")
+  totalCents        Int      @default(0) @map("total_cents")
+  paymentMethod     String?  @map("payment_method")     // pix
+  pagarmeOrderId    String?  @map("pagarme_order_id")
+  qrCodeText        String?  @map("qr_code_text")        @db.Text
+  qrCodeImageUrl    String?  @map("qr_code_image_url")   @db.Text
+  paymentExpiresAt  DateTime? @map("payment_expires_at")
+  paidAt            DateTime? @map("paid_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  session           LivePdvSession @relation(fields: [sessionId], references: [id])
+  items             LivePdvItem[]
+
+  @@index([sessionId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("live_pdv_carts")
+}
+
+model LivePdvItem {
+  id                String   @id @default(uuid())
+  cartId            String   @map("cart_id")
+  sessionId         String   @map("session_id")
+  refCode           String   @map("ref_code")
+  itemKey           String   @map("item_key")           // REF|COR|TAM normalizado — chave de reserva
+  codigoBipado      String?  @map("codigo_bipado")       // CODIGO Giga resolvido (baixa de estoque sem ambiguidade)
+  descricao         String?
+  cor               String?
+  tamanho           String?
+  qty               Int      @default(1)
+  priceCents        Int      @map("price_cents")
+  custoCents        Int      @map("custo_cents")         // priceCents / 2.5 (valor de custo p/ conciliação)
+  originStoreCode   String   @map("origin_store_code")
+  originStoreName   String   @map("origin_store_name")
+  originManual      Boolean  @default(false) @map("origin_manual")  // supervisor trocou a loja manualmente
+  // reserved | paid | separating | shipped | delivered | cancelled | expired
+  status            String   @default("reserved")
+  reservedAt        DateTime @default(now()) @map("reserved_at")
+  expiresAt         DateTime @map("expires_at")
+  paidAt            DateTime? @map("paid_at")
+  separatedAt       DateTime? @map("separated_at")
+  shippedAt         DateTime? @map("shipped_at")
+  deliveredAt       DateTime? @map("delivered_at")
+  trackingCode      String?  @map("tracking_code")
+  transferOrderId   String?  @map("transfer_order_id")   // transferência interna gerada no despacho
+  obligationId      String?  @map("obligation_id")        // obrigação intercompany gerada
+  cancelledAt       DateTime? @map("cancelled_at")
+  cancelReason      String?  @map("cancel_reason")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  cart              LivePdvCart    @relation(fields: [cartId], references: [id])
+  session           LivePdvSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId, status])
+  @@index([itemKey, status])
+  @@index([originStoreCode, status])
+  @@index([cartId])
+  @@map("live_pdv_items")
+}
