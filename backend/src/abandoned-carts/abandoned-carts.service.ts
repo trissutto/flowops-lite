@@ -105,6 +105,32 @@ export class AbandonedCartsService {
     return !r || r.ok === false;
   }
 
+  /**
+   * Achata qualquer formato de stats pras chaves PLANAS que a tela lê.
+   * O plugin/WC pode mandar aninhado (by_status.abandoned.qty/total) — a tela
+   * lê plano (stats.abandoned). Sem isso, os cards ficavam 0 mesmo com lista cheia.
+   */
+  private normalizeStats(s: any): any {
+    if (!s || typeof s !== 'object') return s;
+    const by = s.by_status || {};
+    const pick = (...vs: any[]): number => {
+      for (const v of vs) if (v !== undefined && v !== null) return Number(v) || 0;
+      return 0;
+    };
+    const ab = by.abandoned || {};
+    const rec = by.completed || by.recovered || {};
+    const lo = by.lost || {};
+    return {
+      ...s,
+      abandoned: pick(s.abandoned, ab.qty, ab.count),
+      recovered: pick(s.recovered, s.completed, rec.qty, rec.count),
+      lost: pick(s.lost, lo.qty, lo.count),
+      total_abandoned_value: pick(s.total_abandoned_value, ab.total, ab.value),
+      total_recovered_value: pick(s.total_recovered_value, rec.total, rec.value),
+      recovery_rate: pick(s.recovery_rate),
+    };
+  }
+
   async list(params: {
     page?: number;
     perPage?: number;
@@ -149,26 +175,19 @@ export class AbandonedCartsService {
 
   async stats(since?: string) {
     const primary = await this.call<any>('/flowops/v1/abandoned-carts/stats', { since });
-    if (!this.isFailed(primary)) return primary;
+    // Mesmo quando o plugin responde, achata o formato pras chaves planas que a
+    // tela lê — era esse o motivo dos cards ficarem 0 com a lista cheia.
+    if (!this.isFailed(primary)) return this.normalizeStats(primary);
 
-    // Fallback WooCommerce — normaliza pro mesmo shape PLANO que a tela espera
-    // (stats?.abandoned, stats?.total_abandoned_value, etc).
     this.logger.warn(
       `[carrinhos] plugin WP falhou nas STATS, tentando fallback WooCommerce: ${(primary as any)?.error ?? ''}`,
     );
     const fb: any = await this.statsWcPending(since);
     if (this.isFailed(fb)) return primary; // mantém o erro do plugin (mais informativo)
 
-    const by = fb.by_status || {};
     return {
-      ok: true,
+      ...this.normalizeStats(fb),
       source: 'woocommerce-fallback',
-      abandoned: by.abandoned?.qty ?? 0,
-      recovered: by.completed?.qty ?? 0,
-      lost: by.lost?.qty ?? 0,
-      total_abandoned_value: by.abandoned?.total ?? 0,
-      total_recovered_value: by.completed?.total ?? 0,
-      recovery_rate: fb.recovery_rate ?? 0,
       warning: fb.warning,
       pluginError: (primary as any)?.error,
     };

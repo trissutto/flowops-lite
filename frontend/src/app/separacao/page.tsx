@@ -1813,8 +1813,22 @@ function CarrinhosTab() {
           !!(listResp as any)?.pluginError;
         setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais via WooCommerce — o plugin de carrinhos do site está fora do ar.') : null);
       }
-      const st = (statsResp as any)?.stats || (statsResp as any) || null;
-      setStats(st);
+      // Normaliza: o plugin/WC pode mandar PLANO (abandoned) ou ANINHADO
+      // (by_status.abandoned.qty/total). A tela lê plano — então achatamos aqui.
+      const raw: any = (statsResp as any)?.stats || (statsResp as any) || {};
+      const by = raw.by_status || {};
+      const pick = (...vs: any[]) => {
+        for (const v of vs) if (v !== undefined && v !== null) return Number(v) || 0;
+        return 0;
+      };
+      setStats({
+        abandoned: pick(raw.abandoned, by.abandoned?.qty, by.abandoned?.count),
+        recovered: pick(raw.recovered, raw.completed, by.completed?.qty, by.recovered?.qty),
+        lost: pick(raw.lost, by.lost?.qty, by.lost?.count),
+        total_abandoned_value: pick(raw.total_abandoned_value, by.abandoned?.total, by.abandoned?.value),
+        total_recovered_value: pick(raw.total_recovered_value, by.completed?.total, by.recovered?.total),
+        recovery_rate: pick(raw.recovery_rate),
+      });
     } catch (e: any) {
       setErro(e?.message || 'Erro de rede');
       setItems([]);
@@ -1855,6 +1869,19 @@ function CarrinhosTab() {
     return (it.email?.toLowerCase().includes(q) || nome.includes(q) || it.phone?.includes(q));
   });
 
+  // Safety-net: se o endpoint de stats vier sem os abandonados (formato divergente),
+  // deriva dos próprios itens carregados — assim o card NUNCA fica 0 com lista cheia.
+  const itensAbandonados = items.filter((c) => {
+    const st = String(c.order_status || c.status || 'abandoned').toLowerCase();
+    return st === 'abandoned' || st === '';
+  });
+  const valorItensAb = itensAbandonados.reduce(
+    (s, c) => s + Number(c.total ?? c.cart_total ?? c.cart_total_brl ?? 0),
+    0,
+  );
+  const abCount = stats?.abandoned ? stats.abandoned : itensAbandonados.length;
+  const abValue = stats?.total_abandoned_value ? stats.total_abandoned_value : valorItensAb;
+
   return (
     <div className="space-y-3">
       {erro && (
@@ -1877,8 +1904,8 @@ function CarrinhosTab() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
         <div className="border-2 border-rose-300 bg-rose-50 rounded-lg p-3">
           <div className="text-[10px] font-bold uppercase text-rose-700">Abandonados</div>
-          <div className="text-2xl font-black tabular-nums text-rose-800">{stats?.abandoned ?? 0}</div>
-          <div className="text-[11px] text-rose-700">{BRL(stats?.total_abandoned_value ?? 0)}</div>
+          <div className="text-2xl font-black tabular-nums text-rose-800">{abCount}</div>
+          <div className="text-[11px] text-rose-700">{BRL(abValue)}</div>
         </div>
         <div className="border-2 border-emerald-300 bg-emerald-50 rounded-lg p-3">
           <div className="text-[10px] font-bold uppercase text-emerald-700">Recuperados</div>
@@ -1892,7 +1919,7 @@ function CarrinhosTab() {
         </div>
         <div className="border-2 border-amber-300 bg-amber-50 rounded-lg p-3">
           <div className="text-[10px] font-bold uppercase text-amber-700">Receita Pendente</div>
-          <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(stats?.total_abandoned_value ?? 0)}</div>
+          <div className="text-2xl font-black tabular-nums text-amber-800">{BRL(abValue)}</div>
           <div className="text-[11px] text-amber-700">se nada recuperar</div>
         </div>
       </div>
