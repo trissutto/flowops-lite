@@ -5813,8 +5813,8 @@ const CpfNaNotaInput = React.forwardRef<
 
   // Salva diretamente um CPF passado por parâmetro (versão pra debounce/flush)
   async function salvarCpfDireto(cpfLimpo: string, opts?: { silent?: boolean }): Promise<boolean> {
-    if (cpfLimpo.length !== 11) {
-      if (!opts?.silent) toast('error', 'CPF inválido', 'Digita os 11 dígitos do CPF');
+    if (cpfLimpo.length !== 11 && cpfLimpo.length !== 14) {
+      if (!opts?.silent) toast('error', 'Documento invalido', 'Digite 11 digitos (CPF) ou 14 digitos (CNPJ)');
       return false;
     }
     if (cpfLimpo === lastSavedCpf) return true; // já salvo, não precisa
@@ -5848,7 +5848,7 @@ const CpfNaNotaInput = React.forwardRef<
   // Quando vendedora digita o 11º dígito, salva sozinho (sem precisar clicar Salvar)
   useEffect(() => {
     const cpfLimpo = cpfInput.replace(/\D/g, '');
-    if (cpfLimpo.length !== 11) return;
+    if (cpfLimpo.length !== 11 && cpfLimpo.length !== 14) return;
     if (cpfLimpo === lastSavedCpf) return;
     const t = setTimeout(() => {
       salvarCpfDireto(cpfLimpo, { silent: false });
@@ -5861,11 +5861,11 @@ const CpfNaNotaInput = React.forwardRef<
   React.useImperativeHandle(ref, () => ({
     hasUnsavedCpf: () => {
       const cpfLimpo = cpfInput.replace(/\D/g, '');
-      return editing && cpfLimpo.length === 11 && cpfLimpo !== lastSavedCpf;
+      return editing && (cpfLimpo.length === 11 || cpfLimpo.length === 14) && cpfLimpo !== lastSavedCpf;
     },
     flushPendingSave: async () => {
       const cpfLimpo = cpfInput.replace(/\D/g, '');
-      if (cpfLimpo.length !== 11 || cpfLimpo === lastSavedCpf) return false;
+      if ((cpfLimpo.length !== 11 && cpfLimpo.length !== 14) || cpfLimpo === lastSavedCpf) return false;
       return await salvarCpfDireto(cpfLimpo, { silent: true });
     },
   }), [cpfInput, editing, lastSavedCpf]);

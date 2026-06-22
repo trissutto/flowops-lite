@@ -269,9 +269,16 @@ export class NfceService {
     })();
     const items = sale.items as any[];
 
-    const dest = sale.customerCpf
-      ? `<dest><CPF>${sale.customerCpf.replace(/\D/g, '')}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`
-      : '';
+    // CPF tem 11 digitos, CNPJ tem 14. SEFAZ rejeita CNPJ na tag <CPF>.
+    const docDest = (sale.customerCpf || '').replace(/\D/g, '');
+    let dest = '';
+    if (docDest.length === 11) {
+      dest = `<dest><CPF>${docDest}</CPF><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+    } else if (docDest.length === 14) {
+      dest = `<dest><CNPJ>${docDest}</CNPJ><xNome>${this.esc(sale.customerName || 'CONSUMIDOR')}</xNome><indIEDest>9</indIEDest></dest>`;
+    } else if (docDest.length > 0) {
+      this.logger.warn(`[nfce] customerCpf com ${docDest.length} digitos invalidos: ${docDest}. Emitindo sem destinatario.`);
+    }
 
     // ─── Distribuição de desconto nos itens ───
     // SEFAZ exige que vDesc(total) = SOMA dos vDesc(por item) (cStat 537).
