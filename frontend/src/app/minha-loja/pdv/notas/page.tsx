@@ -78,6 +78,57 @@ export default function NotasEmitidasPage() {
   const [cancelando, setCancelando] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  // Corrigir & reemitir (notas rejeitadas)
+  const [fixTarget, setFixTarget] = useState<NfceRow | null>(null);
+  const [fixDoc, setFixDoc] = useState('');
+  const [fixName, setFixName] = useState('');
+  const [fixSaving, setFixSaving] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const [fixResult, setFixResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  function abrirCorrecao(r: NfceRow) {
+    setFixTarget(r);
+    setFixDoc((r.customerCpf || '').replace(/\D/g, ''));
+    setFixName(r.customerName || '');
+    setFixError(null);
+    setFixResult(null);
+  }
+
+  async function executarReemissao() {
+    if (!fixTarget) return;
+    const doc = fixDoc.replace(/\D/g, '');
+    if (doc.length !== 11 && doc.length !== 14) {
+      setFixError('Documento inválido — informe 11 dígitos (CPF) ou 14 (CNPJ).');
+      return;
+    }
+    setFixSaving(true);
+    setFixError(null);
+    setFixResult(null);
+    try {
+      // 1) Corrige o documento (e nome) da venda. Permitido porque a NFC-e
+      //    está rejeitada (ainda não autorizada pela SEFAZ).
+      await api(`/pdv/sales/${fixTarget.id}/customer`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cpf: doc, ...(fixName.trim() ? { name: fixName.trim() } : {}) }),
+      });
+      // 2) Reemite a NFC-e (gera novo número e transmite pra SEFAZ).
+      const r = await api<any>(`/pdv/sales/${fixTarget.id}/nfce`, { method: 'POST' });
+      if (r?.status === 'authorized') {
+        setFixResult({ ok: true, msg: `NFC-e ${r.numero || ''} autorizada!` });
+        await carregar();
+      } else {
+        setFixResult({
+          ok: false,
+          msg: r?.motivo || `Status: ${r?.status || 'rejeitada'} — confira os dados e tente de novo.`,
+        });
+      }
+    } catch (e: any) {
+      setFixError(e?.message || String(e));
+    } finally {
+      setFixSaving(false);
+    }
+  }
+
   const carregar = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -326,6 +377,17 @@ export default function NotasEmitidasPage() {
                 <td className="p-2 text-xs">{formatDate(r.nfceAutorizadaEm)}</td>
                 <td className="p-2">
                   <div className="flex gap-1 justify-end items-center">
+                    {/* Corrigir CPF/CNPJ e reemitir — só pra rejeitadas */}
+                    {(r.nfceStatus === 'rejected' || r.nfceStatus === 'error') && (
+                      <button
+                        onClick={() => abrirCorrecao(r)}
+                        className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-xs font-bold border border-amber-300 flex items-center gap-1"
+                        title="Corrigir CPF/CNPJ do cliente e reemitir a NFC-e"
+                      >
+                        <AlertCircle className="w-3 h-3" />
+                        Corrigir &amp; reemitir
+                      </button>
+                    )}
                     {/* Reimprimir NFC-e (cupom fiscal) — só pra autorizadas */}
                     {r.nfceStatus === 'authorized' && r.nfceChave && (
                       <button
@@ -410,6 +472,77 @@ export default function NotasEmitidasPage() {
                 className="flex-1 px-3 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold rounded text-sm flex items-center justify-center gap-2"
               >
                 {cancelando ? <><Loader2 className="w-4 h-4 animate-spin" /> Cancelando…</> : <><Check className="w-4 h-4" /> Confirmar</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Corrigir & Reemitir (notas rejeitadas) */}
+      {fixTarget && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-600" /> Corrigir &amp; reemitir
+              </h3>
+              <button onClick={() => setFixTarget(null)} disabled={fixSaving}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="bg-slate-50 rounded p-2 text-sm space-y-0.5">
+              <div className="flex justify-between"><span>Loja:</span><b>{fixTarget.storeName || fixTarget.storeCode}</b></div>
+              <div className="flex justify-between"><span>Valor:</span><b>{brl(fixTarget.total)}</b></div>
+              <div className="flex justify-between"><span>Doc. atual:</span><b className="font-mono">{fixTarget.customerCpf || '—'}</b></div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900">
+              A nota foi <b>rejeitada</b> pela SEFAZ. Corrija o <b>CPF</b> (11 díg.) ou <b>CNPJ</b> (14 díg.) do cliente e reemita. Gera um novo número.
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-700 uppercase block mb-1">CPF / CNPJ do cliente</label>
+              <input
+                value={fixDoc}
+                onChange={(e) => setFixDoc(e.target.value)}
+                inputMode="numeric"
+                maxLength={18}
+                placeholder="Só números"
+                className="w-full border rounded p-2 text-sm font-mono"
+              />
+              <div className="text-[10px] text-slate-500 mt-0.5">
+                {fixDoc.replace(/\D/g, '').length} dígitos — precisa ser 11 (CPF) ou 14 (CNPJ)
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Nome / razão social (opcional)</label>
+              <input
+                value={fixName}
+                onChange={(e) => setFixName(e.target.value)}
+                placeholder="Nome do cliente na nota"
+                className="w-full border rounded p-2 text-sm"
+              />
+            </div>
+            {fixError && (
+              <div className="bg-rose-50 border border-rose-300 rounded p-2 text-xs text-rose-800">{fixError}</div>
+            )}
+            {fixResult && (
+              <div className={`rounded p-2 text-xs border ${fixResult.ok ? 'bg-emerald-50 border-emerald-300 text-emerald-800' : 'bg-rose-50 border-rose-300 text-rose-800'}`}>
+                {fixResult.ok ? '✅ ' : '❌ '}{fixResult.msg}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setFixTarget(null)}
+                disabled={fixSaving}
+                className="flex-1 px-3 py-2 border rounded text-sm"
+              >
+                {fixResult?.ok ? 'Fechar' : 'Voltar'}
+              </button>
+              <button
+                onClick={executarReemissao}
+                disabled={fixSaving || ![11, 14].includes(fixDoc.replace(/\D/g, '').length) || (fixResult?.ok ?? false)}
+                className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold rounded text-sm flex items-center justify-center gap-2"
+              >
+                {fixSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> Reemitindo…</> : <><FileText className="w-4 h-4" /> Reemitir NFC-e</>}
               </button>
             </div>
           </div>
