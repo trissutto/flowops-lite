@@ -1161,6 +1161,21 @@ model CrediarioConfig {
   taxaMensalPercent  Float    @default(0) @map("taxa_mensal_percent")
   // Habilitar cobrança de juros? Se false, sempre retorna juros = 0.
   enabled            Boolean  @default(false)
+  // Multa fixa (%) aplicada UMA vez ao entrar em atraso (após carência).
+  // Padrão BR: 2%. 0 = sem multa. Soma ao juros calculado.
+  multaPercent       Float    @default(0) @map("multa_percent")
+  // Teto de juros como % do valor da parcela (ex: 100 = juros nunca passa do
+  // principal). 0 = sem teto (comportamento legado). Protege de juros que
+  // explodem em parcelas muito antigas.
+  jurosMaxPercentParcela Float @default(0) @map("juros_max_percent_parcela")
+  // ── POLÍTICA DE LIMITE DE CRÉDITO (default OFF — não altera nada até ligar) ──
+  // Quando ligada, o PDV bloqueia novo crediário pra cliente acima do limite.
+  // O bloqueio pode ser liberado com senha de supervisor (override).
+  limiteEnabled            Boolean @default(false) @map("limite_enabled")
+  // Máximo de parcelas VENCIDAS em aberto que o cliente pode ter (0 = ignora).
+  limiteMaxParcelasVencidas Int    @default(0) @map("limite_max_parcelas_vencidas")
+  // Máximo de valor TOTAL em aberto (vencido + a vencer). 0 = ignora.
+  limiteMaxValorEmAberto   Float   @default(0) @map("limite_max_valor_em_aberto")
   createdAt          DateTime @default(now()) @map("created_at")
   updatedAt          DateTime @updatedAt @map("updated_at")
 
@@ -1337,6 +1352,12 @@ model PdvSale {
   stoneNsu           String?   @map("stone_nsu")             // NSU/autorização
   stoneBandeira      String?   @map("stone_bandeira")        // VISA, MASTER, etc
   stoneLast4         String?   @map("stone_last4")           // últimos 4 dígitos do cartão
+  // ── CREDIÁRIO (idempotência) ──
+  // CONTROLE retornado pelo Giga quando as parcelas foram criadas. Serve de
+  // trava: se já preenchido, o endpoint POST /crediario NÃO recria parcelas
+  // (evita duplicação por retry de rede, duplo-clique ou os 2 fluxos do front).
+  crediarioControle  String?   @map("crediario_controle")
+  crediarioCriadoEm  DateTime? @map("crediario_criado_em")
   // Timestamps
   createdAt       DateTime @default(now()) @map("created_at")
   finalizedAt     DateTime? @map("finalized_at")

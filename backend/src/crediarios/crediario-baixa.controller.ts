@@ -80,7 +80,16 @@ export class CrediarioBaixaController {
   @Post('config')
   async setConfig(
     @Req() req: any,
-    @Body() body: { diasCarencia?: number; taxaMensalPercent?: number; enabled?: boolean },
+    @Body() body: {
+      diasCarencia?: number;
+      taxaMensalPercent?: number;
+      enabled?: boolean;
+      multaPercent?: number;
+      jurosMaxPercentParcela?: number;
+      limiteEnabled?: boolean;
+      limiteMaxParcelasVencidas?: number;
+      limiteMaxValorEmAberto?: number;
+    },
   ) {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     return this.svc.setConfig(body);

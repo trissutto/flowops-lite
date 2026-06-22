@@ -34,6 +34,14 @@ export interface JurosConfig {
   diasCarencia: number;
   taxaMensalPercent: number;
   enabled: boolean;
+  // Multa fixa (%) aplicada uma vez ao entrar em atraso. 0 = sem multa.
+  multaPercent: number;
+  // Teto de juros como % da parcela (0 = sem teto).
+  jurosMaxPercentParcela: number;
+  // Política de limite de crédito (default off).
+  limiteEnabled: boolean;
+  limiteMaxParcelasVencidas: number;
+  limiteMaxValorEmAberto: number;
 }
 
 export interface OpenInstallment {
@@ -163,6 +171,11 @@ export class CrediarioBaixaService {
       diasCarencia: cfg.diasCarencia,
       taxaMensalPercent: cfg.taxaMensalPercent,
       enabled: cfg.enabled,
+      multaPercent: cfg.multaPercent ?? 0,
+      jurosMaxPercentParcela: cfg.jurosMaxPercentParcela ?? 0,
+      limiteEnabled: cfg.limiteEnabled ?? false,
+      limiteMaxParcelasVencidas: cfg.limiteMaxParcelasVencidas ?? 0,
+      limiteMaxValorEmAberto: cfg.limiteMaxValorEmAberto ?? 0,
     };
   }
 
@@ -177,6 +190,19 @@ export class CrediarioBaixaService {
       data.taxaMensalPercent = t;
     }
     if (input.enabled != null) data.enabled = !!input.enabled;
+    if (input.multaPercent != null) {
+      data.multaPercent = Math.max(0, Math.min(100, Number(input.multaPercent)));
+    }
+    if (input.jurosMaxPercentParcela != null) {
+      data.jurosMaxPercentParcela = Math.max(0, Math.min(1000, Number(input.jurosMaxPercentParcela)));
+    }
+    if (input.limiteEnabled != null) data.limiteEnabled = !!input.limiteEnabled;
+    if (input.limiteMaxParcelasVencidas != null) {
+      data.limiteMaxParcelasVencidas = Math.max(0, Math.min(999, Math.floor(Number(input.limiteMaxParcelasVencidas))));
+    }
+    if (input.limiteMaxValorEmAberto != null) {
+      data.limiteMaxValorEmAberto = Math.max(0, Number(input.limiteMaxValorEmAberto));
+    }
     await (this.prisma as any).crediarioConfig.upsert({
       where: { id: 'singleton' },
       create: { id: 'singleton', ...data },
@@ -209,7 +235,20 @@ export class CrediarioBaixaService {
 
     const diasComJuros = diasAtraso - cfg.diasCarencia;
     const jurosDia = (cfg.taxaMensalPercent / 30) / 100;
-    const juros = Math.round(valorParcela * jurosDia * diasComJuros * 100) / 100;
+    let juros = valorParcela * jurosDia * diasComJuros;
+
+    // Multa fixa (única) ao entrar em atraso — padrão BR é 2%. 0 = sem multa.
+    const multaPct = cfg.multaPercent ?? 0;
+    if (multaPct > 0) juros += valorParcela * (multaPct / 100);
+
+    // Teto: juros (incl. multa) não pode passar de X% da parcela. 0 = sem teto.
+    const tetoPct = cfg.jurosMaxPercentParcela ?? 0;
+    if (tetoPct > 0) {
+      const teto = valorParcela * (tetoPct / 100);
+      if (juros > teto) juros = teto;
+    }
+
+    juros = Math.round(juros * 100) / 100;
     return { diasAtraso, juros };
   }
 

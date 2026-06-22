@@ -813,10 +813,19 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     const valorUltima = Math.round((input.valorTotal - valorIgual * (input.parcelas - 1)) * 100) / 100;
 
     const conn = await this.pool.getConnection();
+    let txStarted = false;
     try {
-      // Pega Ãºltimo REGISTRO + Ãºltimo CONTROLE pra incrementar
+      // TRANSAÃ‡ÃƒO: as N parcelas precisam entrar TODAS ou NENHUMA. Sem isso,
+      // uma falha no meio (ex: parcela 4 de 6) deixava parcelas Ã³rfÃ£s no Giga,
+      // que apareciam pro cliente como dÃ­vida parcial fantasma.
+      await conn.beginTransaction();
+      txStarted = true;
+
+      // Pega Ãºltimo REGISTRO + Ãºltimo CONTROLE pra incrementar.
+      // FOR UPDATE serializa contra outra venda criando crediÃ¡rio ao mesmo
+      // tempo â€” evita 2 vendas pegarem o mesmo CONTROLE/REGISTRO.
       const [maxRows]: any = await conn.execute(
-        `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl FROM \`movimento\``,
+        `SELECT COALESCE(MAX(\`${c.registro}\`), 0) AS maxReg, COALESCE(MAX(\`${c.controle}\`), 0) AS maxCtl FROM \`movimento\` FOR UPDATE`,
       );
       const startRegistro = Number(maxRows[0]?.maxReg || 0) + 1;
       const novoControle = Number(maxRows[0]?.maxCtl || 0) + 1;
@@ -872,6 +881,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         });
       }
 
+      await conn.commit();
+      txStarted = false;
+
       this.logger.log(
         `[crediario] Criou ${input.parcelas} parcelas no Giga: cliente=${input.codCliente} controle=${novoControle} total=R$${input.valorTotal.toFixed(2)}`,
       );
@@ -884,7 +896,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       };
     } catch (e: any) {
       const msg = String(e?.message || e);
-      this.logger.error(`[crediario] INSERT em movimento FALHOU: ${msg}`);
+      this.logger.error(`[crediario] INSERT em movimento FALHOU (rollback): ${msg}`);
+      if (txStarted) {
+        try {
+          await conn.rollback();
+        } catch (rbErr: any) {
+          this.logger.error(`[crediario] rollback FALHOU: ${String(rbErr?.message || rbErr)}`);
+        }
+      }
       return { success: false, error: msg };
     } finally {
       conn.release();

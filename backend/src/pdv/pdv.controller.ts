@@ -1261,10 +1261,31 @@ export class PdvController {
       primeiroVencimento: string; // 'YYYY-MM-DD'
       entrada?: number;
       observacao?: string;
+      // Senha de supervisor pra liberar venda acima do limite de crédito
+      // (só usada quando a política de limite está ligada e o cliente excede).
+      overridePassword?: string;
     },
   ) {
     this.requireRole(req);
     const sale = await this.svc.getSale(saleId);
+
+    // ── IDEMPOTÊNCIA ──
+    // Se a venda JÁ teve parcelas criadas no Giga, NÃO recria. O frontend chama
+    // este endpoint em 2 fluxos (split e finalize) e retry de rede / duplo-clique
+    // gerava parcelas duplicadas no movimento. Retorna sucesso com o controle já
+    // gravado — idempotente.
+    if ((sale as any).crediarioControle) {
+      this.logger.warn(
+        `[crediario] IDEMPOTENTE — venda ${saleId} já tem controle=${(sale as any).crediarioControle}, ignorando recriação`,
+      );
+      return {
+        ok: true,
+        idempotent: true,
+        controle: (sale as any).crediarioControle,
+        criadoEm: (sale as any).crediarioCriadoEm || null,
+      };
+    }
+
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
     if (!sale.customerCpf) throw new BadRequestException('Cliente sem CPF — identifique antes');
     if (!body?.parcelas || body.parcelas < 1 || body.parcelas > 24) {
@@ -1313,12 +1334,60 @@ export class PdvController {
       };
     }
 
-    // Busca cliente no Giga pra pegar codCliente
+    // Busca cliente no Giga pra pegar codCliente (+ pendências pra checar limite)
     const info = await this.getCustomerInfo(req, sale.customerCpf);
     if (!info.found || !info.cliente) {
       throw new BadRequestException(
         'Cliente não encontrado no Giga. Cadastre o cliente antes de fazer crediário.',
       );
+    }
+
+    // ── POLÍTICA DE LIMITE DE CRÉDITO (default OFF) ──
+    // Quando ligada em CrediarioConfig, bloqueia cliente acima do limite.
+    // Pode ser liberado com senha de supervisor (overridePassword).
+    try {
+      const cfg = await this.crediarioBaixa.getConfig();
+      if (cfg.limiteEnabled) {
+        const motivos: string[] = [];
+        const qtdVencidas = Number((info as any).qtdAtrasadas || 0);
+        const valorAberto = Number((info as any).totalDevido || 0);
+        if (cfg.limiteMaxParcelasVencidas > 0 && qtdVencidas > cfg.limiteMaxParcelasVencidas) {
+          motivos.push(
+            `${qtdVencidas} parcelas vencidas (máx ${cfg.limiteMaxParcelasVencidas})`,
+          );
+        }
+        if (cfg.limiteMaxValorEmAberto > 0 && valorAberto > cfg.limiteMaxValorEmAberto) {
+          motivos.push(
+            `R$ ${valorAberto.toFixed(2)} em aberto (máx R$ ${cfg.limiteMaxValorEmAberto.toFixed(2)})`,
+          );
+        }
+        if (motivos.length > 0) {
+          // Bloqueado — só passa com senha de supervisor válida.
+          let liberado = false;
+          if (body?.overridePassword) {
+            try {
+              const nivel = validateMinLevel(body.overridePassword, 'SUPERVISOR');
+              liberado = true;
+              this.logger.warn(
+                `[crediario] LIMITE liberado por override [${nivel}] — venda ${saleId} cliente=${info.cliente.codCliente} (${motivos.join('; ')})`,
+              );
+            } catch {
+              throw new ForbiddenException('Senha de supervisor inválida pra liberar o limite');
+            }
+          }
+          if (!liberado) {
+            throw new ForbiddenException(
+              `Cliente acima do limite de crédito: ${motivos.join('; ')}. ` +
+              `Libere com senha de supervisor.`,
+            );
+          }
+        }
+      }
+    } catch (e: any) {
+      // Erros de bloqueio (Forbidden) sobem; falha ao LER a config não pode
+      // travar a venda — segue sem limite (fail-open, comportamento legado).
+      if (e instanceof ForbiddenException) throw e;
+      this.logger.warn(`[crediario] checagem de limite ignorada (erro lendo config): ${e?.message}`);
     }
 
     const cols = await this.crediarios.detectColumns();
@@ -1344,6 +1413,23 @@ export class PdvController {
       throw new BadRequestException(`Erro ao criar parcelas: ${result.error}`);
     }
 
+    // Grava o controle na venda — TRAVA de idempotência pra próximas chamadas.
+    // best-effort: se falhar, a venda fica sem a trava (volta ao risco antigo),
+    // mas as parcelas já foram criadas corretamente, então não desfaz nada.
+    try {
+      await (this.svc as any).prisma.pdvSale.update({
+        where: { id: saleId },
+        data: {
+          crediarioControle: String(result.controleUsado ?? ''),
+          crediarioCriadoEm: new Date(),
+        },
+      });
+    } catch (e: any) {
+      this.logger.error(
+        `[crediario] FALHA ao gravar controle de idempotência na venda ${saleId}: ${e?.message}`,
+      );
+    }
+
     return {
       ok: true,
       parcelas: result.parcelas,
@@ -1364,7 +1450,7 @@ export class PdvController {
   async listarCrediariosOrfaos(@Query('dias') diasQ?: string) {
     const dias = Math.min(60, Math.max(1, Number(diasQ) || 10));
     const since = new Date(Date.now() - dias * 86400000);
-    const vendas = await (this.prisma as any).pdvSale.findMany({
+    const vendas = await (this.svc as any).prisma.pdvSale.findMany({
       where: {
         status: 'finalized',
         createdAt: { gte: since },
