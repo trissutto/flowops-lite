@@ -1760,6 +1760,8 @@ function CarrinhosTab() {
   const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  // Aviso quando os dados vêm do fallback WooCommerce (plugin WP fora do ar).
+  const [warning, setWarning] = useState<string | null>(null);
   // Auto-refresh a cada 60s pra capturar carrinhos novos do site
   useEffect(() => {
     const t = setInterval(() => { load(); }, 60000);
@@ -1801,9 +1803,15 @@ function CarrinhosTab() {
       if ((listResp as any)?.ok === false || (listResp as any)?.error) {
         setErro((listResp as any)?.error || 'Falha ao buscar carrinhos.');
         setItems([]);
+        setWarning(null);
       } else {
         const arr = (listResp as any).items || (listResp as any).rows || [];
         setItems(Array.isArray(arr) ? arr : []);
+        // Plugin WP fora → backend caiu pro WooCommerce (dados parciais).
+        const usouFallback =
+          (listResp as any)?.source === 'woocommerce-fallback' ||
+          !!(listResp as any)?.pluginError;
+        setWarning(usouFallback ? ((listResp as any)?.warning || 'Mostrando dados parciais via WooCommerce — o plugin de carrinhos do site está fora do ar.') : null);
       }
       const st = (statsResp as any)?.stats || (statsResp as any) || null;
       setStats(st);
@@ -1908,6 +1916,13 @@ function CarrinhosTab() {
         <button onClick={runDiag} className="px-3 py-2 border-2 rounded text-sm font-bold bg-slate-100 hover:bg-slate-200" title="Schema da tabela CartFlows">Diag</button>
         <span className="text-xs text-slate-500 ml-auto">{filtered.length} {filtered.length === 1 ? 'carrinho' : 'carrinhos'}{lastFetch ? ` · atualizado ${lastFetch.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}</span>
       </div>
+
+      {warning && !erro && (
+        <div className="mb-2 bg-amber-50 border-2 border-amber-300 rounded-lg p-3 text-sm text-amber-900 flex items-start gap-2">
+          <span className="font-bold">⚠️ Modo parcial:</span>
+          <span>{warning} Pra cobertura total, reative o plugin <b>flowops-abandoned-carts</b> no WordPress (ou confira <b>FLOWOPS_WP_BASE</b>/<b>FLOWOPS_WP_KEY</b>) — clique em <b>Diag</b> pra ver o erro.</span>
+        </div>
+      )}
 
       {loading ? (
         <div className="bg-white rounded-lg shadow p-8 text-center text-slate-400">Carregando do site...</div>

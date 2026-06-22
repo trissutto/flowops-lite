@@ -100,6 +100,11 @@ export class AbandonedCartsService {
     return this.call<any>('/flowops/v1/ping');
   }
 
+  /** Considera "falhou" se veio null/undefined ou um envelope { ok: false }. */
+  private isFailed(r: any): boolean {
+    return !r || r.ok === false;
+  }
+
   async list(params: {
     page?: number;
     perPage?: number;
@@ -108,7 +113,7 @@ export class AbandonedCartsService {
     until?: string;
     search?: string;
   }) {
-    return this.call<any>('/flowops/v1/abandoned-carts/list', {
+    const primary = await this.call<any>('/flowops/v1/abandoned-carts/list', {
       page: params.page,
       per_page: params.perPage,
       status: params.status,
@@ -116,6 +121,26 @@ export class AbandonedCartsService {
       until: params.until,
       search: params.search,
     });
+    if (!this.isFailed(primary)) return primary;
+
+    // Plugin WP indisponível (404/401/sem env/site fora) → cai pro WooCommerce
+    // REST, que não depende do plugin .php. Antes a aba ficava EM BRANCO aqui.
+    this.logger.warn(
+      `[carrinhos] plugin WP falhou na LISTA, tentando fallback WooCommerce: ${(primary as any)?.error ?? ''}`,
+    );
+    const fb: any = await this.listWcPending(params);
+    if (!this.isFailed(fb)) {
+      fb.pluginError = (primary as any)?.error;
+      return fb;
+    }
+    // Os dois caminhos falharam — devolve um erro que explica ambos.
+    return {
+      ok: false,
+      error:
+        'Não foi possível buscar carrinhos nem pelo plugin do WordPress nem pelo WooCommerce.',
+      pluginError: (primary as any)?.error,
+      wcError: (fb as any)?.error,
+    };
   }
 
   async detail(id: number) {
@@ -123,7 +148,30 @@ export class AbandonedCartsService {
   }
 
   async stats(since?: string) {
-    return this.call<any>('/flowops/v1/abandoned-carts/stats', { since });
+    const primary = await this.call<any>('/flowops/v1/abandoned-carts/stats', { since });
+    if (!this.isFailed(primary)) return primary;
+
+    // Fallback WooCommerce — normaliza pro mesmo shape PLANO que a tela espera
+    // (stats?.abandoned, stats?.total_abandoned_value, etc).
+    this.logger.warn(
+      `[carrinhos] plugin WP falhou nas STATS, tentando fallback WooCommerce: ${(primary as any)?.error ?? ''}`,
+    );
+    const fb: any = await this.statsWcPending(since);
+    if (this.isFailed(fb)) return primary; // mantém o erro do plugin (mais informativo)
+
+    const by = fb.by_status || {};
+    return {
+      ok: true,
+      source: 'woocommerce-fallback',
+      abandoned: by.abandoned?.qty ?? 0,
+      recovered: by.completed?.qty ?? 0,
+      lost: by.lost?.qty ?? 0,
+      total_abandoned_value: by.abandoned?.total ?? 0,
+      total_recovered_value: by.completed?.total ?? 0,
+      recovery_rate: fb.recovery_rate ?? 0,
+      warning: fb.warning,
+      pluginError: (primary as any)?.error,
+    };
   }
 
   // ==========================================================================
@@ -178,6 +226,7 @@ export class AbandonedCartsService {
     let wcStatuses: string[];
     switch (params.status) {
       case 'recovered':
+      case 'completed': // frontend manda 'completed' como rótulo de recuperado
         wcStatuses = ['processing', 'completed'];
         break;
       case 'lost':
