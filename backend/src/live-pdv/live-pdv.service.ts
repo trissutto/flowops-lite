@@ -666,10 +666,21 @@ export class LivePdvService {
     const subtotal = (items as any[]).reduce((s, i) => s + i.priceCents * i.qty, 0);
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     const frete = cart?.freteCents || 0;
-    await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
-      data: { subtotalCents: subtotal, totalCents: subtotal + frete },
-    });
+    const newTotal = subtotal + frete;
+    const data: any = { subtotalCents: subtotal, totalCents: newTotal };
+    // INVALIDA cobrança pendente quando o total muda (ex.: promo aplicada
+    // depois do PIX gerado). Sem isso, o QR/link fica com o valor antigo
+    // (oficial) enquanto o carrinho já está no promo. Derruba o pagamento
+    // velho → operadora gera um novo com o valor correto.
+    if (cart && cart.status === 'awaiting_payment' && newTotal !== cart.totalCents) {
+      data.status = 'open';
+      data.pagarmeOrderId = null;
+      data.qrCodeText = null;
+      data.qrCodeImageUrl = null;
+      data.paymentExpiresAt = null;
+      data.paymentMethod = null;
+    }
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
   }
 
   async getCart(cartId: string) {
@@ -714,6 +725,30 @@ export class LivePdvService {
     await this.recalcCart(item.cartId);
     this.gateway.emitToAdmins('live-pdv:item-cancelled', { itemId, cartId: item.cartId });
     return this.getCart(item.cartId);
+  }
+
+  /**
+   * Exclui (cancela) o carrinho INTEIRO de uma cliente — cancela todos os
+   * itens não-terminais (libera as reservas) e marca o carrinho como cancelado.
+   * Bloqueado se já pago/em separação (aí não é "excluir cliente", é estorno).
+   */
+  async cancelCart(cartId: string, reason?: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    if (['paid', 'separating', 'shipped', 'delivered'].includes(cart.status)) {
+      throw new BadRequestException('Carrinho já pago/em separação — não pode ser excluído aqui');
+    }
+    const now = new Date();
+    await (this.prisma as any).livePdvItem.updateMany({
+      where: { cartId, status: { in: ['reserved', 'awaiting_payment'] } },
+      data: { status: 'cancelled', cancelledAt: now, cancelReason: reason || 'carrinho excluído' },
+    });
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { status: 'cancelled' },
+    });
+    this.gateway.emitToAdmins('live-pdv:cart-cancelled', { cartId, sessionId: cart.sessionId });
+    return { ok: true };
   }
 
   /** Troca manual da loja de origem (supervisor). */
