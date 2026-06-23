@@ -1851,21 +1851,11 @@ function PdvPageInner() {
               })()}
             </div>
             )}
-            {/* Cabeçalho de colunas — agora com coluna de THUMBNAIL antes da DESC */}
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
-              <div>SKU</div>
-              <div></div>
-              <div>Produto</div>
-              <div className="text-center">Qtd</div>
-              <div className="text-right">R$ Unit</div>
-              <div className="text-right">R$ Total</div>
-              <div className="text-center">Ações</div>
-            </div>
             <div className="px-3 py-1.5 bg-[#FAF6E8] border-b border-[#E5E5E0] text-[11px] text-[#8C7325] font-bold flex items-center gap-1.5">
               <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
               <span className="ml-2 text-[9px] font-bold text-[#8C7325]/70 uppercase tracking-wider">↓ último bipado no topo</span>
             </div>
-            <div className="divide-y">
+            <div className="p-2 space-y-2">
               {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
                   na venda, aparece como "produto devolvido" no carrinho com valor
                   negativo, deixando claro que o abatimento foi feito. Renderizado
@@ -1920,106 +1910,95 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_56px_72px_96px_44px] gap-2 items-center transition-colors duration-500 ${
+                  className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-colors duration-500 ${
                     it.id === lastAddedItemId
-                      ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
+                      ? 'border-emerald-400 bg-emerald-50'
                       : isLast
-                      ? 'bg-[#FAF6E8] shadow-[inset_3px_0_0_0_#D4AF37]'
-                      : 'hover:bg-[#FAF6E8]/50'
+                      ? 'border-[#e7ddcf] bg-[#FAF6E8]'
+                      : 'border-[#e7ddcf] bg-white hover:bg-[#FAF6E8]/50'
                   }`}
                 >
-                  {/* SKU/EAN */}
-                  <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
-                    {it.ean || it.sku}
-                  </div>
-
-                  {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
+                  {/* Mini-foto */}
                   <ProductThumb sku={it.sku} refCode={it.ref} />
 
-                  {/* DESCRIÇÃO — REF como chip destacado + descrição em negrito.
-                      Ordem: SKU (col 1) -> REF (chip) -> descrição. */}
-                  <div className="min-w-0 flex items-center gap-2">
-                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                      <span className="font-mono font-black text-[11px] bg-white text-slate-700 border border-[#E5E5E0] rounded px-1.5 py-0.5 shrink-0 tracking-wide">
+                  {/* REF · nome + cor/tam cinza + EAN embaixo */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[11px] font-bold shrink-0" style={{ color: '#7a3b46' }}>
                         {it.ref || it.sku}
                       </span>
                       {it.descricao && (
-                        <span className="text-sm font-bold text-slate-900 truncate font-sans">{it.descricao}</span>
+                        <span className="text-sm font-semibold text-slate-900 truncate">{it.descricao}</span>
+                      )}
+                      {((it as any).cor || (it as any).tamanho) && (
+                        <span className="text-xs text-slate-400 shrink-0">
+                          {[(it as any).cor, (it as any).tamanho].filter(Boolean).join(' ')}
+                        </span>
+                      )}
+                      {it.promoTag && (
+                        <span
+                          className="text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40"
+                          title={`Desconto: ${brl(it.desconto)}`}
+                        >
+                          {it.promoTag === 'MANUAL' ? '✏️ MANUAL' : `🎁 ${it.promoTag}`}
+                        </span>
                       )}
                     </div>
-                    {it.promoTag && (
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                          it.promoTag.includes('4 LEVA 3')
-                            ? 'bg-[#0B0B0B] text-[#D4AF37] border border-[#0B0B0B]'
-                            : it.promoTag === 'MANUAL'
-                            ? 'bg-black text-[#D4AF37] border border-[#D4AF37]/50'
-                            : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
-                        }`}
-                        title={`Desconto: ${brl(it.desconto)}`}
-                      >
-                        {it.promoTag === 'MANUAL' ? '✏️ MANUAL' : `🎁 ${it.promoTag}`}
-                      </span>
-                    )}
+                    <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{it.ean || it.sku}</div>
                   </div>
 
-                  {/* QTD — input editável direto, sem botões */}
-                  <div className="flex items-center justify-center">
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      value={it.qty}
-                      onChange={(e) => {
-                        const n = parseInt(e.target.value, 10);
-                        if (!isNaN(n) && n >= 1 && n <= 99 && n !== it.qty) {
-                          updateItem(it.id, { qty: n });
-                        }
-                      }}
-                      disabled={sale.status !== 'open'}
-                      className="w-14 h-9 text-center font-black tabular-nums text-base text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 disabled:opacity-60"
-                    />
+                  {/* QTD */}
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={it.qty}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!isNaN(n) && n >= 1 && n <= 99 && n !== it.qty) {
+                        updateItem(it.id, { qty: n });
+                      }
+                    }}
+                    disabled={sale.status !== 'open'}
+                    className="w-12 h-9 shrink-0 text-center font-black tabular-nums text-base text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 disabled:opacity-60"
+                  />
+
+                  {/* UNITÁRIO */}
+                  <div className="text-right shrink-0 w-[78px]">
+                    <div className="text-[9px] uppercase tracking-wide text-slate-400 leading-none">Unitário</div>
+                    <div className="text-xs tabular-nums text-slate-600 font-semibold mt-0.5">{brl(it.precoUnit)}</div>
                   </div>
 
-                  {/* VAL UNITÁRIO */}
-                  <div className="text-right text-sm tabular-nums text-slate-700 font-semibold">
-                    {brl(it.precoUnit)}
-                  </div>
-
-                  {/* VAL TOTAL — preto forte, fonte grande */}
-                  <div className="text-right">
-                    <div className="font-black text-black tabular-nums text-base">{brl(it.total)}</div>
+                  {/* TOTAL — serifado premium */}
+                  <div className="text-right shrink-0 w-[92px]">
+                    <div className="font-display tabular-nums text-lg leading-none" style={{ color: '#2e2326' }}>
+                      {brl(it.total)}
+                    </div>
                     {it.desconto > 0 && (
-                      <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
+                      <div className="text-[10px] text-slate-400 line-through tabular-nums mt-0.5">{brl(bruto)}</div>
                     )}
                   </div>
 
-                  {/* AÇÕES — % desconto + 🗑 remover. Compactos pra não roubar espaço. */}
+                  {/* AÇÕES — % desconto + lixeira */}
                   {sale.status === 'open' ? (
-                    <div className="flex items-center justify-center gap-0.5">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
-                        onClick={() =>
-                          setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
-                        }
-                        className={`w-6 h-6 rounded flex items-center justify-center transition active:scale-95 ${
+                        onClick={() => setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center transition active:scale-95 ${
                           it.desconto > 0 && it.promoTag === 'MANUAL'
                             ? 'bg-amber-500 text-white hover:bg-amber-600'
                             : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                         }`}
-                        title={
-                          it.desconto > 0 && it.promoTag === 'MANUAL'
-                            ? `Desconto manual: ${brl(it.desconto)} (clique pra alterar)`
-                            : 'Aplicar desconto neste item (% ou R$)'
-                        }
+                        title="Aplicar desconto neste item (% ou R$)"
                       >
-                        <Percent className="w-3 h-3" />
+                        <Percent className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => removeItem(it.id)}
-                        className="w-6 h-6 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
+                        className="w-7 h-7 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
                         title="Remover item"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   ) : <div />}
@@ -2126,6 +2105,18 @@ function PdvPageInner() {
             })()}
           </div>
           {/* fim do resumo da venda */}
+
+          {/* Botão PAGAMENTO — verde-sálvia, destaque máximo (abre o fluxo de pagamento) */}
+          <button
+            onClick={() => { setPaymentFilter('all'); setShowPayment(true); }}
+            disabled={!sale.items?.length}
+            className="w-full rounded-xl py-3.5 flex items-center justify-center gap-2 font-black text-white shadow-md transition active:scale-[0.98] hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: '#4f7355' }}
+            title="Ir para o pagamento (F8)"
+          >
+            <CreditCard className="w-5 h-5" /> Pagamento
+            <kbd className="ml-1 text-[10px] font-mono bg-white/20 rounded px-1.5 py-0.5">F8</kbd>
+          </button>
 
           {/* SIDEBAR DIREITA — cards compactos */}
           <div className="space-y-1.5">
