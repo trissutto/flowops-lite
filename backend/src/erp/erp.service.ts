@@ -2,6 +2,7 @@
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
+import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
@@ -95,13 +96,21 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // em transferencias + PDV + crediario sem fila. Wincred MySQL aguenta.
       connectionLimit: 15,
       queueLimit: 0,
-      // 15s pra conectar â€” Giga roda atrÃ¡s do NAT da loja, latÃªncia varia MUITO.
-      // 5s era curto e causava ETIMEDOUT em pico de uso / rede instÃ¡vel.
-      connectTimeout: 15000,
-      // Keep-alive evita que o NAT derrube conexÃ£o ociosa do pool.
+      // 4s pra conectar. O Giga é um servidor DEDICADO (dedi-...lurds.com.br),
+      // não roda atrás do NAT de loja — quando acessível, conecta em <1s.
+      // 15s era longo demais: quando o servidor fica inacessível (firewall),
+      // CADA conexão pendurava 15s e entupia o event loop, derrubando o app
+      // INTEIRO. 4s + circuit-breaker (abaixo) faz falhar rápido sem travar.
+      connectTimeout: 4000,
+      // Keep-alive evita que conexÃ£o ociosa do pool seja derrubada.
       enableKeepAlive: true,
       keepAliveInitialDelay: 30000,
     });
+
+    // Circuit-breaker compartilhado (Giga/WP): quando o servidor fica
+    // inacessível, faz as chamadas FALHAREM RÁPIDO em vez de pendurar até o
+    // connectTimeout e entupir o event loop. Cobre query/execute/getConnection.
+    GigaBreaker.wrapPool(this.pool);
 
     // IMPORTANTE: ping em background. NÃƒO bloquear o boot do Nest.
     // Se ERP_HOST nÃ£o estiver acessÃ­vel do Railway, o TCP fica pendurado
