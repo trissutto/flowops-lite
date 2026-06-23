@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 
 /**
  * FinanceiroService — gerencia obrigações intercompany REDE↔FILIAL.
@@ -25,6 +26,7 @@ export class FinanceiroService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly pricing: RealignmentPricingService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -127,11 +129,18 @@ export class FinanceiroService {
       return { mesReferencia, total: 0, atualizadas: 0, semSku: 0, semPreco: 0 };
     }
 
-    // Coleta SKUs unicos pra buscar precos em batch
+    // Coleta SKUs + REFs unicos pra buscar precos em batch.
+    // USA RealignmentPricingService (VENDAUN em REAIS) — NÃO o
+    // getProductPricesBySkus (que divide VENDAUN por 100 e gerava obrigações
+    // ÷100, ex.: R$ 1,90/peça em vez de R$ 190). Fallback por REF.
     const skus = Array.from(new Set(
       (obligations as any[]).map((o) => o.sku).filter(Boolean),
     ));
-    const priceMap = await this.erp.getProductPricesBySkus(skus);
+    const refs = Array.from(new Set(
+      (obligations as any[]).map((o) => o.refCode).filter(Boolean),
+    ));
+    const priceMap = await this.pricing.getPricesByCodigos(skus);
+    const refPriceMap = await this.pricing.getPricesByRefs(refs);
 
     let atualizadas = 0;
     let semSku = 0;
@@ -139,9 +148,8 @@ export class FinanceiroService {
     const divisorPadrao = 2.5;
 
     for (const o of obligations as any[]) {
-      if (!o.sku) { semSku++; continue; }
-      const novoPreco = priceMap.get(o.sku) || 0;
-      if (novoPreco <= 0) { semPreco++; continue; }
+      const novoPreco = (o.sku ? priceMap.get(o.sku) || 0 : 0) || refPriceMap.get(o.refCode) || 0;
+      if (novoPreco <= 0) { if (!o.sku) semSku++; else semPreco++; continue; }
       // Mantem o mesmo se for igual (nao re-update sem necessidade)
       if (Math.abs(Number(o.precoUnitario || 0) - novoPreco) < 0.01) continue;
 
