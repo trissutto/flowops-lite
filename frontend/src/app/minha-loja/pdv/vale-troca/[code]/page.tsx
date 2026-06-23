@@ -21,7 +21,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { api } from '@/lib/api';
+import { API_URL } from '@/lib/api';
 
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -69,8 +69,14 @@ export default function ValeImprimirPage() {
 
   useEffect(() => {
     if (!code) return;
-    api<CreditInfo>(`/pdv/devolucao/credito/${encodeURIComponent(code)}`)
-      .then((d) => setInfo(d))
+    // Endpoint PÚBLICO + fetch puro (NÃO o helper api()). O cupom do cliente
+    // não pode depender da sessão da vendedora: com api() autenticado, sessão
+    // expirada → redirect pro /login → window.print() imprimia a TELA DE LOGIN
+    // (saía bloco cinza com "E-mail/Senha"). fetch direto nunca redireciona —
+    // se falhar, mostra erro em vez de imprimir lixo.
+    fetch(`${API_URL}/public/vale/${encodeURIComponent(code)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Vale não encontrado'))))
+      .then((d: CreditInfo) => setInfo(d))
       .catch((e) => setErr(e?.message || 'Vale não encontrado'));
   }, [code]);
 

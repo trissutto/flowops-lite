@@ -11,6 +11,7 @@ import { CashService } from './cash.service';
 import { CashController } from './cash.controller';
 import { ReturnsService } from './returns.service';
 import { ReturnsController } from './returns.controller';
+import { ReturnsPublicController } from './returns-public.controller';
 import { NfceService } from './nfce.service';
 import { CrediarioPrintService } from './crediario-print.service';
 import { CoordsDbService } from './coords-db.service';
@@ -28,7 +29,7 @@ import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
   imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule],
-  controllers: [PdvController, CashController, ReturnsController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
+  controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
   providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
