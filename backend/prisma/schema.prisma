@@ -292,6 +292,28 @@ model MonthlyClosure {
   @@map("monthly_closures")
 }
 
+// Conta corrente da franqueada — lançamentos MANUAIS (pagamentos + ajustes).
+// Os DÉBITOS automáticos (obrigações ÷2,5 + royalties 8% + marketing 4%) NÃO
+// ficam aqui: são calculados na hora a partir do que o sistema já tem. Aqui só
+// entram os lançamentos manuais, cada um com documento (comprovante) opcional.
+// Há UMA franqueada só (todas as FILIAL = mesmo dono) → sem vínculo de loja.
+model FranquiaLancamento {
+  id            String   @id @default(uuid())
+  data          DateTime                              // data do pagamento/ajuste
+  tipo          String                                // 'pagamento' | 'ajuste'
+  natureza      String                                // 'credito' (reduz saldo) | 'debito' (aumenta)
+  descricao     String
+  valorCents    Int      @map("valor_cents")          // sempre positivo
+  documentoUrl  String?  @map("documento_url")
+  documentoNome String?  @map("documento_nome")
+  criadoPorId   String?  @map("criado_por_id")
+  criadoPorNome String?  @map("criado_por_nome")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([data])
+  @@map("franquia_lancamentos")
+}
+
 model Order {
   id              String   @id @default(uuid())
   wcOrderId       Int      @unique @map("wc_order_id")

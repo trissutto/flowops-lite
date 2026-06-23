@@ -74,7 +74,7 @@ export default function ValeImprimirPage() {
     // expirada → redirect pro /login → window.print() imprimia a TELA DE LOGIN
     // (saía bloco cinza com "E-mail/Senha"). fetch direto nunca redireciona —
     // se falhar, mostra erro em vez de imprimir lixo.
-    fetch(`${API_URL}/public/vale/${encodeURIComponent(code)}`)
+    fetch(`${API_URL}/api/public/vale/${encodeURIComponent(code)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Vale não encontrado'))))
       .then((d: CreditInfo) => setInfo(d))
       .catch((e) => setErr(e?.message || 'Vale não encontrado'));
