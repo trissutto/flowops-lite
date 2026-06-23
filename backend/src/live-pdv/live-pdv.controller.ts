@@ -120,6 +120,11 @@ export class LivePdvController {
     return this.svc.updateCartCustomer(cartId, body);
   }
 
+  @Post('carts/:cartId/cancel')
+  cancelCart(@Param('cartId') cartId: string, @Body() body: { reason?: string }) {
+    return this.svc.cancelCart(cartId, body?.reason);
+  }
+
   @Post('carts/:cartId/frete')
   setFrete(@Param('cartId') cartId: string, @Body() body: { freteCents: number }) {
     return this.svc.setFrete(cartId, body.freteCents);

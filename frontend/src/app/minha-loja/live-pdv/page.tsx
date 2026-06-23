@@ -263,6 +263,7 @@ export default function LivePdvPage() {
       setPromoEditing(false);
       await doSearch();
       await refreshCarts();
+      await syncOpenCartAfterPriceChange();
     } catch (e: any) {
       alert('Erro ao aplicar promo: ' + (e?.message || e));
     }
@@ -278,9 +279,22 @@ export default function LivePdvPage() {
       setPromoEditing(false);
       await doSearch();
       await refreshCarts();
+      await syncOpenCartAfterPriceChange();
     } catch (e: any) {
       alert('Erro ao remover promo: ' + (e?.message || e));
     }
+  }
+
+  // Após mudar preço (promo), ressincroniza o carrinho aberto e descarta um
+  // PIX/link antigo (o backend já o invalidou quando o total mudou).
+  async function syncOpenCartAfterPriceChange() {
+    if (!cart) return;
+    try {
+      const fresh = await api<Cart>(`/live-pdv/carts/${cart.id}`);
+      setCart(fresh);
+    } catch {}
+    setQr(null);
+    setPaid(false);
   }
 
   // ─── Busca ────────────────────────────────────────────────────────────────
@@ -414,6 +428,20 @@ export default function LivePdvPage() {
     setQr(null);
     setPaid(false);
     searchRef.current?.focus();
+  }
+
+  // Exclui (cancela) o carrinho da cliente — libera as reservas
+  async function deleteCart() {
+    if (!cart) return;
+    if (!confirm(`Excluir o carrinho de ${cart.customerName}? As peças reservadas serão liberadas.`)) return;
+    try {
+      await api(`/live-pdv/carts/${cart.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
+      newClient();
+      await refreshCarts();
+      await doSearch(); // atualiza estoque (reservas liberadas)
+    } catch (e: any) {
+      alert('Erro ao excluir: ' + (e?.message || e));
+    }
   }
 
   function openCart(c: Cart) {
@@ -869,6 +897,7 @@ export default function LivePdvPage() {
             onChargePix={chargePix}
             onChargeLink={chargeLink}
             onEditCustomer={() => setEditCustomerOpen(true)}
+            onDeleteCart={deleteCart}
           />
         </div>
       )}
@@ -916,6 +945,7 @@ function CartPanel({
   onChargePix,
   onChargeLink,
   onEditCustomer,
+  onDeleteCart,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -927,6 +957,7 @@ function CartPanel({
   onChargePix: () => void;
   onChargeLink: () => void;
   onEditCustomer: () => void;
+  onDeleteCart: () => void;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -964,13 +995,22 @@ function CartPanel({
                 </div>
               </div>
               {cart && (
-                <button
-                  onClick={onEditCustomer}
-                  title="Editar dados da cliente"
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
-                >
-                  <Pencil className="h-3.5 w-3.5" /> Editar
-                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={onEditCustomer}
+                    title="Editar dados da cliente"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Editar
+                  </button>
+                  <button
+                    onClick={onDeleteCart}
+                    title="Excluir o carrinho desta cliente (libera as reservas)"
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs font-medium text-rose-600 hover:border-rose-400 hover:bg-rose-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Excluir
+                  </button>
+                </div>
               )}
             </div>
 
