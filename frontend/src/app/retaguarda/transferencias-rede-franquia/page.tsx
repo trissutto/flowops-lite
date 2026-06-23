@@ -23,13 +23,20 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FileText,
   Loader2,
   Network,
   Package,
+  Paperclip,
+  Plus,
   Printer,
+  RefreshCw,
   Store,
+  Trash2,
+  Wallet,
+  X,
 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { api, API_URL, getAuthToken } from '@/lib/api';
 
 /* ─── Types ─── */
 interface FlowMetrics {
@@ -102,6 +109,7 @@ export default function TransferenciasRedeFranquiaPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [tab, setTab] = useState<'analise' | 'conta'>('analise');
 
   const isCustom = period === 'custom';
 
@@ -207,6 +215,7 @@ export default function TransferenciasRedeFranquiaPage() {
               Consolidado por tipo de loja — quanto cada categoria enviou pra outra.
             </p>
           </div>
+          {tab === 'analise' && (
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white">
               {PERIODS.map((p) => (
@@ -265,21 +274,48 @@ export default function TransferenciasRedeFranquiaPage() {
               <Printer className="h-4 w-4" /> Imprimir
             </button>
           </div>
+          )}
         </div>
 
-        {loading && (
+        {/* Abas: Análise × Conta Corrente */}
+        <div className="mb-5 flex gap-1 border-b border-slate-200 print:hidden">
+          <button
+            onClick={() => setTab('analise')}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition ${
+              tab === 'analise'
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Análise das transferências
+          </button>
+          <button
+            onClick={() => setTab('conta')}
+            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm font-semibold transition ${
+              tab === 'conta'
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Wallet className="h-4 w-4" /> Conta Corrente da Franqueada
+          </button>
+        </div>
+
+        {tab === 'conta' && <ContaCorrente />}
+
+        {tab === 'analise' && loading && (
           <div className="flex items-center justify-center gap-2 py-24 text-slate-500">
             <Loader2 className="h-5 w-5 animate-spin" /> Carregando relatório…
           </div>
         )}
 
-        {error && !loading && (
+        {tab === 'analise' && error && !loading && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             Falha ao carregar: {error}
           </div>
         )}
 
-        {data && !loading && (
+        {tab === 'analise' && data && !loading && (
           <>
             {data.period && (
               <p className="mb-4 text-xs text-slate-400">
@@ -456,5 +492,379 @@ function FlowRows({
           </tr>
         ))}
     </>
+  );
+}
+
+/* ─── Conta Corrente da Franqueada ─── */
+interface CCLinha {
+  id: string;
+  data: string;
+  tipo: string; // 'debito_sistema' | 'pagamento' | 'ajuste'
+  natureza: 'debito' | 'credito';
+  descricao: string;
+  valor: number;
+  saldo: number;
+  documentoUrl: string | null;
+  documentoNome: string | null;
+  criadoPorNome?: string | null;
+  editavel: boolean;
+}
+interface CCExtrato {
+  from: string;
+  to: string;
+  linhas: CCLinha[];
+  totalDebitos: number;
+  totalCreditos: number;
+  saldo: number;
+}
+
+function ContaCorrente() {
+  const hoje = new Date();
+  const seisMesesAtras = new Date(hoje.getFullYear(), hoje.getMonth() - 5, 1);
+  const [from, setFrom] = useState(ymd(seisMesesAtras));
+  const [to, setTo] = useState(ymd(hoje));
+  const [ext, setExt] = useState<CCExtrato | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      const d = await api<CCExtrato>(`/financeiro/conta-corrente?from=${from}&to=${to}`);
+      setExt(d);
+    } catch (e: any) {
+      setError(String(e?.message || e));
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to]);
+
+  async function excluir(id: string) {
+    if (!confirm('Estornar este lançamento? O documento anexado também será removido.')) return;
+    try {
+      await api(`/financeiro/conta-corrente/lancamentos/${id}`, { method: 'DELETE' });
+      load();
+    } catch (e: any) {
+      alert('Falha ao estornar: ' + (e?.message || e));
+    }
+  }
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
+          <input
+            type="date"
+            value={from}
+            max={to}
+            onChange={(e) => setFrom(e.target.value)}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+          />
+          <span className="text-sm text-slate-500">até</span>
+          <input
+            type="date"
+            value={to}
+            min={from}
+            onChange={(e) => setTo(e.target.value)}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+          />
+          <button onClick={load} className="ml-1 rounded p-1 text-slate-500 hover:bg-slate-100" title="Atualizar">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700"
+        >
+          <Plus className="h-4 w-4" /> Lançar pagamento / ajuste
+        </button>
+      </div>
+
+      {ext && (
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="text-[11px] uppercase tracking-wide text-slate-400">Débitos (o que ela deve)</div>
+            <div className="text-xl font-bold text-slate-800">{brl(ext.totalDebitos)}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="text-[11px] uppercase tracking-wide text-slate-400">Pagamentos / créditos</div>
+            <div className="text-xl font-bold text-emerald-700">{brl(ext.totalCreditos)}</div>
+          </div>
+          <div className={`rounded-xl border p-4 ${ext.saldo > 0.005 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Saldo a acertar</div>
+            <div className={`text-2xl font-black ${ext.saldo > 0.005 ? 'text-rose-700' : 'text-emerald-700'}`}>
+              {brl(ext.saldo)}
+            </div>
+            <div className="text-[10px] text-slate-400">
+              {ext.saldo > 0.005
+                ? 'franqueada deve à rede'
+                : ext.saldo < -0.005
+                ? 'crédito a favor da franqueada'
+                : 'quitado'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center justify-center gap-2 py-16 text-slate-500">
+          <Loader2 className="h-5 w-5 animate-spin" /> Carregando…
+        </div>
+      )}
+      {error && !loading && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">Falha: {error}</div>
+      )}
+
+      {ext && !loading && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3">Descrição</th>
+                <th className="px-4 py-3 text-right">Débito</th>
+                <th className="px-4 py-3 text-right">Crédito</th>
+                <th className="px-4 py-3 text-right">Saldo</th>
+                <th className="px-4 py-3 text-center">Doc</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {ext.linhas.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                    Nenhum lançamento no período.
+                  </td>
+                </tr>
+              )}
+              {ext.linhas.map((l) => (
+                <tr key={l.id} className={l.tipo === 'debito_sistema' ? 'bg-slate-50/40' : ''}>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                    {new Date(l.data).toLocaleDateString('pt-BR')}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className="text-slate-800">{l.descricao}</span>
+                    {l.tipo === 'pagamento' && (
+                      <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                        PAGAMENTO
+                      </span>
+                    )}
+                    {l.tipo === 'ajuste' && (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                        AJUSTE
+                      </span>
+                    )}
+                    {l.criadoPorNome && <span className="ml-2 text-[10px] text-slate-400">por {l.criadoPorNome}</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-rose-700">
+                    {l.natureza === 'debito' ? brl(l.valor) : ''}
+                  </td>
+                  <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">
+                    {l.natureza === 'credito' ? brl(l.valor) : ''}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{brl(l.saldo)}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    {l.documentoUrl ? (
+                      <a
+                        href={l.documentoUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex text-blue-600 hover:text-blue-800"
+                        title={l.documentoNome || 'Documento'}
+                      >
+                        <FileText className="h-4 w-4" />
+                      </a>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    {l.editavel && (
+                      <button onClick={() => excluir(l.id)} className="text-slate-400 hover:text-rose-600" title="Estornar">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-slate-400">
+        Linhas em cinza = débitos automáticos do sistema (mercadoria ÷2,5 + royalties 8% + marketing 4% por mês).
+        Pagamentos e ajustes são lançados manualmente, com documento anexável. Saldo &gt; 0 = a franqueada deve à rede.
+      </p>
+
+      {showForm && (
+        <LancamentoForm
+          onClose={() => setShowForm(false)}
+          onSaved={() => {
+            setShowForm(false);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LancamentoForm({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [tipo, setTipo] = useState<'pagamento' | 'ajuste'>('pagamento');
+  const [natureza, setNatureza] = useState<'credito' | 'debito'>('debito');
+  const [data, setData] = useState(ymd(new Date()));
+  const [valor, setValor] = useState('');
+  const [descricao, setDescricao] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function salvar() {
+    setErr(null);
+    const v = Number(String(valor).replace(/\./g, '').replace(',', '.'));
+    if (!v || v <= 0) {
+      setErr('Informe um valor válido.');
+      return;
+    }
+    if (!descricao.trim()) {
+      setErr('Informe a descrição.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append('tipo', tipo);
+      if (tipo === 'ajuste') fd.append('natureza', natureza);
+      fd.append('data', data);
+      fd.append('valor', String(v));
+      fd.append('descricao', descricao.trim());
+      if (file) fd.append('file', file);
+      const res = await fetch(`${API_URL}/api/financeiro/conta-corrente/lancamentos`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getAuthToken() || ''}` },
+        body: fd,
+      });
+      if (!res.ok) throw new Error((await res.text()) || 'Falha ao salvar');
+      onSaved();
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-800">Lançar na conta corrente</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setTipo('pagamento')}
+              className={`flex-1 rounded-lg border-2 px-3 py-2 text-sm font-bold ${
+                tipo === 'pagamento' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
+              }`}
+            >
+              Pagamento
+            </button>
+            <button
+              onClick={() => setTipo('ajuste')}
+              className={`flex-1 rounded-lg border-2 px-3 py-2 text-sm font-bold ${
+                tipo === 'ajuste' ? 'border-amber-600 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500'
+              }`}
+            >
+              Ajuste
+            </button>
+          </div>
+
+          {tipo === 'pagamento' ? (
+            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              Pagamento da franqueada — entra como <b>crédito</b> (reduz o saldo devedor).
+            </p>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setNatureza('debito')}
+                className={`flex-1 rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+                  natureza === 'debito' ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-slate-200 text-slate-500'
+                }`}
+              >
+                Débito (+ deve)
+              </button>
+              <button
+                onClick={() => setNatureza('credito')}
+                className={`flex-1 rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+                  natureza === 'credito' ? 'border-emerald-400 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
+                }`}
+              >
+                Crédito (− deve)
+              </button>
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-500">Data</label>
+            <input
+              type="date"
+              value={data}
+              onChange={(e) => setData(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-500">Valor (R$)</label>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              placeholder="0,00"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-500">Descrição</label>
+            <input
+              type="text"
+              value={descricao}
+              onChange={(e) => setDescricao(e.target.value)}
+              placeholder="Ex: Pagamento acerto março via PIX"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-500">Documento / comprovante (opcional)</label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50">
+              <Paperclip className="h-4 w-4" />
+              <span className="truncate">{file ? file.name : 'Anexar arquivo (PDF, imagem…)'}</span>
+              <input type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            </label>
+          </div>
+
+          {err && <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{err}</div>}
+
+          <button
+            onClick={salvar}
+            disabled={saving}
+            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? 'Salvando…' : 'Salvar lançamento'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
