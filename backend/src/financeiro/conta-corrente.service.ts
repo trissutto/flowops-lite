@@ -75,30 +75,37 @@ export class ContaCorrenteService {
     royalties: number;
     marketing: number;
     total: number;
+    detalheGiga: Array<{ label: string; valor: number; sinal: string }>;
+    detalheFlow: Array<{ label: string; valor: number; sinal: string }>;
+    detalheRoy: Array<{ label: string; valor: number; sinal: string }>;
   }> {
     const [y, m] = mes.split('-').map(Number);
     const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const fromStr = `${mes}-01`;
     const toStr = `${mes}-${String(lastDay).padStart(2, '0')}`;
+    const round = (n: number) => Math.round(n * 100) / 100;
 
-    // Tipo por loja (REDE = própria · FILIAL = franquia). Normaliza zero à
-    // esquerda pra casar LJ_ORIGEM/DESTINO char(2) do Giga ('01','07') com o
-    // Store.code do Flow.
+    // Tipo + nome por loja. Normaliza zero à esquerda pra casar LJ_ORIGEM/DESTINO
+    // char(2) do Giga ('01','07') com o Store.code do Flow.
     const stores = await this.prisma.store.findMany({
-      select: { code: true, tipo: true } as any,
+      select: { code: true, tipo: true, name: true } as any,
     });
     const norm = (c: any) => String(c ?? '').trim().padStart(2, '0');
     const tipoMap = new Map<string, string>();
+    const nameMap = new Map<string, string>();
     for (const s of stores as any[]) {
       tipoMap.set(norm(s.code), s.tipo === 'FILIAL' ? 'FILIAL' : 'REDE');
+      nameMap.set(norm(s.code), s.name || s.code);
     }
     const tipoOf = (code: string) => tipoMap.get(norm(code)) || 'REDE';
+    const nomeOf = (code: string) => nameMap.get(norm(code)) || String(code);
 
     // ── MERCADORIA lado GIGA — tabela `transferencias`, PREÇO ÷ 2,5 (NUNCA custo).
     // A franqueada DEVE pelo que a rede mandou pra ela (REDE→FILIAL) e é
     // CREDITADA pelo que ela devolveu (FILIAL→REDE). FILIAL→FILIAL (mesmo dono)
     // e REDE→REDE não entram.
     let mercadoriaGiga = 0;
+    const detalheGiga: Array<{ label: string; valor: number; sinal: string }> = [];
     try {
       const transf = await this.erp.getGigaTransfersByPair(
         new Date(`${fromStr}T00:00:00Z`),
@@ -109,36 +116,62 @@ export class ContaCorrenteService {
       for (const t of transf) {
         const oFil = tipoOf(t.origem) === 'FILIAL';
         const dFil = tipoOf(t.destino) === 'FILIAL';
-        if (!oFil && dFil) recebeu += t.totalPreco; // REDE → FRANQUIA
-        else if (oFil && !dFil) mandou += t.totalPreco; // FRANQUIA → REDE
+        const vc = round(t.totalPreco / 2.5);
+        if (!oFil && dFil) {
+          recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
+          detalheGiga.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '+' });
+        } else if (oFil && !dFil) {
+          mandou += t.totalPreco; // FRANQUIA → REDE (abate)
+          detalheGiga.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '-' });
+        }
       }
       mercadoriaGiga = (recebeu - mandou) / 2.5;
     } catch (e: any) {
       this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
     }
+    detalheGiga.sort((a, b) => b.valor - a.valor);
 
     // ── MERCADORIA lado FLOW — relatório de transferências (já em custo ÷2,5).
     let mercadoriaFlow = 0;
+    const detalheFlow: Array<{ label: string; valor: number; sinal: string }> = [];
     try {
       const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
       mercadoriaFlow =
         (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
+      for (const p of (((rep as any).pairs as any[]) || [])) {
+        if (p.direction === 'redeToFilial') {
+          detalheFlow.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '+' });
+        } else if (p.direction === 'filialToRede') {
+          detalheFlow.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '-' });
+        }
+      }
     } catch (e: any) {
       this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
     }
+    detalheFlow.sort((a, b) => b.valor - a.valor);
 
     // ── Royalties 8% + marketing 4% (FinanceiroService, a partir da venda Giga).
     let royalties = 0;
     let marketing = 0;
+    const detalheRoy: Array<{ label: string; valor: number; sinal: string }> = [];
     try {
       const r = await this.financeiro.getRoyaltiesByMonth(mes);
       royalties = r.totalRoyalties || 0;
       marketing = r.totalMarketing || 0;
+      for (const f of (((r as any).porFilial as any[]) || [])) {
+        const tot = (f.royaltiesValor || 0) + (f.marketingValor || 0);
+        if (tot <= 0.005) continue;
+        detalheRoy.push({
+          label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`,
+          valor: round(tot),
+          sinal: '+',
+        });
+      }
     } catch (e: any) {
       this.logger.warn(`[conta-corrente] royalties ${mes} indisponível: ${e?.message || e}`);
     }
+    detalheRoy.sort((a, b) => b.valor - a.valor);
 
-    const round = (n: number) => Math.round(n * 100) / 100;
     return {
       mes,
       mercadoriaGiga: round(mercadoriaGiga),
@@ -146,6 +179,9 @@ export class ContaCorrenteService {
       royalties: round(royalties),
       marketing: round(marketing),
       total: round(mercadoriaGiga + mercadoriaFlow + royalties + marketing),
+      detalheGiga,
+      detalheFlow,
+      detalheRoy,
     };
   }
 
@@ -191,7 +227,13 @@ export class ContaCorrenteService {
     // DÉBITOS automáticos — SEPARADOS POR SISTEMA (GIGA × FLOW) + royalties.
     // Datados no vencimento (dia 1 do mês seguinte). Valor negativo (a franquia
     // devolveu mais do que recebeu da rede) vira CRÉDITO.
-    const pushAuto = (mesRef: string, descricao: string, sistema: string, valor: number) => {
+    const pushAuto = (
+      mesRef: string,
+      descricao: string,
+      sistema: string,
+      valor: number,
+      detalhe?: Array<{ label: string; valor: number; sinal: string }>,
+    ) => {
       if (Math.abs(valor) < 0.005) return;
       const [yy, mm] = mesRef.split('-').map(Number);
       const vencimento = new Date(Date.UTC(yy, mm, 1)).toISOString();
@@ -207,15 +249,16 @@ export class ContaCorrenteService {
         documentoUrl: null,
         documentoNome: null,
         editavel: false,
+        detalhe: detalhe && detalhe.length ? detalhe : undefined,
       });
       if (natureza === 'debito') totalDebitos += Math.abs(valor);
       else totalCreditos += Math.abs(valor);
     };
     for (const mes of this.mesesEntre(from, to)) {
       const d = await this.debitoDoMes(mes);
-      pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga);
-      pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow);
-      pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing);
+      pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
+      pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
+      pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
 
     // LANÇAMENTOS manuais (pagamentos + ajustes) no período.

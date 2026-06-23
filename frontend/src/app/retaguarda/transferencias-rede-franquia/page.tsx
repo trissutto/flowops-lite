@@ -14,7 +14,7 @@
  */
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -508,6 +508,8 @@ interface CCLinha {
   documentoNome: string | null;
   criadoPorNome?: string | null;
   editavel: boolean;
+  sistema?: string;
+  detalhe?: Array<{ label: string; valor: number; sinal: string }>;
 }
 interface CCExtrato {
   from: string;
@@ -527,6 +529,7 @@ function ContaCorrente() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [expandido, setExpandido] = useState<Record<string, boolean>>({});
 
   async function load() {
     setLoading(true);
@@ -643,56 +646,98 @@ function ContaCorrente() {
                   </td>
                 </tr>
               )}
-              {ext.linhas.map((l) => (
-                <tr key={l.id} className={l.tipo === 'debito_sistema' ? 'bg-slate-50/40' : ''}>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
-                    {new Date(l.data).toLocaleDateString('pt-BR')}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className="text-slate-800">{l.descricao}</span>
-                    {l.tipo === 'pagamento' && (
-                      <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
-                        PAGAMENTO
-                      </span>
-                    )}
-                    {l.tipo === 'ajuste' && (
-                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-                        AJUSTE
-                      </span>
-                    )}
-                    {l.criadoPorNome && <span className="ml-2 text-[10px] text-slate-400">por {l.criadoPorNome}</span>}
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-rose-700">
-                    {l.natureza === 'debito' ? brl(l.valor) : ''}
-                  </td>
-                  <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">
-                    {l.natureza === 'credito' ? brl(l.valor) : ''}
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{brl(l.saldo)}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {l.documentoUrl ? (
-                      <a
-                        href={l.documentoUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex text-blue-600 hover:text-blue-800"
-                        title={l.documentoNome || 'Documento'}
-                      >
-                        <FileText className="h-4 w-4" />
-                      </a>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {l.editavel && (
-                      <button onClick={() => excluir(l.id)} className="text-slate-400 hover:text-rose-600" title="Estornar">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {ext.linhas.map((l) => {
+                const temDet = !!(l.detalhe && l.detalhe.length);
+                const aberto = !!expandido[l.id];
+                return (
+                  <Fragment key={l.id}>
+                    <tr
+                      className={`${l.tipo === 'debito_sistema' ? 'bg-slate-50/40' : ''} ${temDet ? 'cursor-pointer hover:bg-slate-100/70' : ''}`}
+                      onClick={temDet ? () => setExpandido((e) => ({ ...e, [l.id]: !e[l.id] })) : undefined}
+                    >
+                      <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
+                        {new Date(l.data).toLocaleDateString('pt-BR')}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {temDet && (
+                          <span className="mr-1 inline-block align-middle text-slate-400">
+                            {aberto ? <ChevronDown className="inline h-4 w-4" /> : <ChevronRight className="inline h-4 w-4" />}
+                          </span>
+                        )}
+                        <span className="text-slate-800">{l.descricao}</span>
+                        {l.tipo === 'pagamento' && (
+                          <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                            PAGAMENTO
+                          </span>
+                        )}
+                        {l.tipo === 'ajuste' && (
+                          <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                            AJUSTE
+                          </span>
+                        )}
+                        {l.criadoPorNome && <span className="ml-2 text-[10px] text-slate-400">por {l.criadoPorNome}</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-rose-700">
+                        {l.natureza === 'debito' ? brl(l.valor) : ''}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-emerald-700">
+                        {l.natureza === 'credito' ? brl(l.valor) : ''}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{brl(l.saldo)}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        {l.documentoUrl ? (
+                          <a
+                            href={l.documentoUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex text-blue-600 hover:text-blue-800"
+                            title={l.documentoNome || 'Documento'}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <FileText className="h-4 w-4" />
+                          </a>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {l.editavel && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              excluir(l.id);
+                            }}
+                            className="text-slate-400 hover:text-rose-600"
+                            title="Estornar"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {temDet &&
+                      aberto &&
+                      l.detalhe!.map((d, i) => (
+                        <tr key={`${l.id}-d-${i}`} className="bg-white text-xs text-slate-600">
+                          <td className="px-4 py-1.5" />
+                          <td className="py-1.5 pl-10 pr-4">
+                            {d.sinal === '-' ? '− ' : '+ '}
+                            {d.label}
+                          </td>
+                          <td className="px-4 py-1.5 text-right tabular-nums text-rose-600">
+                            {d.sinal === '+' ? brl(d.valor) : ''}
+                          </td>
+                          <td className="px-4 py-1.5 text-right tabular-nums text-emerald-600">
+                            {d.sinal === '-' ? brl(d.valor) : ''}
+                          </td>
+                          <td className="px-4 py-1.5" />
+                          <td className="px-4 py-1.5" />
+                          <td className="px-4 py-1.5" />
+                        </tr>
+                      ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
