@@ -52,6 +52,20 @@ function emitConnection(ev: ConnectionEvent) {
  */
 let unauthorizedHandled = false;
 
+/**
+ * Limpa o token de AMBOS os storages.
+ *
+ * IMPORTANTE: o modo IMPERSONATE (admin "entra como loja") guarda o token no
+ * sessionStorage (por aba), e getAuthToken() prioriza sessionStorage. Se o 401
+ * limpasse só o localStorage, o token expirado de impersonação continuava no
+ * sessionStorage → loop infinito de "sessão expirou" no navegador. Limpar os
+ * dois mata o loop.
+ */
+function clearStoredToken() {
+  try { localStorage.removeItem('flowops_token'); } catch {}
+  try { sessionStorage.removeItem('flowops_token'); } catch {}
+}
+
 function handleUnauthorized() {
   if (typeof window === 'undefined') return;
   if (unauthorizedHandled) return;
@@ -60,9 +74,7 @@ function handleUnauthorized() {
   // Acontece quando chamadas em background (ping, polling) disparam 401
   // enquanto o user está digitando senha. Antes ficava em loop de alerts.
   if (window.location.pathname === '/login') {
-    try {
-      localStorage.removeItem('flowops_token');
-    } catch {}
+    clearStoredToken();
     return;
   }
 
@@ -74,18 +86,14 @@ function handleUnauthorized() {
   // sessão na próxima ação.
   const PRINT_ROUTES = ['/recibo/', '/recibo-devolucao/', '/nfce/', '/imprimir'];
   if (PRINT_ROUTES.some((p) => window.location.pathname.includes(p))) {
-    try {
-      localStorage.removeItem('flowops_token');
-    } catch {}
+    clearStoredToken();
     setTimeout(() => { try { window.close(); } catch {} }, 100);
     return;
   }
 
   unauthorizedHandled = true;
 
-  try {
-    localStorage.removeItem('flowops_token');
-  } catch {}
+  clearStoredToken();
   try { import('./socket').then(m => m.disconnectSocket()); } catch {}
 
   // Dispara evento pra qualquer listener (ex.: layout) e também mostra alert
