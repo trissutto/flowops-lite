@@ -18,6 +18,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
+  ArrowUpRight,
   Building2,
   Calendar,
   ChevronDown,
@@ -28,9 +29,11 @@ import {
   Network,
   Package,
   Paperclip,
+  Percent,
   Plus,
   Printer,
   RefreshCw,
+  SlidersHorizontal,
   Store,
   Trash2,
   Wallet,
@@ -495,6 +498,29 @@ function FlowRows({
   );
 }
 
+function CatCard({
+  icon,
+  label,
+  valor,
+  hint,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  valor: number;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-1.5 text-sm text-slate-500">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-bold text-slate-800">{brl(valor)}</div>
+      <div className="text-[11px] text-slate-400">{hint}</div>
+    </div>
+  );
+}
+
 /* ─── Conta Corrente da Franqueada ─── */
 interface CCLinha {
   id: string;
@@ -531,6 +557,35 @@ function ContaCorrente() {
   const [showForm, setShowForm] = useState(false);
   const [expandido, setExpandido] = useState<Record<string, boolean>>({});
   const reqIdRef = useRef(0);
+
+  // Resumo do topo: quebra os débitos por categoria (mercadoria = giga+flow,
+  // royalties+mkt, ajustes manuais) e calcula quanto do total já foi quitado.
+  const resumo = useMemo(() => {
+    if (!ext) return null;
+    const cats = { mercadoria: 0, royalties: 0, ajustes: 0 };
+    for (const l of ext.linhas) {
+      const s = l.natureza === 'debito' ? l.valor : -l.valor;
+      if (l.tipo === 'debito_sistema') {
+        if (l.sistema === 'royalties') cats.royalties += s;
+        else cats.mercadoria += s; // giga + flow
+      } else if (l.tipo === 'ajuste') {
+        cats.ajustes += s;
+      }
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    const pct =
+      ext.totalDebitos > 0.005
+        ? Math.min(100, Math.round((ext.totalCreditos / ext.totalDebitos) * 100))
+        : ext.saldo > 0.005
+        ? 0
+        : 100;
+    return {
+      cats: { mercadoria: round(cats.mercadoria), royalties: round(cats.royalties), ajustes: round(cats.ajustes) },
+      pct,
+      saldoPos: ext.saldo > 0.005,
+      saldoNeg: ext.saldo < -0.005,
+    };
+  }, [ext]);
 
   async function load() {
     // Ignora respostas de loads ANTIGOS (corrida ao trocar datas/atualizar) —
@@ -594,28 +649,69 @@ function ContaCorrente() {
         </button>
       </div>
 
-      {ext && (
-        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">Débitos (o que ela deve)</div>
-            <div className="text-xl font-bold text-slate-800">{brl(ext.totalDebitos)}</div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <div className="text-[11px] uppercase tracking-wide text-slate-400">Pagamentos / créditos</div>
-            <div className="text-xl font-bold text-emerald-700">{brl(ext.totalCreditos)}</div>
-          </div>
-          <div className={`rounded-xl border p-4 ${ext.saldo > 0.005 ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-            <div className="text-[11px] uppercase tracking-wide text-slate-500">Saldo a acertar</div>
-            <div className={`text-2xl font-black ${ext.saldo > 0.005 ? 'text-rose-700' : 'text-emerald-700'}`}>
-              {brl(ext.saldo)}
+      {ext && resumo && (
+        <div className="mb-5">
+          {/* Saldo em destaque + barra de quitação */}
+          <div className="mb-3 rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-xs text-slate-500">Saldo a acertar</div>
+                <div className={`text-3xl font-black leading-tight ${resumo.saldoPos ? 'text-rose-700' : 'text-emerald-700'}`}>
+                  {brl(Math.abs(ext.saldo))}
+                </div>
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  {resumo.saldoPos ? (
+                    <>
+                      <ArrowUpRight className="h-3.5 w-3.5" /> franqueada deve à rede
+                    </>
+                  ) : resumo.saldoNeg ? (
+                    'crédito a favor da franqueada'
+                  ) : (
+                    'quitado'
+                  )}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] uppercase tracking-wide text-slate-400">Débitos</div>
+                <div className="text-base font-bold text-slate-800">{brl(ext.totalDebitos)}</div>
+                <div className="mt-2 text-[11px] uppercase tracking-wide text-slate-400">Pago / créditos</div>
+                <div className="text-base font-bold text-emerald-700">{brl(ext.totalCreditos)}</div>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-400">
-              {ext.saldo > 0.005
-                ? 'franqueada deve à rede'
-                : ext.saldo < -0.005
-                ? 'crédito a favor da franqueada'
-                : 'quitado'}
+            <div className="mt-4">
+              <div className="mb-1.5 flex justify-between text-xs text-slate-500">
+                <span>{resumo.pct}% quitado</span>
+                <span>{resumo.saldoPos ? `faltam ${brl(ext.saldo)}` : 'sem saldo devedor'}</span>
+              </div>
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-all"
+                  style={{ width: `${resumo.pct}%` }}
+                />
+              </div>
             </div>
+          </div>
+
+          {/* Débitos por categoria */}
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+            <CatCard
+              icon={<Building2 className="h-4 w-4 text-blue-600" />}
+              label="Mercadoria"
+              valor={resumo.cats.mercadoria}
+              hint="Giga + Flow · custo ÷2,5"
+            />
+            <CatCard
+              icon={<Percent className="h-4 w-4 text-purple-600" />}
+              label="Royalties + Mkt"
+              valor={resumo.cats.royalties}
+              hint="8% + 4% da venda"
+            />
+            <CatCard
+              icon={<SlidersHorizontal className="h-4 w-4 text-amber-600" />}
+              label="Ajustes"
+              valor={resumo.cats.ajustes}
+              hint="lançamentos manuais"
+            />
           </div>
         </div>
       )}
