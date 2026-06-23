@@ -1501,7 +1501,7 @@ function PdvPageInner() {
               >
                 <Search className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Consulta Produtos</div>
+                  <div className="text-sm font-black leading-tight">Consulta</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Buscar produto, estoque</div>
                 </div>
                 <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F10</span>
@@ -1559,7 +1559,7 @@ function PdvPageInner() {
               >
                 <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Baixa Crediário</div>
+                  <div className="text-sm font-black leading-tight">Crediário</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Receber parcelas</div>
                 </div>
                 <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
@@ -1584,7 +1584,7 @@ function PdvPageInner() {
               >
                 <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
+                  <div className="text-sm font-black leading-tight">Vendidos</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Vendas + trocas (conferir)</div>
                 </div>
                 <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
@@ -1596,7 +1596,7 @@ function PdvPageInner() {
               >
                 <FileText className="w-5 h-5 text-[#D4AF37] shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Notas Fiscais</div>
+                  <div className="text-sm font-black leading-tight">Notas</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">NFC-es emitidas</div>
                 </div>
                 <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
