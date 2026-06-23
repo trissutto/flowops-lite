@@ -1314,7 +1314,7 @@ function PdvPageInner() {
           PDV2: sticky top-7 (28px) pra ficar logo abaixo do banner de teste. */}
       <header
         className="sticky top-7 z-20"
-        style={{ background: '#5e2c35', borderBottom: '1px solid rgba(212,175,55,.35)' }}
+        style={{ background: '#fffdfa', borderBottom: '1px solid #ecdfc6' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
@@ -1356,13 +1356,8 @@ function PdvPageInner() {
               )}
             </div>
             <h1
-              className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
-              style={{
-                background: 'linear-gradient(90deg, #D4AF37 0%, #E5C158 100%)',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-              }}
+              className="font-display text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
+              style={{ color: '#5e2c35' }}
               title={sale?.storeName || ''}
             >
               {sale?.storeName || 'Carregando…'}
@@ -1487,13 +1482,13 @@ function PdvPageInner() {
           do footer pra mesma navegação. */}
       {sale?.status === 'open' && (
         <aside
-          className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
+          className="pdv-rail w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
           style={{
             top: '0',
             minHeight: '100vh',
             maxHeight: '100vh',
             overflowY: 'auto',
-            background: '#5e2c35',
+            background: '#f4efe7',
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
@@ -2058,7 +2053,7 @@ function PdvPageInner() {
           minHeight: '100vh',
           maxHeight: '100vh',
           overflowY: 'auto',
-          background: '#5e2c35',
+          background: '#f4efe7',
         }}
       >
         <div className="p-2.5 pt-3 space-y-3">
@@ -2116,13 +2111,16 @@ function PdvPageInner() {
               const liquido = Math.round((sale.total - valeTrocaPago) * 100) / 100;
               const ehCredito = liquido < -0.01;
               return (
-                <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#8C7325]">
+                <div className="border-t border-dashed border-[#e0d3c0] mt-3 pt-3">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#9c8d90]">
                     {ehCredito ? 'Sobra crédito' : 'A pagar'}
                   </span>
-                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
+                  <div
+                    className="font-display tabular-nums leading-none mt-0.5"
+                    style={{ fontSize: '34px', color: ehCredito ? '#b4583e' : '#5e2c35' }}
+                  >
                     {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
-                  </span>
+                  </div>
                 </div>
               );
             })()}
@@ -2470,10 +2468,13 @@ function PdvPageInner() {
                           {brl(sale.total)} · <span className="text-emerald-600">✓ {brl(paid)} pago</span>
                         </div>
                       )}
-                      <div className="text-[10px] text-[#8C7325] uppercase tracking-widest font-bold leading-none">
+                      <div className="text-[10px] text-[#9c8d90] uppercase tracking-widest font-bold leading-none">
                         {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
                       </div>
-                      <div className={`text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
+                      <div
+                        className="font-display text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap"
+                        style={{ color: ehCredito ? '#b4583e' : '#5e2c35' }}
+                      >
                         {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                       </div>
                     </>
