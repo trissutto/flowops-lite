@@ -112,6 +112,14 @@ export class LivePdvController {
     return this.svc.getCart(cartId);
   }
 
+  @Post('carts/:cartId/customer')
+  updateCartCustomer(
+    @Param('cartId') cartId: string,
+    @Body() body: { name: string; phone?: string; instagram?: string; cpf?: string; email?: string },
+  ) {
+    return this.svc.updateCartCustomer(cartId, body);
+  }
+
   @Post('carts/:cartId/frete')
   setFrete(@Param('cartId') cartId: string, @Body() body: { freteCents: number }) {
     return this.svc.setFrete(cartId, body.freteCents);
