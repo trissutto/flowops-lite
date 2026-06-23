@@ -14,7 +14,7 @@
  */
 
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -530,17 +530,22 @@ function ContaCorrente() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [expandido, setExpandido] = useState<Record<string, boolean>>({});
+  const reqIdRef = useRef(0);
 
   async function load() {
+    // Ignora respostas de loads ANTIGOS (corrida ao trocar datas/atualizar) —
+    // só o request mais recente atualiza a tela. Evita ficar preso em
+    // "Carregando..." por causa de uma resposta lenta que chegou atrasada.
+    const myId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const d = await api<CCExtrato>(`/financeiro/conta-corrente?from=${from}&to=${to}`);
-      setExt(d);
+      if (myId === reqIdRef.current) setExt(d);
     } catch (e: any) {
-      setError(String(e?.message || e));
+      if (myId === reqIdRef.current) setError(String(e?.message || e));
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }
   useEffect(() => {
