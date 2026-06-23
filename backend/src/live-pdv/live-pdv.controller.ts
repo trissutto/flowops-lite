@@ -50,8 +50,23 @@ export class LivePdvController {
 
   // ── Busca / grade ──
   @Get('search')
-  search(@Query('term') term: string) {
-    return this.svc.searchGrade(term);
+  search(@Query('term') term: string, @Query('sessionId') sessionId?: string) {
+    return this.svc.searchGrade(term, sessionId);
+  }
+
+  // ── Preço promocional da live ──
+  @Get('sessions/:id/promos')
+  listPromos(@Param('id') sessionId: string) {
+    return this.svc.listPromos(sessionId);
+  }
+
+  @Post('sessions/:id/promo')
+  setPromo(
+    @Req() req: any,
+    @Param('id') sessionId: string,
+    @Body() body: { refCode: string; priceCents: number },
+  ) {
+    return this.svc.setPromoPrice(sessionId, body.refCode, body.priceCents, req?.user?.sub || null);
   }
 
   // ── Cliente ──
