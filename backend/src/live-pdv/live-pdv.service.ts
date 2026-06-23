@@ -425,6 +425,62 @@ export class LivePdvService {
     return { id: created.id, name, phone, instagram: ig };
   }
 
+  /**
+   * Edita os dados do cliente de um carrinho a QUALQUER MOMENTO da live.
+   * Atualiza tanto o cadastro mestre (Customer, mantendo originSource='live')
+   * quanto o snapshot do carrinho. Só o nome é obrigatório.
+   */
+  async updateCartCustomer(cartId: string, input: {
+    name: string;
+    phone?: string;
+    instagram?: string;
+    cpf?: string;
+    email?: string;
+  }) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const name = (input.name || '').trim();
+    if (!name) throw new BadRequestException('Nome é obrigatório');
+    const phone = (input.phone || '').replace(/\D/g, '');
+    const ig = (input.instagram || '').trim().replace(/^@/, '') || null;
+    const cpf = input.cpf ? input.cpf.replace(/\D/g, '') : null;
+    const email = input.email?.trim() || null;
+
+    // Atualiza o cliente mestre (cria se o carrinho ainda não tinha vínculo).
+    let customerId: string | null = cart.customerId || null;
+    try {
+      if (customerId) {
+        await (this.prisma as any).customer.update({
+          where: { id: customerId },
+          data: { name, phone: phone || null, igUsername: ig, cpf, email, originSource: 'live' },
+        });
+      } else {
+        const created = await (this.prisma as any).customer.create({
+          data: { name, phone: phone || null, igUsername: ig, cpf, email, originSource: 'live' },
+        });
+        customerId = created.id;
+      }
+    } catch (e) {
+      // Conflito (ex.: e-mail único já usado por outro cliente) não pode travar
+      // a live — o snapshot do carrinho continua sendo a fonte pra venda.
+      this.logger.warn(`updateCartCustomer: falha ao salvar Customer: ${(e as Error).message}`);
+    }
+
+    const updated = await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: {
+        customerId,
+        customerName: name,
+        customerPhone: phone,
+        customerInstagram: ig,
+        customerCpf: cpf,
+        customerEmail: email,
+      },
+    });
+    this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
+    return this.getCart(updated.id);
+  }
+
   // ─── Carrinho / Itens ───────────────────────────────────────────────────────
   private async ensureCart(sessionId: string, customer: {
     id?: string | null;

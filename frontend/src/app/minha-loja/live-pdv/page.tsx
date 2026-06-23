@@ -73,6 +73,8 @@ interface Cart {
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
+  customerCpf?: string | null;
+  customerEmail?: string | null;
   status: string;
   subtotalCents: number;
   freteCents: number;
@@ -177,6 +179,7 @@ export default function LivePdvPage() {
   const [carts, setCarts] = useState<Cart[]>([]);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
+  const [editCustomerOpen, setEditCustomerOpen] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
 
   // Pagamento
@@ -422,6 +425,34 @@ export default function LivePdvPage() {
     });
     setQr(null);
     setPaid(false);
+  }
+
+  // Edita o cliente do carrinho a qualquer momento (salva no banco + snapshot)
+  async function saveCustomerEdit(form: {
+    name: string;
+    phone: string;
+    instagram: string;
+    cpf: string;
+    email: string;
+  }) {
+    if (!cart) return;
+    try {
+      const updated = await api<Cart>(`/live-pdv/carts/${cart.id}/customer`, {
+        method: 'POST',
+        body: JSON.stringify(form),
+      });
+      setCart(updated);
+      setActiveCustomer({
+        id: '',
+        name: updated.customerName,
+        phone: updated.customerPhone,
+        instagram: updated.customerInstagram,
+      });
+      setEditCustomerOpen(false);
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao salvar cliente: ' + (e?.message || e));
+    }
   }
 
   async function removeItem(itemId: string) {
@@ -818,8 +849,26 @@ export default function LivePdvPage() {
             onNewClient={newClient}
             onRemoveItem={removeItem}
             onChargePix={chargePix}
+            onEditCustomer={() => setEditCustomerOpen(true)}
           />
         </div>
+      )}
+
+      {/* Modal editar cliente do carrinho */}
+      {editCustomerOpen && cart && (
+        <CustomerModal
+          title="Editar cliente"
+          submitLabel="Salvar alterações"
+          initial={{
+            name: cart.customerName,
+            phone: cart.customerPhone,
+            instagram: cart.customerInstagram,
+            cpf: cart.customerCpf,
+            email: cart.customerEmail,
+          }}
+          onClose={() => setEditCustomerOpen(false)}
+          onSave={saveCustomerEdit}
+        />
       )}
 
       {/* Modal cliente */}
@@ -846,6 +895,7 @@ function CartPanel({
   onNewClient,
   onRemoveItem,
   onChargePix,
+  onEditCustomer,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -855,6 +905,7 @@ function CartPanel({
   onNewClient: () => void;
   onRemoveItem: (id: string) => void;
   onChargePix: () => void;
+  onEditCustomer: () => void;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -881,16 +932,25 @@ function CartPanel({
           <div className="p-3">
             <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2">
               <User className="h-4 w-4 text-slate-400" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold text-slate-800">
                   {cart?.customerName || activeCustomer?.name}
                 </div>
                 <div className="truncate text-xs text-slate-500">
-                  {cart?.customerPhone || activeCustomer?.phone}
+                  {cart?.customerPhone || activeCustomer?.phone || 'sem telefone'}
                   {(cart?.customerInstagram || activeCustomer?.instagram) &&
                     ` · @${cart?.customerInstagram || activeCustomer?.instagram}`}
                 </div>
               </div>
+              {cart && (
+                <button
+                  onClick={onEditCustomer}
+                  title="Editar dados da cliente"
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Editar
+                </button>
+              )}
             </div>
 
             <div className="max-h-[40vh] space-y-1.5 overflow-y-auto">
@@ -987,19 +1047,25 @@ function CartPanel({
   );
 }
 
-/* ─── Modal de cliente ─── */
+/* ─── Modal de cliente (criar / editar) ─── */
 function CustomerModal({
   onClose,
   onSave,
+  initial,
+  title = 'Identificar cliente',
+  submitLabel = 'Salvar e adicionar item',
 }: {
   onClose: () => void;
   onSave: (f: { name: string; phone: string; instagram: string; cpf: string; email: string }) => void;
+  initial?: { name?: string; phone?: string; instagram?: string | null; cpf?: string | null; email?: string | null };
+  title?: string;
+  submitLabel?: string;
 }) {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [instagram, setInstagram] = useState('');
-  const [cpf, setCpf] = useState('');
-  const [email, setEmail] = useState('');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [phone, setPhone] = useState(initial?.phone ?? '');
+  const [instagram, setInstagram] = useState(initial?.instagram ?? '');
+  const [cpf, setCpf] = useState(initial?.cpf ?? '');
+  const [email, setEmail] = useState(initial?.email ?? '');
   const nameRef = useRef<HTMLInputElement>(null);
   useEffect(() => nameRef.current?.focus(), []);
 
@@ -1017,7 +1083,7 @@ function CustomerModal({
       <form onSubmit={submit} className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
-            <UserPlus className="h-5 w-5 text-rose-500" /> Identificar cliente
+            <UserPlus className="h-5 w-5 text-rose-500" /> {title}
           </h3>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X className="h-5 w-5" />
@@ -1033,7 +1099,7 @@ function CustomerModal({
           </div>
         </div>
         <button type="submit" className="mt-4 w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700">
-          Salvar e adicionar item
+          {submitLabel}
         </button>
       </form>
     </div>
