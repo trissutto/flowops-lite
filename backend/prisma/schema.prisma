@@ -3270,8 +3270,9 @@ model LivePdvItem {
   cor               String?
   tamanho           String?
   qty               Int      @default(1)
-  priceCents        Int      @map("price_cents")
-  custoCents        Int      @map("custo_cents")         // priceCents / 2.5 (valor de custo p/ conciliação)
+  priceCents        Int      @map("price_cents")          // preço efetivo cobrado (promo da live se houver)
+  basePriceCents    Int      @default(0) @map("base_price_cents") // preço cheio (sem promo) — base do custo e do "de/por"
+  custoCents        Int      @map("custo_cents")         // basePriceCents / 2.5 (valor de custo p/ conciliação)
   originStoreCode   String   @map("origin_store_code")
   originStoreName   String   @map("origin_store_name")
   originManual      Boolean  @default(false) @map("origin_manual")  // supervisor trocou a loja manualmente
@@ -3299,4 +3300,20 @@ model LivePdvItem {
   @@index([originStoreCode, status])
   @@index([cartId])
   @@map("live_pdv_items")
+}
+
+// Preço promocional da live — definido pela atendente em tempo real, por
+// produto (REF) dentro de uma sessão. Vale pra novos itens e atualiza os
+// itens ainda RESERVADOS (não pagos). priceCents=preço promo em centavos.
+model LivePdvPromo {
+  id              String   @id @default(uuid())
+  sessionId       String   @map("session_id")
+  refCode         String   @map("ref_code")        // REF normalizada (uppercase)
+  priceCents      Int      @map("price_cents")
+  createdByUserId String?  @map("created_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@unique([sessionId, refCode])
+  @@map("live_pdv_promos")
 }

@@ -20,10 +20,12 @@ import {
   Check,
   Loader2,
   Package,
+  Pencil,
   QrCode,
   Search,
   ShoppingCart,
   Store,
+  Tag,
   Trash2,
   User,
   UserPlus,
@@ -48,6 +50,8 @@ interface GradeResult {
   ref?: string;
   descricao?: string;
   priceCents?: number;
+  basePriceCents?: number;
+  promoActive?: boolean;
   photoUrl?: string | null;
   totalRede?: number;
   cells?: GradeCell[];
@@ -154,6 +158,8 @@ export default function LivePdvPage() {
   const [term, setTerm] = useState('');
   const [product, setProduct] = useState<GradeResult | null>(null);
   const [searching, setSearching] = useState(false);
+  const [promoEditing, setPromoEditing] = useState(false);
+  const [promoInput, setPromoInput] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Cliente / carrinho
@@ -204,10 +210,12 @@ export default function LivePdvPage() {
     socket.on('live-pdv:cart-paid', onChange);
     socket.on('live-pdv:reservations-expired', onChange);
     socket.on('live-pdv:item-shipped', onChange);
+    socket.on('live-pdv:promo', onChange);
     return () => {
       socket.off('live-pdv:cart-paid', onChange);
       socket.off('live-pdv:reservations-expired', onChange);
       socket.off('live-pdv:item-shipped', onChange);
+      socket.off('live-pdv:promo', onChange);
     };
   }, [sessionId, refreshCarts]);
 
@@ -226,6 +234,42 @@ export default function LivePdvPage() {
     }
   }
 
+  // ─── Preço promocional da live ──────────────────────────────────────────────
+  async function applyPromo() {
+    if (!sessionId || !product?.ref) return;
+    const reais = parseFloat(promoInput.replace(',', '.'));
+    if (isNaN(reais) || reais <= 0) {
+      alert('Informe um preço promocional válido.');
+      return;
+    }
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: product.ref, priceCents: Math.round(reais * 100) }),
+      });
+      setPromoEditing(false);
+      await doSearch();
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao aplicar promo: ' + (e?.message || e));
+    }
+  }
+
+  async function removePromo() {
+    if (!sessionId || !product?.ref) return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: product.ref, priceCents: 0 }),
+      });
+      setPromoEditing(false);
+      await doSearch();
+      await refreshCarts();
+    } catch (e: any) {
+      alert('Erro ao remover promo: ' + (e?.message || e));
+    }
+  }
+
   // ─── Busca ────────────────────────────────────────────────────────────────
   async function doSearch(e?: React.FormEvent) {
     e?.preventDefault();
@@ -233,8 +277,10 @@ export default function LivePdvPage() {
     if (!q) return;
     setSearching(true);
     setProduct(null);
+    setPromoEditing(false);
     try {
-      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}`);
+      const sid = sessionId ? `&sessionId=${sessionId}` : '';
+      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`);
       setProduct(res);
     } catch (err: any) {
       setProduct({ found: false });
@@ -522,7 +568,71 @@ export default function LivePdvPage() {
                   <div className="min-w-0">
                     <div className="text-xs font-semibold text-rose-600">{product.ref}</div>
                     <h2 className="truncate text-lg font-bold text-slate-800">{product.descricao}</h2>
-                    <div className="mt-1 text-2xl font-extrabold text-slate-900">{brl(product.priceCents || 0)}</div>
+
+                    {/* Preço + preço promocional da live */}
+                    {promoEditing ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">R$</span>
+                          <input
+                            autoFocus
+                            value={promoInput}
+                            onChange={(e) => setPromoInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && applyPromo()}
+                            inputMode="decimal"
+                            placeholder="0,00"
+                            className="w-28 rounded-lg border border-rose-300 py-1.5 pl-8 pr-2 text-lg font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                          />
+                        </div>
+                        <button
+                          onClick={applyPromo}
+                          className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
+                        >
+                          Aplicar
+                        </button>
+                        {product.promoActive && (
+                          <button
+                            onClick={removePromo}
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                          >
+                            Remover promo
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setPromoEditing(false)}
+                          className="text-sm text-slate-400 hover:text-slate-600"
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className={`text-2xl font-extrabold ${product.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
+                          {brl(product.priceCents || 0)}
+                        </span>
+                        {product.promoActive && (
+                          <>
+                            <span className="text-sm text-slate-400 line-through">
+                              {brl(product.basePriceCents || 0)}
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700">
+                              <Tag className="h-3 w-3" /> Promo Live
+                            </span>
+                          </>
+                        )}
+                        <button
+                          onClick={() => {
+                            setPromoInput(((product.priceCents || 0) / 100).toFixed(2).replace('.', ','));
+                            setPromoEditing(true);
+                          }}
+                          title="Definir preço promocional da live"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Preço
+                        </button>
+                      </div>
+                    )}
+
                     <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
                       <Package className="h-3 w-3" /> {product.totalRede} na rede
                     </div>

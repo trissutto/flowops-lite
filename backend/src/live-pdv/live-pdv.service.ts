@@ -183,7 +183,7 @@ export class LivePdvService {
    * Busca produto e devolve a grade com estoque consolidado + por loja
    * (já descontando reservas ativas da live).
    */
-  async searchGrade(term: string) {
+  async searchGrade(term: string, sessionId?: string) {
     const q = (term || '').trim();
     if (!q) throw new BadRequestException('Informe referência, código, SKU ou nome');
 
@@ -287,7 +287,15 @@ export class LivePdvService {
       return this.norm(a.tamanho).localeCompare(this.norm(b.tamanho), undefined, { numeric: true });
     });
 
-    const priceCents = cells.find((c) => c.priceCents > 0)?.priceCents || this.reaisToCents(refPrice);
+    const basePriceCents = cells.find((c) => c.priceCents > 0)?.priceCents || this.reaisToCents(refPrice);
+
+    // Preço promocional da live (se a atendente definiu pra esse REF nessa sessão)
+    const promoCents = sessionId ? await this.getPromo(sessionId, ref) : null;
+    const promoActive = promoCents != null && promoCents > 0;
+    const priceCents = promoActive ? promoCents! : basePriceCents;
+    // Reflete a promo nas células (preço por REF)
+    if (promoActive) for (const c of cells) c.priceCents = promoCents!;
+
     const photoUrl =
       (cors.length ? photoBatch[`${this.norm(ref)}|${this.norm(cors[0])}`] : null) ||
       genericPhoto?.url ||
@@ -298,10 +306,76 @@ export class LivePdvService {
       ref,
       descricao,
       priceCents,
+      basePriceCents,
+      promoActive,
       photoUrl,
       totalRede,
       cells,
     };
+  }
+
+  // ─── Preço promocional da live ───────────────────────────────────────────────
+  /** Retorna o preço promo (centavos) de um REF na sessão, ou null. */
+  private async getPromo(sessionId: string, refCode: string): Promise<number | null> {
+    const promo = await (this.prisma as any).livePdvPromo.findUnique({
+      where: { sessionId_refCode: { sessionId, refCode: this.norm(refCode) } },
+    });
+    return promo && promo.priceCents > 0 ? promo.priceCents : null;
+  }
+
+  async listPromos(sessionId: string) {
+    return (this.prisma as any).livePdvPromo.findMany({ where: { sessionId } });
+  }
+
+  /**
+   * Define (ou remove, se priceCents<=0) o preço promo de um REF na sessão.
+   * Aplica em TEMPO REAL aos itens ainda RESERVADOS desse REF (não pagos):
+   * troca o priceCents pelo promo (ou volta ao basePriceCents se removido) e
+   * recalcula os carrinhos afetados. O custo (÷2,5) NÃO muda — fica preso ao
+   * preço cheio (basePriceCents), pra conciliação intercompany não distorcer.
+   */
+  async setPromoPrice(sessionId: string, refCode: string, priceCents: number, userId?: string | null) {
+    await this.getSession(sessionId);
+    const ref = this.norm(refCode);
+    if (!ref) throw new BadRequestException('REF obrigatória');
+
+    const promoOn = priceCents && priceCents > 0;
+    if (promoOn) {
+      await (this.prisma as any).livePdvPromo.upsert({
+        where: { sessionId_refCode: { sessionId, refCode: ref } },
+        create: { sessionId, refCode: ref, priceCents: Math.round(priceCents), createdByUserId: userId || null },
+        update: { priceCents: Math.round(priceCents) },
+      });
+    } else {
+      await (this.prisma as any).livePdvPromo.deleteMany({ where: { sessionId, refCode: ref } });
+    }
+
+    // Atualiza itens reservados desse REF (compara normalizado)
+    const reserved = await (this.prisma as any).livePdvItem.findMany({
+      where: { sessionId, status: 'reserved' },
+    });
+    const affected = (reserved as any[]).filter((i) => this.norm(i.refCode) === ref);
+    const cartIds = new Set<string>();
+    for (const it of affected) {
+      const novo = promoOn ? Math.round(priceCents) : (it.basePriceCents || it.priceCents);
+      if (novo !== it.priceCents) {
+        await (this.prisma as any).livePdvItem.update({
+          where: { id: it.id },
+          data: { priceCents: novo },
+        });
+        cartIds.add(it.cartId);
+      }
+    }
+    for (const cartId of cartIds) await this.recalcCart(cartId).catch(() => {});
+
+    this.gateway.emitToAdmins('live-pdv:promo', {
+      sessionId,
+      refCode: ref,
+      priceCents: promoOn ? Math.round(priceCents) : null,
+      affected: affected.length,
+    });
+
+    return { ok: true, refCode: ref, priceCents: promoOn ? Math.round(priceCents) : null, affected: affected.length };
   }
 
   // ─── Cliente ──────────────────────────────────────────────────────────────
@@ -476,7 +550,10 @@ export class LivePdvService {
       const refPriceMap = await this.pricing.getPricesByRefs([ref]);
       priceReais = refPriceMap.get(ref) || 0;
     }
-    const priceCents = this.reaisToCents(priceReais);
+    const basePriceCents = this.reaisToCents(priceReais);
+    // Aplica preço promocional da live se houver pro REF nessa sessão
+    const promo = await this.getPromo(session.id, ref);
+    const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
     // Descrição
     const rowsForDesc = await this.erp.searchByRef(ref);
@@ -499,7 +576,8 @@ export class LivePdvService {
         tamanho: tam,
         qty,
         priceCents,
-        custoCents: this.custoCents(priceCents),
+        basePriceCents,
+        custoCents: this.custoCents(basePriceCents),
         originStoreCode: chosen.storeCode,
         originStoreName: chosen.storeName,
         status: 'reserved',
@@ -830,7 +908,9 @@ export class LivePdvService {
     const fromTipo = fromStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
     const toTipo = toStore?.tipo === 'FILIAL' ? 'FILIAL' : 'REDE';
     if (fromTipo !== toTipo) {
-      const precoTotal = (item.priceCents * item.qty) / 100;
+      // Conciliação usa o preço CHEIO (base), não o promocional da live.
+      const baseCents = item.basePriceCents || item.priceCents;
+      const precoTotal = (baseCents * item.qty) / 100;
       const valorObrigacao = precoTotal / this.DIVISOR_CUSTO;
       const mesReferencia = new Date().toISOString().slice(0, 7); // YYYY-MM
       const obl = await (this.prisma as any).interStoreObligation.create({
@@ -848,7 +928,7 @@ export class LivePdvService {
           tamanho: item.tamanho,
           descricao: item.descricao,
           qty: item.qty,
-          precoUnitario: item.priceCents / 100,
+          precoUnitario: baseCents / 100,
           precoTotal,
           divisor: this.DIVISOR_CUSTO,
           valorObrigacao,
