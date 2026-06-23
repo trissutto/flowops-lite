@@ -2255,15 +2255,18 @@ function PdvPageInner() {
          em crédito ou confirmação em débito; PIX/CREDIÁRIO/DINHEIRO abrem
          no modo certo). */}
       {sale?.status === 'open' && (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0 && (() => {
-        const venderCredito = (band: string) => {
+        // CRÉDITO/DÉBITO viram 1 botão cada — a BANDEIRA é escolhida no
+        // PaymentModal (seletor próprio de logos). presetBandeira=null força
+        // o picker a aparecer (igual ao fluxo do pdv2).
+        const venderCredito = () => {
           setPresetMethod('credito');
-          setPresetBandeira(band);
+          setPresetBandeira(null);
           setPaymentFilter('cartao');
           setShowPayment(true);
         };
-        const venderDebito = (band: string) => {
+        const venderDebito = () => {
           setPresetMethod('debito');
-          setPresetBandeira(band);
+          setPresetBandeira(null);
           setPaymentFilter('cartao');
           setShowPayment(true);
         };
@@ -2303,27 +2306,31 @@ function PdvPageInner() {
         return (
           <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
             <div className="w-fit max-w-full mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-3 overflow-x-auto">
-              {/* GRUPO CRÉDITO */}
+              {/* GRUPO CARTÃO — CRÉDITO/DÉBITO em 1 botão cada. A bandeira é
+                  escolhida no PaymentModal (seletor de logos). */}
               <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Crédito</span>
+                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Cartão</span>
                 <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderCredito('MASTERCARD')} brand="MASTERCARD" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('VISANET')}    brand="VISANET"    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('CIELO')}      brand="CIELO"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('HIPERCARD')}  brand="HIPERCARD"  hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderCredito('AMEX')}       brand="AMEX"       hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                </div>
-              </div>
-
-              <div className="w-px bg-slate-200 self-stretch mx-1" />
-
-              {/* GRUPO DÉBITO */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Débito</span>
-                <div className="flex gap-1.5">
-                  <PayBtn onClick={() => venderDebito('REDESHOP')}      brand="REDESHOP"      hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderDebito('VISA ELECTRON')} brand="VISA ELECTRON" hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
-                  <PayBtn onClick={() => venderDebito('ELO')}           brand="ELO"           hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]" />
+                  <PayBtn
+                    onClick={venderCredito}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <CreditCard className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">CRÉDITO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
+                  />
+                  <PayBtn
+                    onClick={venderDebito}
+                    label={
+                      <span className="flex items-center gap-1">
+                        <CreditCard className="w-4 h-4 text-[#8C7325]" />
+                        <span className="text-xs font-black text-black tracking-wide">DÉBITO</span>
+                      </span>
+                    }
+                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
+                  />
                 </div>
               </div>
 
