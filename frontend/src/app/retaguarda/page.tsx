@@ -18,7 +18,7 @@ import {
   LayoutDashboard, BarChart3, DollarSign, Users, ShoppingBag,
   Shuffle, Truck, AlertTriangle, FileSearch, Activity, ArrowLeft,
   Globe2, Store, Settings, Megaphone, CreditCard, ClipboardList,
-  Package, Bell,
+  Package, Bell, Network,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import AdminShell, { type AdminNavItem } from '@/components/AdminShell';
@@ -50,6 +50,7 @@ const GESTAO_ITEMS: GestaoItem[] = [
   { href: '/retaguarda/distribuicao-estoque', label: 'Distribuição',      subtitle: 'Estoque PLUS',  description: 'Detecta desequilíbrios entre lojas', tone: 'rose',   icon: Package         },
   // "Financeiro" (analítico WC) movido pro hub /site — é financeiro do e-commerce.
   { href: '/retaguarda/financeiro/transferencias', label: 'Transferências', subtitle: 'Inter-lojas',  description: 'Royalties + fechamento',        tone: 'green',  icon: DollarSign      },
+  { href: '/retaguarda/transferencias-rede-franquia', label: 'REDE × Franquia', subtitle: 'Conta corrente', description: 'Acerto da franqueada + extrato analítico', tone: 'teal', icon: Network },
   { href: '/relatorios/vendedoras',           label: 'Vendedoras',        subtitle: 'Ranking',       description: 'Vendas por mês',                tone: 'rose',   icon: Users           },
   { href: '/retaguarda/crediario/automatico', label: 'Cobrança',          subtitle: 'Crediário',     description: 'Campanhas automáticas',         tone: 'orange', icon: CreditCard      },
   { href: '/retaguarda/crediario',            label: 'Crediário',         subtitle: 'Manual',        description: 'Lista + WhatsApp bulk',         tone: 'orange', icon: CreditCard      },
