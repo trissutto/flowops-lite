@@ -73,12 +73,25 @@
   .pdv-lab .pdv-rail .group > span { display: none !important; }            /* chip de atalho some */
   .pdv-lab .pdv-rail .group > svg:last-child { display: none !important; }  /* seta some */
   .pdv-lab .pdv-rail .group > div { display: block !important; flex: none !important; text-align: center !important; min-width: 0 !important; }
-  .pdv-lab .pdv-rail .group > div > div:last-child { display: none !important; }  /* subtítulo some */
+  .pdv-lab .pdv-rail .group > div > div:last-child { display: none !important; }  /* subtítulo (linha explicativa) some */
+  /* Rótulo do rail — serigrafia fina e elegante: caixa-alta, tracking generoso */
   .pdv-lab .pdv-rail .group > div > div:first-child {
-    font-family: var(--font-display), Georgia, serif !important;
-    font-size: 10px !important; font-weight: 400 !important;
-    letter-spacing: .02em !important; line-height: 1.12 !important;
-    white-space: normal !important; color: #6b5a5e !important;
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif !important;
+    font-size: 9px !important; font-weight: 500 !important;
+    letter-spacing: .14em !important; text-transform: uppercase !important;
+    line-height: 1.15 !important; white-space: normal !important;
+    color: #8a7a6b !important;
+  }
+
+  /* ── PDV v1 (/pdv) — limpa os botões do menu: remove a linha explicativa
+     (subtítulo) e refina a serigrafia do título (caixa-alta + tracking).
+     Mantém o tema escuro/dourado atual. Escopado em .pdv1-skin. ── */
+  .pdv1-skin aside .text-\[10px\].text-\[\#9CA3AF\].leading-tight.mt-0\.5 { display: none !important; }
+  .pdv1-skin aside .text-sm.font-black.leading-tight {
+    font-weight: 500 !important;
+    font-size: 12px !important;
+    letter-spacing: .12em !important;
+    text-transform: uppercase !important;
   }
 
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }

@@ -1466,7 +1466,7 @@ function PdvPageInner() {
 
   return (
     <div
-      className="min-h-screen flex flex-col"
+      className="pdv1-skin min-h-screen flex flex-col"
       style={{ background: '#0B0B0B', zoom: uiZoom }}
     >
       <TrainingModeBanner />
