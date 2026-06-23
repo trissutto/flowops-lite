@@ -797,6 +797,54 @@ export class LivePdvService {
   }
 
   /**
+   * Gera um LINK DE PAGAMENTO (checkout Pagar.me) pra cliente pagar por fora
+   * (WhatsApp/Instagram), com PIX ou cartão. Mesma confirmação automática do
+   * PIX (o checkPayment já detecta pago independente do método).
+   */
+  async startPaymentLink(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId, status: 'reserved' },
+    });
+    if (!items.length) throw new BadRequestException('Carrinho sem itens reservados');
+    const session = await this.getSession(cart.sessionId);
+    await this.recalcCart(cartId);
+    const fresh = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
+    const valor = (fresh.totalCents || 0) / 100;
+    if (valor <= 0) throw new BadRequestException('Total inválido');
+
+    const link = await this.pagarme.createCheckoutLink({
+      saleId: cartId,
+      valor,
+      storeCode: session.liveStoreCode,
+      storeName: session.liveStoreName,
+      customerName: cart.customerName,
+      customerCpf: cart.customerCpf || undefined,
+      customerPhone: cart.customerPhone || undefined,
+      customerEmail: cart.customerEmail || undefined,
+      expiresInMinutes: 1440, // 24h pra cliente pagar
+    });
+
+    const updated = await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: {
+        status: 'awaiting_payment',
+        paymentMethod: 'link',
+        pagarmeOrderId: link.pagarmeOrderId,
+        qrCodeText: link.paymentUrl, // reusa o campo pra guardar a URL do link
+        paymentExpiresAt: link.expiresAt,
+      },
+    });
+    return {
+      cart: updated,
+      paymentUrl: link.paymentUrl,
+      expiresAt: link.expiresAt,
+      valor,
+    };
+  }
+
+  /**
    * Verifica o pagamento na Pagar.me. Se pago, dispara o pipeline pós-venda.
    * Chamado por polling do frontend enquanto o QR está na tela.
    */

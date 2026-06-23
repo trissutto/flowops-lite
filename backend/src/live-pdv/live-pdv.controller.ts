@@ -141,6 +141,11 @@ export class LivePdvController {
     return this.svc.startPayment(cartId);
   }
 
+  @Post('carts/:cartId/pay-link')
+  startPaymentLink(@Param('cartId') cartId: string) {
+    return this.svc.startPaymentLink(cartId);
+  }
+
   @Get('carts/:cartId/payment-status')
   checkPayment(@Param('cartId') cartId: string) {
     return this.svc.checkPayment(cartId);
