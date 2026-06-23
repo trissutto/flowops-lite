@@ -10,6 +10,7 @@ import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd 
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
+import * as crypto from 'crypto';
 
 /**
  * PdvService — frente de caixa (MVP).
@@ -580,6 +581,13 @@ export class PdvService {
       if (ret.status === 'used') {
         throw new BadRequestException(
           `Vale-troca ${code} já foi usado em ${ret.creditoUsadoAt ? new Date(ret.creditoUsadoAt).toLocaleString('pt-BR') : 'data desconhecida'}`,
+        );
+      }
+      // Vale anulado (ex: residual cujo vale original voltou num cancelamento)
+      // não pode ser reusado — senão vira duplo crédito.
+      if (ret.status === 'cancelled' || ret.status === 'anulado') {
+        throw new BadRequestException(
+          `Vale-troca ${code} foi anulado e não vale mais como pagamento.`,
         );
       }
       if (ret.creditoValidade && new Date(ret.creditoValidade).getTime() < Date.now()) {
@@ -1743,6 +1751,54 @@ export class PdvService {
           },
         });
         this.logger.log(`[pdv] vale-troca ${code} marcado como USED na venda ${sale.id}`);
+
+        // FIX uso PARCIAL: se o vale cobriu MENOS que o valor total dele, gera
+        // automaticamente um vale RESIDUAL com a diferença pra cliente NÃO
+        // perder o saldo. Idempotente: pula se já existe residual pra esta
+        // venda (cobre também o caso do botão manual "Gerar vale do saldo",
+        // cujo motivo também contém "residual") → nunca duplica crédito.
+        try {
+          const usado = Number(p.valor) || 0;
+          const totalVale = Number(ret.valorTotal) || 0;
+          const sobra = Math.round((totalVale - usado) * 100) / 100;
+          if (sobra > 0.01) {
+            const jaTemResidual = await (this.prisma as any).pdvReturn.findFirst({
+              where: {
+                originalSaleId: sale.id,
+                modo: 'credito',
+                status: { not: 'cancelled' },
+                motivo: { contains: 'residual', mode: 'insensitive' },
+              },
+              select: { id: true },
+            });
+            if (!jaTemResidual) {
+              const novoCode = `TROCA-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+              await (this.prisma as any).pdvReturn.create({
+                data: {
+                  originalSaleId: sale.id,
+                  originalSaleNumber: (ret as any).originalSaleNumber || null,
+                  storeCode: (ret as any).storeCode,
+                  storeName: (ret as any).storeName,
+                  cashSessionId: null,
+                  modo: 'credito',
+                  valorTotal: sobra,
+                  status: 'completed',
+                  customerCpf: (ret as any).customerCpf || null,
+                  customerName: (ret as any).customerName || null,
+                  creditoCode: novoCode,
+                  creditoValidade: new Date(Date.now() + 90 * 86400_000),
+                  isTraining: !!(ret as any).isTraining,
+                  motivo: `Saldo residual do vale ${code} (uso parcial na venda ${sale.id})`,
+                },
+              });
+              this.logger.log(
+                `[pdv] vale RESIDUAL automático ${novoCode} R$${sobra.toFixed(2)} (sobra do ${code})`,
+              );
+            }
+          }
+        } catch (e2: any) {
+          this.logger.warn(`[pdv] falha ao gerar vale residual do ${code}: ${e2?.message || e2}`);
+        }
       }
     } catch (e: any) {
       this.logger.warn(`[pdv] erro ao marcar vale-troca como usado: ${e?.message || e}`);
@@ -2027,12 +2083,13 @@ export class PdvService {
   async cancel(input: { saleId: string; reason?: string }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
+      include: { payments: true },
     });
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status === 'cancelled')
       throw new BadRequestException('Venda já está cancelada');
 
-    return (this.prisma as any).pdvSale.update({
+    const updated = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
       data: {
         status: 'cancelled',
@@ -2040,6 +2097,53 @@ export class PdvService {
         cancelReason: input.reason || null,
       },
     });
+
+    // FIX: cancelar venda DEVOLVE o vale-troca usado nela. Sem isso, o cliente
+    // que pagou com vale e teve a venda cancelada PERDIA o crédito (o vale
+    // ficava 'used' pra sempre). Reverte pra 'completed' e limpa o uso.
+    try {
+      const valePayments = ((sale as any).payments || []).filter(
+        (p: any) => p.method === 'vale_troca',
+      );
+      for (const p of valePayments) {
+        let code: string | null = null;
+        try {
+          const det = typeof p.details === 'string' ? JSON.parse(p.details) : p.details;
+          code = String(det?.creditoCode || '').trim().toUpperCase() || null;
+        } catch { /* ignora */ }
+        if (!code) continue;
+        const ret = await (this.prisma as any).pdvReturn.findUnique({
+          where: { creditoCode: code },
+        });
+        // Só restaura o vale se ele foi consumido JUSTAMENTE nesta venda.
+        if (ret && ret.status === 'used' && ret.creditoUsadoEm === sale.id) {
+          await (this.prisma as any).pdvReturn.update({
+            where: { id: ret.id },
+            data: { status: 'completed', creditoUsadoEm: null, creditoUsadoAt: null },
+          });
+          this.logger.log(`[pdv] cancel: vale ${code} DEVOLVIDO (venda ${sale.id} cancelada)`);
+        }
+      }
+      // ANULA vales RESIDUAIS gerados a partir desta venda (uso parcial). Sem
+      // isso, restaurar o vale original E manter o residual = DUPLO crédito.
+      // Só anula residuais ainda NÃO usados (se já foi gasto, não dá pra anular).
+      const anulados = await (this.prisma as any).pdvReturn.updateMany({
+        where: {
+          originalSaleId: sale.id,
+          modo: 'credito',
+          status: { notIn: ['used', 'cancelled'] },
+          motivo: { contains: 'residual', mode: 'insensitive' },
+        },
+        data: { status: 'cancelled' },
+      });
+      if (anulados?.count) {
+        this.logger.log(`[pdv] cancel: ${anulados.count} vale(s) residual(is) anulado(s) da venda ${sale.id}`);
+      }
+    } catch (e: any) {
+      this.logger.warn(`[pdv] cancel: erro ao devolver/anular vale: ${e?.message || e}`);
+    }
+
+    return updated;
   }
 
   // ═════════════════════════════════════════════════════════════════════════
