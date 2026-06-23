@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
+import { RealignmentPricingService } from './realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
 
 /**
@@ -32,6 +33,7 @@ export class RealignmentShipmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
   ) {}
 
@@ -703,9 +705,13 @@ export class RealignmentShipmentService {
     // Mesmo grupo → sem cobrança
     if (fromTipo === toTipo) return;
 
-    // Busca preços Giga em batch
+    // Busca preços Giga em batch — VENDAUN em REAIS (RealignmentPricingService),
+    // NÃO o getProductPricesBySkus (que divide VENDAUN por 100 e gerava
+    // obrigações ÷100, ex.: R$ 1,90/peça em vez de R$ 190).
     const skus = stockItems.map((s) => s.sku);
-    const priceMap = await this.erp.getProductPricesBySkus(skus);
+    const refs = Array.from(new Set(stockItems.map((s) => s.refCode).filter(Boolean)));
+    const priceMap = await this.pricing.getPricesByCodigos(skus);
+    const refPriceMap = await this.pricing.getPricesByRefs(refs);
 
     // Mapa REF→SKU pra encontrar item correto
     const refToSku = new Map<string, string>();
@@ -716,7 +722,7 @@ export class RealignmentShipmentService {
 
     for (const it of items as any[]) {
       const sku = refToSku.get(it.refCode);
-      const preco = sku ? priceMap.get(sku) || 0 : 0;
+      const preco = (sku ? priceMap.get(sku) || 0 : 0) || refPriceMap.get(it.refCode) || 0;
       const qty = it.qtyOrigem || 1;
       const precoTotal = preco * qty;
       const divisor = 2.5;
