@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   BarChart3,
   Check,
+  Link2,
   Loader2,
   Package,
   Pencil,
@@ -183,7 +184,7 @@ export default function LivePdvPage() {
   const [adding, setAdding] = useState<string | null>(null);
 
   // Pagamento
-  const [qr, setQr] = useState<{ text: string; img: string; valor: number } | null>(null);
+  const [qr, setQr] = useState<{ text: string; img: string; valor: number; link?: string } | null>(null);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
 
@@ -479,6 +480,19 @@ export default function LivePdvPage() {
       setQr({ text: res.qrCodeText, img: res.qrCodeImageUrl, valor: res.valor });
     } catch (e: any) {
       alert('Erro ao gerar PIX: ' + (e?.message || e));
+    } finally {
+      setPaying(false);
+    }
+  }
+
+  async function chargeLink() {
+    if (!cart) return;
+    setPaying(true);
+    try {
+      const res = await api<any>(`/live-pdv/carts/${cart.id}/pay-link`, { method: 'POST' });
+      setQr({ text: '', img: '', valor: res.valor, link: res.paymentUrl });
+    } catch (e: any) {
+      alert('Erro ao gerar link: ' + (e?.message || e));
     } finally {
       setPaying(false);
     }
@@ -795,37 +809,41 @@ export default function LivePdvPage() {
                     Clientes da live ({carts.length})
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+                <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
                   {[...carts]
                     .sort((a, b) =>
                       (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
                     )
                     .map((c) => {
                       const active = cart?.id === c.id;
-                      const isOpen = c.status === 'open' || c.status === 'awaiting_payment';
                       return (
                         <button
                           key={c.id}
                           onClick={() => openCart(c)}
-                          className={`rounded-xl border-2 p-3 text-left transition ${
-                            active
-                              ? 'border-rose-500 bg-rose-50 shadow-md'
-                              : isOpen
-                              ? 'border-rose-200 bg-white hover:border-rose-400 hover:shadow'
-                              : 'border-slate-200 bg-slate-50 hover:bg-white'
+                          className={`flex w-full items-center gap-3 px-3 py-2 text-left transition ${
+                            active ? 'bg-rose-50' : 'hover:bg-slate-50'
                           }`}
+                          style={active ? { boxShadow: 'inset 5px 0 0 0 #e11d48' } : undefined}
                         >
-                          <div className="truncate text-base font-bold text-slate-900" title={c.customerName}>
-                            {c.customerName}
-                          </div>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-slate-600">
-                              {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
+                          {active && (
+                            <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                              Atendendo
                             </span>
-                            <span className="text-sm font-extrabold text-slate-900">{brl(c.totalCents)}</span>
-                          </div>
+                          )}
                           <span
-                            className={`mt-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                            className={`min-w-0 flex-1 truncate ${active ? 'text-base font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                            title={c.customerName}
+                          >
+                            {c.customerName}
+                          </span>
+                          <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">
+                            {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
+                          </span>
+                          <span className="w-24 shrink-0 text-right text-sm font-bold tabular-nums text-slate-900">
+                            {brl(c.totalCents)}
+                          </span>
+                          <span
+                            className={`w-32 shrink-0 text-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
                               STATUS_PILL[c.status] || 'bg-slate-100 text-slate-600'
                             }`}
                           >
@@ -849,6 +867,7 @@ export default function LivePdvPage() {
             onNewClient={newClient}
             onRemoveItem={removeItem}
             onChargePix={chargePix}
+            onChargeLink={chargeLink}
             onEditCustomer={() => setEditCustomerOpen(true)}
           />
         </div>
@@ -895,16 +914,18 @@ function CartPanel({
   onNewClient,
   onRemoveItem,
   onChargePix,
+  onChargeLink,
   onEditCustomer,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
-  qr: { text: string; img: string; valor: number } | null;
+  qr: { text: string; img: string; valor: number; link?: string } | null;
   paid: boolean;
   paying: boolean;
   onNewClient: () => void;
   onRemoveItem: (id: string) => void;
   onChargePix: () => void;
+  onChargeLink: () => void;
   onEditCustomer: () => void;
 }) {
   return (
@@ -1004,6 +1025,35 @@ function CartPanel({
                 <span className="font-bold">Pagamento confirmado!</span>
                 <span className="text-xs">Ordem de separação enviada à loja de origem.</span>
               </div>
+            ) : qr?.link ? (
+              <div className="mt-3 flex flex-col gap-2 rounded-lg border border-slate-200 p-3">
+                <div className="text-sm font-semibold text-slate-700">Link de pagamento · {brl(qr.valor * 100)}</div>
+                <input
+                  readOnly
+                  value={qr.link}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                  className="w-full rounded border border-slate-200 p-2 text-xs text-slate-600"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => navigator.clipboard?.writeText(qr.link!)}
+                    className="flex-1 rounded-lg border border-slate-300 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Copiar link
+                  </button>
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent('Link de pagamento Lurd\'s: ' + qr.link)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 rounded-lg bg-emerald-600 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-700"
+                  >
+                    Enviar no WhatsApp
+                  </a>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Aguardando pagamento…
+                </div>
+              </div>
             ) : qr ? (
               <div className="mt-3 flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-3">
                 <div className="text-sm font-semibold text-slate-700">PIX · {brl(qr.valor * 100)}</div>
@@ -1030,14 +1080,23 @@ function CartPanel({
             ) : (
               cart &&
               cart.items.some((i) => i.status === 'reserved') && (
-                <button
-                  onClick={onChargePix}
-                  disabled={paying}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-3 font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
-                >
-                  {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
-                  Cobrar PIX ({brl(cart.totalCents)})
-                </button>
+                <div className="mt-3 space-y-2">
+                  <button
+                    onClick={onChargePix}
+                    disabled={paying}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-3 font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {paying ? <Loader2 className="h-5 w-5 animate-spin" /> : <QrCode className="h-5 w-5" />}
+                    Cobrar PIX ({brl(cart.totalCents)})
+                  </button>
+                  <button
+                    onClick={onChargeLink}
+                    disabled={paying}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-600 py-2.5 font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    <Link2 className="h-4 w-4" /> Link de pagamento
+                  </button>
+                </div>
               )
             )}
           </div>
