@@ -330,10 +330,10 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
       onRequestManualItem();
       return;
     }
-    // BUSCA DE REF/GRADE — 3 gatilhos:
+    // BUSCA DE REF/GRADE — gatilhos:
     //   1. forceRef (Shift+Enter / REF+ESPAÇO): explícito, REF de QUALQUER tamanho.
-    //   2. 3-6 dígitos + Enter: nunca é código (códigos têm 7+), vai direto.
-    //   3. Fallback no catch abaixo: código não achou → tenta como REF.
+    //   2. Fallback no catch abaixo: bipou código + ENTER e não achou → tenta REF.
+    // (NÃO usar mais "3-6 dígitos = REF": existem CÓDIGOS de 3-6 dígitos, ex. 10115.)
     const buscarRef = async () => {
       setSearchLoading(true);
       onError(null);
@@ -351,7 +351,13 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         setTimeout(() => inputRef.current?.focus(), 50);
       }
     };
-    if (opts?.forceRef || /^\d{3,6}$/.test(sku)) {
+    // REF/GRADE só por gatilho EXPLÍCITO (REF + ESPAÇO ou Shift+Enter).
+    // ANTES: "3-6 dígitos + Enter" caía aqui automático — mas isso QUEBRAVA
+    // produtos cujo CODIGO tem 3-6 dígitos (ex.: 10115 = Calça). O leitor manda
+    // BIP+ENTER; como 10115 também é REF das Meias, o ENTER "puxava a REF" e
+    // trazia o produto errado. Agora o ENTER SEMPRE bipa por código; se o
+    // código não existir, o catch abaixo tenta como REF (REF digitada à mão).
+    if (opts?.forceRef) {
       await buscarRef();
       return;
     }
@@ -369,9 +375,11 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
       setScanInput('');
     } catch (e: any) {
       const msg = String(e?.message || '');
-      // FALLBACK REF: código numérico (7+ díg) não existe no Giga? Pode ser
-      // uma REF longa — busca a grade automaticamente antes de dar erro.
-      if (/^\d{7,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
+      // FALLBACK REF: código numérico não existe no Giga? Pode ser uma REF
+      // (digitada à mão) — busca a grade automaticamente antes de dar erro.
+      // Cobre qualquer numérico 3+ (não só 7+), já que agora o ENTER bipa
+      // código primeiro pra QUALQUER tamanho de número.
+      if (/^\d{3,}$/.test(sku) && /n[aã]o encontrado/i.test(msg)) {
         setScanLoading(false);
         await buscarRef();
         return;

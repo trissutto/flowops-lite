@@ -2348,13 +2348,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       let products: any[] = [];
       if (isNumericRef) {
         const cols = 'CODIGO, REF, DESCRICAOCOMPLETA, COR, TAMANHO, ID';
+        // BUG FIX: antes a busca numérica casava SÓ por REF. Um número que é
+        // CODIGO de um produto mas REF de OUTRO trazia só o "outro" e escondia
+        // o certo (ex.: 10115 = CODIGO da Calça, mas REF das Meias → vinha a
+        // meia, sumia a calça). Agora casa CODIGO exato (com zero-padding,
+        // igual resolveSkuInfo) E REF, com o CODIGO vindo PRIMEIRO.
+        const codVariants = new Set<string>([cleanTerm]);
+        const strip = cleanTerm.replace(/^0+/, '');
+        if (strip) codVariants.add(strip);
+        for (let len = 3; len <= 14; len++) {
+          if (cleanTerm.length < len) codVariants.add(cleanTerm.padStart(len, '0'));
+        }
+        const codList = Array.from(codVariants);
         const [exactRows] = await this.pool.query<mysql.RowDataPacket[]>(
           `SELECT ${cols}
              FROM produtos
-            WHERE TRIM(REF) = ?
-            ORDER BY DESCRICAOCOMPLETA, TAMANHO, COR
+            WHERE CODIGO IN (?) OR TRIM(REF) = ?
+            ORDER BY (CASE WHEN CODIGO IN (?) THEN 0 ELSE 1 END), DESCRICAOCOMPLETA, TAMANHO, COR
             LIMIT 80`,
-          [cleanTerm],
+          [codList, cleanTerm, codList],
         );
         products = exactRows as any[];
         if (!products.length) {
