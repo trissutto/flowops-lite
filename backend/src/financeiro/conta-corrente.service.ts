@@ -34,6 +34,12 @@ export class ContaCorrenteService {
   private readonly logger = new Logger(ContaCorrenteService.name);
   private r2ClientCache: S3Client | null = null;
 
+  // Cache do débito por mês (TTL curto). O extrato bate no Giga (transferências
+  // + caixa + preços do relatório) por mês — caro, pela internet. Cachear evita
+  // re-bater o Giga em re-loads / troca de datas (mata o "às vezes trava").
+  private debitoCache = new Map<string, { at: number; data: any }>();
+  private readonly DEBITO_TTL_MS = 60_000;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly financeiro: FinanceiroService,
@@ -79,14 +85,19 @@ export class ContaCorrenteService {
     detalheFlow: Array<{ label: string; valor: number; sinal: string }>;
     detalheRoy: Array<{ label: string; valor: number; sinal: string }>;
   }> {
+    // Cache: meses (sobretudo passados) não mudam toda hora. Re-load / troca de
+    // datas fica instantâneo e não re-bate o Giga.
+    const cached = this.debitoCache.get(mes);
+    if (cached && Date.now() - cached.at < this.DEBITO_TTL_MS) return cached.data;
+
     const [y, m] = mes.split('-').map(Number);
     const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const fromStr = `${mes}-01`;
     const toStr = `${mes}-${String(lastDay).padStart(2, '0')}`;
     const round = (n: number) => Math.round(n * 100) / 100;
 
-    // Tipo + nome por loja. Normaliza zero à esquerda pra casar LJ_ORIGEM/DESTINO
-    // char(2) do Giga ('01','07') com o Store.code do Flow.
+    // Tipo + nome por loja (Postgres, rápido). Normaliza zero à esquerda pra casar
+    // LJ_ORIGEM/DESTINO char(2) do Giga ('01','07') com o Store.code do Flow.
     const stores = await this.prisma.store.findMany({
       select: { code: true, tipo: true, name: true } as any,
     });
@@ -100,89 +111,93 @@ export class ContaCorrenteService {
     const tipoOf = (code: string) => tipoMap.get(norm(code)) || 'REDE';
     const nomeOf = (code: string) => nameMap.get(norm(code)) || String(code);
 
-    // ── MERCADORIA lado GIGA — tabela `transferencias`, PREÇO ÷ 2,5 (NUNCA custo).
-    // A franqueada DEVE pelo que a rede mandou pra ela (REDE→FILIAL) e é
-    // CREDITADA pelo que ela devolveu (FILIAL→REDE). FILIAL→FILIAL (mesmo dono)
-    // e REDE→REDE não entram.
-    let mercadoriaGiga = 0;
-    const detalheGiga: Array<{ label: string; valor: number; sinal: string }> = [];
-    try {
-      const transf = await this.erp.getGigaTransfersByPair(
-        new Date(`${fromStr}T00:00:00Z`),
-        new Date(`${toStr}T23:59:59Z`),
-      );
-      let recebeu = 0;
-      let mandou = 0;
-      for (const t of transf) {
-        const oFil = tipoOf(t.origem) === 'FILIAL';
-        const dFil = tipoOf(t.destino) === 'FILIAL';
-        const vc = round(t.totalPreco / 2.5);
-        if (!oFil && dFil) {
-          recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
-          detalheGiga.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '+' });
-        } else if (oFil && !dFil) {
-          mandou += t.totalPreco; // FRANQUIA → REDE (abate)
-          detalheGiga.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '-' });
+    // As 3 fontes batem no Giga (transferências, relatório/preços, caixa) e são
+    // INDEPENDENTES → rodam em PARALELO pra cortar a latência (era sequencial).
+    const gigaWork = (async () => {
+      let valor = 0;
+      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      try {
+        const transf = await this.erp.getGigaTransfersByPair(
+          new Date(`${fromStr}T00:00:00Z`),
+          new Date(`${toStr}T23:59:59Z`),
+        );
+        let recebeu = 0;
+        let mandou = 0;
+        for (const t of transf) {
+          const oFil = tipoOf(t.origem) === 'FILIAL';
+          const dFil = tipoOf(t.destino) === 'FILIAL';
+          const vc = round(t.totalPreco / 2.5);
+          if (!oFil && dFil) {
+            recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
+            detalhe.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '+' });
+          } else if (oFil && !dFil) {
+            mandou += t.totalPreco; // FRANQUIA → REDE (abate)
+            detalhe.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '-' });
+          }
         }
+        valor = (recebeu - mandou) / 2.5;
+      } catch (e: any) {
+        this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
       }
-      mercadoriaGiga = (recebeu - mandou) / 2.5;
-    } catch (e: any) {
-      this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
-    }
-    detalheGiga.sort((a, b) => b.valor - a.valor);
+      detalhe.sort((a, b) => b.valor - a.valor);
+      return { valor, detalhe };
+    })();
 
-    // ── MERCADORIA lado FLOW — relatório de transferências (já em custo ÷2,5).
-    let mercadoriaFlow = 0;
-    const detalheFlow: Array<{ label: string; valor: number; sinal: string }> = [];
-    try {
-      const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
-      mercadoriaFlow =
-        (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
-      for (const p of (((rep as any).pairs as any[]) || [])) {
-        if (p.direction === 'redeToFilial') {
-          detalheFlow.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '+' });
-        } else if (p.direction === 'filialToRede') {
-          detalheFlow.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '-' });
+    const flowWork = (async () => {
+      let valor = 0;
+      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      try {
+        const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
+        valor = (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
+        for (const p of (((rep as any).pairs as any[]) || [])) {
+          if (p.direction === 'redeToFilial') {
+            detalhe.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '+' });
+          } else if (p.direction === 'filialToRede') {
+            detalhe.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '-' });
+          }
         }
+      } catch (e: any) {
+        this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
-    }
-    detalheFlow.sort((a, b) => b.valor - a.valor);
+      detalhe.sort((a, b) => b.valor - a.valor);
+      return { valor, detalhe };
+    })();
 
-    // ── Royalties 8% + marketing 4% (FinanceiroService, a partir da venda Giga).
-    let royalties = 0;
-    let marketing = 0;
-    const detalheRoy: Array<{ label: string; valor: number; sinal: string }> = [];
-    try {
-      const r = await this.financeiro.getRoyaltiesByMonth(mes);
-      royalties = r.totalRoyalties || 0;
-      marketing = r.totalMarketing || 0;
-      for (const f of (((r as any).porFilial as any[]) || [])) {
-        const tot = (f.royaltiesValor || 0) + (f.marketingValor || 0);
-        if (tot <= 0.005) continue;
-        detalheRoy.push({
-          label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`,
-          valor: round(tot),
-          sinal: '+',
-        });
+    const royWork = (async () => {
+      let royalties = 0;
+      let marketing = 0;
+      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      try {
+        const r = await this.financeiro.getRoyaltiesByMonth(mes);
+        royalties = r.totalRoyalties || 0;
+        marketing = r.totalMarketing || 0;
+        for (const f of (((r as any).porFilial as any[]) || [])) {
+          const tot = (f.royaltiesValor || 0) + (f.marketingValor || 0);
+          if (tot <= 0.005) continue;
+          detalhe.push({ label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`, valor: round(tot), sinal: '+' });
+        }
+      } catch (e: any) {
+        this.logger.warn(`[conta-corrente] royalties ${mes} indisponível: ${e?.message || e}`);
       }
-    } catch (e: any) {
-      this.logger.warn(`[conta-corrente] royalties ${mes} indisponível: ${e?.message || e}`);
-    }
-    detalheRoy.sort((a, b) => b.valor - a.valor);
+      detalhe.sort((a, b) => b.valor - a.valor);
+      return { royalties, marketing, detalhe };
+    })();
 
-    return {
+    const [giga, flow, roy] = await Promise.all([gigaWork, flowWork, royWork]);
+
+    const data = {
       mes,
-      mercadoriaGiga: round(mercadoriaGiga),
-      mercadoriaFlow: round(mercadoriaFlow),
-      royalties: round(royalties),
-      marketing: round(marketing),
-      total: round(mercadoriaGiga + mercadoriaFlow + royalties + marketing),
-      detalheGiga,
-      detalheFlow,
-      detalheRoy,
+      mercadoriaGiga: round(giga.valor),
+      mercadoriaFlow: round(flow.valor),
+      royalties: round(roy.royalties),
+      marketing: round(roy.marketing),
+      total: round(giga.valor + flow.valor + roy.royalties + roy.marketing),
+      detalheGiga: giga.detalhe,
+      detalheFlow: flow.detalhe,
+      detalheRoy: roy.detalhe,
     };
+    this.debitoCache.set(mes, { at: Date.now(), data });
+    return data;
   }
 
   /** Lista de meses "YYYY-MM" entre duas datas (inclusive). */
