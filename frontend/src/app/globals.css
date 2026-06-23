@@ -51,6 +51,8 @@
   .pdv-lab .text-white\/90 { color: #6b5a5e !important; }
   .pdv-lab .text-\[\#D4AF37\] { color: #7a3b46 !important; }
   .pdv-lab .text-\[\#9CA3AF\] { color: #9c8d90 !important; }
+  /* Dourado escuro (ícones de pagamento / labels) → VERDE-SÁLVIA (destaque pagar) */
+  .pdv-lab .text-\[\#8C7325\] { color: #4f7355 !important; }
   /* Pílulas douradas (bg dourado + texto preto) → vinho + creme */
   .pdv-lab .bg-\[\#D4AF37\] { background-color: #7a3b46 !important; }
   .pdv-lab .bg-\[\#D4AF37\].text-black,
@@ -61,12 +63,23 @@
   /* Números premium: tabulares (preço/total alinham) */
   .pdv-lab .tabular-nums, .pdv-lab .pdv-num { font-variant-numeric: tabular-nums; }
 
-  /* MENU LATERAL → RAIL DE ÍCONES (esconde textos, mostra só ícones) */
-  .pdv-lab .pdv-rail { width: 64px !important; }
-  .pdv-lab .pdv-rail .group { justify-content: center !important; gap: 0 !important; padding-left: 0 !important; padding-right: 0 !important; }
-  .pdv-lab .pdv-rail .group > div { display: none !important; }
-  .pdv-lab .pdv-rail .group > span { display: none !important; }
-  .pdv-lab .pdv-rail .group > svg:last-child { display: none !important; }
+  /* MENU LATERAL → RAIL DE ÍCONES: ícone 30% maior + label fina serifada embaixo */
+  .pdv-lab .pdv-rail { width: 80px !important; }
+  .pdv-lab .pdv-rail .group {
+    flex-direction: column !important; gap: 4px !important;
+    padding: 9px 2px !important; justify-content: center !important;
+  }
+  .pdv-lab .pdv-rail .group > svg:first-child { width: 26px !important; height: 26px !important; }
+  .pdv-lab .pdv-rail .group > span { display: none !important; }            /* chip de atalho some */
+  .pdv-lab .pdv-rail .group > svg:last-child { display: none !important; }  /* seta some */
+  .pdv-lab .pdv-rail .group > div { display: block !important; flex: none !important; text-align: center !important; min-width: 0 !important; }
+  .pdv-lab .pdv-rail .group > div > div:last-child { display: none !important; }  /* subtítulo some */
+  .pdv-lab .pdv-rail .group > div > div:first-child {
+    font-family: var(--font-display), Georgia, serif !important;
+    font-size: 10px !important; font-weight: 400 !important;
+    letter-spacing: .02em !important; line-height: 1.12 !important;
+    white-space: normal !important; color: #6b5a5e !important;
+  }
 
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }
 

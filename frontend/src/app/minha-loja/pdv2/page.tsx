@@ -2117,7 +2117,7 @@ function PdvPageInner() {
                   </span>
                   <div
                     className="font-display tabular-nums leading-none mt-0.5"
-                    style={{ fontSize: '34px', color: ehCredito ? '#b4583e' : '#5e2c35' }}
+                    style={{ fontSize: '44px', color: ehCredito ? '#b4583e' : '#5e2c35' }}
                   >
                     {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
                   </div>
@@ -2472,7 +2472,7 @@ function PdvPageInner() {
                         {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
                       </div>
                       <div
-                        className="font-display text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap"
+                        className="font-display text-5xl sm:text-6xl md:text-7xl xl:text-8xl font-black tabular-nums leading-none mt-1 whitespace-nowrap"
                         style={{ color: ehCredito ? '#b4583e' : '#5e2c35' }}
                       >
                         {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
