@@ -389,15 +389,16 @@ export class LivePdvService {
     const name = (input.name || '').trim();
     const phone = (input.phone || '').replace(/\D/g, '');
     if (!name) throw new BadRequestException('Nome é obrigatório');
-    if (!phone) throw new BadRequestException('Telefone é obrigatório');
     const ig = (input.instagram || '').trim().replace(/^@/, '') || null;
 
-    // Tenta achar cliente existente por telefone ou instagram (evita duplicar)
-    const existing = await (this.prisma as any).customer.findFirst({
-      where: {
-        OR: [{ phone }, ...(ig ? [{ igUsername: ig }] : [])],
-      },
-    });
+    // Tenta achar cliente existente por telefone ou instagram (evita duplicar).
+    // Só busca se houver alguma chave — telefone vazio não pode casar com outros.
+    const orConds: any[] = [];
+    if (phone) orConds.push({ phone });
+    if (ig) orConds.push({ igUsername: ig });
+    const existing = orConds.length
+      ? await (this.prisma as any).customer.findFirst({ where: { OR: orConds } })
+      : null;
     if (existing) {
       // Atualiza dados faltantes sem sobrescrever o que já tem
       const patch: any = {};
