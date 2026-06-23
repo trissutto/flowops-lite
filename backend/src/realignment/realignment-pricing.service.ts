@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
+import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * RealignmentPricingService — busca preços de venda (VENDAUN) no Giga
@@ -41,8 +42,10 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
         waitForConnections: true,
         connectionLimit: 2,
         queueLimit: 0,
-        connectTimeout: 8000,
+        connectTimeout: 4000,
       });
+      // Circuit-breaker compartilhado (Giga/WP) — falha rápido se inacessível.
+      GigaBreaker.wrapPool(this.pool);
       this.logger.log(`pool pricing inicializado (host=${host})`);
     } catch (e) {
       this.logger.error(`falha ao iniciar pool: ${(e as Error).message}`);
@@ -88,6 +91,7 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
   async getPricesByCodigos(codigos: string[]): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     if (!this.pool || codigos.length === 0) return result;
+    if (GigaBreaker.isOpen()) return result; // Giga fora — não tenta (sem preço)
 
     // Gera todas as variantes pra UMA query massiva
     const variantToOriginal = new Map<string, string>();
@@ -139,6 +143,7 @@ export class RealignmentPricingService implements OnModuleInit, OnModuleDestroy 
   async getPricesByRefs(refs: string[]): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     if (!this.pool || refs.length === 0) return result;
+    if (GigaBreaker.isOpen()) return result; // Giga fora — não tenta (sem preço)
 
     const uniqueRefs = Array.from(new Set(refs.map((r) => String(r).trim()).filter(Boolean)));
     if (uniqueRefs.length === 0) return result;

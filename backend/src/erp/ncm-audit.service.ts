@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
+import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * NcmAuditService — auditoria e correção de NCMs no ERP Gigasistemas.
@@ -62,8 +63,10 @@ export class NcmAuditService implements OnModuleInit, OnModuleDestroy {
         waitForConnections: true,
         connectionLimit: 3,
         queueLimit: 0,
-        connectTimeout: 8000,
+        connectTimeout: 4000,
       });
+      // Circuit-breaker compartilhado (Giga/WP) — falha rápido se inacessível.
+      GigaBreaker.wrapPool(this.pool);
       this.logger.log(`NcmAuditService pool inicializado (host=${host})`);
     } catch (e) {
       this.logger.error(`Falha ao iniciar pool: ${(e as Error).message}`);
