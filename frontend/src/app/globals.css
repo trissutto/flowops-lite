@@ -34,15 +34,39 @@
      Não afeta nenhuma outra tela. Reversível (remover .pdv-lab do root).
      ══════════════════════════════════════════════════════════════════════ */
   .pdv-lab { background: #f4efe7; }
-  .pdv-lab .bg-\[\#0B0B0B\] { background-color: #5e2c35 !important; }
-  .pdv-lab .bg-\[\#161616\] { background-color: #6e3540 !important; }
-  .pdv-lab .bg-\[\#1C1C1C\] { background-color: #5e2c35 !important; }
-  .pdv-lab .bg-\[\#1f1f1f\] { background-color: #7a3b46 !important; }
-  .pdv-lab .hover\:bg-\[\#1f1f1f\]:hover { background-color: #7a3b46 !important; }
-  .pdv-lab .border-\[\#2A2A2A\] { border-color: #834b57 !important; }
+  /* Superfícies escuras → claras (champagne/cream) */
+  .pdv-lab .bg-\[\#0B0B0B\],
+  .pdv-lab .bg-\[\#161616\],
+  .pdv-lab .bg-\[\#1C1C1C\] { background-color: #fffdfa !important; }
+  .pdv-lab .bg-\[\#1f1f1f\],
+  .pdv-lab .hover\:bg-\[\#1f1f1f\]:hover,
+  .pdv-lab .hover\:bg-\[\#1C1C1C\]:hover { background-color: #f3ece1 !important; }
   .pdv-lab .bg-\[\#FAFAF7\] { background-color: #f4efe7 !important; }
-  /* Números premium do PDV: tabulares (preço/total alinham) */
+  .pdv-lab .border-\[\#2A2A2A\] { border-color: #e7ddcf !important; }
+  /* Texto/ícones claros → vinho/ink (chrome agora é claro) */
+  .pdv-lab .text-white { color: #2e2326 !important; }
+  .pdv-lab .text-white\/70,
+  .pdv-lab .text-white\/80,
+  .pdv-lab .text-white\/85,
+  .pdv-lab .text-white\/90 { color: #6b5a5e !important; }
+  .pdv-lab .text-\[\#D4AF37\] { color: #7a3b46 !important; }
+  .pdv-lab .text-\[\#9CA3AF\] { color: #9c8d90 !important; }
+  /* Pílulas douradas (bg dourado + texto preto) → vinho + creme */
+  .pdv-lab .bg-\[\#D4AF37\] { background-color: #7a3b46 !important; }
+  .pdv-lab .bg-\[\#D4AF37\].text-black,
+  .pdv-lab .bg-\[\#D4AF37\] .text-black { color: #f4efe7 !important; }
+  /* Bordas de acento dourado → fio dourado discreto */
+  .pdv-lab .border-\[\#D4AF37\],
+  .pdv-lab .hover\:border-\[\#D4AF37\]:hover { border-color: #c2a86a !important; }
+  /* Números premium: tabulares (preço/total alinham) */
   .pdv-lab .tabular-nums, .pdv-lab .pdv-num { font-variant-numeric: tabular-nums; }
+
+  /* MENU LATERAL → RAIL DE ÍCONES (esconde textos, mostra só ícones) */
+  .pdv-lab .pdv-rail { width: 64px !important; }
+  .pdv-lab .pdv-rail .group { justify-content: center !important; gap: 0 !important; padding-left: 0 !important; padding-right: 0 !important; }
+  .pdv-lab .pdv-rail .group > div { display: none !important; }
+  .pdv-lab .pdv-rail .group > span { display: none !important; }
+  .pdv-lab .pdv-rail .group > svg:last-child { display: none !important; }
 
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }
 
