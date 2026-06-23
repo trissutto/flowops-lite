@@ -103,6 +103,15 @@ const STATUS_LABEL: Record<string, string> = {
   expired: 'Expirado',
 };
 
+const STATUS_PILL: Record<string, string> = {
+  open: 'bg-amber-100 text-amber-700',
+  awaiting_payment: 'bg-blue-100 text-blue-700',
+  paid: 'bg-emerald-100 text-emerald-700',
+  separating: 'bg-violet-100 text-violet-700',
+  shipped: 'bg-slate-200 text-slate-700',
+  delivered: 'bg-emerald-100 text-emerald-700',
+};
+
 /* ─── Grade (matriz cor × tamanho) ─── */
 const SIZE_LETTER_ORDER = [
   'PP', 'P', 'M', 'G', 'GG', 'XG', 'XGG', 'EG', 'EGG',
@@ -746,27 +755,54 @@ export default function LivePdvPage() {
               </div>
             )}
 
-            {/* Lista de clientes da live */}
+            {/* Clientes da live — destaque e ordem alfabética pra achar rápido na live */}
             {carts.length > 0 && (
-              <div className="mt-4">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Clientes da live ({carts.length})
+              <div className="mt-5">
+                <div className="mb-2 flex items-center gap-2">
+                  <User className="h-5 w-5 text-rose-500" />
+                  <span className="text-base font-bold uppercase tracking-wide text-slate-800">
+                    Clientes da live ({carts.length})
+                  </span>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {carts.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => openCart(c)}
-                      className={`rounded-lg border px-3 py-1.5 text-left text-sm ${
-                        cart?.id === c.id ? 'border-rose-400 bg-rose-50' : 'border-slate-200 bg-white hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="font-semibold text-slate-800">{c.customerName}</div>
-                      <div className="text-xs text-slate-500">
-                        {c.items.length} itens · {brl(c.totalCents)} · {STATUS_LABEL[c.status] || c.status}
-                      </div>
-                    </button>
-                  ))}
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+                  {[...carts]
+                    .sort((a, b) =>
+                      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+                    )
+                    .map((c) => {
+                      const active = cart?.id === c.id;
+                      const isOpen = c.status === 'open' || c.status === 'awaiting_payment';
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => openCart(c)}
+                          className={`rounded-xl border-2 p-3 text-left transition ${
+                            active
+                              ? 'border-rose-500 bg-rose-50 shadow-md'
+                              : isOpen
+                              ? 'border-rose-200 bg-white hover:border-rose-400 hover:shadow'
+                              : 'border-slate-200 bg-slate-50 hover:bg-white'
+                          }`}
+                        >
+                          <div className="truncate text-base font-bold text-slate-900" title={c.customerName}>
+                            {c.customerName}
+                          </div>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-slate-600">
+                              {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
+                            </span>
+                            <span className="text-sm font-extrabold text-slate-900">{brl(c.totalCents)}</span>
+                          </div>
+                          <span
+                            className={`mt-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              STATUS_PILL[c.status] || 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {STATUS_LABEL[c.status] || c.status}
+                          </span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             )}
@@ -969,8 +1005,8 @@ function CustomerModal({
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !phone.trim()) {
-      alert('Nome e telefone são obrigatórios');
+    if (!name.trim()) {
+      alert('Nome é obrigatório');
       return;
     }
     onSave({ name, phone, instagram, cpf, email });
@@ -989,7 +1025,7 @@ function CustomerModal({
         </div>
         <div className="space-y-2.5">
           <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone *" inputMode="tel" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone (opcional)" inputMode="tel" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Instagram (@)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <div className="grid grid-cols-2 gap-2">
             <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
