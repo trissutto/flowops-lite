@@ -25,6 +25,46 @@
     --panel-border:      #f5d9e6;
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     PDV LAB — Design tokens da marca Lurds Plus Size (boutique premium).
+     Escopados em .pdv-lab pra NÃO afetar as outras telas (laboratório /pdv2).
+     Aplicado por camadas no redesign do PDV. Operação 8h/dia → baixo cansaço:
+     canvas quente (champagne), texto vinho-escuro (não preto puro), 1 acento
+     positivo (sálvia) pra pagar, dourado só como fio fino.
+     ══════════════════════════════════════════════════════════════════════ */
+  .pdv-lab {
+    /* Superfícies (quentes, baixo brilho) */
+    --pdv-canvas:        #f4efe7;  /* fundo da tela (champagne/cream) */
+    --pdv-surface:       #fffdfa;  /* cards/painéis */
+    --pdv-surface-2:     #faf4ec;  /* superfície secundária / hover */
+    --pdv-line:          #e7ddcf;  /* bordas sutis */
+    /* Marca */
+    --pdv-wine:          #7a3b46;  /* primária — vinho/bordô */
+    --pdv-wine-700:      #5e2c35;  /* vinho escuro (texto/realce forte) */
+    --pdv-rose:          #c08081;  /* acento rosé */
+    --pdv-rose-bg:       #f6e8e6;  /* fundo rosé suave */
+    --pdv-gold:          #c2a86a;  /* dourado SÓ como fio fino de acento */
+    /* Texto (vinho-escuro, não #000 → conforto 8h) */
+    --pdv-ink:           #2e2326;  /* texto principal */
+    --pdv-ink-2:         #6b5a5e;  /* texto secundário */
+    --pdv-ink-3:         #9c8d90;  /* hints/placeholder */
+    /* Semânticos */
+    --pdv-pay:           #4f7355;  /* verde-sálvia — confirmar/pagar */
+    --pdv-pay-700:       #3c5a42;
+    --pdv-pay-bg:        #e7efe6;
+    --pdv-danger:        #b4583e;  /* terracota — cancelar/perigo */
+    --pdv-danger-bg:     #f6e6e0;
+    --pdv-warn:          #b8862f;  /* âmbar — atenção/acabando */
+    /* Raio & elevação */
+    --pdv-radius:        14px;
+    --pdv-radius-sm:     10px;
+    --pdv-shadow:        0 1px 2px rgba(46,35,38,.05), 0 6px 18px rgba(46,35,38,.06);
+    --pdv-shadow-lg:     0 2px 6px rgba(46,35,38,.08), 0 16px 40px rgba(46,35,38,.10);
+  }
+  /* Números premium: tabulares + display serifada (preço, A pagar) */
+  .pdv-num { font-family: var(--font-display), ui-serif, Georgia, serif; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+  .pdv-tab { font-variant-numeric: tabular-nums; }
+
   body { @apply text-slate-700 antialiased; background: var(--pastel-cream); }
 
   /* BLOQUEIO de gesture "back" do Chrome — vendedora arrastando o mouse

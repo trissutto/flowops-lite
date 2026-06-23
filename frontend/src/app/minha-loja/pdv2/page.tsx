@@ -1297,15 +1297,18 @@ function PdvPageInner() {
 
   return (
     <div
-      className="min-h-screen flex flex-col"
-      style={{ background: '#0B0B0B', zoom: uiZoom }}
+      className="pdv-lab min-h-screen flex flex-col"
+      style={{ background: 'var(--pdv-canvas)', color: 'var(--pdv-ink)', zoom: uiZoom }}
     >
       <TrainingModeBanner />
-      {/* ── PDV2: banner fino fixo de VERSÃO DE TESTE ── */}
-      <div className="sticky top-0 z-30 h-7 bg-[#D4AF37] text-black text-xs font-bold tracking-wide flex items-center justify-center gap-3 px-4 shadow-md">
-        <span>PDV V2 — VERSÃO DE TESTE</span>
+      {/* ── PDV2: banner fino fixo de VERSÃO DE TESTE (laboratório de redesign) ── */}
+      <div
+        className="sticky top-0 z-30 h-7 text-xs font-bold tracking-wide flex items-center justify-center gap-3 px-4"
+        style={{ background: 'var(--pdv-wine-700)', color: 'var(--pdv-canvas)' }}
+      >
+        <span>PDV V2 — LABORATÓRIO DE REDESIGN</span>
         <span className="opacity-40">·</span>
-        <Link href="/minha-loja/pdv" className="text-black underline underline-offset-2 hover:text-[#161616]">
+        <Link href="/minha-loja/pdv" className="underline underline-offset-2 opacity-90 hover:opacity-100" style={{ color: 'var(--pdv-gold)' }}>
           voltar ao PDV atual
         </Link>
       </div>
@@ -1314,7 +1317,7 @@ function PdvPageInner() {
           PDV2: sticky top-7 (28px) pra ficar logo abaixo do banner de teste. */}
       <header
         className="sticky top-7 z-20"
-        style={{ background: '#0B0B0B' }}
+        style={{ background: 'var(--pdv-wine-700)', borderBottom: '1px solid rgba(194,168,106,.35)' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
