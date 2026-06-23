@@ -7,6 +7,7 @@ import {
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanceiroService } from './financeiro.service';
+import { RealignmentReportService } from '../realignment/realignment-report.service';
 
 /**
  * ContaCorrenteService — conta corrente da FRANQUEADA.
@@ -14,9 +15,10 @@ import { FinanceiroService } from './financeiro.service';
  * Há UMA franqueada só (todas as lojas FILIAL = mesmo dono), então é uma conta
  * única que soma todas as FILIAL.
  *
- * - DÉBITOS (o que ela deve): calculados na hora a partir do que o sistema JÁ
- *   tem — obrigações inter-loja (mercadoria ÷2,5, líquida do que ela mandou pra
- *   rede) + royalties 8% + marketing 4%. NÃO são duplicados em tabela.
+ * - DÉBITOS (o que ela deve): calculados na hora — MERCADORIA vem do RELATÓRIO
+ *   de transferências (mesma fonte da aba "Análise", preço VENDAUN em reais ÷2,5,
+ *   líquida do que ela mandou pra rede) + royalties 8% + marketing 4%. NÃO usa a
+ *   tabela InterStoreObligation (está com bug de preço ÷100).
  * - CRÉDITOS/AJUSTES (manuais): tabela FranquiaLancamento — pagamentos da
  *   franqueada (com comprovante) e ajustes manuais.
  * - SALDO = total débitos − total créditos (quanto a franqueada ainda deve).
@@ -34,6 +36,7 @@ export class ContaCorrenteService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly financeiro: FinanceiroService,
+    private readonly report: RealignmentReportService,
   ) {}
 
   // ── R2 (reaproveita o padrão de seller-documents/product-photos) ──────────
@@ -70,25 +73,25 @@ export class ContaCorrenteService {
     marketing: number;
     total: number;
   }> {
-    // FILIAL = franquia (mesmo dono). Conjunto de códigos pra classificar.
-    const filiais = await this.prisma.store.findMany({
-      where: { active: true, ...({ tipo: 'FILIAL' } as any) } as any,
-      select: { code: true } as any,
-    });
-    const filialSet = new Set((filiais as any[]).map((f) => String(f.code)));
+    const [y, m] = mes.split('-').map(Number);
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const fromStr = `${mes}-01`;
+    const toStr = `${mes}-${String(lastDay).padStart(2, '0')}`;
 
-    // Dívida CHEIA de mercadoria (todas as obrigações não-canceladas do mês).
-    const obrigs = await (this.prisma as any).interStoreObligation.findMany({
-      where: { mesReferencia: mes, status: { not: 'cancelled' } },
-      select: { toStoreCode: true, fromStoreCode: true, valorObrigacao: true },
-    });
-    let aPagar = 0;
-    let aReceber = 0;
-    for (const o of obrigs as any[]) {
-      if (filialSet.has(String(o.toStoreCode))) aPagar += o.valorObrigacao || 0; // recebeu da rede → deve
-      if (filialSet.has(String(o.fromStoreCode))) aReceber += o.valorObrigacao || 0; // mandou pra rede → crédito
+    // MERCADORIA — usa a MESMA fonte da aba "Análise" (relatório), que precifica
+    // VENDAUN como REAIS (correto). NÃO usa a tabela InterStoreObligation porque
+    // ela está com o bug de preço ÷100 (ex: 566 peças "preço total R$ 1.073" =
+    // R$ 1,90/peça), o que zerava/encolhia a mercadoria. A franqueada DEVE pelo
+    // que recebeu da rede (redeToFilial) e é CREDITADA pelo que mandou de volta
+    // (filialToRede), tudo a custo ÷2,5.
+    let mercadoria = 0;
+    try {
+      const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
+      mercadoria =
+        (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
+    } catch (e: any) {
+      this.logger.warn(`[conta-corrente] mercadoria ${mes} indisponível: ${e?.message || e}`);
     }
-    const mercadoria = aPagar - aReceber;
 
     // Royalties 8% + marketing 4% (já calculados pelo FinanceiroService a partir
     // da venda bruta no Giga). Se o Giga estiver fora, o circuit-breaker faz
