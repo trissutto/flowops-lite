@@ -138,6 +138,42 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     if (this.pool) await this.pool.end();
   }
 
+  /**
+   * Transferências feitas NO GIGA — lê a tabela `transferencias` (item a item)
+   * agregada por par de loja (LJ_ORIGEM → LJ_DESTINO) no período.
+   *
+   * Retorna o PREÇO de venda somado (PRECO × QUANTIDADE). O caller divide por
+   * 2,5 pra obter o valor de custo. NUNCA usa a coluna CUSTO (regra do dono).
+   * PRECO já vem em REAIS (ex: 49,90), sem ÷100.
+   */
+  async getGigaTransfersByPair(
+    from: Date,
+    to: Date,
+  ): Promise<Array<{ origem: string; destino: string; qty: number; totalPreco: number }>> {
+    if (!this.pool) return [];
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT LJ_ORIGEM AS origem, LJ_DESTINO AS destino,
+                SUM(QUANTIDADE) AS qty, SUM(PRECO * QUANTIDADE) AS totalPreco
+           FROM transferencias
+          WHERE DATA >= ? AND DATA <= ?
+          GROUP BY LJ_ORIGEM, LJ_DESTINO`,
+        [fromStr, toStr],
+      );
+      return (rows as any[]).map((r) => ({
+        origem: String(r.origem ?? '').trim(),
+        destino: String(r.destino ?? '').trim(),
+        qty: Number(r.qty) || 0,
+        totalPreco: Number(r.totalPreco) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`getGigaTransfersByPair falhou: ${(e as Error)?.message || e}`);
+      return [];
+    }
+  }
+
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //

@@ -8,6 +8,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
+import { ErpService } from '../erp/erp.service';
 
 /**
  * ContaCorrenteService — conta corrente da FRANQUEADA.
@@ -37,6 +38,7 @@ export class ContaCorrenteService {
     private readonly prisma: PrismaService,
     private readonly financeiro: FinanceiroService,
     private readonly report: RealignmentReportService,
+    private readonly erp: ErpService,
   ) {}
 
   // ── R2 (reaproveita o padrão de seller-documents/product-photos) ──────────
@@ -68,7 +70,8 @@ export class ContaCorrenteService {
   // ── Débito do mês (consome 100% do cálculo que o sistema já faz) ──────────
   private async debitoDoMes(mes: string): Promise<{
     mes: string;
-    mercadoria: number;
+    mercadoriaGiga: number;
+    mercadoriaFlow: number;
     royalties: number;
     marketing: number;
     total: number;
@@ -78,24 +81,53 @@ export class ContaCorrenteService {
     const fromStr = `${mes}-01`;
     const toStr = `${mes}-${String(lastDay).padStart(2, '0')}`;
 
-    // MERCADORIA — usa a MESMA fonte da aba "Análise" (relatório), que precifica
-    // VENDAUN como REAIS (correto). NÃO usa a tabela InterStoreObligation porque
-    // ela está com o bug de preço ÷100 (ex: 566 peças "preço total R$ 1.073" =
-    // R$ 1,90/peça), o que zerava/encolhia a mercadoria. A franqueada DEVE pelo
-    // que recebeu da rede (redeToFilial) e é CREDITADA pelo que mandou de volta
-    // (filialToRede), tudo a custo ÷2,5.
-    let mercadoria = 0;
+    // Tipo por loja (REDE = própria · FILIAL = franquia). Normaliza zero à
+    // esquerda pra casar LJ_ORIGEM/DESTINO char(2) do Giga ('01','07') com o
+    // Store.code do Flow.
+    const stores = await this.prisma.store.findMany({
+      select: { code: true, tipo: true } as any,
+    });
+    const norm = (c: any) => String(c ?? '').trim().padStart(2, '0');
+    const tipoMap = new Map<string, string>();
+    for (const s of stores as any[]) {
+      tipoMap.set(norm(s.code), s.tipo === 'FILIAL' ? 'FILIAL' : 'REDE');
+    }
+    const tipoOf = (code: string) => tipoMap.get(norm(code)) || 'REDE';
+
+    // ── MERCADORIA lado GIGA — tabela `transferencias`, PREÇO ÷ 2,5 (NUNCA custo).
+    // A franqueada DEVE pelo que a rede mandou pra ela (REDE→FILIAL) e é
+    // CREDITADA pelo que ela devolveu (FILIAL→REDE). FILIAL→FILIAL (mesmo dono)
+    // e REDE→REDE não entram.
+    let mercadoriaGiga = 0;
     try {
-      const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
-      mercadoria =
-        (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
+      const transf = await this.erp.getGigaTransfersByPair(
+        new Date(`${fromStr}T00:00:00Z`),
+        new Date(`${toStr}T23:59:59Z`),
+      );
+      let recebeu = 0;
+      let mandou = 0;
+      for (const t of transf) {
+        const oFil = tipoOf(t.origem) === 'FILIAL';
+        const dFil = tipoOf(t.destino) === 'FILIAL';
+        if (!oFil && dFil) recebeu += t.totalPreco; // REDE → FRANQUIA
+        else if (oFil && !dFil) mandou += t.totalPreco; // FRANQUIA → REDE
+      }
+      mercadoriaGiga = (recebeu - mandou) / 2.5;
     } catch (e: any) {
-      this.logger.warn(`[conta-corrente] mercadoria ${mes} indisponível: ${e?.message || e}`);
+      this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
     }
 
-    // Royalties 8% + marketing 4% (já calculados pelo FinanceiroService a partir
-    // da venda bruta no Giga). Se o Giga estiver fora, o circuit-breaker faz
-    // retornar 0 sem travar — degrada só essa parte.
+    // ── MERCADORIA lado FLOW — relatório de transferências (já em custo ÷2,5).
+    let mercadoriaFlow = 0;
+    try {
+      const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
+      mercadoriaFlow =
+        (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
+    } catch (e: any) {
+      this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
+    }
+
+    // ── Royalties 8% + marketing 4% (FinanceiroService, a partir da venda Giga).
     let royalties = 0;
     let marketing = 0;
     try {
@@ -109,10 +141,11 @@ export class ContaCorrenteService {
     const round = (n: number) => Math.round(n * 100) / 100;
     return {
       mes,
-      mercadoria: round(mercadoria),
+      mercadoriaGiga: round(mercadoriaGiga),
+      mercadoriaFlow: round(mercadoriaFlow),
       royalties: round(royalties),
       marketing: round(marketing),
-      total: round(mercadoria + royalties + marketing),
+      total: round(mercadoriaGiga + mercadoriaFlow + royalties + marketing),
     };
   }
 
@@ -155,28 +188,34 @@ export class ContaCorrenteService {
     let totalDebitos = 0;
     let totalCreditos = 0;
 
-    // DÉBITOS automáticos — 1 linha por mês, datada no vencimento (dia 1 do mês
-    // seguinte, igual a regra das obrigações).
-    for (const mes of this.mesesEntre(from, to)) {
-      const d = await this.debitoDoMes(mes);
-      if (Math.abs(d.total) < 0.005) continue;
-      const [y, mm] = mes.split('-').map(Number);
-      const vencimento = new Date(Date.UTC(y, mm, 1)); // 1º dia do mês seguinte
+    // DÉBITOS automáticos — SEPARADOS POR SISTEMA (GIGA × FLOW) + royalties.
+    // Datados no vencimento (dia 1 do mês seguinte). Valor negativo (a franquia
+    // devolveu mais do que recebeu da rede) vira CRÉDITO.
+    const pushAuto = (mesRef: string, descricao: string, sistema: string, valor: number) => {
+      if (Math.abs(valor) < 0.005) return;
+      const [yy, mm] = mesRef.split('-').map(Number);
+      const vencimento = new Date(Date.UTC(yy, mm, 1)).toISOString();
+      const natureza = valor >= 0 ? 'debito' : 'credito';
       linhas.push({
-        id: `auto-${mes}`,
-        data: vencimento.toISOString(),
+        id: `auto-${mesRef}-${sistema}`,
+        data: vencimento,
         tipo: 'debito_sistema',
-        natureza: 'debito',
-        descricao:
-          `Acerto ${mes} — mercadoria ${this.brl(d.mercadoria)} + ` +
-          `royalties ${this.brl(d.royalties)} + marketing ${this.brl(d.marketing)}`,
-        valor: d.total,
-        detalhe: d,
+        natureza,
+        sistema,
+        descricao,
+        valor: Math.abs(valor),
         documentoUrl: null,
         documentoNome: null,
         editavel: false,
       });
-      totalDebitos += d.total;
+      if (natureza === 'debito') totalDebitos += Math.abs(valor);
+      else totalCreditos += Math.abs(valor);
+    };
+    for (const mes of this.mesesEntre(from, to)) {
+      const d = await this.debitoDoMes(mes);
+      pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga);
+      pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow);
+      pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing);
     }
 
     // LANÇAMENTOS manuais (pagamentos + ajustes) no período.
