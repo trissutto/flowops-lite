@@ -2,7 +2,6 @@
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
 import { StockEntry } from '../routing/types';
-import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * Cliente para o MySQL do ERP gigasistemas21 (WinCred).
@@ -109,10 +108,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       keepAliveInitialDelay: 30000,
     });
 
-    // Circuit-breaker compartilhado (Giga/WP): quando o servidor fica
-    // inacessível, faz as chamadas FALHAREM RÁPIDO em vez de pendurar até o
-    // connectTimeout e entupir o event loop. Cobre query/execute/getConnection.
-    GigaBreaker.wrapPool(this.pool);
+    // (Removido 24/06) Circuit-breaker do Giga/WP: foi adicionado pra "falhar
+    // rápido" quando o servidor ficasse inacessível, mas o Giga é dedicado e
+    // aberto pra qualquer IP — o cenário não se aplica. Ele só introduziu um
+    // modo de falha novo (blackout global de 20s ao disparar). O pool + o
+    // connectTimeout já limitam o dano. Mantido o comportamento simples.
 
     // IMPORTANTE: ping em background. NÃƒO bloquear o boot do Nest.
     // Se ERP_HOST nÃ£o estiver acessÃ­vel do Railway, o TCP fica pendurado

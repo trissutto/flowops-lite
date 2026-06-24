@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as mysql from 'mysql2/promise';
-import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * Cliente direto pro MySQL do WordPress/WooCommerce.
@@ -41,8 +40,8 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
       timezone: 'Z',
     });
 
-    // Circuit-breaker compartilhado (Giga/WP) — falha rápido se inacessível.
-    GigaBreaker.wrapPool(this.pool);
+    // (Removido 24/06) Circuit-breaker do Giga/WP — desnecessário: servidor
+    // dedicado e aberto pra qualquer IP. O pool + connectTimeout já bastam.
 
     // IMPORTANTE: ping em background (fire-and-forget). NÃO bloquear o boot.
     // Se o IP do Railway não estiver liberado no WP, o TCP fica pendurado
@@ -86,9 +85,6 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
     params: any[] = [],
   ): Promise<T[]> {
     if (!this.pool) return [];
-    // Servidor WP/Giga inacessível: retorna vazio na hora (sem tentar conectar)
-    // pra não pendurar nem floodar o log. Degrada só imagens, não trava o app.
-    if (GigaBreaker.isOpen()) return [];
     const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql, params);
     return rows as unknown as T[];
   }
