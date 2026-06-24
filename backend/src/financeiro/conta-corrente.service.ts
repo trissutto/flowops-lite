@@ -440,6 +440,27 @@ export class ContaCorrenteService {
     };
   }
 
+  /** Itens (peças/SKU) de uma transferência — 5º nível da cascata, sob demanda. */
+  async getTransferItems(input: { controle?: string; data?: string }) {
+    const controle = String(input.controle || '').trim();
+    if (!controle) throw new BadRequestException('controle obrigatório');
+    const where: any = { controle };
+    if (input.data && /^\d{4}-\d{2}-\d{2}$/.test(input.data)) {
+      where.data = new Date(`${input.data}T00:00:00Z`);
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    const items = await (this.prisma as any).gigaTransferenciaItem.findMany({
+      where,
+      orderBy: { totalPreco: 'desc' },
+    });
+    return (items as any[]).map((i) => ({
+      codigo: i.codigo,
+      descricao: i.descricao || '',
+      pecas: i.qty,
+      valor: round((i.totalPreco || 0) / 2.5), // custo ÷2,5, igual ao resto
+    }));
+  }
+
   /** Dispara o sync do espelho do Giga sob demanda (botão "Sincronizar agora"). */
   async sincronizarGiga() {
     const estado = await this.mirror.sync();
