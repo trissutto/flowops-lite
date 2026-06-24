@@ -78,4 +78,11 @@ export class ContaCorrenteController {
     this.requireAdmin(req);
     return this.svc.removerLancamento(id);
   }
+
+  /** POST /financeiro/conta-corrente/sync-giga → sincroniza o espelho sob demanda */
+  @Post('sync-giga')
+  syncGiga(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.svc.sincronizarGiga();
+  }
 }

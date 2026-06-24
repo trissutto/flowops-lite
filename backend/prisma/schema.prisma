@@ -3360,3 +3360,54 @@ model LivePdvPromo {
   @@unique([sessionId, refCode])
   @@map("live_pdv_promos")
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// ESPELHO (ghost) do Giga — tabelas sincronizadas de hora em hora pelo
+// GigaMirrorService. A conta corrente LÊ DAQUI (Postgres), nunca do Giga ao
+// vivo → instantâneo, sem circuit-breaker, sem blip. O único ponto que fala
+// com o Giga é o sync; se ele tropeça, tenta no próximo ciclo e a tela nem vê.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Transferências agregadas por (origem, destino, documento, dia) — exatamente
+// o grão que a cascata da conta corrente consome. totalPreco = soma de venda.
+model GigaTransferencia {
+  id         String   @id @default(cuid())
+  ljOrigem   String   @map("lj_origem")
+  ljDestino  String   @map("lj_destino")
+  controle   String
+  data       DateTime @db.Date
+  qty        Int
+  totalPreco Float    @map("total_preco")
+  syncedAt   DateTime @default(now()) @map("synced_at")
+
+  @@index([data])
+  @@index([ljOrigem, ljDestino])
+  @@map("giga_transferencia")
+}
+
+// Venda bruta por (loja, dia), já líquida de MARCADO='SIM'. Royalties somam por
+// mês a partir daqui.
+model GigaCaixaDiario {
+  id       String   @id @default(cuid())
+  loja     String
+  data     DateTime @db.Date
+  bruto    Float
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([data])
+  @@index([loja])
+  @@map("giga_caixa_diario")
+}
+
+// Estado do sync (1 linha por tabela): última vez OK, erro, nº de linhas.
+model GigaMirrorState {
+  id         String    @id @default(cuid())
+  tabela     String    @unique
+  lastSyncAt DateTime? @map("last_sync_at")
+  lastOkAt   DateTime? @map("last_ok_at")
+  lastError  String?   @map("last_error")
+  rows       Int       @default(0)
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  @@map("giga_mirror_state")
+}
