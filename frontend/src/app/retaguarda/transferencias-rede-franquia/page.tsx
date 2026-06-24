@@ -16,6 +16,7 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
@@ -531,6 +532,7 @@ interface DetItem {
   fromTipo?: string; // 'REDE' | 'FILIAL'
   toTipo?: string;
   pecas?: number;
+  transfers?: Array<{ data: string; controle: string; pecas: number; valor: number }>;
 }
 interface CCLinha {
   id: string;
@@ -554,6 +556,8 @@ interface CCExtrato {
   totalDebitos: number;
   totalCreditos: number;
   saldo: number;
+  gigaIndisponivel?: boolean;
+  mesesIndisponiveis?: string[];
 }
 
 /* Monta a árvore REDE/FRANQUIA → cidade que enviou → cidades destino. */
@@ -678,19 +682,50 @@ function DetalheTree({ det }: { det: DetItem[] }) {
                       <td className="px-4 py-1.5" />
                     </tr>
                     {sOpen &&
-                      s.dests.map((d, i) => (
-                        <tr key={`${sk}-${i}`} className="bg-white text-xs text-slate-500">
-                          <td className="px-4 py-1" />
-                          <td className="py-1 pl-16 pr-4">
-                            <span className="text-slate-400">→</span> {d.to} · {num(d.pecas || 0)} pç
-                          </td>
-                          <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                        </tr>
-                      ))}
+                      s.dests.map((d, i) => {
+                        const dk = `${sk}::${i}`;
+                        const hasT = !!(d.transfers && d.transfers.length);
+                        const dOpen = !!open[dk];
+                        return (
+                          <Fragment key={dk}>
+                            <tr
+                              className={`bg-white text-xs text-slate-600 ${hasT ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+                              onClick={hasT ? () => toggle(dk) : undefined}
+                            >
+                              <td className="px-4 py-1" />
+                              <td className="py-1 pl-16 pr-4">
+                                {hasT ? (
+                                  dOpen ? <ChevronDown className="inline h-3.5 w-3.5 text-slate-300" /> : <ChevronRight className="inline h-3.5 w-3.5 text-slate-300" />
+                                ) : (
+                                  <span className="text-slate-400">→</span>
+                                )}
+                                <span className="ml-1">{d.to} · {num(d.pecas || 0)} pç</span>
+                                {hasT && <span className="ml-2 text-slate-400">{d.transfers!.length} transf.</span>}
+                              </td>
+                              <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                            </tr>
+                            {hasT &&
+                              dOpen &&
+                              d.transfers!.map((t, j) => (
+                                <tr key={`${dk}-t-${j}`} className="bg-slate-50/40 text-[11px] text-slate-500">
+                                  <td className="whitespace-nowrap px-4 py-1">{t.data.split('-').reverse().join('/')}</td>
+                                  <td className="py-1 pl-20 pr-4">
+                                    <span className="text-slate-400">nº</span> {t.controle} · {num(t.pecas)} pç
+                                  </td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                </tr>
+                              ))}
+                          </Fragment>
+                        );
+                      })}
                   </Fragment>
                 );
               })}
@@ -803,6 +838,29 @@ function ContaCorrente() {
           <Plus className="h-4 w-4" /> Lançar pagamento / ajuste
         </button>
       </div>
+
+      {ext?.gigaIndisponivel && !loading && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div className="flex-1 text-sm text-amber-900">
+            <div className="font-bold">Dados do Giga incompletos neste momento</div>
+            <div className="text-amber-800">
+              Não foi possível buscar a mercadoria/royalties de{' '}
+              {ext.mesesIndisponiveis && ext.mesesIndisponiveis.length
+                ? ext.mesesIndisponiveis.join(', ')
+                : 'alguns meses'}
+              . Os valores acima podem estar <b>incompletos</b> — isso <b>não</b> significa R$ 0 real. Clique em
+              atualizar pra tentar de novo.
+            </div>
+          </div>
+          <button
+            onClick={load}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            <RefreshCw className="h-4 w-4" /> Atualizar
+          </button>
+        </div>
+      )}
 
       {ext && resumo && (
         <div className="mb-5">
