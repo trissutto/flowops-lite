@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
 import { ErpService } from '../erp/erp.service';
+import { GigaMirrorService } from './giga-mirror.service';
 
 /**
  * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
@@ -25,6 +26,9 @@ type DetalheItem = {
   fromTipo?: string;
   toTipo?: string;
   pecas?: number;
+  // Nível mais fundo da cascata: as transferências (1 por CONTROLE) que compõem
+  // o par origem→destino. valor já em custo (÷2,5).
+  transfers?: Array<{ data: string; controle: string; pecas: number; valor: number }>;
 };
 
 /**
@@ -62,6 +66,7 @@ export class ContaCorrenteService {
     private readonly financeiro: FinanceiroService,
     private readonly report: RealignmentReportService,
     private readonly erp: ErpService,
+    private readonly mirror: GigaMirrorService,
   ) {}
 
   // ── R2 (reaproveita o padrão de seller-documents/product-photos) ──────────
@@ -90,6 +95,26 @@ export class ContaCorrenteService {
       .replace(/[^a-zA-Z0-9.\-_]/g, '_');
   }
 
+  /**
+   * Corre uma promise contra um timeout. Se estourar, devolve `fallback` (e loga)
+   * em vez de pendurar. Os "works" internos nunca rejeitam (têm try/catch), então
+   * só o timeout pode disparar — garante que o extrato sempre responde.
+   */
+  private async withTimeout<T>(work: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.error(`[conta-corrente] ${label} excedeu ${ms}ms — usando fallback (0)`);
+        resolve(fallback);
+      }, ms);
+    });
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   // ── Débito do mês (consome 100% do cálculo que o sistema já faz) ──────────
   private async debitoDoMes(mes: string): Promise<{
     mes: string;
@@ -101,6 +126,7 @@ export class ContaCorrenteService {
     detalheGiga: DetalheItem[];
     detalheFlow: DetalheItem[];
     detalheRoy: DetalheItem[];
+    ok: boolean; // false = Giga falhou/indisponível neste mês (não confiar nos 0)
   }> {
     // Cache: meses (sobretudo passados) não mudam toda hora. Re-load / troca de
     // datas fica instantâneo e não re-bate o Giga.
@@ -132,111 +158,134 @@ export class ContaCorrenteService {
     // INDEPENDENTES → rodam em PARALELO pra cortar a latência (era sequencial).
     const gigaWork = (async () => {
       let valor = 0;
+      let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
-        const transf = await this.erp.getGigaTransfersByPair(
-          new Date(`${fromStr}T00:00:00Z`),
-          new Date(`${toStr}T23:59:59Z`),
-        );
+        // Lê do ESPELHO (Postgres), não do Giga ao vivo — instantâneo e sem blip.
+        const mrows = await (this.prisma as any).gigaTransferencia.findMany({
+          where: { data: { gte: new Date(`${fromStr}T00:00:00Z`), lte: new Date(`${toStr}T00:00:00Z`) } },
+        });
+        const rows = (mrows as any[]).map((r) => ({
+          origem: r.ljOrigem,
+          destino: r.ljDestino,
+          controle: r.controle,
+          data: new Date(r.data).toISOString().slice(0, 10),
+          qty: r.qty,
+          totalPreco: r.totalPreco,
+        }));
+        // Agrupa as transferências (uma por CONTROLE) por par origem→destino,
+        // guardando a lista pro nível mais fundo da cascata.
+        const pares = new Map<
+          string,
+          {
+            origem: string;
+            destino: string;
+            qty: number;
+            totalPreco: number;
+            transfers: Array<{ data: string; controle: string; pecas: number; valor: number }>;
+          }
+        >();
+        for (const r of rows) {
+          const key = `${r.origem}->${r.destino}`;
+          let p = pares.get(key);
+          if (!p) {
+            p = { origem: r.origem, destino: r.destino, qty: 0, totalPreco: 0, transfers: [] };
+            pares.set(key, p);
+          }
+          p.qty += r.qty;
+          p.totalPreco += r.totalPreco;
+          p.transfers.push({ data: r.data, controle: r.controle, pecas: r.qty, valor: round(r.totalPreco / 2.5) });
+        }
+
         let recebeu = 0;
         let mandou = 0;
-        for (const t of transf) {
-          const oFil = tipoOf(t.origem) === 'FILIAL';
-          const dFil = tipoOf(t.destino) === 'FILIAL';
-          const vc = round(t.totalPreco / 2.5);
+        for (const p of pares.values()) {
+          const oFil = tipoOf(p.origem) === 'FILIAL';
+          const dFil = tipoOf(p.destino) === 'FILIAL';
+          const vc = round(p.totalPreco / 2.5);
+          // transferências por data crescente, depois maior valor
+          const transfers = p.transfers.sort(
+            (a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0) || b.valor - a.valor,
+          );
+          const base = {
+            label: `${nomeOf(p.origem)} → ${nomeOf(p.destino)} · ${p.qty} pç`,
+            valor: vc,
+            from: nomeOf(p.origem),
+            to: nomeOf(p.destino),
+            fromTipo: tipoOf(p.origem),
+            toTipo: tipoOf(p.destino),
+            pecas: p.qty,
+            transfers,
+          };
           if (!oFil && dFil) {
-            recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
-            detalhe.push({
-              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
-              valor: vc,
-              sinal: '+',
-              from: nomeOf(t.origem),
-              to: nomeOf(t.destino),
-              fromTipo: tipoOf(t.origem),
-              toTipo: tipoOf(t.destino),
-              pecas: t.qty,
-            });
+            recebeu += p.totalPreco; // REDE → FRANQUIA (soma)
+            detalhe.push({ ...base, sinal: '+' });
           } else if (oFil && !dFil) {
-            mandou += t.totalPreco; // FRANQUIA → REDE (abate)
-            detalhe.push({
-              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
-              valor: vc,
-              sinal: '-',
-              from: nomeOf(t.origem),
-              to: nomeOf(t.destino),
-              fromTipo: tipoOf(t.origem),
-              toTipo: tipoOf(t.destino),
-              pecas: t.qty,
-            });
+            mandou += p.totalPreco; // FRANQUIA → REDE (abate)
+            detalhe.push({ ...base, sinal: '-' });
           }
         }
         valor = (recebeu - mandou) / 2.5;
       } catch (e: any) {
+        ok = false;
         this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
       }
       detalhe.sort((a, b) => b.valor - a.valor);
-      return { valor, detalhe };
+      return { valor, detalhe, ok };
     })();
 
-    const flowWork = (async () => {
-      let valor = 0;
-      const detalhe: DetalheItem[] = [];
-      try {
-        const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
-        valor = (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
-        for (const p of (((rep as any).pairs as any[]) || [])) {
-          if (p.direction === 'redeToFilial') {
-            detalhe.push({
-              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
-              valor: round(p.valorCusto),
-              sinal: '+',
-              from: p.fromName,
-              to: p.toName,
-              fromTipo: 'REDE',
-              toTipo: 'FILIAL',
-              pecas: p.pecas,
-            });
-          } else if (p.direction === 'filialToRede') {
-            detalhe.push({
-              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
-              valor: round(p.valorCusto),
-              sinal: '-',
-              from: p.fromName,
-              to: p.toName,
-              fromTipo: 'FILIAL',
-              toTipo: 'REDE',
-              pecas: p.pecas,
-            });
-          }
-        }
-      } catch (e: any) {
-        this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
-      }
-      detalhe.sort((a, b) => b.valor - a.valor);
-      return { valor, detalhe };
-    })();
+    // FLOW DESLIGADO: era um cross-check redundante (a mercadoria REAL já vem do
+    // gigaWork, direto da tabela `transferencias` numa query só). Ele usava o
+    // pool de pricing (connectionLimit 2, queries em chunk) — o gargalo que
+    // travava o extrato — e na prática vinha sempre 0. Mantido como 0 fixo; se um
+    // dia precisar do cross-check, reativar SEM bater no pricing por mês.
+    const flow = { valor: 0, detalhe: [] as DetalheItem[] };
 
     const royWork = (async () => {
       let royalties = 0;
       let marketing = 0;
+      let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
-        const r = await this.financeiro.getRoyaltiesByMonth(mes);
-        royalties = r.totalRoyalties || 0;
-        marketing = r.totalMarketing || 0;
-        for (const f of (((r as any).porFilial as any[]) || [])) {
-          const tot = (f.royaltiesValor || 0) + (f.marketingValor || 0);
+        // Lê do ESPELHO de caixa (Postgres). Venda bruta por FILIAL no mês →
+        // royalties 8% + marketing 4% (mesma regra do FinanceiroService).
+        const caixa = await (this.prisma as any).gigaCaixaDiario.findMany({
+          where: { data: { gte: new Date(`${fromStr}T00:00:00Z`), lte: new Date(`${toStr}T00:00:00Z`) } },
+        });
+        const vendaPorLoja = new Map<string, number>();
+        for (const c of caixa as any[]) {
+          if (tipoOf(c.loja) !== 'FILIAL') continue;
+          const code = norm(c.loja);
+          vendaPorLoja.set(code, (vendaPorLoja.get(code) || 0) + (Number(c.bruto) || 0));
+        }
+        const ROY = 0.08;
+        const MKT = 0.04;
+        for (const [code, venda] of vendaPorLoja) {
+          royalties += venda * ROY;
+          marketing += venda * MKT;
+          const tot = venda * (ROY + MKT);
           if (tot <= 0.005) continue;
-          detalhe.push({ label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`, valor: round(tot), sinal: '+' });
+          detalhe.push({ label: `${nomeOf(code)} · venda ${this.brl(venda)}`, valor: round(tot), sinal: '+' });
         }
       } catch (e: any) {
+        ok = false;
         this.logger.warn(`[conta-corrente] royalties ${mes} indisponível: ${e?.message || e}`);
       }
       detalhe.sort((a, b) => b.valor - a.valor);
-      return { royalties, marketing, detalhe };
+      return { royalties, marketing, detalhe, ok };
     })();
 
-    const [giga, flow, roy] = await Promise.all([gigaWork, flowWork, royWork]);
+    // Giga (mercadoria) e royalties são os débitos REAIS — 1 query cada no pool
+    // do ERP. Rodam juntos (2 conexões, tranquilo) com time-box generoso só pra
+    // o endpoint nunca pendurar numa query presa.
+    const [giga, roy] = await Promise.all([
+      this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria GIGA ${mes}`),
+      this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
+    ]);
+
+    // ok = as duas leituras do espelho (Postgres) deram certo. Leitura local não
+    // dá blip; só marca falha se o Postgres em si der erro. Se !ok, não cacheia.
+    const ok = giga.ok && roy.ok;
 
     const data = {
       mes,
@@ -248,8 +297,9 @@ export class ContaCorrenteService {
       detalheGiga: giga.detalhe,
       detalheFlow: flow.detalhe,
       detalheRoy: roy.detalhe,
+      ok,
     };
-    this.debitoCache.set(mes, { at: Date.now(), data });
+    if (ok) this.debitoCache.set(mes, { at: Date.now(), data });
     return data;
   }
 
@@ -322,10 +372,16 @@ export class ContaCorrenteService {
       if (natureza === 'debito') totalDebitos += Math.abs(valor);
       else totalCreditos += Math.abs(valor);
     };
+    // Meses em SÉRIE de propósito: 1 mês por vez = no máximo 2 conexões ao Giga
+    // simultâneas (giga + roy). Paralelizar os meses dispara um BURST de conexões
+    // que o servidor do Giga recusa → o circuit-breaker abre → tudo vem 0. Sem o
+    // flowWork (que era o lento), cada mês é só 2 queries rápidas, então série já
+    // é veloz e segura. NÃO paralelizar os meses.
+    const mesesIndisponiveis: string[] = [];
     for (const mes of this.mesesEntre(from, to)) {
       const d = await this.debitoDoMes(mes);
+      if (!d.ok) mesesIndisponiveis.push(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
-      pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
 
@@ -360,6 +416,15 @@ export class ContaCorrenteService {
       ln.saldo = Math.round(saldo * 100) / 100;
     }
 
+    // Estado do espelho do Giga (pra tela mostrar "sincronizado às HH:MM" e o
+    // botão de sincronizar; pendente = espelho ainda não populado).
+    let gigaSync: any = null;
+    try {
+      gigaSync = await this.mirror.getState();
+    } catch {
+      /* não bloqueia o extrato se o estado não vier */
+    }
+
     const round = (n: number) => Math.round(n * 100) / 100;
     return {
       from: from.toISOString(),
@@ -368,7 +433,19 @@ export class ContaCorrenteService {
       totalDebitos: round(totalDebitos),
       totalCreditos: round(totalCreditos),
       saldo: round(saldo), // > 0 = franqueada deve; < 0 = crédito a favor dela
+      // Falha de LEITURA do espelho (raro — Postgres). Diferente de espelho vazio.
+      gigaIndisponivel: mesesIndisponiveis.length > 0,
+      mesesIndisponiveis,
+      gigaSync, // { lastOkAt, pendente, erro, transferenciaAt, caixaAt, syncing }
     };
+  }
+
+  /** Dispara o sync do espelho do Giga sob demanda (botão "Sincronizar agora"). */
+  async sincronizarGiga() {
+    const estado = await this.mirror.sync();
+    // Zera o cache de débito pra próxima leitura já refletir o espelho novo.
+    this.debitoCache.clear();
+    return estado;
   }
 
   // ── Lançamento manual (com documento opcional) ────────────────────────────

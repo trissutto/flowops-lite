@@ -16,13 +16,14 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Building2,
-  Calendar,
   ChevronDown,
   ChevronRight,
+  Database,
   Download,
   FileText,
   Loader2,
@@ -76,14 +77,6 @@ interface Summary {
 
 type FlowKey = 'redeToFilial' | 'filialToRede' | 'redeToRede' | 'filialToFilial';
 
-const PERIODS: Array<{ value: string; label: string }> = [
-  { value: '7d', label: '7 dias' },
-  { value: '30d', label: '30 dias' },
-  { value: '90d', label: '90 dias' },
-  { value: 'ytd', label: 'Este ano' },
-  { value: '12m', label: '12 meses' },
-];
-
 const FLOW_DEFS: Array<{
   key: FlowKey;
   label: string;
@@ -104,31 +97,39 @@ const num = (n: number) => n.toLocaleString('pt-BR');
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
+/** Formata o horário do último sync do espelho do Giga. */
+const fmtSync = (iso: string) => {
+  const d = new Date(iso);
+  const hoje = new Date();
+  const mesmoDia = d.toDateString() === hoje.toDateString();
+  return mesmoDia
+    ? `às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+    : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
+
 export default function TransferenciasRedeFranquiaPage() {
-  const [period, setPeriod] = useState('90d');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  // Filtro SÓ por seletor de datas (de/até). Default: últimos 90 dias.
+  const [customFrom, setCustomFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 90);
+    return ymd(d);
+  });
+  const [customTo, setCustomTo] = useState(() => ymd(new Date()));
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<'analise' | 'conta'>('analise');
 
-  const isCustom = period === 'custom';
-
   useEffect(() => {
-    // No modo personalizado só busca quando as duas datas estão preenchidas.
-    if (isCustom && (!customFrom || !customTo)) {
+    if (!customFrom || !customTo) {
       setLoading(false);
       return;
     }
     let alive = true;
     setLoading(true);
     setError(null);
-    const qs = isCustom
-      ? `from=${customFrom}&to=${customTo}`
-      : `period=${period}`;
-    api<Summary>(`/transferencias/rede-franquia?${qs}`)
+    api<Summary>(`/transferencias/rede-franquia?from=${customFrom}&to=${customTo}`)
       .then((d) => {
         if (alive) setData(d);
       })
@@ -141,19 +142,7 @@ export default function TransferenciasRedeFranquiaPage() {
     return () => {
       alive = false;
     };
-  }, [period, customFrom, customTo, isCustom]);
-
-  /** Ativa o modo personalizado, pré-preenchendo os últimos 30 dias. */
-  function enableCustom() {
-    if (!customFrom || !customTo) {
-      const to = new Date();
-      const from = new Date();
-      from.setDate(from.getDate() - 30);
-      setCustomFrom(ymd(from));
-      setCustomTo(ymd(to));
-    }
-    setPeriod('custom');
-  }
+  }, [customFrom, customTo]);
 
   const pairsByFlow = useMemo(() => {
     const map: Record<string, Pair[]> = {
@@ -192,7 +181,7 @@ export default function TransferenciasRedeFranquiaPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const suffix = isCustom && data.period ? `${data.period.from}_a_${data.period.to}` : period;
+    const suffix = data.period ? `${data.period.from}_a_${data.period.to}` : `${customFrom}_a_${customTo}`;
     a.download = `transferencias-rede-franquia-${suffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
@@ -220,48 +209,23 @@ export default function TransferenciasRedeFranquiaPage() {
           </div>
           {tab === 'analise' && (
           <div className="flex flex-wrap items-center gap-2 print:hidden">
-            <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white">
-              {PERIODS.map((p) => (
-                <button
-                  key={p.value}
-                  onClick={() => setPeriod(p.value)}
-                  className={`px-3 py-1.5 text-sm font-medium transition ${
-                    period === p.value
-                      ? 'bg-blue-600 text-white'
-                      : 'text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                onClick={enableCustom}
-                className={`inline-flex items-center gap-1 border-l border-slate-300 px-3 py-1.5 text-sm font-medium transition ${
-                  isCustom ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <Calendar className="h-4 w-4" /> Personalizado
-              </button>
+            <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              />
+              <span className="text-sm text-slate-500">até</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              />
             </div>
-            {isCustom && (
-              <div className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-2 py-1">
-                <input
-                  type="date"
-                  value={customFrom}
-                  max={customTo || undefined}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-                />
-                <span className="text-sm text-slate-500">até</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  min={customFrom || undefined}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-                />
-              </div>
-            )}
             <button
               onClick={exportCsv}
               disabled={!data}
@@ -531,6 +495,7 @@ interface DetItem {
   fromTipo?: string; // 'REDE' | 'FILIAL'
   toTipo?: string;
   pecas?: number;
+  transfers?: Array<{ data: string; controle: string; pecas: number; valor: number }>;
 }
 interface CCLinha {
   id: string;
@@ -554,6 +519,14 @@ interface CCExtrato {
   totalDebitos: number;
   totalCreditos: number;
   saldo: number;
+  gigaIndisponivel?: boolean;
+  mesesIndisponiveis?: string[];
+  gigaSync?: {
+    lastOkAt: string | null;
+    pendente: boolean;
+    erro: string | null;
+    syncing?: boolean;
+  } | null;
 }
 
 /* Monta a árvore REDE/FRANQUIA → cidade que enviou → cidades destino. */
@@ -678,19 +651,50 @@ function DetalheTree({ det }: { det: DetItem[] }) {
                       <td className="px-4 py-1.5" />
                     </tr>
                     {sOpen &&
-                      s.dests.map((d, i) => (
-                        <tr key={`${sk}-${i}`} className="bg-white text-xs text-slate-500">
-                          <td className="px-4 py-1" />
-                          <td className="py-1 pl-16 pr-4">
-                            <span className="text-slate-400">→</span> {d.to} · {num(d.pecas || 0)} pç
-                          </td>
-                          <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                        </tr>
-                      ))}
+                      s.dests.map((d, i) => {
+                        const dk = `${sk}::${i}`;
+                        const hasT = !!(d.transfers && d.transfers.length);
+                        const dOpen = !!open[dk];
+                        return (
+                          <Fragment key={dk}>
+                            <tr
+                              className={`bg-white text-xs text-slate-600 ${hasT ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+                              onClick={hasT ? () => toggle(dk) : undefined}
+                            >
+                              <td className="px-4 py-1" />
+                              <td className="py-1 pl-16 pr-4">
+                                {hasT ? (
+                                  dOpen ? <ChevronDown className="inline h-3.5 w-3.5 text-slate-300" /> : <ChevronRight className="inline h-3.5 w-3.5 text-slate-300" />
+                                ) : (
+                                  <span className="text-slate-400">→</span>
+                                )}
+                                <span className="ml-1">{d.to} · {num(d.pecas || 0)} pç</span>
+                                {hasT && <span className="ml-2 text-slate-400">{d.transfers!.length} transf.</span>}
+                              </td>
+                              <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                            </tr>
+                            {hasT &&
+                              dOpen &&
+                              d.transfers!.map((t, j) => (
+                                <tr key={`${dk}-t-${j}`} className="bg-slate-50/40 text-[11px] text-slate-500">
+                                  <td className="whitespace-nowrap px-4 py-1">{t.data.split('-').reverse().join('/')}</td>
+                                  <td className="py-1 pl-20 pr-4">
+                                    <span className="text-slate-400">nº</span> {t.controle} · {num(t.pecas)} pç
+                                  </td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                </tr>
+                              ))}
+                          </Fragment>
+                        );
+                      })}
                   </Fragment>
                 );
               })}
@@ -711,6 +715,7 @@ function ContaCorrente() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [expandido, setExpandido] = useState<Record<string, boolean>>({});
+  const [syncing, setSyncing] = useState(false);
   const reqIdRef = useRef(0);
 
   // Resumo do topo: quebra os débitos por categoria (mercadoria = giga+flow,
@@ -773,28 +778,54 @@ function ContaCorrente() {
     }
   }
 
+  async function syncGiga() {
+    setSyncing(true);
+    try {
+      await api(`/financeiro/conta-corrente/sync-giga`, { method: 'POST' });
+      await load();
+    } catch (e: any) {
+      alert('Falha ao sincronizar o Giga: ' + (e?.message || e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
-          <input
-            type="date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-          />
-          <span className="text-sm text-slate-500">até</span>
-          <input
-            type="date"
-            value={to}
-            min={from}
-            onChange={(e) => setTo(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-          />
-          <button onClick={load} className="ml-1 rounded p-1 text-slate-500 hover:bg-slate-100" title="Atualizar">
-            <RefreshCw className="h-4 w-4" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
+            <input
+              type="date"
+              value={from}
+              max={to}
+              onChange={(e) => setFrom(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+            />
+            <span className="text-sm text-slate-500">até</span>
+            <input
+              type="date"
+              value={to}
+              min={from}
+              onChange={(e) => setTo(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+            />
+            <button onClick={load} className="ml-1 rounded p-1 text-slate-500 hover:bg-slate-100" title="Atualizar">
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+          <button
+            onClick={syncGiga}
+            disabled={syncing}
+            title="Puxa os dados do Giga para a base local (espelho). A tela lê do espelho."
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Database className={`h-4 w-4 ${syncing ? 'animate-pulse' : ''}`} />
+            {syncing ? 'Sincronizando…' : 'Sincronizar Giga'}
           </button>
+          {ext?.gigaSync?.lastOkAt && !ext.gigaSync.pendente && !syncing && (
+            <span className="text-xs text-slate-400">sincronizado {fmtSync(ext.gigaSync.lastOkAt)}</span>
+          )}
         </div>
         <button
           onClick={() => setShowForm(true)}
@@ -803,6 +834,39 @@ function ContaCorrente() {
           <Plus className="h-4 w-4" /> Lançar pagamento / ajuste
         </button>
       </div>
+
+      {(ext?.gigaSync?.pendente || ext?.gigaIndisponivel) && !loading && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div className="flex-1 text-sm text-amber-900">
+            {ext?.gigaSync?.pendente ? (
+              <>
+                <div className="font-bold">Espelho do Giga ainda não sincronizado</div>
+                <div className="text-amber-800">
+                  A mercadoria e os royalties leem da base local, que ainda não foi populada
+                  {ext.gigaSync?.erro ? ' (o último sync falhou)' : ''}. Clique em <b>Sincronizar Giga</b> pra
+                  puxar os dados agora.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="font-bold">Não foi possível ler o espelho do Giga</div>
+                <div className="text-amber-800">
+                  Os valores podem estar <b>incompletos</b> — <b>não</b> significa R$ 0 real. Clique em atualizar.
+                </div>
+              </>
+            )}
+          </div>
+          <button
+            onClick={ext?.gigaSync?.pendente ? syncGiga : load}
+            disabled={syncing}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {ext?.gigaSync?.pendente ? <Database className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+            {ext?.gigaSync?.pendente ? (syncing ? 'Sincronizando…' : 'Sincronizar Giga') : 'Atualizar'}
+          </button>
+        </div>
+      )}
 
       {ext && resumo && (
         <div className="mb-5">

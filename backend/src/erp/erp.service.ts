@@ -176,6 +176,51 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Igual ao getGigaTransfersByPair, mas DETALHADO por documento de transferência
+   * (CONTROLE) — pra montar o nível mais fundo da cascata da conta corrente.
+   * Uma linha por (origem, destino, CONTROLE, DATA): soma das peças e do preço
+   * de venda daquele documento. DATA já vem como string 'YYYY-MM-DD'.
+   */
+  async getGigaTransfersDetailed(
+    from: Date,
+    to: Date,
+  ): Promise<Array<{ origem: string; destino: string; controle: string; data: string; qty: number; totalPreco: number }>> {
+    if (!this.pool) return [];
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+    // RETRY: blip transitório não pode zerar a mercadoria. Tenta de novo antes
+    // de PROPAGAR (quem chama precisa saber que falhou pra avisar, nunca mostrar
+    // 0 como se a mercadoria fosse realmente zero).
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT LJ_ORIGEM AS origem, LJ_DESTINO AS destino, CONTROLE AS controle,
+                  DATE_FORMAT(DATA, '%Y-%m-%d') AS data,
+                  SUM(QUANTIDADE) AS qty, SUM(PRECO * QUANTIDADE) AS totalPreco
+             FROM transferencias
+            WHERE DATA >= ? AND DATA <= ?
+            GROUP BY LJ_ORIGEM, LJ_DESTINO, CONTROLE, DATA`,
+          [fromStr, toStr],
+        );
+        return (rows as any[]).map((r) => ({
+          origem: String(r.origem ?? '').trim(),
+          destino: String(r.destino ?? '').trim(),
+          controle: String(r.controle ?? '').trim(),
+          data: String(r.data ?? '').trim(),
+          qty: Number(r.qty) || 0,
+          totalPreco: Number(r.totalPreco) || 0,
+        }));
+      } catch (e: any) {
+        lastErr = e;
+        this.logger.warn(`getGigaTransfersDetailed tentativa ${attempt}/2 falhou: ${(e as Error)?.message || e}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    throw lastErr;
+  }
+
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //
@@ -2186,31 +2231,80 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     storeCodes: string[],
     inicio: Date,
     fim: Date,
+    opts: { throwOnError?: boolean } = {},
   ): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (!this.pool || !storeCodes.length) return out;
-    try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT c.LOJA AS storeCode,
-                SUM(c.VALORTOTAL) AS bruto
-           FROM caixa c
-          WHERE c.LOJA IN (?)
-            AND c.DATA >= ?
-            AND c.DATA <  ?
-            AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
-          GROUP BY c.LOJA`,
-        [storeCodes, inicio, fim],
-      );
-      for (const r of rows as any[]) {
-        const code = String(r.storeCode).trim();
-        const bruto = Number(r.bruto) || 0;
-        if (bruto > 0) out.set(code, bruto);
+    // RETRY: um blip transitório (uma das 2 conexões paralelas da conta corrente
+    // cai) não pode zerar a venda. Tenta de novo antes de desistir.
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT c.LOJA AS storeCode,
+                  SUM(c.VALORTOTAL) AS bruto
+             FROM caixa c
+            WHERE c.LOJA IN (?)
+              AND c.DATA >= ?
+              AND c.DATA <  ?
+              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+            GROUP BY c.LOJA`,
+          [storeCodes, inicio, fim],
+        );
+        out.clear();
+        for (const r of rows as any[]) {
+          const code = String(r.storeCode).trim();
+          const bruto = Number(r.bruto) || 0;
+          if (bruto > 0) out.set(code, bruto);
+        }
+        return out;
+      } catch (e) {
+        lastErr = e;
+        this.logger.error(`getSalesGrossByStores tentativa ${attempt}/2 falhou: ${(e as Error).message}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
       }
-      return out;
-    } catch (e) {
-      this.logger.error(`getSalesGrossByStores falhou: ${(e as Error).message}`);
-      return out;
     }
+    // Esgotou as tentativas. throwOnError = quem chama PRECISA saber que falhou
+    // (conta corrente, pra avisar) em vez de tratar 0 como venda real.
+    if (opts.throwOnError) throw lastErr;
+    return out;
+  }
+
+  /**
+   * Venda bruta por (LOJA, DIA) — alimenta o ESPELHO `giga_caixa_diario`.
+   * Já líquida de MARCADO='SIM'. DATA volta como 'YYYY-MM-DD'. PROPAGA o erro
+   * (com retry): o sync precisa saber que falhou pra não zerar o espelho.
+   */
+  async getSalesGrossDailyByStore(
+    from: Date,
+    to: Date,
+  ): Promise<Array<{ loja: string; data: string; bruto: number }>> {
+    if (!this.pool) return [];
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT c.LOJA AS loja,
+                  DATE_FORMAT(c.DATA, '%Y-%m-%d') AS data,
+                  SUM(c.VALORTOTAL) AS bruto
+             FROM caixa c
+            WHERE c.DATA >= ? AND c.DATA <= ?
+              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+            GROUP BY c.LOJA, DATE(c.DATA)`,
+          [from, to],
+        );
+        return (rows as any[]).map((r) => ({
+          loja: String(r.loja ?? '').trim(),
+          data: String(r.data ?? '').trim(),
+          bruto: Number(r.bruto) || 0,
+        }));
+      } catch (e: any) {
+        lastErr = e;
+        this.logger.warn(`getSalesGrossDailyByStore tentativa ${attempt}/2 falhou: ${(e as Error)?.message || e}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    throw lastErr;
   }
 
   /**
