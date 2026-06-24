@@ -1394,6 +1394,25 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     if (codigosVariants.length === 0) return [];
 
+    // estoque.LOJA é char(2) ZERO-PADDED no Giga ("01","06","10"). Se o code da
+    // loja no FlowOps vier sem o zero ("1","6"), o `LOJA IN (...)` NÃO casa e dá
+    // ruptura mesmo com estoque físico. Expandimos cada storeCode pras 2 formas
+    // (com e sem zero) e guardamos um mapa LOJA→codeOriginal pra devolver o
+    // storeCode no formato que o caller (routing) espera.
+    const lojaVariants: string[] = [];
+    const lojaToStoreCode = new Map<string, string>();
+    for (const sc of storeCodes) {
+      const s = String(sc ?? '').trim();
+      if (!s) continue;
+      if (!lojaToStoreCode.has(s)) { lojaVariants.push(s); lojaToStoreCode.set(s, s); }
+      if (/^\d{1,2}$/.test(s)) {
+        const padded = s.padStart(2, '0');
+        if (!lojaToStoreCode.has(padded)) { lojaVariants.push(padded); lojaToStoreCode.set(padded, s); }
+        const stripped = s.replace(/^0+/, '') || s;
+        if (!lojaToStoreCode.has(stripped)) { lojaVariants.push(stripped); lojaToStoreCode.set(stripped, s); }
+      }
+    }
+
     try {
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
         `SELECT CODIGO AS sku,
@@ -1403,14 +1422,16 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
           WHERE CODIGO IN (?)
             AND LOJA IN (?)
             AND ESTOQUE > 0`,
-        [codigosVariants, storeCodes],
+        [codigosVariants, lojaVariants],
       );
       // Agrega por (originalSku, storeCode). MÃºltiplas variantes de padding
       // podem casar â€” somamos tudo, mas logamos pra detectar caso patolÃ³gico.
       const agg = new Map<string, number>();
       for (const r of rows as any[]) {
         const codigoEstoque = String(r.sku).trim();
-        const storeCode = String(r.storeCode).trim();
+        const lojaEstoque = String(r.storeCode).trim();
+        // Devolve no formato do code do FlowOps (mapeia "06"→"6" se for o caso).
+        const storeCode = lojaToStoreCode.get(lojaEstoque) ?? lojaEstoque;
         const originalSku = codigoVariantToOriginal.get(codigoEstoque);
         if (!originalSku) continue;
         const key = `${storeCode}::${originalSku}`;
