@@ -96,12 +96,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // em transferencias + PDV + crediario sem fila. Wincred MySQL aguenta.
       connectionLimit: 15,
       queueLimit: 0,
-      // 4s pra conectar. O Giga é um servidor DEDICADO (dedi-...lurds.com.br),
-      // não roda atrás do NAT de loja — quando acessível, conecta em <1s.
-      // 15s era longo demais: quando o servidor fica inacessível (firewall),
-      // CADA conexão pendurava 15s e entupia o event loop, derrubando o app
-      // INTEIRO. 4s + circuit-breaker (abaixo) faz falhar rápido sem travar.
-      connectTimeout: 4000,
+      // REGRESSÃO (23/06): isto tinha sido cortado pra 4s. Mas um fix anterior
+      // JÁ tinha subido pra 15s justamente porque <5s causava ETIMEDOUT em pico
+      // de uso / latência. Com 4s, qualquer lentidão do Giga estoura o connect,
+      // e 3 estouros seguidos ABREM o circuit-breaker por 20s → blackout TOTAL
+      // do Giga (ruptura, esgotado, 0 variações). Voltamos a um valor tolerante:
+      // o circuit-breaker (abaixo) já cobre o "falhar rápido" em QUEDA REAL, então
+      // não precisa de timeout minúsculo. 12s tolera latência sem falso-positivo.
+      connectTimeout: 12000,
       // Keep-alive evita que conexÃ£o ociosa do pool seja derrubada.
       enableKeepAlive: true,
       keepAliveInitialDelay: 30000,

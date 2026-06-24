@@ -35,24 +35,28 @@ let openUntil = 0;
 const THRESHOLD = 3; // falhas de conexão seguidas pra abrir o circuito
 const COOLDOWN_MS = 20_000; // 20s sem tentar conectar enquanto aberto
 
-const CONN_ERROR_CODES = new Set([
+// SÓ erros de HOST INACESSÍVEL (não dá nem pra estabelecer a conexão) abrem o
+// breaker. Quedas de uma conexão JÁ ABERTA — ECONNRESET, PROTOCOL_CONNECTION_LOST,
+// EPIPE, PROTOCOL_SEQUENCE_TIMEOUT — são NORMAIS num pool com keep-alive: o
+// servidor fecha conexões ociosas (wait_timeout) e o mysql2 simplesmente pega
+// outra. Se essas contassem, o breaker abriria no USO NORMAL e derrubaria todo o
+// Giga por 20s sem o servidor estar fora. (Regressão observada 23/06.)
+const HOST_DOWN_CODES = new Set([
   'ECONNREFUSED',
   'ETIMEDOUT',
   'EHOSTUNREACH',
   'ENETUNREACH',
   'ENOTFOUND',
-  'ECONNRESET',
-  'EPIPE',
-  'PROTOCOL_CONNECTION_LOST',
-  'PROTOCOL_SEQUENCE_TIMEOUT',
-  'POOL_CLOSED',
 ]);
 
 function isConnError(e: any): boolean {
   const code = String(e?.code || '');
-  if (CONN_ERROR_CODES.has(code)) return true;
+  if (HOST_DOWN_CODES.has(code)) return true;
+  // Sem código: só trata como host-down se a MENSAGEM for claramente de
+  // estabelecimento de conexão/DNS. Evita casar "Connection lost" (queda de
+  // conexão já aberta), que NÃO deve abrir o breaker.
   const msg = String(e?.message || '');
-  return /connect|timeout|ehostunreach|econnrefused|getaddrinfo|enetunreach/i.test(
+  return /(getaddrinfo|ehostunreach|enetunreach|connect\s+e(timedout|connrefused|hostunreach|netunreach))/i.test(
     msg,
   );
 }

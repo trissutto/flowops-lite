@@ -33,9 +33,11 @@ export class WpDbService implements OnModuleInit, OnModuleDestroy {
       waitForConnections: true,
       connectionLimit: 5,
       queueLimit: 0,
-      // 4s (era 5s). Mesmo servidor dedicado do Giga — falha rápido quando
-      // inacessível, e o circuit-breaker abaixo evita entupir o event loop.
-      connectTimeout: 4000,
+      // 12s. Mesmo servidor dedicado do Giga. 4s/5s causava ETIMEDOUT em pico
+      // de latência — e como o breaker é COMPARTILHADO, um timeout aqui abria o
+      // circuito e bloqueava o Giga junto. O breaker já cobre o "falhar rápido"
+      // em queda real, então o timeout pode ser tolerante. (Regressão 23/06.)
+      connectTimeout: 12000,
       timezone: 'Z',
     });
 
