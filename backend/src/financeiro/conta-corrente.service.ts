@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
 import { ErpService } from '../erp/erp.service';
+import { GigaBreaker } from '../common/giga-breaker';
 
 /**
  * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
@@ -124,6 +125,7 @@ export class ContaCorrenteService {
     detalheGiga: DetalheItem[];
     detalheFlow: DetalheItem[];
     detalheRoy: DetalheItem[];
+    ok: boolean; // false = Giga falhou/indisponível neste mês (não confiar nos 0)
   }> {
     // Cache: meses (sobretudo passados) não mudam toda hora. Re-load / troca de
     // datas fica instantâneo e não re-bate o Giga.
@@ -155,6 +157,7 @@ export class ContaCorrenteService {
     // INDEPENDENTES → rodam em PARALELO pra cortar a latência (era sequencial).
     const gigaWork = (async () => {
       let valor = 0;
+      let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
         const rows = await this.erp.getGigaTransfersDetailed(
@@ -215,10 +218,11 @@ export class ContaCorrenteService {
         }
         valor = (recebeu - mandou) / 2.5;
       } catch (e: any) {
+        ok = false;
         this.logger.warn(`[conta-corrente] mercadoria GIGA ${mes} indisponível: ${e?.message || e}`);
       }
       detalhe.sort((a, b) => b.valor - a.valor);
-      return { valor, detalhe };
+      return { valor, detalhe, ok };
     })();
 
     // FLOW DESLIGADO: era um cross-check redundante (a mercadoria REAL já vem do
@@ -231,6 +235,7 @@ export class ContaCorrenteService {
     const royWork = (async () => {
       let royalties = 0;
       let marketing = 0;
+      let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
         const r = await this.financeiro.getRoyaltiesByMonth(mes);
@@ -242,19 +247,25 @@ export class ContaCorrenteService {
           detalhe.push({ label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`, valor: round(tot), sinal: '+' });
         }
       } catch (e: any) {
+        ok = false;
         this.logger.warn(`[conta-corrente] royalties ${mes} indisponível: ${e?.message || e}`);
       }
       detalhe.sort((a, b) => b.valor - a.valor);
-      return { royalties, marketing, detalhe };
+      return { royalties, marketing, detalhe, ok };
     })();
 
     // Giga (mercadoria) e royalties são os débitos REAIS — 1 query cada no pool
     // do ERP. Rodam juntos (2 conexões, tranquilo) com time-box generoso só pra
     // o endpoint nunca pendurar numa query presa.
     const [giga, roy] = await Promise.all([
-      this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[] }, `mercadoria GIGA ${mes}`),
-      this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[] }, `royalties ${mes}`),
+      this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria GIGA ${mes}`),
+      this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
     ]);
+
+    // ok = as DUAS fontes responderam E o circuit-breaker não está aberto. Se
+    // falhou, os 0 NÃO são reais (é indisponibilidade) → marca ok=false, a tela
+    // avisa, e NÃO cacheia (senão um blip "trava" o 0 por 60s; refresh resolve).
+    const ok = giga.ok && roy.ok && !GigaBreaker.isOpen();
 
     const data = {
       mes,
@@ -266,8 +277,9 @@ export class ContaCorrenteService {
       detalheGiga: giga.detalhe,
       detalheFlow: flow.detalhe,
       detalheRoy: roy.detalhe,
+      ok,
     };
-    this.debitoCache.set(mes, { at: Date.now(), data });
+    if (ok) this.debitoCache.set(mes, { at: Date.now(), data });
     return data;
   }
 
@@ -345,8 +357,10 @@ export class ContaCorrenteService {
     // que o servidor do Giga recusa → o circuit-breaker abre → tudo vem 0. Sem o
     // flowWork (que era o lento), cada mês é só 2 queries rápidas, então série já
     // é veloz e segura. NÃO paralelizar os meses.
+    const mesesIndisponiveis: string[] = [];
     for (const mes of this.mesesEntre(from, to)) {
       const d = await this.debitoDoMes(mes);
+      if (!d.ok) mesesIndisponiveis.push(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
@@ -390,6 +404,10 @@ export class ContaCorrenteService {
       totalDebitos: round(totalDebitos),
       totalCreditos: round(totalCreditos),
       saldo: round(saldo), // > 0 = franqueada deve; < 0 = crédito a favor dela
+      // Avisa a tela: a busca do Giga falhou em ao menos 1 mês → mercadoria/
+      // royalties podem estar INCOMPLETOS (não são 0 reais). Refresh tenta de novo.
+      gigaIndisponivel: mesesIndisponiveis.length > 0,
+      mesesIndisponiveis,
     };
   }
 

@@ -208,8 +208,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         totalPreco: Number(r.totalPreco) || 0,
       }));
     } catch (e: any) {
+      // PROPAGA: quem chama (conta corrente) precisa saber que FALHOU pra não
+      // mostrar/cachear 0 como se a mercadoria fosse realmente zero.
       this.logger.warn(`getGigaTransfersDetailed falhou: ${(e as Error)?.message || e}`);
-      return [];
+      throw e;
     }
   }
 

@@ -16,6 +16,7 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ArrowUpRight,
@@ -555,6 +556,8 @@ interface CCExtrato {
   totalDebitos: number;
   totalCreditos: number;
   saldo: number;
+  gigaIndisponivel?: boolean;
+  mesesIndisponiveis?: string[];
 }
 
 /* Monta a árvore REDE/FRANQUIA → cidade que enviou → cidades destino. */
@@ -835,6 +838,29 @@ function ContaCorrente() {
           <Plus className="h-4 w-4" /> Lançar pagamento / ajuste
         </button>
       </div>
+
+      {ext?.gigaIndisponivel && !loading && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          <div className="flex-1 text-sm text-amber-900">
+            <div className="font-bold">Dados do Giga incompletos neste momento</div>
+            <div className="text-amber-800">
+              Não foi possível buscar a mercadoria/royalties de{' '}
+              {ext.mesesIndisponiveis && ext.mesesIndisponiveis.length
+                ? ext.mesesIndisponiveis.join(', ')
+                : 'alguns meses'}
+              . Os valores acima podem estar <b>incompletos</b> — isso <b>não</b> significa R$ 0 real. Clique em
+              atualizar pra tentar de novo.
+            </div>
+          </div>
+          <button
+            onClick={load}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            <RefreshCw className="h-4 w-4" /> Atualizar
+          </button>
+        </div>
+      )}
 
       {ext && resumo && (
         <div className="mb-5">
