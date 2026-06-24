@@ -2271,6 +2271,43 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Venda bruta por (LOJA, DIA) — alimenta o ESPELHO `giga_caixa_diario`.
+   * Já líquida de MARCADO='SIM'. DATA volta como 'YYYY-MM-DD'. PROPAGA o erro
+   * (com retry): o sync precisa saber que falhou pra não zerar o espelho.
+   */
+  async getSalesGrossDailyByStore(
+    from: Date,
+    to: Date,
+  ): Promise<Array<{ loja: string; data: string; bruto: number }>> {
+    if (!this.pool) return [];
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT c.LOJA AS loja,
+                  DATE_FORMAT(c.DATA, '%Y-%m-%d') AS data,
+                  SUM(c.VALORTOTAL) AS bruto
+             FROM caixa c
+            WHERE c.DATA >= ? AND c.DATA <= ?
+              AND (c.MARCADO IS NULL OR c.MARCADO <> 'SIM')
+            GROUP BY c.LOJA, DATE(c.DATA)`,
+          [from, to],
+        );
+        return (rows as any[]).map((r) => ({
+          loja: String(r.loja ?? '').trim(),
+          data: String(r.data ?? '').trim(),
+          bruto: Number(r.bruto) || 0,
+        }));
+      } catch (e: any) {
+        lastErr = e;
+        this.logger.warn(`getSalesGrossDailyByStore tentativa ${attempt}/2 falhou: ${(e as Error)?.message || e}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    throw lastErr;
+  }
+
+  /**
    * VENDAS POR LOJA â€” Ãºltimos N dias (default 30), em UNIDADES.
    * Usado pra calcular a proporcionalidade inversa no routing:
    *   loja que vendeu MAIS tem meta de cessÃ£o MENOR.

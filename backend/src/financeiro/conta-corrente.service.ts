@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FinanceiroService } from './financeiro.service';
 import { RealignmentReportService } from '../realignment/realignment-report.service';
 import { ErpService } from '../erp/erp.service';
-import { GigaBreaker } from '../common/giga-breaker';
+import { GigaMirrorService } from './giga-mirror.service';
 
 /**
  * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
@@ -66,6 +66,7 @@ export class ContaCorrenteService {
     private readonly financeiro: FinanceiroService,
     private readonly report: RealignmentReportService,
     private readonly erp: ErpService,
+    private readonly mirror: GigaMirrorService,
   ) {}
 
   // ── R2 (reaproveita o padrão de seller-documents/product-photos) ──────────
@@ -160,10 +161,18 @@ export class ContaCorrenteService {
       let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
-        const rows = await this.erp.getGigaTransfersDetailed(
-          new Date(`${fromStr}T00:00:00Z`),
-          new Date(`${toStr}T23:59:59Z`),
-        );
+        // Lê do ESPELHO (Postgres), não do Giga ao vivo — instantâneo e sem blip.
+        const mrows = await (this.prisma as any).gigaTransferencia.findMany({
+          where: { data: { gte: new Date(`${fromStr}T00:00:00Z`), lte: new Date(`${toStr}T00:00:00Z`) } },
+        });
+        const rows = (mrows as any[]).map((r) => ({
+          origem: r.ljOrigem,
+          destino: r.ljDestino,
+          controle: r.controle,
+          data: new Date(r.data).toISOString().slice(0, 10),
+          qty: r.qty,
+          totalPreco: r.totalPreco,
+        }));
         // Agrupa as transferências (uma por CONTROLE) por par origem→destino,
         // guardando a lista pro nível mais fundo da cascata.
         const pares = new Map<
@@ -238,13 +247,25 @@ export class ContaCorrenteService {
       let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
-        const r = await this.financeiro.getRoyaltiesByMonth(mes, { strict: true });
-        royalties = r.totalRoyalties || 0;
-        marketing = r.totalMarketing || 0;
-        for (const f of (((r as any).porFilial as any[]) || [])) {
-          const tot = (f.royaltiesValor || 0) + (f.marketingValor || 0);
+        // Lê do ESPELHO de caixa (Postgres). Venda bruta por FILIAL no mês →
+        // royalties 8% + marketing 4% (mesma regra do FinanceiroService).
+        const caixa = await (this.prisma as any).gigaCaixaDiario.findMany({
+          where: { data: { gte: new Date(`${fromStr}T00:00:00Z`), lte: new Date(`${toStr}T00:00:00Z`) } },
+        });
+        const vendaPorLoja = new Map<string, number>();
+        for (const c of caixa as any[]) {
+          if (tipoOf(c.loja) !== 'FILIAL') continue;
+          const code = norm(c.loja);
+          vendaPorLoja.set(code, (vendaPorLoja.get(code) || 0) + (Number(c.bruto) || 0));
+        }
+        const ROY = 0.08;
+        const MKT = 0.04;
+        for (const [code, venda] of vendaPorLoja) {
+          royalties += venda * ROY;
+          marketing += venda * MKT;
+          const tot = venda * (ROY + MKT);
           if (tot <= 0.005) continue;
-          detalhe.push({ label: `${f.storeName || f.storeCode} · venda ${this.brl(f.vendaBruta || 0)}`, valor: round(tot), sinal: '+' });
+          detalhe.push({ label: `${nomeOf(code)} · venda ${this.brl(venda)}`, valor: round(tot), sinal: '+' });
         }
       } catch (e: any) {
         ok = false;
@@ -262,10 +283,9 @@ export class ContaCorrenteService {
       this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
     ]);
 
-    // ok = as DUAS fontes responderam E o circuit-breaker não está aberto. Se
-    // falhou, os 0 NÃO são reais (é indisponibilidade) → marca ok=false, a tela
-    // avisa, e NÃO cacheia (senão um blip "trava" o 0 por 60s; refresh resolve).
-    const ok = giga.ok && roy.ok && !GigaBreaker.isOpen();
+    // ok = as duas leituras do espelho (Postgres) deram certo. Leitura local não
+    // dá blip; só marca falha se o Postgres em si der erro. Se !ok, não cacheia.
+    const ok = giga.ok && roy.ok;
 
     const data = {
       mes,
@@ -396,6 +416,15 @@ export class ContaCorrenteService {
       ln.saldo = Math.round(saldo * 100) / 100;
     }
 
+    // Estado do espelho do Giga (pra tela mostrar "sincronizado às HH:MM" e o
+    // botão de sincronizar; pendente = espelho ainda não populado).
+    let gigaSync: any = null;
+    try {
+      gigaSync = await this.mirror.getState();
+    } catch {
+      /* não bloqueia o extrato se o estado não vier */
+    }
+
     const round = (n: number) => Math.round(n * 100) / 100;
     return {
       from: from.toISOString(),
@@ -404,11 +433,19 @@ export class ContaCorrenteService {
       totalDebitos: round(totalDebitos),
       totalCreditos: round(totalCreditos),
       saldo: round(saldo), // > 0 = franqueada deve; < 0 = crédito a favor dela
-      // Avisa a tela: a busca do Giga falhou em ao menos 1 mês → mercadoria/
-      // royalties podem estar INCOMPLETOS (não são 0 reais). Refresh tenta de novo.
+      // Falha de LEITURA do espelho (raro — Postgres). Diferente de espelho vazio.
       gigaIndisponivel: mesesIndisponiveis.length > 0,
       mesesIndisponiveis,
+      gigaSync, // { lastOkAt, pendente, erro, transferenciaAt, caixaAt, syncing }
     };
+  }
+
+  /** Dispara o sync do espelho do Giga sob demanda (botão "Sincronizar agora"). */
+  async sincronizarGiga() {
+    const estado = await this.mirror.sync();
+    // Zera o cache de débito pra próxima leitura já refletir o espelho novo.
+    this.debitoCache.clear();
+    return estado;
   }
 
   // ── Lançamento manual (com documento opcional) ────────────────────────────

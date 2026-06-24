@@ -7,11 +7,12 @@ import { FinanceiroController } from './financeiro.controller';
 import { FechamentoPdfService } from './pdf.service';
 import { ContaCorrenteService } from './conta-corrente.service';
 import { ContaCorrenteController } from './conta-corrente.controller';
+import { GigaMirrorService } from './giga-mirror.service';
 
 @Module({
   imports: [PrismaModule, ErpModule, RealignmentModule],
   controllers: [FinanceiroController, ContaCorrenteController],
-  providers: [FinanceiroService, FechamentoPdfService, ContaCorrenteService],
+  providers: [FinanceiroService, FechamentoPdfService, ContaCorrenteService, GigaMirrorService],
   exports: [FinanceiroService, FechamentoPdfService],
 })
 export class FinanceiroModule {}

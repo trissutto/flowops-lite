@@ -23,6 +23,7 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  Database,
   Download,
   FileText,
   Loader2,
@@ -95,6 +96,16 @@ const brl = (n: number) =>
 const num = (n: number) => n.toLocaleString('pt-BR');
 
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
+
+/** Formata o horário do último sync do espelho do Giga. */
+const fmtSync = (iso: string) => {
+  const d = new Date(iso);
+  const hoje = new Date();
+  const mesmoDia = d.toDateString() === hoje.toDateString();
+  return mesmoDia
+    ? `às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+    : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
 
 export default function TransferenciasRedeFranquiaPage() {
   // Filtro SÓ por seletor de datas (de/até). Default: últimos 90 dias.
@@ -510,6 +521,12 @@ interface CCExtrato {
   saldo: number;
   gigaIndisponivel?: boolean;
   mesesIndisponiveis?: string[];
+  gigaSync?: {
+    lastOkAt: string | null;
+    pendente: boolean;
+    erro: string | null;
+    syncing?: boolean;
+  } | null;
 }
 
 /* Monta a árvore REDE/FRANQUIA → cidade que enviou → cidades destino. */
@@ -698,6 +715,7 @@ function ContaCorrente() {
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [expandido, setExpandido] = useState<Record<string, boolean>>({});
+  const [syncing, setSyncing] = useState(false);
   const reqIdRef = useRef(0);
 
   // Resumo do topo: quebra os débitos por categoria (mercadoria = giga+flow,
@@ -760,28 +778,54 @@ function ContaCorrente() {
     }
   }
 
+  async function syncGiga() {
+    setSyncing(true);
+    try {
+      await api(`/financeiro/conta-corrente/sync-giga`, { method: 'POST' });
+      await load();
+    } catch (e: any) {
+      alert('Falha ao sincronizar o Giga: ' + (e?.message || e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
-          <input
-            type="date"
-            value={from}
-            max={to}
-            onChange={(e) => setFrom(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-          />
-          <span className="text-sm text-slate-500">até</span>
-          <input
-            type="date"
-            value={to}
-            min={from}
-            onChange={(e) => setTo(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-          />
-          <button onClick={load} className="ml-1 rounded p-1 text-slate-500 hover:bg-slate-100" title="Atualizar">
-            <RefreshCw className="h-4 w-4" />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
+            <input
+              type="date"
+              value={from}
+              max={to}
+              onChange={(e) => setFrom(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+            />
+            <span className="text-sm text-slate-500">até</span>
+            <input
+              type="date"
+              value={to}
+              min={from}
+              onChange={(e) => setTo(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+            />
+            <button onClick={load} className="ml-1 rounded p-1 text-slate-500 hover:bg-slate-100" title="Atualizar">
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+          <button
+            onClick={syncGiga}
+            disabled={syncing}
+            title="Puxa os dados do Giga para a base local (espelho). A tela lê do espelho."
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <Database className={`h-4 w-4 ${syncing ? 'animate-pulse' : ''}`} />
+            {syncing ? 'Sincronizando…' : 'Sincronizar Giga'}
           </button>
+          {ext?.gigaSync?.lastOkAt && !ext.gigaSync.pendente && !syncing && (
+            <span className="text-xs text-slate-400">sincronizado {fmtSync(ext.gigaSync.lastOkAt)}</span>
+          )}
         </div>
         <button
           onClick={() => setShowForm(true)}
@@ -791,25 +835,35 @@ function ContaCorrente() {
         </button>
       </div>
 
-      {ext?.gigaIndisponivel && !loading && (
+      {(ext?.gigaSync?.pendente || ext?.gigaIndisponivel) && !loading && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
           <div className="flex-1 text-sm text-amber-900">
-            <div className="font-bold">Dados do Giga incompletos neste momento</div>
-            <div className="text-amber-800">
-              Não foi possível buscar a mercadoria/royalties de{' '}
-              {ext.mesesIndisponiveis && ext.mesesIndisponiveis.length
-                ? ext.mesesIndisponiveis.join(', ')
-                : 'alguns meses'}
-              . Os valores acima podem estar <b>incompletos</b> — isso <b>não</b> significa R$ 0 real. Clique em
-              atualizar pra tentar de novo.
-            </div>
+            {ext?.gigaSync?.pendente ? (
+              <>
+                <div className="font-bold">Espelho do Giga ainda não sincronizado</div>
+                <div className="text-amber-800">
+                  A mercadoria e os royalties leem da base local, que ainda não foi populada
+                  {ext.gigaSync?.erro ? ' (o último sync falhou)' : ''}. Clique em <b>Sincronizar Giga</b> pra
+                  puxar os dados agora.
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="font-bold">Não foi possível ler o espelho do Giga</div>
+                <div className="text-amber-800">
+                  Os valores podem estar <b>incompletos</b> — <b>não</b> significa R$ 0 real. Clique em atualizar.
+                </div>
+              </>
+            )}
           </div>
           <button
-            onClick={load}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+            onClick={ext?.gigaSync?.pendente ? syncGiga : load}
+            disabled={syncing}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
           >
-            <RefreshCw className="h-4 w-4" /> Atualizar
+            {ext?.gigaSync?.pendente ? <Database className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+            {ext?.gigaSync?.pendente ? (syncing ? 'Sincronizando…' : 'Sincronizar Giga') : 'Atualizar'}
           </button>
         </div>
       )}
