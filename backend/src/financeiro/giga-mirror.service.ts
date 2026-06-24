@@ -87,6 +87,13 @@ export class GigaMirrorService implements OnModuleInit {
         this.logger.error(`sync caixa falhou (espelho preservado): ${e?.message || e}`);
         await this.setState('caixa', null, String(e?.message || e));
       }
+      try {
+        const n = await this.syncItens();
+        this.logger.log(`espelho giga_transferencia_item: ${n} linhas`);
+      } catch (e: any) {
+        this.logger.error(`sync itens falhou (espelho preservado): ${e?.message || e}`);
+        await this.setState('item', null, String(e?.message || e));
+      }
     } finally {
       this.syncing = false;
     }
@@ -135,6 +142,33 @@ export class GigaMirrorService implements OnModuleInit {
       { timeout: 120_000, maxWait: 20_000 },
     );
     await this.setState('caixa', data.length, null);
+    return data.length;
+  }
+
+  private async syncItens(): Promise<number> {
+    const rows = await this.erp.getGigaTransferItems(this.windowFrom(), this.windowTo());
+    const data = rows
+      .filter((r) => r.controle && r.codigo && r.data)
+      .map((r) => ({
+        ljOrigem: r.origem,
+        ljDestino: r.destino,
+        controle: r.controle,
+        codigo: r.codigo,
+        descricao: r.descricao || null,
+        data: new Date(`${r.data}T00:00:00Z`),
+        qty: r.qty,
+        totalPreco: r.totalPreco,
+      }));
+    await this.prisma.$transaction(
+      async (tx) => {
+        await (tx as any).gigaTransferenciaItem.deleteMany({});
+        for (let i = 0; i < data.length; i += 2000) {
+          await (tx as any).gigaTransferenciaItem.createMany({ data: data.slice(i, i + 2000) });
+        }
+      },
+      { timeout: 180_000, maxWait: 20_000 },
+    );
+    await this.setState('item', data.length, null);
     return data.length;
   }
 

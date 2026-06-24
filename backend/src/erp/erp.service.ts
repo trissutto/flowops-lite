@@ -221,6 +221,52 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     throw lastErr;
   }
 
+  /**
+   * Itens (peças/SKU) das transferências — alimenta `giga_transferencia_item`.
+   * Grão: (origem, destino, CONTROLE, CODIGO, dia). É o nível mais fundo da
+   * cascata da conta corrente. PROPAGA o erro (com retry) pro sync saber.
+   */
+  async getGigaTransferItems(
+    from: Date,
+    to: Date,
+  ): Promise<
+    Array<{ origem: string; destino: string; controle: string; codigo: string; descricao: string; data: string; qty: number; totalPreco: number }>
+  > {
+    if (!this.pool) return [];
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+          `SELECT LJ_ORIGEM AS origem, LJ_DESTINO AS destino, CONTROLE AS controle,
+                  CODIGO AS codigo, MAX(DESCRICAO) AS descricao,
+                  DATE_FORMAT(DATA, '%Y-%m-%d') AS data,
+                  SUM(QUANTIDADE) AS qty, SUM(PRECO * QUANTIDADE) AS totalPreco
+             FROM transferencias
+            WHERE DATA >= ? AND DATA <= ?
+            GROUP BY LJ_ORIGEM, LJ_DESTINO, CONTROLE, CODIGO, DATA`,
+          [fromStr, toStr],
+        );
+        return (rows as any[]).map((r) => ({
+          origem: String(r.origem ?? '').trim(),
+          destino: String(r.destino ?? '').trim(),
+          controle: String(r.controle ?? '').trim(),
+          codigo: String(r.codigo ?? '').trim(),
+          descricao: String(r.descricao ?? '').trim(),
+          data: String(r.data ?? '').trim(),
+          qty: Number(r.qty) || 0,
+          totalPreco: Number(r.totalPreco) || 0,
+        }));
+      } catch (e: any) {
+        lastErr = e;
+        this.logger.warn(`getGigaTransferItems tentativa ${attempt}/2 falhou: ${(e as Error)?.message || e}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    throw lastErr;
+  }
+
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //

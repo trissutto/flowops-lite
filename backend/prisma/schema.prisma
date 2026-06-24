@@ -3411,3 +3411,23 @@ model GigaMirrorState {
 
   @@map("giga_mirror_state")
 }
+
+// Itens (peças/SKU) de cada transferência — o nível mais fundo da cascata.
+// Grão: (origem, destino, documento, CODIGO, dia). Carregado sob demanda quando
+// o usuário abre uma transferência específica (não vai no payload do extrato).
+model GigaTransferenciaItem {
+  id         String   @id @default(cuid())
+  ljOrigem   String   @map("lj_origem")
+  ljDestino  String   @map("lj_destino")
+  controle   String
+  codigo     String
+  descricao  String?
+  data       DateTime @db.Date
+  qty        Int
+  totalPreco Float    @map("total_preco")
+  syncedAt   DateTime @default(now()) @map("synced_at")
+
+  @@index([controle])
+  @@index([data])
+  @@map("giga_transferencia_item")
+}

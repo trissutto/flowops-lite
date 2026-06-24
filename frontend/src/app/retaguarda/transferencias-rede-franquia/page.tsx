@@ -679,19 +679,30 @@ function DetalheTree({ det }: { det: DetItem[] }) {
                             </tr>
                             {hasT &&
                               dOpen &&
-                              d.transfers!.map((t, j) => (
-                                <tr key={`${dk}-t-${j}`} className="bg-slate-50/40 text-[11px] text-slate-500">
-                                  <td className="whitespace-nowrap px-4 py-1">{t.data.split('-').reverse().join('/')}</td>
-                                  <td className="py-1 pl-20 pr-4">
-                                    <span className="text-slate-400">nº</span> {t.controle} · {num(t.pecas)} pç
-                                  </td>
-                                  <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(t.valor) : ''}</td>
-                                  <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(t.valor) : ''}</td>
-                                  <td className="px-4 py-1" />
-                                  <td className="px-4 py-1" />
-                                  <td className="px-4 py-1" />
-                                </tr>
-                              ))}
+                              d.transfers!.map((t, j) => {
+                                const tk = `${dk}-t-${j}`;
+                                const tOpen = !!open[tk];
+                                return (
+                                  <Fragment key={tk}>
+                                    <tr
+                                      className="cursor-pointer bg-slate-50/40 text-[11px] text-slate-500 hover:bg-slate-100/60"
+                                      onClick={() => toggle(tk)}
+                                    >
+                                      <td className="whitespace-nowrap px-4 py-1">{t.data.split('-').reverse().join('/')}</td>
+                                      <td className="py-1 pl-20 pr-4">
+                                        {tOpen ? <ChevronDown className="inline h-3 w-3 text-slate-300" /> : <ChevronRight className="inline h-3 w-3 text-slate-300" />}
+                                        <span className="ml-1 text-slate-400">nº</span> {t.controle} · {num(t.pecas)} pç
+                                      </td>
+                                      <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(t.valor) : ''}</td>
+                                      <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(t.valor) : ''}</td>
+                                      <td className="px-4 py-1" />
+                                      <td className="px-4 py-1" />
+                                      <td className="px-4 py-1" />
+                                    </tr>
+                                    {tOpen && <TransferItens controle={t.controle} data={t.data} isDeb={isDeb} />}
+                                  </Fragment>
+                                );
+                              })}
                           </Fragment>
                         );
                       })}
@@ -701,6 +712,62 @@ function DetalheTree({ det }: { det: DetItem[] }) {
           </Fragment>
         );
       })}
+    </>
+  );
+}
+
+/* 5º nível da cascata: peças/SKU de UMA transferência. Carrega sob demanda
+   (só quando o usuário abre a transferência) pra não inchar o extrato. */
+function TransferItens({ controle, data, isDeb }: { controle: string; data: string; isDeb: boolean }) {
+  const [items, setItems] = useState<
+    Array<{ codigo: string; descricao: string; pecas: number; valor: number }> | null
+  >(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api<Array<{ codigo: string; descricao: string; pecas: number; valor: number }>>(
+      `/financeiro/conta-corrente/transfer-items?controle=${encodeURIComponent(controle)}&data=${encodeURIComponent(data)}`,
+    )
+      .then((d) => {
+        if (alive) setItems(d);
+      })
+      .catch((e) => {
+        if (alive) setErr(String(e?.message || e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [controle, data]);
+
+  const msg = (texto: string, cls: string) => (
+    <tr className={`bg-white text-[11px] ${cls}`}>
+      <td className="px-4 py-1" />
+      <td className="py-1 pl-24 pr-4" colSpan={6}>
+        {texto}
+      </td>
+    </tr>
+  );
+
+  if (err) return msg(`Falha ao carregar itens: ${err}`, 'text-rose-500');
+  if (!items) return msg('Carregando itens…', 'text-slate-400');
+  if (!items.length) return msg('Sem itens no espelho — clique em Sincronizar Giga.', 'text-slate-400');
+
+  return (
+    <>
+      {items.map((it, k) => (
+        <tr key={k} className="bg-white text-[11px] text-slate-500">
+          <td className="px-4 py-1" />
+          <td className="py-1 pl-24 pr-4">
+            <span className="text-slate-400">{it.codigo}</span> {it.descricao} · {num(it.pecas)} pç
+          </td>
+          <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(it.valor) : ''}</td>
+          <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(it.valor) : ''}</td>
+          <td className="px-4 py-1" />
+          <td className="px-4 py-1" />
+          <td className="px-4 py-1" />
+        </tr>
+      ))}
     </>
   );
 }

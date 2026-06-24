@@ -85,4 +85,11 @@ export class ContaCorrenteController {
     this.requireAdmin(req);
     return this.svc.sincronizarGiga();
   }
+
+  /** GET /financeiro/conta-corrente/transfer-items?controle=&data= → 5º nível */
+  @Get('transfer-items')
+  transferItems(@Req() req: any, @Query('controle') controle?: string, @Query('data') data?: string) {
+    this.requireAdmin(req);
+    return this.svc.getTransferItems({ controle, data });
+  }
 }
