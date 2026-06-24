@@ -90,6 +90,26 @@ export class ContaCorrenteService {
       .replace(/[^a-zA-Z0-9.\-_]/g, '_');
   }
 
+  /**
+   * Corre uma promise contra um timeout. Se estourar, devolve `fallback` (e loga)
+   * em vez de pendurar. Os "works" internos nunca rejeitam (têm try/catch), então
+   * só o timeout pode disparar — garante que o extrato sempre responde.
+   */
+  private async withTimeout<T>(work: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        this.logger.error(`[conta-corrente] ${label} excedeu ${ms}ms — usando fallback (0)`);
+        resolve(fallback);
+      }, ms);
+    });
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   // ── Débito do mês (consome 100% do cálculo que o sistema já faz) ──────────
   private async debitoDoMes(mes: string): Promise<{
     mes: string;
@@ -236,7 +256,15 @@ export class ContaCorrenteService {
       return { royalties, marketing, detalhe };
     })();
 
-    const [giga, flow, roy] = await Promise.all([gigaWork, flowWork, royWork]);
+    // Time-box cada fonte pra o endpoint NUNCA travar (await que não resolve por
+    // query pendurada). O `flowWork` (pool de pricing, connectionLimit 2, em
+    // chunks) é o gargalo e costuma vir 0 → timeout curto. Giga/royalties são
+    // os débitos REAIS (1 query cada, pool do ERP) → timeout generoso.
+    const [giga, flow, roy] = await Promise.all([
+      this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[] }, `mercadoria GIGA ${mes}`),
+      this.withTimeout(flowWork, 6_000, { valor: 0, detalhe: [] as DetalheItem[] }, `mercadoria Flow ${mes}`),
+      this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[] }, `royalties ${mes}`),
+    ]);
 
     const data = {
       mes,
@@ -322,12 +350,17 @@ export class ContaCorrenteService {
       if (natureza === 'debito') totalDebitos += Math.abs(valor);
       else totalCreditos += Math.abs(valor);
     };
-    for (const mes of this.mesesEntre(from, to)) {
-      const d = await this.debitoDoMes(mes);
+    // Meses em PARALELO (antes era sequencial → a faixa padrão de 6 meses
+    // enfileirava ~18 idas ao Giga e travava). Cada debitoDoMes já é time-boxed,
+    // então o pior caso do extrato é o timeout de UM mês, não a soma deles.
+    const meses = this.mesesEntre(from, to);
+    const debitos = await Promise.all(meses.map((mes) => this.debitoDoMes(mes)));
+    meses.forEach((mes, i) => {
+      const d = debitos[i];
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
       pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
-    }
+    });
 
     // LANÇAMENTOS manuais (pagamentos + ajustes) no período.
     const lancs = await (this.prisma as any).franquiaLancamento.findMany({
