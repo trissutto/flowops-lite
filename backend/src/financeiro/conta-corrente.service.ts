@@ -198,43 +198,12 @@ export class ContaCorrenteService {
       return { valor, detalhe };
     })();
 
-    const flowWork = (async () => {
-      let valor = 0;
-      const detalhe: DetalheItem[] = [];
-      try {
-        const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
-        valor = (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
-        for (const p of (((rep as any).pairs as any[]) || [])) {
-          if (p.direction === 'redeToFilial') {
-            detalhe.push({
-              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
-              valor: round(p.valorCusto),
-              sinal: '+',
-              from: p.fromName,
-              to: p.toName,
-              fromTipo: 'REDE',
-              toTipo: 'FILIAL',
-              pecas: p.pecas,
-            });
-          } else if (p.direction === 'filialToRede') {
-            detalhe.push({
-              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
-              valor: round(p.valorCusto),
-              sinal: '-',
-              from: p.fromName,
-              to: p.toName,
-              fromTipo: 'FILIAL',
-              toTipo: 'REDE',
-              pecas: p.pecas,
-            });
-          }
-        }
-      } catch (e: any) {
-        this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
-      }
-      detalhe.sort((a, b) => b.valor - a.valor);
-      return { valor, detalhe };
-    })();
+    // FLOW DESLIGADO: era um cross-check redundante (a mercadoria REAL já vem do
+    // gigaWork, direto da tabela `transferencias` numa query só). Ele usava o
+    // pool de pricing (connectionLimit 2, queries em chunk) — o gargalo que
+    // travava o extrato — e na prática vinha sempre 0. Mantido como 0 fixo; se um
+    // dia precisar do cross-check, reativar SEM bater no pricing por mês.
+    const flow = { valor: 0, detalhe: [] as DetalheItem[] };
 
     const royWork = (async () => {
       let royalties = 0;
@@ -256,13 +225,11 @@ export class ContaCorrenteService {
       return { royalties, marketing, detalhe };
     })();
 
-    // Time-box cada fonte pra o endpoint NUNCA travar (await que não resolve por
-    // query pendurada). O `flowWork` (pool de pricing, connectionLimit 2, em
-    // chunks) é o gargalo e costuma vir 0 → timeout curto. Giga/royalties são
-    // os débitos REAIS (1 query cada, pool do ERP) → timeout generoso.
-    const [giga, flow, roy] = await Promise.all([
+    // Giga (mercadoria) e royalties são os débitos REAIS — 1 query cada no pool
+    // do ERP. Rodam juntos (2 conexões, tranquilo) com time-box generoso só pra
+    // o endpoint nunca pendurar numa query presa.
+    const [giga, roy] = await Promise.all([
       this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[] }, `mercadoria GIGA ${mes}`),
-      this.withTimeout(flowWork, 6_000, { valor: 0, detalhe: [] as DetalheItem[] }, `mercadoria Flow ${mes}`),
       this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[] }, `royalties ${mes}`),
     ]);
 
@@ -350,17 +317,16 @@ export class ContaCorrenteService {
       if (natureza === 'debito') totalDebitos += Math.abs(valor);
       else totalCreditos += Math.abs(valor);
     };
-    // Meses em PARALELO (antes era sequencial → a faixa padrão de 6 meses
-    // enfileirava ~18 idas ao Giga e travava). Cada debitoDoMes já é time-boxed,
-    // então o pior caso do extrato é o timeout de UM mês, não a soma deles.
-    const meses = this.mesesEntre(from, to);
-    const debitos = await Promise.all(meses.map((mes) => this.debitoDoMes(mes)));
-    meses.forEach((mes, i) => {
-      const d = debitos[i];
+    // Meses em SÉRIE de propósito: 1 mês por vez = no máximo 2 conexões ao Giga
+    // simultâneas (giga + roy). Paralelizar os meses dispara um BURST de conexões
+    // que o servidor do Giga recusa → o circuit-breaker abre → tudo vem 0. Sem o
+    // flowWork (que era o lento), cada mês é só 2 queries rápidas, então série já
+    // é veloz e segura. NÃO paralelizar os meses.
+    for (const mes of this.mesesEntre(from, to)) {
+      const d = await this.debitoDoMes(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
-      pushAuto(mes, `Mercadoria Flow — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
-    });
+    }
 
     // LANÇAMENTOS manuais (pagamentos + ajustes) no período.
     const lancs = await (this.prisma as any).franquiaLancamento.findMany({
