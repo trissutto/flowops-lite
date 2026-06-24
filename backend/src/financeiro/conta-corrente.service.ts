@@ -25,6 +25,9 @@ type DetalheItem = {
   fromTipo?: string;
   toTipo?: string;
   pecas?: number;
+  // Nível mais fundo da cascata: as transferências (1 por CONTROLE) que compõem
+  // o par origem→destino. valor já em custo (÷2,5).
+  transfers?: Array<{ data: string; controle: string; pecas: number; valor: number }>;
 };
 
 /**
@@ -154,40 +157,60 @@ export class ContaCorrenteService {
       let valor = 0;
       const detalhe: DetalheItem[] = [];
       try {
-        const transf = await this.erp.getGigaTransfersByPair(
+        const rows = await this.erp.getGigaTransfersDetailed(
           new Date(`${fromStr}T00:00:00Z`),
           new Date(`${toStr}T23:59:59Z`),
         );
+        // Agrupa as transferências (uma por CONTROLE) por par origem→destino,
+        // guardando a lista pro nível mais fundo da cascata.
+        const pares = new Map<
+          string,
+          {
+            origem: string;
+            destino: string;
+            qty: number;
+            totalPreco: number;
+            transfers: Array<{ data: string; controle: string; pecas: number; valor: number }>;
+          }
+        >();
+        for (const r of rows) {
+          const key = `${r.origem}->${r.destino}`;
+          let p = pares.get(key);
+          if (!p) {
+            p = { origem: r.origem, destino: r.destino, qty: 0, totalPreco: 0, transfers: [] };
+            pares.set(key, p);
+          }
+          p.qty += r.qty;
+          p.totalPreco += r.totalPreco;
+          p.transfers.push({ data: r.data, controle: r.controle, pecas: r.qty, valor: round(r.totalPreco / 2.5) });
+        }
+
         let recebeu = 0;
         let mandou = 0;
-        for (const t of transf) {
-          const oFil = tipoOf(t.origem) === 'FILIAL';
-          const dFil = tipoOf(t.destino) === 'FILIAL';
-          const vc = round(t.totalPreco / 2.5);
+        for (const p of pares.values()) {
+          const oFil = tipoOf(p.origem) === 'FILIAL';
+          const dFil = tipoOf(p.destino) === 'FILIAL';
+          const vc = round(p.totalPreco / 2.5);
+          // transferências por data crescente, depois maior valor
+          const transfers = p.transfers.sort(
+            (a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0) || b.valor - a.valor,
+          );
+          const base = {
+            label: `${nomeOf(p.origem)} → ${nomeOf(p.destino)} · ${p.qty} pç`,
+            valor: vc,
+            from: nomeOf(p.origem),
+            to: nomeOf(p.destino),
+            fromTipo: tipoOf(p.origem),
+            toTipo: tipoOf(p.destino),
+            pecas: p.qty,
+            transfers,
+          };
           if (!oFil && dFil) {
-            recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
-            detalhe.push({
-              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
-              valor: vc,
-              sinal: '+',
-              from: nomeOf(t.origem),
-              to: nomeOf(t.destino),
-              fromTipo: tipoOf(t.origem),
-              toTipo: tipoOf(t.destino),
-              pecas: t.qty,
-            });
+            recebeu += p.totalPreco; // REDE → FRANQUIA (soma)
+            detalhe.push({ ...base, sinal: '+' });
           } else if (oFil && !dFil) {
-            mandou += t.totalPreco; // FRANQUIA → REDE (abate)
-            detalhe.push({
-              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
-              valor: vc,
-              sinal: '-',
-              from: nomeOf(t.origem),
-              to: nomeOf(t.destino),
-              fromTipo: tipoOf(t.origem),
-              toTipo: tipoOf(t.destino),
-              pecas: t.qty,
-            });
+            mandou += p.totalPreco; // FRANQUIA → REDE (abate)
+            detalhe.push({ ...base, sinal: '-' });
           }
         }
         valor = (recebeu - mandou) / 2.5;

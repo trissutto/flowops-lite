@@ -176,6 +176,43 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Igual ao getGigaTransfersByPair, mas DETALHADO por documento de transferência
+   * (CONTROLE) — pra montar o nível mais fundo da cascata da conta corrente.
+   * Uma linha por (origem, destino, CONTROLE, DATA): soma das peças e do preço
+   * de venda daquele documento. DATA já vem como string 'YYYY-MM-DD'.
+   */
+  async getGigaTransfersDetailed(
+    from: Date,
+    to: Date,
+  ): Promise<Array<{ origem: string; destino: string; controle: string; data: string; qty: number; totalPreco: number }>> {
+    if (!this.pool) return [];
+    const fromStr = from.toISOString().slice(0, 10);
+    const toStr = to.toISOString().slice(0, 10);
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT LJ_ORIGEM AS origem, LJ_DESTINO AS destino, CONTROLE AS controle,
+                DATE_FORMAT(DATA, '%Y-%m-%d') AS data,
+                SUM(QUANTIDADE) AS qty, SUM(PRECO * QUANTIDADE) AS totalPreco
+           FROM transferencias
+          WHERE DATA >= ? AND DATA <= ?
+          GROUP BY LJ_ORIGEM, LJ_DESTINO, CONTROLE, DATA`,
+        [fromStr, toStr],
+      );
+      return (rows as any[]).map((r) => ({
+        origem: String(r.origem ?? '').trim(),
+        destino: String(r.destino ?? '').trim(),
+        controle: String(r.controle ?? '').trim(),
+        data: String(r.data ?? '').trim(),
+        qty: Number(r.qty) || 0,
+        totalPreco: Number(r.totalPreco) || 0,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`getGigaTransfersDetailed falhou: ${(e as Error)?.message || e}`);
+      return [];
+    }
+  }
+
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //
