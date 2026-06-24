@@ -11,6 +11,23 @@ import { RealignmentReportService } from '../realignment/realignment-report.serv
 import { ErpService } from '../erp/erp.service';
 
 /**
+ * Item de detalhe de um débito de mercadoria. Além do `label` (compat), carrega
+ * origem/destino/tipo/peças pra montar a árvore em cascata (REDE/FRANQUIA →
+ * cidade que enviou → cidades destino) no front. Royalties não preenchem os
+ * campos opcionais → caem na lista simples.
+ */
+type DetalheItem = {
+  label: string;
+  valor: number;
+  sinal: string;
+  from?: string;
+  to?: string;
+  fromTipo?: string;
+  toTipo?: string;
+  pecas?: number;
+};
+
+/**
  * ContaCorrenteService — conta corrente da FRANQUEADA.
  *
  * Há UMA franqueada só (todas as lojas FILIAL = mesmo dono), então é uma conta
@@ -81,9 +98,9 @@ export class ContaCorrenteService {
     royalties: number;
     marketing: number;
     total: number;
-    detalheGiga: Array<{ label: string; valor: number; sinal: string }>;
-    detalheFlow: Array<{ label: string; valor: number; sinal: string }>;
-    detalheRoy: Array<{ label: string; valor: number; sinal: string }>;
+    detalheGiga: DetalheItem[];
+    detalheFlow: DetalheItem[];
+    detalheRoy: DetalheItem[];
   }> {
     // Cache: meses (sobretudo passados) não mudam toda hora. Re-load / troca de
     // datas fica instantâneo e não re-bate o Giga.
@@ -115,7 +132,7 @@ export class ContaCorrenteService {
     // INDEPENDENTES → rodam em PARALELO pra cortar a latência (era sequencial).
     const gigaWork = (async () => {
       let valor = 0;
-      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      const detalhe: DetalheItem[] = [];
       try {
         const transf = await this.erp.getGigaTransfersByPair(
           new Date(`${fromStr}T00:00:00Z`),
@@ -129,10 +146,28 @@ export class ContaCorrenteService {
           const vc = round(t.totalPreco / 2.5);
           if (!oFil && dFil) {
             recebeu += t.totalPreco; // REDE → FRANQUIA (soma)
-            detalhe.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '+' });
+            detalhe.push({
+              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
+              valor: vc,
+              sinal: '+',
+              from: nomeOf(t.origem),
+              to: nomeOf(t.destino),
+              fromTipo: tipoOf(t.origem),
+              toTipo: tipoOf(t.destino),
+              pecas: t.qty,
+            });
           } else if (oFil && !dFil) {
             mandou += t.totalPreco; // FRANQUIA → REDE (abate)
-            detalhe.push({ label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`, valor: vc, sinal: '-' });
+            detalhe.push({
+              label: `${nomeOf(t.origem)} → ${nomeOf(t.destino)} · ${t.qty} pç`,
+              valor: vc,
+              sinal: '-',
+              from: nomeOf(t.origem),
+              to: nomeOf(t.destino),
+              fromTipo: tipoOf(t.origem),
+              toTipo: tipoOf(t.destino),
+              pecas: t.qty,
+            });
           }
         }
         valor = (recebeu - mandou) / 2.5;
@@ -145,15 +180,33 @@ export class ContaCorrenteService {
 
     const flowWork = (async () => {
       let valor = 0;
-      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      const detalhe: DetalheItem[] = [];
       try {
         const rep = await this.report.getRedeFranquiaSummary('custom', fromStr, toStr);
         valor = (rep.flows.redeToFilial.valorCusto || 0) - (rep.flows.filialToRede.valorCusto || 0);
         for (const p of (((rep as any).pairs as any[]) || [])) {
           if (p.direction === 'redeToFilial') {
-            detalhe.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '+' });
+            detalhe.push({
+              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
+              valor: round(p.valorCusto),
+              sinal: '+',
+              from: p.fromName,
+              to: p.toName,
+              fromTipo: 'REDE',
+              toTipo: 'FILIAL',
+              pecas: p.pecas,
+            });
           } else if (p.direction === 'filialToRede') {
-            detalhe.push({ label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`, valor: round(p.valorCusto), sinal: '-' });
+            detalhe.push({
+              label: `${p.fromName} → ${p.toName} · ${p.pecas} pç`,
+              valor: round(p.valorCusto),
+              sinal: '-',
+              from: p.fromName,
+              to: p.toName,
+              fromTipo: 'FILIAL',
+              toTipo: 'REDE',
+              pecas: p.pecas,
+            });
           }
         }
       } catch (e: any) {
@@ -166,7 +219,7 @@ export class ContaCorrenteService {
     const royWork = (async () => {
       let royalties = 0;
       let marketing = 0;
-      const detalhe: Array<{ label: string; valor: number; sinal: string }> = [];
+      const detalhe: DetalheItem[] = [];
       try {
         const r = await this.financeiro.getRoyaltiesByMonth(mes);
         royalties = r.totalRoyalties || 0;
@@ -247,7 +300,7 @@ export class ContaCorrenteService {
       descricao: string,
       sistema: string,
       valor: number,
-      detalhe?: Array<{ label: string; valor: number; sinal: string }>,
+      detalhe?: DetalheItem[],
     ) => {
       if (Math.abs(valor) < 0.005) return;
       const [yy, mm] = mesRef.split('-').map(Number);
