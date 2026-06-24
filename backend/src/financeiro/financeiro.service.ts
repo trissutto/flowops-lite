@@ -264,7 +264,7 @@ export class FinanceiroService {
    *   { storeCode, storeName, vendaBruta, royaltiesValor, marketingValor,
    *     totalAPagar }
    */
-  async getRoyaltiesByMonth(mesReferencia: string) {
+  async getRoyaltiesByMonth(mesReferencia: string, opts: { strict?: boolean } = {}) {
     if (!/^\d{4}-\d{2}$/.test(mesReferencia)) {
       throw new BadRequestException('mesReferencia inválido (formato YYYY-MM)');
     }
@@ -298,6 +298,7 @@ export class FinanceiroService {
       (filiais as any[]).map((f) => String(f.code)),
       inicio,
       fim,
+      { throwOnError: opts.strict },
     );
 
     let totalRoyalties = 0;

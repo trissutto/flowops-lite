@@ -238,7 +238,7 @@ export class ContaCorrenteService {
       let ok = true;
       const detalhe: DetalheItem[] = [];
       try {
-        const r = await this.financeiro.getRoyaltiesByMonth(mes);
+        const r = await this.financeiro.getRoyaltiesByMonth(mes, { strict: true });
         royalties = r.totalRoyalties || 0;
         marketing = r.totalMarketing || 0;
         for (const f of (((r as any).porFilial as any[]) || [])) {
