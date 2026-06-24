@@ -531,6 +531,7 @@ interface DetItem {
   fromTipo?: string; // 'REDE' | 'FILIAL'
   toTipo?: string;
   pecas?: number;
+  transfers?: Array<{ data: string; controle: string; pecas: number; valor: number }>;
 }
 interface CCLinha {
   id: string;
@@ -678,19 +679,50 @@ function DetalheTree({ det }: { det: DetItem[] }) {
                       <td className="px-4 py-1.5" />
                     </tr>
                     {sOpen &&
-                      s.dests.map((d, i) => (
-                        <tr key={`${sk}-${i}`} className="bg-white text-xs text-slate-500">
-                          <td className="px-4 py-1" />
-                          <td className="py-1 pl-16 pr-4">
-                            <span className="text-slate-400">→</span> {d.to} · {num(d.pecas || 0)} pç
-                          </td>
-                          <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                          <td className="px-4 py-1" />
-                        </tr>
-                      ))}
+                      s.dests.map((d, i) => {
+                        const dk = `${sk}::${i}`;
+                        const hasT = !!(d.transfers && d.transfers.length);
+                        const dOpen = !!open[dk];
+                        return (
+                          <Fragment key={dk}>
+                            <tr
+                              className={`bg-white text-xs text-slate-600 ${hasT ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+                              onClick={hasT ? () => toggle(dk) : undefined}
+                            >
+                              <td className="px-4 py-1" />
+                              <td className="py-1 pl-16 pr-4">
+                                {hasT ? (
+                                  dOpen ? <ChevronDown className="inline h-3.5 w-3.5 text-slate-300" /> : <ChevronRight className="inline h-3.5 w-3.5 text-slate-300" />
+                                ) : (
+                                  <span className="text-slate-400">→</span>
+                                )}
+                                <span className="ml-1">{d.to} · {num(d.pecas || 0)} pç</span>
+                                {hasT && <span className="ml-2 text-slate-400">{d.transfers!.length} transf.</span>}
+                              </td>
+                              <td className="px-4 py-1 text-right tabular-nums text-rose-500">{isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1 text-right tabular-nums text-emerald-500">{!isDeb ? brl(d.valor) : ''}</td>
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                              <td className="px-4 py-1" />
+                            </tr>
+                            {hasT &&
+                              dOpen &&
+                              d.transfers!.map((t, j) => (
+                                <tr key={`${dk}-t-${j}`} className="bg-slate-50/40 text-[11px] text-slate-500">
+                                  <td className="whitespace-nowrap px-4 py-1">{t.data.split('-').reverse().join('/')}</td>
+                                  <td className="py-1 pl-20 pr-4">
+                                    <span className="text-slate-400">nº</span> {t.controle} · {num(t.pecas)} pç
+                                  </td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-rose-400">{isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1 text-right tabular-nums text-emerald-400">{!isDeb ? brl(t.valor) : ''}</td>
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                  <td className="px-4 py-1" />
+                                </tr>
+                              ))}
+                          </Fragment>
+                        );
+                      })}
                   </Fragment>
                 );
               })}
