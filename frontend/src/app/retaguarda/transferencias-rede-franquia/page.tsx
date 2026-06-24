@@ -21,7 +21,6 @@ import {
   ArrowRight,
   ArrowUpRight,
   Building2,
-  Calendar,
   ChevronDown,
   ChevronRight,
   Download,
@@ -77,14 +76,6 @@ interface Summary {
 
 type FlowKey = 'redeToFilial' | 'filialToRede' | 'redeToRede' | 'filialToFilial';
 
-const PERIODS: Array<{ value: string; label: string }> = [
-  { value: '7d', label: '7 dias' },
-  { value: '30d', label: '30 dias' },
-  { value: '90d', label: '90 dias' },
-  { value: 'ytd', label: 'Este ano' },
-  { value: '12m', label: '12 meses' },
-];
-
 const FLOW_DEFS: Array<{
   key: FlowKey;
   label: string;
@@ -106,30 +97,28 @@ const num = (n: number) => n.toLocaleString('pt-BR');
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
 export default function TransferenciasRedeFranquiaPage() {
-  const [period, setPeriod] = useState('90d');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  // Filtro SÓ por seletor de datas (de/até). Default: últimos 90 dias.
+  const [customFrom, setCustomFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 90);
+    return ymd(d);
+  });
+  const [customTo, setCustomTo] = useState(() => ymd(new Date()));
   const [data, setData] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [tab, setTab] = useState<'analise' | 'conta'>('analise');
 
-  const isCustom = period === 'custom';
-
   useEffect(() => {
-    // No modo personalizado só busca quando as duas datas estão preenchidas.
-    if (isCustom && (!customFrom || !customTo)) {
+    if (!customFrom || !customTo) {
       setLoading(false);
       return;
     }
     let alive = true;
     setLoading(true);
     setError(null);
-    const qs = isCustom
-      ? `from=${customFrom}&to=${customTo}`
-      : `period=${period}`;
-    api<Summary>(`/transferencias/rede-franquia?${qs}`)
+    api<Summary>(`/transferencias/rede-franquia?from=${customFrom}&to=${customTo}`)
       .then((d) => {
         if (alive) setData(d);
       })
@@ -142,19 +131,7 @@ export default function TransferenciasRedeFranquiaPage() {
     return () => {
       alive = false;
     };
-  }, [period, customFrom, customTo, isCustom]);
-
-  /** Ativa o modo personalizado, pré-preenchendo os últimos 30 dias. */
-  function enableCustom() {
-    if (!customFrom || !customTo) {
-      const to = new Date();
-      const from = new Date();
-      from.setDate(from.getDate() - 30);
-      setCustomFrom(ymd(from));
-      setCustomTo(ymd(to));
-    }
-    setPeriod('custom');
-  }
+  }, [customFrom, customTo]);
 
   const pairsByFlow = useMemo(() => {
     const map: Record<string, Pair[]> = {
@@ -193,7 +170,7 @@ export default function TransferenciasRedeFranquiaPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const suffix = isCustom && data.period ? `${data.period.from}_a_${data.period.to}` : period;
+    const suffix = data.period ? `${data.period.from}_a_${data.period.to}` : `${customFrom}_a_${customTo}`;
     a.download = `transferencias-rede-franquia-${suffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
@@ -221,48 +198,23 @@ export default function TransferenciasRedeFranquiaPage() {
           </div>
           {tab === 'analise' && (
           <div className="flex flex-wrap items-center gap-2 print:hidden">
-            <div className="flex overflow-hidden rounded-lg border border-slate-300 bg-white">
-              {PERIODS.map((p) => (
-                <button
-                  key={p.value}
-                  onClick={() => setPeriod(p.value)}
-                  className={`px-3 py-1.5 text-sm font-medium transition ${
-                    period === p.value
-                      ? 'bg-blue-600 text-white'
-                      : 'text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <button
-                onClick={enableCustom}
-                className={`inline-flex items-center gap-1 border-l border-slate-300 px-3 py-1.5 text-sm font-medium transition ${
-                  isCustom ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <Calendar className="h-4 w-4" /> Personalizado
-              </button>
+            <div className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2 py-1">
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              />
+              <span className="text-sm text-slate-500">até</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
+              />
             </div>
-            {isCustom && (
-              <div className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-2 py-1">
-                <input
-                  type="date"
-                  value={customFrom}
-                  max={customTo || undefined}
-                  onChange={(e) => setCustomFrom(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-                />
-                <span className="text-sm text-slate-500">até</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  min={customFrom || undefined}
-                  onChange={(e) => setCustomTo(e.target.value)}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700"
-                />
-              </div>
-            )}
             <button
               onClick={exportCsv}
               disabled={!data}
