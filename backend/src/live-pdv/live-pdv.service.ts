@@ -47,6 +47,46 @@ export class LivePdvService {
   private keyOf(ref: string, cor: any, tam: any): string {
     return `${this.norm(ref)}|${this.norm(cor)}|${this.norm(tam)}`;
   }
+
+  // Preço por CODIGO com FALLBACK no espelho (giga_produto.vendaUn) quando o
+  // Giga ao vivo falha/zera — evita peça/grade a R$0 na Live.
+  private async pricesWithMirror(codigos: string[]): Promise<Map<string, number>> {
+    const out = await this.pricing.getPricesByCodigos(codigos).catch(() => new Map<string, number>());
+    const missing = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean))).filter(
+      (c) => !((out.get(c) || 0) > 0),
+    );
+    if (missing.length) {
+      try {
+        const rows = await (this.prisma as any).gigaProduto.findMany({
+          where: { codigo: { in: missing }, vendaUn: { gt: 0 } },
+          select: { codigo: true, vendaUn: true },
+        });
+        for (const r of rows as any[]) {
+          const c = String(r.codigo).trim();
+          if (!((out.get(c) || 0) > 0)) out.set(c, Number(r.vendaUn) || 0);
+        }
+      } catch {
+        /* espelho indisponível — mantém o que veio do Giga */
+      }
+    }
+    return out;
+  }
+
+  // Preço por REF com fallback no espelho.
+  private async refPriceWithMirror(ref: string): Promise<number> {
+    const live = (await this.pricing.getPricesByRefs([ref]).catch(() => new Map<string, number>())).get(ref) || 0;
+    if (live > 0) return live;
+    try {
+      const row = await (this.prisma as any).gigaProduto.findFirst({
+        where: { ref: { equals: ref, mode: 'insensitive' }, vendaUn: { gt: 0 } },
+        orderBy: { vendaUn: 'desc' },
+        select: { vendaUn: true },
+      });
+      return row ? Number(row.vendaUn) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  }
   private reaisToCents(v: number): number {
     return Math.round((Number(v) || 0) * 100);
   }
@@ -204,10 +244,10 @@ export class LivePdvService {
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
     const detailed = await this.erp.getStockBySkusDetailed(codigos);
-    // Preço pelo serviço do relatório: trata VENDAUN como REAIS (correto p/ Lurd's).
-    const prices = await this.pricing.getPricesByCodigos(codigos);
-    const refPriceMap = await this.pricing.getPricesByRefs([ref]);
-    const refPrice = refPriceMap.get(ref) || 0;
+    // Preço (VENDAUN em reais) COM FALLBACK no espelho — nunca mostra R$0 por
+    // causa de hiccup no Giga ao vivo.
+    const prices = await this.pricesWithMirror(codigos);
+    const refPrice = await this.refPriceWithMirror(ref);
     const storesMap = await this.storesMap();
 
     // 3) Reservas ativas pra descontar.
@@ -350,32 +390,18 @@ export class LivePdvService {
       await (this.prisma as any).livePdvPromo.deleteMany({ where: { sessionId, refCode: ref } });
     }
 
-    // Atualiza itens reservados desse REF (compara normalizado)
-    const reserved = await (this.prisma as any).livePdvItem.findMany({
-      where: { sessionId, status: 'reserved' },
-    });
-    const affected = (reserved as any[]).filter((i) => this.norm(i.refCode) === ref);
-    const cartIds = new Set<string>();
-    for (const it of affected) {
-      const novo = promoOn ? Math.round(priceCents) : (it.basePriceCents || it.priceCents);
-      if (novo !== it.priceCents) {
-        await (this.prisma as any).livePdvItem.update({
-          where: { id: it.id },
-          data: { priceCents: novo },
-        });
-        cartIds.add(it.cartId);
-      }
-    }
-    for (const cartId of cartIds) await this.recalcCart(cartId).catch(() => {});
-
+    // "COMPROU COMPROU": a Promo Live vale SÓ pras próximas peças bipadas. Itens
+    // que JÁ estão no carrinho ficam TRAVADOS no preço que pegaram — NÃO
+    // re-precificamos nada (nem ao mudar, nem ao remover a promo). O custo (÷2,5)
+    // do intercompany continua preso ao basePriceCents (preço cheio).
     this.gateway.emitToAdmins('live-pdv:promo', {
       sessionId,
       refCode: ref,
       priceCents: promoOn ? Math.round(priceCents) : null,
-      affected: affected.length,
+      affected: 0,
     });
 
-    return { ok: true, refCode: ref, priceCents: promoOn ? Math.round(priceCents) : null, affected: affected.length };
+    return { ok: true, refCode: ref, priceCents: promoOn ? Math.round(priceCents) : null, affected: 0 };
   }
 
   // ─── Cliente ──────────────────────────────────────────────────────────────
@@ -650,12 +676,35 @@ export class LivePdvService {
     }
     if (storeInputs.length === 0) throw new BadRequestException('Sem loja ativa com estoque');
 
-    // RoutingEngine escolhe a melhor loja de origem
+    // FASE A — AGRUPAR FRETE: se o carrinho JÁ usa uma loja que tem estoque
+    // pra esta peça, prefere ela (concentra o envio, paga menos frete). Só abre
+    // loja nova quando nenhuma já usada cobre. 1ª peça do carrinho → roteia normal.
+    let preferStoreCode: string | undefined;
+    const existingItems = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId: cart.id, status: { in: this.COMMITTED } },
+      select: { originStoreCode: true },
+    });
+    if (existingItems.length) {
+      const freq = new Map<string, number>();
+      for (const it of existingItems as any[]) {
+        if (it.originStoreCode) freq.set(it.originStoreCode, (freq.get(it.originStoreCode) || 0) + 1);
+      }
+      const availByStore = new Map(stock.map((s) => [s.storeCode, s.availableQty]));
+      for (const [storeCode] of [...freq.entries()].sort((a, b) => b[1] - a[1])) {
+        if ((availByStore.get(storeCode) || 0) >= qty) {
+          preferStoreCode = storeCode;
+          break;
+        }
+      }
+    }
+
+    // RoutingEngine escolhe a melhor loja de origem (respeitando preferStoreCode)
     const result = this.routing.route({
       items: [{ sku: itemKey, quantity: qty }],
       stores: storeInputs,
       stock,
       shippingCep: cart.customerCep || session.liveStoreCode || null,
+      preferStoreCode,
     });
     if (!result.success || !result.assignments.length) {
       throw new BadRequestException(
@@ -664,15 +713,10 @@ export class LivePdvService {
     }
     const chosen = result.assignments[0];
 
-    // Preço (VENDAUN em reais, via serviço do relatório) com fallback por REF
-    const priceMap = bestCodigo
-      ? await this.pricing.getPricesByCodigos([bestCodigo])
-      : new Map<string, number>();
+    // Preço (VENDAUN em reais) COM FALLBACK no espelho — nunca reserva a R$0.
+    const priceMap = bestCodigo ? await this.pricesWithMirror([bestCodigo]) : new Map<string, number>();
     let priceReais = bestCodigo ? priceMap.get(bestCodigo) || 0 : 0;
-    if (priceReais === 0) {
-      const refPriceMap = await this.pricing.getPricesByRefs([ref]);
-      priceReais = refPriceMap.get(ref) || 0;
-    }
+    if (priceReais === 0) priceReais = await this.refPriceWithMirror(ref);
     const basePriceCents = this.reaisToCents(priceReais);
     // Aplica preço promocional da live se houver pro REF nessa sessão
     const promo = await this.getPromo(session.id, ref);
