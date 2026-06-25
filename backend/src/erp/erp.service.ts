@@ -4181,6 +4181,41 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Matriz LOJA × ANO de cadastro (DATAALT): peças em estoque por loja, quebradas
+   * por ano. Uma query só (GROUP BY loja, bucket de ano). Bucket: 'pre2020'
+   * (< 2021), o ano (2021..), ou 'sem_data' (DATAALT nulo). Pro relatório PDF.
+   */
+  async getStockByYearByStore(
+    plusSize = false,
+  ): Promise<Array<{ loja: string; ano: string; pecas: number }>> {
+    if (!this.pool) return [];
+    try {
+      const dataCol = await this.getCadastroDateCol();
+      const anoExpr = dataCol
+        ? `CASE WHEN p.\`${dataCol}\` IS NULL THEN 'sem_data'
+                WHEN p.\`${dataCol}\` < '2021-01-01' THEN 'pre2020'
+                ELSE CAST(YEAR(p.\`${dataCol}\`) AS CHAR) END`
+        : `'sem_data'`;
+      const conds: string[] = ['e.ESTOQUE > 0'];
+      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
+      const sql = `SELECT e.LOJA AS loja, ${anoExpr} AS ano, SUM(e.ESTOQUE) AS pecas
+                     FROM estoque e
+                     INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
+                    WHERE ${conds.join(' AND ')}
+                    GROUP BY e.LOJA, ano`;
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+      return (rows as any[]).map((r) => ({
+        loja: String(r.loja || '').trim(),
+        ano: String(r.ano || 'sem_data').trim(),
+        pecas: Number(r.pecas) || 0,
+      }));
+    } catch (e) {
+      this.logger.error(`getStockByYearByStore falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
    * Vendas por loja num perÃ­odo (data inicio/fim half-open: >= inicio, < fim).
    * Retorna peÃ§as vendidas + valor bruto. Ignora MARCADO='SIM'.
    * Filtros opcionais: PLUS SIZE + ANO DE CADASTRO da peÃ§a.

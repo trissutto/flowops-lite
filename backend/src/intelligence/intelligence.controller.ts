@@ -53,6 +53,17 @@ export class IntelligenceController {
     });
   }
 
+  /**
+   * GET /intelligence/stock-by-year?plusSize=
+   * Matriz LOJA × ANO de cadastro (DATAALT): peças em estoque por ano, todas as
+   * lojas. Alimenta o relatório PDF sintético "estoque por ano".
+   */
+  @Get('stock-by-year')
+  stockByYear(@Req() req: any, @Query('plusSize') plusSize?: string) {
+    this.requireAdmin(req);
+    return this.svc.getStockByYearMatrix({ plusSize: this.parseBool(plusSize) });
+  }
+
   @Get('top-sellers')
   topSellers(
     @Req() req: any,
