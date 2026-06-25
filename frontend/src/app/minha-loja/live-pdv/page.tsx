@@ -179,12 +179,6 @@ export default function LivePdvPage() {
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
-  // Buscar cliente de lives ANTERIORES (já participou de live) pra puxar pra sessão atual
-  const [pastSearch, setPastSearch] = useState('');
-  const [pastResults, setPastResults] = useState<
-    { customerId: string; name: string; phone: string; instagram: string | null }[]
-  >([]);
-  const [pastLoading, setPastLoading] = useState(false);
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
   const [editCustomerOpen, setEditCustomerOpen] = useState(false);
@@ -475,51 +469,6 @@ export default function LivePdvPage() {
     });
     setQr(null);
     setPaid(false);
-  }
-
-  // Busca (com debounce) de clientes de lives anteriores.
-  useEffect(() => {
-    const t = pastSearch.trim();
-    if (t.length < 2) {
-      setPastResults([]);
-      setPastLoading(false);
-      return;
-    }
-    let cancel = false;
-    setPastLoading(true);
-    const h = setTimeout(async () => {
-      try {
-        const r = await api<{ customerId: string; name: string; phone: string; instagram: string | null }[]>(
-          `/live-pdv/customers/search-live?term=${encodeURIComponent(t)}`,
-        );
-        if (!cancel) setPastResults(r || []);
-      } catch {
-        if (!cancel) setPastResults([]);
-      } finally {
-        if (!cancel) setPastLoading(false);
-      }
-    }, 300);
-    return () => {
-      cancel = true;
-      clearTimeout(h);
-    };
-  }, [pastSearch]);
-
-  // Puxa uma cliente de live anterior pra sessão atual (cria/reusa o carrinho).
-  async function addPastCustomer(customerId: string) {
-    try {
-      const newCart = await api<Cart>(`/live-pdv/sessions/${sessionId}/add-customer`, {
-        method: 'POST',
-        body: JSON.stringify({ customerId }),
-      });
-      setPastSearch('');
-      setPastResults([]);
-      await refreshCarts();
-      const fresh = await api<Cart>(`/live-pdv/carts/${newCart.id}`);
-      openCart(fresh);
-    } catch (e: any) {
-      alert('Erro ao puxar cliente: ' + (e?.message || e));
-    }
   }
 
   // Edita o cliente do carrinho a qualquer momento (salva no banco + snapshot)
@@ -909,52 +858,6 @@ export default function LivePdvPage() {
                 </div>
               </div>
             )}
-
-            {/* Puxar cliente de lives anteriores — busca quem já participou de live */}
-            <div className="mt-5">
-              <div className="mb-2 flex items-center gap-2">
-                <Search className="h-5 w-5 text-rose-500" />
-                <span className="text-base font-bold uppercase tracking-wide text-slate-800">
-                  Puxar cliente de lives anteriores
-                </span>
-              </div>
-              <div className="relative">
-                <input
-                  value={pastSearch}
-                  onChange={(e) => setPastSearch(e.target.value)}
-                  placeholder="Buscar por nome, telefone ou @ (lives passadas)"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-rose-400 focus:outline-none"
-                />
-                {pastLoading && (
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">buscando…</span>
-                )}
-              </div>
-              {pastSearch.trim().length >= 2 && (
-                <div className="mt-1 divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  {pastResults.length === 0 && !pastLoading && (
-                    <div className="px-3 py-3 text-center text-sm text-slate-400">
-                      Nenhuma cliente de live anterior encontrada.
-                    </div>
-                  )}
-                  {pastResults.map((r) => (
-                    <button
-                      key={r.customerId}
-                      onClick={() => addPastCustomer(r.customerId)}
-                      className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-slate-50"
-                    >
-                      <span className="min-w-0 flex-1 truncate font-semibold text-slate-800">{r.name}</span>
-                      {r.instagram && <span className="shrink-0 text-xs text-slate-500">@{r.instagram}</span>}
-                      {r.phone && (
-                        <span className="hidden shrink-0 text-xs text-slate-400 sm:inline">{maskPhoneBR(r.phone)}</span>
-                      )}
-                      <span className="shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-600">
-                        Puxar
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
 
             {/* Clientes da live — destaque e ordem alfabética pra achar rápido na live */}
             {carts.length > 0 && (
