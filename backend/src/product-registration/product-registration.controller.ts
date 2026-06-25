@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { AdminOnly, AdminOnlyGuard } from '../auth/admin-only.guard';
 import {
   PreviewInput,
   ProcessarInput,
@@ -8,7 +10,12 @@ import {
 /**
  * Endpoints REST do Cadastro Dinâmico de Produtos.
  * Base: /api/product-registration
+ *
+ * Escreve no Wincred (grupos/subgrupos/produtos) → restrito à MATRIZ
+ * (admin/operator) e exige login. Antes estava SEM auth (público).
  */
+@UseGuards(JwtAuthGuard, AdminOnlyGuard)
+@AdminOnly()
 @Controller('product-registration')
 export class ProductRegistrationController {
   constructor(private readonly svc: ProductRegistrationService) {}
