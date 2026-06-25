@@ -48,27 +48,6 @@ export class LivePdvService {
     return `${this.norm(ref)}|${this.norm(cor)}|${this.norm(tam)}`;
   }
 
-  // REF "base" — colapsa variantes de cor que vêm com sufixo diferente no Giga
-  // ("VLM-222", "VLM-222 MAR", "BMM-100-A", "13015M") numa só REF. MESMA lógica
-  // da Consulta de Produto (products.service.normalizeBaseRef), pra a grade da
-  // live mostrar TODAS as cores. Se o usuário já buscou com sufixo de cor,
-  // preserva (ele quer aquela cor específica).
-  private baseRef(ref: string, query: string): string {
-    const s = String(ref ?? '').trim();
-    const queryUpper = String(query ?? '').trim().toUpperCase();
-    const queryHasColorSuffix =
-      /\s[A-Z]{1,3}$/.test(queryUpper) ||
-      /-[A-Z]{1,3}$/.test(queryUpper) ||
-      /\d[A-Z]{1,2}$/.test(queryUpper);
-    if (queryHasColorSuffix) return s;
-    if (s.toUpperCase() === queryUpper) return s;
-    let stripped = s;
-    stripped = stripped.replace(/\s[A-Za-z]{1,3}$/, '').trim();
-    if (stripped === s) stripped = stripped.replace(/-[A-Za-z]{1,3}$/, '').trim();
-    if (stripped === s) stripped = stripped.replace(/(\d)([A-Za-z]{1,2})$/, '$1').trim();
-    return stripped || s;
-  }
-
   // Remove cor/tamanho do nome do produto pro título genérico (igual Consulta).
   private cleanProductName(name: string): string {
     const KNOWN_COLORS = [
@@ -230,12 +209,16 @@ export class LivePdvService {
     if (!rows.length) rows = await this.erp.searchProductsLike(q);
     if (!rows.length) return { found: false, term: q };
 
-    // Foco em 1 produto por busca, mas colapsando as variantes de cor sob a
-    // REF base (igual à Consulta de Produto) — assim a grade traz TODAS as
-    // cores, não só as da 1ª REF exata. O estoque somado da REDE já é feito
-    // mais abaixo (totalRede / perStore).
-    const ref = this.baseRef(String(rows[0].REF), q);
-    const productRows = rows.filter((r) => this.baseRef(String(r.REF), q) === ref);
+    // searchByRef("VLM-222") também traz "VLM-222EST" (LIKE 'VLM-222%'), que é
+    // OUTRO produto (estampado). Foco na REF que bate EXATO com o que foi
+    // digitado e trago TODAS as cores dela (todas ficam sob a mesma REF no
+    // Giga). Se nada bate exato (busca por nome/parcial), cai na 1ª REF.
+    const qn = this.norm(q);
+    const exact = rows.filter((r) => this.norm(r.REF) === qn);
+    const productRows = exact.length
+      ? exact
+      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+    const ref = String(productRows[0].REF).trim();
     const descricao = this.cleanProductName(productRows[0].DESCRICAOCOMPLETA || ref) || ref;
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
