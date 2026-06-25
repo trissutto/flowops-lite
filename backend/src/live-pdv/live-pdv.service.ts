@@ -672,12 +672,38 @@ export class LivePdvService {
     }
     if (storeInputs.length === 0) throw new BadRequestException('Sem loja ativa com estoque');
 
-    // RoutingEngine escolhe a melhor loja de origem
+    // FASE A — AGRUPAR FRETE: se o carrinho JÁ usa uma loja que tem estoque
+    // pra esta peça, prefere ela (concentra o envio, paga menos frete). Só abre
+    // loja nova quando nenhuma loja já usada cobre. A 1ª peça do carrinho não
+    // tem loja prévia → cai no roteamento normal (melhor loja por estoque).
+    let preferStoreCode: string | undefined;
+    const existingItems = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId: cart.id, status: { in: this.COMMITTED } },
+      select: { originStoreCode: true },
+    });
+    if (existingItems.length) {
+      const freq = new Map<string, number>();
+      for (const it of existingItems as any[]) {
+        if (it.originStoreCode) freq.set(it.originStoreCode, (freq.get(it.originStoreCode) || 0) + 1);
+      }
+      const availByStore = new Map(stock.map((s) => [s.storeCode, s.availableQty]));
+      // loja já usada com mais peças primeiro; precisa cobrir a qty desta peça
+      const ordered = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+      for (const [storeCode] of ordered) {
+        if ((availByStore.get(storeCode) || 0) >= qty) {
+          preferStoreCode = storeCode;
+          break;
+        }
+      }
+    }
+
+    // RoutingEngine escolhe a melhor loja de origem (respeitando preferStoreCode)
     const result = this.routing.route({
       items: [{ sku: itemKey, quantity: qty }],
       stores: storeInputs,
       stock,
       shippingCep: cart.customerCep || session.liveStoreCode || null,
+      preferStoreCode,
     });
     if (!result.success || !result.assignments.length) {
       throw new BadRequestException(
