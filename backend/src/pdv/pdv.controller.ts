@@ -435,7 +435,7 @@ export class PdvController {
     @Req() req: any,
     @Param('id') id: string,
     @Param('itemId') itemId: string,
-    @Body() body: { qty?: number; desconto?: number },
+    @Body() body: { qty?: number; desconto?: number; password?: string; motivo?: string },
   ) {
     this.requireRole(req);
     return this.svc.updateItem({
@@ -443,6 +443,8 @@ export class PdvController {
       itemId,
       qty: body?.qty,
       desconto: body?.desconto,
+      password: body?.password,
+      motivo: body?.motivo,
     });
   }
 
