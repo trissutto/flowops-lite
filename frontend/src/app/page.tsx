@@ -39,6 +39,7 @@ const NAV: AdminNavItem[] = [
 export default function DashboardHome() {
   const router = useRouter();
   const [userName, setUserName] = useState<string>('');
+  const [supremo, setSupremo] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   // Pilot
@@ -97,11 +98,13 @@ export default function DashboardHome() {
       router.push('/login');
       return;
     }
-    api<{ role: string; name?: string }>('/auth/me')
+    api<{ role: string; name?: string; email?: string }>('/auth/me')
       .then((me) => {
         if (me.role === 'store') router.push('/minha-loja/pdv');
         else if (me.role === 'contador') router.push('/retaguarda/relatorio-fiscal');
         if (me.name) setUserName(me.name);
+        // SUPREMO: só este e-mail enxerga o módulo Imóveis.
+        setSupremo(String(me.email || '').trim().toLowerCase() === 'trissutto@gmail.com');
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -263,7 +266,7 @@ export default function DashboardHome() {
         <HubCard href="/retaguarda/instagram-hub" label="Instagram" subtitle="Redes & Live"  description="Inbox · Live · Conta @lurdsplussize" tone="rose" icon={Instagram} />
         <HubCard href="/retaguarda"         label="Gestão"    subtitle="Estratégico"     description="Inteligência · Financeiro · Cobrança" tone="orange" icon={BarChart3} />
         <HubCard href="/retaguarda/rh"      label="RH"        subtitle="Recursos Humanos" description="Funcionárias · Ponto · Comissão · Treinamento" tone="slate" icon={Users} />
-        <HubCard href="/imobiliario"        label="Imóveis"   subtitle="Patrimônio"      description="Cadastro · IPTU · Contas · Cartório" tone="amber" icon={Building2} />
+        {supremo && <HubCard href="/imobiliario"        label="Imóveis"   subtitle="Patrimônio"      description="Cadastro · IPTU · Contas · Cartório" tone="amber" icon={Building2} />}
         <HubCard href="/config"             label="Config"    subtitle="Setup técnico"   description="NFC-e · Pagamentos · WhatsApp" tone="purple" icon={Settings} />
       </section>
 

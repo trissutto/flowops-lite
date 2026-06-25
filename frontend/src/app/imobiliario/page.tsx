@@ -86,10 +86,10 @@ export default function ImobiliarioPage() {
       router.push('/login?redirect=/imobiliario');
       return;
     }
-    api<{ role: string; name: string }>('/auth/me')
+    api<{ role: string; name: string; email?: string }>('/auth/me')
       .then((me) => {
-        const allowed = ['admin', 'imobiliario_admin', 'imobiliario_user', 'imobiliario_viewer'];
-        if (!allowed.includes(me.role)) {
+        // SUPREMO: módulo Imobiliário restrito a este e-mail (acima de admin).
+        if (String(me.email || '').trim().toLowerCase() !== 'trissutto@gmail.com') {
           alert('Você não tem acesso ao módulo Imobiliário.');
           router.push('/');
         }
