@@ -4104,10 +4104,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // coluna de cadastro dedicada).
       'DATAALT',
     ];
-    this._cadCol = (await this.pickCol(candidatas)) || null;
-    if (this._cadCol) {
-      this.logger.log(`[erp] coluna de data cadastro detectada: ${this._cadCol}`);
-    }
+    // Auto-detecção; se nada casar, CAI no DATAALT (única data em `produtos` do
+    // Giga Lurd's — confirmado no schema). Override via env GIGA_PRODUTO_DATA_COL.
+    // Não depender só da detecção: ela voltava null e o filtro de ano virava no-op.
+    const detected = await this.pickCol(candidatas);
+    const fallback = (process.env.GIGA_PRODUTO_DATA_COL || 'DATAALT').trim();
+    this._cadCol = detected || fallback || null;
+    this.logger.log(
+      `[erp] coluna de data cadastro = ${this._cadCol} (detectada: ${detected || 'nenhuma'}, fallback: ${fallback})`,
+    );
     return this._cadCol;
   }
 
@@ -4151,7 +4156,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       const yf = await this.buildYearFilter(year, 'p');
       const needsJoin = plusSize || yf.cond;
       const conds: string[] = ['e.ESTOQUE > 0'];
-      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
+      if (plusSize) conds.push(`(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')`);
       if (yf.cond) conds.push(yf.cond);
 
       // JOIN normaliza zero à esquerda (estoque.CODIGO × produtos.CODIGO têm
@@ -4197,7 +4202,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
                 ELSE CAST(YEAR(p.\`${dataCol}\`) AS CHAR) END`
         : `'sem_data'`;
       const conds: string[] = ['e.ESTOQUE > 0'];
-      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
+      if (plusSize) conds.push(`(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')`);
       const sql = `SELECT e.LOJA AS loja, ${anoExpr} AS ano, SUM(e.ESTOQUE) AS pecas
                      FROM estoque e
                      INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
@@ -4238,7 +4243,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         "(c.MARCADO IS NULL OR c.MARCADO <> 'SIM')",
       ];
       const params: any[] = [inicio, fim];
-      if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
+      if (plusSize) conds.push(`(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')`);
       if (yf.cond) {
         conds.push(yf.cond);
         params.push(...yf.params);
@@ -4311,7 +4316,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
 
     const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')");
     }
 
     // BUG FIX padding: caixa.CODIGO e produtos.CODIGO podem ter padding
@@ -4788,7 +4793,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     }
     const prodConds: string[] = ['p.REF IS NOT NULL', "p.REF <> ''"];
     if (input.plusSize) {
-      prodConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
+      prodConds.push("(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')");
     }
 
     // Subquery de estoque atual por REF
@@ -4869,7 +4874,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       stockParams.push(input.storeCode);
     }
     if (input.plusSize) {
-      stockConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
+      stockConds.push("(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')");
     }
     const salesJoinFilter = input.storeCode ? 'AND c2.LOJA = ?' : '';
     const salesParams = input.storeCode ? [input.storeCode] : [];
@@ -4936,7 +4941,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // 1. Pega top REFs por estoque total
     const topConds: string[] = ['e.ESTOQUE > 0'];
     if (input.plusSize) {
-      topConds.push("UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'");
+      topConds.push("(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')");
     }
     const topSql = `
       SELECT p.REF AS refCode,
