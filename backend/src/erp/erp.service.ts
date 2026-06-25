@@ -267,6 +267,53 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     throw lastErr;
   }
 
+  /**
+   * Catálogo de produtos do Giga (tabela `produtos`) — alimenta o espelho
+   * `giga_produto`. Confere as colunas com SHOW COLUMNS e seleciona NULL pras
+   * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
+   */
+  async getGigaProdutos(): Promise<
+    Array<{ codigo: string; ref: string; descricao: string; cor: string; tamanho: string; grupo: string; ncm: string; vendaUn: number }>
+  > {
+    if (!this.pool) return [];
+    let lastErr: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
+        const have = new Set((cols as any[]).map((c) => String(c.Field).toUpperCase()));
+        const col = (name: string, alias: string) => (have.has(name) ? `\`${name}\` AS ${alias}` : `NULL AS ${alias}`);
+        const sql = `SELECT
+            ${col('CODIGO', 'codigo')},
+            ${col('REF', 'ref')},
+            ${col('DESCRICAOCOMPLETA', 'descricao')},
+            ${col('COR', 'cor')},
+            ${col('TAMANHO', 'tamanho')},
+            ${col('GRUPO', 'grupo')},
+            ${col('NCM', 'ncm')},
+            ${col('VENDAUN', 'vendaUn')}
+          FROM produtos`;
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+        return (rows as any[])
+          .map((r) => ({
+            codigo: String(r.codigo ?? '').trim(),
+            ref: String(r.ref ?? '').trim(),
+            descricao: String(r.descricao ?? '').trim(),
+            cor: String(r.cor ?? '').trim(),
+            tamanho: String(r.tamanho ?? '').trim(),
+            grupo: String(r.grupo ?? '').trim(),
+            ncm: String(r.ncm ?? '').trim(),
+            vendaUn: Number(r.vendaUn) || 0,
+          }))
+          .filter((p) => p.codigo);
+      } catch (e: any) {
+        lastErr = e;
+        this.logger.warn(`getGigaProdutos tentativa ${attempt}/2 falhou: ${(e as Error)?.message || e}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    throw lastErr;
+  }
+
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BAIXA DE ESTOQUE (WRITE) â€” controlado por env var ERP_WRITE_ENABLED.
   //

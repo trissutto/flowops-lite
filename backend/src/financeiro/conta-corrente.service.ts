@@ -463,7 +463,7 @@ export class ContaCorrenteService {
 
   /** Dispara o sync do espelho do Giga sob demanda (botão "Sincronizar agora"). */
   async sincronizarGiga() {
-    const estado = await this.mirror.sync();
+    const estado = await this.mirror.sync({ force: true });
     // Zera o cache de débito pra próxima leitura já refletir o espelho novo.
     this.debitoCache.clear();
     return estado;
