@@ -9,8 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
  * o schema do Gigasistemas sem precisar lidar com CORS/JWT do frontend.
  * Depois que o diagnóstico é feito, esses endpoints podem ser removidos.
  *
- * O secret vale via env var DIAGNOSE_SECRET. Se não configurada, usa default
- * "lurds-diagnose-2026" (bom o suficiente pra investigação pontual).
+ * O secret vale via env var DIAGNOSE_SECRET. Se NÃO configurada, os endpoints
+ * ficam DESATIVADOS (fail-closed) — sem default hardcoded.
  */
 @Controller('diagnose')
 export class DiagnoseController {
@@ -20,8 +20,9 @@ export class DiagnoseController {
   ) {}
 
   private checkSecret(secret: string | undefined) {
-    const expected = process.env.DIAGNOSE_SECRET || 'lurds-diagnose-2026';
-    if (!secret || secret !== expected) {
+    // Fail-closed: sem DIAGNOSE_SECRET configurado, nega tudo (sem default).
+    const expected = process.env.DIAGNOSE_SECRET;
+    if (!expected || !secret || secret !== expected) {
       throw new UnauthorizedException('secret inválido');
     }
   }
