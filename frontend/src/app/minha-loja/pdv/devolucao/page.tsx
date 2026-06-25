@@ -281,8 +281,31 @@ export default function DevolucaoPage() {
   }
 
   // Cria devolução manual (sem cupom — peça do Giga)
+  // MD-4: devolução em dinheiro/pix (sai dinheiro do caixa) exige senha de
+  // GERENTE + justificativa. Retorna null se cancelar.
+  async function exigirSenhaGerente(): Promise<{ password: string; motivoFinal: string } | null> {
+    let motivoFinal = motivo.trim();
+    if (!motivoFinal) {
+      const m = window.prompt('Justificativa da devolução em dinheiro/pix (obrigatória):');
+      if (!m || !m.trim()) return null;
+      motivoFinal = m.trim();
+      setMotivo(motivoFinal);
+    }
+    const pw = window.prompt('Senha do GERENTE para liberar devolução em dinheiro/pix:');
+    if (!pw) return null;
+    return { password: pw, motivoFinal };
+  }
+
   async function confirmManual(modoEscolhido: 'dinheiro' | 'troca' | 'credito') {
     if (!manualEligible) return;
+    let gerentePassword: string | undefined;
+    let motivoManual = motivo;
+    if (modoEscolhido === 'dinheiro') {
+      const auth = await exigirSenhaGerente();
+      if (!auth) return;
+      gerentePassword = auth.password;
+      motivoManual = auth.motivoFinal;
+    }
     setManualBusy(true);
     setErr('');
     try {
@@ -302,9 +325,10 @@ export default function DevolucaoPage() {
         body: JSON.stringify({
           sku: manualEligible.produto.codigo,
           modo: modoEscolhido,
-          motivo: motivo || 'Sem cupom (Giga)',
+          motivo: motivoManual || 'Sem cupom (Giga)',
           creditoValidadeDias: modoEscolhido === 'credito' ? validade : undefined,
           attachToSaleId: modoEscolhido === 'troca' ? attachToSaleId : null,
+          password: gerentePassword,
         }),
       });
       try { localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {}
@@ -395,6 +419,14 @@ export default function DevolucaoPage() {
       setErr('Selecione ao menos uma peça');
       return;
     }
+    let gerentePassword: string | undefined;
+    let motivoToSend = motivo;
+    if (modo === 'dinheiro' || modo === 'pix') {
+      const auth = await exigirSenhaGerente();
+      if (!auth) return;
+      gerentePassword = auth.password;
+      motivoToSend = auth.motivoFinal;
+    }
     setBusy(true);
     try {
       // Se veio do PDV com uma venda em andamento (F4 / botão Trocar), anexa
@@ -436,9 +468,10 @@ export default function DevolucaoPage() {
           body: JSON.stringify({
             vendas: vendasPayload,
             modo,
-            motivo: motivo || undefined,
+            motivo: motivoToSend || undefined,
             creditoValidadeDias: modo === 'credito' ? validade : undefined,
             attachToSaleId: modo === 'troca' ? attachToSaleId : null,
+            password: gerentePassword,
           }),
         });
       } else {
@@ -448,9 +481,10 @@ export default function DevolucaoPage() {
             originalSaleId: data!.sale.id,
             modo,
             items,
-            motivo: motivo || undefined,
+            motivo: motivoToSend || undefined,
             creditoValidadeDias: modo === 'credito' ? validade : undefined,
             attachToSaleId: modo === 'troca' ? attachToSaleId : null,
+            password: gerentePassword,
           }),
         });
       }
