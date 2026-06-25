@@ -1095,6 +1095,13 @@ export class PdvService {
     if (!item || item.saleId !== input.saleId)
       throw new NotFoundException('Item não encontrado nessa venda');
 
+    // Bloqueia edição de item em venda já fechada (mesmo guard de setSaleDiscount).
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
     const newQty = input.qty != null ? Math.max(1, Math.min(99, input.qty)) : item.qty;
     const newDesconto = input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
     const bruto = item.precoUnit * newQty;
