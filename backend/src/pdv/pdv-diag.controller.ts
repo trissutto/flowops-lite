@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
+import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CrediarioPrintService } from './crediario-print.service';
 import { CoordsDbService } from './coords-db.service';
 import { CrediariosService } from '../crediarios/crediarios.service';
@@ -36,6 +37,7 @@ export class PdvDiagController {
    * valorPago). Pra confirmar que estamos atualizando a coluna CORRETA que o
    * WinCred lê na tela "Histórico do Cliente".
    */
+  @UseGuards(JwtAuthGuard)
   @Get('columns')
   async getColumns(@Res() res: Response) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -60,11 +62,13 @@ export class PdvDiagController {
    *
    * IMPORTANTE: requer ERP_WRITE_ENABLED=true no Railway (já deve estar).
    */
+  @UseGuards(JwtAuthGuard)
   @Post('baixa-retroativa')
   async postBaixaRetroativa(@Body() body: any, @Res() res: Response) {
     return this.executarBaixaRetroativa(body || {}, res);
   }
   // GET pra facilitar pelo navegador (sem precisar de tool de POST)
+  @UseGuards(JwtAuthGuard)
   @Get('baixa-retroativa')
   async getBaixaRetroativa(@Query() q: any, @Res() res: Response) {
     return this.executarBaixaRetroativa(q, res);
@@ -179,6 +183,7 @@ export class PdvDiagController {
    * coluna onde achou. Pra identificar qual coluna do banco corresponde ao
    * "Controle" mostrado na tela do WinCred.
    */
+  @UseGuards(JwtAuthGuard)
   @Get('find')
   async getFind(@Query('valor') valor: string, @Res() res: Response) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -231,6 +236,7 @@ export class PdvDiagController {
    * Use pra investigar parcelas que aparecem como "pendentes" no WinCred
    * mesmo após baixa pelo nosso sistema.
    */
+  @UseGuards(JwtAuthGuard)
   @Get('parcela')
   async getParcela(@Query('registro') registro: string, @Query('controle') controle: string, @Res() res: Response) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -330,6 +336,7 @@ export class PdvDiagController {
    * CRUA + lista de colunas. Pra entender por que endereço/CEP não estão vindo.
    * Sem auth pra acesso direto pelo navegador (debug).
    */
+  @UseGuards(JwtAuthGuard)
   @Get('cliente')
   async getCliente(@Query('cpf') cpf: string, @Res() res: Response) {
     try {
@@ -346,6 +353,7 @@ export class PdvDiagController {
    * + diagnóstico do POR QUE endereço/CEP estão vazios (se estiverem).
    * USE ESSE pra entender por que o PDF de uma venda real não puxa o endereço.
    */
+  @UseGuards(JwtAuthGuard)
   @Get('sale')
   async getSale(@Query('id') id: string, @Res() res: Response) {
     try {
