@@ -1089,7 +1089,7 @@ export class PdvService {
     return { ok: true, item };
   }
 
-  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number }) {
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
@@ -1114,6 +1114,20 @@ export class PdvService {
     // "MANUAL" pra applyAutoDiscounts não sobrescrever depois. Se zerou
     // o desconto, deixa tag null (volta ao automático).
     const isManualDiscount = input.desconto != null && newDesconto > 0;
+
+    // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item).
+    //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
+    //   Campanha ativa → bloqueia (prevalece a promoção).
+    if (isManualDiscount) {
+      if (sale.activePromotion && sale.activePromotion !== 'NONE') {
+        throw new BadRequestException(
+          'Promoção/campanha ativa — desconto avulso por item bloqueado (prevalece o desconto da campanha).',
+        );
+      }
+      const pct = bruto > 0 ? (newDesconto / bruto) * 100 : 0;
+      this.requireDiscountAuth(pct, input.password, input.motivo);
+    }
+
     const newTag = isManualDiscount
       ? 'MANUAL'
       : input.desconto != null && newDesconto === 0
