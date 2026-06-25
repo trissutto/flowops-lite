@@ -4159,13 +4159,15 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       if (plusSize) conds.push(`(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')`);
       if (yf.cond) conds.push(yf.cond);
 
-      // JOIN normaliza zero à esquerda (estoque.CODIGO × produtos.CODIGO têm
-      // padding diferente — mesmo fix do JOIN caixa×produtos). Sem isso, o
-      // filtro de ano/plus-size força o JOIN e não casa NADA → estoque zera.
+      // JOIN por match EXATO (usa índice). NÃO usar CAST(... AS UNSIGNED):
+      // estoque.CODIGO tem códigos não-numéricos (ex: 'MANUAL-1780170') que
+      // viram 0 no CAST → JOIN explode (MAX_JOIN_SIZE) → query aborta → 0.
+      // O exato pega ~todo o estoque (confirmado: ~212k peças); MANUAL não casa
+      // produto e fica de fora (correto — não tem cadastro).
       const sql = needsJoin
         ? `SELECT e.LOJA AS storeCode, SUM(e.ESTOQUE) AS pecas
              FROM estoque e
-             INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
+             INNER JOIN produtos p ON p.CODIGO = e.CODIGO
             WHERE ${conds.join(' AND ')}
             GROUP BY e.LOJA`
         : `SELECT LOJA AS storeCode, SUM(ESTOQUE) AS pecas
@@ -4203,9 +4205,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         : `'sem_data'`;
       const conds: string[] = ['e.ESTOQUE > 0'];
       if (plusSize) conds.push(`(COALESCE(p.PLUS_SIZE, 0) > 0 OR UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%')`);
+      // Match EXATO (índice). NÃO usar CAST: estoque.CODIGO tem 'MANUAL-...' que
+      // vira 0 no CAST e estoura o MAX_JOIN_SIZE. Exato pega ~todo o estoque.
       const sql = `SELECT e.LOJA AS loja, ${anoExpr} AS ano, SUM(e.ESTOQUE) AS pecas
                      FROM estoque e
-                     INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
+                     INNER JOIN produtos p ON p.CODIGO = e.CODIGO
                     WHERE ${conds.join(' AND ')}
                     GROUP BY e.LOJA, ano`;
       const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
