@@ -3431,3 +3431,22 @@ model GigaTransferenciaItem {
   @@index([data])
   @@map("giga_transferencia_item")
 }
+
+// Catálogo de produtos do Giga (espelho). Grão: 1 linha por CODIGO (SKU).
+// Sincronizado pelo GigaMirrorService (no máx. a cada ~6h — catálogo muda devagar).
+model GigaProduto {
+  id        String   @id @default(cuid())
+  codigo    String
+  ref       String?
+  descricao String?
+  cor       String?
+  tamanho   String?
+  grupo     String?
+  ncm       String?
+  vendaUn   Float?   @map("venda_un")
+  syncedAt  DateTime @default(now()) @map("synced_at")
+
+  @@index([codigo])
+  @@index([ref])
+  @@map("giga_produto")
+}

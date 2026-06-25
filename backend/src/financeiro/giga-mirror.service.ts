@@ -66,7 +66,7 @@ export class GigaMirrorService implements OnModuleInit {
 
   /** Sincroniza as duas tabelas. Cada uma é independente: falha numa não
    *  impede a outra, e nenhuma zera o espelho em caso de erro. */
-  async sync() {
+  async sync(opts: { force?: boolean } = {}) {
     if (this.syncing) {
       this.logger.warn('sync do espelho já em andamento — pulando');
       return this.getState();
@@ -93,6 +93,19 @@ export class GigaMirrorService implements OnModuleInit {
       } catch (e: any) {
         this.logger.error(`sync itens falhou (espelho preservado): ${e?.message || e}`);
         await this.setState('item', null, String(e?.message || e));
+      }
+      // Catálogo muda devagar → re-sincroniza no máx. a cada 6h (force = botão
+      // manual / backfill ignora o throttle).
+      if (opts.force || (await this.shouldSyncProduto())) {
+        try {
+          const n = await this.syncProdutos();
+          this.logger.log(`espelho giga_produto: ${n} linhas`);
+        } catch (e: any) {
+          this.logger.error(`sync produtos falhou (espelho preservado): ${e?.message || e}`);
+          await this.setState('produto', null, String(e?.message || e));
+        }
+      } else {
+        this.logger.log('sync produtos pulado (sincronizado há < 6h)');
       }
     } finally {
       this.syncing = false;
@@ -169,6 +182,38 @@ export class GigaMirrorService implements OnModuleInit {
       { timeout: 180_000, maxWait: 20_000 },
     );
     await this.setState('item', data.length, null);
+    return data.length;
+  }
+
+  /** true se o catálogo nunca sincronizou OK ou já passou de 6h. */
+  private async shouldSyncProduto(): Promise<boolean> {
+    const st = await (this.prisma as any).gigaMirrorState.findUnique({ where: { tabela: 'produto' } });
+    if (!st?.lastOkAt) return true;
+    return Date.now() - new Date(st.lastOkAt).getTime() > 6 * 60 * 60 * 1000;
+  }
+
+  private async syncProdutos(): Promise<number> {
+    const rows = await this.erp.getGigaProdutos();
+    const data = rows.map((r) => ({
+      codigo: r.codigo,
+      ref: r.ref || null,
+      descricao: r.descricao || null,
+      cor: r.cor || null,
+      tamanho: r.tamanho || null,
+      grupo: r.grupo || null,
+      ncm: r.ncm || null,
+      vendaUn: r.vendaUn || 0,
+    }));
+    await this.prisma.$transaction(
+      async (tx) => {
+        await (tx as any).gigaProduto.deleteMany({});
+        for (let i = 0; i < data.length; i += 2000) {
+          await (tx as any).gigaProduto.createMany({ data: data.slice(i, i + 2000) });
+        }
+      },
+      { timeout: 180_000, maxWait: 20_000 },
+    );
+    await this.setState('produto', data.length, null);
     return data.length;
   }
 
