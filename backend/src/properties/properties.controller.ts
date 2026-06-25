@@ -70,29 +70,34 @@ function getR2Client(): S3Client {
  *   - imobiliario_user (CRUD imóveis + docs, sem deletar)
  *   - imobiliario_viewer (só leitura)
  */
+// SUPREMO — módulo Imobiliário é EXCLUSIVO destes e-mails (acima de admin).
+// Configurável por env SUPREMO_EMAILS (CSV); fallback = trissutto@gmail.com.
+const SUPREMO_EMAILS = (process.env.SUPREMO_EMAILS || 'trissutto@gmail.com')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
 @UseGuards(JwtAuthGuard)
 @Controller('properties')
 export class PropertiesController {
   constructor(private readonly svc: PropertiesService) {}
 
-  // Niveis de acesso
-  private requireRead(req: any) {
-    const allowed = ['admin', 'imobiliario_admin', 'imobiliario_user', 'imobiliario_viewer'];
-    if (!allowed.includes(req?.user?.role)) {
-      throw new ForbiddenException('Sem acesso ao módulo imobiliário');
+  // Acesso ao Imobiliário restrito ao SUPREMO (por e-mail). Read/Write/Delete
+  // usam a mesma trava — só o(s) e-mail(s) SUPREMO entram.
+  private requireSupremo(req: any) {
+    const email = String(req?.user?.email || '').trim().toLowerCase();
+    if (!SUPREMO_EMAILS.includes(email)) {
+      throw new ForbiddenException('Acesso restrito ao módulo imobiliário (SUPREMO)');
     }
+  }
+  private requireRead(req: any) {
+    this.requireSupremo(req);
   }
   private requireWrite(req: any) {
-    const allowed = ['admin', 'imobiliario_admin', 'imobiliario_user'];
-    if (!allowed.includes(req?.user?.role)) {
-      throw new ForbiddenException('Sem permissão de escrita no imobiliário');
-    }
+    this.requireSupremo(req);
   }
   private requireDelete(req: any) {
-    const allowed = ['admin', 'imobiliario_admin'];
-    if (!allowed.includes(req?.user?.role)) {
-      throw new ForbiddenException('Apenas admin imobiliário pode excluir/arquivar');
-    }
+    this.requireSupremo(req);
   }
   private userInfo(req: any) {
     return {
