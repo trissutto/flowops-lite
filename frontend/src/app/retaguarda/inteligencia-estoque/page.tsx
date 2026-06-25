@@ -25,6 +25,7 @@ import {
   ArrowLeft, RefreshCw, Loader2, AlertTriangle, Calendar, Filter,
   Package, TrendingUp, TrendingDown, Store, BarChart3, Grid3x3,
   Download, X, ChevronRight, AlertCircle, Boxes, DollarSign,
+  Printer, CalendarRange,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -114,9 +115,27 @@ type Heatmap = {
 const TABS = [
   { id: 'overview', label: 'Visão geral', icon: BarChart3 },
   { id: 'heatmap', label: 'Heatmap REF × Loja', icon: Grid3x3 },
+  { id: 'porano', label: 'Estoque por ano (PDF)', icon: CalendarRange },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
+
+type StockByYear = {
+  years: string[];
+  rows: Array<{
+    storeCode: string;
+    storeName: string;
+    tipo: 'REDE' | 'FILIAL';
+    byYear: Record<string, number>;
+    total: number;
+  }>;
+  totalsByYear: Record<string, number>;
+  grandTotal: number;
+  plusSize: boolean;
+  geradoEm: string;
+};
+
+const anoLabel = (k: string) => (k === 'pre2020' ? '≤ 2020' : k === 'sem_data' ? 'Sem data' : k);
 
 // ─── helpers ─────────────────────────────────────────────────────────
 const brl = (n: number) =>
@@ -173,6 +192,10 @@ export default function InteligenciaEstoquePage() {
   const [heatmap, setHeatmap] = useState<Heatmap | null>(null);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
 
+  // Estoque por ano (relatório PDF)
+  const [porAno, setPorAno] = useState<StockByYear | null>(null);
+  const [porAnoLoading, setPorAnoLoading] = useState(false);
+
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
@@ -211,6 +234,73 @@ export default function InteligenciaEstoquePage() {
     }
   };
 
+  const loadPorAno = async () => {
+    setPorAnoLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (plusSize) params.set('plusSize', 'true');
+      const data = await api<StockByYear>(`/intelligence/stock-by-year?${params.toString()}`);
+      setPorAno(data);
+    } catch {
+      setPorAno(null);
+    } finally {
+      setPorAnoLoading(false);
+    }
+  };
+
+  // Abre uma janela limpa só com o relatório e manda imprimir (Salvar como PDF).
+  const imprimirPorAnoPdf = () => {
+    if (!porAno) return;
+    const w = window.open('', '_blank', 'width=1100,height=800');
+    if (!w) {
+      alert('Permita pop-ups para gerar o PDF.');
+      return;
+    }
+    const fmt = (n: number) => n.toLocaleString('pt-BR');
+    const yearTh = porAno.years.map((y) => `<th class="num">${anoLabel(y)}</th>`).join('');
+    const bodyRows = porAno.rows
+      .map((r) => {
+        const cells = porAno.years.map((y) => `<td class="num">${fmt(r.byYear[y] || 0)}</td>`).join('');
+        return `<tr>
+          <td>${r.storeCode} · ${r.storeName}</td>
+          <td class="tipo">${r.tipo === 'FILIAL' ? 'FRANQ' : 'REDE'}</td>
+          ${cells}
+          <td class="num tot">${fmt(r.total)}</td>
+        </tr>`;
+      })
+      .join('');
+    const footCells = porAno.years.map((y) => `<td class="num">${fmt(porAno.totalsByYear[y] || 0)}</td>`).join('');
+    const geradoEm = new Date(porAno.geradoEm).toLocaleString('pt-BR');
+    w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+      <title>Estoque por ano de cadastro</title>
+      <style>
+        @page { size: A4 landscape; margin: 12mm; }
+        * { font-family: Arial, Helvetica, sans-serif; }
+        body { color: #1e293b; margin: 0; }
+        h1 { font-size: 16px; margin: 0 0 2px; }
+        .sub { font-size: 11px; color: #64748b; margin: 0 0 12px; }
+        table { width: 100%; border-collapse: collapse; font-size: 10px; }
+        th, td { border: 0.5px solid #cbd5e1; padding: 3px 6px; text-align: left; }
+        th { background: #f1f5f9; font-size: 9px; text-transform: uppercase; letter-spacing: .03em; }
+        td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+        td.tipo { color: #64748b; font-size: 9px; }
+        td.tot { font-weight: bold; }
+        tfoot td { background: #f8fafc; font-weight: bold; border-top: 1.5px solid #94a3b8; }
+        tbody tr:nth-child(even) { background: #fafafa; }
+      </style></head><body>
+      <h1>Estoque por ano de cadastro — todas as lojas</h1>
+      <p class="sub">Peças em estoque por ano (DATAALT do produto)${porAno.plusSize ? ' · só PLUS SIZE' : ''} · gerado em ${geradoEm} · total geral ${fmt(porAno.grandTotal)} peças</p>
+      <table>
+        <thead><tr><th>Loja</th><th>Tipo</th>${yearTh}<th class="num">Total</th></tr></thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot><tr><td>TOTAL</td><td></td>${footCells}<td class="num">${fmt(porAno.grandTotal)}</td></tr></tfoot>
+      </table>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 350);
+  };
+
   const openDetail = async (code: string) => {
     setDetailCode(code);
     setDetail(null);
@@ -232,6 +322,8 @@ export default function InteligenciaEstoquePage() {
       loadOverview();
     } else if (tab === 'heatmap') {
       loadHeatmap();
+    } else if (tab === 'porano') {
+      loadPorAno();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, queryString]);
@@ -302,11 +394,11 @@ export default function InteligenciaEstoquePage() {
             </p>
           </div>
           <button
-            onClick={() => (tab === 'overview' ? loadOverview() : loadHeatmap())}
-            disabled={loading || heatmapLoading}
+            onClick={() => (tab === 'overview' ? loadOverview() : tab === 'heatmap' ? loadHeatmap() : loadPorAno())}
+            disabled={loading || heatmapLoading || porAnoLoading}
             className="text-sm flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-100 hover:bg-slate-200 disabled:opacity-50"
           >
-            <RefreshCw className={`w-4 h-4 ${loading || heatmapLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading || heatmapLoading || porAnoLoading ? 'animate-spin' : ''}`} />
             Atualizar
           </button>
         </div>
@@ -553,6 +645,79 @@ export default function InteligenciaEstoquePage() {
             ) : (
               <HeatmapTable heatmap={heatmap} />
             )}
+          </div>
+        )}
+
+        {tab === 'porano' && (
+          <div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm text-slate-500">
+                Peças em estoque por <b>ano de cadastro</b> (DATAALT), por loja — todas as lojas.
+                {plusSize && <span className="ml-1 text-amber-600 font-semibold">Só PLUS SIZE.</span>}
+              </div>
+              <button
+                onClick={imprimirPorAnoPdf}
+                disabled={!porAno || porAnoLoading}
+                className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-3 py-2 text-sm font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                <Printer className="w-4 h-4" /> Imprimir / Salvar PDF
+              </button>
+            </div>
+
+            <div className="bg-white rounded-lg border overflow-x-auto">
+              {porAnoLoading ? (
+                <div className="text-center py-10 text-slate-400">
+                  <Loader2 className="w-6 h-6 animate-spin inline-block mb-2" />
+                  <div className="text-sm">Calculando estoque por ano...</div>
+                </div>
+              ) : !porAno || porAno.rows.length === 0 ? (
+                <div className="text-center py-10 text-slate-400">
+                  <CalendarRange className="w-10 h-10 inline-block mb-2 opacity-50" />
+                  <div className="text-sm">Sem dados</div>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Loja</th>
+                      <th className="px-3 py-2 text-left">Tipo</th>
+                      {porAno.years.map((y) => (
+                        <th key={y} className="px-3 py-2 text-right">{anoLabel(y)}</th>
+                      ))}
+                      <th className="px-3 py-2 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {porAno.rows.map((r) => (
+                      <tr key={r.storeCode} className="hover:bg-slate-50">
+                        <td className="px-3 py-2 whitespace-nowrap text-slate-800">
+                          <span className="text-slate-400">{r.storeCode}</span> {r.storeName}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${r.tipo === 'FILIAL' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {r.tipo === 'FILIAL' ? 'FRANQ' : 'REDE'}
+                          </span>
+                        </td>
+                        {porAno.years.map((y) => (
+                          <td key={y} className="px-3 py-2 text-right tabular-nums text-slate-700">{num(r.byYear[y] || 0)}</td>
+                        ))}
+                        <td className="px-3 py-2 text-right font-bold tabular-nums text-slate-900">{num(r.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold text-slate-800">
+                      <td className="px-3 py-2">TOTAL</td>
+                      <td className="px-3 py-2" />
+                      {porAno.years.map((y) => (
+                        <td key={y} className="px-3 py-2 text-right tabular-nums">{num(porAno.totalsByYear[y] || 0)}</td>
+                      ))}
+                      <td className="px-3 py-2 text-right tabular-nums">{num(porAno.grandTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
           </div>
         )}
       </main>

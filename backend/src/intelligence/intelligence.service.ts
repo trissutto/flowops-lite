@@ -145,6 +145,53 @@ export class IntelligenceService {
     };
   }
 
+  /**
+   * Matriz LOJA × ANO de cadastro (DATAALT) — peças em estoque por loja,
+   * quebradas por ano. Pro relatório PDF sintético "estoque por ano".
+   */
+  async getStockByYearMatrix(input: { plusSize?: boolean }) {
+    const plusSize = !!input.plusSize;
+    const stores = await this.prisma.store.findMany({
+      where: { active: true },
+      select: { code: true, name: true, tipo: true } as any,
+      orderBy: { code: 'asc' },
+    });
+    const raw = await this.erp.getStockByYearByStore(plusSize);
+
+    const byStore = new Map<string, Map<string, number>>();
+    const yearsSet = new Set<string>();
+    for (const r of raw) {
+      yearsSet.add(r.ano);
+      if (!byStore.has(r.loja)) byStore.set(r.loja, new Map());
+      const m = byStore.get(r.loja)!;
+      m.set(r.ano, (m.get(r.ano) || 0) + r.pecas);
+    }
+    // Colunas: pre2020 primeiro, anos numéricos crescentes, sem_data por último.
+    const rank = (k: string) => (k === 'pre2020' ? -1 : k === 'sem_data' ? 9999 : parseInt(k, 10));
+    const years = Array.from(yearsSet).sort((a, b) => rank(a) - rank(b));
+
+    const totalsByYear: Record<string, number> = {};
+    for (const y of years) totalsByYear[y] = 0;
+    let grandTotal = 0;
+
+    const rows = (stores as any[]).map((s) => {
+      const m = byStore.get(s.code) || new Map<string, number>();
+      const byYear: Record<string, number> = {};
+      let total = 0;
+      for (const y of years) {
+        const v = m.get(y) || 0;
+        byYear[y] = v;
+        total += v;
+        totalsByYear[y] += v;
+      }
+      grandTotal += total;
+      return { storeCode: s.code, storeName: s.name, tipo: (s.tipo || 'REDE') as 'REDE' | 'FILIAL', byYear, total };
+    });
+    rows.sort((a, b) => b.total - a.total);
+
+    return { years, rows, totalsByYear, grandTotal, plusSize, geradoEm: new Date().toISOString() };
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   // DIAGNÓSTICO DE SKU — pra debugar "tem estoque mas sistema não acha"
   // ═══════════════════════════════════════════════════════════════════════
