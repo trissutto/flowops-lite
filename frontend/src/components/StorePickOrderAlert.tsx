@@ -435,11 +435,11 @@ export default function StorePickOrderAlert() {
     >
       <div className="w-full max-w-3xl">
         <div
-          className="bg-amber-50 border-4 border-amber-500 rounded-2xl shadow-2xl overflow-hidden"
+          className="bg-amber-50 border-4 border-amber-500 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-3rem)]"
           style={{ animation: 'flowopsPopupIn 0.4s ease-out' }}
         >
           {/* Header gigante */}
-          <div className="bg-amber-500 px-5 py-3 flex items-center justify-between gap-3">
+          <div className="bg-amber-500 px-5 py-3 flex items-center justify-between gap-3 shrink-0">
             <div className="flex items-center gap-3">
               <AlertTriangle className="w-9 h-9 text-amber-900 animate-pulse" />
               <div>
@@ -462,8 +462,8 @@ export default function StorePickOrderAlert() {
             </div>
           </div>
 
-          {/* Conteúdo do pedido */}
-          <div className="p-5 space-y-4 bg-white">
+          {/* Conteúdo do pedido — rola se o pedido for grande (botão fica fixo) */}
+          <div className="p-5 space-y-4 bg-white flex-1 overflow-y-auto min-h-0">
             {/* Linha 1: número + valor */}
             <div className="flex items-baseline justify-between gap-3 border-b border-slate-200 pb-3">
               <div>
@@ -560,8 +560,8 @@ export default function StorePickOrderAlert() {
             )}
           </div>
 
-          {/* Ações */}
-          <div className="bg-slate-100 px-5 py-3 flex items-center justify-between gap-3">
+          {/* Ações — rodapé fixo, sempre visível mesmo com pedido grande */}
+          <div className="bg-slate-100 px-5 py-3 flex items-center justify-between gap-3 shrink-0">
             <button
               onClick={() => dismiss(top.pickOrderId)}
               className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg font-bold hover:bg-slate-50"
@@ -584,7 +584,7 @@ export default function StorePickOrderAlert() {
 
           {/* Stack indicator: outros pedidos pendentes */}
           {stack.length > 1 && (
-            <div className="bg-amber-100 border-t border-amber-200 px-4 py-2 text-xs text-amber-900">
+            <div className="bg-amber-100 border-t border-amber-200 px-4 py-2 text-xs text-amber-900 shrink-0">
               <b>{stack.length - 1}</b> outro(s) pedido(s) atrás desse. Marque "VI" pra avançar.
               <button
                 onClick={dismissAll}
