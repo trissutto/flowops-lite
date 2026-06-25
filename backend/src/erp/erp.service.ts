@@ -4100,6 +4100,9 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       'DATACRIACAO', 'DT_CRIACAO',
       'DATA_ENT', 'DATAENT', 'DT_ENT', 'DATA_ENTRADA', 'DATAENTRADA', 'DT_ENTRADA',
       'CREATED_AT', 'CRIADO_EM',
+      // Giga Lurd's: a única data em `produtos` é DATAALT (fallback — não há
+      // coluna de cadastro dedicada).
+      'DATAALT',
     ];
     this._cadCol = (await this.pickCol(candidatas)) || null;
     if (this._cadCol) {
@@ -4151,10 +4154,13 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       if (plusSize) conds.push(`UPPER(COALESCE(p.DESCRICAOCOMPLETA, '')) LIKE '%PLUS SIZE%'`);
       if (yf.cond) conds.push(yf.cond);
 
+      // JOIN normaliza zero à esquerda (estoque.CODIGO × produtos.CODIGO têm
+      // padding diferente — mesmo fix do JOIN caixa×produtos). Sem isso, o
+      // filtro de ano/plus-size força o JOIN e não casa NADA → estoque zera.
       const sql = needsJoin
         ? `SELECT e.LOJA AS storeCode, SUM(e.ESTOQUE) AS pecas
              FROM estoque e
-             INNER JOIN produtos p ON p.CODIGO = e.CODIGO
+             INNER JOIN produtos p ON CAST(p.CODIGO AS UNSIGNED) = CAST(e.CODIGO AS UNSIGNED)
             WHERE ${conds.join(' AND ')}
             GROUP BY e.LOJA`
         : `SELECT LOJA AS storeCode, SUM(ESTOQUE) AS pecas
