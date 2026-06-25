@@ -308,10 +308,22 @@ export default function LivePdvPage() {
     setPromoEditing(false);
     try {
       const sid = sessionId ? `&sessionId=${sessionId}` : '';
-      const res = await api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`);
+      // Timeout de 12s: se o Giga estiver lento, NÃO deixa o spinner girando pra
+      // sempre — avisa e libera a tela pra tentar de novo.
+      const res = await Promise.race([
+        api<GradeResult>(`/live-pdv/search?term=${encodeURIComponent(q)}${sid}`),
+        new Promise<GradeResult>((_, reject) =>
+          setTimeout(() => reject(new Error('__timeout__')), 12000),
+        ),
+      ]);
       setProduct(res);
     } catch (err: any) {
-      setProduct({ found: false });
+      if (err?.message === '__timeout__') {
+        setProduct(null);
+        alert('A busca demorou demais (o Giga pode estar lento). Tente de novo.');
+      } else {
+        setProduct({ found: false });
+      }
     } finally {
       setSearching(false);
     }
