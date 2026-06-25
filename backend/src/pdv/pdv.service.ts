@@ -1177,6 +1177,14 @@ export class PdvService {
     });
     if (!item || item.saleId !== input.saleId)
       throw new NotFoundException('Item não encontrado nessa venda');
+
+    // Bloqueia remoção de item em venda já fechada (mesmo guard de setSaleDiscount).
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+    if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
+
     await (this.prisma as any).pdvSaleItem.delete({ where: { id: item.id } });
     await this.applyAutoDiscounts(input.saleId);
     await this.recalcTotals(input.saleId);
