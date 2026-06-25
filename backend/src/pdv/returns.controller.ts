@@ -11,6 +11,7 @@
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { validateMinLevel } from '../auth/auth-levels.util';
 import { ReturnsService } from './returns.service';
 import { isTrainingRequest } from './training.util';
 
@@ -23,6 +24,17 @@ export class ReturnsController {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'store')
       throw new ForbiddenException('Apenas admin ou loja');
+  }
+
+  // Devolução que SAI dinheiro do caixa (dinheiro/pix) exige senha de GERENTE
+  // + justificativa. Troca/crédito (vale, não sai dinheiro) seguem livres.
+  private requireCashAuth(modo: string | undefined, motivo: string | undefined, password: string | undefined) {
+    if (modo === 'dinheiro' || modo === 'pix') {
+      if (!motivo || String(motivo).trim().length < 3) {
+        throw new BadRequestException('Justificativa obrigatória (mín. 3 caracteres) para devolução em dinheiro/pix');
+      }
+      validateMinLevel(password, 'GERENTE'); // lança se a senha não for ≥ GERENTE
+    }
   }
 
   private resolveStore(req: any, override?: { storeCode?: string; storeName?: string }) {
@@ -127,9 +139,11 @@ export class ReturnsController {
       storeCode?: string;
       storeName?: string;
       attachToSaleId?: string | null;
+      password?: string;
     },
   ) {
     this.requireRole(req);
+    this.requireCashAuth(body.modo, body.motivo, body.password);
     const { storeCode, storeName } = this.resolveStore(req, body);
     const u = req?.user || {};
     return this.svc.createManualReturn({
@@ -168,11 +182,13 @@ export class ReturnsController {
       storeCode?: string;
       storeName?: string;
       attachToSaleId?: string | null;
+      password?: string;
       /** Frontend manda true quando user clica "Confirmar" no alerta cross-store. */
       confirmCrossStore?: boolean;
     },
   ) {
     this.requireRole(req);
+    this.requireCashAuth(body.modo, body.motivo, body.password);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturn({
       originalSaleId: body.originalSaleId,
@@ -224,9 +240,11 @@ export class ReturnsController {
       storeCode?: string;
       storeName?: string;
       attachToSaleId?: string | null;
+      password?: string;
     },
   ) {
     this.requireRole(req);
+    this.requireCashAuth(body.modo, body.motivo, body.password);
     const { storeCode, storeName } = this.resolveStore(req, body);
     return this.svc.createReturnBatch({
       vendas: body.vendas,
