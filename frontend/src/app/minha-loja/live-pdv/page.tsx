@@ -1174,6 +1174,16 @@ function CartPanel({
   );
 }
 
+/* Máscara de celular BR: (XX) XXXXX-XXXX. Aplica ao digitar; aceita digitação
+ * parcial. Guarda só os dígitos no banco (a máscara é só visual). */
+function maskPhoneBR(value: string): string {
+  const d = (value || '').replace(/\D/g, '').slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
 /* ─── Modal de cliente (criar / editar) ─── */
 function CustomerModal({
   onClose,
@@ -1189,7 +1199,7 @@ function CustomerModal({
   submitLabel?: string;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [phone, setPhone] = useState(initial?.phone ?? '');
+  const [phone, setPhone] = useState(maskPhoneBR(initial?.phone ?? ''));
   const [instagram, setInstagram] = useState(initial?.instagram ?? '');
   const [cpf, setCpf] = useState(initial?.cpf ?? '');
   const [email, setEmail] = useState(initial?.email ?? '');
@@ -1202,7 +1212,7 @@ function CustomerModal({
       alert('Nome é obrigatório');
       return;
     }
-    onSave({ name, phone, instagram, cpf, email });
+    onSave({ name, phone: phone.replace(/\D/g, ''), instagram, cpf, email });
   }
 
   return (
@@ -1218,7 +1228,7 @@ function CustomerModal({
         </div>
         <div className="space-y-2.5">
           <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone (opcional)" inputMode="tel" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="(11) 99999-9999" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Instagram (@)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <div className="grid grid-cols-2 gap-2">
             <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
