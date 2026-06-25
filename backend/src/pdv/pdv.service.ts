@@ -10,6 +10,7 @@ import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd 
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
+import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 
 /**
@@ -1145,7 +1146,20 @@ export class PdvService {
    * Exemplo: subtotal=100, item1 tem desconto manual de 5, user define
    * setSaleDiscount(10) → economia total = 5+10 = 15, total = 85.
    */
-  async setSaleDiscount(input: { saleId: string; desconto: number }) {
+  // MD-1: desconto avulso em faixas. % sobre o subtotal BRUTO.
+  //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
+  private requireDiscountAuth(pct: number, password?: string, motivo?: string) {
+    if (pct > 10 + 1e-9) {
+      validateMinLevel(password, 'GERENTE'); // lança se senha < GERENTE
+      if (!motivo || String(motivo).trim().length < 3) {
+        throw new BadRequestException('Justificativa obrigatória para desconto acima de 10%');
+      }
+    } else if (pct > 7 + 1e-9) {
+      validateMinLevel(password, 'CAIXA'); // lança se senha < CAIXA
+    }
+  }
+
+  async setSaleDiscount(input: { saleId: string; desconto: number; password?: string; motivo?: string }) {
     const sale = await (this.prisma as any).pdvSale.findUnique({
       where: { id: input.saleId },
       include: { items: true },
@@ -1154,6 +1168,18 @@ export class PdvService {
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
 
     const desconto = Math.max(0, input.desconto || 0);
+
+    // MD-1: campanha ativa → prevalece a promoção, desconto avulso bloqueado.
+    if (desconto > 0 && sale.activePromotion && sale.activePromotion !== 'NONE') {
+      throw new BadRequestException(
+        'Promoção/campanha ativa — desconto avulso bloqueado (prevalece o desconto da campanha).',
+      );
+    }
+    // MD-1: senha por faixa, % sobre o subtotal BRUTO (preço cheio).
+    const subtotalBruto = sale.items.reduce((s: number, i: any) => s + i.precoUnit * i.qty, 0);
+    const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
+    this.requireDiscountAuth(pct, input.password, input.motivo);
+
     // Soma dos itens líquidos (já com descontos individuais aplicados)
     const subtotalLiquido = sale.items.reduce((s: number, i: any) => s + (i.total || 0), 0);
     if (desconto > subtotalLiquido) {
