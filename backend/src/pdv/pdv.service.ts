@@ -2107,6 +2107,13 @@ export class PdvService {
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status === 'cancelled')
       throw new BadRequestException('Venda já está cancelada');
+    // Venda FINALIZADA só pode ser cancelada via Estorno master (senha de
+    // administrador + justificativa + reversão de estoque/fiscal). O cancel
+    // simples é só pra venda em aberto (carrinho) — não fura o estorno.
+    if (sale.status === 'finalized')
+      throw new BadRequestException(
+        'Venda finalizada — use o Estorno (exige senha de administrador e justificativa).',
+      );
 
     const updated = await (this.prisma as any).pdvSale.update({
       where: { id: sale.id },
