@@ -1145,14 +1145,17 @@ function MatrixCell({
       </button>
     );
   }
+  const critico = qty === 1; // última peça → alerta laranja (2 tons + escuro)
   const low = qty <= 2;
   return (
     <button
       type="button"
       onClick={onClick}
-      title="Clique pra filtrar outras lojas por este tamanho/cor"
+      title={critico ? 'ÚLTIMA peça deste tamanho/cor — clique pra ver outras lojas' : 'Clique pra filtrar outras lojas por este tamanho/cor'}
       className={`${base} text-base ${
-        low
+        critico
+          ? 'bg-orange-300 text-orange-900 border border-orange-500 hover:bg-orange-400'
+          : low
           ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200'
           : 'bg-emerald-100 text-emerald-900 border border-emerald-300 hover:bg-emerald-200'
       } ${selected ? 'ring-2 ring-brand shadow-md scale-[1.02]' : matched ? 'ring-2 ring-brand' : ''}`}
@@ -1171,8 +1174,12 @@ function CellLegend() {
         disponível
       </span>
       <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded bg-orange-300 border border-orange-500 inline-block" />
+        última peça (1)
+      </span>
+      <span className="inline-flex items-center gap-1">
         <span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block" />
-        acabando (≤2)
+        acabando (2)
       </span>
       <span className="inline-flex items-center gap-1">
         <span className="w-3 h-3 rounded bg-slate-50 border border-slate-200 inline-block" />
