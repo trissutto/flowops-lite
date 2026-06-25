@@ -5560,10 +5560,10 @@ function PaymentModal({
                   </span>
                 )}
               </label>
-              {/* PDV2: COLUNA ÚNICA — uma linha por parcela, leitura limpa
-                  de cima pra baixo ("3× de R$ 15,93"). Linha selecionada
-                  vira verde. Dica de teclado: 1-9 selecionam direto. */}
-              <div className="flex flex-col gap-1">
+              {/* 2 COLUNAS (6+6) — corta a altura pela metade pra as 12 parcelas
+                  SEMPRE caberem na tela útil, mesmo em monitor menor, sem cortar
+                  10×–12×. Linha selecionada vira verde. Teclas 1-9 selecionam. */}
+              <div className="grid grid-cols-2 gap-1.5">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((p) => {
                   const calc = calcularParcelas(baseTotal, p);
                   const valorMostrar = calc.iguais;
