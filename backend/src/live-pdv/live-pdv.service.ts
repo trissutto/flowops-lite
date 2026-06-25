@@ -47,22 +47,6 @@ export class LivePdvService {
   private keyOf(ref: string, cor: any, tam: any): string {
     return `${this.norm(ref)}|${this.norm(cor)}|${this.norm(tam)}`;
   }
-
-  // Remove cor/tamanho do nome do produto pro título genérico (igual Consulta).
-  private cleanProductName(name: string): string {
-    const KNOWN_COLORS = [
-      'PRETO', 'BRANCO', 'VERMELHO', 'ROSA', 'AZUL', 'MARINHO', 'MARROM',
-      'VINHO', 'VERDE', 'AMARELO', 'LARANJA', 'BEGE', 'CINZA', 'UVA',
-      'PINK', 'NUDE', 'CREME', 'CAQUI', 'CARAMELO', 'OFF', 'MOSTARDA',
-      'TERRACOTA', 'TIFANNY', 'SALMAO', 'SALMÃO', 'GRAFITE', 'PERVINCA', 'ROYAL', 'MUSGO',
-    ];
-    let n = String(name || '').trim();
-    for (const c of KNOWN_COLORS) {
-      n = n.replace(new RegExp(`\\s+${c}\\b`, 'gi'), '');
-    }
-    n = n.replace(/\s+\b(3[6-9]|[4-7]\d|80)\b/g, '');
-    return n.replace(/\s{2,}/g, ' ').trim();
-  }
   private reaisToCents(v: number): number {
     return Math.round((Number(v) || 0) * 100);
   }
@@ -209,17 +193,11 @@ export class LivePdvService {
     if (!rows.length) rows = await this.erp.searchProductsLike(q);
     if (!rows.length) return { found: false, term: q };
 
-    // searchByRef("VLM-222") também traz "VLM-222EST" (LIKE 'VLM-222%'), que é
-    // OUTRO produto (estampado). Foco na REF que bate EXATO com o que foi
-    // digitado e trago TODAS as cores dela (todas ficam sob a mesma REF no
-    // Giga). Se nada bate exato (busca por nome/parcial), cai na 1ª REF.
-    const qn = this.norm(q);
-    const exact = rows.filter((r) => this.norm(r.REF) === qn);
-    const productRows = exact.length
-      ? exact
-      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+    // Pega o 1º REF retornado (foco em 1 produto por busca, como o spec pede).
+    const firstRef = this.norm(rows[0].REF);
+    const productRows = rows.filter((r) => this.norm(r.REF) === firstRef);
     const ref = String(productRows[0].REF).trim();
-    const descricao = this.cleanProductName(productRows[0].DESCRICAOCOMPLETA || ref) || ref;
+    const descricao = productRows[0].DESCRICAOCOMPLETA || ref;
 
     // 2) Estoque por loja (1 query batch p/ todos os CODIGOs do produto).
     const codigos = Array.from(
@@ -265,16 +243,12 @@ export class LivePdvService {
       }
     }
 
-    // 5) Foto principal (best-effort). PERF: só a 1ª cor é usada no photoUrl —
-    // buscar as N cores travava a busca na live (servidor de fotos externo
-    // lento/instável). Agora busca SÓ a 1ª cor + a genérica, em paralelo.
+    // 5) Foto principal (best-effort, por cor).
     const cors = Array.from(new Set(productRows.map((r) => r.COR).filter(Boolean)));
-    const [photoBatch, genericPhoto] = await Promise.all([
-      cors.length
-        ? this.photos.getBatch([{ ref, cor: cors[0] }]).catch(() => ({} as Record<string, string>))
-        : Promise.resolve({} as Record<string, string>),
-      this.photos.getPhoto(ref).catch(() => null),
-    ]);
+    const photoBatch = await this.photos
+      .getBatch(cors.map((c: any) => ({ ref, cor: c })))
+      .catch(() => ({} as Record<string, string>));
+    const genericPhoto = await this.photos.getPhoto(ref).catch(() => null);
 
     let totalRede = 0;
     const cells = Array.from(cellMap.values()).map((c: any) => {
@@ -676,38 +650,12 @@ export class LivePdvService {
     }
     if (storeInputs.length === 0) throw new BadRequestException('Sem loja ativa com estoque');
 
-    // FASE A — AGRUPAR FRETE: se o carrinho JÁ usa uma loja que tem estoque
-    // pra esta peça, prefere ela (concentra o envio, paga menos frete). Só abre
-    // loja nova quando nenhuma loja já usada cobre. A 1ª peça do carrinho não
-    // tem loja prévia → cai no roteamento normal (melhor loja por estoque).
-    let preferStoreCode: string | undefined;
-    const existingItems = await (this.prisma as any).livePdvItem.findMany({
-      where: { cartId: cart.id, status: { in: this.COMMITTED } },
-      select: { originStoreCode: true },
-    });
-    if (existingItems.length) {
-      const freq = new Map<string, number>();
-      for (const it of existingItems as any[]) {
-        if (it.originStoreCode) freq.set(it.originStoreCode, (freq.get(it.originStoreCode) || 0) + 1);
-      }
-      const availByStore = new Map(stock.map((s) => [s.storeCode, s.availableQty]));
-      // loja já usada com mais peças primeiro; precisa cobrir a qty desta peça
-      const ordered = [...freq.entries()].sort((a, b) => b[1] - a[1]);
-      for (const [storeCode] of ordered) {
-        if ((availByStore.get(storeCode) || 0) >= qty) {
-          preferStoreCode = storeCode;
-          break;
-        }
-      }
-    }
-
-    // RoutingEngine escolhe a melhor loja de origem (respeitando preferStoreCode)
+    // RoutingEngine escolhe a melhor loja de origem
     const result = this.routing.route({
       items: [{ sku: itemKey, quantity: qty }],
       stores: storeInputs,
       stock,
       shippingCep: cart.customerCep || session.liveStoreCode || null,
-      preferStoreCode,
     });
     if (!result.success || !result.assignments.length) {
       throw new BadRequestException(
