@@ -444,6 +444,20 @@ export default function LivePdvPage() {
     }
   }
 
+  // Exclui (cancela) o carrinho de uma cliente direto pela lista, sem precisar
+  // abri-la antes. Mesmo endpoint do deleteCart. Libera as reservas.
+  async function deleteCartFromList(c: Cart) {
+    if (!confirm(`Excluir a cliente ${c.customerName} da live? As peças reservadas serão liberadas.`)) return;
+    try {
+      await api(`/live-pdv/carts/${c.id}/cancel`, { method: 'POST', body: JSON.stringify({}) });
+      if (cart?.id === c.id) newClient(); // se era a que estava aberta no painel, limpa
+      await refreshCarts();
+      await doSearch(); // atualiza estoque (reservas liberadas)
+    } catch (e: any) {
+      alert('Erro ao excluir: ' + (e?.message || e));
+    }
+  }
+
   function openCart(c: Cart) {
     setCart(c);
     setActiveCustomer({
@@ -845,39 +859,53 @@ export default function LivePdvPage() {
                     .map((c) => {
                       const active = cart?.id === c.id;
                       return (
-                        <button
+                        <div
                           key={c.id}
-                          onClick={() => openCart(c)}
-                          className={`flex w-full items-center gap-3 px-3 py-2 text-left transition ${
+                          className={`flex w-full items-center transition ${
                             active ? 'bg-rose-50' : 'hover:bg-slate-50'
                           }`}
                           style={active ? { boxShadow: 'inset 5px 0 0 0 #e11d48' } : undefined}
                         >
-                          {active && (
-                            <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
-                              Atendendo
+                          <button
+                            onClick={() => openCart(c)}
+                            className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
+                          >
+                            {active && (
+                              <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                                Atendendo
+                              </span>
+                            )}
+                            <span
+                              className={`min-w-0 flex-1 truncate ${active ? 'text-base font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                              title={c.customerName}
+                            >
+                              {c.customerName}
                             </span>
-                          )}
-                          <span
-                            className={`min-w-0 flex-1 truncate ${active ? 'text-base font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
-                            title={c.customerName}
+                            <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">
+                              {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
+                            </span>
+                            <span className="w-24 shrink-0 text-right text-sm font-bold tabular-nums text-slate-900">
+                              {brl(c.totalCents)}
+                            </span>
+                            <span
+                              className={`w-32 shrink-0 text-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                STATUS_PILL[c.status] || 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {STATUS_LABEL[c.status] || c.status}
+                            </span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteCartFromList(c);
+                            }}
+                            title="Excluir esta cliente da live (libera as reservas)"
+                            className="mr-2 shrink-0 rounded-md p-2 text-slate-400 transition hover:bg-rose-100 hover:text-rose-600"
                           >
-                            {c.customerName}
-                          </span>
-                          <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">
-                            {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
-                          </span>
-                          <span className="w-24 shrink-0 text-right text-sm font-bold tabular-nums text-slate-900">
-                            {brl(c.totalCents)}
-                          </span>
-                          <span
-                            className={`w-32 shrink-0 text-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                              STATUS_PILL[c.status] || 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            {STATUS_LABEL[c.status] || c.status}
-                          </span>
-                        </button>
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       );
                     })}
                 </div>
