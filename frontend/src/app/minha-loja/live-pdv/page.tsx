@@ -859,12 +859,30 @@ export default function LivePdvPage() {
               </div>
             )}
 
-            {/* Clientes da live — destaque e ordem alfabética pra achar rápido na live */}
+          </div>
+
+          {/* Sidebar: carrinho + lista de clientes da live */}
+          <div className="flex flex-col gap-4">
+            <CartPanel
+              cart={cart}
+              activeCustomer={activeCustomer}
+              qr={qr}
+              paid={paid}
+              paying={paying}
+              onNewClient={newClient}
+              onRemoveItem={removeItem}
+              onChargePix={chargePix}
+              onChargeLink={chargeLink}
+              onEditCustomer={() => setEditCustomerOpen(true)}
+              onDeleteCart={deleteCart}
+            />
+
+            {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
             {carts.length > 0 && (
-              <div className="mt-5">
+              <div>
                 <div className="mb-2 flex items-center gap-2">
                   <User className="h-5 w-5 text-rose-500" />
-                  <span className="text-base font-bold uppercase tracking-wide text-slate-800">
+                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
                     Clientes da live ({clientesFiltradas.length}
                     {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
                   </span>
@@ -888,83 +906,72 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
-                <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="max-h-[60vh] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200 bg-white">
                   {clientesFiltradas.length === 0 && (
                     <div className="px-3 py-4 text-center text-sm text-slate-400">
-                      Nenhuma cliente encontrada para “{clientFilter}”.
+                      Nenhuma cliente encontrada.
                     </div>
                   )}
                   {clientesFiltradas.map((c) => {
-                      const active = cart?.id === c.id;
-                      return (
-                        <div
-                          key={c.id}
-                          className={`flex w-full items-center transition ${
-                            active ? 'bg-rose-50' : 'hover:bg-slate-50'
-                          }`}
-                          style={active ? { boxShadow: 'inset 5px 0 0 0 #e11d48' } : undefined}
+                    const active = cart?.id === c.id;
+                    return (
+                      <div
+                        key={c.id}
+                        className={`flex w-full items-center transition ${
+                          active ? 'bg-rose-50' : 'hover:bg-slate-50'
+                        }`}
+                        style={active ? { boxShadow: 'inset 4px 0 0 0 #e11d48' } : undefined}
+                      >
+                        <button
+                          onClick={() => openCart(c)}
+                          className="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-1.5 text-left"
                         >
-                          <button
-                            onClick={() => openCart(c)}
-                            className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
-                          >
-                            {active && (
-                              <span className="shrink-0 rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
-                                Atendendo
-                              </span>
-                            )}
+                          <div className="flex w-full items-center gap-2">
                             <span
-                              className={`min-w-0 flex-1 truncate ${active ? 'text-base font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
+                              className={`min-w-0 flex-1 truncate ${active ? 'font-extrabold text-rose-700' : 'font-semibold text-slate-800'}`}
                               title={c.customerName}
                             >
                               {c.customerName}
                             </span>
-                            <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">
-                              {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
-                            </span>
-                            <span className="w-24 shrink-0 text-right text-sm font-bold tabular-nums text-slate-900">
+                            <span className="shrink-0 text-xs font-bold tabular-nums text-slate-900">
                               {brl(c.totalCents)}
                             </span>
+                          </div>
+                          <div className="flex w-full items-center gap-1.5 text-[10px] text-slate-500">
+                            {active && (
+                              <span className="rounded-full bg-rose-600 px-1.5 py-px font-bold uppercase text-white">
+                                Atendendo
+                              </span>
+                            )}
+                            <span>
+                              {c.items.length} {c.items.length === 1 ? 'item' : 'itens'}
+                            </span>
                             <span
-                              className={`w-32 shrink-0 text-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              className={`rounded-full px-1.5 py-px font-bold uppercase ${
                                 STATUS_PILL[c.status] || 'bg-slate-100 text-slate-600'
                               }`}
                             >
                               {STATUS_LABEL[c.status] || c.status}
                             </span>
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteCartFromList(c);
-                            }}
-                            title="Excluir esta cliente da live (libera as reservas)"
-                            className="mr-2 shrink-0 rounded-md p-2 text-slate-400 transition hover:bg-rose-100 hover:text-rose-600"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      );
-                    })}
+                          </div>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteCartFromList(c);
+                          }}
+                          title="Excluir esta cliente da live (libera as reservas)"
+                          className="mr-1.5 shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-rose-100 hover:text-rose-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
-
-          {/* Sidebar: carrinho */}
-          <CartPanel
-            cart={cart}
-            activeCustomer={activeCustomer}
-            qr={qr}
-            paid={paid}
-            paying={paying}
-            onNewClient={newClient}
-            onRemoveItem={removeItem}
-            onChargePix={chargePix}
-            onChargeLink={chargeLink}
-            onEditCustomer={() => setEditCustomerOpen(true)}
-            onDeleteCart={deleteCart}
-          />
         </div>
       )}
 
