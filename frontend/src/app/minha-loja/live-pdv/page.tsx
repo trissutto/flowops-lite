@@ -178,6 +178,7 @@ export default function LivePdvPage() {
   const [activeCustomer, setActiveCustomer] = useState<ActiveCustomer | null>(null);
   const [cart, setCart] = useState<Cart | null>(null);
   const [carts, setCarts] = useState<Cart[]>([]);
+  const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
   const [editCustomerOpen, setEditCustomerOpen] = useState(false);
@@ -587,6 +588,22 @@ export default function LivePdvPage() {
     );
   }
 
+  // Lista de clientes filtrada (por nome ou @) e ordenada alfabeticamente.
+  const clientesFiltradas = (() => {
+    const q = clientFilter.trim().toLowerCase();
+    const qIg = q.replace(/^@/, '');
+    return [...carts]
+      .filter(
+        (c) =>
+          !q ||
+          (c.customerName || '').toLowerCase().includes(q) ||
+          (c.customerInstagram || '').toLowerCase().replace(/^@/, '').includes(qIg),
+      )
+      .sort((a, b) =>
+        (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
+      );
+  })();
+
   return (
     <div className="min-h-screen bg-slate-100">
       {/* Header */}
@@ -848,15 +865,36 @@ export default function LivePdvPage() {
                 <div className="mb-2 flex items-center gap-2">
                   <User className="h-5 w-5 text-rose-500" />
                   <span className="text-base font-bold uppercase tracking-wide text-slate-800">
-                    Clientes da live ({carts.length})
+                    Clientes da live ({clientesFiltradas.length}
+                    {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
                   </span>
                 </div>
+                <div className="relative mb-2">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={clientFilter}
+                    onChange={(e) => setClientFilter(e.target.value)}
+                    placeholder="Buscar cliente por nome ou @"
+                    className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-8 text-sm focus:border-rose-400 focus:outline-none"
+                  />
+                  {clientFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setClientFilter('')}
+                      title="Limpar busca"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
                 <div className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  {[...carts]
-                    .sort((a, b) =>
-                      (a.customerName || '').localeCompare(b.customerName || '', 'pt-BR', { sensitivity: 'base' }),
-                    )
-                    .map((c) => {
+                  {clientesFiltradas.length === 0 && (
+                    <div className="px-3 py-4 text-center text-sm text-slate-400">
+                      Nenhuma cliente encontrada para “{clientFilter}”.
+                    </div>
+                  )}
+                  {clientesFiltradas.map((c) => {
                       const active = cart?.id === c.id;
                       return (
                         <div
