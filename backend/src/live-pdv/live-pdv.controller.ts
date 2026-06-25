@@ -77,6 +77,18 @@ export class LivePdvController {
     return this.svc.quickCustomer(body);
   }
 
+  // Busca clientes que JÁ participaram de alguma live (por nome/telefone/@)
+  @Get('customers/search-live')
+  searchLiveCustomers(@Query('term') term: string) {
+    return this.svc.searchLiveCustomers(term || '');
+  }
+
+  // Puxa uma cliente de live anterior pra sessão atual (cria/reusa o carrinho)
+  @Post('sessions/:id/add-customer')
+  addCustomerToSession(@Param('id') id: string, @Body() body: { customerId: string }) {
+    return this.svc.addCustomerToSession(id, body?.customerId);
+  }
+
   // ── Carrinho / itens ──
   @Post('sessions/:id/items')
   addItem(

@@ -514,6 +514,72 @@ export class LivePdvService {
   }
 
   /**
+   * Busca clientes que JÁ participaram de alguma live (têm carrinho em
+   * LivePdvCart), por nome / telefone / @. Busca direto no snapshot do carrinho
+   * (distinct por customerId) — naturalmente restrito a participantes de live.
+   * Não expõe a base geral de loja/site.
+   */
+  async searchLiveCustomers(term: string) {
+    const t = (term || '').trim();
+    if (t.length < 2) return [];
+    const digits = t.replace(/\D/g, '');
+    const ig = t.replace(/^@/, '');
+    const OR: any[] = [
+      { customerName: { contains: t, mode: 'insensitive' } },
+      { customerInstagram: { contains: ig, mode: 'insensitive' } },
+    ];
+    if (digits.length >= 3) OR.push({ customerPhone: { contains: digits } });
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { customerId: { not: null }, OR },
+      distinct: ['customerId'],
+      orderBy: { createdAt: 'desc' },
+      select: {
+        customerId: true,
+        customerName: true,
+        customerPhone: true,
+        customerInstagram: true,
+      },
+      take: 20,
+    });
+    return carts.map((c: any) => ({
+      customerId: c.customerId,
+      name: c.customerName,
+      phone: c.customerPhone,
+      instagram: c.customerInstagram,
+    }));
+  }
+
+  /**
+   * Puxa uma cliente já existente (de live anterior) para a sessão de live
+   * ATUAL: cria (ou reusa) o carrinho aberto dela na sessão. Usa os dados mais
+   * frescos do cadastro mestre, com fallback no snapshot do último carrinho.
+   */
+  async addCustomerToSession(sessionId: string, customerId: string) {
+    if (!customerId) throw new BadRequestException('customerId obrigatório');
+    const cust = await (this.prisma as any).customer.findUnique({ where: { id: customerId } });
+    let name = (cust?.name || '').trim();
+    let phone = cust?.phone || '';
+    let instagram = cust?.igUsername || null;
+    if (!name) {
+      // fallback: snapshot do carrinho mais recente dessa cliente
+      const last = await (this.prisma as any).livePdvCart.findFirst({
+        where: { customerId },
+        orderBy: { createdAt: 'desc' },
+        select: { customerName: true, customerPhone: true, customerInstagram: true },
+      });
+      if (last) {
+        name = last.customerName;
+        phone = phone || last.customerPhone;
+        instagram = instagram || last.customerInstagram;
+      }
+    }
+    if (!name) throw new NotFoundException('Cliente não encontrada');
+    const cart = await this.ensureCart(sessionId, { id: customerId, name, phone, instagram });
+    this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId: cart.id, sessionId });
+    return cart;
+  }
+
+  /**
    * Adiciona um item ao carrinho da cliente. Escolhe a loja de origem
    * automaticamente (RoutingEngine) e cria a reserva com TTL.
    */
