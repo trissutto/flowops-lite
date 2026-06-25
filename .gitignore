@@ -75,3 +75,6 @@ coverage/
 
 # --- Uploads locais --------------------------------------------------------
 uploads/
+
+# Snapshots locais de seguranca (correcoes em producao) — nunca versionar
+backup/
