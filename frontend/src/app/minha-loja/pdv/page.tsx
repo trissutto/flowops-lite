@@ -1033,10 +1033,35 @@ function PdvPageInner() {
   // ── Aplicar desconto na venda inteira (extra, soma com descontos de item) ──
   const setSaleDiscount = async (desconto: number) => {
     if (!sale) return;
+    // MD-1: campanha ativa → prevalece a promoção, desconto avulso bloqueado.
+    if (desconto > 0 && sale.activePromotion && sale.activePromotion !== 'NONE') {
+      toast('error', 'Promoção ativa', 'Desconto avulso bloqueado — prevalece a campanha.');
+      return;
+    }
+    // MD-1: senha por faixa (% sobre subtotal BRUTO): 0–7% livre · >7–10% CAIXA
+    // · >10% GERENTE + justificativa.
+    let password: string | undefined;
+    let motivo: string | undefined;
+    if (desconto > 0) {
+      const subtotalBruto = sale.items.reduce((s, i) => s + i.precoUnit * i.qty, 0);
+      const pct = subtotalBruto > 0 ? (desconto / subtotalBruto) * 100 : 0;
+      if (pct > 10 + 1e-9) {
+        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha de GERENTE:`);
+        if (!pw) return;
+        password = pw;
+        const m = window.prompt('Justificativa do desconto (obrigatória):');
+        if (!m || !m.trim()) return;
+        motivo = m.trim();
+      } else if (pct > 7 + 1e-9) {
+        const pw = window.prompt(`Desconto de ${pct.toFixed(1)}% — exige senha do CAIXA:`);
+        if (!pw) return;
+        password = pw;
+      }
+    }
     try {
       await api(`/pdv/sales/${sale.id}/discount`, {
         method: 'PATCH',
-        body: JSON.stringify({ desconto }),
+        body: JSON.stringify({ desconto, password, motivo }),
       });
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);

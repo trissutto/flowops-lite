@@ -454,10 +454,15 @@ export class PdvController {
   setDiscount(
     @Req() req: any,
     @Param('id') id: string,
-    @Body() body: { desconto: number },
+    @Body() body: { desconto: number; password?: string; motivo?: string },
   ) {
     this.requireRole(req);
-    return this.svc.setSaleDiscount({ saleId: id, desconto: body?.desconto || 0 });
+    return this.svc.setSaleDiscount({
+      saleId: id,
+      desconto: body?.desconto || 0,
+      password: body?.password,
+      motivo: body?.motivo,
+    });
   }
 
   /**
