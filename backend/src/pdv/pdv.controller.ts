@@ -1447,7 +1447,8 @@ export class PdvController {
    * Usado pra identificar vendas perdidas pelo bug do sumPaidValue.
    */
   @Get('sales/crediario-orfaos')
-  async listarCrediariosOrfaos(@Query('dias') diasQ?: string) {
+  async listarCrediariosOrfaos(@Req() req: any, @Query('dias') diasQ?: string) {
+    this.requireRole(req);
     const dias = Math.min(60, Math.max(1, Number(diasQ) || 10));
     const since = new Date(Date.now() - dias * 86400000);
     const vendas = await (this.svc as any).prisma.pdvSale.findMany({
