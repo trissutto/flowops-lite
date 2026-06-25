@@ -109,16 +109,6 @@ export default function LivePainelPage() {
   }, [live?.id]);
 
   // ─── Ações ────────────────────────────────────────────────
-  const seedLive = async () => {
-    setBusy(true);
-    try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/api/inbox/dev/seed-live`);
-      await loadLive();
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const startLive = async () => {
     if (!live) return;
     setBusy(true);
@@ -187,19 +177,9 @@ export default function LivePainelPage() {
         <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md text-center">
           <div className="text-5xl mb-4">🎙️</div>
           <h2 className="text-xl font-bold text-stone-800 mb-2">Nenhuma live no ar</h2>
-          <p className="text-sm text-stone-600 mb-6">
-            Crie uma live de teste pra começar a operar o sistema de live commerce.
+          <p className="text-sm text-stone-600">
+            Nenhuma live ativa no momento.
           </p>
-          <button
-            onClick={seedLive}
-            disabled={busy}
-            className="bg-rose-600 hover:bg-rose-700 disabled:bg-stone-300 text-white px-6 py-3 rounded-xl font-bold"
-          >
-            {busy ? 'Criando…' : '✨ Criar Live de Teste'}
-          </button>
-          <div className="mt-4 text-xs text-stone-500">
-            Cria 1 live + 5 produtos demo.
-          </div>
         </div>
       </main>
     );

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/jwt.guard';
 import { InboxService } from './inbox.service';
 import { MetaService } from './meta.service';
 
@@ -15,6 +16,7 @@ import { MetaService } from './meta.service';
  * dúvidas de clientes que vêm via Instagram Direct dentro da janela
  * Human Agent (até 7 dias).
  */
+@UseGuards(JwtAuthGuard)
 @Controller('inbox')
 export class InboxController {
   constructor(
@@ -53,29 +55,5 @@ export class InboxController {
       body: body.body,
       agentName: body.agentName,
     });
-  }
-
-  /**
-   * SEED demo — popula 6 conversas pra videos da App Review.
-   * Pode chamar pelo navegador (GET) ou via curl POST.
-   */
-  @Get('dev/seed')
-  async seedGet() {
-    return this.inbox.seedDemoData();
-  }
-
-  @Post('dev/seed')
-  async seedPost() {
-    return this.inbox.seedDemoData();
-  }
-
-  @Get('dev/seed-live')
-  async seedLiveGet() {
-    return this.inbox.seedLiveData();
-  }
-
-  @Post('dev/seed-live')
-  async seedLivePost() {
-    return this.inbox.seedLiveData();
   }
 }
