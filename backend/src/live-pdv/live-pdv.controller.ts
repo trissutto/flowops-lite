@@ -137,6 +137,12 @@ export class LivePdvController {
     return this.svc.cancelCart(cartId, body?.reason);
   }
 
+  // Recupera carrinhos que expiraram (re-reserva os itens) por N horas (default 24h)
+  @Post('sessions/:id/recover-expired')
+  recoverExpired(@Param('id') id: string, @Body() body: { ttlHours?: number }) {
+    return this.svc.recoverExpiredReservations(id, body?.ttlHours || 24);
+  }
+
   @Post('carts/:cartId/frete')
   setFrete(@Param('cartId') cartId: string, @Body() body: { freteCents: number }) {
     return this.svc.setFrete(cartId, body.freteCents);

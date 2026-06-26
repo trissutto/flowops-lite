@@ -471,6 +471,22 @@ export default function LivePdvPage() {
     }
   }
 
+  // Recupera carrinhos que expiraram (re-reserva os itens) e deixa por 24h.
+  async function recoverCarts() {
+    if (!sessionId) return;
+    if (!confirm('Recuperar os carrinhos que expiraram e deixá-los reservados por 24h?')) return;
+    try {
+      const r = await api<{ recovered: number; carts: number }>(
+        `/live-pdv/sessions/${sessionId}/recover-expired`,
+        { method: 'POST', body: JSON.stringify({ ttlHours: 24 }) },
+      );
+      await refreshCarts();
+      alert(`Recuperados ${r.recovered} item(ns) em ${r.carts} carrinho(s). Válidos por 24h.`);
+    } catch (e: any) {
+      alert('Erro ao recuperar: ' + (e?.message || e));
+    }
+  }
+
   function openCart(c: Cart) {
     setCart(c);
     setActiveCustomer({
@@ -892,12 +908,22 @@ export default function LivePdvPage() {
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
             {carts.length > 0 && (
               <div>
-                <div className="mb-2 flex items-center gap-2">
-                  <User className="h-5 w-5 text-rose-500" />
-                  <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
-                    Clientes da live ({clientesFiltradas.length}
-                    {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
-                  </span>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <User className="h-5 w-5 text-rose-500" />
+                    <span className="text-sm font-bold uppercase tracking-wide text-slate-800">
+                      Clientes da live ({clientesFiltradas.length}
+                      {clientFilter.trim() && clientesFiltradas.length !== carts.length ? `/${carts.length}` : ''})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={recoverCarts}
+                    title="Re-reserva os itens que expiraram e deixa por 24h"
+                    className="shrink-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                  >
+                    Recuperar 24h
+                  </button>
                 </div>
                 <div className="relative mb-2">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />

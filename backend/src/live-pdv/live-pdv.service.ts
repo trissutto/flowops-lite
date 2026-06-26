@@ -871,6 +871,58 @@ export class LivePdvService {
     return { ok: true };
   }
 
+  /**
+   * RECUPERAÇÃO: re-reserva os itens que EXPIRARAM (TTL) numa sessão, com novo
+   * prazo (default 24h). Pra remontar carrinhos quando reservas venceram por
+   * incidente. Não duplica itemKey que já foi re-bipado. Recalcula os carrinhos.
+   */
+  async recoverExpiredReservations(sessionId: string, ttlHours = 24) {
+    await this.getSession(sessionId);
+    const carts = await (this.prisma as any).livePdvCart.findMany({
+      where: { sessionId, status: { not: 'cancelled' } },
+      select: { id: true },
+    });
+    const cartIds = (carts as any[]).map((c) => c.id);
+    if (!cartIds.length) return { recovered: 0, carts: 0 };
+
+    const items = await (this.prisma as any).livePdvItem.findMany({
+      where: { cartId: { in: cartIds } },
+      select: { id: true, cartId: true, itemKey: true, status: true },
+    });
+
+    // Por carrinho, conjunto de itemKeys JÁ ativos (não recupera duplicado).
+    const ACTIVE = ['reserved', 'paid', 'separating', 'shipped', 'delivered', 'awaiting_payment'];
+    const activeByCart = new Map<string, Set<string>>();
+    for (const it of items as any[]) {
+      if (ACTIVE.includes(it.status)) {
+        if (!activeByCart.has(it.cartId)) activeByCart.set(it.cartId, new Set());
+        activeByCart.get(it.cartId)!.add(it.itemKey);
+      }
+    }
+
+    const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
+    const affected = new Set<string>();
+    let recovered = 0;
+    for (const it of items as any[]) {
+      if (it.status !== 'expired') continue;
+      let set = activeByCart.get(it.cartId);
+      if (set && set.has(it.itemKey)) continue; // já re-bipado — não duplica
+      await (this.prisma as any).livePdvItem.update({
+        where: { id: it.id },
+        data: { status: 'reserved', expiresAt },
+      });
+      if (!set) { set = new Set(); activeByCart.set(it.cartId, set); }
+      set.add(it.itemKey);
+      affected.add(it.cartId);
+      recovered++;
+    }
+    for (const cid of affected) await this.recalcCart(cid).catch(() => {});
+    if (recovered > 0) {
+      this.gateway.emitToAdmins('live-pdv:recovered', { sessionId, recovered, carts: affected.size });
+    }
+    return { recovered, carts: affected.size, expiresAt };
+  }
+
   /** Troca manual da loja de origem (supervisor). */
   async changeItemOrigin(itemId: string, storeCode: string) {
     const item = await (this.prisma as any).livePdvItem.findUnique({ where: { id: itemId } });
