@@ -262,38 +262,48 @@ export class RealignmentShipmentService {
     const codigo = String(input.codigo || '').trim();
     if (!codigo) throw new BadRequestException('Código obrigatório');
 
-    // Resolve a peça pelo código bipado
-    const rows = await this.erp.searchByCodeAndExpandRef(codigo).catch(() => [] as any[]);
-    const row = (rows as any[]).find((r) => String(r.CODIGO || '').trim() === codigo);
-    if (!row) throw new NotFoundException(`Código ${codigo} não encontrado no Giga`);
+    // Resolve a peça pelo código bipado — MESMO método da TRIAGEM (resolveSkuInfo).
+    // BUG ANTERIOR: usava searchByCodeAndExpandRef + .find(r => r.CODIGO === codigo).
+    // Esse match EXATO falhava quando o bipado era EAN13 (a busca achava a REF pelo
+    // código de barras, mas os itens da REF têm o CODIGO interno, nunca == EAN) ou
+    // tinha padding de zero diferente → 404 "não encontrado" mesmo com a peça lá.
+    // resolveSkuInfo já trata padding + EAN13 e devolve o CODIGO REAL do Giga.
+    const info = await this.erp.resolveSkuInfo(codigo);
+    if (!info) throw new NotFoundException(`Código ${codigo} não encontrado no Giga`);
+    if (!info.ref) throw new BadRequestException(`Código ${codigo} sem REF cadastrada no Giga`);
+
+    // CRÍTICO: daqui pra frente usar o CODIGO REAL resolvido (info.codigo), não o
+    // bipado — senão estoque/preço não casam (mesma lição comentada na triagem).
+    const codigoReal = info.codigo;
 
     // Estoque na origem — só ALERTA, não bloqueia (decisão do dono)
     const detailed = await this.erp
-      .getStockBySkusDetailed([codigo])
+      .getStockBySkusDetailed([codigoReal])
       .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
     const origemQty =
-      (detailed[codigo] || []).find((e) => e.storeCode === (origem as any).code)?.qty || 0;
+      (detailed[codigoReal] || []).find((e) => e.storeCode === (origem as any).code)?.qty || 0;
     const alerta =
       origemQty < 1
         ? `Atenção: a loja origem (${(origem as any).code}) não tem estoque dessa peça — bipe permitido mesmo assim.`
         : null;
 
-    const ref = String(row.REF || codigo).trim();
-    const cor = row.COR ? String(row.COR).trim() : null;
-    const tamanho = row.TAMANHO ? String(row.TAMANHO).trim() : null;
+    const ref = String(info.ref || codigoReal).trim();
+    const cor = info.cor ? String(info.cor).trim() : null;
+    const tamanho = info.tamanho ? String(info.tamanho).trim() : null;
+    const descricao = (info.descricao || '').trim() || null;
 
     // Preço CHEIO unitário (snapshot no bipe) — pricing ao vivo, fallback no
     // espelho giga_produto. Usado na conferência e no impresso (valor inteiro).
     let precoReais = 0;
     try {
-      const pmap = await this.pricing.getPricesByCodigos([codigo]);
-      precoReais = pmap.get(codigo) || 0;
+      const pmap = await this.pricing.getPricesByCodigos([codigoReal]);
+      precoReais = pmap.get(codigoReal) || 0;
     } catch {
       /* ignora — cai no espelho */
     }
     if (!precoReais) {
       const gp = await (this.prisma as any).gigaProduto.findFirst({
-        where: { codigo },
+        where: { codigo: codigoReal },
         select: { vendaUn: true },
       });
       precoReais = Number(gp?.vendaUn) || 0;
@@ -307,7 +317,7 @@ export class RealignmentShipmentService {
         tipo: 'TRANSFERENCIA',
         refCode: ref,
         codigoBipado: codigo,
-        descricao: (row.DESCRICAOCOMPLETA || '').trim() || null,
+        descricao,
         cor,
         tamanho,
         qtyOrigem: 1,
@@ -361,7 +371,7 @@ export class RealignmentShipmentService {
       alerta,
       item: {
         id: order.id,
-        codigo,
+        codigo: codigoReal,
         ref,
         descricao: order.descricao,
         cor,
