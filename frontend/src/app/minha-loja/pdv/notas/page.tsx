@@ -65,21 +65,30 @@ export default function NotasEmitidasPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Role — loja (role=store) só vê as próprias notas (o backend já força isso).
-  // Aqui escondemos o filtro de loja e o resumo POR LOJA pra não confundir.
+  // admin/master da MATRIZ vê todas as lojas e tem o filtro. Loja (role=store) —
+  // inclusive o MODO MASTER operando um PDV de loja (impersonate = role=store +
+  // storeCode da loja) — só vê as próprias notas.
   const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    api<{ role?: string }>('/auth/me')
-      .then((me) => setIsAdmin(me?.role === 'admin'))
-      .catch(() => {});
-  }, []);
 
   // Filtros
-  const [storeCode, setStoreCode] = useState<string>(''); // vazio = todas
+  const [storeCode, setStoreCode] = useState<string>(''); // default = loja do PDV atual (via /auth/me)
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState(todayStr());
   const [status, setStatus] = useState<string>('all');
   const [q, setQ] = useState<string>('');
+
+  useEffect(() => {
+    api<{ role?: string; storeCode?: string | null }>('/auth/me')
+      .then((me) => {
+        const adminLike = me?.role === 'admin' || me?.role === 'master';
+        setIsAdmin(adminLike);
+        // Escopa pra loja em que está operando. No PDV de ITANHAÉM (role=store,
+        // storeCode=01) → só notas de ITANHAÉM. Admin/master da matriz sem loja
+        // específica fica em "Todas".
+        if (me?.storeCode) setStoreCode(me.storeCode);
+      })
+      .catch(() => {});
+  }, []);
 
   // Cancelar modal
   const [cancelTarget, setCancelTarget] = useState<NfceRow | null>(null);
