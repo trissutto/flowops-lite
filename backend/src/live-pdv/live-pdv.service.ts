@@ -87,6 +87,68 @@ export class LivePdvService {
       return 0;
     }
   }
+
+  // Resolve as linhas do produto (REF/código/nome) COM FALLBACK no espelho
+  // giga_produto quando o Giga ao vivo não responde — a busca da Live continua
+  // achando o produto mesmo com o Giga fora do ar.
+  private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
+    let rows: any[] = await this.erp.searchByRef(q).catch(() => []);
+    if (!rows.length) rows = await this.erp.searchByCodeAndExpandRef(q).catch(() => []);
+    if (!rows.length) rows = await this.erp.searchProductsLike(q).catch(() => []);
+    if (rows.length) return { rows, fromMirror: false };
+    const mrows = await (this.prisma as any).gigaProduto
+      .findMany({
+        where: {
+          OR: [
+            { ref: { equals: q, mode: 'insensitive' } },
+            { ref: { startsWith: q, mode: 'insensitive' } },
+            { codigo: q },
+          ],
+        },
+        take: 1000,
+      })
+      .catch(() => []);
+    const mapped = (mrows as any[]).map((r) => ({
+      CODIGO: r.codigo,
+      REF: r.ref,
+      DESCRICAOCOMPLETA: r.descricao,
+      COR: r.cor,
+      TAMANHO: r.tamanho,
+    }));
+    return { rows: mapped, fromMirror: mapped.length > 0 };
+  }
+
+  // Estoque por loja COM FALLBACK no espelho giga_estoque quando o Giga ao vivo
+  // não retorna (só fallback — com Giga no ar usa sempre o exato/ao vivo).
+  private async stockWithMirror(
+    codigos: string[],
+  ): Promise<{ detailed: Record<string, Array<{ storeCode: string; qty: number }>>; fromMirror: boolean }> {
+    const detailed = await this.erp
+      .getStockBySkusDetailed(codigos)
+      .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
+    const missing = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean))).filter(
+      (c) => !(detailed[c]?.length),
+    );
+    let fromMirror = false;
+    if (missing.length) {
+      try {
+        const rows = await (this.prisma as any).gigaEstoque.findMany({
+          where: { codigo: { in: missing }, estoque: { gt: 0 } },
+          select: { codigo: true, loja: true, estoque: true },
+        });
+        for (const r of rows as any[]) {
+          const c = String(r.codigo).trim();
+          if (!detailed[c]) detailed[c] = [];
+          detailed[c].push({ storeCode: String(r.loja).trim(), qty: Number(r.estoque) || 0 });
+          fromMirror = true;
+        }
+      } catch {
+        /* espelho indisponível */
+      }
+    }
+    return { detailed, fromMirror };
+  }
+
   private reaisToCents(v: number): number {
     return Math.round((Number(v) || 0) * 100);
   }
@@ -227,10 +289,10 @@ export class LivePdvService {
     const q = (term || '').trim();
     if (!q) throw new BadRequestException('Informe referência, código, SKU ou nome');
 
-    // 1) Resolve linhas do produto. Tenta REF, depois CÓDIGO/EAN, depois nome.
-    let rows: any[] = await this.erp.searchByRef(q);
-    if (!rows.length) rows = await this.erp.searchByCodeAndExpandRef(q);
-    if (!rows.length) rows = await this.erp.searchProductsLike(q);
+    // 1) Resolve linhas do produto (REF/código/nome) COM FALLBACK no espelho
+    // giga_produto quando o Giga ao vivo não responde.
+    const resolved = await this.resolveRowsWithMirror(q);
+    const rows = resolved.rows;
     if (!rows.length) return { found: false, term: q };
 
     // Foco em 1 produto. searchByRef("VLM-222") também traz "VLM-222EST" (LIKE),
@@ -249,7 +311,9 @@ export class LivePdvService {
     const codigos = Array.from(
       new Set(productRows.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
     );
-    const detailed = await this.erp.getStockBySkusDetailed(codigos);
+    const stockRes = await this.stockWithMirror(codigos);
+    const detailed = stockRes.detailed;
+    const fromMirror = resolved.fromMirror || stockRes.fromMirror;
     // Preço (VENDAUN em reais) COM FALLBACK no espelho — nunca mostra R$0 por
     // causa de hiccup no Giga ao vivo.
     const prices = await this.pricesWithMirror(codigos);
@@ -361,6 +425,9 @@ export class LivePdvService {
       photoUrl,
       totalRede,
       cells,
+      // true = produto/estoque vieram do ESPELHO (Giga ao vivo estava fora);
+      // o número pode estar desatualizado — frontend mostra aviso.
+      fromMirror,
     };
   }
 

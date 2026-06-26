@@ -268,6 +268,8 @@ export class GigaMirrorService implements OnModuleInit {
     erro: string | null;
     transferenciaAt: Date | null;
     caixaAt: Date | null;
+    estoqueRows: number | null;
+    estoqueAt: Date | null;
     syncing: boolean;
   }> {
     const states = await (this.prisma as any).gigaMirrorState.findMany();
@@ -275,6 +277,7 @@ export class GigaMirrorService implements OnModuleInit {
     for (const s of states as any[]) by[s.tabela] = s;
     const t = by['transferencia'];
     const c = by['caixa'];
+    const e = by['estoque'];
     const oks = [t?.lastOkAt, c?.lastOkAt].filter(Boolean).map((d: any) => new Date(d).getTime());
     return {
       lastOkAt: oks.length ? new Date(Math.max(...oks)) : null,
@@ -282,6 +285,8 @@ export class GigaMirrorService implements OnModuleInit {
       erro: t?.lastError || c?.lastError || null,
       transferenciaAt: t?.lastOkAt ?? null,
       caixaAt: c?.lastOkAt ?? null,
+      estoqueRows: e?.rows ?? null,
+      estoqueAt: e?.lastOkAt ?? null,
       syncing: this.syncing,
     };
   }
