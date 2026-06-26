@@ -69,6 +69,9 @@ export default function NotasEmitidasPage() {
   // inclusive o MODO MASTER operando um PDV de loja (impersonate = role=store +
   // storeCode da loja) — só vê as próprias notas.
   const [isAdmin, setIsAdmin] = useState(false);
+  // ADMINISTRADOR FRANQUIAS (role=franquias) é read-only: vê as notas das
+  // franquias mas não age (sem tirar nota / corrigir / cancelar).
+  const [readOnly, setReadOnly] = useState(false);
 
   // Filtros
   const [storeCode, setStoreCode] = useState<string>(''); // default = loja do PDV atual (via /auth/me)
@@ -82,6 +85,7 @@ export default function NotasEmitidasPage() {
       .then((me) => {
         const adminLike = me?.role === 'admin' || me?.role === 'master';
         setIsAdmin(adminLike);
+        setReadOnly(me?.role === 'franquias');
         // Escopa pra loja em que está operando. No PDV de ITANHAÉM (role=store,
         // storeCode=01) → só notas de ITANHAÉM. Admin/master da matriz sem loja
         // específica fica em "Todas".
@@ -404,6 +408,8 @@ export default function NotasEmitidasPage() {
                 <td className="p-2 text-xs">{formatDate(r.nfceAutorizadaEm)}</td>
                 <td className="p-2">
                   <div className="flex gap-1 justify-end items-center">
+                    {readOnly && <span className="text-slate-300 text-xs">—</span>}
+                    {!readOnly && (<>
                     {/* Tirar nota / Corrigir & reemitir — qualquer venda que ainda
                         NÃO tem NFC-e autorizada (preview, skipped, rejeitada). É o
                         caminho pra emitir DEPOIS quando a tela do PIX fechou antes. */}
@@ -449,6 +455,7 @@ export default function NotasEmitidasPage() {
                         Cancelar ({r.minutosRestantes}min)
                       </button>
                     )}
+                    </>)}
                   </div>
                 </td>
               </tr>

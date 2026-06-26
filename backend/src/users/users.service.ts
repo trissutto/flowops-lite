@@ -11,7 +11,9 @@ import { PrismaService } from '../prisma/prisma.service';
 // Roles validos. 'contador' = acesso restrito ao Relatorio Fiscal (NFC-e) — usado
 // pra dar visibilidade ao contador externo sem expor o resto do sistema.
 // 'supervisor' = pode ver relatorios fiscais mas nao mexe em config.
-const VALID_ROLES = ['admin', 'operator', 'store', 'supervisor', 'contador'] as const;
+// 'franquias' = ADMINISTRADOR FRANQUIAS — read-only, só enxerga dados das lojas
+// franqueadas (tipo='FILIAL'): Notas/NFC-e, Faturamento e Estoque. Não age.
+const VALID_ROLES = ['admin', 'operator', 'store', 'supervisor', 'contador', 'franquias'] as const;
 type Role = (typeof VALID_ROLES)[number];
 
 export interface UserInput {

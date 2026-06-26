@@ -822,6 +822,7 @@ export class PdvService {
    */
   async listNfces(input: {
     storeCode?: string;
+    storeCodes?: string[]; // restringe a um CONJUNTO de lojas (ex: franquias)
     startDate?: string;
     endDate?: string;
     status?: string;
@@ -844,7 +845,12 @@ export class PdvService {
       nfceStatus: { not: null },
       finalizedAt: { gte: dateStart, lte: dateEnd },
     };
-    if (input.storeCode) where.storeCode = input.storeCode;
+    // Conjunto de lojas (franquias) tem prioridade; senão filtra por 1 loja.
+    if (input.storeCodes && input.storeCodes.length > 0) {
+      where.storeCode = { in: input.storeCodes };
+    } else if (input.storeCode) {
+      where.storeCode = input.storeCode;
+    }
     if (input.status && input.status !== 'all') {
       where.nfceStatus = input.status;
     }

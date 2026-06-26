@@ -275,7 +275,7 @@ export class PdvController {
    *        limit (default 100, max 500)
    */
   @Get('nfces')
-  listNfces(
+  async listNfces(
     @Req() req: any,
     @Query('storeCode') storeCode?: string,
     @Query('startDate') startDate?: string,
@@ -284,16 +284,31 @@ export class PdvController {
     @Query('q') q?: string,
     @Query('limit') limit?: string,
   ) {
-    this.requireRole(req);
-    // ISOLAMENTO POR LOJA: usuário com role='store' SÓ vê as notas da PRÓPRIA loja
-    // — ignora qualquer storeCode passado na query. Admin/master (role='admin')
-    // vê todas (ou filtra pelo storeCode escolhido).
+    // READ-ONLY: admin/store (requireRole) + 'franquias' (só leitura).
     const role = req?.user?.role;
+    if (role !== 'admin' && role !== 'store' && role !== 'franquias') {
+      throw new ForbiddenException('Apenas admin, loja ou administrador de franquias');
+    }
+
+    // ESCOPO POR PAPEL:
+    //  - store      → SÓ a própria loja (ignora storeCode da query).
+    //  - franquias  → SÓ as lojas FILIAL (franqueadas).
+    //  - admin/master → todas (ou filtra pelo storeCode escolhido).
     const userStoreCode = req?.user?.storeCode;
-    const effectiveStoreCode =
-      role === 'store' && userStoreCode ? userStoreCode : storeCode;
+    let effectiveStoreCode = role === 'store' && userStoreCode ? userStoreCode : storeCode;
+    let storeCodes: string[] | undefined;
+    if (role === 'franquias') {
+      const franq = await (this.svc as any).prisma.store.findMany({
+        where: { tipo: 'FILIAL', active: true },
+        select: { code: true },
+      });
+      storeCodes = (franq as any[]).map((s) => s.code);
+      effectiveStoreCode = undefined; // o conjunto de franquias prevalece
+    }
+
     return this.svc.listNfces({
       storeCode: effectiveStoreCode,
+      storeCodes,
       startDate,
       endDate,
       status,
