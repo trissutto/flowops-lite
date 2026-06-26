@@ -249,7 +249,7 @@ export default function WhatsappCobrancaPage() {
                   <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
                     Enviar teste
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <input
                       type="tel"
                       value={testNumber}

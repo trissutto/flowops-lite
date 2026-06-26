@@ -433,6 +433,7 @@ export default function FinanceiroPage() {
               <h2 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
                 <TrendingUp className="w-4 h-4" /> Por status
               </h2>
+              <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 border-b">
                   <tr>
@@ -451,6 +452,7 @@ export default function FinanceiroPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 

@@ -253,6 +253,7 @@ export default function VendedorasPage() {
 
         {/* Lista */}
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-600">
               <tr>
@@ -345,6 +346,7 @@ export default function VendedorasPage() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>

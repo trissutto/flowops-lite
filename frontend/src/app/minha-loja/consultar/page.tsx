@@ -1728,7 +1728,7 @@ function TransferModal({
               />
             </div>
             {entrega === 'direto' && (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
                     Telefone
@@ -1860,7 +1860,7 @@ function TransferModal({
               <label className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1 block">
                 Forma de envio <span className="text-red-500">*</span>
               </label>
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {(['SEDEX', 'PAC', 'MOTOBOY', 'OUTRO'] as const).map((f) => (
                   <button
                     key={f}

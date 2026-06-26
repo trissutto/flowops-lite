@@ -286,7 +286,7 @@ export default function ProntuarioPage() {
                 placeholder="Rua, número, complemento"
               />
             </Field>
-            <div className="grid grid-cols-3 gap-3 mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
               <Field label="CEP">
                 <Input
                   value={data.cep || ''}

@@ -395,7 +395,7 @@ export default function EditProductModal({ itemId, onClose, onSaved }: Props) {
       <div className="flex-1 bg-black/40" onClick={onClose} />
 
       {/* Drawer */}
-      <div className="w-full md:w-[800px] lg:w-[900px] bg-white h-full overflow-y-auto shadow-2xl flex flex-col">
+      <div className="w-full max-w-[95vw] md:w-[800px] lg:w-[900px] bg-white h-full max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
         {/* Topo fixo */}
         <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">

@@ -292,7 +292,7 @@ export default function RecuperacaoPage() {
 
       {/* Por estágio */}
       {stats && (
-        <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
           {stats.byStage.map((s) => (
             <div key={s.stepIndex} className="bg-white rounded-lg shadow p-4">
               <div className="text-xs uppercase text-gray-500">

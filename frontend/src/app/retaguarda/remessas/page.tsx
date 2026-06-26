@@ -299,6 +299,7 @@ export default function RemessasAdminPage() {
           </div>
         ) : (
           <div className="bg-white rounded-lg border overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b text-xs uppercase text-slate-500">
                 <tr>
@@ -384,6 +385,7 @@ export default function RemessasAdminPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </main>
@@ -425,7 +427,7 @@ export default function RemessasAdminPage() {
                 </div>
               ) : detail ? (
                 <>
-                  <div className="grid grid-cols-3 gap-3 mb-4 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 text-sm">
                     <div className="bg-slate-50 rounded p-2">
                       <div className="text-xs text-slate-500">Aberta</div>
                       <div className="font-medium">{fmtDate(detail.openedAt)}</div>

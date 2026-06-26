@@ -196,7 +196,7 @@ export default function EspelhoPontoPage() {
         {!loading && espelho && (
           <>
             {/* Resumo */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <StatBox
                 label="Previsto"
                 value={fmtMin(espelho.totais.minPrevisto)}

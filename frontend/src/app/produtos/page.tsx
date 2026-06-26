@@ -778,6 +778,7 @@ export default function ProdutosPage() {
 
       {/* Lista */}
       <div className="bg-white rounded shadow overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr>
@@ -950,6 +951,7 @@ export default function ProdutosPage() {
 
                               {/* Tabela de variações */}
                               <div className="bg-white border rounded overflow-hidden">
+                                <div className="overflow-x-auto">
                                 <table className="w-full text-xs">
                                   <thead className="bg-slate-100">
                                     <tr>
@@ -1035,6 +1037,7 @@ export default function ProdutosPage() {
                                     })}
                                   </tbody>
                                 </table>
+                                </div>
                               </div>
                             </>
                           )}
@@ -1047,6 +1050,7 @@ export default function ProdutosPage() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* ========== MODAL BULK SYNC — Preview → Confirmação final ========== */}
@@ -1236,7 +1240,7 @@ export default function ProdutosPage() {
 
               {/* Resultado da aplicação */}
               {lowStockApplyResult && (
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div className="p-2 rounded border bg-emerald-50 text-center">
                     <div className="text-xs text-emerald-700">Marcados como rascunho</div>
                     <div className="text-xl font-bold text-emerald-900">{lowStockApplyResult.success}</div>

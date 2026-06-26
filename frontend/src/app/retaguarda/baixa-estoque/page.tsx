@@ -287,7 +287,7 @@ export default function BaixaEstoquePage() {
       ) : null}
 
       {/* KPIs */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-4">
           <div className="text-xs uppercase text-gray-500">Pick-orders na fila</div>
           <div className="text-3xl font-bold mt-1">{totalPending}</div>
@@ -537,6 +537,7 @@ export default function BaixaEstoquePage() {
                   {selected.items.length === 1 ? '' : 's'})
                 </h3>
                 <div className="border rounded overflow-hidden">
+                  <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 text-xs uppercase text-gray-500">
                       <tr>
@@ -555,6 +556,7 @@ export default function BaixaEstoquePage() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </section>
 
@@ -709,7 +711,7 @@ export default function BaixaEstoquePage() {
 
               {bulkResult && (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="bg-green-50 border border-green-200 rounded p-3">
                       <div className="text-xs uppercase text-green-700">Aprovados</div>
                       <div className="text-2xl font-bold text-green-800 mt-1">

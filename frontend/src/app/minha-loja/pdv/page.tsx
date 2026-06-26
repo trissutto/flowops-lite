@@ -1933,7 +1933,7 @@ function PdvPageInner() {
             )}
             {promoExpanded && (
             <div className="px-3 py-2 bg-[#FAF6E8]/40 border-b border-[#E5E5E0]">
-              <div className="grid grid-cols-3 gap-1.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
                 <button
                   onClick={() => setPromotion('NONE')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
@@ -3661,7 +3661,7 @@ function CustomerModal({
       onMouseDown={backdropClose.onMouseDown}
       onClick={backdropClose.onClick}
     >
-      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-lg w-full max-w-md p-4 space-y-3 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-semibold flex items-center gap-2">
             <User className="w-4 h-4" /> Identificar cliente
@@ -3769,7 +3769,7 @@ function CustomerModal({
               </div>
 
               {/* Métricas */}
-              <div className="grid grid-cols-3 gap-1.5 text-center">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-center">
                 <div className="bg-white rounded p-1.5 border border-slate-200">
                   <div className="text-[9px] uppercase text-slate-500">Compras</div>
                   <div className="font-black text-violet-700 text-sm">{c.orderCount}</div>
@@ -3925,7 +3925,7 @@ function CustomerModal({
                 placeholder="Logradouro (rua/avenida)"
                 className="w-full border rounded px-3 py-2 text-sm"
               />
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={numero}
                   onChange={(e) => setNumero(e.target.value)}
@@ -3945,7 +3945,7 @@ function CustomerModal({
                 placeholder="Bairro"
                 className="w-full border rounded px-3 py-2 text-sm"
               />
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={cidade}
                   onChange={(e) => setCidade(e.target.value)}
@@ -5214,7 +5214,7 @@ function PaymentModal({
             <label className="text-[10px] text-slate-600 uppercase font-semibold tracking-wider">
               Como foi feita a venda online?
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => { setVendaOnlineTipo('pix'); setPagarmeLink(null); }}
@@ -5331,7 +5331,7 @@ function PaymentModal({
                       {pagarmeLink.paymentUrl}
                     </div>
                     {/* Linha 2: 4 botões em grid compacto */}
-                    <div className="grid grid-cols-4 gap-1.5">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -5545,7 +5545,7 @@ function PaymentModal({
               <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wide">
                 Atalho — pagar todo dia
               </div>
-              <div className="grid grid-cols-5 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
                 {[5, 10, 15, 20, 25].map((dia) => {
                   const corrent = credVencto ? new Date(credVencto + 'T00:00:00') : null;
                   const ativo = corrent && corrent.getDate() === dia;
@@ -7252,7 +7252,7 @@ function PixAvulsoModal({
   const backdropClose = useSmartBackdropClose(onClose);
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onMouseDown={backdropClose.onMouseDown} onClick={backdropClose.onClick}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-emerald-700 flex items-center gap-2">
             <DollarSign className="w-5 h-5" /> PIX Rápido
@@ -7824,7 +7824,7 @@ function DiscountModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-amber-700 flex items-center gap-2">
             <Percent className="w-5 h-5" /> Aplicar desconto
@@ -7983,7 +7983,7 @@ function ManualItemModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-black text-lg text-rose-700 flex items-center gap-2">
             <FileText className="w-5 h-5" /> Item Manual

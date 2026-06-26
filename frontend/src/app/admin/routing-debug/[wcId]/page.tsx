@@ -105,6 +105,7 @@ export default function RoutingDebugPage() {
       {data.liveMode && data.wcLineItems && data.wcLineItems.length > 0 && (
         <section className="bg-white border border-slate-200 rounded p-4">
           <h2 className="font-bold mb-2">Line items no WooCommerce ({data.wcLineItems.length})</h2>
+          <div className="overflow-x-auto">
           <table className="w-full text-xs border-collapse">
             <thead className="bg-slate-100 text-left">
               <tr>
@@ -125,6 +126,7 @@ export default function RoutingDebugPage() {
               ))}
             </tbody>
           </table>
+          </div>
           <div className="text-xs text-slate-500 mt-2">
             👀 Confere se o SKU acima bate com o CODIGO no Gigasistemas. Se não bater, o routing vai consultar estoque errado.
           </div>
@@ -161,6 +163,7 @@ export default function RoutingDebugPage() {
             </div>
           </div>
 
+          <div className="overflow-x-auto">
           <table className="w-full text-xs border-collapse">
             <thead className="bg-slate-100 text-left">
               <tr>
@@ -215,6 +218,7 @@ export default function RoutingDebugPage() {
               })}
             </tbody>
           </table>
+          </div>
 
           <div className="text-xs text-slate-500 border-t pt-2">
             <b>Legenda:</b> ERP soma = SUM(ESTOQUE) de todas as linhas (inclusive negativas).

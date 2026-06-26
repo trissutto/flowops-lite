@@ -175,7 +175,7 @@ export default function NovoImovelPage() {
             />
           </Field>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <Field label="Número">
               <input
                 value={numero}
@@ -205,7 +205,7 @@ export default function NovoImovelPage() {
             />
           </Field>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div className="col-span-2">
               <Field label="Cidade">
                 <input

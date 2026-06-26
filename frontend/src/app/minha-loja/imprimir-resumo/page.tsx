@@ -146,6 +146,7 @@ export default function ImprimirResumoPage() {
         <h2 className="font-black bg-violet-700 text-white px-3 py-1 text-sm uppercase tracking-wide">
           ★ Peças a separar (consolidado)
         </h2>
+        <div className="overflow-x-auto">
         <table className="w-full text-[12px] mt-1">
           <thead>
             <tr className="border-b-2 border-black bg-gray-100">
@@ -179,6 +180,7 @@ export default function ImprimirResumoPage() {
             </tr>
           </tfoot>
         </table>
+        </div>
       </div>
 
       {/* DETALHE POR PEDIDO — pra distribuir nas sacolas */}

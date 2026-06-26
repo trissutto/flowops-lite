@@ -200,6 +200,7 @@ export default function AlmoxarifadoPage() {
                 <span>{cat}</span>
                 <span className="text-xs font-normal text-slate-400">{list.length} {list.length === 1 ? 'item' : 'itens'}</span>
               </header>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                   <tr>
@@ -256,6 +257,7 @@ export default function AlmoxarifadoPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </section>
           ))}
         </div>

@@ -570,6 +570,7 @@ function DiagnosticoLojasCard({
                 <div className="text-xs font-bold text-emerald-900 uppercase mb-2">
                   2️⃣ Distribuição do campo LOJA no Giga ({diag.lojasNoGiga.length} valores)
                 </div>
+                <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="text-[10px] text-emerald-700 uppercase">
                     <tr>
@@ -596,6 +597,7 @@ function DiagnosticoLojasCard({
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
 
               {/* 3) Distribuição atual no Customer */}
@@ -603,6 +605,7 @@ function DiagnosticoLojasCard({
                 <div className="text-xs font-bold text-blue-900 uppercase mb-2">
                   3️⃣ Distribuição atual em Customer (CRM FlowOps)
                 </div>
+                <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="text-[10px] text-blue-700 uppercase">
                     <tr>
@@ -629,6 +632,7 @@ function DiagnosticoLojasCard({
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
 
               <div className="text-[11px] text-slate-500 italic">

@@ -359,14 +359,14 @@ function TabGeral({ data, id, onSave }: any) {
         <SelectDark label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
       </div>
       <FieldDark label="Logradouro" value={endereco} onChange={setEndereco} />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <FieldDark label="Número" value={numero} onChange={setNumero} />
         <div className="col-span-2">
           <FieldDark label="Complemento" value={complemento} onChange={setComplemento} />
         </div>
       </div>
       <FieldDark label="Bairro" value={bairro} onChange={setBairro} />
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <div className="col-span-2">
           <FieldDark label="Cidade" value={cidade} onChange={setCidade} />
         </div>
@@ -554,7 +554,7 @@ function TabTaxas({ data, id, onChange }: any) {
             {tipo === 'outros' && (
               <FieldDark label="Nome da taxa" value={nome} onChange={setNome} />
             )}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <FieldDark label="Valor (R$)" value={valor} onChange={setValor} />
               <FieldDark label="Dia vencimento" value={vencimentoDia} onChange={setVencimentoDia} type="number" />
               <FieldDark label="Código (opcional)" value={codigo} onChange={setCodigo} />

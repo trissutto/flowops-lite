@@ -385,12 +385,12 @@ export default function NfceConfigPage() {
 
               <Card title="Endereço do Estabelecimento">
                 <Field label="Logradouro" value={cfg.endereco.logradouro} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, logradouro: v } })} />
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <Field label="Número" value={cfg.endereco.numero} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, numero: v } })} />
                   <Field label="Bairro" value={cfg.endereco.bairro} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, bairro: v } })} />
                   <Field label="CEP" value={cfg.endereco.cep} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, cep: v } })} placeholder="00000-000" />
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <Field label="Município" value={cfg.endereco.municipio} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, municipio: v } })} />
                   <Field label="UF" value={cfg.uf} onChange={(v) => setCfg({ ...cfg, uf: v })} placeholder="SP" />
                   <Field label="Cód. Município IBGE" value={cfg.endereco.codMunicipio} onChange={(v) => setCfg({ ...cfg, endereco: { ...cfg.endereco, codMunicipio: v } })} placeholder="3550308" />

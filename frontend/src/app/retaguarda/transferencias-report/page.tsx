@@ -1209,7 +1209,7 @@ function StoreDrawer({
 
         {/* KPIs da loja */}
         <div className="p-6 space-y-6">
-          <section className="grid grid-cols-4 gap-3">
+          <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <MiniKpi label="Enviado" value={num(store.sentQty)} sub={brl(store.sentValue)} tone="violet" />
             <MiniKpi label="Recebido" value={num(store.receivedQty)} sub={brl(store.receivedValue)} tone="cyan" />
             <MiniKpi
@@ -1432,7 +1432,7 @@ function ShipmentDetailModal({
           </section>
 
           {/* Resumo */}
-          <section className="grid grid-cols-4 gap-3">
+          <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <MiniKpi label="Total peças" value={num(shipment.totalQty)} sub="enviadas" tone="violet" />
             <MiniKpi label="Recebidas" value={num(totalReceived)} sub={`${Math.round((totalReceived / shipment.totalQty) * 100)}% conferido`} tone="emerald" />
             <MiniKpi label="Divergências" value={num(totalMissing)} sub={totalMissing > 0 ? 'peças faltantes' : 'sem divergência'} tone={totalMissing > 0 ? 'rose' : 'slate'} />

@@ -201,6 +201,7 @@ export default function DivergenciasPage() {
               cron: a cada 10 min
             </span>
           </div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
               <tr>
@@ -255,6 +256,7 @@ export default function DivergenciasPage() {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Sample diff estoque */}
@@ -281,6 +283,7 @@ export default function DivergenciasPage() {
               </p>
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
                 <tr>
@@ -309,6 +312,7 @@ export default function DivergenciasPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
 
@@ -341,7 +345,7 @@ function CardTotal({
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
       <div className="text-xs font-bold uppercase text-slate-500 mb-2">{label}</div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <div>
           <div className="text-[10px] text-slate-500">WINCRED</div>
           <div className="text-2xl font-bold text-slate-800">{wincred.toLocaleString('pt-BR')}</div>

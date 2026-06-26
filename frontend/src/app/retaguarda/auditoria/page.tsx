@@ -180,7 +180,7 @@ export default function AuditoriaPage() {
               <div className="text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
                 Total da rede no período
               </div>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <div className="text-xs text-slate-500">Wincred (Giga)</div>
                   <div className="text-xl font-bold tabular-nums">{brl(data.sumario.totalWincredBrl)}</div>

@@ -172,7 +172,7 @@ export default function CargosPage() {
         </button>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
@@ -216,6 +216,7 @@ export default function CargosPage() {
         <Loader2 className="w-6 h-6 animate-spin mx-auto" />
       ) : (
         <div className="bg-white border rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-600">
               <tr>
@@ -287,6 +288,7 @@ export default function CargosPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

@@ -645,7 +645,7 @@ export default function CrediarioPage() {
 
       {/* KPIs */}
       {kpiData && (
-        <div className="grid grid-cols-3 gap-3 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
           <Kpi label="Clientes em atraso"  value={kpiData.clientes.toLocaleString('pt-BR')}  tone="rose" />
           <Kpi label="Parcelas vencidas"   value={kpiData.parcelas.toLocaleString('pt-BR')} tone="peach" />
           <Kpi label="Total em aberto"     value={brl(kpiData.totalDevido)}                  tone="coral" />
@@ -1021,7 +1021,7 @@ export default function CrediarioPage() {
             </div>
 
             {/* KPIs da campanha */}
-            <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
               <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200">
                 <div className="text-[10px] uppercase tracking-widest font-bold text-emerald-800">Vão receber</div>
                 <div className="text-2xl font-semibold text-emerald-900 tabular-nums">{campanha.queue.length}</div>
@@ -1154,7 +1154,7 @@ export default function CrediarioPage() {
                   Validação WhatsApp ({waValidation.summary.total} números)
                   {!waValidation.connected && <span className="ml-auto text-rose-700">⚠ desconectado</span>}
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                   <div className="bg-emerald-100 rounded p-2 text-emerald-900">
                     <div className="text-[10px] uppercase font-bold">Tem WhatsApp</div>
                     <div className="text-xl font-semibold tabular-nums">{waValidation.summary.ativos}</div>

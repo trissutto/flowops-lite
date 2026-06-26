@@ -982,7 +982,7 @@ function AjustePagamentoModal({ target, onClose, onSaved }: { target: NonNullabl
   };
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-black text-blue-700 flex items-center gap-2">✏️ Ajustar pagamento</h2>
         <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm space-y-1">
           <div><strong>Cliente:</strong> {target.customerName || '—'}</div>
@@ -1002,7 +1002,7 @@ function AjustePagamentoModal({ target, onClose, onSaved }: { target: NonNullabl
         {needsBandeira && (
           <div>
             <label className="text-xs uppercase font-bold text-slate-700 block mb-1">Bandeira</label>
-            <div className="grid grid-cols-3 gap-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-1">
               {formaInfo.bandeiras.map((b) => (
                 <button key={b} type="button" onClick={() => setBandeira(b)}
                   className={`px-2 py-1.5 rounded border-2 text-[11px] font-bold ${bandeira === b ? 'bg-blue-600 border-blue-700 text-white' : 'bg-white border-slate-200 text-slate-700 hover:border-blue-300'}`}>
@@ -1080,7 +1080,7 @@ function ModalShell({
 }) {
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b">
           <h2 className="text-lg font-bold text-rose-900">{title}</h2>
           <button onClick={onClose}>

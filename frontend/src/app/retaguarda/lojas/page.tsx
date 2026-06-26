@@ -476,7 +476,7 @@ function EditModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-slate-900">Editar loja {store.code}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
@@ -492,7 +492,7 @@ function EditModal({
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
             />
           </Field>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="col-span-2">
               <Field label="Cidade">
                 <input

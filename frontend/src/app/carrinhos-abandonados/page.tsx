@@ -484,6 +484,7 @@ export default function CarrinhosAbandonadosPage() {
 
       {/* Lista */}
       <div className="bg-white rounded shadow overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr>
@@ -563,6 +564,7 @@ export default function CarrinhosAbandonadosPage() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Paginação */}
@@ -663,6 +665,7 @@ export default function CarrinhosAbandonadosPage() {
                       Itens do carrinho ({detail.cart_items.length})
                     </div>
                     <div className="border rounded overflow-hidden">
+                      <div className="overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead className="bg-slate-100">
                           <tr>
@@ -683,6 +686,7 @@ export default function CarrinhosAbandonadosPage() {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     </div>
                   </div>
 

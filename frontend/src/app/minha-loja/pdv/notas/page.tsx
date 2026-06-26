@@ -277,7 +277,7 @@ export default function NotasEmitidasPage() {
         </div>
         <div className="col-span-2">
           <label className="text-[10px] uppercase font-bold text-slate-500">Buscar (nº / CPF / nome)</label>
-          <div className="flex gap-1">
+          <div className="flex flex-col sm:flex-row gap-1">
             <input
               type="text"
               value={q}
@@ -340,6 +340,7 @@ export default function NotasEmitidasPage() {
 
       {/* Lista */}
       <div className="bg-white border rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100 text-[10px] uppercase font-bold text-slate-600">
             <tr>
@@ -424,12 +425,13 @@ export default function NotasEmitidasPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Modal Cancelar */}
       {cancelTarget && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3">
+          <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg">Cancelar NFC-e {cancelTarget.nfceNumber}</h3>
               <button onClick={() => setCancelTarget(null)} disabled={cancelando}>
@@ -481,7 +483,7 @@ export default function NotasEmitidasPage() {
       {/* Modal Corrigir & Reemitir (notas rejeitadas) */}
       {fixTarget && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3">
+          <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg flex items-center gap-2">
                 <AlertCircle className="w-5 h-5 text-amber-600" /> Corrigir &amp; reemitir

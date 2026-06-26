@@ -99,6 +99,7 @@ export default function LojasPage() {
       {error && <div className="bg-red-50 text-red-700 p-3 rounded mb-4 text-sm">{error}</div>}
 
       <div className="bg-white rounded shadow overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr>
@@ -161,6 +162,7 @@ export default function LojasPage() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Modal editar/criar */}
@@ -229,7 +231,7 @@ export default function LojasPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="col-span-2">
                   <label className="block font-medium mb-1">Cidade</label>
                   <input

@@ -241,6 +241,7 @@ export default function ImprimirMateriaisPage() {
         )}
 
         {/* Tabela de itens */}
+        <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-slate-800 text-white">
@@ -308,6 +309,7 @@ export default function ImprimirMateriaisPage() {
             </tr>
           </tfoot>
         </table>
+        </div>
 
         {/* Rastreio (se já enviado) */}
         {request.trackingCode && (

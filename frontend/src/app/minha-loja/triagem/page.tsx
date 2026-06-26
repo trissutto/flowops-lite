@@ -566,7 +566,7 @@ export default function TriagemPage() {
               <Barcode className="w-3.5 h-3.5" />
               Bipe a peça (SKU/EAN)
             </label>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <input
                 ref={inputRef}
                 type="text"

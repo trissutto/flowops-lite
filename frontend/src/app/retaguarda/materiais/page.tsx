@@ -369,6 +369,7 @@ function RequestBody({ request, onChanged }: { request: SupplyRequest; onChanged
 
       {/* Tabela itens */}
       <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
             <tr>
@@ -433,6 +434,7 @@ function RequestBody({ request, onChanged }: { request: SupplyRequest; onChanged
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Rastreio (quando vai enviar) */}

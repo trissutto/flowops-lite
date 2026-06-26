@@ -299,7 +299,7 @@ export default function AppPushPage() {
             <label className="text-[11px] font-bold uppercase text-slate-500 tracking-wider block mb-2">
               Pra quem enviar
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 onClick={() => setMode('all')}
                 className={`px-3 py-2 rounded-lg text-sm font-bold border transition ${

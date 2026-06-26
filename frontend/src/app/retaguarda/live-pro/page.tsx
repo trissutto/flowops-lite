@@ -464,7 +464,7 @@ function ProductDrawer({
             <div className="text-2xl font-bold text-rose-600 mt-1">{fmtCurrency(product.price)}</div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="bg-stone-50 rounded-lg p-3 text-center">
               <div className="text-2xl font-bold text-stone-900">{product.stock}</div>
               <div className="text-[10px] uppercase font-bold text-stone-500">Estoque</div>
