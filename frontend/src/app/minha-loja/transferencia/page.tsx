@@ -129,8 +129,47 @@ export default function TransferenciaPage() {
     }
   }
 
+  // Imprime a remessa: PDF com CAPA A4 paisagem (cidade destino + nº remessa
+  // grandes) + romaneio com a lista de produtos. Electron imprime silencioso;
+  // no navegador, abre popup e dispara print. Mesma estratégia do realinhamento.
+  async function imprimirRemessa(shipmentId: string, code: string) {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('flowops_token') : null;
+      if (!token) return;
+      const { API_URL } = await import('@/lib/api');
+      const r = await fetch(`${API_URL}/api/realignment/shipments/${shipmentId}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`);
+      const blobUrl = URL.createObjectURL(await r.blob());
+
+      const electron = (window as any).electronAPI;
+      if (electron?.silentPrintUrl) {
+        try {
+          await electron.silentPrintUrl(blobUrl);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+          return;
+        } catch {
+          /* cai no popup */
+        }
+      }
+      const w = window.open(blobUrl, 'lurds_remessa_print', 'width=1000,height=700,resizable=yes');
+      if (!w) {
+        setMsg({ type: 'warn', text: `Remessa enviada. Popup de impressão bloqueado — habilite popups ou imprima a remessa ${code} no Realinhamento.` });
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+        return;
+      }
+      setTimeout(() => { try { w.focus(); w.print(); } catch { /* Ctrl+P manual */ } }, 800);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (e: any) {
+      setMsg({ type: 'warn', text: `Remessa enviada, mas falhou imprimir: ${e?.message || e}. Imprima pela tela de Realinhamento.` });
+    }
+  }
+
   async function processar() {
     if (!shipment) return;
+    const shipId = shipment.id;
+    const shipCode = shipment.code;
     const dest = shipment.toStoreName || shipment.toStoreCode;
     if (
       !confirm(
@@ -141,9 +180,11 @@ export default function TransferenciaPage() {
     setBusy(true);
     setMsg(null);
     try {
-      await api(`/realignment/shipments/${shipment.id}/close-and-send`, { method: 'POST' });
-      setMsg({ type: 'ok', text: `Remessa ${shipment.code} enviada — agora em trânsito para ${dest}.` });
+      await api(`/realignment/shipments/${shipId}/close-and-send`, { method: 'POST' });
+      setMsg({ type: 'ok', text: `Remessa ${shipCode} enviada para ${dest} — imprimindo capa + romaneio…` });
       setShipment(null);
+      // Imprime CAPA (A4 paisagem) + romaneio (lista de produtos) automaticamente.
+      await imprimirRemessa(shipId, shipCode);
     } catch (err: any) {
       setMsg({ type: 'err', text: err?.message || 'Falha ao processar/enviar' });
     } finally {
@@ -153,6 +194,7 @@ export default function TransferenciaPage() {
 
   const lojasDestino = stores.filter((s) => s.code !== myStoreCode);
   const totalValor = shipment?.items.reduce((sum, i) => sum + (i.precoUnitCents || 0), 0) || 0;
+  const totalPecas = shipment?.items.reduce((sum, i) => sum + (i.qtyOrigem || 1), 0) || 0;
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -241,8 +283,16 @@ export default function TransferenciaPage() {
                 </span>
               </div>
               <span className="text-xs text-slate-500">
-                {shipment.items.length} peça(s) · total <b className="text-slate-800">{brl(totalValor)}</b> · → {shipment.toStoreName || shipment.toStoreCode}
+                total <b className="text-slate-800">{brl(totalValor)}</b> · → {shipment.toStoreName || shipment.toStoreCode}
               </span>
+            </div>
+
+            {/* TOTAL DE PEÇAS — destacado */}
+            <div className="mb-3 flex items-center justify-between rounded-lg bg-slate-900 px-4 py-2.5 text-white">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300">
+                Total de peças nesta remessa
+              </span>
+              <span className="text-3xl font-black tabular-nums leading-none">{totalPecas}</span>
             </div>
 
             <div className="divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200">

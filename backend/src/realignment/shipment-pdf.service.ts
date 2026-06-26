@@ -65,11 +65,14 @@ export class ShipmentPdfService {
   private buildPdf(shipment: any, items: any[]): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       try {
+        // Documento começa em A4 PAISAGEM (página de CAPA). O romaneio (lista de
+        // produtos) vem depois em A4 retrato.
         const doc = new (PDFDocument as any)({
           size: 'A4',
-          margin: 40,
+          layout: 'landscape',
+          margin: 30,
           info: {
-            Title: `Romaneio ${shipment.code}`,
+            Title: `Remessa ${shipment.code}`,
             Author: "Lurd's Plus Size",
             Subject: `Remessa ${shipment.fromStoreCode} → ${shipment.toStoreCode}`,
           },
@@ -79,6 +82,18 @@ export class ShipmentPdfService {
         doc.on('data', (c: Buffer) => chunks.push(c));
         doc.on('end', () => resolve(Buffer.concat(chunks)));
         doc.on('error', reject);
+
+        // ── PÁGINA 1: CAPA A4 PAISAGEM ───────────────────────────
+        // Cidade destino GIGANTE + nº da remessa GRANDE + total de peças.
+        // É a folha que vai colada na caixa pra triagem visual rápida.
+        const totalPecasCapa = items.reduce(
+          (s: number, it: any) => s + (Number(it.qtyOrigem) || 1),
+          0,
+        );
+        this.drawCover(doc, shipment, totalPecasCapa);
+
+        // ── PÁGINA 2+: ROMANEIO (A4 RETRATO) ─────────────────────
+        doc.addPage({ size: 'A4', layout: 'portrait', margin: 40 });
 
         // ── CABEÇALHO ────────────────────────────────────────────
         doc
@@ -112,6 +127,13 @@ export class ShipmentPdfService {
           .fillColor(this.statusColor(shipment.status))
           .font('Helvetica-Bold')
           .text(statusLabel[shipment.status] || shipment.status.toUpperCase(), { align: 'center' });
+
+        doc.moveDown(0.4);
+        doc
+          .fontSize(14)
+          .fillColor('#0B0B0B')
+          .font('Helvetica-Bold')
+          .text(`TOTAL DE PEÇAS: ${totalPecasCapa}`, { align: 'center' });
 
         doc.moveDown(1);
 
@@ -315,6 +337,65 @@ export class ShipmentPdfService {
         reject(e);
       }
     });
+  }
+
+  /**
+   * CAPA A4 PAISAGEM — cidade destino GIGANTE + nº da remessa GRANDE + total de
+   * peças. Folha pra colar na caixa (triagem visual no recebimento).
+   */
+  private drawCover(doc: any, shipment: any, totalPecas: number) {
+    const W = doc.page.width; // ~842 (paisagem)
+    const cidade = String(shipment.toStoreName || shipment.toStoreCode || '—').toUpperCase();
+    // Cidade longa → reduz a fonte pra caber em 1 linha.
+    const cidadeFont = cidade.length > 14 ? 64 : cidade.length > 10 ? 80 : 100;
+
+    // Rótulo topo
+    doc
+      .fillColor('#5e3823')
+      .font('Helvetica-Bold')
+      .fontSize(20)
+      .text('TRANSFERÊNCIA DE MERCADORIA', 0, 46, { align: 'center', width: W });
+    doc
+      .fillColor('#999')
+      .font('Helvetica')
+      .fontSize(14)
+      .text(
+        `Origem: ${shipment.fromStoreName} (${shipment.fromStoreCode})`,
+        0,
+        78,
+        { align: 'center', width: W },
+      );
+
+    // DESTINO (rótulo) + CIDADE gigante
+    doc
+      .fillColor('#16a34a')
+      .font('Helvetica-Bold')
+      .fontSize(16)
+      .text('DESTINO', 0, 130, { align: 'center', width: W });
+    doc
+      .fillColor('#0B0B0B')
+      .font('Helvetica-Bold')
+      .fontSize(cidadeFont)
+      .text(cidade, 0, 150, { align: 'center', width: W });
+
+    // Nº DA REMESSA — grande
+    doc
+      .fillColor('#5e3823')
+      .font('Helvetica-Bold')
+      .fontSize(58)
+      .text(String(shipment.code || ''), 0, 330, { align: 'center', width: W });
+
+    // TOTAL DE PEÇAS — grande
+    doc
+      .fillColor('#0B0B0B')
+      .font('Helvetica-Bold')
+      .fontSize(44)
+      .text(
+        `${totalPecas} PEÇA${totalPecas === 1 ? '' : 'S'}`,
+        0,
+        430,
+        { align: 'center', width: W },
+      );
   }
 
   private fmtDate(d: Date | string | null): string {
