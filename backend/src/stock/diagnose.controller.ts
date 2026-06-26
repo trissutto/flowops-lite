@@ -108,4 +108,36 @@ export class DiagnoseController {
       })),
     };
   }
+
+  /**
+   * GET /diagnose/nfce-rejeitadas?secret=XXX
+   * Últimas vendas com NFC-e rejeitada: pagamentos reais (method+valor) + a
+   * seção <pag> do XML emitido. Pra diagnosticar rejeições de forma de pagamento
+   * (ex: cStat 391 cartão) sem precisar de login.
+   */
+  @Get('nfce-rejeitadas')
+  async nfceRejeitadas(@Query('secret') secret: string) {
+    this.checkSecret(secret);
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where: { nfceStatus: { in: ['rejected', 'error'] } },
+      include: { payments: { select: { method: true, valor: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 6,
+    });
+    return (sales as any[]).map((s) => {
+      const xml = String(s.nfceXml || '');
+      const pag = (xml.match(/<pag>[\s\S]*?<\/pag>/) || [''])[0];
+      return {
+        num: s.nfceNumber,
+        serie: s.nfceSerie,
+        status: s.nfceStatus,
+        motivo: s.nfceMotivo,
+        total: s.total,
+        paymentMethod: s.paymentMethod,
+        payments: s.payments,
+        pagXml: pag,
+        xmlLen: xml.length,
+      };
+    });
+  }
 }
