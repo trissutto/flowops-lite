@@ -251,10 +251,9 @@ export class ContaCorrenteService {
               lte: new Date(`${toStr}T23:59:59.999Z`),
             },
           },
-          select: { id: true, fromStoreCode: true, toStoreCode: true },
+          select: { id: true, code: true, fromStoreCode: true, toStoreCode: true, receivedAt: true },
         });
         if (ships.length) {
-          const shipMap = new Map((ships as any[]).map((s) => [s.id, s]));
           const items = await (this.prisma as any).transferOrder.findMany({
             where: { shipmentId: { in: (ships as any[]).map((s) => s.id) } },
             select: { shipmentId: true, codigoBipado: true, qtyOrigem: true, precoUnitCents: true },
@@ -275,23 +274,50 @@ export class ContaCorrenteService {
             });
             for (const g of gps as any[]) precoByCod.set(String(g.codigo), Math.round((Number(g.vendaUn) || 0) * 100));
           }
-          const pares = new Map<string, { origem: string; destino: string; qty: number; totalPreco: number }>();
+          // 1) agrega por REMESSA (REM-xxx): peças + valor cheio
+          const shipAgg = new Map<string, { pecas: number; totalReais: number }>();
           for (const it of items as any[]) {
-            const s = shipMap.get(it.shipmentId) as any;
-            if (!s) continue;
             const cents =
               it.precoUnitCents && it.precoUnitCents > 0
                 ? it.precoUnitCents
                 : precoByCod.get(String(it.codigoBipado)) || 0;
             const qty = it.qtyOrigem || 1;
+            let a = shipAgg.get(it.shipmentId);
+            if (!a) {
+              a = { pecas: 0, totalReais: 0 };
+              shipAgg.set(it.shipmentId, a);
+            }
+            a.pecas += qty;
+            a.totalReais += (cents / 100) * qty;
+          }
+          // 2) agrupa por par origem→destino, guardando as remessas (5º nível)
+          const pares = new Map<
+            string,
+            {
+              origem: string;
+              destino: string;
+              qty: number;
+              totalPreco: number;
+              transfers: Array<{ data: string; controle: string; pecas: number; valor: number }>;
+            }
+          >();
+          for (const s of ships as any[]) {
+            const a = shipAgg.get(s.id);
+            if (!a || a.pecas === 0) continue;
             const key = `${s.fromStoreCode}->${s.toStoreCode}`;
             let p = pares.get(key);
             if (!p) {
-              p = { origem: s.fromStoreCode, destino: s.toStoreCode, qty: 0, totalPreco: 0 };
+              p = { origem: s.fromStoreCode, destino: s.toStoreCode, qty: 0, totalPreco: 0, transfers: [] };
               pares.set(key, p);
             }
-            p.qty += qty;
-            p.totalPreco += (cents / 100) * qty;
+            p.qty += a.pecas;
+            p.totalPreco += a.totalReais;
+            p.transfers.push({
+              data: s.receivedAt ? new Date(s.receivedAt).toISOString().slice(0, 10) : '',
+              controle: s.code,
+              pecas: a.pecas,
+              valor: round(a.totalReais / 2.5),
+            });
           }
           let recebeu = 0;
           let mandou = 0;
@@ -306,7 +332,9 @@ export class ContaCorrenteService {
               fromTipo: tipoOf(p.origem),
               toTipo: tipoOf(p.destino),
               pecas: p.qty,
-              transfers: [] as Array<{ data: string; controle: string; pecas: number; valor: number }>,
+              transfers: p.transfers.sort(
+                (a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0) || b.valor - a.valor,
+              ),
             };
             if (!oFil && dFil) {
               recebeu += p.totalPreco; // REDE → FRANQUIA (soma)
@@ -531,11 +559,64 @@ export class ContaCorrenteService {
   async getTransferItems(input: { controle?: string; data?: string }) {
     const controle = String(input.controle || '').trim();
     if (!controle) throw new BadRequestException('controle obrigatório');
+    const round = (n: number) => Math.round(n * 100) / 100;
+    // FLOW: remessa REM-xxx → itens do TransferOrder (não vive no espelho do Giga).
+    // Agrega por código (peças + valor ÷2,5) pra exibir igual à Giga.
+    if (/^REM-/i.test(controle)) {
+      const ship = await (this.prisma as any).realignmentShipment.findFirst({
+        where: { code: controle },
+        select: { id: true },
+      });
+      if (!ship) return [];
+      const orders = await (this.prisma as any).transferOrder.findMany({
+        where: { shipmentId: ship.id },
+        select: {
+          codigoBipado: true,
+          refCode: true,
+          cor: true,
+          tamanho: true,
+          qtyOrigem: true,
+          precoUnitCents: true,
+        },
+      });
+      const faltam = Array.from(
+        new Set(
+          (orders as any[])
+            .filter((o) => !(o.precoUnitCents > 0) && o.codigoBipado)
+            .map((o) => String(o.codigoBipado)),
+        ),
+      );
+      const precoByCod = new Map<string, number>();
+      if (faltam.length) {
+        const gps = await (this.prisma as any).gigaProduto.findMany({
+          where: { codigo: { in: faltam } },
+          select: { codigo: true, vendaUn: true },
+        });
+        for (const g of gps as any[]) precoByCod.set(String(g.codigo), Math.round((Number(g.vendaUn) || 0) * 100));
+      }
+      const agg = new Map<string, { codigo: string; descricao: string; pecas: number; valor: number }>();
+      for (const o of orders as any[]) {
+        const cents =
+          o.precoUnitCents && o.precoUnitCents > 0
+            ? o.precoUnitCents
+            : precoByCod.get(String(o.codigoBipado)) || 0;
+        const qty = o.qtyOrigem || 1;
+        const codigo = String(o.codigoBipado || o.refCode || '');
+        const k = `${codigo}|${o.cor || ''}|${o.tamanho || ''}`;
+        let a = agg.get(k);
+        if (!a) {
+          a = { codigo, descricao: `${o.refCode || ''} ${o.cor || ''} ${o.tamanho || ''}`.trim(), pecas: 0, valor: 0 };
+          agg.set(k, a);
+        }
+        a.pecas += qty;
+        a.valor += round(((cents / 100) * qty) / 2.5);
+      }
+      return Array.from(agg.values()).sort((a, b) => b.valor - a.valor);
+    }
     const where: any = { controle };
     if (input.data && /^\d{4}-\d{2}-\d{2}$/.test(input.data)) {
       where.data = new Date(`${input.data}T00:00:00Z`);
     }
-    const round = (n: number) => Math.round(n * 100) / 100;
     const items = await (this.prisma as any).gigaTransferenciaItem.findMany({
       where,
       orderBy: { totalPreco: 'desc' },
