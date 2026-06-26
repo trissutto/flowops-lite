@@ -94,7 +94,7 @@ export default function FaturamentoPage() {
   const router = useRouter();
   const [from, setFrom] = useState(firstOfMonthIso());
   const [to, setTo] = useState(todayIso());
-  const [granularity, setGranularity] = useState<Granularity>('day');
+  const [granularity] = useState<Granularity>('day'); // fixo em "dia" — toggle removido
   const [data, setData] = useState<Resumo | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -282,22 +282,6 @@ export default function FaturamentoPage() {
               onChange={(e) => setTo(e.target.value)}
               className="block mt-0.5 px-3 py-1.5 border border-slate-300 rounded-md text-sm"
             />
-          </div>
-          <div>
-            <label className="text-[11px] font-bold uppercase text-slate-600 tracking-wider">Granularidade</label>
-            <div className="flex gap-0.5 mt-0.5 bg-slate-100 p-0.5 rounded-md">
-              {(['day', 'week', 'month'] as Granularity[]).map((g) => (
-                <button
-                  key={g}
-                  onClick={() => setGranularity(g)}
-                  className={`px-3 py-1 text-xs font-bold rounded ${
-                    granularity === g ? 'bg-white text-emerald-700 shadow' : 'text-slate-600'
-                  }`}
-                >
-                  {g === 'day' ? 'Dia' : g === 'week' ? 'Semana' : 'Mês'}
-                </button>
-              ))}
-            </div>
           </div>
           <button
             onClick={() => load()}
