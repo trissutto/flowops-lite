@@ -234,12 +234,97 @@ export class ContaCorrenteService {
       return { valor, detalhe, ok };
     })();
 
-    // FLOW DESLIGADO: era um cross-check redundante (a mercadoria REAL já vem do
-    // gigaWork, direto da tabela `transferencias` numa query só). Ele usava o
-    // pool de pricing (connectionLimit 2, queries em chunk) — o gargalo que
-    // travava o extrato — e na prática vinha sempre 0. Mantido como 0 fixo; se um
-    // dia precisar do cross-check, reativar SEM bater no pricing por mês.
-    const flow = { valor: 0, detalhe: [] as DetalheItem[] };
+    // MERCADORIA FLOW: transferências do Flow (TRANSFERENCIA ponto a ponto +
+    // REALINHAMENTO) RECEBIDAS no mês. Mesma cascata REDE↔FRANQUIA + ÷2,5 da
+    // Giga. Lê SÓ do Postgres (remessas/itens/espelho de produtos) — NÃO bate no
+    // pool de pricing (o gargalo que fez desligarem o flow antes).
+    const flowWork = (async () => {
+      let valor = 0;
+      let ok = true;
+      const detalhe: DetalheItem[] = [];
+      try {
+        const ships = await (this.prisma as any).realignmentShipment.findMany({
+          where: {
+            status: 'received',
+            receivedAt: {
+              gte: new Date(`${fromStr}T00:00:00Z`),
+              lte: new Date(`${toStr}T23:59:59.999Z`),
+            },
+          },
+          select: { id: true, fromStoreCode: true, toStoreCode: true },
+        });
+        if (ships.length) {
+          const shipMap = new Map((ships as any[]).map((s) => [s.id, s]));
+          const items = await (this.prisma as any).transferOrder.findMany({
+            where: { shipmentId: { in: (ships as any[]).map((s) => s.id) } },
+            select: { shipmentId: true, codigoBipado: true, qtyOrigem: true, precoUnitCents: true },
+          });
+          // Itens sem preço snapshot (realinhamento) → resolve pelo espelho giga_produto
+          const faltam = Array.from(
+            new Set(
+              (items as any[])
+                .filter((i) => !(i.precoUnitCents > 0) && i.codigoBipado)
+                .map((i) => String(i.codigoBipado)),
+            ),
+          );
+          const precoByCod = new Map<string, number>();
+          if (faltam.length) {
+            const gps = await (this.prisma as any).gigaProduto.findMany({
+              where: { codigo: { in: faltam } },
+              select: { codigo: true, vendaUn: true },
+            });
+            for (const g of gps as any[]) precoByCod.set(String(g.codigo), Math.round((Number(g.vendaUn) || 0) * 100));
+          }
+          const pares = new Map<string, { origem: string; destino: string; qty: number; totalPreco: number }>();
+          for (const it of items as any[]) {
+            const s = shipMap.get(it.shipmentId) as any;
+            if (!s) continue;
+            const cents =
+              it.precoUnitCents && it.precoUnitCents > 0
+                ? it.precoUnitCents
+                : precoByCod.get(String(it.codigoBipado)) || 0;
+            const qty = it.qtyOrigem || 1;
+            const key = `${s.fromStoreCode}->${s.toStoreCode}`;
+            let p = pares.get(key);
+            if (!p) {
+              p = { origem: s.fromStoreCode, destino: s.toStoreCode, qty: 0, totalPreco: 0 };
+              pares.set(key, p);
+            }
+            p.qty += qty;
+            p.totalPreco += (cents / 100) * qty;
+          }
+          let recebeu = 0;
+          let mandou = 0;
+          for (const p of pares.values()) {
+            const oFil = tipoOf(p.origem) === 'FILIAL';
+            const dFil = tipoOf(p.destino) === 'FILIAL';
+            const base = {
+              label: `${nomeOf(p.origem)} → ${nomeOf(p.destino)} · ${p.qty} pç`,
+              valor: round(p.totalPreco / 2.5),
+              from: nomeOf(p.origem),
+              to: nomeOf(p.destino),
+              fromTipo: tipoOf(p.origem),
+              toTipo: tipoOf(p.destino),
+              pecas: p.qty,
+              transfers: [] as Array<{ data: string; controle: string; pecas: number; valor: number }>,
+            };
+            if (!oFil && dFil) {
+              recebeu += p.totalPreco; // REDE → FRANQUIA (soma)
+              detalhe.push({ ...base, sinal: '+' });
+            } else if (oFil && !dFil) {
+              mandou += p.totalPreco; // FRANQUIA → REDE (abate)
+              detalhe.push({ ...base, sinal: '-' });
+            }
+          }
+          valor = (recebeu - mandou) / 2.5;
+        }
+      } catch (e: any) {
+        ok = false;
+        this.logger.warn(`[conta-corrente] mercadoria FLOW ${mes} indisponível: ${e?.message || e}`);
+      }
+      detalhe.sort((a, b) => b.valor - a.valor);
+      return { valor, detalhe, ok };
+    })();
 
     const royWork = (async () => {
       let royalties = 0;
@@ -278,14 +363,15 @@ export class ContaCorrenteService {
     // Giga (mercadoria) e royalties são os débitos REAIS — 1 query cada no pool
     // do ERP. Rodam juntos (2 conexões, tranquilo) com time-box generoso só pra
     // o endpoint nunca pendurar numa query presa.
-    const [giga, roy] = await Promise.all([
+    const [giga, roy, flow] = await Promise.all([
       this.withTimeout(gigaWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria GIGA ${mes}`),
       this.withTimeout(royWork, 15_000, { royalties: 0, marketing: 0, detalhe: [] as DetalheItem[], ok: false }, `royalties ${mes}`),
+      this.withTimeout(flowWork, 15_000, { valor: 0, detalhe: [] as DetalheItem[], ok: false }, `mercadoria FLOW ${mes}`),
     ]);
 
     // ok = as duas leituras do espelho (Postgres) deram certo. Leitura local não
     // dá blip; só marca falha se o Postgres em si der erro. Se !ok, não cacheia.
-    const ok = giga.ok && roy.ok;
+    const ok = giga.ok && roy.ok && flow.ok;
 
     const data = {
       mes,
@@ -382,6 +468,7 @@ export class ContaCorrenteService {
       const d = await this.debitoDoMes(mes);
       if (!d.ok) mesesIndisponiveis.push(mes);
       pushAuto(mes, `Mercadoria GIGA — ${mes}`, 'giga', d.mercadoriaGiga, d.detalheGiga);
+      pushAuto(mes, `Mercadoria FLOW — ${mes}`, 'flow', d.mercadoriaFlow, d.detalheFlow);
       pushAuto(mes, `Royalties 8% + Marketing 4% — ${mes}`, 'royalties', d.royalties + d.marketing, d.detalheRoy);
     }
 
