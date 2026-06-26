@@ -276,10 +276,22 @@ export class RealignmentShipmentService {
     // bipado — senão estoque/preço não casam (mesma lição comentada na triagem).
     const codigoReal = info.codigo;
 
-    // Estoque na origem — só ALERTA, não bloqueia (decisão do dono)
-    const detailed = await this.erp
-      .getStockBySkusDetailed([codigoReal])
-      .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
+    // Helper: NUNCA deixar uma leitura lenta do Giga travar a transferência.
+    // O Giga reconstrói tabelas (estoque/produtos) ao vivo; na janela, uma query
+    // pode pendurar. Aqui estoque é só ALERTA e preço tem espelho local — então
+    // damos timeout curto e seguimos. (Era a causa do "travando": com o lookup
+    // corrigido, o fluxo passou a CHEGAR nessas leituras lentas; a triagem não passa.)
+    const withTimeout = <T>(p: Promise<T>, ms: number, fb: T): Promise<T> =>
+      Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fb), ms))]);
+
+    // Estoque na origem — só ALERTA, não bloqueia (decisão do dono). Best-effort.
+    const detailed = await withTimeout(
+      this.erp
+        .getStockBySkusDetailed([codigoReal])
+        .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>)),
+      4000,
+      {} as Record<string, Array<{ storeCode: string; qty: number }>>,
+    );
     const origemQty =
       (detailed[codigoReal] || []).find((e) => e.storeCode === (origem as any).code)?.qty || 0;
     const alerta =
@@ -292,21 +304,26 @@ export class RealignmentShipmentService {
     const tamanho = info.tamanho ? String(info.tamanho).trim() : null;
     const descricao = (info.descricao || '').trim() || null;
 
-    // Preço CHEIO unitário (snapshot no bipe) — pricing ao vivo, fallback no
-    // espelho giga_produto. Usado na conferência e no impresso (valor inteiro).
+    // Preço CHEIO unitário (snapshot). PRIORIZA o espelho local (Postgres, rápido)
+    // pra não depender do Giga ao vivo — que é o que pendurava. Só tenta ao vivo
+    // (com timeout) se o espelho não tiver o preço.
     let precoReais = 0;
     try {
-      const pmap = await this.pricing.getPricesByCodigos([codigoReal]);
-      precoReais = pmap.get(codigoReal) || 0;
-    } catch {
-      /* ignora — cai no espelho */
-    }
-    if (!precoReais) {
       const gp = await (this.prisma as any).gigaProduto.findFirst({
         where: { codigo: codigoReal },
         select: { vendaUn: true },
       });
       precoReais = Number(gp?.vendaUn) || 0;
+    } catch {
+      /* segue pro ao vivo */
+    }
+    if (!precoReais) {
+      const pmap = await withTimeout(
+        this.pricing.getPricesByCodigos([codigoReal]).catch(() => new Map<string, number>()),
+        4000,
+        new Map<string, number>(),
+      );
+      precoReais = pmap.get(codigoReal) || 0;
     }
     const precoUnitCents = Math.round((precoReais || 0) * 100);
 
