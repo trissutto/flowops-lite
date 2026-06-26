@@ -534,11 +534,32 @@ export default function RealinhamentoPage() {
     // Pra cada REF, conta quantas famílias EXISTEM no resultado da busca.
     // Se >1 família e o usuário selecionou só algumas → amarra filtro com FAMILIA.
     // Se =1 família OU usuário selecionou TODAS as famílias → SEM filtro (todas).
+    const termo = searchTerm.trim();
     const newFilters: Record<string, string> = { ...refFilters };
     for (const ref of refsToAdd) {
-      const allFamiliasOfRef = searchResults
-        .filter((r) => r.REF === ref)
-        .map((r) => r.FAMILIA || '');
+      const rowsOfRef = searchResults.filter((r) => r.REF === ref);
+      const temFamilia = rowsOfRef.some((r) => r.FAMILIA);
+
+      // BUSCA POR DESCRIÇÃO (texto livre, SEM FAMILIA): a REF crua pode ter
+      // OUTROS produtos no catálogo do Giga (ex: 13050 = vestido ESTAMPA, mas
+      // também 13050-INV FORMA RARA, CAMISA, SOUTIEN). Sem filtro, o preview
+      // re-expande a REF inteira e cai em ambiguidade com produtos "nada a ver".
+      // Correção: amarra o filtro com as palavras DISTINTIVAS do termo buscado
+      // (tirando o próprio número da REF, que o preview já escopa). Assim o plano
+      // pega SÓ o que você procurou.
+      if (!temFamilia) {
+        const distintivas = termo
+          .split(/\s+/)
+          .filter((w) => w && w.toUpperCase() !== ref.toUpperCase())
+          .join(' ')
+          .trim();
+        if (distintivas) newFilters[ref] = distintivas;
+        else delete newFilters[ref];
+        continue;
+      }
+
+      // BUSCA POR REF (com FAMILIAS detectadas): mantém a lógica de família.
+      const allFamiliasOfRef = rowsOfRef.map((r) => r.FAMILIA || '');
       const selectedFamiliasOfRef = selectedRows
         .filter((r) => r.REF === ref)
         .map((r) => r.FAMILIA || '');
