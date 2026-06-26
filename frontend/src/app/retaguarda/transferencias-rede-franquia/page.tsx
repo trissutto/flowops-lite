@@ -526,6 +526,8 @@ interface CCExtrato {
     pendente: boolean;
     erro: string | null;
     syncing?: boolean;
+    estoqueRows?: number | null;
+    estoqueAt?: string | null;
   } | null;
 }
 
@@ -891,7 +893,12 @@ function ContaCorrente() {
             {syncing ? 'Sincronizando…' : 'Sincronizar Giga'}
           </button>
           {ext?.gigaSync?.lastOkAt && !ext.gigaSync.pendente && !syncing && (
-            <span className="text-xs text-slate-400">sincronizado {fmtSync(ext.gigaSync.lastOkAt)}</span>
+            <span className="text-xs text-slate-400">
+              sincronizado {fmtSync(ext.gigaSync.lastOkAt)}
+              {ext.gigaSync.estoqueRows != null && (
+                <> · espelho de estoque: <b>{ext.gigaSync.estoqueRows.toLocaleString('pt-BR')}</b> linhas</>
+              )}
+            </span>
           )}
         </div>
         <button
