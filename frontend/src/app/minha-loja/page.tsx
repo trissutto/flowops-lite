@@ -34,7 +34,7 @@ import {
   Clock, PlayCircle, CheckCircle2, Truck, Printer, RefreshCw,
   Wifi, WifiOff, X, LogOut, AlertCircle, Barcode, Search, History,
   Package2, ClipboardList, Shuffle, Inbox, Package, ShoppingCart,
-  Fingerprint, Zap, Radio,
+  Fingerprint, Zap, Radio, ArrowLeftRight,
 } from 'lucide-react';
 
 type PickStatus = 'new' | 'separating' | 'separated' | 'ready' | 'shipped';
@@ -891,6 +891,7 @@ function QuickActionGrid({ realignmentPending = 0, shipmentsIncoming = 0 }: { re
     { href: '/minha-loja/triagem',       icon: Package,      label: 'Triagem',        subtitle: 'Bipar',       description: 'Distribuir mercadoria',    tone: 'purple' },
     { href: '/minha-loja/materiais',     icon: Package2,     label: 'Materiais',      subtitle: 'Suprimentos', description: 'Sacolas, etiquetas…',      tone: 'amber'  },
     { href: '/minha-loja/realinhamento', icon: Shuffle,      label: 'Realinhar',      subtitle: 'Inter-lojas', description: 'Separar pra outras lojas', tone: 'sky',     badge: realignmentPending },
+    { href: '/minha-loja/transferencia', icon: ArrowLeftRight, label: 'Transferir',    subtitle: 'Ponto a ponto', description: 'Mandar pra outra loja',    tone: 'sky'    },
     { href: '/minha-loja/recebimento',   icon: Inbox,        label: 'Receber',        subtitle: 'Mercadoria',  description: 'Dar entrada de remessa',   tone: 'green',   badge: shipmentsIncoming },
     { href: '/minha-loja/ponto',         icon: Fingerprint,  label: 'Ponto',          subtitle: 'Bater',       description: 'Entrada · almoço · saída', tone: 'indigo' },
   ];

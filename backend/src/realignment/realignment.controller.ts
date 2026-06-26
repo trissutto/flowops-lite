@@ -495,6 +495,26 @@ export class RealignmentController {
   }
 
   /**
+   * TRANSFERÊNCIA PONTO A PONTO — a loja origem escolhe o destino e bipa o
+   * código. Cria a peça e linka numa remessa TRANSFERENCIA (mesmo trilho).
+   * POST /realignment/shipments/transferencia/bipar { destinoCode, codigo }
+   */
+  @Post('shipments/transferencia/bipar')
+  biparTransferencia(@Body() body: { destinoCode: string; codigo: string }, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja origem');
+    return this.shipment.biparTransferencia({
+      storeId,
+      destinoCode: body?.destinoCode,
+      codigo: body?.codigo,
+      userId: req?.user?.id || req?.user?.sub || null,
+      userName: req?.user?.name || req?.user?.email || null,
+    });
+  }
+
+  /**
    * Remove um item de uma remessa aberta (vendedora errou, quer tirar).
    * DELETE /realignment/shipments/items/:transferOrderId · filial origem
    */
