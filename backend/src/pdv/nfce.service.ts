@@ -450,12 +450,13 @@ export class NfceService {
         // próprio CNPJ + bandeira "outros (99)" — válido em todas UFs.
         let cardBlock = '';
         if (tPag === '03' || tPag === '04') {
-          // tBand=99 é "Outros" — aceito sem precisar identificar Visa/Master/etc
-          // CNPJ credenciadora: usa o CNPJ do próprio emitente como fallback
-          // genérico. Se Lurd's tiver TEF integrado depois, substitui pelo CNPJ
-          // real da credenciadora (Cielo, Stone, Rede, etc).
-          const cnpjCred = String(config.cnpj || '').replace(/\D/g, '').padStart(14, '0').slice(0, 14);
-          cardBlock = `<card><tpIntegra>2</tpIntegra><CNPJ>${cnpjCred}</CNPJ><tBand>99</tBand><cAut>0</cAut></card>`;
+          // SEM TEF integrado → tpIntegra=2 (não integrado). Nesse modo NÃO se
+          // informa CNPJ da credenciadora nem cAut (são do tpIntegra=1/integrado).
+          // BUG ANTERIOR: mandava o CNPJ do PRÓPRIO emitente como "credenciadora".
+          // A SEFAZ-SP valida que esse CNPJ é de uma credenciadora real; como não
+          // é, recusava com cStat 391 ("dados do cartão não informados"). O formato
+          // canônico sem TEF é só tpIntegra + tBand=99 ("Outros").
+          cardBlock = `<card><tpIntegra>2</tpIntegra><tBand>99</tBand></card>`;
         }
         // indPag=0 (à vista) é tecnicamente opcional, mas SEFAZ-SP PL_009
         // tem reportes de rejeição cStat 225 sem ele em algumas variantes
