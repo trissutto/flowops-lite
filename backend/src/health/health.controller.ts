@@ -12,7 +12,7 @@ export class HealthController {
     return {
       ok: true,
       service: 'flowops-backend',
-      version: 'live-lote-preco-promo-faseA-2026-06-25',
+      version: 'live-busca-ref-exata-2026-06-25',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     };

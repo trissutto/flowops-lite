@@ -233,9 +233,15 @@ export class LivePdvService {
     if (!rows.length) rows = await this.erp.searchProductsLike(q);
     if (!rows.length) return { found: false, term: q };
 
-    // Pega o 1º REF retornado (foco em 1 produto por busca, como o spec pede).
-    const firstRef = this.norm(rows[0].REF);
-    const productRows = rows.filter((r) => this.norm(r.REF) === firstRef);
+    // Foco em 1 produto. searchByRef("VLM-222") também traz "VLM-222EST" (LIKE),
+    // que é OUTRO produto (estampado). Prefere a REF que bate EXATO com o termo
+    // digitado e traz TODAS as cores dela — igual à Consulta de Produto. Se nada
+    // bate exato (busca por código/nome), cai na 1ª REF retornada.
+    const qn = this.norm(q);
+    const exact = rows.filter((r) => this.norm(r.REF) === qn);
+    const productRows = exact.length
+      ? exact
+      : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
     const ref = String(productRows[0].REF).trim();
     const descricao = productRows[0].DESCRICAOCOMPLETA || ref;
 
@@ -283,12 +289,16 @@ export class LivePdvService {
       }
     }
 
-    // 5) Foto principal (best-effort, por cor).
+    // 5) Foto principal (best-effort). PERF: só a 1ª cor é usada no photoUrl —
+    // buscar as N cores travava a busca (servidor de fotos externo/instável).
+    // Busca SÓ a 1ª cor + a genérica, em paralelo.
     const cors = Array.from(new Set(productRows.map((r) => r.COR).filter(Boolean)));
-    const photoBatch = await this.photos
-      .getBatch(cors.map((c: any) => ({ ref, cor: c })))
-      .catch(() => ({} as Record<string, string>));
-    const genericPhoto = await this.photos.getPhoto(ref).catch(() => null);
+    const [photoBatch, genericPhoto] = await Promise.all([
+      cors.length
+        ? this.photos.getBatch([{ ref, cor: cors[0] }]).catch(() => ({} as Record<string, string>))
+        : Promise.resolve({} as Record<string, string>),
+      this.photos.getPhoto(ref).catch(() => null),
+    ]);
 
     let totalRede = 0;
     const cells = Array.from(cellMap.values()).map((c: any) => {
