@@ -262,29 +262,40 @@ export class RealignmentShipmentService {
     const codigo = String(input.codigo || '').trim();
     if (!codigo) throw new BadRequestException('Código obrigatório');
 
-    // Resolve a peça pelo código bipado — MESMO método da TRIAGEM (resolveSkuInfo).
-    // BUG ANTERIOR: usava searchByCodeAndExpandRef + .find(r => r.CODIGO === codigo).
-    // Esse match EXATO falhava quando o bipado era EAN13 (a busca achava a REF pelo
-    // código de barras, mas os itens da REF têm o CODIGO interno, nunca == EAN) ou
-    // tinha padding de zero diferente → 404 "não encontrado" mesmo com a peça lá.
-    // resolveSkuInfo já trata padding + EAN13 e devolve o CODIGO REAL do Giga.
-    const info = await this.erp.resolveSkuInfo(codigo);
+    // Valida/resolve o código bipado pela MESMA rotina do PDV: getPdvProductInfo.
+    // É a validação mais batida do sistema (o PDV bipa o dia todo). Ela trata
+    // padding + EAN13, resolve o CODIGO real E JÁ DEVOLVE O PREÇO na mesma chamada.
+    // Isso elimina a chamada ao pool de preço separado (getPricesByCodigos), que
+    // era justamente o que PENDURAVA a transferência durante a reconstrução das
+    // tabelas do Giga — a triagem/PDV não passam por aquele pool, por isso iam de boa.
+    const info = await this.erp.getPdvProductInfo(codigo);
     if (!info) throw new NotFoundException(`Código ${codigo} não encontrado no Giga`);
-    if (!info.ref) throw new BadRequestException(`Código ${codigo} sem REF cadastrada no Giga`);
 
-    // CRÍTICO: daqui pra frente usar o CODIGO REAL resolvido (info.codigo), não o
-    // bipado — senão estoque/preço não casam (mesma lição comentada na triagem).
-    const codigoReal = info.codigo;
+    const codigoReal = info.sku; // CODIGO real resolvido pela rotina do PDV
+    const ref = String(info.ref || codigoReal).trim();
+    const cor = info.cor ? String(info.cor).trim() : null;
+    const tamanho = info.tamanho ? String(info.tamanho).trim() : null;
+    const descricao = (info.descricao || '').trim() || null;
 
-    // Helper: NUNCA deixar uma leitura lenta do Giga travar a transferência.
-    // O Giga reconstrói tabelas (estoque/produtos) ao vivo; na janela, uma query
-    // pode pendurar. Aqui estoque é só ALERTA e preço tem espelho local — então
-    // damos timeout curto e seguimos. (Era a causa do "travando": com o lookup
-    // corrigido, o fluxo passou a CHEGAR nessas leituras lentas; a triagem não passa.)
+    // Preço já vem da rotina do PDV. Fallback no espelho local (Postgres) se vier 0.
+    // Transferência NÃO bloqueia por preço (é só snapshot pra conferência/impresso).
+    let precoReais = Number(info.preco) || 0;
+    if (!precoReais) {
+      try {
+        const gp = await (this.prisma as any).gigaProduto.findFirst({
+          where: { codigo: codigoReal },
+          select: { vendaUn: true },
+        });
+        precoReais = Number(gp?.vendaUn) || 0;
+      } catch {
+        /* sem preço — segue */
+      }
+    }
+
+    // Estoque na origem — só ALERTA, não bloqueia. Best-effort com timeout curto
+    // pra NUNCA travar (Giga reconstrói tabelas ao vivo e a query pode pendurar).
     const withTimeout = <T>(p: Promise<T>, ms: number, fb: T): Promise<T> =>
       Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fb), ms))]);
-
-    // Estoque na origem — só ALERTA, não bloqueia (decisão do dono). Best-effort.
     const detailed = await withTimeout(
       this.erp
         .getStockBySkusDetailed([codigoReal])
@@ -298,33 +309,6 @@ export class RealignmentShipmentService {
       origemQty < 1
         ? `Atenção: a loja origem (${(origem as any).code}) não tem estoque dessa peça — bipe permitido mesmo assim.`
         : null;
-
-    const ref = String(info.ref || codigoReal).trim();
-    const cor = info.cor ? String(info.cor).trim() : null;
-    const tamanho = info.tamanho ? String(info.tamanho).trim() : null;
-    const descricao = (info.descricao || '').trim() || null;
-
-    // Preço CHEIO unitário (snapshot). PRIORIZA o espelho local (Postgres, rápido)
-    // pra não depender do Giga ao vivo — que é o que pendurava. Só tenta ao vivo
-    // (com timeout) se o espelho não tiver o preço.
-    let precoReais = 0;
-    try {
-      const gp = await (this.prisma as any).gigaProduto.findFirst({
-        where: { codigo: codigoReal },
-        select: { vendaUn: true },
-      });
-      precoReais = Number(gp?.vendaUn) || 0;
-    } catch {
-      /* segue pro ao vivo */
-    }
-    if (!precoReais) {
-      const pmap = await withTimeout(
-        this.pricing.getPricesByCodigos([codigoReal]).catch(() => new Map<string, number>()),
-        4000,
-        new Map<string, number>(),
-      );
-      precoReais = pmap.get(codigoReal) || 0;
-    }
     const precoUnitCents = Math.round((precoReais || 0) * 100);
 
     // Cria o TransferOrder ad-hoc (tipo TRANSFERENCIA) — 1 peça por bipe (cada
