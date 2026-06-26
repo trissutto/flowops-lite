@@ -988,7 +988,7 @@ function PdvPageInner() {
   };
 
   // ── Atualizar qty/desconto do item ──
-  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number }) => {
+  const updateItem = async (itemId: string, patch: { qty?: number; desconto?: number; excludePromo?: boolean }) => {
     if (!sale) return;
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item):
     // 0–7% livre · >7–10% CAIXA · >10% GERENTE + justificativa. Campanha ativa bloqueia.
@@ -1032,6 +1032,15 @@ function PdvPageInner() {
           } else {
             toast('info', 'Desconto removido', item.descricao || item.ref || item.sku);
           }
+        }
+      }
+      // Feedback de exclusão/inclusão na promoção
+      if (patch.excludePromo != null) {
+        const item = fresh.items.find((i) => i.id === itemId);
+        if (patch.excludePromo) {
+          toast('info', 'Item fora da promoção', `${item?.descricao || item?.ref || item?.sku} — desconto removido`);
+        } else {
+          toast('success', 'Item de volta na promoção', item?.descricao || item?.ref || item?.sku);
         }
       }
     } catch (e: any) {
@@ -2076,15 +2085,21 @@ function PdvPageInner() {
                     {it.promoTag && (
                       <span
                         className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                          it.promoTag.includes('4 LEVA 3')
+                          it.promoTag === 'SEM_PROMO'
+                            ? 'bg-slate-200 text-slate-600 border border-slate-300'
+                            : it.promoTag.includes('4 LEVA 3')
                             ? 'bg-[#0B0B0B] text-[#D4AF37] border border-[#0B0B0B]'
                             : it.promoTag === 'MANUAL'
                             ? 'bg-black text-[#D4AF37] border border-[#D4AF37]/50'
                             : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
                         }`}
-                        title={`Desconto: ${brl(it.desconto)}`}
+                        title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
                       >
-                        {it.promoTag === 'MANUAL' ? '✏️ MANUAL' : `🎁 ${it.promoTag}`}
+                        {it.promoTag === 'SEM_PROMO'
+                          ? '🚫 Fora da promo'
+                          : it.promoTag === 'MANUAL'
+                          ? '✏️ MANUAL'
+                          : `🎁 ${it.promoTag}`}
                       </span>
                     )}
                   </div>
@@ -2140,6 +2155,26 @@ function PdvPageInner() {
                       >
                         <Percent className="w-3 h-3" />
                       </button>
+                      {/* Tirar/voltar item da PROMOÇÃO ativa (peça que não participa).
+                          Só aparece com campanha ativa e item que tem promo OU já foi excluído. */}
+                      {sale.activePromotion && sale.activePromotion !== 'NONE' &&
+                        (it.promoTag === 'SEM_PROMO' || (it.desconto > 0 && /^(PROMO|4 LEVA)/.test(it.promoTag || ''))) && (
+                        <button
+                          onClick={() => updateItem(it.id, { excludePromo: it.promoTag !== 'SEM_PROMO' })}
+                          className={`w-6 h-6 rounded flex items-center justify-center text-[11px] leading-none transition active:scale-95 ${
+                            it.promoTag === 'SEM_PROMO'
+                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                              : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                          }`}
+                          title={
+                            it.promoTag === 'SEM_PROMO'
+                              ? 'Incluir este item na promoção'
+                              : 'Tirar este item da promoção (não participa)'
+                          }
+                        >
+                          {it.promoTag === 'SEM_PROMO' ? '🎁' : '🚫'}
+                        </button>
+                      )}
                       <button
                         onClick={() => removeItem(it.id)}
                         className="w-6 h-6 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"

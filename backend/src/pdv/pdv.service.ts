@@ -1089,7 +1089,7 @@ export class PdvService {
     return { ok: true, item };
   }
 
-  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string }) {
+  async updateItem(input: { saleId: string; itemId: string; qty?: number; desconto?: number; password?: string; motivo?: string; excludePromo?: boolean }) {
     const item = await (this.prisma as any).pdvSaleItem.findUnique({
       where: { id: input.itemId },
     });
@@ -1104,31 +1104,47 @@ export class PdvService {
     if (sale.status !== 'open') throw new BadRequestException('Venda já fechada');
 
     const newQty = input.qty != null ? Math.max(1, Math.min(99, input.qty)) : item.qty;
-    const newDesconto = input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
+
+    // EXCLUSÃO DA PROMOÇÃO POR ITEM (pedido da loja): peça que NÃO participa da
+    // campanha. excludePromo=true → zera o desconto e TRAVA como 'SEM_PROMO', que
+    // o applyAutoDiscounts preserva (não re-aplica os 50%). É REMOVER desconto,
+    // então é permitido MESMO com campanha ativa e NÃO exige senha. excludePromo
+    // =false → re-inclui na promoção (volta ao automático, tag null).
+    const excluindoPromo = input.excludePromo === true;
+    const reincluindoPromo = input.excludePromo === false;
+
+    const newDesconto = excluindoPromo
+      ? 0
+      : input.desconto != null ? Math.max(0, input.desconto) : (item.desconto || 0);
     const bruto = item.precoUnit * newQty;
     if (newDesconto > bruto) {
       throw new BadRequestException(`Desconto (${newDesconto.toFixed(2)}) maior que o total do item (${bruto.toFixed(2)})`);
     }
 
-    // Se usuário definiu desconto MANUAL (>0) via PATCH, marca com tag
-    // "MANUAL" pra applyAutoDiscounts não sobrescrever depois. Se zerou
-    // o desconto, deixa tag null (volta ao automático).
-    const isManualDiscount = input.desconto != null && newDesconto > 0;
+    // Desconto MANUAL (>0) — só conta como manual se NÃO está excluindo/reincluindo
+    // a promoção. marca 'MANUAL' pra applyAutoDiscounts não sobrescrever.
+    const isManualDiscount =
+      !excluindoPromo && !reincluindoPromo && input.desconto != null && newDesconto > 0;
 
     // MD-1: desconto manual por item em faixas (% sobre o BRUTO do item).
     //   0–7% livre · >7–10% senha CAIXA · >10% senha GERENTE + justificativa.
-    //   Campanha ativa → bloqueia (prevalece a promoção).
+    //   Campanha ativa → bloqueia desconto avulso ADICIONAL (prevalece a promoção).
+    //   Pra TIRAR a promoção de um item, usa-se excludePromo (acima), sem senha.
     if (isManualDiscount) {
       if (sale.activePromotion && sale.activePromotion !== 'NONE') {
         throw new BadRequestException(
-          'Promoção/campanha ativa — desconto avulso por item bloqueado (prevalece o desconto da campanha).',
+          'Promoção ativa — desconto avulso por item bloqueado. Pra tirar a promoção de uma peça que não participa, use "Remover desconto" (sem senha).',
         );
       }
       const pct = bruto > 0 ? (newDesconto / bruto) * 100 : 0;
       this.requireDiscountAuth(pct, input.password, input.motivo);
     }
 
-    const newTag = isManualDiscount
+    const newTag = excluindoPromo
+      ? 'SEM_PROMO'
+      : reincluindoPromo
+      ? null
+      : isManualDiscount
       ? 'MANUAL'
       : input.desconto != null && newDesconto === 0
       ? null
@@ -1266,10 +1282,11 @@ export class PdvService {
     // Função pra zerar promo automática de todos itens (preserva desconto manual? não — autodesconto sobrescreve)
     const updates: Array<{ id: string; desconto: number; total: number; tag: string | null }> = [];
 
-    // Helper: item com promoTag='MANUAL' tem desconto fixado pela vendedora.
-    // applyAutoDiscounts NUNCA sobrescreve esses — promoção automática só
-    // mexe em itens sem manual.
-    const isManual = (it: any) => it.promoTag === 'MANUAL';
+    // Helper: itens "travados" que a promoção automática NUNCA toca:
+    //   - promoTag='MANUAL'    → desconto fixado pela vendedora.
+    //   - promoTag='SEM_PROMO' → peça que a loja tirou da campanha (não participa).
+    // Promoção automática só mexe nos demais.
+    const isManual = (it: any) => it.promoTag === 'MANUAL' || it.promoTag === 'SEM_PROMO';
 
     if (activePromotion === 'NONE' || !activePromotion) {
       // Zera tudo (apenas resetando o que veio de promo automática)
