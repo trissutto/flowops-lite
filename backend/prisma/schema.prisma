@@ -243,6 +243,9 @@ model RealignmentShipment {
   fromStoreName     String   @map("from_store_name")
   toStoreCode       String   @map("to_store_code")
   toStoreName       String   @map("to_store_name")
+  // REALINHAMENTO (triagem automática) | TRANSFERENCIA (ponto a ponto manual).
+  // Separa as caixas pra não misturar manual com automático.
+  tipo              String   @default("REALINHAMENTO")
   // Status: open | in_transit | received | cancelled
   status            String   @default("open")
   // Timestamps por etapa
@@ -916,6 +919,10 @@ model TransferOrder {
   cor               String?                                // ex: PRETO (null = cor não especificada no pedido)
   tamanho           String?                                // ex: 46    (null = tamanho não especificado)
   qtyOrigem         Int      @map("qty_origem")          // qtd na loja de origem no momento do pedido
+  // Preço CHEIO unitário (centavos), snapshot no bipe. Usado na conferência da
+  // transferência e no impresso (valor inteiro, p/ bater com a etiqueta). O ÷2,5
+  // do acerto da franquia é aplicado só na tela de Franquias.
+  precoUnitCents    Int?     @map("preco_unit_cents")
   // Loja que VAI MANDAR (origem)
   lojaOrigemCode    String   @map("loja_origem_code")
   lojaOrigemName    String   @map("loja_origem_name")

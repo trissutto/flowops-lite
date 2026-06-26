@@ -12,7 +12,7 @@ export class HealthController {
     return {
       ok: true,
       service: 'flowops-backend',
-      version: 'espelho-estoque-passo2-fallback-busca-2026-06-25',
+      version: 'transferencia-ponto-a-ponto-2026-06-26',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     };

@@ -77,6 +77,7 @@ export class RealignmentShipmentService {
     toStoreCode: string;
     toStoreName: string;
     openedByUserId?: string | null;
+    tipo?: string;
   }): Promise<any> {
     let lastErr: any = null;
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -89,6 +90,7 @@ export class RealignmentShipmentService {
             fromStoreName: data.fromStoreName,
             toStoreCode: data.toStoreCode,
             toStoreName: data.toStoreName,
+            tipo: data.tipo ?? 'REALINHAMENTO',
             status: 'open',
             openedByUserId: data.openedByUserId ?? null,
           },
@@ -139,6 +141,7 @@ export class RealignmentShipmentService {
             tamanho: true,
             qtyOrigem: true,
             descricao: true,
+            precoUnitCents: true,
           } as any,
         });
         return { ...s, items };
@@ -227,6 +230,146 @@ export class RealignmentShipmentService {
     });
 
     return { ok: true, shipmentId: shipment.id, shipmentCode: shipment.code, transferOrderId: (updated as any).id };
+  }
+
+  /**
+   * TRANSFERÊNCIA PONTO A PONTO (manual): a loja ORIGEM escolhe o DESTINO e
+   * BIPA o código. Resolve a peça no Giga, cria um TransferOrder ad-hoc
+   * (tipo TRANSFERENCIA) e linka numa remessa TRANSFERENCIA do par origem→
+   * destino (separada das caixas de realinhamento). Estoque insuficiente na
+   * origem só ALERTA (não bloqueia). Daí pra frente é o MESMO trilho do
+   * realinhamento (fechar/enviar = closeAndSend, conferência por bip no destino).
+   */
+  async biparTransferencia(input: {
+    storeId: string;
+    destinoCode: string;
+    codigo: string;
+    userId?: string | null;
+    userName?: string | null;
+  }) {
+    const origem = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { id: true, code: true, name: true } as any,
+    });
+    if (!origem) throw new ForbiddenException('Loja inválida');
+    const destino = await this.prisma.store.findFirst({
+      where: { code: input.destinoCode, active: true } as any,
+      select: { code: true, name: true } as any,
+    });
+    if (!destino) throw new NotFoundException('Loja destino não encontrada');
+    if ((destino as any).code === (origem as any).code)
+      throw new BadRequestException('Origem e destino são a mesma loja');
+    const codigo = String(input.codigo || '').trim();
+    if (!codigo) throw new BadRequestException('Código obrigatório');
+
+    // Resolve a peça pelo código bipado
+    const rows = await this.erp.searchByCodeAndExpandRef(codigo).catch(() => [] as any[]);
+    const row = (rows as any[]).find((r) => String(r.CODIGO || '').trim() === codigo);
+    if (!row) throw new NotFoundException(`Código ${codigo} não encontrado no Giga`);
+
+    // Estoque na origem — só ALERTA, não bloqueia (decisão do dono)
+    const detailed = await this.erp
+      .getStockBySkusDetailed([codigo])
+      .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
+    const origemQty =
+      (detailed[codigo] || []).find((e) => e.storeCode === (origem as any).code)?.qty || 0;
+    const alerta =
+      origemQty < 1
+        ? `Atenção: a loja origem (${(origem as any).code}) não tem estoque dessa peça — bipe permitido mesmo assim.`
+        : null;
+
+    const ref = String(row.REF || codigo).trim();
+    const cor = row.COR ? String(row.COR).trim() : null;
+    const tamanho = row.TAMANHO ? String(row.TAMANHO).trim() : null;
+
+    // Preço CHEIO unitário (snapshot no bipe) — pricing ao vivo, fallback no
+    // espelho giga_produto. Usado na conferência e no impresso (valor inteiro).
+    let precoReais = 0;
+    try {
+      const pmap = await this.pricing.getPricesByCodigos([codigo]);
+      precoReais = pmap.get(codigo) || 0;
+    } catch {
+      /* ignora — cai no espelho */
+    }
+    if (!precoReais) {
+      const gp = await (this.prisma as any).gigaProduto.findFirst({
+        where: { codigo },
+        select: { vendaUn: true },
+      });
+      precoReais = Number(gp?.vendaUn) || 0;
+    }
+    const precoUnitCents = Math.round((precoReais || 0) * 100);
+
+    // Cria o TransferOrder ad-hoc (tipo TRANSFERENCIA) — 1 peça por bipe (cada
+    // unidade vira uma linha; não soma SKU igual).
+    const order = await this.prisma.transferOrder.create({
+      data: {
+        tipo: 'TRANSFERENCIA',
+        refCode: ref,
+        codigoBipado: codigo,
+        descricao: (row.DESCRICAOCOMPLETA || '').trim() || null,
+        cor,
+        tamanho,
+        qtyOrigem: 1,
+        precoUnitCents,
+        lojaOrigemCode: (origem as any).code,
+        lojaOrigemName: (origem as any).name,
+        lojaDestinoCode: (destino as any).code,
+        lojaDestinoName: (destino as any).name,
+        solicitanteNome: input.userName || 'Operador',
+        mensagem: `📦 TRANSFERÊNCIA — ${(origem as any).code}→${(destino as any).code}: ${ref} ${cor || ''} ${tamanho || ''}`.trim(),
+        createdByUserId: input.userId ?? null,
+        realignmentStatus: 'pending',
+      } as any,
+    });
+
+    // Acha/cria a remessa ABERTA de TRANSFERENCIA do par origem→destino
+    let shipment = await (this.prisma as any).realignmentShipment.findFirst({
+      where: {
+        fromStoreCode: (origem as any).code,
+        toStoreCode: (destino as any).code,
+        status: 'open',
+        tipo: 'TRANSFERENCIA',
+      },
+    });
+    if (!shipment) {
+      shipment = await this.createShipmentWithRetry({
+        fromStoreCode: (origem as any).code,
+        fromStoreName: (origem as any).name,
+        toStoreCode: (destino as any).code,
+        toStoreName: (destino as any).name,
+        openedByUserId: input.userId ?? null,
+        tipo: 'TRANSFERENCIA',
+      });
+    }
+
+    // Linka a ordem na remessa (mesma marcação do realinhamento)
+    await this.prisma.transferOrder.update({
+      where: { id: order.id },
+      data: {
+        realignmentStatus: 'sent',
+        realignmentSentAt: new Date(),
+        realignmentSentByUserId: input.userId ?? null,
+        shipmentId: shipment.id,
+      } as any,
+    });
+
+    return {
+      ok: true,
+      shipmentId: shipment.id,
+      shipmentCode: shipment.code,
+      alerta,
+      item: {
+        id: order.id,
+        codigo,
+        ref,
+        descricao: order.descricao,
+        cor,
+        tamanho,
+        precoUnitCents,
+        estoqueOrigem: origemQty,
+      },
+    };
   }
 
   /**
