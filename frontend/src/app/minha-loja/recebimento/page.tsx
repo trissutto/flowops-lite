@@ -258,6 +258,43 @@ export default function RecebimentoPage() {
     }
   }, [selected, loadShipments]);
 
+  // "Dar entrada SEM bipar" — pra quando a loja JÁ guardou e esqueceu de bipar.
+  // Marca TODAS as pendentes como recebidas e dá entrada no Giga, sem conferir
+  // peça a peça. Pede confirmação explícita (não tem como desfazer).
+  const handleReceberTudoSemBipar = useCallback(async () => {
+    if (!selected) return;
+    const pendingCount = selected.items.filter(
+      (i) => i.realignmentStatus !== 'received' && i.realignmentStatus !== 'missing',
+    ).length;
+    if (pendingCount === 0) {
+      alert('Não há itens pendentes — use "Dar Entrada" normal.');
+      return;
+    }
+    if (!confirm(
+      `DAR ENTRADA SEM BIPAR em ${selected.code}?\n\n` +
+      `Vai marcar as ${pendingCount} peça(s) pendentes como RECEBIDAS e dar entrada ` +
+      `no estoque do Giga — SEM conferir peça a peça.\n\n` +
+      `Use só se você JÁ guardou a mercadoria e tem certeza que chegou tudo. NÃO pode desfazer.`
+    )) return;
+    setConfirming(true);
+    try {
+      const res = await api<{ ok: boolean; receivedItems: number; missingItems: number }>(
+        `/realignment/shipments/${selected.id}/receber-tudo-sem-bipar`,
+        { method: 'POST', body: '{}' },
+      );
+      alert(
+        `✅ Remessa ${selected.code} recebida (sem bipar)!\n\n` +
+          `${res.receivedItems} itens entraram no estoque.`,
+      );
+      setSelected(null);
+      await loadShipments();
+    } catch (e: any) {
+      alert(`Erro: ${e?.message}`);
+    } finally {
+      setConfirming(false);
+    }
+  }, [selected, loadShipments]);
+
   // ── Render ──
   if (loading) {
     return (
@@ -396,6 +433,19 @@ export default function RecebimentoPage() {
                 ? `Dar Entrada (${receivedCount} pç → estoque)`
                 : `Bipe ou marque os ${pendingCount} pendentes pra liberar`}
           </button>
+
+          {/* Atalho: dar entrada SEM bipar (loja já guardou e esqueceu de bipar) */}
+          {pendingCount > 0 && (
+            <button
+              type="button"
+              onClick={handleReceberTudoSemBipar}
+              disabled={confirming}
+              className="w-full mt-2 py-3 rounded-2xl text-sm font-bold border-2 border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 flex items-center justify-center gap-2"
+              title="Marca TODAS as pendentes como recebidas e dá entrada, sem conferir peça a peça"
+            >
+              ⚠️ Dar entrada SEM bipar — recebi tudo ({pendingCount} pç)
+            </button>
+          )}
         </main>
 
         {/* ─── CELEBRAÇÃO 100% PERFEITO ─── */}

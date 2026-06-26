@@ -1856,6 +1856,52 @@ export class RealignmentShipmentService {
   }
 
   /**
+   * "Dar entrada SEM bipar" — marca TODOS os itens pendentes da remessa como
+   * recebidos (sem conferência peça a peça) e finaliza a entrada (estoque Giga).
+   *
+   * Usado quando a loja JÁ guardou a mercadoria e esqueceu de bipar no
+   * recebimento. Bypassa a conferência física — confia que tudo chegou. Mantém o
+   * codigoBipado que veio da ORIGEM (resolvido no bipe de envio), então a entrada
+   * Giga funciona normal. Loga warning pra auditoria.
+   */
+  async receberTudoSemBipar(input: { shipmentId: string; storeId: string; userId?: string }) {
+    const store = await this.prisma.store.findUnique({
+      where: { id: input.storeId },
+      select: { code: true } as any,
+    });
+    if (!store) throw new ForbiddenException('Loja inválida');
+
+    const shipment = await (this.prisma as any).realignmentShipment.findUnique({
+      where: { id: input.shipmentId },
+    });
+    if (!shipment) throw new NotFoundException('Remessa não encontrada');
+    if (shipment.toStoreCode !== (store as any).code)
+      throw new ForbiddenException('Essa remessa não é da sua loja');
+    if (shipment.status !== 'in_transit')
+      throw new BadRequestException(`Remessa não está em trânsito (status=${shipment.status})`);
+
+    // Marca TODOS os itens ainda pendentes (sent) como recebidos. Mantém o
+    // codigoBipado salvo na origem — a entrada Giga (confirmReceived) usa ele.
+    const r = await this.prisma.transferOrder.updateMany({
+      where: {
+        shipmentId: shipment.id,
+        realignmentStatus: { notIn: ['received', 'missing'] },
+      } as any,
+      data: {
+        realignmentStatus: 'received',
+        realignmentReceivedAt: new Date(),
+        realignmentReceivedByUserId: input.userId ?? null,
+      } as any,
+    });
+    this.logger.warn(
+      `[shipment] ${shipment.code}: ENTRADA SEM BIPAR — ${r.count} item(ns) marcados 'received' SEM conferência (user=${input.userId || '-'})`,
+    );
+
+    // Finaliza: aplica entrada Giga de TODOS os recebidos + fecha a remessa.
+    return this.confirmReceived(input);
+  }
+
+  /**
    * "Dar Entrada" — finaliza o recebimento da remessa.
    *
    * Pré-condição: TODOS itens da remessa devem ter status final

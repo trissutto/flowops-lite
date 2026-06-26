@@ -653,6 +653,21 @@ export class RealignmentController {
     return this.shipment.confirmReceived({ shipmentId: id, storeId, userId });
   }
 
+  /**
+   * "Dar entrada SEM bipar" — marca TODOS os itens como recebidos (sem conferir
+   * peça a peça) e finaliza a entrada. Pra quando a loja JÁ guardou e esqueceu de
+   * bipar. POST /realignment/shipments/:id/receber-tudo-sem-bipar · filial destino
+   */
+  @Post('shipments/:id/receber-tudo-sem-bipar')
+  receberTudoSemBipar(@Param('id') id: string, @Req() req: any) {
+    const role = req?.user?.role;
+    const storeId = req?.user?.storeId;
+    const userId = req?.user?.id || req?.user?.sub || null;
+    if (role !== 'store' || !storeId)
+      throw new ForbiddenException('Apenas loja destino');
+    return this.shipment.receberTudoSemBipar({ shipmentId: id, storeId, userId });
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // TRIAGEM DO PROVADOR
   // ════════════════════════════════════════════════════════════════════
