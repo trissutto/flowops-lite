@@ -202,10 +202,13 @@ export default function FaturamentoPage() {
     load(true); // FORÇA refresh — limpa cache pra estorno aparecer na hora
   };
 
+  // Carrega no mount E sempre que QUALQUER filtro muda (datas, atalhos,
+  // granularidade) — antes a granularidade não recarregava e dava a impressão
+  // de que os filtros "não funcionavam". load() não altera esses estados → sem loop.
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [from, to, granularity]);
 
   // Formata bucket pro eixo X do gráfico
   const chartData = useMemo(() => {
