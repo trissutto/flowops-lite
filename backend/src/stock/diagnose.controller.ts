@@ -125,7 +125,7 @@ export class DiagnoseController {
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: { nfceStatus: { in: ['rejected', 'error'] } },
       include: { payments: { select: { method: true, valor: true } } },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { createdAt: 'desc' },
       take: 6,
     });
     return (sales as any[]).map((s) => {
