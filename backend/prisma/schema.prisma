@@ -3450,3 +3450,17 @@ model GigaProduto {
   @@index([ref])
   @@map("giga_produto")
 }
+
+// Espelho do ESTOQUE do Giga por loja (CODIGO x LOJA). Usado como FALLBACK na
+// Live quando o Giga ao vivo cai — nunca como fonte primária (estoque exato é
+// sempre o ao vivo). Sync de hora em hora (full replace).
+model GigaEstoque {
+  id       String   @id @default(cuid())
+  codigo   String
+  loja     String
+  estoque  Int
+  syncedAt DateTime @default(now()) @map("synced_at")
+
+  @@index([codigo])
+  @@map("giga_estoque")
+}

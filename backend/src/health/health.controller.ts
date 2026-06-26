@@ -12,7 +12,7 @@ export class HealthController {
     return {
       ok: true,
       service: 'flowops-backend',
-      version: 'live-reserva-sem-expiracao-auto-2026-06-25',
+      version: 'espelho-estoque-passo1-tabela-sync-2026-06-25',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     };

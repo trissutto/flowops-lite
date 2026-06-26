@@ -107,6 +107,14 @@ export class GigaMirrorService implements OnModuleInit {
       } else {
         this.logger.log('sync produtos pulado (sincronizado há < 6h)');
       }
+      // Estoque muda rápido → re-sincroniza TODA hora (full replace).
+      try {
+        const n = await this.syncEstoque();
+        this.logger.log(`espelho giga_estoque: ${n} linhas`);
+      } catch (e: any) {
+        this.logger.error(`sync estoque falhou (espelho preservado): ${e?.message || e}`);
+        await this.setState('estoque', null, String(e?.message || e));
+      }
     } finally {
       this.syncing = false;
     }
@@ -214,6 +222,24 @@ export class GigaMirrorService implements OnModuleInit {
       { timeout: 180_000, maxWait: 20_000 },
     );
     await this.setState('produto', data.length, null);
+    return data.length;
+  }
+
+  private async syncEstoque(): Promise<number> {
+    const rows = await this.erp.getGigaEstoque();
+    // Vazio = Giga indisponível (sempre há estoque na rede) → NÃO zera o espelho.
+    if (!rows.length) throw new Error('getGigaEstoque vazio — espelho preservado');
+    const data = rows.map((r) => ({ codigo: r.codigo, loja: r.loja, estoque: r.estoque }));
+    await this.prisma.$transaction(
+      async (tx) => {
+        await (tx as any).gigaEstoque.deleteMany({});
+        for (let i = 0; i < data.length; i += 2000) {
+          await (tx as any).gigaEstoque.createMany({ data: data.slice(i, i + 2000) });
+        }
+      },
+      { timeout: 180_000, maxWait: 20_000 },
+    );
+    await this.setState('estoque', data.length, null);
     return data.length;
   }
 
