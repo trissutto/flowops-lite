@@ -97,21 +97,28 @@ export default function NotasEmitidasPage() {
   async function executarReemissao() {
     if (!fixTarget) return;
     const doc = fixDoc.replace(/\D/g, '');
-    if (doc.length !== 11 && doc.length !== 14) {
-      setFixError('Documento inválido — informe 11 dígitos (CPF) ou 14 (CNPJ).');
+    // CPF é OPCIONAL: pode tirar nota sem CPF (consumidor não identificado).
+    // Se informar, tem que ser 11 (CPF) ou 14 (CNPJ).
+    if (doc && doc.length !== 11 && doc.length !== 14) {
+      setFixError('Documento inválido — 11 dígitos (CPF), 14 (CNPJ), ou deixe em branco pra nota sem CPF.');
       return;
     }
     setFixSaving(true);
     setFixError(null);
     setFixResult(null);
     try {
-      // 1) Corrige o documento (e nome) da venda. Permitido porque a NFC-e
-      //    está rejeitada (ainda não autorizada pela SEFAZ).
-      await api(`/pdv/sales/${fixTarget.id}/customer`, {
-        method: 'PATCH',
-        body: JSON.stringify({ cpf: doc, ...(fixName.trim() ? { name: fixName.trim() } : {}) }),
-      });
-      // 2) Reemite a NFC-e (gera novo número e transmite pra SEFAZ).
+      // 1) Atualiza CPF/nome SE informado (permitido enquanto a nota não foi
+      //    autorizada). Em branco → emite sem destinatário.
+      if (doc || fixName.trim()) {
+        await api(`/pdv/sales/${fixTarget.id}/customer`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            ...(doc ? { cpf: doc } : {}),
+            ...(fixName.trim() ? { name: fixName.trim() } : {}),
+          }),
+        });
+      }
+      // 2) Emite/reemite a NFC-e (transmite pra SEFAZ).
       const r = await api<any>(`/pdv/sales/${fixTarget.id}/nfce`, { method: 'POST' });
       if (r?.status === 'authorized') {
         setFixResult({ ok: true, msg: `NFC-e ${r.numero || ''} autorizada!` });
@@ -377,15 +384,19 @@ export default function NotasEmitidasPage() {
                 <td className="p-2 text-xs">{formatDate(r.nfceAutorizadaEm)}</td>
                 <td className="p-2">
                   <div className="flex gap-1 justify-end items-center">
-                    {/* Corrigir CPF/CNPJ e reemitir — só pra rejeitadas */}
-                    {(r.nfceStatus === 'rejected' || r.nfceStatus === 'error') && (
+                    {/* Tirar nota / Corrigir & reemitir — qualquer venda que ainda
+                        NÃO tem NFC-e autorizada (preview, skipped, rejeitada). É o
+                        caminho pra emitir DEPOIS quando a tela do PIX fechou antes. */}
+                    {r.nfceStatus !== 'authorized' && r.nfceStatus !== 'cancelled' && !r.nfceCanceladaEm && (
                       <button
                         onClick={() => abrirCorrecao(r)}
                         className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-xs font-bold border border-amber-300 flex items-center gap-1"
-                        title="Corrigir CPF/CNPJ do cliente e reemitir a NFC-e"
+                        title="Adicionar CPF (opcional) e tirar a NFC-e desta venda"
                       >
                         <AlertCircle className="w-3 h-3" />
-                        Corrigir &amp; reemitir
+                        {r.nfceStatus === 'rejected' || r.nfceStatus === 'error'
+                          ? 'Corrigir & reemitir'
+                          : 'Tirar nota'}
                       </button>
                     )}
                     {/* Reimprimir NFC-e (cupom fiscal) — só pra autorizadas */}
@@ -484,7 +495,10 @@ export default function NotasEmitidasPage() {
           <div className="bg-white rounded-lg w-full max-w-md p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-lg flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-amber-600" /> Corrigir &amp; reemitir
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+                {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error'
+                  ? 'Corrigir & reemitir'
+                  : 'Tirar nota desta venda'}
               </h3>
               <button onClick={() => setFixTarget(null)} disabled={fixSaving}>
                 <X className="w-5 h-5" />
@@ -496,10 +510,14 @@ export default function NotasEmitidasPage() {
               <div className="flex justify-between"><span>Doc. atual:</span><b className="font-mono">{fixTarget.customerCpf || '—'}</b></div>
             </div>
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900">
-              A nota foi <b>rejeitada</b> pela SEFAZ. Corrija o <b>CPF</b> (11 díg.) ou <b>CNPJ</b> (14 díg.) do cliente e reemita. Gera um novo número.
+              {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? (
+                <>A nota foi <b>rejeitada</b> pela SEFAZ. Corrija o CPF/CNPJ e reemita.</>
+              ) : (
+                <>Essa venda ainda <b>não tem NFC-e</b> (a tela do PIX fechou antes, etc). Adicione o CPF se quiser e clique em <b>Tirar nota</b> pra emitir agora.</>
+              )}
             </div>
             <div>
-              <label className="text-xs font-bold text-slate-700 uppercase block mb-1">CPF / CNPJ do cliente</label>
+              <label className="text-xs font-bold text-slate-700 uppercase block mb-1">CPF / CNPJ do cliente (opcional)</label>
               <input
                 value={fixDoc}
                 onChange={(e) => setFixDoc(e.target.value)}
@@ -509,7 +527,7 @@ export default function NotasEmitidasPage() {
                 className="w-full border rounded p-2 text-sm font-mono"
               />
               <div className="text-[10px] text-slate-500 mt-0.5">
-                {fixDoc.replace(/\D/g, '').length} dígitos — precisa ser 11 (CPF) ou 14 (CNPJ)
+                {fixDoc.replace(/\D/g, '').length} dígitos · opcional — em branco = nota SEM CPF (consumidor não identificado)
               </div>
             </div>
             <div>
@@ -539,10 +557,19 @@ export default function NotasEmitidasPage() {
               </button>
               <button
                 onClick={executarReemissao}
-                disabled={fixSaving || ![11, 14].includes(fixDoc.replace(/\D/g, '').length) || (fixResult?.ok ?? false)}
+                disabled={
+                  fixSaving ||
+                  (fixDoc.replace(/\D/g, '').length !== 0 &&
+                    ![11, 14].includes(fixDoc.replace(/\D/g, '').length)) ||
+                  (fixResult?.ok ?? false)
+                }
                 className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold rounded text-sm flex items-center justify-center gap-2"
               >
-                {fixSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> Reemitindo…</> : <><FileText className="w-4 h-4" /> Reemitir NFC-e</>}
+                {fixSaving ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Emitindo…</>
+                ) : (
+                  <><FileText className="w-4 h-4" /> {fixTarget.nfceStatus === 'rejected' || fixTarget.nfceStatus === 'error' ? 'Reemitir NFC-e' : 'Tirar nota'}</>
+                )}
               </button>
             </div>
           </div>
