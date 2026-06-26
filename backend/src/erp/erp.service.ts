@@ -272,6 +272,29 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
    * `giga_produto`. Confere as colunas com SHOW COLUMNS e seleciona NULL pras
    * que não existirem (robusto a nomes diferentes). PROPAGA o erro (com retry).
    */
+  /** Espelho de estoque do Giga: CODIGO x LOJA x ESTOQUE (só > 0) pro mirror. */
+  async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
+    if (!this.pool) return [];
+    try {
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+        `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+           FROM estoque
+          WHERE ESTOQUE > 0
+          GROUP BY CODIGO, LOJA`,
+      );
+      return (rows as any[])
+        .map((r) => ({
+          codigo: String(r.codigo ?? '').trim(),
+          loja: String(r.loja ?? '').trim(),
+          estoque: Number(r.estoque) || 0,
+        }))
+        .filter((r) => r.codigo && r.loja && r.estoque > 0);
+    } catch (e) {
+      this.logger.error(`getGigaEstoque falhou: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
   async getGigaProdutos(): Promise<
     Array<{ codigo: string; ref: string; descricao: string; cor: string; tamanho: string; grupo: string; ncm: string; vendaUn: number }>
   > {
