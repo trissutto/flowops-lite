@@ -441,27 +441,32 @@ export class NfceService {
     const vNF = vNFNum.toFixed(2);
 
     const payments = (sale.payments || []) as any[];
+    // CNPJ usado como "instituição de pagamento" no grupo <card>. Usa o CNPJ do
+    // próprio emitente como genérico (comprovado em produção: SEFAZ ACEITA — a
+    // nota 110 com esse formato passou no cartão; só caiu por outro motivo).
+    const cnpjInstPag = String(config.cnpj || '').replace(/\D/g, '').padStart(14, '0').slice(0, 14);
     const pagLines = payments
       .map((p: any) => {
         const tPag = this.mapPaymentToSefaz(p.method);
-        // FIX REJEIÇÃO 391: pra cartão crédito (03) ou débito (04),
-        // SEFAZ exige o grupo <card> com CNPJ da credenciadora + bandeira.
-        // Como não temos integração com TEF, usamos os dados padrão do
-        // próprio CNPJ + bandeira "outros (99)" — válido em todas UFs.
+
+        // GRUPO <card> — obrigatório (cStat 391) p/ cartão E TAMBÉM p/ PIX/transf.
+        // (NT2020.006: tPag 17/18/19 exigem a "instituição de pagamento").
+        //   03/04 (cartão): tpIntegra + CNPJ + bandeira (tBand=99 "Outros") + cAut.
+        //   17/18/19 (PIX/transf/carteira): tpIntegra + CNPJ (sem bandeira de cartão).
         let cardBlock = '';
         if (tPag === '03' || tPag === '04') {
-          // SEM TEF integrado → tpIntegra=2 (não integrado). Nesse modo NÃO se
-          // informa CNPJ da credenciadora nem cAut (são do tpIntegra=1/integrado).
-          // BUG ANTERIOR: mandava o CNPJ do PRÓPRIO emitente como "credenciadora".
-          // A SEFAZ-SP valida que esse CNPJ é de uma credenciadora real; como não
-          // é, recusava com cStat 391 ("dados do cartão não informados"). O formato
-          // canônico sem TEF é só tpIntegra + tBand=99 ("Outros").
-          cardBlock = `<card><tpIntegra>2</tpIntegra><tBand>99</tBand></card>`;
+          cardBlock = `<card><tpIntegra>2</tpIntegra><CNPJ>${cnpjInstPag}</CNPJ><tBand>99</tBand><cAut>0</cAut></card>`;
+        } else if (tPag === '17' || tPag === '18' || tPag === '19') {
+          cardBlock = `<card><tpIntegra>2</tpIntegra><CNPJ>${cnpjInstPag}</CNPJ></card>`;
         }
-        // indPag=0 (à vista) é tecnicamente opcional, mas SEFAZ-SP PL_009
-        // tem reportes de rejeição cStat 225 sem ele em algumas variantes
-        // de venda. Adiciona pra garantir compatibilidade.
-        return `<detPag><indPag>0</indPag><tPag>${tPag}</tPag><vPag>${(p.valor || 0).toFixed(2)}</vPag>${cardBlock}</detPag>`;
+
+        // xPag — obrigatório quando tPag=99 (Outros), senão cStat 441.
+        const xPag = tPag === '99'
+          ? `<xPag>${this.esc(this.descreveMetodoPag(p.method))}</xPag>`
+          : '';
+
+        // indPag=0 (à vista). xPag entra ENTRE tPag e vPag; card depois de vPag.
+        return `<detPag><indPag>0</indPag><tPag>${tPag}</tPag>${xPag}<vPag>${(p.valor || 0).toFixed(2)}</vPag>${cardBlock}</detPag>`;
       })
       .join('');
 
@@ -602,6 +607,19 @@ export class NfceService {
     if (m === 'crediario' || m === 'credito_loja') return '05';
     if (m === 'pix') return '17';
     return '99';
+  }
+
+  /** Descrição p/ <xPag> quando tPag=99 (Outros). SEFAZ exige — cStat 441. */
+  private descreveMetodoPag(method: string): string {
+    const m = String(method || '').toLowerCase().trim();
+    const map: Record<string, string> = {
+      vale_troca: 'VALE TROCA',
+      venda_online: 'VENDA ONLINE',
+      cartao: 'CARTAO',
+      link: 'LINK DE PAGAMENTO',
+      boleto: 'BOLETO',
+    };
+    return (map[m] || m.replace(/_/g, ' ').toUpperCase() || 'OUTROS').slice(0, 60) || 'OUTROS';
   }
 
   // ── Emissão (público) ───────────────────────────────────────────────
