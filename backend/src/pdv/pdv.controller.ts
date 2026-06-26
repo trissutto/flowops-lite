@@ -285,8 +285,15 @@ export class PdvController {
     @Query('limit') limit?: string,
   ) {
     this.requireRole(req);
+    // ISOLAMENTO POR LOJA: usuário com role='store' SÓ vê as notas da PRÓPRIA loja
+    // — ignora qualquer storeCode passado na query. Admin/master (role='admin')
+    // vê todas (ou filtra pelo storeCode escolhido).
+    const role = req?.user?.role;
+    const userStoreCode = req?.user?.storeCode;
+    const effectiveStoreCode =
+      role === 'store' && userStoreCode ? userStoreCode : storeCode;
     return this.svc.listNfces({
-      storeCode,
+      storeCode: effectiveStoreCode,
       startDate,
       endDate,
       status,

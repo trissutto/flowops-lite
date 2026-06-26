@@ -65,6 +65,15 @@ export default function NotasEmitidasPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Role — loja (role=store) só vê as próprias notas (o backend já força isso).
+  // Aqui escondemos o filtro de loja e o resumo POR LOJA pra não confundir.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    api<{ role?: string }>('/auth/me')
+      .then((me) => setIsAdmin(me?.role === 'admin'))
+      .catch(() => {});
+  }, []);
+
   // Filtros
   const [storeCode, setStoreCode] = useState<string>(''); // vazio = todas
   const [startDate, setStartDate] = useState(todayStr());
@@ -241,16 +250,18 @@ export default function NotasEmitidasPage() {
 
       {/* Filtros */}
       <div className="bg-white border rounded-lg p-3 grid grid-cols-2 md:grid-cols-6 gap-2 text-sm">
-        <div>
-          <label className="text-[10px] uppercase font-bold text-slate-500">Loja</label>
-          <input
-            type="text"
-            value={storeCode}
-            onChange={(e) => setStoreCode(e.target.value.toUpperCase())}
-            placeholder="Todas"
-            className="w-full border rounded px-2 py-1 text-sm"
-          />
-        </div>
+        {isAdmin && (
+          <div>
+            <label className="text-[10px] uppercase font-bold text-slate-500">Loja</label>
+            <input
+              type="text"
+              value={storeCode}
+              onChange={(e) => setStoreCode(e.target.value.toUpperCase())}
+              placeholder="Todas"
+              className="w-full border rounded px-2 py-1 text-sm"
+            />
+          </div>
+        )}
         <div>
           <label className="text-[10px] uppercase font-bold text-slate-500">De</label>
           <input
