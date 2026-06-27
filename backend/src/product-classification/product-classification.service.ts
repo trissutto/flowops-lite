@@ -127,7 +127,11 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        const hay = `${r.ref} ${r.descricao} ${r.marca} ${r.fornecedor} ${r.categoria}`.toUpperCase();
+        // Busca por texto considera SÓ referência + descrição (decisão do dono).
+        // Marca e fornecedor ficam de fora: marca é quase toda igual (LUNENDER) e
+        // fornecedor traz dado sujo (CNPJ/ruído) — ambos poluíam o resultado.
+        // A REF costuma vir embutida na descrição, então buscar nº de ref funciona.
+        const hay = `${r.ref} ${r.descricao}`.toUpperCase();
         for (const w of words) if (!hay.includes(w)) return false;
       }
 
