@@ -13,7 +13,7 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Shuffle, Database, CreditCard, Boxes, CheckCircle2, Package2, Store,
+  Shuffle, CreditCard, Boxes, CheckCircle2, Package2, Store,
   FileSearch, Truck, BarChart3, Percent, ArrowLeft,
   LayoutDashboard, Globe2, Settings, ShoppingCart, Tags,
 } from 'lucide-react';
@@ -45,7 +45,7 @@ const LOJA_ITEMS: LojaItem[] = [
   { href: '/retaguarda/inteligencia-estoque', label: 'Inteligência',   subtitle: 'Estoque',     description: 'Venda + estoque em tempo real', tone: 'purple', icon: BarChart3    },
   { href: '/retaguarda/realinhamento',        label: 'Realinhamento',  subtitle: 'Matriz',      description: 'Rebalancear entre lojas',       tone: 'orange', icon: Shuffle      },
   { href: '/retaguarda/remessas',             label: 'Remessas',       subtitle: 'Trânsito',    description: 'Caixas em rota',                tone: 'sky',    icon: Truck        },
-  { href: '/auditoria-sku',                   label: 'Produtos Loja',  subtitle: 'ERP',         description: 'Gigasistemas',                  tone: 'amber',  icon: Database     },
+  { href: '/cadastros/classificacao-produtos', label: 'Produtos Loja',  subtitle: 'Classificação', description: 'Básico/Moda + plus size',     tone: 'purple', icon: Tags         },
   { href: '/retaguarda/crediario',            label: 'Crediário',      subtitle: 'Cobrança',    description: 'Parcelas + atrasos',            tone: 'rose',   icon: CreditCard   },
   { href: '/loja/juros-crediario',            label: 'Juros Crediário',subtitle: 'Config',      description: 'Carência + taxa mensal',        tone: 'amber',  icon: Percent      },
   { href: '/retaguarda/almoxarifado',         label: 'Almoxarifado',   subtitle: 'Estoque',     description: 'Materiais internos',            tone: 'purple', icon: Boxes        },
