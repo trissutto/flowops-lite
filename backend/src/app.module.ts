@@ -60,6 +60,7 @@ import { ProductPhotosModule } from './product-photos/product-photos.module';
 import { PushModule } from './push/push.module';
 import { FaturamentoModule } from './faturamento/faturamento.module';
 import { LivePdvModule } from './live-pdv/live-pdv.module';
+import { PromoConfigModule } from './promo-config/promo-config.module';
 
 @Module({
   imports: [
@@ -122,6 +123,7 @@ import { LivePdvModule } from './live-pdv/live-pdv.module';
     PushModule,
     FaturamentoModule,
     LivePdvModule,
+    PromoConfigModule,
     ReportsModule,
   ],
 })

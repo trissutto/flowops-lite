@@ -10,6 +10,7 @@ import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd 
 import { ErpService } from '../erp/erp.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
+import { PromoConfigService } from '../promo-config/promo-config.service';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import * as crypto from 'crypto';
 
@@ -36,7 +37,29 @@ export class PdvService {
     private readonly erp: ErpService,
     private readonly cash: CashService,
     private readonly nfce: NfceService,
+    private readonly promoConfig: PromoConfigService,
   ) {}
+
+  /**
+   * Conjunto de REFs (normalizadas TRIM+UPPER) classificadas como BÁSICO
+   * dentre as informadas. Usado pela promoção 50% pra pular peças básicas.
+   * Retorna Set vazio se a tabela não existir ou der erro (fail-open).
+   */
+  private async basicoRefsIn(refs: string[]): Promise<Set<string>> {
+    const norm = (r: any) => String(r || '').trim().toUpperCase();
+    const wanted = Array.from(new Set(refs.map(norm).filter(Boolean)));
+    if (!wanted.length) return new Set();
+    try {
+      const rows = await (this.prisma as any).productClassification.findMany({
+        where: { ref: { in: wanted }, tipoProduto: 1 },
+        select: { ref: true },
+      });
+      return new Set((rows as any[]).map((r) => norm(r.ref)));
+    } catch (e: any) {
+      this.logger.warn(`[pdv] lookup básico falhou (fail-open): ${e?.message}`);
+      return new Set();
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // VENDA — ciclo de vida
@@ -1316,9 +1339,30 @@ export class PdvService {
         }
         return null;
       };
+
+      // Filtro configurável (tela "Promoções PDV"): não dar 50% no que é BÁSICO.
+      // A classificação Básico/Moda vem da tela "Produtos Loja".
+      let basicoRefs = new Set<string>();
+      try {
+        const cfg = await this.promoConfig.getConfig();
+        if (cfg.excluirBasicoNa50) {
+          const refs = (items as any[]).map((i) => i.ref).filter(Boolean);
+          basicoRefs = await this.basicoRefsIn(refs);
+        }
+      } catch {
+        // fail-open: sem config, mantém comportamento antigo (50% em tudo elegível)
+      }
+      const isBasico = (it: any) =>
+        basicoRefs.size > 0 && basicoRefs.has(String(it.ref || '').trim().toUpperCase());
+
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual
         const bruto = it.precoUnit * it.qty;
+        // Peça básica: fica fora da promoção de 50% (preço cheio)
+        if (isBasico(it)) {
+          updates.push({ id: it.id, desconto: 0, total: bruto, tag: 'Básico · sem promo' });
+          continue;
+        }
         const promo = promoByYear(it.dataCadastro || null);
         if (promo) {
           const desconto = Math.round(bruto * promo.pct * 100) / 100;

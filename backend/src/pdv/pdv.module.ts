@@ -4,6 +4,7 @@ import { ErpModule } from '../erp/erp.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CrediariosModule } from '../crediarios/crediarios.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
+import { PromoConfigModule } from '../promo-config/promo-config.module';
 import { PdvService } from './pdv.service';
 import { PdvController } from './pdv.controller';
 import { PixService } from './pix.service';
@@ -28,7 +29,7 @@ import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
-  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule],
+  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
   providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
