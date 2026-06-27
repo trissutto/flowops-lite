@@ -284,7 +284,7 @@ export default function ClassificacaoProdutosPage() {
         <input
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Pesquisar por descrição, referência, marca, fornecedor, coleção ou qualquer palavra..."
+          placeholder="Pesquisar por descrição, referência, fornecedor, coleção ou qualquer palavra... (marca: use o filtro ao lado)"
           className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
         />
       </div>

@@ -127,7 +127,10 @@ export class ProductClassificationService {
       if (categoria && r.categoria.toUpperCase() !== categoria) return false;
 
       if (words.length) {
-        const hay = `${r.ref} ${r.descricao} ${r.marca} ${r.fornecedor} ${r.categoria}`.toUpperCase();
+        // Busca por texto NÃO inclui a marca de propósito: quase todo o catálogo
+        // é de uma marca só (ex.: LUNENDER), então buscar por marca "puxava" tudo
+        // e poluía o resultado. Marca tem dropdown dedicado pra filtrar explícito.
+        const hay = `${r.ref} ${r.descricao} ${r.fornecedor} ${r.categoria}`.toUpperCase();
         for (const w of words) if (!hay.includes(w)) return false;
       }
 
