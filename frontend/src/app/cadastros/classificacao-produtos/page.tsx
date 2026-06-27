@@ -417,10 +417,10 @@ export default function ClassificacaoProdutosPage() {
                         <input type="checkbox" checked={isSel} onChange={() => toggleRow(r.ref)} />
                       </td>
                       <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.ref}</td>
-                      <td className="px-3 py-2 text-slate-800 max-w-[280px] truncate" title={r.descricao}>
+                      <td className="px-3 py-2 text-slate-800 min-w-[360px] whitespace-normal break-words" title={r.descricao}>
                         {r.descricao || '—'}
                         {!r.revisada && (
-                          <span className="ml-1.5 align-middle text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">não revisado</span>
+                          <span className="ml-1.5 align-middle text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 whitespace-nowrap">não revisado</span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-slate-600 text-xs">{r.marca || '—'}</td>
