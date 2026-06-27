@@ -1342,18 +1342,26 @@ export class PdvService {
 
       // Filtro configurável (tela "Promoções PDV"): não dar 50% no que é BÁSICO.
       // A classificação Básico/Moda vem da tela "Produtos Loja".
+      // Chave de classificação do item: REF quando existe; senão "#<codigo>"
+      // (produtos sem REF — meias/acessórios — são classificados pelo código).
+      const clsKey = (it: any): string => {
+        const ref = String(it.ref || '').trim();
+        if (ref) return ref.toUpperCase();
+        const cod = String(it.sku || '').trim();
+        return cod ? `#${cod}`.toUpperCase() : '';
+      };
       let basicoRefs = new Set<string>();
       try {
         const cfg = await this.promoConfig.getConfig();
         if (cfg.excluirBasicoNa50) {
-          const refs = (items as any[]).map((i) => i.ref).filter(Boolean);
-          basicoRefs = await this.basicoRefsIn(refs);
+          const keys = (items as any[]).map(clsKey).filter(Boolean);
+          basicoRefs = await this.basicoRefsIn(keys);
         }
       } catch {
         // fail-open: sem config, mantém comportamento antigo (50% em tudo elegível)
       }
       const isBasico = (it: any) =>
-        basicoRefs.size > 0 && basicoRefs.has(String(it.ref || '').trim().toUpperCase());
+        basicoRefs.size > 0 && basicoRefs.has(clsKey(it));
 
       for (const it of items as any[]) {
         if (isManual(it)) continue; // preserva manual

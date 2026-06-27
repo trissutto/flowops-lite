@@ -415,7 +415,16 @@ export default function ClassificacaoProdutosPage() {
                       <td className="px-3 py-2">
                         <input type="checkbox" checked={isSel} onChange={() => toggleRow(r.ref)} />
                       </td>
-                      <td className="px-3 py-2 font-mono text-xs text-slate-700">{r.ref}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-700">
+                        {r.ref.startsWith('#') ? (
+                          <span className="inline-flex items-center gap-1">
+                            {r.ref.slice(1)}
+                            <span className="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-500 font-sans" title="Produto sem REF no ERP — classificado pelo código">
+                              sem REF
+                            </span>
+                          </span>
+                        ) : r.ref}
+                      </td>
                       <td className="px-3 py-2 text-slate-800 min-w-[360px] whitespace-normal break-words" title={r.descricao}>
                         {r.descricao || '—'}
                         {!r.revisada && (

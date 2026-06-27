@@ -1810,6 +1810,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     plusSize: boolean;
   }>> {
     if (!this.pool) return [];
+    // Produtos COM ref: agrupados por REFERÊNCIA (modelo).
+    // Produtos SEM ref: entram individualmente pelo CÓDIGO, com chave
+    // sintética "#<codigo>" — assim meias/acessórios sem REF aparecem na tela
+    // de classificação e podem ser excluídos de promoção. O prefixo "#" evita
+    // colisão com REFs reais numéricas (ex.: REF "611" ≠ CÓDIGO 611).
     const sql = `
       SELECT TRIM(UPPER(p.REF))                                   AS ref,
              MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
@@ -1821,7 +1826,20 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
        WHERE p.REF IS NOT NULL
          AND TRIM(p.REF) <> ''
        GROUP BY TRIM(UPPER(p.REF))
-       LIMIT 200000
+
+      UNION ALL
+
+      SELECT CONCAT('#', p.CODIGO)                                AS ref,
+             COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')    AS descricao,
+             COALESCE(p.MARCA, '')                                AS marca,
+             COALESCE(p.FORNECEDOR, '')                           AS fornecedor,
+             COALESCE(p.NOMEGRUPO, '')                            AS categoria,
+             CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END    AS plus_size
+        FROM produtos p
+       WHERE (p.REF IS NULL OR TRIM(p.REF) = '')
+         AND p.CODIGO IS NOT NULL
+         AND TRIM(p.CODIGO) <> ''
+       LIMIT 400000
     `;
     try {
       const t0 = Date.now();
