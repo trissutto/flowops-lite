@@ -667,7 +667,7 @@ export default function LivePdvPage() {
         <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_380px]">
           {/* Coluna principal: busca + grade */}
           <div>
-            <form onSubmit={doSearch} className="mb-4 flex gap-2">
+            <form onSubmit={doSearch} className="mb-4 flex flex-col sm:flex-row gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
                 <input
@@ -1306,7 +1306,7 @@ function CustomerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl">
+      <form onSubmit={submit} className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
             <UserPlus className="h-5 w-5 text-rose-500" /> {title}
@@ -1319,7 +1319,7 @@ function CustomerModal({
           <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="(11) 99999-9999" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Instagram (@)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
           </div>

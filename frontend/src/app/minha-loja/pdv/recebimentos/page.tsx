@@ -866,7 +866,7 @@ export default function RecebimentosPage() {
                           <div className="text-xs text-violet-900 font-bold uppercase tracking-wide text-center">
                             Cliente paga parte em DINHEIRO + parte em PIX
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <div>
                               <label className="text-[10px] uppercase font-bold text-amber-800 mb-1 flex items-center gap-1">
                                 <Banknote size={12} /> Dinheiro

@@ -555,6 +555,7 @@ export default function FinanceiroTransferenciasPage() {
                 <KpiBox label="TOTAL" value={brl(royalties.totalAPagar)} color="emerald" />
               </div>
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
                 <table className="text-sm w-full">
                   <thead>
                     <tr className="text-left text-slate-700 border-b border-slate-200 bg-slate-50">
@@ -588,6 +589,7 @@ export default function FinanceiroTransferenciasPage() {
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </>
           ) : null}
@@ -623,6 +625,7 @@ export default function FinanceiroTransferenciasPage() {
               <EmptyBox text="Nenhum mês fechado ainda." />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
                 <table className="text-sm w-full">
                   <thead>
                     <tr className="text-left text-slate-700 border-b border-slate-200 bg-slate-50">
@@ -665,6 +668,7 @@ export default function FinanceiroTransferenciasPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
@@ -674,7 +678,7 @@ export default function FinanceiroTransferenciasPage() {
       {/* Modal confirmação fechamento */}
       {closureModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold text-slate-900">Confirmar fechamento</h3>
               <button onClick={() => setClosureModal(null)} className="text-slate-400 hover:text-slate-600">

@@ -143,7 +143,7 @@ export default function InstagramAccountPage() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-stone-200">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6 pt-6 border-t border-stone-200">
               <Stat label="Seguidores" value={formatNumber(account.followers_count)} accent="text-rose-600" />
               <Stat label="Seguindo" value={formatNumber(account.follows_count)} accent="text-stone-800" />
               <Stat label="Publicações" value={formatNumber(account.media_count)} accent="text-stone-800" />

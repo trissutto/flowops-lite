@@ -308,7 +308,7 @@ export default function TransferenciasRedeFranquiaPage() {
                         {num(m.shipments)} remessas
                       </span>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <Metric label="Peças" value={num(m.pecas)} icon={<Package className="h-3.5 w-3.5" />} />
                       <Metric label="Valor total" value={brl(m.valorTotal)} />
                       <Metric label="Custo ÷2,5" value={brl(m.valorCusto)} strong />
@@ -320,6 +320,7 @@ export default function TransferenciasRedeFranquiaPage() {
 
             {/* Summary table */}
             <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
@@ -357,6 +358,7 @@ export default function TransferenciasRedeFranquiaPage() {
                   </tr>
                 </tfoot>
               </table>
+              </div>
             </div>
 
             <p className="text-xs text-slate-400 print:hidden">
@@ -1020,6 +1022,7 @@ function ContaCorrente() {
 
       {ext && !loading && (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
@@ -1115,6 +1118,7 @@ function ContaCorrente() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -1182,7 +1186,7 @@ function LancamentoForm({ onClose, onSaved }: { onClose: () => void; onSaved: ()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-bold text-slate-800">Lançar na conta corrente</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">

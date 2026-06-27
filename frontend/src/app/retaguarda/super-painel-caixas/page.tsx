@@ -615,7 +615,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
         </div>
 
         {/* Breakdown por modalidade — clicável pra expandir cascade */}
-        <div className="grid grid-cols-5 gap-1 pt-2 border-t border-slate-200">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 pt-2 border-t border-slate-200">
           <ModItem label="Dinheiro" valor={t.totalDinheiro} cor="emerald"
             active={expanded === 'dinheiro'}
             onClick={loja.detalhado && t.totalDinheiro > 0 ? () => setExpanded(expanded === 'dinheiro' ? null : 'dinheiro') : undefined} />
@@ -1180,7 +1180,7 @@ function EditBandeiraModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-black mb-1">Trocar bandeira do cartão</h2>
         <p className="text-xs text-slate-500 mb-3">{saleHint}</p>
 
@@ -1327,7 +1327,7 @@ function MasterAdjustModal({
 
   return createPortal(
     <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
             <h3 className="text-lg font-black text-slate-900">⚙️ Ajustes Master</h3>
@@ -1500,7 +1500,7 @@ function MasterEditPaymentModal({
 
   return createPortal(
     <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
             <h3 className="text-lg font-black text-slate-900">✏️ Editar Pagamento</h3>

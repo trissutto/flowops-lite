@@ -417,7 +417,7 @@ export default function AuditoriaSkuPage() {
       {/* KPIs + filtros + tabela */}
       {entries.length > 0 && (
         <>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-white border rounded-lg p-4">
               <div className="text-xs text-slate-500 uppercase tracking-wide">Total de puladas</div>
               <div className="text-2xl font-bold text-slate-800 mt-1">{totalPuladas}</div>
@@ -496,7 +496,7 @@ export default function AuditoriaSkuPage() {
             {skuFix && !applyResult && (
               <>
                 {/* Sumário */}
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                   <div className="bg-emerald-100 border border-emerald-300 rounded p-2">
                     <div className="text-emerald-700 uppercase font-semibold">Corrigível</div>
                     <div className="text-2xl font-bold text-emerald-900">{skuFix.summary.corrigivel}</div>
@@ -690,6 +690,7 @@ export default function AuditoriaSkuPage() {
             <div className="text-xs text-slate-500 px-3 py-2 border-b bg-slate-50">
               Mostrando {filtered.length} de {entries.length}
             </div>
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-100 text-xs">
                 <tr>
@@ -773,6 +774,7 @@ export default function AuditoriaSkuPage() {
                 ))}
               </tbody>
             </table>
+            </div>
             {filtered.length > 500 && (
               <div className="text-xs text-center text-slate-500 py-2 border-t bg-slate-50">
                 Exibindo primeiras 500 linhas. Use filtros ou exporte XLSX pra ver o resto.

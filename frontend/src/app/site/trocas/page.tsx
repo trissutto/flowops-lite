@@ -574,7 +574,7 @@ function OrderDetail({
           {/* MODO */}
           <div>
             <label className="block text-sm font-bold text-rose-900 mb-2">Modo</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <ModoBtn
                 active={modo === 'devolucao'}
                 onClick={() => setModo('devolucao')}

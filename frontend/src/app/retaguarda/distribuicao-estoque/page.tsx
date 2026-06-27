@@ -2076,6 +2076,7 @@ function RealignConfigPanel() {
 
       {/* Tabela */}
       <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
@@ -2151,6 +2152,7 @@ function RealignConfigPanel() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Save bar */}
@@ -2610,6 +2612,7 @@ function RefRootView({
           </div>
         )}
         {data && refsFiltradas.length > 0 && (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -2713,6 +2716,7 @@ function RefRootView({
               })}
             </tbody>
           </table>
+          </div>
         )}
         {data && refsFiltradas.length === 0 && (
           <div className="p-12 text-center text-slate-500">
@@ -2878,6 +2882,7 @@ function RefDetailsDrawer({
             </div>
           )}
           {detail && detail.rows.length > 0 && (
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
@@ -2928,6 +2933,7 @@ function RefDetailsDrawer({
                   ))}
               </tbody>
             </table>
+            </div>
           )}
           {detail && detail.rows.length === 0 && !loading && (
             <div className="text-center py-12 text-slate-500 text-sm">
@@ -3177,7 +3183,7 @@ function ConsolidateDrawer({
               </div>
 
               {/* Stats */}
-              <div className="grid grid-cols-3 gap-2 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-sm">
                 <div className="bg-orange-50 border border-orange-200 rounded p-2">
                   <div className="text-[10px] font-bold text-orange-700 uppercase">Movimentos</div>
                   <div className="text-xl font-bold text-orange-800">{moves.length}</div>

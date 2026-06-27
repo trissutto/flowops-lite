@@ -441,6 +441,7 @@ function PedidosPageInner() {
 
       {/* ─── DESKTOP: TABELA (hidden sm:block) ─── */}
       <div className="hidden sm:block bg-white rounded shadow overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr>
@@ -515,6 +516,7 @@ function PedidosPageInner() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Paginação */}

@@ -3471,3 +3471,24 @@ model GigaEstoque {
   @@index([codigo])
   @@map("giga_estoque")
 }
+
+/// Classificação BÁSICO/MODA por REFERÊNCIA (modelo). Owned 100% pelo Flow —
+/// vive no Postgres e sobrevive aos syncs do ERP (que truncam wincred_produtos).
+/// NÃO altera nada no Giga/Wincred ao vivo. Cruzada com o catálogo do ERP por REF.
+///
+/// Granularidade = REF (não SKU): básico/moda é característica do modelo, então
+/// uma REF classificada vale pra todas as suas cores/tamanhos.
+///
+/// ref = REF do ERP normalizada (TRIM + UPPER). Produto SEM registro aqui =
+/// tipoProduto 0 (MODA) e NÃO revisado, conforme a regra da tela.
+model ProductClassification {
+  ref                   String   @id @db.VarChar(20)
+  tipoProduto           Int      @default(0) @map("tipo_produto") // 0=MODA, 1=BASICO
+  classificacaoRevisada Boolean  @default(false) @map("classificacao_revisada")
+  updatedBy             String?  @map("updated_by")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@index([tipoProduto])
+  @@index([classificacaoRevisada])
+  @@map("product_classification")
+}

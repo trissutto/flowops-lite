@@ -24,7 +24,7 @@ import {
   LayoutDashboard, PackageMinus, CheckCircle2, Package2, Boxes, Database,
   DollarSign, ShoppingBag, Users, Megaphone, Settings, ChevronDown, X, Globe,
   Smartphone, FileSearch, MessageSquare, Radio, Instagram,
-  Bot, TrendingUp, Network,
+  Bot, TrendingUp, Network, Tags,
 } from 'lucide-react';
 
 type NavItem = {
@@ -87,6 +87,14 @@ const GROUPS: NavGroup[] = [
       { href: '/retaguarda/instagram-dashboard', label: 'Dashboard',          icon: TrendingUp },
       { href: '/retaguarda/lu-config',           label: 'Configurar Lú IA',   icon: Bot },
       { href: '/retaguarda/instagram',           label: 'Conta Instagram',    icon: Instagram },
+    ],
+  },
+  {
+    key: 'cadastros',
+    label: 'Cadastros',
+    color: 'violet',
+    items: [
+      { href: '/cadastros/classificacao-produtos', label: 'Classificação de Produtos', icon: Tags },
     ],
   },
   {
@@ -159,6 +167,14 @@ const COLOR_CLASSES: Record<string, {
     activeText: 'text-white',
     activeDot: 'bg-rose-500',
     hoverBg: 'hover:bg-rose-50',
+  },
+  violet: {
+    headerBg: 'bg-violet-50',
+    headerText: 'text-violet-900',
+    activeBg: 'bg-gradient-to-r from-violet-500 to-purple-600',
+    activeText: 'text-white',
+    activeDot: 'bg-violet-500',
+    hoverBg: 'hover:bg-violet-50',
   },
 };
 

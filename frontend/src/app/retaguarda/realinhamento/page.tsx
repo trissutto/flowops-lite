@@ -1299,7 +1299,7 @@ export default function RealinhamentoPage() {
             <div className="text-xs text-indigo-900/70 mb-2">
               Digite palavras da descrição (ex: <i>blusa azul 48</i>, <i>vestido boho</i>) — o sistema lista as REFs correspondentes pra você marcar.
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <input
                 type="text"
                 className="flex-1 border border-indigo-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
@@ -1834,7 +1834,7 @@ export default function RealinhamentoPage() {
       {/* Modal: Zerar realinhamentos (admin) */}
       {wipeOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-rose-100 flex items-center justify-center">

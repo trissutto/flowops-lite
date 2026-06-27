@@ -176,6 +176,7 @@ export default function ComissaoPage() {
               <TrendingUp className="w-4 h-4 text-emerald-600" />
               Por loja esse mês
             </h2>
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-xs text-slate-500">
                 <tr>
@@ -198,6 +199,7 @@ export default function ComissaoPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 

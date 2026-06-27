@@ -362,6 +362,7 @@ Por favor confirmar separação no sistema assim que finalizar.
           </button>
         </div>
 
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
@@ -433,6 +434,7 @@ Por favor confirmar separação no sistema assim que finalizar.
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Pick orders já criadas */}

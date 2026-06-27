@@ -584,7 +584,7 @@ export default function DevolucaoPage() {
 
         {!success && (
           <div className="bg-white rounded-xl shadow-sm p-3 mb-2">
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <input
                 ref={inputRef}
                 value={query}

@@ -1610,7 +1610,7 @@ function CreateCustomerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold">Cadastrar cliente</h2>
           <button onClick={onClose}><X className="w-5 h-5 text-gray-500" /></button>

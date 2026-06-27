@@ -266,7 +266,7 @@ export default function MarcadosPage() {
       {/* Busca por CPF ou nome */}
       <div className="bg-white border rounded-lg p-4 space-y-2 relative">
         <label className="block text-sm font-bold text-slate-700">CPF ou nome do cliente</label>
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <input
             ref={inputRef}
             type="text"
@@ -397,6 +397,7 @@ export default function MarcadosPage() {
                 </div>
               </div>
 
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-600">
                   <tr>
@@ -435,6 +436,7 @@ export default function MarcadosPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
 
               {/* Footer com totais e ação */}
               <div className="bg-slate-50 p-3 flex items-center justify-between flex-wrap gap-3">

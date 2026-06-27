@@ -308,7 +308,7 @@ export default function CrediarioAutomaticoPage() {
                 </div>
 
                 {/* Stats */}
-                <div className="grid grid-cols-3 gap-2 mt-3 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-3 mb-3">
                   <div className="rounded-lg bg-emerald-50 p-2 border border-emerald-100 text-center">
                     <div className="text-[10px] uppercase tracking-wider text-emerald-800">Enviadas</div>
                     <div className="text-lg font-semibold text-emerald-900 tabular-nums">{c.totalEnviadas}</div>
@@ -457,7 +457,7 @@ function CampanhaForm({
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="text-[10px] uppercase tracking-widest font-semibold block mb-1" style={{ color: '#6e3a40' }}>Loja</label>
               <input

@@ -944,7 +944,7 @@ function EstornoModal({
       onClick={resultado ? onSuccess : onClose}
     >
       <div
-        className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
+        className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* HEADER */}

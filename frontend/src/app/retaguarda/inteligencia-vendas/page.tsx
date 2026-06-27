@@ -420,6 +420,7 @@ export default function InteligenciaVendasPage() {
                 <h2 className="text-xs font-black uppercase tracking-wider text-violet-700">Top Lojas</h2>
                 <span className="text-[10px] text-slate-400 ml-auto">{report.byStore.length} loja{report.byStore.length === 1 ? '' : 's'}</span>
               </div>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-100">
                   <tr className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -449,6 +450,7 @@ export default function InteligenciaVendasPage() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
 
             {/* TOP VENDEDORAS — com comissão */}
@@ -459,6 +461,7 @@ export default function InteligenciaVendasPage() {
                 <span className="text-[10px] text-slate-400 ml-auto">comissão {comissaoPct}%</span>
               </div>
               <div className="max-h-[420px] overflow-y-auto">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
                     <tr className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -487,6 +490,7 @@ export default function InteligenciaVendasPage() {
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
 
@@ -497,6 +501,7 @@ export default function InteligenciaVendasPage() {
                 <h2 className="text-xs font-black uppercase tracking-wider text-violet-700">Top Marcas</h2>
               </div>
               <div className="max-h-[360px] overflow-y-auto">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
                     <tr className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -518,6 +523,7 @@ export default function InteligenciaVendasPage() {
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
 
@@ -528,6 +534,7 @@ export default function InteligenciaVendasPage() {
                 <h2 className="text-xs font-black uppercase tracking-wider text-violet-700">Top Produtos</h2>
               </div>
               <div className="max-h-[360px] overflow-y-auto">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
                     <tr className="text-[10px] uppercase tracking-wider text-slate-500">
@@ -551,6 +558,7 @@ export default function InteligenciaVendasPage() {
                     )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
 

@@ -868,6 +868,7 @@ function DetailModal({
                   <div className="text-xs uppercase font-semibold text-gray-600 mb-2 flex items-center gap-1">
                     <Zap className="w-3 h-3" /> Estoque aplicado no Gigasistemas
                   </div>
+                  <div className="overflow-x-auto">
                   <table className="w-full text-xs border">
                     <thead className="bg-gray-50 border-b">
                       <tr>
@@ -890,6 +891,7 @@ function DetailModal({
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
 
@@ -899,6 +901,7 @@ function DetailModal({
                   <div className="text-xs uppercase font-semibold text-gray-600 mb-2 flex items-center gap-1">
                     <Package className="w-3 h-3" /> Itens que foram tentados
                   </div>
+                  <div className="overflow-x-auto">
                   <table className="w-full text-xs border">
                     <thead className="bg-gray-50 border-b">
                       <tr>
@@ -917,6 +920,7 @@ function DetailModal({
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
 
@@ -924,7 +928,7 @@ function DetailModal({
               {(detail.event.startsWith('debit.bulk-approved')) && detail.payload && (
                 <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
                   <div className="text-xs uppercase font-semibold text-blue-700 mb-2">Resumo do lote</div>
-                  <div className="grid grid-cols-4 gap-2 text-center">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
                     <div>
                       <div className="text-xs text-gray-500">Total</div>
                       <div className="font-bold">{detail.payload.total ?? 0}</div>

@@ -557,6 +557,7 @@ export default function InteligenciaEstoquePage() {
                     <div className="text-sm">Sem dados pra esse período</div>
                   </div>
                 ) : (
+                  <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-slate-50 border-b text-xs uppercase text-slate-500">
                       <tr>
@@ -620,6 +621,7 @@ export default function InteligenciaEstoquePage() {
                       })}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
 
@@ -729,7 +731,7 @@ export default function InteligenciaEstoquePage() {
           onClick={() => setDetailCode(null)}
         >
           <div
-            className="bg-white rounded-lg max-w-5xl w-full my-8 overflow-hidden"
+            className="bg-white rounded-lg max-w-5xl w-full my-8 overflow-hidden max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="px-4 py-3 border-b flex items-center justify-between bg-slate-50 sticky top-0">

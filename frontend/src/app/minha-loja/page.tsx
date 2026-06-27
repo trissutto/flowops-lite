@@ -1380,7 +1380,7 @@ function ShippedModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-xl w-full sm:max-w-md shadow-xl">
+      <div className="bg-white rounded-t-2xl sm:rounded-xl w-full sm:max-w-md max-h-[90vh] overflow-y-auto shadow-xl">
         <div className="flex items-center justify-between p-4 border-b">
           <h2 className="font-bold text-lg">
             Enviar pedido #{row.order.wcOrderNumber ?? '—'}
@@ -1480,7 +1480,7 @@ function ReportIssueModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-2 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-xl max-w-md w-full overflow-hidden shadow-2xl">
+      <div className="bg-white rounded-t-2xl sm:rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto shadow-2xl">
         <header className="bg-red-600 text-white px-4 py-3 flex items-center gap-2">
           <AlertCircle className="w-5 h-5" />
           <div className="flex-1">

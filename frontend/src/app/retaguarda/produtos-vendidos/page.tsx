@@ -475,7 +475,7 @@ function ProdutosVendidosContent() {
                       ? new Date(d.originalSaleDate).toLocaleDateString('pt-BR')
                       : '—';
                     return (
-                      <div key={d.returnId} className={`grid grid-cols-6 gap-2 border-b border-slate-100 last:border-0 py-0.5 ${d.originalSaleInPeriod ? 'bg-amber-50' : 'bg-rose-50'}`}>
+                      <div key={d.returnId} className={`grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 border-b border-slate-100 last:border-0 py-0.5 ${d.originalSaleInPeriod ? 'bg-amber-50' : 'bg-rose-50'}`}>
                         <span className="font-mono text-[10px]">{d.returnId.slice(0, 8)}</span>
                         <span className="font-bold uppercase text-[10px]">{d.modo}</span>
                         <span className="font-mono font-bold">{brl(d.valor)}</span>
@@ -527,7 +527,7 @@ function ProdutosVendidosContent() {
                 </div>
                 <div className="max-h-40 overflow-y-auto bg-white rounded p-2 text-[11px] font-mono space-y-0.5">
                   {data.conciliacao.vendasComDivergencia.map((v) => (
-                    <div key={v.saleId} className="grid grid-cols-5 gap-2 border-b border-amber-100 last:border-0 py-0.5">
+                    <div key={v.saleId} className="grid grid-cols-2 sm:grid-cols-5 gap-2 border-b border-amber-100 last:border-0 py-0.5">
                       <span className="font-bold">{v.saleNumber}</span>
                       <span className="text-slate-500">total {brl(v.total)}</span>
                       {v.desconto != null && v.desconto > 0 && (
@@ -854,7 +854,7 @@ function EditSellerModal({
 
   return (
     <div className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between mb-3">
           <div>
             <h3 className="text-lg font-black text-slate-900">👤 Editar Vendedora</h3>

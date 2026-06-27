@@ -245,7 +245,7 @@ export default function InstagramDashboardPage() {
             <div className="flex items-center gap-2 text-stone-500 text-xs uppercase font-bold tracking-wider mb-3">
               <Sparkles className="w-4 h-4 text-rose-600" /> Eficácia da Lú IA
             </div>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <div className="text-2xl font-bold text-stone-900">
                   {fmtPct(data.commentsLuReplied, data.commentsProcessed)}

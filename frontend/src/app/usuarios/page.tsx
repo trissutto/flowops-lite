@@ -207,6 +207,7 @@ export default function UsuariosPage() {
       )}
 
       <div className="bg-white rounded shadow overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-100">
             <tr>
@@ -271,6 +272,7 @@ export default function UsuariosPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Modal criar/editar usuário */}

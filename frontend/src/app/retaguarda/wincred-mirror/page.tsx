@@ -177,6 +177,7 @@ export default function WincredMirrorPage() {
             Carregando...
           </div>
         ) : status ? (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -223,6 +224,7 @@ export default function WincredMirrorPage() {
               })}
             </tbody>
           </table>
+          </div>
         ) : null}
       </div>
 
@@ -235,6 +237,7 @@ export default function WincredMirrorPage() {
               Resultado do ultimo sync
             </h2>
           </div>
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -263,6 +266,7 @@ export default function WincredMirrorPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>

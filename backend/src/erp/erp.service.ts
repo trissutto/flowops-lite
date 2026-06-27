@@ -1793,6 +1793,57 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * SNAPSHOT do catálogo agregado por REFERÊNCIA (modelo) — usado pela tela
+   * "Classificação de Produtos" (Cadastros). Uma única query GROUP BY REF sobre
+   * `produtos`; o caller cacheia o resultado (é tela de retaguarda, não precisa
+   * ser ao vivo a cada tecla). NÃO toca em estoque nem em nada existente.
+   *
+   * Uma REF é considerada plus-size se QUALQUER SKU dela tiver PLUS_SIZE in (1,2).
+   * categoria = NOMEGRUPO (o "grupo" que a loja trata como categoria).
+   */
+  async getRefCatalogSnapshot(): Promise<Array<{
+    ref: string;
+    descricao: string;
+    marca: string;
+    fornecedor: string;
+    categoria: string;
+    plusSize: boolean;
+  }>> {
+    if (!this.pool) return [];
+    const sql = `
+      SELECT TRIM(UPPER(p.REF))                                   AS ref,
+             MAX(COALESCE(p.DESCRICAOCOMPLETA, p.DESCRICAOPDV, '')) AS descricao,
+             MAX(COALESCE(p.MARCA, ''))                           AS marca,
+             MAX(COALESCE(p.FORNECEDOR, ''))                      AS fornecedor,
+             MAX(COALESCE(p.NOMEGRUPO, ''))                       AS categoria,
+             MAX(CASE WHEN p.PLUS_SIZE IN (1, 2) THEN 1 ELSE 0 END) AS plus_size
+        FROM produtos p
+       WHERE p.REF IS NOT NULL
+         AND TRIM(p.REF) <> ''
+       GROUP BY TRIM(UPPER(p.REF))
+       LIMIT 200000
+    `;
+    try {
+      const t0 = Date.now();
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+      this.logger.log(
+        `[erp] getRefCatalogSnapshot: ${(rows as any[]).length} REF(s) em ${Date.now() - t0}ms`,
+      );
+      return (rows as any[]).map((r) => ({
+        ref: String(r.ref || '').trim(),
+        descricao: String(r.descricao || '').trim(),
+        marca: String(r.marca || '').trim(),
+        fornecedor: String(r.fornecedor || '').trim(),
+        categoria: String(r.categoria || '').trim(),
+        plusSize: Number(r.plus_size) === 1,
+      }));
+    } catch (e) {
+      this.logger.error(`getRefCatalogSnapshot falhou: ${(e as Error).message}`);
+      throw e;
+    }
+  }
+
+  /**
    * DIAGNÃ“STICO de searchRefsByDateRange â€” usado pra debugar quando "0 resultados".
    * Retorna:
    *   - qual coluna de data foi detectada

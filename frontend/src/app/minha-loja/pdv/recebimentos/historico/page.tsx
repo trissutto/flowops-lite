@@ -167,7 +167,7 @@ export default function HistoricoBaixasPage() {
 
         {/* Filtros */}
         <div className="bg-white rounded-xl shadow p-4 space-y-3">
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div>
               <label className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Período</label>
               <select
@@ -355,7 +355,7 @@ export default function HistoricoBaixasPage() {
             onClick={() => !estornando && setEstornoBaixa(null)}
           >
             <div
-              className="bg-white rounded-xl max-w-md w-full p-5 space-y-3"
+              className="bg-white rounded-xl max-w-md w-full p-5 space-y-3 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h2 className="text-lg font-black text-rose-700 flex items-center gap-2">

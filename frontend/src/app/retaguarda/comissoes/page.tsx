@@ -212,6 +212,7 @@ function RulesTab() {
           </button>
         </div>
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full bg-white rounded-xl border border-slate-200 overflow-hidden">
           <thead className="bg-slate-50 text-xs uppercase text-slate-600">
             <tr>
@@ -279,6 +280,7 @@ function RulesTab() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {editing && (
@@ -623,6 +625,7 @@ function PeriodsTab() {
       {loading ? (
         <Loader2 className="w-6 h-6 animate-spin mx-auto" />
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full bg-white rounded-xl border border-slate-200 overflow-hidden">
           <thead className="bg-slate-50 text-xs uppercase text-slate-600">
             <tr>
@@ -699,6 +702,7 @@ function PeriodsTab() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
@@ -754,7 +758,7 @@ function ReportTab() {
         <p className="text-center text-slate-400 py-10">Nenhum dado pra esse período</p>
       ) : (
         <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Card label="Vendido líquido" value={brl(data.period.totalVendido)} />
             <Card label="Comissão total" value={brl(data.period.totalCommission)} highlight />
             <Card label="Vendedoras" value={String(data.period.totalSellers)} />
@@ -769,6 +773,7 @@ function ReportTab() {
                   comissão
                 </span>
               </div>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-600">
                   <tr>
@@ -797,6 +802,7 @@ function ReportTab() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           ))}
         </div>

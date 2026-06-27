@@ -546,6 +546,7 @@ export default function ListaPersonalizadaPage() {
 
           {/* Tabela */}
           <div className="bg-white rounded shadow overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-100">
                 <tr>
@@ -619,6 +620,7 @@ export default function ListaPersonalizadaPage() {
                 })}
               </tbody>
             </table>
+            </div>
           </div>
 
           {totalPages > 1 && (

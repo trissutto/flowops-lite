@@ -1127,6 +1127,7 @@ export default function PedidoDetailPage() {
         <h3 className="font-semibold p-4 text-sm text-slate-600 uppercase tracking-wide border-b flex items-center gap-2">
           <Package className="w-4 h-4" /> Itens ({order.lineItems.length})
         </h3>
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
@@ -1149,6 +1150,7 @@ export default function PedidoDetailPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* SEPARAÇÃO — bloqueada se pagamento nao confirmado (on-hold/pending/failed/cancelled) */}
@@ -2248,7 +2250,7 @@ function SkuDiagnoseModal({
           {data && !loading && (
             <>
               {/* KPIs no topo: real vs committed vs liquid */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-3 text-center">
                   <div className="text-[10px] text-blue-700 uppercase tracking-widest font-bold">Real (Giga)</div>
                   <div className="text-3xl font-black text-blue-700 tabular-nums mt-1">{data.totals.real}</div>

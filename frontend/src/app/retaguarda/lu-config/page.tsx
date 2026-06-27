@@ -277,7 +277,7 @@ export default function LuConfigPage() {
                 <label className="text-sm font-bold text-stone-700 block mb-2">
                   Uso de emojis
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {(['none', 'moderate', 'high'] as const).map((opt) => (
                     <button
                       key={opt}

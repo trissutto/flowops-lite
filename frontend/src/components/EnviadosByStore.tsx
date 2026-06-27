@@ -392,6 +392,7 @@ export default function EnviadosByStore() {
                 {/* Lista expandida */}
                 {isOpen && (
                   <div className="border-t">
+                    <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
                         <tr>
@@ -472,6 +473,7 @@ export default function EnviadosByStore() {
                         })}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 )}
               </div>
