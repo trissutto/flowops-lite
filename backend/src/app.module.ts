@@ -19,6 +19,7 @@ import { StockModule } from './stock/stock.module';
 import { RoutingModule } from './routing/routing.module';
 import { WooCommerceModule } from './woocommerce/woocommerce.module';
 import { ErpModule } from './erp/erp.module';
+import { ProductClassificationModule } from './product-classification/product-classification.module';
 import { QueueModule } from './queue/queue.module';
 import { WebsocketModule } from './websocket/websocket.module';
 import { WpDbModule } from './wp-db/wp-db.module';
@@ -81,6 +82,7 @@ import { LivePdvModule } from './live-pdv/live-pdv.module';
     RoutingModule,
     WooCommerceModule,
     ErpModule,
+    ProductClassificationModule,
     QueueModule,
     WebsocketModule,
     WpDbModule,
