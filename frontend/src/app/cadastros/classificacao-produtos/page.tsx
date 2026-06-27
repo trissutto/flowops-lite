@@ -284,7 +284,7 @@ export default function ClassificacaoProdutosPage() {
         <input
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="Pesquisar por descrição, referência, fornecedor, coleção ou qualquer palavra... (marca: use o filtro ao lado)"
+          placeholder="Pesquisar por descrição ou referência..."
           className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
         />
       </div>
@@ -396,7 +396,6 @@ export default function ClassificacaoProdutosPage() {
                 <th className="px-3 py-2.5 text-left">Referência</th>
                 <th className="px-3 py-2.5 text-left">Descrição</th>
                 <th className="px-3 py-2.5 text-left">Marca</th>
-                <th className="px-3 py-2.5 text-left">Fornecedor</th>
                 <th className="px-3 py-2.5 text-left">Categoria</th>
                 <th className="px-3 py-2.5 text-center">Plus</th>
                 <th className="px-3 py-2.5 text-center">Tipo Atual</th>
@@ -404,9 +403,9 @@ export default function ClassificacaoProdutosPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
+                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={8} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
+                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
               ) : (
                 rows.map((r) => {
                   const isSel = allFiltered || selected.has(r.ref);
@@ -424,7 +423,6 @@ export default function ClassificacaoProdutosPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 text-slate-600 text-xs">{r.marca || '—'}</td>
-                      <td className="px-3 py-2 text-slate-600 text-xs">{r.fornecedor || '—'}</td>
                       <td className="px-3 py-2 text-slate-600 text-xs">{r.categoria || '—'}</td>
                       <td className="px-3 py-2 text-center">
                         {r.plusSize ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold">PLUS</span> : <span className="text-slate-300">—</span>}
