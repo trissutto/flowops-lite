@@ -4793,6 +4793,20 @@ function PaymentModal({
     }
   };
 
+  // Volta pra grade de formas (trocar forma de pagamento). Sai do PIX, descarta
+  // o QR/cobrança e REABRE todas as formas — o filtro 'pix' (quando o modal é
+  // aberto pelo atalho PIX) escondia as outras e prendia a vendedora no QR.
+  const trocarForma = () => {
+    setSelected(null);
+    setPixCharge(null);
+    setPixPaid(false);
+    setVendaOnlineTipo(null);
+    setBandeira(null);
+    setParcelas(1);
+    setValorParcial('');
+    setEffectiveFilter('all');
+  };
+
   const canConfirm = useMemo(() => {
     if (!selected) return false;
     if (selected === 'crediario' && !customerCpf) return false;
@@ -5822,6 +5836,20 @@ function PaymentModal({
                 )}
               </>
             ) : null}
+
+            {/* Voltar / trocar forma de pagamento — sai do PIX e reabre TODAS
+                as formas. Antes, com o QR gerado, a vendedora ficava presa no
+                PIX sem como trocar a forma de pagamento. Escondido se o PIX já
+                foi confirmado como PAGO (trocar descartaria dinheiro recebido). */}
+            {!pixPaid && (
+              <button
+                type="button"
+                onClick={trocarForma}
+                className="w-full px-3 py-2.5 bg-white hover:bg-slate-50 border-2 border-slate-200 hover:border-slate-300 text-slate-600 rounded-lg text-sm font-bold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" /> Trocar forma de pagamento
+              </button>
+            )}
           </div>
         )}
 
