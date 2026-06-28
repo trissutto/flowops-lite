@@ -641,6 +641,9 @@ function PdvPageInner() {
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [showVendedora, setShowVendedora] = useState(false);
+  // Popup central de CONFIRMAÇÃO da venda (resumo + escolha da vendedora) que
+  // abre na finalização — substituiu o seletor de vendedora do canto superior.
+  const [showConfirmSale, setShowConfirmSale] = useState(false);
   const [showPayment, setShowPayment] = useState(false);
   // Pré-seleção de método + bandeira (usado pelos atalhos MASTERCARD/VISANET/REDESHOP/VISA ELECTRON)
   const [presetMethod, setPresetMethod] = useState<string | null>(null);
@@ -815,10 +818,10 @@ function PdvPageInner() {
   // ── Foco automático ──
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
-    if (!showCustomer && !showVendedora && !showPayment && !showFinalized) {
+    if (!showCustomer && !showVendedora && !showConfirmSale && !showPayment && !showFinalized) {
       scanBarRef.current?.focus();
     }
-  }, [sale, showCustomer, showVendedora, showPayment, showFinalized]);
+  }, [sale, showCustomer, showVendedora, showConfirmSale, showPayment, showFinalized]);
 
   // Auto-abrir modal de vendedora REMOVIDO — agora vendedora é escolhida
   // a qualquer momento clicando no botão do header (cascata inline).
@@ -832,7 +835,7 @@ function PdvPageInner() {
   useEffect(() => {
     if (!sale || sale.status !== 'open') return;
     const anyModal =
-      showCustomer || showPayment || showFinalized || showVendedora ||
+      showCustomer || showPayment || showFinalized || showVendedora || showConfirmSale ||
       !!showDiscount || showShortcuts;
     const handler = (e: KeyboardEvent) => {
       // ── PDV2: Esc fecha modais — roda ANTES do early-return de modal
@@ -842,6 +845,8 @@ function PdvPageInner() {
         if (showDiscount) { e.preventDefault(); setShowDiscount(null); return; }
         if (showCustomer) { e.preventDefault(); setShowCustomer(false); return; }
         if (showVendedora) { e.preventDefault(); setShowVendedora(false); return; }
+        // Esc no popup de confirmação = cancelar (descarta finalize pendente)
+        if (showConfirmSale) { e.preventDefault(); pendingFinalizeRef.current = null; setShowConfirmSale(false); return; }
         // sem modal aberto → cai no comportamento original (bloco Escape abaixo)
       }
       // ── PDV2: F12 abre/fecha overlay de atalhos (funciona sempre) ──
@@ -903,12 +908,8 @@ function PdvPageInner() {
         setShowCustomer(true);
         return;
       }
-      // F9 → escolher/trocar vendedora (atendente)
-      if (e.key === 'F9') {
-        e.preventDefault();
-        setShowVendedora(true);
-        return;
-      }
+      // F9 (escolher vendedora) REMOVIDO — a vendedora agora é escolhida no
+      // popup central de confirmação que abre na finalização da venda.
       // F10 → consultar produto (estoque/preço/foto)
       if (e.key === 'F10') {
         e.preventDefault();
@@ -970,7 +971,7 @@ function PdvPageInner() {
     // PERF: `scanInput` saiu das deps — o valor digitado agora vive na ScanBar,
     // então o listener NÃO é mais re-registrado a cada tecla.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showDiscount, showShortcuts]);
+  }, [sale, showCustomer, showPayment, showFinalized, showVendedora, showConfirmSale, showDiscount, showShortcuts]);
 
   // ── PDV2: marca o item recém-adicionado pra dar flash verde (~600ms) ──
   // Detecta por diff: item NOVO (id que não existia) ou qty incrementada.
@@ -1284,6 +1285,7 @@ function PdvPageInner() {
       const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
       setSale(fresh);
       setShowVendedora(false);
+      setShowConfirmSale(false);
       toast('success', 'Vendedora identificada', data.nome);
 
       // AUTO-BIPE: se tem um SKU pendente (vendedora bipou antes de escolher
@@ -1376,13 +1378,13 @@ function PdvPageInner() {
   // Se paymentMethod vier vazio, usa modo SPLIT (pagamentos parciais já adicionados via addPayment)
   const finalizeSale = async (paymentMethod: string, paymentDetails?: any, opts?: { skipSellerGate?: boolean }) => {
     if (!sale) return;
-    // PDV2: vendedora OBRIGATÓRIA no ENCERRAMENTO (não no 1º bip).
-    // Sem vendedora: salva o finalize pendente, abre o modal e retoma
-    // automaticamente após a escolha (skipSellerGate evita loop na retomada).
-    if (!sale.sellerName && !opts?.skipSellerGate) {
+    // PDV2: a confirmação da venda (resumo + escolha OBRIGATÓRIA da vendedora)
+    // acontece num popup central no ENCERRAMENTO. Salva o finalize pendente,
+    // abre o popup e retoma automaticamente após confirmar (skipSellerGate
+    // evita reabrir o popup na retomada). Sempre abre — é a etapa final do fluxo.
+    if (!opts?.skipSellerGate) {
       pendingFinalizeRef.current = { paymentMethod, paymentDetails };
-      toast('warning', 'Escolha a vendedora pra fechar a venda', 'Após confirmar, a venda finaliza automaticamente.');
-      setShowVendedora(true);
+      setShowConfirmSale(true);
       return;
     }
     // GUARD SINCRONO contra double-fire: ref muda IMEDIATAMENTE (antes do
@@ -1662,23 +1664,8 @@ function PdvPageInner() {
             );
           })()}
 
-          {/* Botão Vendedora — quem está atendendo · atalho F9 */}
-          <button
-            onClick={() => setShowVendedora(true)}
-            disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
-              sale?.sellerName
-                ? 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
-                : 'border-[#D4AF37] hover:bg-[#1f1f1f] animate-pulse'
-            }`}
-            title={sale?.sellerName ? `Trocar vendedora (atalho F9) — atual: ${sale.sellerName}` : 'Identificar vendedora (atalho F9)'}
-          >
-            <Sparkles className="w-4 h-4 text-[#D4AF37]" />
-            <span className="hidden sm:inline truncate max-w-[100px]">
-              {sale?.sellerName ? sale.sellerName.split(' ')[0] : 'Vendedora'}
-            </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F9</kbd>
-          </button>
+          {/* Seletor de vendedora do canto REMOVIDO — agora a vendedora é
+              escolhida no popup central de confirmação, na finalização. */}
 
           {/* Botão Cliente — atalho F5 */}
           <button
@@ -2785,7 +2772,7 @@ function PdvPageInner() {
 
             {/* ── PDV2: barra de atalhos discreta no rodapé ── */}
             <div className="text-center text-[10px] text-slate-400 font-semibold tracking-wide select-none pt-1.5 mt-2 border-t border-slate-100 flex items-center justify-center gap-x-2 gap-y-1 flex-wrap">
-              {[['F1', 'Bipar'], ['F2', 'Desconto'], ['F4', 'Troca'], ['F6', 'Cliente'], ['F8', 'Pagamento'], ['F9', 'Vendedora'], ['F10', 'Consulta'], ['F12', 'Ajuda']].map(([k, lbl]) => (
+              {[['F1', 'Bipar'], ['F2', 'Desconto'], ['F4', 'Troca'], ['F6', 'Cliente'], ['F8', 'Pagamento'], ['F10', 'Consulta'], ['F12', 'Ajuda']].map(([k, lbl]) => (
                 <span key={k} className="inline-flex items-center gap-1">
                   <kbd className="inline-flex items-center justify-center font-mono text-[9px] bg-black text-[#D4AF37] rounded px-1 py-0.5 leading-none">{k}</kbd>
                   <span className="text-slate-500">{lbl}</span>
@@ -2818,17 +2805,17 @@ function PdvPageInner() {
       )}
 
       {/* Modal Vendedora */}
-      {showVendedora && sale && (
-        <VendedoraModal
-          atual={sale.sellerName || ''}
+      {showConfirmSale && sale && (
+        <ConfirmSaleModal
+          sale={sale}
           storeCode={sale.storeCode}
-          onClose={() => {
-            // Fechou sem escolher → descarta finalize pendente (evita
-            // finalize "fantasma" disparar numa escolha de vendedora futura)
+          onCancel={() => {
+            // Cancelou → descarta finalize pendente (evita finalize "fantasma"
+            // disparar numa escolha de vendedora futura). Volta pro pagamento.
             pendingFinalizeRef.current = null;
-            setShowVendedora(false);
+            setShowConfirmSale(false);
           }}
-          onSave={saveVendedora}
+          onConfirm={saveVendedora}
         />
       )}
 
@@ -3227,17 +3214,36 @@ function PdvPageInner() {
 // Aparece ao clicar no botão "Vendedora" do header (e idealmente automático
 // ao abrir venda nova). Necessário pra atribuir comissão.
 // ─────────────────────────────────────────────────────────────────────────
-function VendedoraModal({
-  atual,
+function ConfirmSaleModal({
+  sale,
   storeCode,
-  onClose,
-  onSave,
+  onCancel,
+  onConfirm,
 }: {
-  atual: string;
+  sale: Sale;
   storeCode?: string;
-  onClose: () => void;
-  onSave: (d: { codigo: string; nome: string }) => void;
+  onCancel: () => void;
+  onConfirm: (d: { codigo: string; nome: string }) => void;
 }) {
+  // Animação de abertura (fade + zoom)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 10);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Vendedora selecionada no popup (pré-seleciona se a venda já tiver uma).
+  const [selected, setSelected] = useState<{ codigo: string; nome: string } | null>(
+    sale.sellerName ? { codigo: sale.sellerId || '', nome: sale.sellerName } : null,
+  );
+
+  // Resumo da venda (lê do `sale`, nada é calculado aqui)
+  const qtdPecas = (sale.items || []).reduce((s, i) => s + (i.qty || 0), 0);
+  const formasPgto = sale.payments || [];
+  const pgtoLabel = (m: string) =>
+    PAYMENT_METHODS.find((p) => p.id === m)?.label ||
+    String(m || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<Array<{ codigo: string; nome: string; loja?: string }>>([]);
   const [searching, setSearching] = useState(false);
@@ -3348,163 +3354,148 @@ function VendedoraModal({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const pick = visibleResults[highlight];
-      if (pick) onSave({ codigo: pick.codigo, nome: pick.nome });
+      if (pick) setSelected({ codigo: pick.codigo, nome: pick.nome });
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      onClose();
+      onCancel();
     }
   }
 
   return (
-    <>
-      {/* Backdrop transparente — fecha ao clicar fora */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      {/* Cascata ancorada no canto superior direito (perto do botão Vendedora do header) */}
+    <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-3 sm:p-4">
       <div
-        className="fixed top-16 right-2 sm:right-4 z-50 bg-white border-2 border-emerald-300 rounded-xl shadow-2xl w-[min(92vw,420px)] p-4 space-y-3"
+        className={`bg-white rounded-2xl shadow-2xl w-[min(96vw,560px)] max-h-[94vh] flex flex-col overflow-hidden transition-all duration-200 ease-out ${
+          mounted ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold flex items-center gap-2 text-emerald-900">
-            <Sparkles className="w-4 h-4" /> Quem está atendendo?
-          </h2>
-          <button onClick={onClose}><X className="w-4 h-4" /></button>
+        {/* Cabeçalho */}
+        <div className="px-5 pt-5 pb-3 shrink-0">
+          <h2 className="text-lg font-extrabold tracking-tight text-slate-900 text-center">CONFIRMAR VENDA</h2>
+
+          {/* Resumo da venda */}
+          <div className="mt-3 rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm space-y-1.5">
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Cliente</span>
+              <span className="font-semibold text-slate-800 text-right truncate">{sale.customerName || 'Não identificado'}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Itens</span>
+              <span className="font-semibold text-slate-800">{qtdPecas} {qtdPecas === 1 ? 'peça' : 'peças'}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-slate-500">Pagamento</span>
+              <span className="font-semibold text-slate-800 text-right">
+                {formasPgto.length > 0
+                  ? formasPgto.map((p) => pgtoLabel(p.method)).join(' + ')
+                  : '—'}
+              </span>
+            </div>
+            {sale.desconto > 0 && (
+              <div className="flex justify-between gap-3">
+                <span className="text-slate-500">Desconto</span>
+                <span className="font-semibold text-rose-600">− {brl(sale.desconto)}</span>
+              </div>
+            )}
+            <div className="flex justify-between gap-3 pt-1.5 mt-1.5 border-t border-slate-200">
+              <span className="text-slate-600 font-bold">TOTAL</span>
+              <span className="font-extrabold text-emerald-700 text-base">{brl(sale.total)}</span>
+            </div>
+          </div>
+
+          {/* Destaque: quem vendeu */}
+          <div className="mt-4 text-center">
+            <p className="text-base font-bold text-slate-900">Quem realizou esta venda?</p>
+            <p className="text-xs text-slate-500">Selecione a vendedora responsável antes de concluir.</p>
+          </div>
+
+          {/* Busca (aparece se houver muitas vendedoras) */}
+          <div className="mt-3 flex items-center gap-2 border-2 border-slate-200 bg-white rounded-xl px-3 py-2.5 focus-within:border-[#D4AF37]">
+            <Search className="w-4 h-4 text-slate-400 shrink-0" />
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder="Buscar vendedora pelo nome…"
+              className="flex-1 bg-transparent text-sm focus:outline-none"
+              autoFocus
+              autoComplete="off"
+            />
+            {searching && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+          </div>
         </div>
 
-        {atual && (
-          <div className="flex items-center gap-2 text-[11px] bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded">
-            <span className="flex-1"><strong>Atual:</strong> {atual}</span>
-            <button
-              type="button"
-              onClick={() => onSave({ codigo: '', nome: '' })}
-              className="px-2 py-0.5 bg-rose-100 hover:bg-rose-200 text-rose-700 rounded text-[10px] font-bold border border-rose-200"
-              title="Remover vendedora atual"
-            >
-              ✕ Trocar
-            </button>
-          </div>
-        )}
-
-        {/* Indicador de filtro: "mostrando funcionárias da loja X" */}
-        {storeCode && lojaFiltered && (
-          <div className="text-[10px] text-violet-700 bg-violet-50 border border-violet-200 px-2 py-1 rounded flex items-center gap-2 justify-between">
-            <span className="flex items-center gap-1">
-              <span className="font-bold">Loja {storeCode}</span>
-              <span className="text-violet-500">·</span>
-              <span>{usingActiveList ? 'whitelist ativa' : 'filtro de loja'}</span>
-            </span>
-            <Link
-              href="/retaguarda/vendedoras-ativas"
-              className="font-bold underline hover:text-violet-900"
-              onClick={(e) => e.stopPropagation()}
-            >
-              ✎ editar lista
-            </Link>
-          </div>
-        )}
-        {storeCode && !lojaFiltered && tabelaOk && (
-          <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded">
-            ⚠ Tabela de funcionários sem coluna de loja — mostrando todos
-          </div>
-        )}
-
-        <div className="flex items-center gap-2 border-2 border-emerald-300 bg-emerald-50 rounded px-2 py-2 focus-within:border-emerald-500">
-          <Search className="w-4 h-4 text-emerald-600 shrink-0" />
-          <input
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder="Nome da vendedora… (↑↓ Enter)"
-            className="flex-1 bg-transparent text-sm focus:outline-none"
-            autoFocus
-            autoComplete="off"
-          />
-          {searching && <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />}
-        </div>
-
-        {tabelaOk === false && (
-          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            Tabela <code>funcionarios</code> não encontrada no Giga. Digite o nome manualmente embaixo.
-          </div>
-        )}
-
-        <div
-          className="max-h-80 overflow-y-auto p-1"
-          ref={(el) => {
-            if (!el) return;
-            const target = el.querySelector(`[data-vendedora-idx="${highlight}"]`) as HTMLElement | null;
-            target?.scrollIntoView({ block: 'nearest' });
-          }}
-        >
+        {/* Cartões grandes de vendedora */}
+        <div className="px-5 pb-2 flex-1 overflow-y-auto">
           {visibleResults.length === 0 && !searching && (
-            <div className="text-center text-xs text-slate-400 py-6">
+            <div className="text-center text-sm text-slate-400 py-8">
               {searchTerm ? 'Nenhuma vendedora encontrada' : 'Carregando…'}
             </div>
           )}
           {visibleResults.length > 0 && (
-            <ul className="flex flex-col gap-1" role="listbox" aria-label="Vendedoras">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               {visibleResults.map((f, idx) => {
-                const isAtual = !!atual && atual.toUpperCase().includes(f.nome.toUpperCase());
-                const isHighlight = idx === highlight;
+                const isSel = selected?.codigo === f.codigo && selected?.nome === f.nome;
                 const primeiroNome = f.nome.split(/\s+/)[0];
                 return (
-                  <li key={f.codigo + f.nome} role="option" aria-selected={isHighlight} data-vendedora-idx={idx}>
-                    <button
-                      type="button"
-                      onClick={() => onSave({ codigo: f.codigo, nome: f.nome })}
-                      onMouseEnter={() => setHighlight(idx)}
-                      title={`${f.nome}${f.codigo ? ' · cód ' + f.codigo : ''}`}
-                      className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg transition border-2 active:scale-[0.98] ${
-                        isHighlight
-                          ? 'bg-emerald-500 border-emerald-600 text-white shadow ring-2 ring-emerald-300'
-                          : isAtual
-                            ? 'bg-emerald-50 border-emerald-400 text-emerald-900'
-                            : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300 text-slate-800'
-                      }`}
-                    >
-                      <div className={`w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-xs font-bold ${
-                        isHighlight ? 'bg-white/20 text-white' : 'bg-emerald-100 text-emerald-700'
-                      }`}>
-                        {primeiroNome.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[12px] font-bold truncate leading-tight">{f.nome}</div>
-                        {f.codigo && (
-                          <div className={`text-[9px] ${isHighlight ? 'text-white/80' : 'text-slate-400'}`}>
-                            cód {f.codigo}
-                          </div>
-                        )}
-                      </div>
-                      {isAtual && !isHighlight && (
-                        <span className="text-[9px] font-bold bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded">ATUAL</span>
-                      )}
-                      {isHighlight && (
-                        <span className="text-[10px] font-bold text-white/90">↵</span>
-                      )}
-                    </button>
-                  </li>
+                  <button
+                    key={f.codigo + f.nome}
+                    type="button"
+                    data-vendedora-idx={idx}
+                    onClick={() => setSelected({ codigo: f.codigo, nome: f.nome })}
+                    title={f.nome}
+                    className={`relative flex flex-col items-center justify-center gap-2 rounded-2xl border-2 p-4 min-h-[112px] transition active:scale-[0.97] ${
+                      isSel
+                        ? 'border-[#D4AF37] bg-[#FFFBEB] ring-2 ring-[#D4AF37] shadow'
+                        : 'border-slate-200 bg-white hover:border-[#D4AF37]/60 hover:bg-amber-50/40'
+                    }`}
+                  >
+                    {isSel && (
+                      <span className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-[#D4AF37] text-white grid place-items-center shadow">
+                        <Check className="w-4 h-4" strokeWidth={3} />
+                      </span>
+                    )}
+                    <span className={`w-12 h-12 rounded-full grid place-items-center ${
+                      isSel ? 'bg-[#D4AF37]/15 text-[#9A7B16]' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      <User className="w-7 h-7" />
+                    </span>
+                    <span className={`text-[13px] font-bold text-center leading-tight line-clamp-2 ${
+                      isSel ? 'text-[#7A5E0E]' : 'text-slate-700'
+                    }`} title={f.nome}>
+                      {primeiroNome}
+                    </span>
+                  </button>
                 );
               })}
-            </ul>
+            </div>
           )}
         </div>
 
-        {/* Fallback manual — útil se a vendedora ainda não foi cadastrada no Giga */}
-        {tabelaOk === false && (
+        {/* Rodapé */}
+        <div className="px-5 py-4 border-t border-slate-200 bg-slate-50 flex items-center gap-3 shrink-0">
           <button
-            onClick={() => {
-              const nome = searchTerm.trim();
-              if (!nome) return;
-              onSave({ codigo: '', nome });
-            }}
-            disabled={searchTerm.trim().length < 3}
-            className="w-full px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded text-sm disabled:opacity-40"
+            type="button"
+            onClick={onCancel}
+            className="px-5 py-3.5 rounded-xl font-bold text-slate-600 bg-white border border-slate-300 hover:bg-slate-100 active:scale-[0.98]"
           >
-            Usar &ldquo;{searchTerm.trim() || '...'}&rdquo; manualmente
+            CANCELAR
           </button>
-        )}
+          <button
+            type="button"
+            disabled={!selected}
+            onClick={() => selected && onConfirm(selected)}
+            className={`flex-1 px-5 py-3.5 rounded-xl font-extrabold text-white transition active:scale-[0.98] flex items-center justify-center gap-2 ${
+              selected
+                ? 'bg-emerald-600 hover:bg-emerald-700 shadow-lg'
+                : 'bg-slate-300 cursor-not-allowed'
+            }`}
+          >
+            <Check className="w-5 h-5" /> FINALIZAR VENDA
+          </button>
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -8098,7 +8089,6 @@ function ShortcutsHelpModal({ onClose }: { onClose: () => void }) {
     ['F4', 'Troca / Devolução'],
     ['F6', 'Identificar cliente (CPF)'],
     ['F8', 'Abrir tela de pagamento'],
-    ['F9', 'Escolher vendedora'],
     ['F10', 'Consultar produto (estoque / preço)'],
     ['Del', 'Remover último item do carrinho'],
     ['Esc', 'Fechar modal aberto'],
