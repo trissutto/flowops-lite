@@ -49,9 +49,9 @@ const CONFIG_ITEMS: ConfigItem[] = [
   { href: '/retaguarda/almoxarifado', label: 'Almoxarifado',  subtitle: 'Itens',       description: 'Materiais internos',      tone: 'purple', icon: Boxes        },
 
   // === Fiscal + Pagamentos (PDV) ===
-  { href: '/config/nfce',             label: 'NFC-e',         subtitle: 'Fiscal',      description: 'Certificado A1 + CSC',    tone: 'rose',   icon: Receipt      },
-  { href: '/config/pagarme',          label: 'Pagar.me',      subtitle: 'PIX',         description: 'Recomendado pra PDV',     tone: 'green',  icon: CreditCard   },
-  { href: '/config/pagbank',          label: 'PagBank',       subtitle: 'PIX',         description: 'Requer homologação',      tone: 'sky',    icon: QrCode       },
+  { href: '/config/nfce',             label: 'Loja: Fiscal + Cobrança', subtitle: 'Por loja', description: 'NFC-e + PIX (PagBank/Pagar.me)', tone: 'rose', icon: Receipt },
+  { href: '/config/pagarme',          label: 'Pagar.me (matriz)', subtitle: 'PIX global', description: 'Conta padrão / fallback', tone: 'green',  icon: CreditCard   },
+  { href: '/config/pagbank',          label: 'PagBank (matriz)',  subtitle: 'PIX global', description: 'Conta padrão / fallback', tone: 'sky',    icon: QrCode       },
 
   // === Integrações ===
   { href: '/config/whatsapp',           label: 'WhatsApp Site',      subtitle: 'Baileys',   description: 'Avisos pra lojas + alertas',  tone: 'green',  icon: MessageCircle },

@@ -17,6 +17,7 @@ import {
   Eye, EyeOff, Store, Receipt, FlaskConical, ChevronDown, ChevronUp, XCircle, AlertTriangle,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import CobrancaSection from './CobrancaSection';
 
 type StatusItem = {
   storeCode: string;
@@ -712,6 +713,8 @@ export default function NfceConfigPage() {
                 </button>
               </div>
             </div>
+
+            <CobrancaSection storeCode={selectedStore} />
           </>
         )}
       </div>
