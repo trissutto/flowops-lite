@@ -1439,20 +1439,16 @@ function PdvPageInner() {
       setShowPayment(false);
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
 
-      // PIX no balcao AGORA mostra a tela de finalizada (pra poder emitir
-      // NFC-e), igual dinheiro/cartao. So o fluxo AUTO (PIX confirmado por
-      // webhook Pagar.me/PagBank, sem operador na tela) pula direto pra
-      // proxima venda. isDirectPix/allPaymentsPix seguem usados na impressao
-      // automatica do cupom logo abaixo.
-      const wasAutoFlow = autoFlowRef.current;
+      // TODA venda (inclusive PIX presencial) MOSTRA a tela de finalizada,
+      // pra a vendedora poder emitir a NFC-e. Antes o PIX setava autoFlowRef
+      // e pulava a tela ("cliente ja foi embora") — isso escondia o botao
+      // EMITIR NFC-e. Agora ninguem pula; a vendedora clica "Nova venda".
+      // isDirectPix/allPaymentsPix seguem usados na impressao auto do cupom.
       autoFlowRef.current = false;
       const isDirectPix = paymentMethod === 'pix';
       const allPaymentsPix = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'pix');
-      const skipFinalizedScreen = wasAutoFlow;
-      if (!skipFinalizedScreen) {
-        setShowFinalized(true);
-      }
+      setShowFinalized(true);
 
       // ── Impressão automática de cupom: PIX ou DINHEIRO (em 2 vias) ──
       // Cartão/crediário/marcado/vale NÃO imprimem cupom auto.
@@ -1475,14 +1471,9 @@ function PdvPageInner() {
         }
       }
 
-      // PIX e fluxo AUTO: abre proxima venda em ~1.5s (sem tela de preview
-      // no caminho — vendedora ja pode bipar proximo cliente direto).
-      if (skipFinalizedScreen) {
-        setTimeout(() => {
-          setSale(null);
-          createNewSale();
-        }, 1500);
-      }
+      // (Antes havia auto-abertura da proxima venda em ~1.5s pro PIX. Removido:
+      // agora a tela de finalizada sempre aparece e a vendedora clica
+      // "Nova venda" — assim consegue emitir a NFC-e antes de seguir.)
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
