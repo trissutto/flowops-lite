@@ -55,6 +55,48 @@ export class PagarmeController {
     return this.svc.testConnection();
   }
 
+  // ── Config por loja (cascata: loja → singleton matriz) ───────────────
+
+  @UseGuards(JwtAuthGuard)
+  @Get('store-configs')
+  async listStoreConfigs(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.listStoreConfigs();
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('store-config/:storeCode')
+  async getStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.getStoreConfig(storeCode);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode')
+  async setStoreConfig(
+    @Req() req: any,
+    @Param('storeCode') storeCode: string,
+    @Body()
+    body: {
+      ambiente?: 'test' | 'live';
+      apiKey?: string;
+      webhookSecret?: string;
+      recipientId?: string;
+      enabled?: boolean;
+      contaLabel?: string;
+    },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.setStoreConfig(storeCode, body);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode/remove')
+  async removeStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.removeStoreConfig(storeCode);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('pix/create')
   async createPix(

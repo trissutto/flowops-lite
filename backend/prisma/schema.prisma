@@ -1617,6 +1617,28 @@ model PagarmeConfig {
   @@map("pagarme_config")
 }
 
+/// Config Pagar.me por loja. Cada loja com CNPJ proprio pode ter sua conta
+/// Pagar.me e API key independente. Se nao cadastrar, usa o singleton
+/// PagarmeConfig como fallback (mesma logica do PagbankStoreConfig).
+///
+/// Resolucao no PDV: PagarmeStoreConfig WHERE storeCode = X AND enabled = true
+///   -> fallback: PagarmeConfig singleton
+model PagarmeStoreConfig {
+  storeCode       String   @id @map("store_code")
+  ambiente        String   @default("test")
+  apiKey          String?  @map("api_key") @db.Text
+  webhookSecret   String?  @map("webhook_secret")
+  recipientId     String?  @map("recipient_id")
+  enabled         Boolean  @default(false)
+  // Identificacao visual: razao social ou nome curto da conta Pagar.me
+  contaLabel      String?  @map("conta_label") @db.VarChar(80)
+
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("pagarme_store_config")
+}
+
 // Cada cobrança PIX vira um registro aqui.
 model PagarmePayment {
   id              String   @id @default(uuid())

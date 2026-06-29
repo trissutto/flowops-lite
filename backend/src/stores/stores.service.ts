@@ -67,6 +67,22 @@ export class StoresService {
   }
 
   /**
+   * Define o gateway PIX da loja (por CODIGO). Usado pelo painel de config
+   * por loja pra escolher PagBank x Pagar.me sem precisar do id (UUID).
+   */
+  async setPixProvider(
+    code: string,
+    provider: 'auto' | 'pagbank' | 'pagarme',
+  ): Promise<{ provider: 'auto' | 'pagbank' | 'pagarme' }> {
+    const p = ['auto', 'pagbank', 'pagarme'].includes(provider) ? provider : 'auto';
+    await this.prisma.store.update({
+      where: { code },
+      data: { pixProvider: p } as any,
+    });
+    return { provider: p };
+  }
+
+  /**
    * Lista lojas com config de realinhamento (campos canSendRealign + canReceiveRealign).
    * Usado pela aba Config da tela de Distribuição de Estoque.
    */

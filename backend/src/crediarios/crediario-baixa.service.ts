@@ -124,35 +124,58 @@ export class CrediarioBaixaService {
     qrCodeText: string;
     qrCodeImageUrl: string;
   }> {
-    // 1) PagBank primeiro
+    // Provedor escolhido pela loja (campo Store.pixProvider):
+    //   'auto'    = PagBank primeiro, Pagar.me como fallback (padrao)
+    //   'pagbank' = so PagBank (sem fallback cross-provider)
+    //   'pagarme' = so Pagar.me (sem fallback cross-provider)
+    // Se PagBank/Pagar.me falhar num modo forcado, o erro propaga e o caller
+    // cai pro PIX local — sem misturar conta de outro provedor.
+    let pref: 'auto' | 'pagbank' | 'pagarme' = 'auto';
     try {
-      const pb = await this.pagbank.createPixCharge({
-        saleId: input.saleId,
-        valor: input.valor,
-        storeCode: input.storeCode,
-        customerName: input.customerName,
-        customerCpf: input.customerCpf,
-        customerEmail: input.customerEmail,
-        expiresInMinutes: input.expiresInMinutes || 15,
+      const st = await (this.prisma as any).store.findUnique({
+        where: { code: input.storeCode },
+        select: { pixProvider: true },
       });
-      this.logger.log(
-        `[crediario-pix] PagBank OK — saleId=${input.saleId} order=${pb.pagbankOrderId} loja=${input.storeCode}`,
-      );
-      return {
-        provider: 'pagbank',
-        orderId: pb.pagbankOrderId,
-        qrCodeText: pb.qrCodeText,
-        // PagBank entrega base64; converte pra data URL pro frontend renderizar igual.
-        qrCodeImageUrl: pb.qrCodeImageB64
-          ? `data:image/png;base64,${pb.qrCodeImageB64}`
-          : '',
-      };
-    } catch (e: any) {
-      this.logger.warn(
-        `[crediario-pix] PagBank falhou (${e?.message?.slice(0, 80)}), tentando Pagar.me...`,
-      );
+      if (st?.pixProvider === 'pagbank' || st?.pixProvider === 'pagarme') {
+        pref = st.pixProvider;
+      }
+    } catch { /* mantem auto */ }
+
+    const tryPagbank = pref === 'auto' || pref === 'pagbank';
+    const tryPagarme = pref === 'auto' || pref === 'pagarme';
+
+    // 1) PagBank (se permitido pela loja)
+    if (tryPagbank) {
+      try {
+        const pb = await this.pagbank.createPixCharge({
+          saleId: input.saleId,
+          valor: input.valor,
+          storeCode: input.storeCode,
+          customerName: input.customerName,
+          customerCpf: input.customerCpf,
+          customerEmail: input.customerEmail,
+          expiresInMinutes: input.expiresInMinutes || 15,
+        });
+        this.logger.log(
+          `[crediario-pix] PagBank OK — saleId=${input.saleId} order=${pb.pagbankOrderId} loja=${input.storeCode} (pref=${pref})`,
+        );
+        return {
+          provider: 'pagbank',
+          orderId: pb.pagbankOrderId,
+          qrCodeText: pb.qrCodeText,
+          // PagBank entrega base64; converte pra data URL pro frontend renderizar igual.
+          qrCodeImageUrl: pb.qrCodeImageB64
+            ? `data:image/png;base64,${pb.qrCodeImageB64}`
+            : '',
+        };
+      } catch (e: any) {
+        if (!tryPagarme) throw e; // loja forcou PagBank: sem fallback cross-provider
+        this.logger.warn(
+          `[crediario-pix] PagBank falhou (${e?.message?.slice(0, 80)}), tentando Pagar.me...`,
+        );
+      }
     }
-    // 2) Fallback Pagar.me
+    // 2) Pagar.me (fallback do auto, ou provedor forcado da loja)
     const pm = await this.pagarme.createPixCharge({
       saleId: input.saleId,
       valor: input.valor,
@@ -164,7 +187,7 @@ export class CrediarioBaixaService {
       expiresInMinutes: input.expiresInMinutes || 15,
     });
     this.logger.log(
-      `[crediario-pix] Pagar.me fallback OK — saleId=${input.saleId} order=${pm.pagarmeOrderId} loja=${input.storeCode}`,
+      `[crediario-pix] Pagar.me OK — saleId=${input.saleId} order=${pm.pagarmeOrderId} loja=${input.storeCode} (pref=${pref})`,
     );
     return {
       provider: 'pagarme',

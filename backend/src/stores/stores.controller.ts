@@ -57,6 +57,19 @@ export class StoresController {
     return this.stores.getPixProvider(code);
   }
 
+  /**
+   * POST /stores/by-code/:code/pix-provider { provider }
+   * Define o gateway PIX da loja (auto | pagbank | pagarme). Usado pelo
+   * painel de config por loja.
+   */
+  @Post('by-code/:code/pix-provider')
+  async setPixProvider(
+    @Param('code') code: string,
+    @Body() body: { provider: 'auto' | 'pagbank' | 'pagarme' },
+  ) {
+    return this.stores.setPixProvider(code, body?.provider);
+  }
+
   @Post()
   create(@Body() body: StoreInput) {
     return this.stores.create(body);

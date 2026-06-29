@@ -180,6 +180,121 @@ export class PagarmeService {
     return cfg;
   }
 
+  /**
+   * Resolve config Pagar.me pra uma loja. Prioridade:
+   *  1. PagarmeStoreConfig com storeCode = X e enabled=true → conta PROPRIA
+   *  2. Fallback: singleton PagarmeConfig (matriz)
+   * Espelha o getConfigInternalForStore do PagBank.
+   */
+  private async getConfigInternalForStore(storeCode: string): Promise<any> {
+    if (storeCode) {
+      try {
+        const storeCfg = await (this.prisma as any).pagarmeStoreConfig.findUnique({
+          where: { storeCode },
+        });
+        if (storeCfg && storeCfg.enabled && storeCfg.apiKey) {
+          this.logger.log(`[pagarme] usando config da loja ${storeCode} (conta: ${storeCfg.contaLabel || 'sem label'})`);
+          return { ...storeCfg, source: 'store' };
+        }
+      } catch (e) {
+        this.logger.warn(`[pagarme] PagarmeStoreConfig nao acessivel: ${(e as Error).message}`);
+      }
+    }
+    const singleton = await this.getConfigInternal();
+    this.logger.log(`[pagarme] usando config singleton (matriz) — loja ${storeCode || '?'} sem config propria`);
+    return { ...singleton, source: 'singleton' };
+  }
+
+  // ── Config por loja ────────────────────────────────────────────────
+
+  /** Lista configs por loja (sem expor api keys). */
+  async listStoreConfigs(): Promise<Array<{
+    storeCode: string;
+    ambiente: string;
+    enabled: boolean;
+    hasApiKey: boolean;
+    hasWebhookSecret: boolean;
+    recipientId: string | null;
+    contaLabel: string | null;
+  }>> {
+    const rows: any[] = await (this.prisma as any).pagarmeStoreConfig.findMany({
+      orderBy: { storeCode: 'asc' },
+    });
+    return rows.map((r) => ({
+      storeCode: r.storeCode,
+      ambiente: r.ambiente,
+      enabled: r.enabled,
+      hasApiKey: !!r.apiKey,
+      hasWebhookSecret: !!r.webhookSecret,
+      recipientId: r.recipientId || null,
+      contaLabel: r.contaLabel || null,
+    }));
+  }
+
+  async getStoreConfig(storeCode: string, reveal: boolean = false): Promise<any> {
+    const r: any = await (this.prisma as any).pagarmeStoreConfig.findUnique({
+      where: { storeCode },
+    });
+    if (!r) return null;
+    const base = {
+      storeCode: r.storeCode,
+      ambiente: r.ambiente,
+      enabled: r.enabled,
+      hasApiKey: !!r.apiKey,
+      hasWebhookSecret: !!r.webhookSecret,
+      recipientId: r.recipientId || null,
+      contaLabel: r.contaLabel || null,
+      detectedFromKey: r.apiKey ? (r.apiKey.startsWith('sk_test_') ? 'test' : 'live') : null,
+    };
+    if (reveal) {
+      return { ...base, apiKey: r.apiKey || null, webhookSecret: r.webhookSecret || null };
+    }
+    return base;
+  }
+
+  async setStoreConfig(storeCode: string, input: {
+    ambiente?: 'test' | 'live';
+    apiKey?: string;
+    webhookSecret?: string;
+    recipientId?: string;
+    enabled?: boolean;
+    contaLabel?: string;
+  }): Promise<any> {
+    if (!storeCode) throw new BadRequestException('storeCode obrigatorio');
+    const data: any = {};
+    if (input.ambiente) data.ambiente = input.ambiente;
+    if (input.enabled != null) data.enabled = input.enabled;
+    if (input.contaLabel != null) data.contaLabel = input.contaLabel.trim().slice(0, 80) || null;
+    if (input.apiKey && input.apiKey.trim()) {
+      data.apiKey = input.apiKey
+        .replace(/\s+/g, '')
+        .replace(/^Bearer/i, '')
+        .replace(/^Basic/i, '')
+        .trim();
+    }
+    if (input.webhookSecret && input.webhookSecret.trim()) {
+      data.webhookSecret = input.webhookSecret.trim();
+    }
+    if (input.recipientId !== undefined) {
+      data.recipientId = (input.recipientId || '').trim() || null;
+    }
+    await (this.prisma as any).pagarmeStoreConfig.upsert({
+      where: { storeCode },
+      create: { storeCode, ...data },
+      update: data,
+    });
+    return this.getStoreConfig(storeCode);
+  }
+
+  async removeStoreConfig(storeCode: string): Promise<{ ok: boolean }> {
+    try {
+      await (this.prisma as any).pagarmeStoreConfig.delete({ where: { storeCode } });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   isEnabled(): Promise<boolean> {
     return (this.prisma as any).pagarmeConfig
       .findUnique({ where: { id: 'singleton' } })
@@ -291,12 +406,11 @@ export class PagarmeService {
     expiresAt: Date;
     valor: number;
   }> {
-    const cfg = await this.getConfigInternal();
-
     if (!input.saleId) throw new BadRequestException('saleId obrigatório');
     if (!input.valor || input.valor <= 0)
       throw new BadRequestException('valor deve ser > 0');
     if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
+    const cfg = await this.getConfigInternalForStore(input.storeCode);
 
     const valorCentavos = Math.round(input.valor * 100);
     const expiresInSec = Math.max(60, (input.expiresInMinutes || 15) * 60);
@@ -622,12 +736,11 @@ export class PagarmeService {
     expiresAt: Date;
     valor: number;
   }> {
-    const cfg = await this.getConfigInternal();
-
     if (!input.saleId) throw new BadRequestException('saleId obrigatório');
     if (!input.valor || input.valor <= 0)
       throw new BadRequestException('valor deve ser > 0');
     if (!input.storeCode) throw new BadRequestException('storeCode obrigatório');
+    const cfg = await this.getConfigInternalForStore(input.storeCode);
 
     const valorCentavos = Math.round(input.valor * 100);
     const expiresInMin = Math.max(15, Math.min(10080, input.expiresInMinutes || 1440));
@@ -847,7 +960,17 @@ export class PagarmeService {
    * Consulta status da order na Pagar.me (polling fallback).
    */
   async checkOrderStatus(pagarmeOrderId: string) {
-    const cfg = await this.getConfigInternal();
+    // Resolve a conta certa: a order foi criada pela conta da LOJA (ou matriz).
+    // Pega o storeCode do registro do pagamento pra consultar com a key correta.
+    let storeCode = '';
+    try {
+      const pay = await (this.prisma as any).pagarmePayment.findUnique({
+        where: { pagarmeOrderId },
+        select: { storeCode: true },
+      });
+      storeCode = pay?.storeCode || '';
+    } catch { /* segue pro singleton */ }
+    const cfg = await this.getConfigInternalForStore(storeCode);
     const resp = await firstValueFrom(
       this.http.get(`${this.BASE_URL}/orders/${pagarmeOrderId}`, {
         headers: {
