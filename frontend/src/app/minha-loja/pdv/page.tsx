@@ -1439,17 +1439,17 @@ function PdvPageInner() {
       setShowPayment(false);
       localStorage.removeItem(`lurds_pdv_sale_${storeCode}`);
 
-      // PIX = NUNCA mostra tela de preview/finalizada. Vai direto pro recibo
-      // + proxima venda. Cobre 3 cenarios:
-      //   1. paymentMethod === 'pix' (PIX unico)
-      //   2. autoFlowRef (PIX confirmado por webhook Pagar.me/PagBank)
-      //   3. split onde TODOS os pagamentos sao PIX (multi-PIX)
+      // PIX no balcao AGORA mostra a tela de finalizada (pra poder emitir
+      // NFC-e), igual dinheiro/cartao. So o fluxo AUTO (PIX confirmado por
+      // webhook Pagar.me/PagBank, sem operador na tela) pula direto pra
+      // proxima venda. isDirectPix/allPaymentsPix seguem usados na impressao
+      // automatica do cupom logo abaixo.
       const wasAutoFlow = autoFlowRef.current;
       autoFlowRef.current = false;
       const isDirectPix = paymentMethod === 'pix';
       const allPaymentsPix = (fresh?.payments?.length ?? 0) > 0 &&
         (fresh.payments || []).every((p: any) => String(p.method).toLowerCase() === 'pix');
-      const skipFinalizedScreen = wasAutoFlow || isDirectPix || allPaymentsPix;
+      const skipFinalizedScreen = wasAutoFlow;
       if (!skipFinalizedScreen) {
         setShowFinalized(true);
       }
