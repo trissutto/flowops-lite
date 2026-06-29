@@ -140,12 +140,15 @@ export function buildQrCodeUrlNfce(input: {
   const versao = input.versaoQR || '2';
   const tpAmb = input.ambiente;
   const idCSC = String(parseInt(input.idCSC, 10)); // SEFAZ aceita sem zero-pad
+  // CSC token: remove espaços/quebras coladas junto (erro comum no cadastro)
+  // que quebrariam o hash → cStat 464. Não altera o token em si.
+  const cscToken = String(input.cscToken || '').trim();
 
   // Concatena pra hash
   const semHash = `${input.chave}|${versao}|${tpAmb}|${idCSC}`;
   const hash = crypto
     .createHash('sha1')
-    .update(semHash + input.cscToken)
+    .update(semHash + cscToken)
     .digest('hex')
     .toUpperCase();
 
