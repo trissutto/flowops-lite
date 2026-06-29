@@ -158,12 +158,17 @@ export function buildQrCodeUrlNfce(input: {
 }
 
 /**
- * URL de consulta do consumidor (impressa no DANFE).
+ * URL de consulta do consumidor (campo <urlChave> do infNFeSupl).
+ *
+ * ATENÇÃO: o schema da NFe limita <urlChave> a 85 caracteres (maxLength=85).
+ * A URL completa do ConsultaPublica.aspx tem ~95 chars e estoura o limite →
+ * rejeição cStat 225 ("Falha no Schema XML do lote de NFe"). A SEFAZ-SP usa
+ * a URL CURTA ".../consulta" pra esse campo (a página .aspx é só o site).
  */
 export function buildUrlConsultaNfce(ambiente: '1' | '2'): string {
   return ambiente === '1'
-    ? 'https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica/Paginas/ConsultaPublica.aspx'
-    : 'https://www.homologacao.nfce.fazenda.sp.gov.br/NFCeConsultaPublica/Paginas/ConsultaPublica.aspx';
+    ? 'https://www.nfce.fazenda.sp.gov.br/consulta'
+    : 'https://www.homologacao.nfce.fazenda.sp.gov.br/consulta';
 }
 
 // ═══════════════════════════════════════════════════════════════════════
