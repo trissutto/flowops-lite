@@ -98,6 +98,13 @@ export class PagarmeController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode/test')
+  async testStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.testStoreConnection(storeCode);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post('pix/create')
   async createPix(
     @Req() req: any,

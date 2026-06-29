@@ -335,9 +335,34 @@ export class PagarmeService {
         hint: 'Cole a API Key no campo e salve',
       };
     }
+    return this.runKeyTest(cfg.apiKey);
+  }
 
+  /** Testa a API Key Pagar.me de UMA loja (config propria; senao matriz). */
+  async testStoreConnection(storeCode: string): Promise<any> {
+    let apiKey = '';
+    let source = 'singleton';
+    try {
+      const sc = await (this.prisma as any).pagarmeStoreConfig.findUnique({ where: { storeCode } });
+      if (sc && sc.apiKey) { apiKey = sc.apiKey; source = 'store'; }
+    } catch { /* ignora */ }
+    if (!apiKey) {
+      const sg = await (this.prisma as any).pagarmeConfig.findUnique({ where: { id: 'singleton' } });
+      apiKey = sg?.apiKey || '';
+    }
+    if (!apiKey) {
+      return { ok: false, source, ambiente: 'test', hasApiKey: false, error: 'Sem API Key (nem na loja nem na matriz)' };
+    }
+    const r = await this.runKeyTest(apiKey);
+    return { ...r, source };
+  }
+
+  /** Core do teste de API Key Pagar.me (POST /orders vazio). */
+  private async runKeyTest(apiKey: string): Promise<{
+    ok: boolean; ambiente: string; hasApiKey: boolean; httpStatus?: number; error?: string; hint?: string;
+  }> {
     // Detecta ambiente real pela key
-    const realAmbiente = cfg.apiKey.startsWith('sk_test_') ? 'test' : 'live';
+    const realAmbiente = apiKey.startsWith('sk_test_') ? 'test' : 'live';
 
     try {
       // Testa com POST /orders body vazio. 401 = key errada, 422 = key ok.
@@ -347,7 +372,7 @@ export class PagarmeService {
           {},
           {
             headers: {
-              Authorization: this.authHeader(cfg.apiKey),
+              Authorization: this.authHeader(apiKey),
               Accept: 'application/json',
               'Content-Type': 'application/json',
             },

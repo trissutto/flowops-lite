@@ -884,6 +884,44 @@ export class PagbankService {
       };
     }
 
+    return this.runTokenTest(cfg);
+  }
+
+  /**
+   * Testa as credenciais PagBank de UMA loja (config propria; se nao tiver,
+   * cai pro singleton matriz). Usado pelo painel de cobranca por loja.
+   */
+  async testStoreConnection(storeCode: string): Promise<any> {
+    let cfg: any = null;
+    let source = 'singleton';
+    try {
+      const sc = await (this.prisma as any).pagbankStoreConfig.findUnique({ where: { storeCode } });
+      if (sc && sc.bearerToken) { cfg = sc; source = 'store'; }
+    } catch { /* tabela pode nao existir — segue */ }
+    if (!cfg) {
+      cfg = await (this.prisma as any).pagbankConfig.findUnique({ where: { id: 'singleton' } });
+    }
+    if (!cfg || !cfg.bearerToken) {
+      return {
+        ok: false, source, ambiente: cfg?.ambiente || 'production',
+        enabled: !!cfg?.enabled, hasToken: false,
+        error: 'Sem token (nem na loja nem na matriz)',
+      };
+    }
+    const r = await this.runTokenTest(cfg);
+    return { ...r, source };
+  }
+
+  /** Core do teste de token PagBank (POST /orders vazio). */
+  private async runTokenTest(cfg: { ambiente: string; bearerToken?: string; enabled?: boolean }): Promise<{
+    ok: boolean;
+    ambiente: string;
+    enabled: boolean;
+    hasToken: boolean;
+    httpStatus?: number;
+    error?: string;
+    hint?: string;
+  }> {
     const baseUrl = this.getBaseUrl(cfg.ambiente);
     // Testa com POST /orders payload vazio. Se token tá OK → 400 (validation).
     // Se token tá errado → 401 ou 403. Bem mais conclusivo que GET /public-keys.

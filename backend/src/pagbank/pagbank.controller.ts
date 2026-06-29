@@ -125,6 +125,14 @@ export class PagbankController {
     return this.svc.removeStoreConfig(storeCode);
   }
 
+  /** POST /pagbank/store-config/:storeCode/test — testa as credenciais da loja */
+  @UseGuards(JwtAuthGuard)
+  @Post('store-config/:storeCode/test')
+  async testStoreConfig(@Req() req: any, @Param('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.testStoreConnection(storeCode);
+  }
+
   /** POST /pagbank/config — admin salva token + ambiente */
   @UseGuards(JwtAuthGuard)
   @Post('config')

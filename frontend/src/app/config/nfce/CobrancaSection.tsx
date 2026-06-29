@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { Save, Trash2, QrCode, CreditCard, Check } from 'lucide-react';
+import { Save, Trash2, QrCode, CreditCard, Check, FlaskConical } from 'lucide-react';
 
 type Provider = 'auto' | 'pagbank' | 'pagarme';
 
@@ -52,6 +52,10 @@ export default function CobrancaSection({ storeCode }: { storeCode: string }) {
   const [savingPb, setSavingPb] = useState(false);
   const [savingPm, setSavingPm] = useState(false);
   const [savingProv, setSavingProv] = useState(false);
+  const [testingPb, setTestingPb] = useState(false);
+  const [testingPm, setTestingPm] = useState(false);
+  const [pbTest, setPbTest] = useState<any>(null);
+  const [pmTest, setPmTest] = useState<any>(null);
 
   const load = useCallback(async () => {
     if (!storeCode) return;
@@ -147,6 +151,38 @@ export default function CobrancaSection({ storeCode }: { storeCode: string }) {
     }
   }
 
+  async function testStore(which: 'pagbank' | 'pagarme') {
+    const setTesting = which === 'pagbank' ? setTestingPb : setTestingPm;
+    const setResult = which === 'pagbank' ? setPbTest : setPmTest;
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await api<any>(`/${which}/store-config/${storeCode}/test`, { method: 'POST' });
+      setResult(r);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function TestResult({ r }: { r: any }) {
+    if (!r) return null;
+    return (
+      <div className={`rounded-lg p-2 text-xs ${r.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+        {r.ok ? (
+          <span className="font-bold">✓ Credenciais OK (HTTP {r.httpStatus}) {r.source ? `· conta: ${r.source === 'store' ? 'própria' : 'matriz'}` : ''}</span>
+        ) : (
+          <>
+            <span className="font-bold">✗ Falhou{r.httpStatus ? ` (HTTP ${r.httpStatus})` : ''}</span>
+            <div>{r.error}</div>
+            {r.hint && <div className="text-[11px] mt-0.5 opacity-80">💡 {r.hint}</div>}
+          </>
+        )}
+      </div>
+    );
+  }
+
   async function removeStore(which: 'pagbank' | 'pagarme') {
     if (!confirm(`Remover a config ${which === 'pagbank' ? 'PagBank' : 'Pagar.me'} desta loja? Ela volta a usar a conta da matriz (global).`)) return;
     try {
@@ -236,12 +272,16 @@ export default function CobrancaSection({ storeCode }: { storeCode: string }) {
               <button onClick={savePagbank} disabled={savingPb} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-lg flex items-center gap-1 disabled:opacity-50">
                 <Save className="w-4 h-4" /> {savingPb ? 'Salvando…' : 'Salvar PagBank'}
               </button>
+              <button onClick={() => testStore('pagbank')} disabled={testingPb} className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-bold rounded-lg flex items-center gap-1 disabled:opacity-50">
+                <FlaskConical className="w-4 h-4" /> {testingPb ? 'Testando…' : 'Testar'}
+              </button>
               {pb && (
                 <button onClick={() => removeStore('pagbank')} className="px-3 py-2 bg-slate-100 hover:bg-red-100 text-slate-600 hover:text-red-700 text-sm font-bold rounded-lg flex items-center gap-1">
                   <Trash2 className="w-4 h-4" /> Usar matriz
                 </button>
               )}
             </div>
+            <TestResult r={pbTest} />
           </div>
 
           {/* Pagar.me */}
@@ -277,12 +317,16 @@ export default function CobrancaSection({ storeCode }: { storeCode: string }) {
               <button onClick={savePagarme} disabled={savingPm} className="px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold rounded-lg flex items-center gap-1 disabled:opacity-50">
                 <Save className="w-4 h-4" /> {savingPm ? 'Salvando…' : 'Salvar Pagar.me'}
               </button>
+              <button onClick={() => testStore('pagarme')} disabled={testingPm} className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-bold rounded-lg flex items-center gap-1 disabled:opacity-50">
+                <FlaskConical className="w-4 h-4" /> {testingPm ? 'Testando…' : 'Testar'}
+              </button>
               {pm && (
                 <button onClick={() => removeStore('pagarme')} className="px-3 py-2 bg-slate-100 hover:bg-red-100 text-slate-600 hover:text-red-700 text-sm font-bold rounded-lg flex items-center gap-1">
                   <Trash2 className="w-4 h-4" /> Usar matriz
                 </button>
               )}
             </div>
+            <TestResult r={pmTest} />
           </div>
 
           <p className="text-[11px] text-slate-400 flex items-center gap-1">
