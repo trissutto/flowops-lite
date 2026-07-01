@@ -4,6 +4,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ErpModule } from '../erp/erp.module';
 import { RoutingModule } from '../routing/routing.module';
 import { PagarmeModule } from '../pagarme/pagarme.module';
+import { PagbankModule } from '../pagbank/pagbank.module';
 import { ProductPhotosModule } from '../product-photos/product-photos.module';
 import { RealignmentModule } from '../realignment/realignment.module';
 import { WebsocketModule } from '../websocket/websocket.module';
@@ -24,6 +25,7 @@ import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
     ErpModule,
     RoutingModule,
     PagarmeModule,
+    PagbankModule,
     ProductPhotosModule,
     RealignmentModule,
     WebsocketModule,

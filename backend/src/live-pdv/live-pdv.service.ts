@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { RoutingEngine } from '../routing/routing.engine';
 import { PagarmeService } from '../pagarme/pagarme.service';
+import { PagbankService } from '../pagbank/pagbank.service';
 import { ProductPhotosService } from '../product-photos/product-photos.service';
 import { RealignmentPricingService } from '../realignment/realignment-pricing.service';
 import { RealtimeGateway } from '../websocket/realtime.gateway';
@@ -35,6 +36,7 @@ export class LivePdvService {
     private readonly erp: ErpService,
     private readonly routing: RoutingEngine,
     private readonly pagarme: PagarmeService,
+    private readonly pagbank: PagbankService,
     private readonly photos: ProductPhotosService,
     private readonly pricing: RealignmentPricingService,
     private readonly gateway: RealtimeGateway,
@@ -1147,33 +1149,36 @@ export class LivePdvService {
     const valor = (fresh.totalCents || 0) / 100;
     if (valor <= 0) throw new BadRequestException('Total inválido');
 
-    const charge = await this.pagarme.createPixCharge({
+    // PIX da Live via PAGBANK (gateway oficial da loja). Reusa o campo
+    // pagarmeOrderId do carrinho pra guardar o pagbankOrderId (é só um id de
+    // order — o checkPayment resolve o gateway pelo paymentMethod='pix').
+    const charge = await this.pagbank.createPixCharge({
       saleId: cartId,
       valor,
       storeCode: session.liveStoreCode,
-      storeName: session.liveStoreName,
       customerName: cart.customerName,
       customerCpf: cart.customerCpf || undefined,
-      customerPhone: cart.customerPhone || undefined,
       customerEmail: cart.customerEmail || undefined,
       expiresInMinutes: session.reservationTtlMin,
     });
+    // PagBank devolve a imagem em base64 puro; o frontend usa como <img src>.
+    const qrImg = charge.qrCodeImageB64 ? `data:image/png;base64,${charge.qrCodeImageB64}` : '';
 
     const updated = await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
       data: {
         status: 'awaiting_payment',
         paymentMethod: 'pix',
-        pagarmeOrderId: charge.pagarmeOrderId,
+        pagarmeOrderId: charge.pagbankOrderId,
         qrCodeText: charge.qrCodeText,
-        qrCodeImageUrl: charge.qrCodeImageUrl,
+        qrCodeImageUrl: qrImg,
         paymentExpiresAt: charge.expiresAt,
       },
     });
     return {
       cart: updated,
       qrCodeText: charge.qrCodeText,
-      qrCodeImageUrl: charge.qrCodeImageUrl,
+      qrCodeImageUrl: qrImg,
       expiresAt: charge.expiresAt,
       valor,
     };
@@ -1237,14 +1242,27 @@ export class LivePdvService {
     if (cart.status === 'paid' || cart.status === 'separating' || cart.status === 'shipped' || cart.status === 'delivered') {
       return { paid: true, cart };
     }
-    const payment = await this.pagarme.getPaymentBySale(cartId).catch(() => null);
-    let isPaid = payment?.status === 'paid';
-    // fallback: consulta ao vivo
-    if (!isPaid && cart.pagarmeOrderId) {
-      try {
-        const live = await this.pagarme.checkOrderStatus(cart.pagarmeOrderId);
-        isPaid = live.isPaid;
-      } catch {}
+    // PIX = PagBank; Link de pagamento = Pagar.me. Consulta o gateway certo.
+    let isPaid = false;
+    if (cart.paymentMethod === 'link') {
+      const payment = await this.pagarme.getPaymentBySale(cartId).catch(() => null);
+      isPaid = payment?.status === 'paid';
+      if (!isPaid && cart.pagarmeOrderId) {
+        try {
+          const live = await this.pagarme.checkOrderStatus(cart.pagarmeOrderId);
+          isPaid = live.isPaid;
+        } catch {}
+      }
+    } else {
+      // pix (padrão) → PagBank
+      const payment = await this.pagbank.getPaymentBySale(cartId).catch(() => null);
+      isPaid = payment?.status === 'paid';
+      if (!isPaid && cart.pagarmeOrderId) {
+        try {
+          const live = await this.pagbank.checkOrderStatus(cart.pagarmeOrderId);
+          isPaid = live.isPaid;
+        } catch {}
+      }
     }
     if (!isPaid) return { paid: false, cart };
     const paidCart = await this.onCartPaid(cartId);
