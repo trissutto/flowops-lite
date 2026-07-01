@@ -100,6 +100,9 @@ export default function PixPaidListener() {
 
   useEffect(() => {
     let cancelled = false;
+    // Guard de in-flight: impede que polls empilhem quando o backend fica lento
+    // (>5s). Sem isto, sob lentidao as chamadas se acumulam e inundam o servidor.
+    let running = false;
     // ESTRATEGIA: since SEMPRE 30min atras (janela larga) + deduplicacao via
     // seenRef. Antes: since ia avancando a cada poll e em PCs com aba em
     // background + Chrome throttling, alertas podiam ser pulados.
@@ -132,6 +135,8 @@ export default function PixPaidListener() {
       if (typeof window === 'undefined') return;
       const token = localStorage.getItem('flowops_token');
       if (!token) return;
+      if (running) return; // ainda ha um poll anterior em voo — pula este tick
+      running = true;
 
       try {
         // since FIXO em 30min atras — janela larga garante que mesmo se aba
@@ -175,6 +180,8 @@ export default function PixPaidListener() {
         }
       } catch {
         /* erro de rede — silencioso */
+      } finally {
+        running = false;
       }
     };
 

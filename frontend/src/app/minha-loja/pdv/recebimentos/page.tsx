@@ -366,7 +366,11 @@ export default function RecebimentosPage() {
   useEffect(() => {
     if (!pixCharge || pixPaid) return;
     let cancelled = false;
+    // Guard de in-flight: nao deixa o tick de 1s empilhar sob lentidao do backend.
+    let inFlight = false;
     const tick = async () => {
+      if (inFlight) return; // poll anterior ainda em voo — pula este tick
+      inFlight = true;
       try {
         const r = await api<{ status: string; isPaid?: boolean }>(`/crediarios/baixa/status/${pixCharge.baixaId}`);
         if (cancelled) return;
@@ -375,7 +379,9 @@ export default function RecebimentosPage() {
           printReceipt(pixCharge.baixaId);
           setTimeout(() => finalizarTudo(), 1500);
         }
-      } catch {}
+      } catch {} finally {
+        inFlight = false;
+      }
     };
     tick();
     const id = setInterval(tick, 1000);

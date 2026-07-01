@@ -4582,6 +4582,9 @@ function PaymentModal({
 
     let cancelled = false;
     let tickCount = 0;
+    // Guard de in-flight: NAO deixa o tick de 1s empilhar quando o status local
+    // ou o /pix/check (POST no gateway) demoram >1s. Era o padrao do flood da live.
+    let inFlight = false;
 
     const handleResult = (status: string, isFailed?: boolean) => {
       if (cancelled) return;
@@ -4598,28 +4601,34 @@ function PaymentModal({
     };
 
     const tick = async () => {
+      if (inFlight) return; // poll anterior ainda em voo — pula este tick
+      inFlight = true;
       tickCount++;
-      // SEMPRE consulta status local (webhook pode ter chegado)
       try {
-        const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(statusEndpoint);
-        handleResult(r.status, r.isFailed);
-      } catch {
-        // silencioso
-      }
-
-      // A cada 3 ticks (3s), FORCA consulta na API do gateway
-      // pra cobrir caso de webhook nao ter chegado.
-      if (checkEndpoint && tickCount % 3 === 0 && !cancelled) {
+        // SEMPRE consulta status local (webhook pode ter chegado)
         try {
-          const r = await api<{ status: string; paid?: boolean }>(checkEndpoint, {
-            method: 'POST',
-          });
-          if (r.status === 'paid' || r.paid) {
-            handleResult('paid');
-          }
+          const r = await api<{ status: string; isPaid?: boolean; isFailed?: boolean }>(statusEndpoint);
+          handleResult(r.status, r.isFailed);
         } catch {
-          // silencioso — endpoint check pode falhar temporariamente
+          // silencioso
         }
+
+        // A cada 3 ticks (3s), FORCA consulta na API do gateway
+        // pra cobrir caso de webhook nao ter chegado.
+        if (checkEndpoint && tickCount % 3 === 0 && !cancelled) {
+          try {
+            const r = await api<{ status: string; paid?: boolean }>(checkEndpoint, {
+              method: 'POST',
+            });
+            if (r.status === 'paid' || r.paid) {
+              handleResult('paid');
+            }
+          } catch {
+            // silencioso — endpoint check pode falhar temporariamente
+          }
+        }
+      } finally {
+        inFlight = false;
       }
     };
 
@@ -7231,7 +7240,12 @@ function PixAvulsoModal({
   useEffect(() => {
     if (!qr || paid || !saleId) return;
     let cancelled = false;
+    // Guard de in-flight: o backend consulta a Pagar.me ao vivo se pending, entao
+    // um tick pode passar de 1s. Sem guard, os ticks de 1s empilhavam.
+    let inFlight = false;
     const tick = async () => {
+      if (inFlight) return; // poll anterior ainda em voo — pula este tick
+      inFlight = true;
       try {
         const r = await api<{ found?: boolean; status: string; isPaid?: boolean }>(
           `/pagarme/pix/status/${saleId}`,
@@ -7248,6 +7262,8 @@ function PixAvulsoModal({
         }
       } catch {
         // silencioso — tenta de novo no próximo tick
+      } finally {
+        inFlight = false;
       }
     };
     tick();
