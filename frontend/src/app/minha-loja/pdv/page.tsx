@@ -468,9 +468,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
             handleScan(e);
           }
         }}
-        className="bg-white rounded-2xl border border-slate-200 px-4 py-2.5 shadow-md flex items-center gap-3 w-full"
+        className="bg-white rounded-xl border border-slate-200 px-4 py-3 shadow-sm flex items-center gap-3 w-full"
       >
-        <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
+        <Barcode className="w-6 h-6 text-slate-500 shrink-0" />
         <input
           ref={inputRef}
           type="text"
@@ -524,8 +524,8 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         <button
           type="submit"
           disabled={!scanInput || scanLoading}
-          className="px-5 py-3 text-black font-bold rounded-xl flex items-center disabled:opacity-40 transition shrink-0 shadow-md"
-          style={{ background: 'linear-gradient(135deg, #E5C158, #D4AF37)' }}
+          className="px-5 py-3 text-black font-bold rounded-lg flex items-center disabled:opacity-40 transition shrink-0 hover:brightness-95"
+          style={{ background: '#D4AF37' }}
         >
           {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
         </button>
@@ -534,9 +534,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
       {/* DROPDOWN DE BUSCA — aparece abaixo do input quando ha resultados */}
       {showResults && searchResults.length > 0 && (
         <div className="absolute z-30 left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-[420px] overflow-y-auto">
-          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-[10px] uppercase tracking-wider font-black text-slate-500 flex items-center justify-between">
+          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 text-[11px] font-semibold text-slate-500 flex items-center justify-between">
             <span>{searchResults.length} resultado(s) — clique pra adicionar</span>
-            <span className="text-[9px] font-normal">↑↓ navegar · Enter escolher · Esc fechar</span>
+            <span className="text-[10px] font-normal text-slate-400">↑↓ navegar · Enter escolher · Esc fechar</span>
           </div>
           {searchResults.map((r, idx) => {
             const isHi = idx === highlightedIdx;
