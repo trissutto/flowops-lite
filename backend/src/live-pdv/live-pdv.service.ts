@@ -50,36 +50,27 @@ export class LivePdvService {
     return `${this.norm(ref)}|${this.norm(cor)}|${this.norm(tam)}`;
   }
 
-  // Preço por CODIGO — ESPELHO PRIMEIRO (giga_produto.vendaUn no Postgres). Só
-  // encosta no Giga ao vivo pros códigos SEM preço no espelho. Evita travar na
-  // consulta de preço quando o Giga/firewall cai.
+  // Preço por CODIGO — SÓ ESPELHO (giga_produto.vendaUn no Postgres). A Live NÃO
+  // toca o Giga ao vivo (que trava quando o firewall derruba o IP do Railway).
   private async pricesWithMirror(codigos: string[]): Promise<Map<string, number>> {
     const uniq = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean)));
     const out = new Map<string, number>();
-    if (uniq.length) {
-      try {
-        const rows = await (this.prisma as any).gigaProduto.findMany({
-          where: { codigo: { in: uniq }, vendaUn: { gt: 0 } },
-          select: { codigo: true, vendaUn: true },
-        });
-        for (const r of rows as any[]) {
-          out.set(String(r.codigo).trim(), Number(r.vendaUn) || 0);
-        }
-      } catch {
-        /* espelho indisponível */
+    if (!uniq.length) return out;
+    try {
+      const rows = await (this.prisma as any).gigaProduto.findMany({
+        where: { codigo: { in: uniq }, vendaUn: { gt: 0 } },
+        select: { codigo: true, vendaUn: true },
+      });
+      for (const r of rows as any[]) {
+        out.set(String(r.codigo).trim(), Number(r.vendaUn) || 0);
       }
-    }
-    const missing = uniq.filter((c) => !((out.get(c) || 0) > 0));
-    if (missing.length) {
-      const live = await this.pricing.getPricesByCodigos(missing).catch(() => new Map<string, number>());
-      for (const [c, v] of live) {
-        if ((v || 0) > 0 && !((out.get(c) || 0) > 0)) out.set(c, v);
-      }
+    } catch {
+      /* espelho indisponível */
     }
     return out;
   }
 
-  // Preço por REF — ESPELHO PRIMEIRO; Giga ao vivo só se o espelho não tiver.
+  // Preço por REF — SÓ ESPELHO.
   private async refPriceWithMirror(ref: string): Promise<number> {
     try {
       const row = await (this.prisma as any).gigaProduto.findFirst({
@@ -91,13 +82,11 @@ export class LivePdvService {
     } catch {
       /* espelho indisponível */
     }
-    return (await this.pricing.getPricesByRefs([ref]).catch(() => new Map<string, number>())).get(ref) || 0;
+    return 0;
   }
 
-  // Resolve as linhas do produto (REF/código/nome) — ESPELHO PRIMEIRO.
-  // O espelho (giga_produto no Postgres) é rápido e local, então não trava se o
-  // Giga/firewall cair. Só cai pro Giga ao vivo se o espelho não achar (produto
-  // novo ainda não sincronizado).
+  // Resolve as linhas do produto (REF/código/nome) — SÓ ESPELHO (giga_produto no
+  // Postgres). A Live NÃO toca o Giga ao vivo.
   private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
     const mrows = await (this.prisma as any).gigaProduto
       .findMany({
@@ -112,21 +101,14 @@ export class LivePdvService {
         take: 1000,
       })
       .catch(() => []);
-    if ((mrows as any[]).length) {
-      const mapped = (mrows as any[]).map((r) => ({
-        CODIGO: r.codigo,
-        REF: r.ref,
-        DESCRICAOCOMPLETA: r.descricao,
-        COR: r.cor,
-        TAMANHO: r.tamanho,
-      }));
-      return { rows: mapped, fromMirror: true };
-    }
-    // Espelho não achou → tenta o Giga ao vivo (produto recém-cadastrado).
-    let rows: any[] = await this.erp.searchByRef(q).catch(() => []);
-    if (!rows.length) rows = await this.erp.searchByCodeAndExpandRef(q).catch(() => []);
-    if (!rows.length) rows = await this.erp.searchProductsLike(q).catch(() => []);
-    return { rows, fromMirror: false };
+    const mapped = (mrows as any[]).map((r) => ({
+      CODIGO: r.codigo,
+      REF: r.ref,
+      DESCRICAOCOMPLETA: r.descricao,
+      COR: r.cor,
+      TAMANHO: r.tamanho,
+    }));
+    return { rows: mapped, fromMirror: true };
   }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
@@ -154,16 +136,7 @@ export class LivePdvService {
         /* espelho indisponível */
       }
     }
-    // Só cai pro Giga ao vivo se o espelho não trouxe NADA (produto não
-    // sincronizado). Evita travar no caso comum.
-    if (!fromMirror && uniq.length) {
-      const live = await this.erp
-        .getStockBySkusDetailed(uniq)
-        .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
-      for (const c of Object.keys(live)) {
-        if (live[c]?.length) detailed[c] = live[c];
-      }
-    }
+    // SÓ ESPELHO — a Live não toca o Giga ao vivo.
     return { detailed, fromMirror };
   }
 
@@ -204,25 +177,42 @@ export class LivePdvService {
   }
 
   /**
-   * Estoque ERP por loja pra um item (REF+COR+TAM). Agrega todos os CODIGOs que
-   * formam o item. Retorna o mapa loja→qty e o melhor CODIGO (mais estoque) pra
-   * baixa futura sem ambiguidade.
+   * Estoque por loja pra um item (REF+COR+TAM) — SÓ ESPELHO (giga_produto +
+   * giga_estoque no Postgres). A reserva NÃO toca o Giga ao vivo. Agrega todos
+   * os CODIGOs do item; retorna loja→qty e o melhor CODIGO (mais estoque).
    */
   private async erpStockByStoreForItem(
     refCode: string,
     cor: string | null,
     tam: string | null,
   ): Promise<{ byStore: Map<string, number>; codigos: string[]; bestCodigo: string | null }> {
-    const rows = await this.erp.searchByRef(refCode);
-    const matched = (rows as any[]).filter(
-      (r) => this.norm(r.COR) === this.norm(cor) && this.norm(r.TAMANHO) === this.norm(tam),
+    const prods = await (this.prisma as any).gigaProduto
+      .findMany({
+        where: { ref: { equals: refCode, mode: 'insensitive' } },
+        select: { codigo: true, cor: true, tamanho: true },
+      })
+      .catch(() => []);
+    const matched = (prods as any[]).filter(
+      (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
     );
     const codigos = Array.from(
-      new Set(matched.map((r) => String(r.CODIGO || '').trim()).filter(Boolean)),
+      new Set(matched.map((r) => String(r.codigo || '').trim()).filter(Boolean)),
     );
     const byStore = new Map<string, number>();
     if (codigos.length === 0) return { byStore, codigos, bestCodigo: null };
-    const detailed = await this.erp.getStockBySkusDetailed(codigos);
+    // Estoque por loja do espelho, e por codigo pra achar o bestCodigo.
+    const est = await (this.prisma as any).gigaEstoque
+      .findMany({
+        where: { codigo: { in: codigos }, estoque: { gt: 0 } },
+        select: { codigo: true, loja: true, estoque: true },
+      })
+      .catch(() => []);
+    const detailed: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+    for (const r of est as any[]) {
+      const codigo = String(r.codigo).trim();
+      if (!detailed[codigo]) detailed[codigo] = [];
+      detailed[codigo].push({ storeCode: String(r.loja).trim(), qty: Number(r.estoque) || 0 });
+    }
     for (const codigo of codigos) {
       const arr = detailed[codigo] || [];
       for (const e of arr) {
@@ -881,12 +871,17 @@ export class LivePdvService {
     const promo = await this.getPromo(session.id, ref);
     const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
-    // Descrição
-    const rowsForDesc = await this.erp.searchByRef(ref);
+    // Descrição — SÓ ESPELHO (não toca o Giga).
+    const rowsForDesc = await (this.prisma as any).gigaProduto
+      .findMany({
+        where: { ref: { equals: ref, mode: 'insensitive' } },
+        select: { cor: true, tamanho: true, descricao: true },
+      })
+      .catch(() => []);
     const descRow = (rowsForDesc as any[]).find(
-      (r) => this.norm(r.COR) === this.norm(cor) && this.norm(r.TAMANHO) === this.norm(tam),
+      (r) => this.norm(r.cor) === this.norm(cor) && this.norm(r.tamanho) === this.norm(tam),
     );
-    const descricao = descRow?.DESCRICAOCOMPLETA || ref;
+    const descricao = descRow?.descricao || ref;
 
     // Cria item + atualiza carrinho (transação)
     const expiresAt = new Date(Date.now() + session.reservationTtlMin * 60 * 1000);
