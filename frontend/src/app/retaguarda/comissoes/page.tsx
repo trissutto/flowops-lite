@@ -932,6 +932,10 @@ function PeriodsTab() {
   const [periods, setPeriods] = useState<Period[]>([]);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState<string | null>(null);
+  const [calcMonth, setCalcMonth] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   async function load() {
     setLoading(true);
@@ -946,11 +950,6 @@ function PeriodsTab() {
   useEffect(() => {
     load();
   }, []);
-
-  function currentYearMonth(): string {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  }
 
   async function action(yearMonth: string, action: 'calculate' | 'close' | 'pay') {
     if (action === 'pay' && !confirm(`Confirmar pagamento de ${yearMonth}? Não pode desfazer.`))
@@ -977,14 +976,27 @@ function PeriodsTab() {
         <p className="text-sm text-slate-600">
           Fechamentos mensais. Sempre rode <b>Calcular</b> antes de fechar.
         </p>
-        <button
-          onClick={() => action(currentYearMonth(), 'calculate')}
-          disabled={!!working}
-          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2"
-        >
-          <Calculator className="w-4 h-4" />
-          Calcular mês atual
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            type="month"
+            value={calcMonth}
+            onChange={(e) => setCalcMonth(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-lg text-sm"
+            title="Mês a calcular"
+          />
+          <button
+            onClick={() => action(calcMonth, 'calculate')}
+            disabled={!!working}
+            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2"
+          >
+            {working === calcMonth + ':calculate' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Calculator className="w-4 h-4" />
+            )}
+            Calcular
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -1083,6 +1095,7 @@ function ReportTab() {
   const [yearMonth, setYearMonth] = useState(defaultYM);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [calcing, setCalcing] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -1096,13 +1109,30 @@ function ReportTab() {
     }
   }
 
+  // Calcula (ou recalcula) o mês selecionado e recarrega o relatório.
+  // O relatório é só leitura — é isso que popula os dados.
+  async function calcNow() {
+    setCalcing(true);
+    try {
+      const r = await api<any>(`/commissions/periods/${yearMonth}/calculate`, { method: 'POST' });
+      alert(`Cálculo OK: ${r.entries?.length || 0} lançamentos, total ${brl(r.total)}`);
+      await load();
+    } catch (e: any) {
+      alert('Erro ao calcular: ' + (e?.message || e));
+    } finally {
+      setCalcing(false);
+    }
+  }
+
   useEffect(() => {
     load();
   }, [yearMonth]);
 
+  const semDados = !data || !data.byStore || data.byStore.length === 0;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <input
           type="month"
           value={yearMonth}
@@ -1115,12 +1145,27 @@ function ReportTab() {
         >
           <RefreshCw className="w-4 h-4" /> Atualizar
         </button>
+        <button
+          onClick={calcNow}
+          disabled={calcing}
+          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-2 rounded flex items-center gap-1 font-bold"
+          title="Recalcula as comissões deste mês a partir das vendas"
+        >
+          {calcing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
+          Calcular este mês
+        </button>
       </div>
 
       {loading ? (
         <Loader2 className="w-6 h-6 animate-spin mx-auto" />
-      ) : !data ? (
-        <p className="text-center text-slate-400 py-10">Nenhum dado pra esse período</p>
+      ) : semDados ? (
+        <div className="text-center py-10 bg-slate-50 border border-slate-200 rounded-lg">
+          <p className="text-slate-500 text-sm">Nenhum dado calculado pra {yearMonth}.</p>
+          <p className="text-slate-400 text-xs mt-1">
+            O relatório só mostra o que já foi calculado. Clique em <b>Calcular este mês</b> acima —
+            e confira se o mês selecionado é o das vendas (as vendas de junho ficam em 2026-06).
+          </p>
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
