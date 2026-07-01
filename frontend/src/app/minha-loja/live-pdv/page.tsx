@@ -89,6 +89,7 @@ interface Cart {
   subtotalCents: number;
   freteCents: number;
   totalCents: number;
+  paymentMethod?: string | null; // 'pix' | 'link' — pra reabrir a cobrança pendente
   qrCodeText?: string | null;
   qrCodeImageUrl?: string | null;
   items: CartItem[];
@@ -642,8 +643,27 @@ export default function LivePdvPage() {
       phone: c.customerPhone,
       instagram: c.customerInstagram,
     });
+    // Se a cliente tem uma cobrança PENDENTE, reabre o QR/link (dá pra mostrar
+    // de novo). Senão, limpa. A confirmação de pago segue rodando via socket.
+    if (c.status === 'awaiting_payment' && c.qrCodeText) {
+      setQr(
+        c.paymentMethod === 'link'
+          ? { text: '', img: '', valor: (c.totalCents || 0) / 100, link: c.qrCodeText }
+          : { text: c.qrCodeText || '', img: c.qrCodeImageUrl || '', valor: (c.totalCents || 0) / 100 },
+      );
+    } else {
+      setQr(null);
+    }
+    setPaid(false);
+  }
+
+  // "Continuar atendendo": esconde a cobrança da tela (NÃO cancela) e volta o
+  // foco pra busca. A cobrança segue no ar; quando pagar, a cliente vira PAGO
+  // na lista sozinha (socket). Dá pra reabrir clicando na cliente de novo.
+  function continueAttending() {
     setQr(null);
     setPaid(false);
+    setTimeout(() => searchRef.current?.focus(), 50);
   }
 
   // Edita/completa o cadastro do carrinho (salva no banco + snapshot). Aceita
@@ -762,6 +782,26 @@ export default function LivePdvPage() {
     }, 4000);
     return () => clearInterval(iv);
   }, [qr, cart, paid, refreshCarts]);
+
+  // Poll de FUNDO das cobranças pendentes — mesmo com o QR fechado ("continuar
+  // atendendo"), confirma o pagamento no servidor e a cliente vira PAGO na
+  // lista sozinha. (O webhook da Pagar.me não marca o carrinho da Live; a
+  // confirmação sai daqui via /payment-status → onCartPaid no backend.)
+  useEffect(() => {
+    const pendentes = carts.filter((c) => c.status === 'awaiting_payment');
+    if (pendentes.length === 0) return;
+    const iv = setInterval(async () => {
+      let algumPagou = false;
+      for (const c of pendentes) {
+        try {
+          const res = await api<{ paid: boolean }>(`/live-pdv/carts/${c.id}/payment-status`);
+          if (res.paid) algumPagou = true;
+        } catch {}
+      }
+      if (algumPagou) refreshCarts();
+    }, 6000);
+    return () => clearInterval(iv);
+  }, [carts, refreshCarts]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
   if (booting) {
@@ -1162,6 +1202,17 @@ export default function LivePdvPage() {
                   </span>
                   <span>· clique na célula pra adicionar · passe o mouse pra ver por loja</span>
                 </div>
+
+                {/* Novo carrinho — logo abaixo da grade, pra começar a próxima
+                    cliente rápido sem sair da mão. */}
+                <div className="mt-4 flex justify-center">
+                  <button
+                    onClick={newClient}
+                    className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-6 py-2.5 font-bold text-white shadow hover:bg-rose-700"
+                  >
+                    <ShoppingCart className="h-5 w-5" /> Novo carrinho
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1182,6 +1233,7 @@ export default function LivePdvPage() {
               onEditCustomer={() => setEditCustomerOpen(true)}
               onDeleteCart={deleteCart}
               onCalcFrete={calcFrete}
+              onContinue={continueAttending}
             />
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
@@ -1354,6 +1406,7 @@ function CartPanel({
   onEditCustomer,
   onDeleteCart,
   onCalcFrete,
+  onContinue,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -1367,6 +1420,7 @@ function CartPanel({
   onEditCustomer: () => void;
   onDeleteCart: () => void;
   onCalcFrete: () => void;
+  onContinue: () => void;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -1379,7 +1433,7 @@ function CartPanel({
             onClick={onNewClient}
             className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
           >
-            <UserPlus className="h-3.5 w-3.5" /> Nova cliente
+            <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
           </button>
         </div>
 
@@ -1487,6 +1541,12 @@ function CartPanel({
                 <Check className="h-8 w-8" />
                 <span className="font-bold">Pagamento confirmado!</span>
                 <span className="text-xs">Ordem de separação enviada à loja de origem.</span>
+                <button
+                  onClick={onContinue}
+                  className="mt-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                >
+                  Continuar atendendo →
+                </button>
               </div>
             ) : qr?.link ? (
               <div className="mt-3 flex flex-col gap-2 rounded-lg border border-slate-200 p-3">
@@ -1516,6 +1576,12 @@ function CartPanel({
                 <div className="flex items-center gap-1 text-xs text-slate-400">
                   <Loader2 className="h-3 w-3 animate-spin" /> Aguardando pagamento…
                 </div>
+                <button
+                  onClick={onContinue}
+                  className="w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Continuar atendendo →
+                </button>
               </div>
             ) : qr ? (
               <div className="mt-3 flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-3">
@@ -1539,6 +1605,12 @@ function CartPanel({
                 <div className="flex items-center gap-1 text-xs text-slate-400">
                   <Loader2 className="h-3 w-3 animate-spin" /> Aguardando pagamento…
                 </div>
+                <button
+                  onClick={onContinue}
+                  className="w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Continuar atendendo →
+                </button>
               </div>
             ) : (
               cart &&
