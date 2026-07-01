@@ -30,6 +30,8 @@ export class LivePdvService {
   private readonly DIVISOR_CUSTO = 2.5;
   /** Status que "seguram" estoque durante a live (contam contra disponibilidade). */
   private readonly COMMITTED = ['reserved', 'paid', 'separating'];
+  /** Throttle da checagem AO VIVO no gateway por carrinho (anti-flood de polling). */
+  private readonly lastLiveCheck = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1271,12 +1273,20 @@ export class LivePdvService {
     if (cart.status === 'paid' || cart.status === 'separating' || cart.status === 'shipped' || cart.status === 'delivered') {
       return { paid: true, cart };
     }
+    // ANTI-FLOOD: a checagem AO VIVO no gateway (HTTP, cara — PagBank/Pagar.me)
+    // roda no MÁXIMO 1x a cada 8s por carrinho. O resto responde do DB (rápido).
+    // Blinda o backend do flood de polling (abas antigas). O status vira 'paid'
+    // no DB quando a checagem ao vivo detecta → confirma em até ~8s.
+    const now = Date.now();
+    const allowLive = now - (this.lastLiveCheck.get(cartId) || 0) >= 8000;
+
     // PIX = PagBank; Link de pagamento = Pagar.me. Consulta o gateway certo.
     let isPaid = false;
     if (cart.paymentMethod === 'link') {
       const payment = await this.pagarme.getPaymentBySale(cartId).catch(() => null);
       isPaid = payment?.status === 'paid';
-      if (!isPaid && cart.pagarmeOrderId) {
+      if (!isPaid && allowLive && cart.pagarmeOrderId) {
+        this.lastLiveCheck.set(cartId, now);
         try {
           const live = await this.pagarme.checkOrderStatus(cart.pagarmeOrderId);
           isPaid = live.isPaid;
@@ -1286,7 +1296,8 @@ export class LivePdvService {
       // pix (padrão) → PagBank
       const payment = await this.pagbank.getPaymentBySale(cartId).catch(() => null);
       isPaid = payment?.status === 'paid';
-      if (!isPaid && cart.pagarmeOrderId) {
+      if (!isPaid && allowLive && cart.pagarmeOrderId) {
+        this.lastLiveCheck.set(cartId, now);
         try {
           const live = await this.pagbank.checkOrderStatus(cart.pagarmeOrderId);
           isPaid = live.isPaid;
