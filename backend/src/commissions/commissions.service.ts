@@ -748,23 +748,41 @@ export class CommissionsService {
   // ── Troca de vendedora numa venda (correção estilo Giga) ────────────
 
   /**
-   * Lista as vendas FINALIZADAS de um período (opcionalmente de uma loja)
-   * pra admin trocar a vendedora — equivalente à tela "Vendas" do Giga.
-   * Não conta treino. Ordenado da mais recente pra mais antiga.
+   * Lista as vendas FINALIZADAS num intervalo de datas LIVRE (De/Até),
+   * opcionalmente de uma loja — pra admin trocar a vendedora, equivalente à
+   * tela "Vendas" do Giga. Sem treino. Ordenado da mais recente pra mais antiga.
+   *
+   * from/to no formato 'YYYY-MM-DD'. Default = mês corrente (1º dia → hoje).
    */
   async listSalesForReassign(input: {
-    yearMonth: string;
+    from?: string | null;
+    to?: string | null;
     storeCode?: string | null;
     sellerId?: string | null;
     q?: string | null;
     limit?: number;
   }) {
-    if (!/^\d{4}-\d{2}$/.test(input.yearMonth)) {
-      throw new BadRequestException('yearMonth inválido (formato YYYY-MM)');
+    const isDate = (s?: string | null) => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (input.from && !isDate(input.from)) {
+      throw new BadRequestException('from inválido (formato YYYY-MM-DD)');
     }
-    const [y, m] = input.yearMonth.split('-').map((s) => parseInt(s, 10));
-    const startDate = new Date(y, m - 1, 1, 0, 0, 0);
-    const endDate = new Date(y, m, 0, 23, 59, 59);
+    if (input.to && !isDate(input.to)) {
+      throw new BadRequestException('to inválido (formato YYYY-MM-DD)');
+    }
+    const now = new Date();
+    const mk = (s: string, end: boolean) => {
+      const [y, m, d] = s.split('-').map((n) => parseInt(n, 10));
+      return new Date(y, m - 1, d, end ? 23 : 0, end ? 59 : 0, end ? 59 : 0);
+    };
+    const startDate = input.from
+      ? mk(input.from, false)
+      : new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+    const endDate = input.to
+      ? mk(input.to, true)
+      : new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    if (startDate > endDate) {
+      throw new BadRequestException('Data inicial não pode ser maior que a final');
+    }
 
     const where: any = {
       status: 'finalized',
@@ -802,7 +820,9 @@ export class CommissionsService {
       orderBy: { finalizedAt: 'desc' },
       take: Math.min(input.limit ?? 300, 1000),
     });
-    return { yearMonth: input.yearMonth, count: sales.length, sales };
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { from: fmt(startDate), to: fmt(endDate), count: sales.length, sales };
   }
 
   /**
