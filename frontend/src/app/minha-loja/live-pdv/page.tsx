@@ -205,6 +205,7 @@ export default function LivePdvPage() {
   // Cobrança pendente: ao clicar em cobrar, abre o cadastro (com endereço) e só
   // gera o PIX/link depois de salvar. null = nenhuma cobrança em andamento.
   const [pendingPay, setPendingPay] = useState<'pix' | 'link' | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const [paid, setPaid] = useState(false);
 
   // ─── Boot: NÃO adota live automaticamente ─────────────────────────────────
@@ -783,24 +784,33 @@ export default function LivePdvPage() {
     }
   }
 
-  // Poll status enquanto QR aberto
-  useEffect(() => {
-    if (!qr || !cart || paid) return;
-    const iv = setInterval(async () => {
-      try {
-        const res = await api<{ paid: boolean; cart: Cart }>(
-          `/live-pdv/carts/${cart.id}/payment-status`,
+  // Confirmação MANUAL de pagamento — SEM polling. O polling automático (a cada
+  // 4s/6s chamando o gateway lento) era o que inundava o backend e derrubava a
+  // live. Agora a operadora clica "Confirmar pagamento" quando vê que caiu:
+  // faz UMA checagem no gateway e marca pago (dispara a separação).
+  async function confirmPayment() {
+    if (!cart) return;
+    setConfirming(true);
+    try {
+      const res = await api<{ paid: boolean; cart: Cart }>(
+        `/live-pdv/carts/${cart.id}/payment-status`,
+      );
+      if (res.paid) {
+        setPaid(true);
+        setCart(res.cart);
+        setQr(null);
+        await refreshCarts();
+      } else {
+        alert(
+          'Pagamento ainda não identificado.\n\nSe a cliente já pagou, espere alguns segundos e clique de novo.',
         );
-        if (res.paid) {
-          setPaid(true);
-          setCart(res.cart);
-          setQr(null);
-          refreshCarts();
-        }
-      } catch {}
-    }, 4000);
-    return () => clearInterval(iv);
-  }, [qr, cart, paid, refreshCarts]);
+      }
+    } catch (e: any) {
+      alert('Erro ao confirmar: ' + (e?.message || e));
+    } finally {
+      setConfirming(false);
+    }
+  }
 
   // (REMOVIDO) O poll de FUNDO das cobranças pendentes foi retirado: usava
   // setInterval a cada 6s chamando o PagBank (lento); quando um ciclo demorava
@@ -1245,6 +1255,8 @@ export default function LivePdvPage() {
               onDeleteCart={deleteCart}
               onCalcFrete={calcFrete}
               onContinue={continueAttending}
+              onConfirmPayment={confirmPayment}
+              confirming={confirming}
             />
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
@@ -1418,6 +1430,8 @@ function CartPanel({
   onDeleteCart,
   onCalcFrete,
   onContinue,
+  onConfirmPayment,
+  confirming,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -1432,6 +1446,8 @@ function CartPanel({
   onDeleteCart: () => void;
   onCalcFrete: () => void;
   onContinue: () => void;
+  onConfirmPayment: () => void;
+  confirming: boolean;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -1584,9 +1600,17 @@ function CartPanel({
                     Enviar no WhatsApp
                   </a>
                 </div>
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                  <Loader2 className="h-3 w-3 animate-spin" /> Aguardando pagamento…
-                </div>
+                <button
+                  onClick={onConfirmPayment}
+                  disabled={confirming}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Já pagou? Confirmar pagamento
+                </button>
+                <span className="text-center text-[11px] text-slate-400">
+                  Clique quando a cliente pagar — confirma e envia pra separação.
+                </span>
                 <button
                   onClick={onContinue}
                   className="w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
@@ -1613,9 +1637,17 @@ function CartPanel({
                 >
                   Copiar código PIX
                 </button>
-                <div className="flex items-center gap-1 text-xs text-slate-400">
-                  <Loader2 className="h-3 w-3 animate-spin" /> Aguardando pagamento…
-                </div>
+                <button
+                  onClick={onConfirmPayment}
+                  disabled={confirming}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Já pagou? Confirmar pagamento
+                </button>
+                <span className="text-center text-[11px] text-slate-400">
+                  Clique quando a cliente pagar — confirma e envia pra separação.
+                </span>
                 <button
                   onClick={onContinue}
                   className="w-full rounded-lg border border-slate-300 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
