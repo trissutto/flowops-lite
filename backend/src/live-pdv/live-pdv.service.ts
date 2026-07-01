@@ -186,9 +186,11 @@ export class LivePdvService {
     cor: string | null,
     tam: string | null,
   ): Promise<{ byStore: Map<string, number>; codigos: string[]; bestCodigo: string | null }> {
+    // ref EXATO (sem insensitive) → usa o índice @@index([ref]) do espelho.
+    // O refCode já vem canônico da busca (é o ref gravado no espelho).
     const prods = await (this.prisma as any).gigaProduto
       .findMany({
-        where: { ref: { equals: refCode, mode: 'insensitive' } },
+        where: { ref: refCode },
         select: { codigo: true, cor: true, tamanho: true },
       })
       .catch(() => []);
@@ -871,10 +873,10 @@ export class LivePdvService {
     const promo = await this.getPromo(session.id, ref);
     const priceCents = promo != null && promo > 0 ? promo : basePriceCents;
 
-    // Descrição — SÓ ESPELHO (não toca o Giga).
+    // Descrição — SÓ ESPELHO, ref EXATO (usa índice).
     const rowsForDesc = await (this.prisma as any).gigaProduto
       .findMany({
-        where: { ref: { equals: ref, mode: 'insensitive' } },
+        where: { ref: ref },
         select: { cor: true, tamanho: true, descricao: true },
       })
       .catch(() => []);
