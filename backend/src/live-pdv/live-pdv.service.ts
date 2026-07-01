@@ -70,11 +70,11 @@ export class LivePdvService {
     return out;
   }
 
-  // Preço por REF — SÓ ESPELHO.
+  // Preço por REF — SÓ ESPELHO, ref EXATO (usa índice; ref já vem canônico).
   private async refPriceWithMirror(ref: string): Promise<number> {
     try {
       const row = await (this.prisma as any).gigaProduto.findFirst({
-        where: { ref: { equals: ref, mode: 'insensitive' }, vendaUn: { gt: 0 } },
+        where: { ref, vendaUn: { gt: 0 } },
         orderBy: { vendaUn: 'desc' },
         select: { vendaUn: true },
       });
@@ -86,29 +86,45 @@ export class LivePdvService {
   }
 
   // Resolve as linhas do produto (REF/código/nome) — SÓ ESPELHO (giga_produto no
-  // Postgres). A Live NÃO toca o Giga ao vivo.
+  // Postgres). Em CAMADAS pra usar os índices (@@index codigo/ref) e NÃO varrer a
+  // tabela toda: código exato → ref exato/prefixo → (só se nada) insensitive/nome.
   private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
-    const mrows = await (this.prisma as any).gigaProduto
-      .findMany({
-        where: {
+    const mk = (rows: any[]) =>
+      (rows as any[]).map((r) => ({
+        CODIGO: r.codigo,
+        REF: r.ref,
+        DESCRICAOCOMPLETA: r.descricao,
+        COR: r.cor,
+        TAMANHO: r.tamanho,
+      }));
+    const find = (where: any, take = 1000) =>
+      (this.prisma as any).gigaProduto.findMany({ where, take }).catch(() => []);
+
+    // 1) Código exato (índice) — cobre bipar código/EAN.
+    let rows = await find({ codigo: q });
+    if (rows.length) return { rows: mk(rows), fromMirror: true };
+
+    // 2) REF pelo índice: exato/prefixo em MAIÚSCULA (padrão Giga) e como digitado.
+    const up = q.toUpperCase();
+    rows = await find({
+      OR: [{ ref: up }, { ref: q }, { ref: { startsWith: up } }, { ref: { startsWith: q } }],
+    });
+    if (rows.length) return { rows: mk(rows), fromMirror: true };
+
+    // 3) Fallback (raro) — ref/nome case-insensitive (varredura). Só quando 1 e 2
+    //    não acharam: busca por nome/descrição ou ref gravada em minúscula.
+    if (q.length >= 2) {
+      rows = await find(
+        {
           OR: [
-            { ref: { equals: q, mode: 'insensitive' } },
             { ref: { startsWith: q, mode: 'insensitive' } },
-            { codigo: q },
             { descricao: { contains: q, mode: 'insensitive' } },
           ],
         },
-        take: 1000,
-      })
-      .catch(() => []);
-    const mapped = (mrows as any[]).map((r) => ({
-      CODIGO: r.codigo,
-      REF: r.ref,
-      DESCRICAOCOMPLETA: r.descricao,
-      COR: r.cor,
-      TAMANHO: r.tamanho,
-    }));
-    return { rows: mapped, fromMirror: true };
+        300,
+      );
+    }
+    return { rows: mk(rows), fromMirror: true };
   }
 
   // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
