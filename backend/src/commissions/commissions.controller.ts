@@ -191,4 +191,47 @@ export class CommissionsController {
       history: history ? parseInt(history, 10) : 6,
     });
   }
+
+  // ── Troca de vendedora numa venda (estilo Giga) ─────────────────────
+
+  /**
+   * GET /commissions/sales?yearMonth=2026-06&storeCode=01&q=maria
+   * Lista vendas finalizadas do período pra admin trocar a vendedora.
+   */
+  @Get('sales')
+  listSales(
+    @Req() req: any,
+    @Query('yearMonth') yearMonth: string,
+    @Query('storeCode') storeCode?: string,
+    @Query('sellerId') sellerId?: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    this.requireAdmin(req);
+    return this.svc.listSalesForReassign({
+      yearMonth,
+      storeCode,
+      sellerId,
+      q,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  /**
+   * POST /commissions/sales/:id/reassign  { sellerId }
+   * Reatribui a vendedora da venda e recalcula o período (force).
+   */
+  @Post('sales/:id/reassign')
+  reassignSale(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: { sellerId: string },
+  ) {
+    this.requireAdmin(req);
+    return this.svc.reassignSaleSeller({
+      saleId: id,
+      newSellerId: body?.sellerId,
+      userId: req?.user?.userId || req?.user?.sub || req?.user?.email,
+    });
+  }
 }
