@@ -44,6 +44,11 @@ async function bootstrap() {
     forbidNonWhitelisted: true,
   }));
 
+  // Shutdown gracioso: no redeploy o Railway manda SIGTERM. Sem isto, o Node
+  // morre no meio de requests em voo (venda de PDV/Live cortada) e os
+  // onModuleDestroy — pool.end() do ERP, $disconnect do Prisma — nunca rodam.
+  app.enableShutdownHooks();
+
   const port = process.env.PORT ?? 3001;
   await app.listen(port, '0.0.0.0');
 
