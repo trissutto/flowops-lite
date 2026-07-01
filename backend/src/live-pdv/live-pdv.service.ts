@@ -234,6 +234,13 @@ export class LivePdvService {
     const code = input.liveStoreCode || (await this.defaultLiveStoreCode());
     const store = await (this.prisma as any).store.findUnique({ where: { code } });
     if (!store) throw new BadRequestException(`Loja da live (${code}) não encontrada`);
+    // UMA LIVE ATIVA POR VEZ: encerra qualquer live ainda aberta antes de abrir
+    // a nova. Os carrinhos ficam guardados na sessão encerrada (sessionId),
+    // então não vazam pra live nova.
+    await (this.prisma as any).livePdvSession.updateMany({
+      where: { status: 'live' },
+      data: { status: 'ended', endedAt: new Date() },
+    });
     const session = await (this.prisma as any).livePdvSession.create({
       data: {
         title: input.title?.trim() || `Live ${new Date().toLocaleDateString('pt-BR')}`,
@@ -539,6 +546,13 @@ export class LivePdvService {
     instagram?: string;
     cpf?: string;
     email?: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
   }) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -548,6 +562,14 @@ export class LivePdvService {
     const ig = (input.instagram || '').trim().replace(/^@/, '') || null;
     const cpf = input.cpf ? input.cpf.replace(/\D/g, '') : null;
     const email = input.email?.trim() || null;
+    // Endereço de entrega (opcional — capturado no PIX; CEP puxa via ViaCEP).
+    const cep = input.cep ? input.cep.replace(/\D/g, '') : null;
+    const endereco = input.endereco?.trim() || null;
+    const numero = input.numero?.trim() || null;
+    const complemento = input.complemento?.trim() || null;
+    const bairro = input.bairro?.trim() || null;
+    const cidade = input.cidade?.trim() || null;
+    const uf = input.uf?.trim().toUpperCase().slice(0, 2) || null;
 
     // Atualiza o cliente mestre (cria se o carrinho ainda não tinha vínculo).
     let customerId: string | null = cart.customerId || null;
@@ -569,6 +591,36 @@ export class LivePdvService {
       this.logger.warn(`updateCartCustomer: falha ao salvar Customer: ${(e as Error).message}`);
     }
 
+    // Upsert do endereço mestre (CustomerAddress) — só se veio algo de endereço.
+    if (customerId && (cep || endereco || cidade)) {
+      try {
+        const addrData = {
+          cep,
+          street: endereco,
+          number: numero,
+          complement: complemento,
+          district: bairro,
+          city: cidade,
+          state: uf,
+        };
+        const existing = await (this.prisma as any).customerAddress.findFirst({
+          where: { customerId },
+        });
+        if (existing) {
+          await (this.prisma as any).customerAddress.update({
+            where: { id: existing.id },
+            data: addrData,
+          });
+        } else {
+          await (this.prisma as any).customerAddress.create({
+            data: { customerId, type: 'entrega', isPrimary: true, ...addrData },
+          });
+        }
+      } catch (e) {
+        this.logger.warn(`updateCartCustomer: falha ao salvar endereço: ${(e as Error).message}`);
+      }
+    }
+
     const updated = await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
       data: {
@@ -578,6 +630,13 @@ export class LivePdvService {
         customerInstagram: ig,
         customerCpf: cpf,
         customerEmail: email,
+        customerCep: cep,
+        customerEndereco: endereco,
+        customerNumero: numero,
+        customerComplemento: complemento,
+        customerBairro: bairro,
+        customerCidade: cidade,
+        customerUf: uf,
       },
     });
     this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
@@ -631,7 +690,10 @@ export class LivePdvService {
       { customerName: { contains: t, mode: 'insensitive' } },
       { customerInstagram: { contains: ig, mode: 'insensitive' } },
     ];
-    if (digits.length >= 3) OR.push({ customerPhone: { contains: digits } });
+    if (digits.length >= 3) {
+      OR.push({ customerPhone: { contains: digits } });
+      OR.push({ customerCpf: { contains: digits } }); // CPF é chave de busca
+    }
     const carts = await (this.prisma as any).livePdvCart.findMany({
       where: { customerId: { not: null }, OR },
       distinct: ['customerId'],
@@ -641,6 +703,7 @@ export class LivePdvService {
         customerName: true,
         customerPhone: true,
         customerInstagram: true,
+        customerCpf: true,
       },
       take: 20,
     });
@@ -649,6 +712,7 @@ export class LivePdvService {
       name: c.customerName,
       phone: c.customerPhone,
       instagram: c.customerInstagram,
+      cpf: c.customerCpf,
     }));
   }
 
@@ -1271,6 +1335,7 @@ export class LivePdvService {
           customerName: c?.customerName,
           customerPhone: c?.customerPhone,
           customerInstagram: c?.customerInstagram,
+          customerCpf: c?.customerCpf || null,
           paidAt: c?.paidAt,
           items: [],
         });

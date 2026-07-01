@@ -78,6 +78,13 @@ interface Cart {
   customerInstagram: string | null;
   customerCpf?: string | null;
   customerEmail?: string | null;
+  customerCep?: string | null;
+  customerEndereco?: string | null;
+  customerNumero?: string | null;
+  customerComplemento?: string | null;
+  customerBairro?: string | null;
+  customerCidade?: string | null;
+  customerUf?: string | null;
   status: string;
   subtotalCents: number;
   freteCents: number;
@@ -165,6 +172,7 @@ function buildGrade(product: GradeResult) {
 export default function LivePdvPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
+  const [activeLive, setActiveLive] = useState<{ id: string; title: string } | null>(null);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
 
@@ -191,18 +199,21 @@ export default function LivePdvPage() {
   // Pagamento
   const [qr, setQr] = useState<{ text: string; img: string; valor: number; link?: string } | null>(null);
   const [paying, setPaying] = useState(false);
+  // Cobrança pendente: ao clicar em cobrar, abre o cadastro (com endereço) e só
+  // gera o PIX/link depois de salvar. null = nenhuma cobrança em andamento.
+  const [pendingPay, setPendingPay] = useState<'pix' | 'link' | null>(null);
   const [paid, setPaid] = useState(false);
 
-  // ─── Boot: pega sessão "live" ou cria uma ─────────────────────────────────
+  // ─── Boot: NÃO adota live automaticamente ─────────────────────────────────
+  // Se existir uma live aberta, guarda em `activeLive` e a tela inicial oferece
+  // "Continuar" ou "Abrir nova" (que fecha a atual). Evita que carrinhos de uma
+  // live antiga apareçam numa live nova.
   useEffect(() => {
     (async () => {
       try {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
-        if (live) {
-          setSessionId(live.id);
-          setSessionTitle(live.title);
-        }
+        if (live) setActiveLive({ id: live.id, title: live.title });
       } catch {}
       setBooting(false);
     })();
@@ -238,17 +249,57 @@ export default function LivePdvPage() {
   }, [sessionId, refreshCarts]);
 
   async function createSession() {
-    const title = prompt('Título da live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
+    if (
+      activeLive &&
+      !confirm(
+        `Abrir uma nova live vai FECHAR a live atual "${activeLive.title}".\n\n` +
+          `Os carrinhos dela ficam guardados (não somem), só saem da tela. Continuar?`,
+      )
+    )
+      return;
+    const title = prompt('Título da nova live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
     if (title === null) return;
     try {
       const s = await api<any>('/live-pdv/sessions', {
         method: 'POST',
         body: JSON.stringify({ title }),
       });
+      setActiveLive(null);
       setSessionId(s.id);
       setSessionTitle(s.title);
     } catch (e: any) {
       alert('Erro ao criar sessão: ' + (e?.message || e));
+    }
+  }
+
+  // Continua a live que já estava aberta (sem fechar nada).
+  function continueLive() {
+    if (!activeLive) return;
+    setSessionId(activeLive.id);
+    setSessionTitle(activeLive.title);
+  }
+
+  // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
+  // tela inicial, liberando pra abrir uma nova.
+  async function closeLive() {
+    if (!sessionId) return;
+    if (
+      !confirm(
+        `Fechar a live "${sessionTitle}"?\n\n` +
+          `Os carrinhos ficam guardados nesta live, mas ela sai da tela. ` +
+          `Você pode abrir uma nova live depois.`,
+      )
+    )
+      return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/end`, { method: 'POST' });
+      setSessionId(null);
+      setSessionTitle('');
+      setActiveLive(null);
+      setCart(null);
+      setProduct(null);
+    } catch (e: any) {
+      alert('Erro ao fechar live: ' + (e?.message || e));
     }
   }
 
@@ -302,6 +353,7 @@ export default function LivePdvPage() {
   async function setPromoCents(cents: number) {
     if (!sessionId || !product?.ref) return;
     const safe = Math.max(0, Math.round(cents));
+    const full = product.basePriceCents || product.priceCents || 0;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
@@ -309,7 +361,20 @@ export default function LivePdvPage() {
       });
       setPromoEditing(false);
       setCupomEditing(false);
-      await doSearch();
+      // Atualiza o preço NA TELA imediatamente — NÃO depende do doSearch (que
+      // por sua vez exige o termo ainda estar no campo de busca). Sem isso, o
+      // desconto "não abatia" quando o campo de busca já tinha sido limpo.
+      setProduct((p) =>
+        p
+          ? {
+              ...p,
+              priceCents: safe,
+              basePriceCents: p.basePriceCents || p.priceCents,
+              promoActive: safe > 0 && safe < full,
+              cells: (p.cells || []).map((c) => ({ ...c, priceCents: safe })),
+            }
+          : p,
+      );
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
@@ -570,13 +635,22 @@ export default function LivePdvPage() {
     setPaid(false);
   }
 
-  // Edita o cliente do carrinho a qualquer momento (salva no banco + snapshot)
+  // Edita/completa o cadastro do carrinho (salva no banco + snapshot). Aceita
+  // também endereço (opcional). Se veio de um clique em cobrar (pendingPay),
+  // gera o PIX/link logo após salvar.
   async function saveCustomerEdit(form: {
     name: string;
     phone: string;
     instagram: string;
     cpf: string;
     email: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
   }) {
     if (!cart) return;
     try {
@@ -593,6 +667,11 @@ export default function LivePdvPage() {
       });
       setEditCustomerOpen(false);
       await refreshCarts();
+      // Se o cadastro foi aberto por um clique em cobrar, gera o pagamento agora.
+      const pay = pendingPay;
+      setPendingPay(null);
+      if (pay === 'pix') await doChargePix();
+      else if (pay === 'link') await doChargeLink();
     } catch (e: any) {
       alert('Erro ao salvar cliente: ' + (e?.message || e));
     }
@@ -614,7 +693,21 @@ export default function LivePdvPage() {
   }
 
   // ─── Pagamento ────────────────────────────────────────────────────────────
-  async function chargePix() {
+  // Ao clicar em cobrar, abre o cadastro pra completar/confirmar (nome, tel,
+  // endereço via CEP — tudo opcional) ANTES de gerar. saveCustomerEdit dispara
+  // doChargePix/doChargeLink ao salvar.
+  function startPix() {
+    if (!cart) return;
+    setPendingPay('pix');
+    setEditCustomerOpen(true);
+  }
+  function startLink() {
+    if (!cart) return;
+    setPendingPay('link');
+    setEditCustomerOpen(true);
+  }
+
+  async function doChargePix() {
     if (!cart) return;
     setPaying(true);
     try {
@@ -627,7 +720,7 @@ export default function LivePdvPage() {
     }
   }
 
-  async function chargeLink() {
+  async function doChargeLink() {
     if (!cart) return;
     setPaying(true);
     try {
@@ -673,13 +766,35 @@ export default function LivePdvPage() {
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-100 p-6">
         <Zap className="h-12 w-12 text-rose-500" />
         <h1 className="text-2xl font-bold text-slate-800">Live Commerce</h1>
-        <p className="text-slate-500">Nenhuma live ativa no momento.</p>
-        <button
-          onClick={createSession}
-          className="rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-700"
-        >
-          ▶ Iniciar nova live
-        </button>
+        {activeLive ? (
+          <>
+            <p className="text-slate-500">
+              Tem uma live aberta: <b className="text-slate-700">{activeLive.title}</b>
+            </p>
+            <button
+              onClick={continueLive}
+              className="rounded-lg bg-slate-800 px-5 py-2.5 font-semibold text-white hover:bg-slate-900"
+            >
+              ▶ Continuar esta live
+            </button>
+            <button
+              onClick={createSession}
+              className="rounded-lg border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50"
+            >
+              + Abrir nova live (fecha a atual)
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-slate-500">Nenhuma live ativa no momento.</p>
+            <button
+              onClick={createSession}
+              className="rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-700"
+            >
+              ▶ Iniciar nova live
+            </button>
+          </>
+        )}
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
@@ -715,6 +830,13 @@ export default function LivePdvPage() {
         <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
           ● {sessionTitle}
         </span>
+        <button
+          onClick={closeLive}
+          title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+        >
+          Fechar live
+        </button>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
           <button
             onClick={() => setTab('console')}
@@ -1044,8 +1166,8 @@ export default function LivePdvPage() {
               paying={paying}
               onNewClient={newClient}
               onRemoveItem={removeItem}
-              onChargePix={chargePix}
-              onChargeLink={chargeLink}
+              onChargePix={startPix}
+              onChargeLink={startLink}
               onEditCustomer={() => setEditCustomerOpen(true)}
               onDeleteCart={deleteCart}
               onCalcFrete={calcFrete}
@@ -1162,16 +1284,33 @@ export default function LivePdvPage() {
       {/* Modal editar cliente do carrinho */}
       {editCustomerOpen && cart && (
         <CustomerModal
-          title="Editar cliente"
-          submitLabel="Salvar alterações"
+          title={pendingPay ? 'Cadastro pra envio' : 'Editar cliente'}
+          submitLabel={
+            pendingPay === 'pix'
+              ? 'Salvar e gerar PIX'
+              : pendingPay === 'link'
+              ? 'Salvar e gerar link'
+              : 'Salvar alterações'
+          }
+          showAddress
           initial={{
             name: cart.customerName,
             phone: cart.customerPhone,
             instagram: cart.customerInstagram,
             cpf: cart.customerCpf,
             email: cart.customerEmail,
+            cep: cart.customerCep,
+            endereco: cart.customerEndereco,
+            numero: cart.customerNumero,
+            complemento: cart.customerComplemento,
+            bairro: cart.customerBairro,
+            cidade: cart.customerCidade,
+            uf: cart.customerUf,
           }}
-          onClose={() => setEditCustomerOpen(false)}
+          onClose={() => {
+            setEditCustomerOpen(false);
+            setPendingPay(null);
+          }}
           onSave={saveCustomerEdit}
         />
       )}
@@ -1436,20 +1575,58 @@ function CustomerModal({
   initial,
   title = 'Identificar cliente',
   submitLabel = 'Salvar e adicionar item',
+  showAddress = false,
 }: {
   onClose: () => void;
-  onSave: (f: { name: string; phone: string; instagram: string; cpf: string; email: string }) => void;
-  initial?: { name?: string; phone?: string; instagram?: string | null; cpf?: string | null; email?: string | null };
+  onSave: (f: {
+    name: string; phone: string; instagram: string; cpf: string; email: string;
+    cep?: string; endereco?: string; numero?: string; complemento?: string; bairro?: string; cidade?: string; uf?: string;
+  }) => void;
+  initial?: {
+    name?: string; phone?: string; instagram?: string | null; cpf?: string | null; email?: string | null;
+    cep?: string | null; endereco?: string | null; numero?: string | null; complemento?: string | null; bairro?: string | null; cidade?: string | null; uf?: string | null;
+  };
   title?: string;
   submitLabel?: string;
+  showAddress?: boolean;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [phone, setPhone] = useState(maskPhoneBR(initial?.phone ?? ''));
   const [instagram, setInstagram] = useState(initial?.instagram ?? '');
   const [cpf, setCpf] = useState(initial?.cpf ?? '');
   const [email, setEmail] = useState(initial?.email ?? '');
+  const [cep, setCep] = useState(initial?.cep ?? '');
+  const [endereco, setEndereco] = useState(initial?.endereco ?? '');
+  const [numero, setNumero] = useState(initial?.numero ?? '');
+  const [complemento, setComplemento] = useState(initial?.complemento ?? '');
+  const [bairro, setBairro] = useState(initial?.bairro ?? '');
+  const [cidade, setCidade] = useState(initial?.cidade ?? '');
+  const [uf, setUf] = useState(initial?.uf ?? '');
+  const [cepLoading, setCepLoading] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   useEffect(() => nameRef.current?.focus(), []);
+
+  // CEP → endereço via ViaCEP (mesmo padrão do PDV). Só preenche o que estiver
+  // vazio pra não sobrescrever edição manual.
+  async function lookupCep(raw: string) {
+    const clean = raw.replace(/\D/g, '');
+    if (clean.length !== 8) return;
+    setCepLoading(true);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await r.json();
+      if (!data?.erro) {
+        setEndereco((prev) => prev || data.logradouro || '');
+        setBairro((prev) => prev || data.bairro || '');
+        setCidade((prev) => prev || data.localidade || '');
+        setUf((prev) => prev || (data.uf || '').toUpperCase());
+      }
+    } catch {
+      /* CEP indisponível — operadora preenche manual */
+    } finally {
+      setCepLoading(false);
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1457,7 +1634,12 @@ function CustomerModal({
       alert('Nome é obrigatório');
       return;
     }
-    onSave({ name, phone: phone.replace(/\D/g, ''), instagram, cpf, email });
+    onSave({
+      name, phone: phone.replace(/\D/g, ''), instagram, cpf, email,
+      ...(showAddress
+        ? { cep: cep.replace(/\D/g, ''), endereco, numero, complemento, bairro, cidade, uf }
+        : {}),
+    });
   }
 
   return (
@@ -1479,6 +1661,35 @@ function CustomerModal({
             <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
           </div>
+
+          {showAddress && (
+            <div className="mt-1 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                Endereço de entrega (opcional — CEP puxa o resto)
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  value={cep}
+                  onChange={(e) => { setCep(e.target.value); lookupCep(e.target.value); }}
+                  placeholder="CEP"
+                  inputMode="numeric"
+                  maxLength={9}
+                  className="w-32 rounded-lg border border-slate-300 px-3 py-2"
+                />
+                {cepLoading && <span className="text-xs text-slate-400">buscando…</span>}
+              </div>
+              <input value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Rua / logradouro" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <div className="grid grid-cols-2 gap-2">
+                <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Número" className="rounded-lg border border-slate-300 px-3 py-2" />
+                <input value={complemento} onChange={(e) => setComplemento(e.target.value)} placeholder="Complemento" className="rounded-lg border border-slate-300 px-3 py-2" />
+              </div>
+              <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <div className="grid grid-cols-[1fr_72px] gap-2">
+                <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className="rounded-lg border border-slate-300 px-3 py-2" />
+                <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF" maxLength={2} className="rounded-lg border border-slate-300 px-3 py-2 uppercase" />
+              </div>
+            </div>
+          )}
         </div>
         <button type="submit" className="mt-4 w-full rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700">
           {submitLabel}

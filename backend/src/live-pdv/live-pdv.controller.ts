@@ -127,7 +127,21 @@ export class LivePdvController {
   @Post('carts/:cartId/customer')
   updateCartCustomer(
     @Param('cartId') cartId: string,
-    @Body() body: { name: string; phone?: string; instagram?: string; cpf?: string; email?: string },
+    @Body()
+    body: {
+      name: string;
+      phone?: string;
+      instagram?: string;
+      cpf?: string;
+      email?: string;
+      cep?: string;
+      endereco?: string;
+      numero?: string;
+      complemento?: string;
+      bairro?: string;
+      cidade?: string;
+      uf?: string;
+    },
   ) {
     return this.svc.updateCartCustomer(cartId, body);
   }
