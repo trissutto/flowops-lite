@@ -81,15 +81,21 @@ export class CutoverService {
     }
 
     // ── Flowops (Postgres) ──
+    // Nomes reais no Postgres (Prisma @map): tabela pdv_sales, colunas snake_case,
+    // valor = total, status finalizado = 'finalized'. A versao anterior usava
+    // "PdvSale"/"totalAmount"/'finalizada' e lancava erro em runtime (relation
+    // does not exist). Exclui vendas de treino (is_training) da reconciliacao,
+    // como todos os demais filtros de venda finalizada no codigo.
     const flopRows: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT "storeCode",
+      `SELECT store_code AS "storeCode",
               COUNT(*)::int AS qtd,
-              SUM("totalAmount")::float AS valor
-         FROM "PdvSale"
-        WHERE "finalizedAt" >= $1
-          AND "finalizedAt" <= $2
-          AND status = 'finalizada'
-        GROUP BY "storeCode"`,
+              SUM(total)::float AS valor
+         FROM pdv_sales
+        WHERE finalized_at >= $1
+          AND finalized_at <= $2
+          AND status = 'finalized'
+          AND is_training = false
+        GROUP BY store_code`,
       new Date(startDate),
       new Date(endDate),
     );
