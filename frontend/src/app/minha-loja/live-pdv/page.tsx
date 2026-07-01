@@ -1202,6 +1202,17 @@ export default function LivePdvPage() {
                   </span>
                   <span>· clique na célula pra adicionar · passe o mouse pra ver por loja</span>
                 </div>
+
+                {/* Novo carrinho — logo abaixo da grade, pra começar a próxima
+                    cliente rápido sem sair da mão. */}
+                <div className="mt-4 flex justify-center">
+                  <button
+                    onClick={newClient}
+                    className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-6 py-2.5 font-bold text-white shadow hover:bg-rose-700"
+                  >
+                    <ShoppingCart className="h-5 w-5" /> Novo carrinho
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1422,7 +1433,7 @@ function CartPanel({
             onClick={onNewClient}
             className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
           >
-            <UserPlus className="h-3.5 w-3.5" /> Nova cliente
+            <ShoppingCart className="h-3.5 w-3.5" /> Novo carrinho
           </button>
         </div>
 
