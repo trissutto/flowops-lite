@@ -69,7 +69,7 @@ type Period = {
 };
 
 type Store = { id: string; code: string; name: string; active: boolean };
-type Seller = { id: string; name: string; active: boolean };
+type Seller = { id: string; name: string; active: boolean; storeCodeOrigin?: string | null };
 
 const brl = (n: number | string | null | undefined) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -262,6 +262,21 @@ function SalesTab() {
     }
   }
 
+  // Só as vendedoras da LOJA da venda (storeCodeOrigin === store da venda).
+  // Sempre inclui a vendedora atual da venda (mesmo que de outra loja) pra o
+  // select conseguir exibi-la. Fallback: se nenhuma casar com a loja, mostra
+  // todas (evita dropdown vazio se o vínculo de loja estiver faltando).
+  function sellersForStore(storeCode: string, currentSellerId: string | null): Seller[] {
+    const norm = (c?: string | null) => (c || '').trim().replace(/^0+/, '');
+    const matched = sellers.filter((v) => norm(v.storeCodeOrigin) === norm(storeCode));
+    let base = matched.length ? matched : sellers;
+    if (currentSellerId && !base.some((v) => v.id === currentSellerId)) {
+      const cur = sellers.find((v) => v.id === currentSellerId);
+      if (cur) base = [cur, ...base];
+    }
+    return base;
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
@@ -445,7 +460,7 @@ function SalesTab() {
                           }`}
                         >
                           <option value="">— escolher —</option>
-                          {sellers.map((v) => (
+                          {sellersForStore(s.storeCode, s.sellerId).map((v) => (
                             <option key={v.id} value={v.id}>
                               {v.name}
                             </option>
