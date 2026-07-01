@@ -546,6 +546,13 @@ export class LivePdvService {
     instagram?: string;
     cpf?: string;
     email?: string;
+    cep?: string;
+    endereco?: string;
+    numero?: string;
+    complemento?: string;
+    bairro?: string;
+    cidade?: string;
+    uf?: string;
   }) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
@@ -555,6 +562,14 @@ export class LivePdvService {
     const ig = (input.instagram || '').trim().replace(/^@/, '') || null;
     const cpf = input.cpf ? input.cpf.replace(/\D/g, '') : null;
     const email = input.email?.trim() || null;
+    // Endereço de entrega (opcional — capturado no PIX; CEP puxa via ViaCEP).
+    const cep = input.cep ? input.cep.replace(/\D/g, '') : null;
+    const endereco = input.endereco?.trim() || null;
+    const numero = input.numero?.trim() || null;
+    const complemento = input.complemento?.trim() || null;
+    const bairro = input.bairro?.trim() || null;
+    const cidade = input.cidade?.trim() || null;
+    const uf = input.uf?.trim().toUpperCase().slice(0, 2) || null;
 
     // Atualiza o cliente mestre (cria se o carrinho ainda não tinha vínculo).
     let customerId: string | null = cart.customerId || null;
@@ -576,6 +591,36 @@ export class LivePdvService {
       this.logger.warn(`updateCartCustomer: falha ao salvar Customer: ${(e as Error).message}`);
     }
 
+    // Upsert do endereço mestre (CustomerAddress) — só se veio algo de endereço.
+    if (customerId && (cep || endereco || cidade)) {
+      try {
+        const addrData = {
+          cep,
+          street: endereco,
+          number: numero,
+          complement: complemento,
+          district: bairro,
+          city: cidade,
+          state: uf,
+        };
+        const existing = await (this.prisma as any).customerAddress.findFirst({
+          where: { customerId },
+        });
+        if (existing) {
+          await (this.prisma as any).customerAddress.update({
+            where: { id: existing.id },
+            data: addrData,
+          });
+        } else {
+          await (this.prisma as any).customerAddress.create({
+            data: { customerId, type: 'entrega', isPrimary: true, ...addrData },
+          });
+        }
+      } catch (e) {
+        this.logger.warn(`updateCartCustomer: falha ao salvar endereço: ${(e as Error).message}`);
+      }
+    }
+
     const updated = await (this.prisma as any).livePdvCart.update({
       where: { id: cartId },
       data: {
@@ -585,6 +630,13 @@ export class LivePdvService {
         customerInstagram: ig,
         customerCpf: cpf,
         customerEmail: email,
+        customerCep: cep,
+        customerEndereco: endereco,
+        customerNumero: numero,
+        customerComplemento: complemento,
+        customerBairro: bairro,
+        customerCidade: cidade,
+        customerUf: uf,
       },
     });
     this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });

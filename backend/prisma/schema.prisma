@@ -3309,6 +3309,13 @@ model LivePdvCart {
   customerCpf       String?  @map("customer_cpf")
   customerEmail     String?  @map("customer_email")
   customerCep       String?  @map("customer_cep")
+  // Endereço de entrega (capturado no ato do PIX; CEP puxa via ViaCEP).
+  customerEndereco    String? @map("customer_endereco")     // logradouro
+  customerNumero      String? @map("customer_numero")
+  customerComplemento String? @map("customer_complemento")
+  customerBairro      String? @map("customer_bairro")
+  customerCidade      String? @map("customer_cidade")
+  customerUf          String? @map("customer_uf")
   // open | awaiting_payment | paid | separating | shipped | delivered | cancelled
   status            String   @default("open")
   subtotalCents     Int      @default(0) @map("subtotal_cents")
