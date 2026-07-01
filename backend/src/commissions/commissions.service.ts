@@ -273,35 +273,50 @@ export class CommissionsService {
    * Não recalcula entries de período 'paid'. Período 'closed' permite
    * recálculo manual (admin override) mas loga aviso.
    */
-  async calculateForPeriod(yearMonth: string): Promise<{ entries: any[]; total: number }> {
+  async calculateForPeriod(
+    yearMonth: string,
+    opts?: { force?: boolean },
+  ): Promise<{ entries: any[]; total: number }> {
     const period = await this.ensurePeriod(yearMonth);
-    if (period.status === 'paid') {
+    if (period.status === 'paid' && !opts?.force) {
       throw new BadRequestException(`Período ${yearMonth} já está PAID — não recalcula`);
+    }
+    if (period.status === 'paid' && opts?.force) {
+      this.logger.warn(
+        `[commissions] Recálculo FORÇADO de período PAID ${yearMonth} (override admin — reatribuição de vendedora). paidAt das entries é preservado.`,
+      );
     }
     if (period.status === 'closed') {
       this.logger.warn(`[commissions] Recalculando período CLOSED ${yearMonth} (override admin)`);
     }
 
     // 1) Soma de vendas + trocas POR LOJA (pra cargo=on_responsible_store)
+    //
+    // NOTA: tabela real = pdv_sales / pdv_returns (@@map), colunas snake_case,
+    // status finalizado = 'finalized'. Aliases voltam em camelCase pro código
+    // downstream continuar lendo r.storeCode / r.sellerId / r.total.
     const salesByStore: any[] = await this.prisma.$queryRawUnsafe(
       `SELECT
-         "storeCode",
+         store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM("totalAmount")::float AS total
-       FROM "PdvSale"
-       WHERE "finalizedAt" >= $1
-         AND "finalizedAt" <= $2
-         AND status = 'finalizada'
-       GROUP BY "storeCode"`,
+         SUM(total)::float AS total
+       FROM pdv_sales
+       WHERE finalized_at >= $1
+         AND finalized_at <= $2
+         AND status = 'finalized'
+         AND is_training = false
+       GROUP BY store_code`,
       period.startDate,
       period.endDate,
     );
+    // Trocas/devoluções por LOJA: TODAS as devoluções da loja no período
+    // (com e sem cupom flowops), pra reduzir a base do líder/gerente.
     const trocasByStore: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT "storeCode", SUM("totalAmount")::float AS total
-       FROM "PdvSale"
-       WHERE "finalizedAt" >= $1 AND "finalizedAt" <= $2
-         AND status IN ('estornada', 'devolvida')
-       GROUP BY "storeCode"`,
+      `SELECT store_code AS "storeCode", SUM(valor_total)::float AS total
+       FROM pdv_returns
+       WHERE created_at >= $1 AND created_at <= $2
+         AND is_training = false
+       GROUP BY store_code`,
       period.startDate,
       period.endDate,
     );
@@ -321,25 +336,31 @@ export class CommissionsService {
 
     // 2) Soma de vendas POR (vendedora × loja) (pra cargo=on_self da VENDEDORA)
     const salesBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT "sellerId", "storeCode",
+      `SELECT seller_id AS "sellerId", store_code AS "storeCode",
          COUNT(*)::int AS qtd,
-         SUM("totalAmount")::float AS total
-       FROM "PdvSale"
-       WHERE "finalizedAt" >= $1
-         AND "finalizedAt" <= $2
-         AND "sellerId" IS NOT NULL
-         AND status = 'finalizada'
-       GROUP BY "sellerId", "storeCode"`,
+         SUM(total)::float AS total
+       FROM pdv_sales
+       WHERE finalized_at >= $1
+         AND finalized_at <= $2
+         AND seller_id IS NOT NULL
+         AND status = 'finalized'
+         AND is_training = false
+       GROUP BY seller_id, store_code`,
       period.startDate,
       period.endDate,
     );
+    // Trocas/devoluções atribuídas à VENDEDORA da venda original (via
+    // original_sale_id → pdv_sales.seller_id). Devolução manual sem cupom
+    // (original_sale_id NULL) NÃO entra aqui — vira desconto só da loja.
     const trocasBySeller: any[] = await this.prisma.$queryRawUnsafe(
-      `SELECT "sellerId", "storeCode", SUM("totalAmount")::float AS total
-       FROM "PdvSale"
-       WHERE "finalizedAt" >= $1 AND "finalizedAt" <= $2
-         AND "sellerId" IS NOT NULL
-         AND status IN ('estornada', 'devolvida')
-       GROUP BY "sellerId", "storeCode"`,
+      `SELECT s.seller_id AS "sellerId", s.store_code AS "storeCode",
+         SUM(r.valor_total)::float AS total
+       FROM pdv_returns r
+       JOIN pdv_sales s ON s.id = r.original_sale_id
+       WHERE r.created_at >= $1 AND r.created_at <= $2
+         AND r.is_training = false
+         AND s.seller_id IS NOT NULL
+       GROUP BY s.seller_id, s.store_code`,
       period.startDate,
       period.endDate,
     );
@@ -510,6 +531,38 @@ export class CommissionsService {
       const storeCode = storeIdToCode.get(seller.responsibleStoreId);
       if (!storeCode) continue;
       await processEntry(seller.id, cargo, storeCode);
+    }
+
+    // === ZERA ENTRIES ÓRFÃS ===
+    // Vendedora que TINHA entry nesse período mas neste recálculo ficou sem
+    // vendas (ex.: a última venda dela foi reatribuída pra outra) não é tocada
+    // pelos fluxos acima — sua entry antiga ficaria "fantasma". Zera o valor
+    // (preserva a linha e o paidAt pra auditoria).
+    const processedKeys = new Set(entries.map((e) => `${e.sellerId}|${e.storeId}`));
+    const existingEntries: any[] = await (this.prisma as any).commissionEntry.findMany({
+      where: { periodId: period.id },
+      select: { id: true, sellerId: true, storeId: true },
+    });
+    for (const ex of existingEntries) {
+      if (processedKeys.has(`${ex.sellerId}|${ex.storeId}`)) continue;
+      await (this.prisma as any).commissionEntry.update({
+        where: { id: ex.id },
+        data: {
+          totalVendido: 0,
+          totalTrocas: 0,
+          vendidoLiquido: 0,
+          qtdVendas: 0,
+          percentApplied: 0,
+          comissaoBase: 0,
+          metaAtingida: false,
+          bonusValue: 0,
+          total: 0,
+          ruleSnapshot: {
+            note: 'zerado — vendedora sem vendas no período após recálculo/reatribuição',
+          },
+          calculatedAt: new Date(),
+        },
+      });
     }
 
     // Atualiza agregados do período
@@ -689,6 +742,134 @@ export class CommissionsService {
       },
       byStore: Array.from(byStore.values()).sort((a, b) => b.totalComissao - a.totalComissao),
       totalGeral,
+    };
+  }
+
+  // ── Troca de vendedora numa venda (correção estilo Giga) ────────────
+
+  /**
+   * Lista as vendas FINALIZADAS de um período (opcionalmente de uma loja)
+   * pra admin trocar a vendedora — equivalente à tela "Vendas" do Giga.
+   * Não conta treino. Ordenado da mais recente pra mais antiga.
+   */
+  async listSalesForReassign(input: {
+    yearMonth: string;
+    storeCode?: string | null;
+    sellerId?: string | null;
+    q?: string | null;
+    limit?: number;
+  }) {
+    if (!/^\d{4}-\d{2}$/.test(input.yearMonth)) {
+      throw new BadRequestException('yearMonth inválido (formato YYYY-MM)');
+    }
+    const [y, m] = input.yearMonth.split('-').map((s) => parseInt(s, 10));
+    const startDate = new Date(y, m - 1, 1, 0, 0, 0);
+    const endDate = new Date(y, m, 0, 23, 59, 59);
+
+    const where: any = {
+      status: 'finalized',
+      isTraining: false,
+      finalizedAt: { gte: startDate, lte: endDate },
+    };
+    if (input.storeCode) where.storeCode = input.storeCode;
+    if (input.sellerId === 'none') where.sellerId = null;
+    else if (input.sellerId) where.sellerId = input.sellerId;
+    if (input.q && input.q.trim()) {
+      const q = input.q.trim();
+      where.OR = [
+        { customerName: { contains: q, mode: 'insensitive' } },
+        { nfceNumber: { contains: q } },
+        { id: { contains: q } },
+      ];
+    }
+
+    const sales = await (this.prisma as any).pdvSale.findMany({
+      where,
+      select: {
+        id: true,
+        finalizedAt: true,
+        total: true,
+        status: true,
+        storeCode: true,
+        storeName: true,
+        sellerId: true,
+        sellerName: true,
+        vendedorName: true,
+        customerName: true,
+        nfceNumber: true,
+        paymentMethod: true,
+      },
+      orderBy: { finalizedAt: 'desc' },
+      take: Math.min(input.limit ?? 300, 1000),
+    });
+    return { yearMonth: input.yearMonth, count: sales.length, sales };
+  }
+
+  /**
+   * Reatribui a vendedora de UMA venda (mesmo já finalizada / período fechado
+   * ou pago — admin manda) e recalcula o período afetado com force=true.
+   * Grava o Seller.id (o que o motor de comissão usa como chave).
+   */
+  async reassignSaleSeller(input: {
+    saleId: string;
+    newSellerId: string;
+    userId?: string;
+  }) {
+    if (!input.newSellerId) throw new BadRequestException('sellerId obrigatório');
+
+    const sale = await (this.prisma as any).pdvSale.findUnique({
+      where: { id: input.saleId },
+      select: {
+        id: true,
+        finalizedAt: true,
+        createdAt: true,
+        sellerId: true,
+        sellerName: true,
+        storeCode: true,
+        status: true,
+      },
+    });
+    if (!sale) throw new NotFoundException('Venda não encontrada');
+
+    const seller = await (this.prisma as any).seller.findUnique({
+      where: { id: input.newSellerId },
+      select: { id: true, name: true, active: true },
+    });
+    if (!seller) throw new BadRequestException('Vendedora não encontrada');
+
+    const before = { sellerId: sale.sellerId, sellerName: sale.sellerName };
+
+    await (this.prisma as any).pdvSale.update({
+      where: { id: input.saleId },
+      data: { sellerId: seller.id, sellerName: seller.name },
+    });
+
+    // Recalcula o período em que a venda caiu (força — admin pode em qualquer
+    // status, inclusive PAID; o paidAt das entries é preservado no upsert).
+    const ref: Date = sale.finalizedAt || sale.createdAt || new Date();
+    const yearMonth = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+    let recalc: any = null;
+    try {
+      const r = await this.calculateForPeriod(yearMonth, { force: true });
+      recalc = { yearMonth, entries: r.entries.length, total: r.total };
+    } catch (e: any) {
+      this.logger.error(
+        `[commissions] recalc pós-reassign falhou (${yearMonth}): ${e.message}`,
+      );
+      recalc = { yearMonth, error: e.message };
+    }
+
+    this.logger.log(
+      `[commissions] Venda ${input.saleId} reatribuída de "${before.sellerName || '—'}" → "${seller.name}" (por ${input.userId || '?'})`,
+    );
+
+    return {
+      ok: true,
+      saleId: input.saleId,
+      before,
+      after: { sellerId: seller.id, sellerName: seller.name },
+      sellerInactive: !seller.active,
+      recalc,
     };
   }
 }

@@ -75,7 +75,7 @@ const brl = (n: number | string | null | undefined) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export default function ComissoesPage() {
-  const [tab, setTab] = useState<'rules' | 'periods' | 'report'>('rules');
+  const [tab, setTab] = useState<'rules' | 'periods' | 'report' | 'sales'>('rules');
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-5">
       <div className="flex items-center gap-3">
@@ -108,6 +108,7 @@ export default function ComissoesPage() {
           { k: 'rules', label: 'Regras' },
           { k: 'periods', label: 'Fechamentos' },
           { k: 'report', label: 'Relatório' },
+          { k: 'sales', label: 'Trocar vendedora' },
         ].map((t) => (
           <button
             key={t.k}
@@ -126,6 +127,322 @@ export default function ComissoesPage() {
       {tab === 'rules' && <RulesTab />}
       {tab === 'periods' && <PeriodsTab />}
       {tab === 'report' && <ReportTab />}
+      {tab === 'sales' && <SalesTab />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  SALES TAB — trocar vendedora de uma venda (estilo tela "Vendas" do Giga)
+// ═══════════════════════════════════════════════════════════════════
+
+type SaleRow = {
+  id: string;
+  finalizedAt: string | null;
+  total: number | string;
+  status: string;
+  storeCode: string;
+  storeName: string;
+  sellerId: string | null;
+  sellerName: string | null;
+  vendedorName: string | null;
+  customerName: string | null;
+  nfceNumber: string | null;
+  paymentMethod: string | null;
+};
+
+function ymNow(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function SalesTab() {
+  const [periods, setPeriods] = useState<Period[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [sellers, setSellers] = useState<Seller[]>([]);
+  const [yearMonth, setYearMonth] = useState<string>('');
+  const [storeCode, setStoreCode] = useState<string>('');
+  const [q, setQ] = useState<string>('');
+  const [sales, setSales] = useState<SaleRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  // Carrega períodos + lojas + vendedoras
+  useEffect(() => {
+    (async () => {
+      try {
+        const [p, s, se] = await Promise.all([
+          api<Period[]>('/commissions/periods'),
+          api<Store[]>('/stores'),
+          api<Seller[]>('/sellers'),
+        ]);
+        setPeriods(p);
+        setStores(s.filter((x) => x.active).sort((a, b) => a.code.localeCompare(b.code)));
+        setSellers(se.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)));
+        const cur = ymNow();
+        setYearMonth(p.find((x) => x.yearMonth === cur)?.yearMonth || p[0]?.yearMonth || cur);
+      } catch (e: any) {
+        setMsg({ kind: 'err', text: 'Erro ao carregar filtros: ' + (e?.message || e) });
+      }
+    })();
+  }, []);
+
+  async function loadSales() {
+    if (!yearMonth) return;
+    setLoading(true);
+    setMsg(null);
+    try {
+      const params = new URLSearchParams({ yearMonth });
+      if (storeCode) params.set('storeCode', storeCode);
+      if (q.trim()) params.set('q', q.trim());
+      const r = await api<{ sales: SaleRow[]; count: number }>(
+        `/commissions/sales?${params.toString()}`,
+      );
+      setSales(r.sales);
+      setDraft({});
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: 'Erro ao listar vendas: ' + (e?.message || e) });
+      setSales([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Recarrega ao trocar período ou loja
+  useEffect(() => {
+    if (yearMonth) loadSales();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yearMonth, storeCode]);
+
+  async function reassign(sale: SaleRow) {
+    const sellerId = draft[sale.id];
+    if (!sellerId || sellerId === (sale.sellerId || '')) return;
+    const seller = sellers.find((s) => s.id === sellerId);
+    if (!seller) return;
+    if (
+      !confirm(
+        `Passar esta venda para ${seller.name}?\n\n` +
+          `Atual: ${sale.sellerName || '— (sem vendedora)'}\n` +
+          `A comissão do período ${yearMonth} será recalculada automaticamente.`,
+      )
+    )
+      return;
+    setSavingId(sale.id);
+    setMsg(null);
+    try {
+      const res = await api<any>(`/commissions/sales/${sale.id}/reassign`, {
+        method: 'POST',
+        body: JSON.stringify({ sellerId }),
+      });
+      const rc = res?.recalc;
+      setMsg({
+        kind: 'ok',
+        text:
+          `✓ Venda passada para ${seller.name}.` +
+          (rc?.error
+            ? ` (recálculo falhou: ${rc.error})`
+            : ` Período ${rc?.yearMonth} recalculado — total R$ ${Number(rc?.total || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}.`),
+      });
+      await loadSales();
+    } catch (e: any) {
+      setMsg({ kind: 'err', text: 'Erro ao trocar vendedora: ' + (e?.message || e) });
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  const periodStatus = periods.find((p) => p.yearMonth === yearMonth)?.status;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-600">
+        Troque a vendedora de uma venda finalizada (igual à tela <b>Vendas</b> do Giga). A
+        comissão do período é <b>recalculada na hora</b>. Admin pode trocar em qualquer
+        período — inclusive fechado ou pago.
+      </p>
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-end gap-3 bg-white border border-slate-200 rounded-xl p-3">
+        <label className="text-sm">
+          <span className="block text-xs font-bold text-slate-500 mb-1">Período</span>
+          <select
+            value={yearMonth}
+            onChange={(e) => setYearMonth(e.target.value)}
+            className="border border-slate-300 rounded-lg px-3 py-2 min-w-[130px]"
+          >
+            {(() => {
+              const opts = periods.map((p) => p.yearMonth);
+              const cur = ymNow();
+              if (!opts.includes(cur)) opts.unshift(cur);
+              return opts.map((ym) => (
+                <option key={ym} value={ym}>
+                  {ym}
+                </option>
+              ));
+            })()}
+          </select>
+        </label>
+
+        <label className="text-sm">
+          <span className="block text-xs font-bold text-slate-500 mb-1">Loja</span>
+          <select
+            value={storeCode}
+            onChange={(e) => setStoreCode(e.target.value)}
+            className="border border-slate-300 rounded-lg px-3 py-2 min-w-[180px]"
+          >
+            <option value="">Todas as lojas</option>
+            {stores.map((s) => (
+              <option key={s.id} value={s.code}>
+                {s.code} · {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="text-sm flex-1 min-w-[180px]">
+          <span className="block text-xs font-bold text-slate-500 mb-1">
+            Buscar (cliente / nº cupom)
+          </span>
+          <div className="flex gap-2">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') loadSales();
+              }}
+              placeholder="opcional…"
+              className="border border-slate-300 rounded-lg px-3 py-2 w-full"
+            />
+            <button
+              onClick={loadSales}
+              className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Buscar
+            </button>
+          </div>
+        </label>
+      </div>
+
+      {periodStatus && periodStatus !== 'open' && (
+        <div className="flex items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-800">
+          <AlertTriangle className="w-4 h-4" />
+          Período <b>{periodStatus === 'paid' ? 'PAGO' : 'FECHADO'}</b> — a troca ainda é
+          permitida e recalcula, mas confira o impacto no que já foi pago.
+        </div>
+      )}
+
+      {msg && (
+        <div
+          className={`text-sm rounded-lg px-3 py-2 border ${
+            msg.kind === 'ok'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+          }`}
+        >
+          {msg.text}
+        </div>
+      )}
+
+      {loading ? (
+        <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+      ) : sales.length === 0 ? (
+        <div className="text-center py-10 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-sm">
+          Nenhuma venda finalizada nesse período/loja.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full bg-white rounded-xl border border-slate-200 overflow-hidden text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-600">
+              <tr>
+                <th className="text-left px-3 py-2">Data</th>
+                <th className="text-left px-3 py-2">Loja</th>
+                <th className="text-left px-3 py-2">Cliente / Cupom</th>
+                <th className="text-right px-3 py-2">Total</th>
+                <th className="text-left px-3 py-2">Vendedora atual</th>
+                <th className="text-left px-3 py-2">Passar para…</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.map((s) => {
+                const chosen = draft[s.id] ?? (s.sellerId || '');
+                const changed = chosen && chosen !== (s.sellerId || '');
+                return (
+                  <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50">
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600">
+                      {s.finalizedAt
+                        ? new Date(s.finalizedAt).toLocaleString('pt-BR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '—'}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600">{s.storeCode}</td>
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-800 truncate max-w-[220px]">
+                        {s.customerName || '— balcão'}
+                      </div>
+                      {s.nfceNumber && (
+                        <div className="text-xs text-slate-400">NFC-e {s.nfceNumber}</div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right font-bold text-slate-800 whitespace-nowrap">
+                      {brl(s.total)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.sellerName ? (
+                        <span className="font-medium text-slate-700">{s.sellerName}</span>
+                      ) : (
+                        <span className="text-amber-600 italic">sem vendedora</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={chosen}
+                          onChange={(e) =>
+                            setDraft((d) => ({ ...d, [s.id]: e.target.value }))
+                          }
+                          className={`border rounded-lg px-2 py-1.5 min-w-[150px] ${
+                            changed ? 'border-emerald-400 bg-emerald-50' : 'border-slate-300'
+                          }`}
+                        >
+                          <option value="">— escolher —</option>
+                          {sellers.map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          disabled={!changed || savingId === s.id}
+                          onClick={() => reassign(s)}
+                          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-bold flex items-center gap-1"
+                        >
+                          {savingId === s.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Save className="w-4 h-4" />
+                          )}
+                          Trocar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="text-xs text-slate-400 mt-2">
+            {sales.length} venda(s). Mostrando no máximo 300 por vez — use a busca ou filtre por
+            loja pra refinar.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
