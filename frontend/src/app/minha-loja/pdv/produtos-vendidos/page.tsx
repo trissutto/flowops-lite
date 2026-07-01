@@ -71,6 +71,7 @@ interface ReportResponse {
       debito: number;
       crediario: number;
       vale_troca: number;
+      online: number;
       outros: number;
     };
     outrosDetalhe?: Array<{ method: string; valor: number; saleId: string }>;
@@ -369,12 +370,13 @@ export default function ProdutosVendidosPage() {
                 </div>
               );
             })()}
-            <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
+            <div className="grid grid-cols-3 md:grid-cols-7 gap-2 text-xs">
               <ModBox label="Dinheiro" valor={data.conciliacao.porModalidade.dinheiro} cor="emerald" />
               <ModBox label="PIX" valor={data.conciliacao.porModalidade.pix} cor="cyan" />
               <ModBox label="Crédito" valor={data.conciliacao.porModalidade.credito} cor="blue" />
               <ModBox label="Débito" valor={data.conciliacao.porModalidade.debito} cor="indigo" />
               <ModBox label="Crediário" valor={data.conciliacao.porModalidade.crediario} cor="rose" />
+              <ModBox label="Online" valor={data.conciliacao.porModalidade.online || 0} cor="violet" />
               <ModBox label="Vale-troca" valor={data.conciliacao.porModalidade.vale_troca || 0} cor="slate" />
             </div>
 
@@ -490,6 +492,7 @@ export default function ProdutosVendidosPage() {
                                       debito: 'bg-indigo-100 text-indigo-800 border-indigo-300',
                                       crediario: 'bg-rose-100 text-rose-800 border-rose-300',
                                       vale_troca: 'bg-slate-200 text-slate-800 border-slate-300',
+                                      venda_online: 'bg-violet-100 text-violet-800 border-violet-300',
                                     };
                                     const cls = colors[p.method] || 'bg-amber-100 text-amber-800 border-amber-300';
                                     return (
@@ -726,7 +729,7 @@ function EditSellerModal({
   );
 }
 
-function ModBox({ label, valor, cor }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose' | 'slate' }) {
+function ModBox({ label, valor, cor }: { label: string; valor: number; cor: 'emerald' | 'cyan' | 'blue' | 'indigo' | 'rose' | 'slate' | 'violet' }) {
   const tones: Record<string, string> = {
     emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
     cyan: 'bg-cyan-50 border-cyan-200 text-cyan-700',
@@ -734,6 +737,7 @@ function ModBox({ label, valor, cor }: { label: string; valor: number; cor: 'eme
     indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
     rose: 'bg-rose-50 border-rose-200 text-rose-700',
     slate: 'bg-slate-50 border-slate-200 text-slate-700',
+    violet: 'bg-violet-50 border-violet-200 text-violet-700',
   };
   return (
     <div className={`border rounded p-2 ${tones[cor]}`}>

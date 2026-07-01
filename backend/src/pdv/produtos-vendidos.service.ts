@@ -352,6 +352,7 @@ export class ProdutosVendidosService {
       debito: 0,
       crediario: 0,
       vale_troca: 0,
+      online: 0,
       outros: 0,
     };
     // Mapa de aliases — qualquer variacao do nome cai na modalidade canonica.
@@ -363,6 +364,11 @@ export class ProdutosVendidosService {
       crediario: 'crediario', fiado: 'crediario',
       vale_troca: 'vale_troca', vale: 'vale_troca', troca: 'vale_troca',
       'troca_credito': 'vale_troca', 'troca_dinheiro': 'vale_troca',
+      // Vendas online (WhatsApp/Instagram/site) — dinheiro recebido pelo gateway.
+      // Conta como RECEBIDO: a venda online entra no vendido, entao tem que
+      // entrar no recebido tambem, senao gera divergencia falsa.
+      'venda_online': 'online', 'venda-online': 'online', online: 'online',
+      site: 'online', loja_virtual: 'online',
     };
     // Coleta os methods desconhecidos pra debug
     const outrosDetalhe: Array<{ method: string; valor: number; saleId: string }> = [];
@@ -388,6 +394,7 @@ export class ProdutosVendidosService {
         porModalidade.credito +
         porModalidade.debito +
         porModalidade.crediario +
+        porModalidade.online +
         porModalidade.vale_troca
       ).toFixed(2),
     );
@@ -532,7 +539,8 @@ export class ProdutosVendidosService {
         porModalidade.pix +
         porModalidade.credito +
         porModalidade.debito +
-        porModalidade.crediario
+        porModalidade.crediario +
+        porModalidade.online
       ).toFixed(2),
     );
     const diferencaV4 = Number((vendidoLiquidoV4 - recebidoV4).toFixed(2));
