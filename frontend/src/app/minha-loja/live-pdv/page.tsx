@@ -165,6 +165,7 @@ function buildGrade(product: GradeResult) {
 export default function LivePdvPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
+  const [activeLive, setActiveLive] = useState<{ id: string; title: string } | null>(null);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
 
@@ -193,16 +194,16 @@ export default function LivePdvPage() {
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
 
-  // ─── Boot: pega sessão "live" ou cria uma ─────────────────────────────────
+  // ─── Boot: NÃO adota live automaticamente ─────────────────────────────────
+  // Se existir uma live aberta, guarda em `activeLive` e a tela inicial oferece
+  // "Continuar" ou "Abrir nova" (que fecha a atual). Evita que carrinhos de uma
+  // live antiga apareçam numa live nova.
   useEffect(() => {
     (async () => {
       try {
         const list = await api<any[]>('/live-pdv/sessions');
         const live = (list || []).find((s) => s.status === 'live');
-        if (live) {
-          setSessionId(live.id);
-          setSessionTitle(live.title);
-        }
+        if (live) setActiveLive({ id: live.id, title: live.title });
       } catch {}
       setBooting(false);
     })();
@@ -238,17 +239,57 @@ export default function LivePdvPage() {
   }, [sessionId, refreshCarts]);
 
   async function createSession() {
-    const title = prompt('Título da live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
+    if (
+      activeLive &&
+      !confirm(
+        `Abrir uma nova live vai FECHAR a live atual "${activeLive.title}".\n\n` +
+          `Os carrinhos dela ficam guardados (não somem), só saem da tela. Continuar?`,
+      )
+    )
+      return;
+    const title = prompt('Título da nova live:', `Live ${new Date().toLocaleDateString('pt-BR')}`);
     if (title === null) return;
     try {
       const s = await api<any>('/live-pdv/sessions', {
         method: 'POST',
         body: JSON.stringify({ title }),
       });
+      setActiveLive(null);
       setSessionId(s.id);
       setSessionTitle(s.title);
     } catch (e: any) {
       alert('Erro ao criar sessão: ' + (e?.message || e));
+    }
+  }
+
+  // Continua a live que já estava aberta (sem fechar nada).
+  function continueLive() {
+    if (!activeLive) return;
+    setSessionId(activeLive.id);
+    setSessionTitle(activeLive.title);
+  }
+
+  // Fecha a live atual: guarda os carrinhos na sessão (não apaga) e volta pra
+  // tela inicial, liberando pra abrir uma nova.
+  async function closeLive() {
+    if (!sessionId) return;
+    if (
+      !confirm(
+        `Fechar a live "${sessionTitle}"?\n\n` +
+          `Os carrinhos ficam guardados nesta live, mas ela sai da tela. ` +
+          `Você pode abrir uma nova live depois.`,
+      )
+    )
+      return;
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/end`, { method: 'POST' });
+      setSessionId(null);
+      setSessionTitle('');
+      setActiveLive(null);
+      setCart(null);
+      setProduct(null);
+    } catch (e: any) {
+      alert('Erro ao fechar live: ' + (e?.message || e));
     }
   }
 
@@ -673,13 +714,35 @@ export default function LivePdvPage() {
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-100 p-6">
         <Zap className="h-12 w-12 text-rose-500" />
         <h1 className="text-2xl font-bold text-slate-800">Live Commerce</h1>
-        <p className="text-slate-500">Nenhuma live ativa no momento.</p>
-        <button
-          onClick={createSession}
-          className="rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-700"
-        >
-          ▶ Iniciar nova live
-        </button>
+        {activeLive ? (
+          <>
+            <p className="text-slate-500">
+              Tem uma live aberta: <b className="text-slate-700">{activeLive.title}</b>
+            </p>
+            <button
+              onClick={continueLive}
+              className="rounded-lg bg-slate-800 px-5 py-2.5 font-semibold text-white hover:bg-slate-900"
+            >
+              ▶ Continuar esta live
+            </button>
+            <button
+              onClick={createSession}
+              className="rounded-lg border border-rose-300 px-5 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50"
+            >
+              + Abrir nova live (fecha a atual)
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-slate-500">Nenhuma live ativa no momento.</p>
+            <button
+              onClick={createSession}
+              className="rounded-lg bg-rose-600 px-5 py-2.5 font-semibold text-white hover:bg-rose-700"
+            >
+              ▶ Iniciar nova live
+            </button>
+          </>
+        )}
         <Link href="/minha-loja" className="text-sm text-slate-400 hover:text-slate-600">
           Voltar
         </Link>
@@ -715,6 +778,13 @@ export default function LivePdvPage() {
         <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
           ● {sessionTitle}
         </span>
+        <button
+          onClick={closeLive}
+          title="Fechar esta live — guarda os carrinhos e libera pra abrir uma nova"
+          className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
+        >
+          Fechar live
+        </button>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
           <button
             onClick={() => setTab('console')}

@@ -234,6 +234,13 @@ export class LivePdvService {
     const code = input.liveStoreCode || (await this.defaultLiveStoreCode());
     const store = await (this.prisma as any).store.findUnique({ where: { code } });
     if (!store) throw new BadRequestException(`Loja da live (${code}) não encontrada`);
+    // UMA LIVE ATIVA POR VEZ: encerra qualquer live ainda aberta antes de abrir
+    // a nova. Os carrinhos ficam guardados na sessão encerrada (sessionId),
+    // então não vazam pra live nova.
+    await (this.prisma as any).livePdvSession.updateMany({
+      where: { status: 'live' },
+      data: { status: 'ended', endedAt: new Date() },
+    });
     const session = await (this.prisma as any).livePdvSession.create({
       data: {
         title: input.title?.trim() || `Live ${new Date().toLocaleDateString('pt-BR')}`,
