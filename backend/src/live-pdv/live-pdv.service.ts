@@ -90,14 +90,11 @@ export class LivePdvService {
     }
   }
 
-  // Resolve as linhas do produto (REF/código/nome) COM FALLBACK no espelho
-  // giga_produto quando o Giga ao vivo não responde — a busca da Live continua
-  // achando o produto mesmo com o Giga fora do ar.
+  // Resolve as linhas do produto (REF/código/nome) — ESPELHO PRIMEIRO.
+  // O espelho (giga_produto no Postgres) é rápido e local, então não trava se o
+  // Giga/firewall cair. Só cai pro Giga ao vivo se o espelho não achar (produto
+  // novo ainda não sincronizado).
   private async resolveRowsWithMirror(q: string): Promise<{ rows: any[]; fromMirror: boolean }> {
-    let rows: any[] = await this.erp.searchByRef(q).catch(() => []);
-    if (!rows.length) rows = await this.erp.searchByCodeAndExpandRef(q).catch(() => []);
-    if (!rows.length) rows = await this.erp.searchProductsLike(q).catch(() => []);
-    if (rows.length) return { rows, fromMirror: false };
     const mrows = await (this.prisma as any).gigaProduto
       .findMany({
         where: {
@@ -105,47 +102,62 @@ export class LivePdvService {
             { ref: { equals: q, mode: 'insensitive' } },
             { ref: { startsWith: q, mode: 'insensitive' } },
             { codigo: q },
+            { descricao: { contains: q, mode: 'insensitive' } },
           ],
         },
         take: 1000,
       })
       .catch(() => []);
-    const mapped = (mrows as any[]).map((r) => ({
-      CODIGO: r.codigo,
-      REF: r.ref,
-      DESCRICAOCOMPLETA: r.descricao,
-      COR: r.cor,
-      TAMANHO: r.tamanho,
-    }));
-    return { rows: mapped, fromMirror: mapped.length > 0 };
+    if ((mrows as any[]).length) {
+      const mapped = (mrows as any[]).map((r) => ({
+        CODIGO: r.codigo,
+        REF: r.ref,
+        DESCRICAOCOMPLETA: r.descricao,
+        COR: r.cor,
+        TAMANHO: r.tamanho,
+      }));
+      return { rows: mapped, fromMirror: true };
+    }
+    // Espelho não achou → tenta o Giga ao vivo (produto recém-cadastrado).
+    let rows: any[] = await this.erp.searchByRef(q).catch(() => []);
+    if (!rows.length) rows = await this.erp.searchByCodeAndExpandRef(q).catch(() => []);
+    if (!rows.length) rows = await this.erp.searchProductsLike(q).catch(() => []);
+    return { rows, fromMirror: false };
   }
 
-  // Estoque por loja COM FALLBACK no espelho giga_estoque quando o Giga ao vivo
-  // não retorna (só fallback — com Giga no ar usa sempre o exato/ao vivo).
+  // Estoque por loja — ESPELHO PRIMEIRO (giga_estoque no Postgres). Só encosta no
+  // Giga ao vivo se o espelho não trouxer NADA pra nenhum código (produto novo
+  // ainda não sincronizado). No caso comum, não toca o Giga → não trava.
   private async stockWithMirror(
     codigos: string[],
   ): Promise<{ detailed: Record<string, Array<{ storeCode: string; qty: number }>>; fromMirror: boolean }> {
-    const detailed = await this.erp
-      .getStockBySkusDetailed(codigos)
-      .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
-    const missing = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean))).filter(
-      (c) => !(detailed[c]?.length),
-    );
+    const uniq = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean)));
+    const detailed: Record<string, Array<{ storeCode: string; qty: number }>> = {};
     let fromMirror = false;
-    if (missing.length) {
+    if (uniq.length) {
       try {
         const rows = await (this.prisma as any).gigaEstoque.findMany({
-          where: { codigo: { in: missing }, estoque: { gt: 0 } },
+          where: { codigo: { in: uniq }, estoque: { gt: 0 } },
           select: { codigo: true, loja: true, estoque: true },
         });
         for (const r of rows as any[]) {
           const c = String(r.codigo).trim();
           if (!detailed[c]) detailed[c] = [];
           detailed[c].push({ storeCode: String(r.loja).trim(), qty: Number(r.estoque) || 0 });
-          fromMirror = true;
         }
+        if ((rows as any[]).length) fromMirror = true;
       } catch {
         /* espelho indisponível */
+      }
+    }
+    // Só cai pro Giga ao vivo se o espelho não trouxe NADA (produto não
+    // sincronizado). Evita travar no caso comum.
+    if (!fromMirror && uniq.length) {
+      const live = await this.erp
+        .getStockBySkusDetailed(uniq)
+        .catch(() => ({} as Record<string, Array<{ storeCode: string; qty: number }>>));
+      for (const c of Object.keys(live)) {
+        if (live[c]?.length) detailed[c] = live[c];
       }
     }
     return { detailed, fromMirror };
