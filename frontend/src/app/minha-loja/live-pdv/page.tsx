@@ -907,7 +907,7 @@ export default function LivePdvPage() {
       {tab === 'dashboard' ? (
         <Dashboard sessionId={sessionId} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_380px]">
+        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_460px]">
           {/* Coluna principal: busca + grade */}
           <div>
             <form onSubmit={doSearch} className="mb-4 flex flex-col sm:flex-row gap-2">
@@ -1113,7 +1113,7 @@ export default function LivePdvPage() {
                               Cor
                             </th>
                             {g.sizes.map((s) => (
-                              <th key={s} className="min-w-[48px] px-2 py-2 text-center font-bold text-slate-700">
+                              <th key={s} className="min-w-[42px] px-2 py-1.5 text-center font-bold text-slate-700">
                                 {s}
                               </th>
                             ))}
@@ -1149,7 +1149,7 @@ export default function LivePdvPage() {
                                         disabled={!cell || qty <= 0 || busy}
                                         onClick={() => cell && clickCell(cell)}
                                         title={title}
-                                        className={`mx-auto flex h-10 w-full items-center justify-center rounded font-extrabold transition ${
+                                        className={`mx-auto flex h-9 w-full items-center justify-center rounded font-extrabold transition ${
                                           qty <= 0
                                             ? 'cursor-not-allowed bg-slate-50 text-slate-300'
                                             : low
