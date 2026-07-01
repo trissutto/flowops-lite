@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft, DollarSign, Plus, Save, X, Trash2, Loader2, Calculator,
-  Lock, CheckCircle2, Download, RefreshCw, AlertTriangle,
+  Lock, CheckCircle2, Download, RefreshCw, AlertTriangle, Search,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -151,16 +151,26 @@ type SaleRow = {
   paymentMethod: string | null;
 };
 
-function ymNow(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-}
+// Filtro de data livre — padrão do app (igual faturamento): De/Até + atalhos.
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const firstOfMonthIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+};
+const isoDaysAgo = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 function SalesTab() {
-  const [periods, setPeriods] = useState<Period[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [sellers, setSellers] = useState<Seller[]>([]);
-  const [yearMonth, setYearMonth] = useState<string>('');
+  const [from, setFrom] = useState<string>(firstOfMonthIso());
+  const [to, setTo] = useState<string>(todayIso());
   const [storeCode, setStoreCode] = useState<string>('');
   const [q, setQ] = useState<string>('');
   const [sales, setSales] = useState<SaleRow[]>([]);
@@ -169,32 +179,31 @@ function SalesTab() {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  // Carrega períodos + lojas + vendedoras
+  // Carrega lojas + vendedoras
   useEffect(() => {
     (async () => {
       try {
-        const [p, s, se] = await Promise.all([
-          api<Period[]>('/commissions/periods'),
+        const [s, se] = await Promise.all([
           api<Store[]>('/stores'),
           api<Seller[]>('/sellers'),
         ]);
-        setPeriods(p);
         setStores(s.filter((x) => x.active).sort((a, b) => a.code.localeCompare(b.code)));
         setSellers(se.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)));
-        const cur = ymNow();
-        setYearMonth(p.find((x) => x.yearMonth === cur)?.yearMonth || p[0]?.yearMonth || cur);
       } catch (e: any) {
         setMsg({ kind: 'err', text: 'Erro ao carregar filtros: ' + (e?.message || e) });
       }
     })();
   }, []);
 
-  async function loadSales() {
-    if (!yearMonth) return;
+  // override = datas passadas pelos atalhos (pra não esperar o setState)
+  async function loadSales(override?: { from?: string; to?: string }) {
+    const f = override?.from ?? from;
+    const t = override?.to ?? to;
+    if (!f || !t) return;
     setLoading(true);
     setMsg(null);
     try {
-      const params = new URLSearchParams({ yearMonth });
+      const params = new URLSearchParams({ from: f, to: t });
       if (storeCode) params.set('storeCode', storeCode);
       if (q.trim()) params.set('q', q.trim());
       const r = await api<{ sales: SaleRow[]; count: number }>(
@@ -210,11 +219,11 @@ function SalesTab() {
     }
   }
 
-  // Recarrega ao trocar período ou loja
+  // Recarrega ao trocar a loja (datas são aplicadas via botão/atalho)
   useEffect(() => {
-    if (yearMonth) loadSales();
+    loadSales();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yearMonth, storeCode]);
+  }, [storeCode]);
 
   async function reassign(sale: SaleRow) {
     const sellerId = draft[sale.id];
@@ -225,7 +234,7 @@ function SalesTab() {
       !confirm(
         `Passar esta venda para ${seller.name}?\n\n` +
           `Atual: ${sale.sellerName || '— (sem vendedora)'}\n` +
-          `A comissão do período ${yearMonth} será recalculada automaticamente.`,
+          `A comissão do mês da venda será recalculada automaticamente.`,
       )
     )
       return;
@@ -253,37 +262,69 @@ function SalesTab() {
     }
   }
 
-  const periodStatus = periods.find((p) => p.yearMonth === yearMonth)?.status;
-
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-600">
         Troque a vendedora de uma venda finalizada (igual à tela <b>Vendas</b> do Giga). A
-        comissão do período é <b>recalculada na hora</b>. Admin pode trocar em qualquer
+        comissão do mês da venda é <b>recalculada na hora</b>. Admin pode trocar em qualquer
         período — inclusive fechado ou pago.
       </p>
 
-      {/* Filtros */}
+      {/* Filtros — intervalo de data LIVRE (De/Até) + atalhos, loja e busca */}
       <div className="flex flex-wrap items-end gap-3 bg-white border border-slate-200 rounded-xl p-3">
         <label className="text-sm">
-          <span className="block text-xs font-bold text-slate-500 mb-1">Período</span>
-          <select
-            value={yearMonth}
-            onChange={(e) => setYearMonth(e.target.value)}
-            className="border border-slate-300 rounded-lg px-3 py-2 min-w-[130px]"
-          >
-            {(() => {
-              const opts = periods.map((p) => p.yearMonth);
-              const cur = ymNow();
-              if (!opts.includes(cur)) opts.unshift(cur);
-              return opts.map((ym) => (
-                <option key={ym} value={ym}>
-                  {ym}
-                </option>
-              ));
-            })()}
-          </select>
+          <span className="block text-xs font-bold text-slate-500 mb-1">De</span>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className="border border-slate-300 rounded-lg px-3 py-2"
+          />
         </label>
+        <label className="text-sm">
+          <span className="block text-xs font-bold text-slate-500 mb-1">Até</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="border border-slate-300 rounded-lg px-3 py-2"
+          />
+        </label>
+        <button
+          onClick={() => loadSales()}
+          className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2"
+        >
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          Aplicar
+        </button>
+
+        {/* Atalhos rápidos — aplicam na hora */}
+        <div className="flex gap-1">
+          <button
+            onClick={() => { const t = todayIso(); setFrom(t); setTo(t); loadSales({ from: t, to: t }); }}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold"
+          >
+            Hoje
+          </button>
+          <button
+            onClick={() => { const y = isoDaysAgo(1); setFrom(y); setTo(y); loadSales({ from: y, to: y }); }}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold"
+          >
+            Ontem
+          </button>
+          <button
+            onClick={() => { const f = isoDaysAgo(7); const t = todayIso(); setFrom(f); setTo(t); loadSales({ from: f, to: t }); }}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold"
+          >
+            7 dias
+          </button>
+          <button
+            onClick={() => { const f = firstOfMonthIso(); const t = todayIso(); setFrom(f); setTo(t); loadSales({ from: f, to: t }); }}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold"
+          >
+            Mês
+          </button>
+        </div>
 
         <label className="text-sm">
           <span className="block text-xs font-bold text-slate-500 mb-1">Loja</span>
@@ -316,23 +357,15 @@ function SalesTab() {
               className="border border-slate-300 rounded-lg px-3 py-2 w-full"
             />
             <button
-              onClick={loadSales}
+              onClick={() => loadSales()}
               className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2"
             >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              <Search className="w-4 h-4" />
               Buscar
             </button>
           </div>
         </label>
       </div>
-
-      {periodStatus && periodStatus !== 'open' && (
-        <div className="flex items-center gap-2 text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-800">
-          <AlertTriangle className="w-4 h-4" />
-          Período <b>{periodStatus === 'paid' ? 'PAGO' : 'FECHADO'}</b> — a troca ainda é
-          permitida e recalcula, mas confira o impacto no que já foi pago.
-        </div>
-      )}
 
       {msg && (
         <div
@@ -350,7 +383,7 @@ function SalesTab() {
         <Loader2 className="w-6 h-6 animate-spin mx-auto" />
       ) : sales.length === 0 ? (
         <div className="text-center py-10 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-sm">
-          Nenhuma venda finalizada nesse período/loja.
+          Nenhuma venda finalizada nesse intervalo/loja.
         </div>
       ) : (
         <div className="overflow-x-auto">

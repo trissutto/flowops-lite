@@ -195,13 +195,15 @@ export class CommissionsController {
   // ── Troca de vendedora numa venda (estilo Giga) ─────────────────────
 
   /**
-   * GET /commissions/sales?yearMonth=2026-06&storeCode=01&q=maria
-   * Lista vendas finalizadas do período pra admin trocar a vendedora.
+   * GET /commissions/sales?from=2026-06-01&to=2026-06-30&storeCode=01&q=maria
+   * Lista vendas finalizadas num intervalo de datas livre pra admin trocar a
+   * vendedora. Sem from/to → mês corrente.
    */
   @Get('sales')
   listSales(
     @Req() req: any,
-    @Query('yearMonth') yearMonth: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
     @Query('storeCode') storeCode?: string,
     @Query('sellerId') sellerId?: string,
     @Query('q') q?: string,
@@ -209,7 +211,8 @@ export class CommissionsController {
   ) {
     this.requireAdmin(req);
     return this.svc.listSalesForReassign({
-      yearMonth,
+      from,
+      to,
       storeCode,
       sellerId,
       q,
