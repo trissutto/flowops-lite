@@ -802,25 +802,11 @@ export default function LivePdvPage() {
     return () => clearInterval(iv);
   }, [qr, cart, paid, refreshCarts]);
 
-  // Poll de FUNDO das cobranças pendentes — mesmo com o QR fechado ("continuar
-  // atendendo"), confirma o pagamento no servidor e a cliente vira PAGO na
-  // lista sozinha. (O webhook da Pagar.me não marca o carrinho da Live; a
-  // confirmação sai daqui via /payment-status → onCartPaid no backend.)
-  useEffect(() => {
-    const pendentes = carts.filter((c) => c.status === 'awaiting_payment');
-    if (pendentes.length === 0) return;
-    const iv = setInterval(async () => {
-      let algumPagou = false;
-      for (const c of pendentes) {
-        try {
-          const res = await api<{ paid: boolean }>(`/live-pdv/carts/${c.id}/payment-status`);
-          if (res.paid) algumPagou = true;
-        } catch {}
-      }
-      if (algumPagou) refreshCarts();
-    }, 6000);
-    return () => clearInterval(iv);
-  }, [carts, refreshCarts]);
+  // (REMOVIDO) O poll de FUNDO das cobranças pendentes foi retirado: usava
+  // setInterval a cada 6s chamando o PagBank (lento); quando um ciclo demorava
+  // mais que 6s, os ciclos EMPILHAVAM e multiplicavam sozinhos, inundando o
+  // backend (latência crescente → derrubava a live). A confirmação de pagamento
+  // volta a sair só do poll do QR aberto (bounded), abaixo.
 
   // ─── Render ───────────────────────────────────────────────────────────────
   if (booting) {
