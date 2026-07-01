@@ -75,6 +75,8 @@ export default function TriagemPage() {
   const [setupOpen, setSetupOpen] = useState(true);
   const [fromStoreCode, setFromStoreCode] = useState('');
   const [toStoreCodes, setToStoreCodes] = useState<string[]>([]);
+  // Loja do PDV ativo (vem do /auth/me — em MODO MASTER é a loja "impersonada").
+  const [myStoreCode, setMyStoreCode] = useState('');
 
   // ── Bipagem ──
   const [scanInput, setScanInput] = useState('');
@@ -107,31 +109,46 @@ export default function TriagemPage() {
   // ── Wipe ──
   const [wiping, setWiping] = useState(false);
 
-  // ── Load lojas + setup salvo + histórico ──
+  // ── Load lojas + loja do PDV ativo + setup salvo + histórico ──
   useEffect(() => {
-    api<Store[]>('/stores')
-      .then((arr) => {
+    Promise.all([
+      api<Store[]>('/stores'),
+      api<any>('/auth/me').catch(() => null),
+    ])
+      .then(([arr, profile]) => {
         setStores(arr.filter((s) => s.active).sort((a, b) => a.code.localeCompare(b.code)));
-        // Restaura setup salvo
+        const activeCode = profile?.storeCode || '';
+        if (activeCode) setMyStoreCode(activeCode);
+
+        // Restaura destinos salvos (a ORIGEM é puxada da loja ativa, ver abaixo).
+        let restoredTo: string[] = [];
+        let savedFrom = '';
         try {
           const raw = typeof window !== 'undefined' ? localStorage.getItem(SETUP_STORAGE_KEY) : null;
           if (raw) {
             const saved = JSON.parse(raw);
-            if (saved?.fromStoreCode) setFromStoreCode(saved.fromStoreCode);
-            if (Array.isArray(saved?.toStoreCodes)) setToStoreCodes(saved.toStoreCodes);
-            if (saved?.fromStoreCode && saved?.toStoreCodes?.length > 0) {
-              setSetupOpen(false);
-            }
+            if (saved?.fromStoreCode) savedFrom = saved.fromStoreCode;
+            if (Array.isArray(saved?.toStoreCodes)) restoredTo = saved.toStoreCodes;
           }
         } catch {
           /* noop */
         }
+
+        // ORIGEM = loja do PDV ativo (puxa automática). Sem loja ativa (ex.: admin
+        // sem POV), cai pro que estava salvo.
+        const originCode = activeCode || savedFrom;
+        if (originCode) setFromStoreCode(originCode);
+        const cleanTo = restoredTo.filter((c) => c !== originCode);
+        if (cleanTo.length) setToStoreCodes(cleanTo);
+        // Se já dá pra começar (origem + destinos), pula o setup.
+        if (originCode && cleanTo.length > 0) setSetupOpen(false);
+
         // Restaura histórico de bipagens
         try {
           const rawH = typeof window !== 'undefined' ? localStorage.getItem(HISTORY_STORAGE_KEY) : null;
           if (rawH) {
-            const arr = JSON.parse(rawH);
-            if (Array.isArray(arr)) setConfirmed(arr.slice(0, 50));
+            const arrH = JSON.parse(rawH);
+            if (Array.isArray(arrH)) setConfirmed(arrH.slice(0, 50));
           }
         } catch {
           /* noop */
@@ -539,9 +556,18 @@ export default function TriagemPage() {
               Triagem do Provador
             </h1>
             {fromStore && (
-              <p className="text-xs text-slate-500">
-                Origem: <b>{fromStore.code} {fromStore.name}</b> · {toStoreCodes.length} destino(s) elegível(is)
-              </p>
+              <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-100 px-2.5 py-0.5 text-xs font-bold text-violet-800">
+                  <Package className="w-3.5 h-3.5" />
+                  Origem: {fromStore.code} {fromStore.name}
+                  {fromStore.code === myStoreCode && (
+                    <span className="ml-1 rounded-full bg-violet-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                      PDV
+                    </span>
+                  )}
+                </span>
+                <span className="text-xs text-slate-500">{toStoreCodes.length} destino(s) elegível(is)</span>
+              </div>
             )}
           </div>
           <button
@@ -1099,10 +1125,16 @@ export default function TriagemPage() {
               )}
             </div>
             <div className="p-4 space-y-4">
-              {/* Origem */}
-              <div>
-                <label className="text-xs uppercase font-semibold text-slate-500 mb-1 block">
-                  Origem (de onde vieram as peças)
+              {/* Origem — DESTACADA pra não confundir com os destinos */}
+              <div className="rounded-lg border-2 border-violet-400 bg-violet-50 p-3">
+                <label className="text-xs uppercase font-bold text-violet-700 mb-1.5 flex items-center gap-2">
+                  <Package className="w-4 h-4" />
+                  Origem — de onde vieram as peças
+                  {fromStoreCode && fromStoreCode === myStoreCode && (
+                    <span className="rounded-full bg-violet-600 text-white px-2 py-0.5 text-[10px] font-bold normal-case tracking-normal">
+                      loja do PDV
+                    </span>
+                  )}
                 </label>
                 <select
                   value={fromStoreCode}
@@ -1111,7 +1143,7 @@ export default function TriagemPage() {
                     // Tira a nova origem dos destinos se estava lá
                     setToStoreCodes((prev) => prev.filter((c) => c !== e.target.value));
                   }}
-                  className="w-full text-sm border rounded-md px-3 py-2"
+                  className="w-full text-base font-bold border-2 border-violet-400 rounded-md px-3 py-2.5 bg-white focus:outline-none focus:border-violet-600 focus:ring-2 focus:ring-violet-200"
                 >
                   <option value="">Selecione...</option>
                   {stores.map((s) => (
