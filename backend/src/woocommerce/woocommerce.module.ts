@@ -11,7 +11,10 @@ import { CustomersAppModule } from '../customers-app/customers-app.module';
 
 @Module({
   imports: [
-    HttpModule,
+    // timeout default: sem isto, várias chamadas (getOrder, updateOrder...) não
+    // tinham timeout e um WP travado pendurava a request pra sempre. Escopado a
+    // este módulo — não afeta o HttpService de outros módulos.
+    HttpModule.register({ timeout: 15000 }),
     forwardRef(() => OrdersModule),
     QueueModule,
     WebsocketModule,

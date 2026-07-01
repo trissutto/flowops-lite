@@ -1404,6 +1404,9 @@ model PdvSale {
 
   @@index([storeCode, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
+  // Comissões, relatório diário e fiscal filtram/ordenam por finalizedAt (não
+  // createdAt). Sem este índice, cada cálculo varria pdv_sales inteira.
+  @@index([status, finalizedAt(sort: Desc)])
   @@index([customerCpf])
   @@index([cashSessionId])
   @@index([sellerId])
@@ -2204,6 +2207,8 @@ model Customer {
   // Dashboard CRM filtra por loja e ordena por recência — composto evita
   // combinar dois índices single-column (filtro + sort).
   @@index([originStoreId, lastOrderAt(sort: Desc)])
+  // Verificador anti-duplicata da Live busca por @ do Instagram a cada cadastro.
+  @@index([igUsername])
   @@map("customers")
 }
 
@@ -2698,6 +2703,11 @@ model Comment {
   liveProduct     LiveProduct? @relation(fields: [liveProductId], references: [id], onDelete: SetNull)
   customer        Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
+  // FKs sem índice faziam a listagem de comentários da live e o onDelete:Cascade
+  // varrerem a tabela inteira.
+  @@index([liveId, createdAt(sort: Desc)])
+  @@index([customerId])
+  @@index([liveProductId])
   @@map("comments")
 }
 
@@ -2725,6 +2735,12 @@ model Reservation {
   liveProduct     LiveProduct  @relation(fields: [liveProductId], references: [id])
   customer        Customer     @relation(fields: [customerId], references: [id])
 
+  // Cron de expiração roda a cada 30s filtrando (status, expiresAt); os demais
+  // cobrem os lookups por produto/cliente e as FKs. Tabela não tinha índice.
+  @@index([status, expiresAt])
+  @@index([liveProductId, customerId, size, status])
+  @@index([liveId])
+  @@index([customerId])
   @@map("reservations")
 }
 
@@ -2763,6 +2779,9 @@ model DmMessage {
 
   customer      Customer @relation(fields: [customerId], references: [id])
 
+  // Inbox da live faz JOIN LATERAL por customer_id ordenando por created_at DESC
+  // (última msg) + COUNT de não-lidas. Sem índice, degradava quadraticamente.
+  @@index([customerId, createdAt(sort: Desc)])
   @@map("dm_messages")
 }
 

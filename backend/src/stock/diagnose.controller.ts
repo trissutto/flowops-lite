@@ -117,11 +117,10 @@ export class DiagnoseController {
    */
   @Get('nfce-rejeitadas')
   async nfceRejeitadas(@Query('k') k: string) {
-    // Chave fixa própria (independente do DIAGNOSE_SECRET da env). Endpoint
-    // TEMPORÁRIO de diagnóstico — remover depois de resolver o cStat 391.
-    if (k !== 'nfce391diag2026') {
-      throw new UnauthorizedException('chave inválida');
-    }
+    // Exige DIAGNOSE_SECRET (fail-closed), igual aos demais endpoints deste
+    // controller. Antes usava chave fixa hardcoded ('nfce391diag2026'), que
+    // ficava versionada no repo e expunha vendas + XML de pagamento sem login.
+    this.checkSecret(k);
     const sales = await (this.prisma as any).pdvSale.findMany({
       where: { nfceStatus: { in: ['rejected', 'error'] } },
       include: { payments: { select: { method: true, valor: true } } },

@@ -5974,9 +5974,10 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     let dataCol: string | null = null;
     let allColumnNames: string[] = [];
     try {
-      const [cols] = await this.pool.query<mysql.RowDataPacket[]>('SHOW COLUMNS FROM produtos');
-      allColumnNames = (cols as any[]).map((c) => String(c.Field));
-      const names = new Set(allColumnNames.map((n) => n.toUpperCase()));
+      // Schema da `produtos` é estável — usa o cache de processo (getProductsColumns)
+      // em vez de rodar SHOW COLUMNS a CADA bipe (era 1 ida WAN ao Giga por peça).
+      const names = await this.getProductsColumns();
+      allColumnNames = Array.from(names);
 
       // PREÃ‡O â€” lista ampla de candidatos comuns + fallback dinÃ¢mico.
       // ORDEM IMPORTA: VENDAUN (Gigasistemas) Ã© o oficial â€” fica primeiro.
@@ -6019,7 +6020,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       for (const c of ['DATAALT', 'DATACAD', 'DATA_CAD', 'DATACADASTRO', 'DATA_CADASTRO']) {
         if (names.has(c)) { dataCol = c; break; }
       }
-      this.logger.log(
+      this.logger.debug(
         `[pdv] Cols detectadas: preco=[${priceCols.join('|')}] custo=${costCol} ncm=${ncmCol} cfop=${cfopCol} ean=${eanCol} data=${dataCol}`,
       );
     } catch (e) {
