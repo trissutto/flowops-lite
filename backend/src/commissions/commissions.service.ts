@@ -276,7 +276,11 @@ export class CommissionsService {
   async calculateForPeriod(
     yearMonth: string,
     opts?: { force?: boolean },
-  ): Promise<{ entries: any[]; total: number }> {
+  ): Promise<{
+    entries: any[];
+    total: number;
+    skipped: { count: number; vendido: number; sellerIds: string[] };
+  }> {
     const period = await this.ensurePeriod(yearMonth);
     if (period.status === 'paid' && !opts?.force) {
       throw new BadRequestException(`Período ${yearMonth} já está PAID — não recalcula`);
@@ -364,30 +368,66 @@ export class CommissionsService {
       period.startDate,
       period.endDate,
     );
-    const sellerSalesMap = new Map<string, { vendido: number; trocas: number; qtd: number }>();
-    for (const r of salesBySeller) {
-      sellerSalesMap.set(`${r.sellerId}|${r.storeCode}`, {
-        vendido: Number(r.total) || 0,
-        trocas: 0,
-        qtd: Number(r.qtd) || 0,
-      });
-    }
-    for (const r of trocasBySeller) {
-      const k = `${r.sellerId}|${r.storeCode}`;
-      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
-      cur.trocas = Number(r.total) || 0;
-      sellerSalesMap.set(k, cur);
-    }
-
     const stores = await this.prisma.store.findMany({ select: { id: true, code: true } });
     const storeCodeToId = new Map(stores.map((s) => [s.code, s.id]));
     const storeIdToCode = new Map(stores.map((s) => [s.id, s.code]));
 
-    // 3) Lista TODAS as vendedoras/líderes/gerentes ativas — pra cobrir
-    //    quem ganha sobre a loja toda mesmo se não vendeu.
-    const allSellers: any[] = await (this.prisma as any).seller.findMany({
-      where: { active: true },
-    });
+    // TODOS os sellers (ativos + inativos) pra RESOLVER o seller_id da venda.
+    // Ativos são usados no FLUXO 2 (líder/gerente da loja).
+    const allSellersAny: any[] = await (this.prisma as any).seller.findMany({});
+    const allSellers: any[] = allSellersAny.filter((s) => s.active);
+    const sellersById = new Map(allSellersAny.map((s) => [s.id, s]));
+    const sellersByCodigo = new Map(
+      allSellersAny
+        .filter((s) => s.wincredCodigo)
+        .map((s) => [String(s.wincredCodigo).trim(), s]),
+    );
+
+    // Resolve o seller_id gravado na venda pra um Seller REAL.
+    // Vendas antigas podem ter gravado o CÓDIGO do Giga em seller_id (fluxo
+    // /pdv/sales/:id/vendedora), não o Seller.id. Sem resolver, o upsert da
+    // entry estoura o FK (CommissionEntry.sellerId → Seller.id) e derruba o
+    // cálculo inteiro (era o 500). Resolve por id; senão por wincredCodigo.
+    const resolveSeller = (raw: any): any | null => {
+      const key = String(raw ?? '').trim();
+      if (!key) return null;
+      return sellersById.get(key) || sellersByCodigo.get(key) || null;
+    };
+
+    // Monta sellerSalesMap JÁ keyed pelo Seller.id REAL (agrega múltiplos raw
+    // ids que apontem pro mesmo Seller). O que não resolver é pulado + contado.
+    const sellerSalesMap = new Map<string, { vendido: number; trocas: number; qtd: number }>();
+    let skippedVendido = 0;
+    const skippedSellerIds = new Set<string>();
+    for (const r of salesBySeller) {
+      const seller = resolveSeller(r.sellerId);
+      if (!seller) {
+        skippedVendido += Number(r.total) || 0;
+        skippedSellerIds.add(String(r.sellerId));
+        continue;
+      }
+      const k = `${seller.id}|${r.storeCode}`;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
+      cur.vendido += Number(r.total) || 0;
+      cur.qtd += Number(r.qtd) || 0;
+      sellerSalesMap.set(k, cur);
+    }
+    for (const r of trocasBySeller) {
+      const seller = resolveSeller(r.sellerId);
+      if (!seller) continue;
+      const k = `${seller.id}|${r.storeCode}`;
+      const cur = sellerSalesMap.get(k) || { vendido: 0, trocas: 0, qtd: 0 };
+      cur.trocas += Number(r.total) || 0;
+      sellerSalesMap.set(k, cur);
+    }
+    if (skippedSellerIds.size > 0) {
+      this.logger.warn(
+        `[commissions] ${yearMonth}: ${skippedSellerIds.size} seller_id(s) sem Seller ` +
+          `correspondente (R$ ${skippedVendido.toFixed(2)} não atribuídos). ` +
+          `Corrija essas vendas em "Trocar vendedora". IDs: ` +
+          Array.from(skippedSellerIds).slice(0, 20).join(', '),
+      );
+    }
 
     const entries: any[] = [];
     let totalGeral = 0;
@@ -511,7 +551,7 @@ export class CommissionsService {
     // === FLUXO 1: vendedoras (cargo=VENDEDORA) — uma entry por loja onde vendeu ===
     for (const [key, sl] of sellerSalesMap) {
       const [sellerId, storeCode] = key.split('|');
-      const seller = allSellers.find((x) => x.id === sellerId);
+      const seller = sellersById.get(sellerId);
       const cargo = seller?.cargo || 'VENDEDORA';
       // Vendedoras + Caixa entram aqui (calcMode=on_self). Lideres/gerentes no fluxo 2.
       if (cargo !== 'VENDEDORA' && cargo !== 'CAIXA') continue;
@@ -579,7 +619,15 @@ export class CommissionsService {
       `[commissions] Período ${yearMonth} calculado: ${entries.length} entries, total R$ ${totalGeral.toFixed(2)}`,
     );
 
-    return { entries, total: totalGeral };
+    return {
+      entries,
+      total: totalGeral,
+      skipped: {
+        count: skippedSellerIds.size,
+        vendido: Number(skippedVendido.toFixed(2)),
+        sellerIds: Array.from(skippedSellerIds).slice(0, 50),
+      },
+    };
   }
 
   async closePeriod(yearMonth: string, userId?: string) {
