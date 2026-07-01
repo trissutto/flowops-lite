@@ -353,6 +353,7 @@ export default function LivePdvPage() {
   async function setPromoCents(cents: number) {
     if (!sessionId || !product?.ref) return;
     const safe = Math.max(0, Math.round(cents));
+    const full = product.basePriceCents || product.priceCents || 0;
     try {
       await api(`/live-pdv/sessions/${sessionId}/promo`, {
         method: 'POST',
@@ -360,7 +361,20 @@ export default function LivePdvPage() {
       });
       setPromoEditing(false);
       setCupomEditing(false);
-      await doSearch();
+      // Atualiza o preço NA TELA imediatamente — NÃO depende do doSearch (que
+      // por sua vez exige o termo ainda estar no campo de busca). Sem isso, o
+      // desconto "não abatia" quando o campo de busca já tinha sido limpo.
+      setProduct((p) =>
+        p
+          ? {
+              ...p,
+              priceCents: safe,
+              basePriceCents: p.basePriceCents || p.priceCents,
+              promoActive: safe > 0 && safe < full,
+              cells: (p.cells || []).map((c) => ({ ...c, priceCents: safe })),
+            }
+          : p,
+      );
       await refreshCarts();
       await syncOpenCartAfterPriceChange();
     } catch (e: any) {
