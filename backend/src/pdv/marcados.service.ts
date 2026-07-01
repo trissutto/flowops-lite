@@ -333,23 +333,25 @@ export class MarcadosService {
     const onlyDigits = q.replace(/\D/g, '');
     const isCpfLike = onlyDigits.length >= 5 && /^\d+$/.test(q.replace(/[.\-]/g, ''));
 
-    // Escapa aspas simples pra evitar injection. SQL com LIKE.
-    const safeQ = q.replace(/'/g, "''");
-    const safeDigits = onlyDigits.replace(/'/g, "''");
     const nomeCol = cm.nome || 'NOME';
     const cpfCol = cm.cpf || 'CPF';
     const codCol = cm.codCliente || 'CODIGO';
 
-    // Busca clientes que tem MARCADOS ATIVOS (JOIN com caixa)
-    // 1) Lista candidatos por nome/cpf (LIMIT 50)
-    // 2) Filtra so quem tem >=1 linha em caixa com MARCADO='SIM'
+    // Valor da busca vai como PLACEHOLDER (?) — mysql2 escapa. Fim do risco de
+    // SQL injection (o replace(/'/g,"''") anterior nao cobria o bypass por
+    // backslash no MySQL). Nome de coluna/tabela vem da deteccao interna, nao
+    // do usuario.
+    // 1) Lista candidatos por nome/cpf; 2) filtra quem tem MARCADO='SIM' na caixa
     let where: string;
+    const params: any[] = [];
     if (isCpfLike) {
       // Busca por CPF parcial (tolera com ou sem formatacao)
-      where = `(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`,'.',''),'-',''),'/','') LIKE '%${safeDigits}%')`;
+      where = `(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`,'.',''),'-',''),'/','') LIKE ?)`;
+      params.push(`%${onlyDigits}%`);
     } else {
       // Busca por nome (case-insensitive via UPPER)
-      where = `(UPPER(\`${nomeCol}\`) LIKE UPPER('%${safeQ}%'))`;
+      where = `(UPPER(\`${nomeCol}\`) LIKE UPPER(?))`;
+      params.push(`%${q}%`);
     }
 
     const sql = `
@@ -369,7 +371,7 @@ export class MarcadosService {
     `;
 
     try {
-      const r = await this.erp.runReadOnly(sql, { maxRows: 20, timeoutMs: 10000 });
+      const r = await this.erp.runReadOnly(sql, { maxRows: 20, timeoutMs: 10000 }, params);
       return (r.rows || []).map((row: any) => ({
         codCliente: String(row.codCliente || '').trim(),
         nome: String(row.nome || '').trim(),

@@ -819,11 +819,11 @@ export class CrediarioBaixaService {
       try {
         const cm = await this.crediarios.detectClientesTable();
         if (cm) {
-          const orParts: string[] = [`\`${cm.codCliente}\` = '${safeBusca}'`];
+          const orParts: string[] = [`\`${cm.codCliente}\` = ?`];
           // Procura por colunas tipo cpf/cnpj/telefone
           // Heurística simples: tenta nome de coluna comum
           const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE ${orParts.join(' OR ')} LIMIT 50`;
-          const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 });
+          const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [safeBusca]);
           for (const row of r.rows) codClientes.push(String(row.cod));
         }
       } catch {/* ignora — usa só o codCliente direto */}
@@ -834,8 +834,8 @@ export class CrediarioBaixaService {
       // CODCLIENTE=26 VISANET, NOME=ELISA. Não queremos VISANET aqui.)
       const cm = await this.crediarios.detectClientesTable();
       if (cm && cm.nome) {
-        const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE '%${safeBusca}%' LIMIT 50`;
-        const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 });
+        const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE ? LIMIT 50`;
+        const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [`%${safeBusca}%`]);
         codClientes = r.rows.map((row) => String(row.cod));
       } else {
         throw new BadRequestException(

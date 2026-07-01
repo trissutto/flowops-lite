@@ -4056,6 +4056,7 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async runReadOnly(
     sqlRaw: string,
     opts: { maxRows?: number; timeoutMs?: number } = {},
+    params?: any[],
   ): Promise<{
     columns: string[];
     rows: any[];
@@ -4134,7 +4135,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
         } catch {
           // MariaDB / versÃµes antigas nÃ£o suportam â€” segue sem timeout server-side
         }
-        const [rows, fields] = await conn.query<mysql.RowDataPacket[]>(finalSql);
+        // params (opcional): quando presente, usa placeholders `?` — os valores
+        // sao escapados pelo mysql2 (fecha SQL injection nos LIKE de busca e
+        // evita que um termo tipo "DELETE" caia na blacklist). Sem params, a
+        // execucao e identica ao comportamento anterior.
+        const [rows, fields] =
+          params && params.length
+            ? await conn.query<mysql.RowDataPacket[]>(finalSql, params)
+            : await conn.query<mysql.RowDataPacket[]>(finalSql);
         const ms = Date.now() - t0;
         const arr = Array.isArray(rows) ? (rows as any[]) : [];
         const cols = Array.isArray(fields)
