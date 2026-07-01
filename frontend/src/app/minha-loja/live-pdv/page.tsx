@@ -194,6 +194,8 @@ export default function LivePdvPage() {
   const [clientFilter, setClientFilter] = useState(''); // busca de cliente por nome/@ na lista
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
+  // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
+  const [addedFlash, setAddedFlash] = useState<string | null>(null);
   const [editCustomerOpen, setEditCustomerOpen] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
 
@@ -478,6 +480,21 @@ export default function LivePdvPage() {
   }
 
   // ─── Clique na grade ──────────────────────────────────────────────────────
+  // Fecha o carrinho depois de adicionar — evita jogar a próxima peça no
+  // carrinho errado. A peça já ficou salva no carrinho da cliente (aparece na
+  // lista CLIENTES DA LIVE). Mostra um aviso rápido e foca a busca.
+  function closeAfterAdd(name?: string | null) {
+    setActiveCustomer(null);
+    setCart(null);
+    setQr(null);
+    setPaid(false);
+    if (name) {
+      setAddedFlash(name);
+      setTimeout(() => setAddedFlash(null), 2600);
+    }
+    searchRef.current?.focus();
+  }
+
   async function clickCell(cell: GradeCell) {
     if (cell.available <= 0) return;
     if (!sessionId) {
@@ -521,6 +538,7 @@ export default function LivePdvPage() {
       setPaid(false);
       await doSearch(); // atualiza estoque exibido
       await refreshCarts();
+      closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
       alert(e?.message || 'Erro ao adicionar');
     } finally {
@@ -576,6 +594,7 @@ export default function LivePdvPage() {
       setCart(res.cart);
       await doSearch();
       await refreshCarts();
+      closeAfterAdd(res.cart?.customerName); // fecha o carrinho por segurança
     } catch (e: any) {
       alert(e?.message || 'Erro ao adicionar');
     } finally {
@@ -871,6 +890,12 @@ export default function LivePdvPage() {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      {/* Aviso rápido: peça adicionada + carrinho fechado (segurança) */}
+      {addedFlash && (
+        <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg">
+          ✓ Adicionado a {addedFlash} · carrinho fechado
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <Link href="/minha-loja" className="text-slate-400 hover:text-slate-600">
