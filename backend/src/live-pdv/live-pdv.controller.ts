@@ -148,6 +148,12 @@ export class LivePdvController {
     return this.svc.setFrete(cartId, body.freteCents);
   }
 
+  // Calcula o frete automaticamente pelo CEP da cliente (SP=SEDEX 9,99, resto=PAC 19,99)
+  @Post('carts/:cartId/frete/auto')
+  autoFrete(@Param('cartId') cartId: string) {
+    return this.svc.computeFreteFromCep(cartId);
+  }
+
   @Post('items/:itemId/cancel')
   cancelItem(@Param('itemId') itemId: string, @Body() body: { reason?: string }) {
     return this.svc.cancelItem(itemId, body?.reason);

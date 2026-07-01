@@ -1024,6 +1024,48 @@ export class LivePdvService {
     return this.getCart(cartId);
   }
 
+  /**
+   * Frete FIXO por CEP (regra Lurd's):
+   *   - SP (CEP 01000-000 a 19999-999) → SEDEX R$ 9,99
+   *   - Qualquer outro CEP do Brasil    → PAC   R$ 19,99
+   * Retorna null se o CEP não tiver 8 dígitos.
+   */
+  private freteFromCep(
+    cepRaw?: string | null,
+  ): { cents: number; servico: 'SEDEX' | 'PAC' } | null {
+    const cep = String(cepRaw || '').replace(/\D/g, '');
+    if (cep.length !== 8) return null;
+    const prefixo = parseInt(cep.slice(0, 5), 10); // 5 primeiros dígitos
+    if (prefixo >= 1000 && prefixo <= 19999) {
+      return { cents: 999, servico: 'SEDEX' }; // São Paulo
+    }
+    return { cents: 1999, servico: 'PAC' }; // demais estados
+  }
+
+  /**
+   * Calcula e aplica o frete do carrinho DERIVANDO do CEP da cliente.
+   * Usado pelo botão "Calcular frete pelo CEP" na tela da live.
+   */
+  async computeFreteFromCep(cartId: string) {
+    const cart = await (this.prisma as any).livePdvCart.findUnique({
+      where: { id: cartId },
+    });
+    if (!cart) throw new NotFoundException('Carrinho não encontrado');
+    const calc = this.freteFromCep(cart.customerCep);
+    if (!calc) {
+      throw new BadRequestException(
+        'Cliente sem CEP válido no carrinho — preencha o CEP da cliente pra calcular o frete.',
+      );
+    }
+    await (this.prisma as any).livePdvCart.update({
+      where: { id: cartId },
+      data: { freteCents: calc.cents },
+    });
+    await this.recalcCart(cartId);
+    const fresh = await this.getCart(cartId);
+    return { ...(fresh as any), freteServico: calc.servico };
+  }
+
   // ─── Pagamento (PIX) ─────────────────────────────────────────────────────────
   async startPayment(cartId: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({ where: { id: cartId } });

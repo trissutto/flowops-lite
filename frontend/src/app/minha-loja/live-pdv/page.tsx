@@ -340,6 +340,23 @@ export default function LivePdvPage() {
     setPromoCents(base - offCents);
   }
 
+  // ─── Frete pelo CEP ──────────────────────────────────────────────────────
+  // SP (CEP 01000-19999) = SEDEX R$ 9,99; qualquer outro estado = PAC R$ 19,99.
+  async function calcFrete() {
+    if (!cart) return;
+    try {
+      const res = await api<Cart & { freteServico?: string }>(
+        `/live-pdv/carts/${cart.id}/frete/auto`,
+        { method: 'POST' },
+      );
+      setCart(res);
+      setQr(null);
+      setPaid(false);
+    } catch (e: any) {
+      alert('Não deu pra calcular o frete: ' + (e?.message || e));
+    }
+  }
+
   // Após mudar preço (promo), ressincroniza o carrinho aberto e descarta um
   // PIX/link antigo (o backend já o invalidou quando o total mudou).
   async function syncOpenCartAfterPriceChange() {
@@ -1031,6 +1048,7 @@ export default function LivePdvPage() {
               onChargeLink={chargeLink}
               onEditCustomer={() => setEditCustomerOpen(true)}
               onDeleteCart={deleteCart}
+              onCalcFrete={calcFrete}
             />
 
             {/* Clientes da live — na lateral pra não ser empurrada pela grade */}
@@ -1185,6 +1203,7 @@ function CartPanel({
   onChargeLink,
   onEditCustomer,
   onDeleteCart,
+  onCalcFrete,
 }: {
   cart: Cart | null;
   activeCustomer: ActiveCustomer | null;
@@ -1197,6 +1216,7 @@ function CartPanel({
   onChargeLink: () => void;
   onEditCustomer: () => void;
   onDeleteCart: () => void;
+  onCalcFrete: () => void;
 }) {
   return (
     <div className="lg:sticky lg:top-16 lg:h-fit">
@@ -1286,7 +1306,14 @@ function CartPanel({
                 </div>
                 {cart.freteCents > 0 && (
                   <div className="flex justify-between text-slate-500">
-                    <span>Frete</span>
+                    <span>
+                      Frete{' '}
+                      {cart.freteCents === 999
+                        ? '(SEDEX · SP)'
+                        : cart.freteCents === 1999
+                        ? '(PAC)'
+                        : ''}
+                    </span>
                     <span>{brl(cart.freteCents)}</span>
                   </div>
                 )}
@@ -1294,6 +1321,13 @@ function CartPanel({
                   <span>Total</span>
                   <span>{brl(cart.totalCents)}</span>
                 </div>
+                <button
+                  onClick={onCalcFrete}
+                  title="Calcula o frete pelo CEP da cliente: SP = SEDEX R$ 9,99 · demais estados = PAC R$ 19,99"
+                  className="mt-1 w-full rounded-lg border border-slate-300 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Calcular frete pelo CEP · SEDEX SP R$ 9,99 / PAC R$ 19,99
+                </button>
               </div>
             )}
 
