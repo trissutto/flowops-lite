@@ -50,44 +50,48 @@ export class LivePdvService {
     return `${this.norm(ref)}|${this.norm(cor)}|${this.norm(tam)}`;
   }
 
-  // Preço por CODIGO com FALLBACK no espelho (giga_produto.vendaUn) quando o
-  // Giga ao vivo falha/zera — evita peça/grade a R$0 na Live.
+  // Preço por CODIGO — ESPELHO PRIMEIRO (giga_produto.vendaUn no Postgres). Só
+  // encosta no Giga ao vivo pros códigos SEM preço no espelho. Evita travar na
+  // consulta de preço quando o Giga/firewall cai.
   private async pricesWithMirror(codigos: string[]): Promise<Map<string, number>> {
-    const out = await this.pricing.getPricesByCodigos(codigos).catch(() => new Map<string, number>());
-    const missing = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean))).filter(
-      (c) => !((out.get(c) || 0) > 0),
-    );
-    if (missing.length) {
+    const uniq = Array.from(new Set(codigos.map((c) => String(c).trim()).filter(Boolean)));
+    const out = new Map<string, number>();
+    if (uniq.length) {
       try {
         const rows = await (this.prisma as any).gigaProduto.findMany({
-          where: { codigo: { in: missing }, vendaUn: { gt: 0 } },
+          where: { codigo: { in: uniq }, vendaUn: { gt: 0 } },
           select: { codigo: true, vendaUn: true },
         });
         for (const r of rows as any[]) {
-          const c = String(r.codigo).trim();
-          if (!((out.get(c) || 0) > 0)) out.set(c, Number(r.vendaUn) || 0);
+          out.set(String(r.codigo).trim(), Number(r.vendaUn) || 0);
         }
       } catch {
-        /* espelho indisponível — mantém o que veio do Giga */
+        /* espelho indisponível */
+      }
+    }
+    const missing = uniq.filter((c) => !((out.get(c) || 0) > 0));
+    if (missing.length) {
+      const live = await this.pricing.getPricesByCodigos(missing).catch(() => new Map<string, number>());
+      for (const [c, v] of live) {
+        if ((v || 0) > 0 && !((out.get(c) || 0) > 0)) out.set(c, v);
       }
     }
     return out;
   }
 
-  // Preço por REF com fallback no espelho.
+  // Preço por REF — ESPELHO PRIMEIRO; Giga ao vivo só se o espelho não tiver.
   private async refPriceWithMirror(ref: string): Promise<number> {
-    const live = (await this.pricing.getPricesByRefs([ref]).catch(() => new Map<string, number>())).get(ref) || 0;
-    if (live > 0) return live;
     try {
       const row = await (this.prisma as any).gigaProduto.findFirst({
         where: { ref: { equals: ref, mode: 'insensitive' }, vendaUn: { gt: 0 } },
         orderBy: { vendaUn: 'desc' },
         select: { vendaUn: true },
       });
-      return row ? Number(row.vendaUn) || 0 : 0;
+      if (row && Number(row.vendaUn) > 0) return Number(row.vendaUn);
     } catch {
-      return 0;
+      /* espelho indisponível */
     }
+    return (await this.pricing.getPricesByRefs([ref]).catch(() => new Map<string, number>())).get(ref) || 0;
   }
 
   // Resolve as linhas do produto (REF/código/nome) — ESPELHO PRIMEIRO.
