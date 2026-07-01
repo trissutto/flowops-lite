@@ -603,6 +603,41 @@ export default function LivePdvPage() {
     }
   }
 
+  // Verificador de @: a operadora escolheu USAR um carrinho já existente (mesma
+  // @) em vez de criar outro — abre ele e adiciona a peça pendente nele.
+  function handleUseExisting(existing: Cart) {
+    setShowCustomerModal(false);
+    const cell = pendingCell;
+    setPendingCell(null);
+    openCart(existing);
+    if (cell) setTimeout(() => addItemToCart(existing, cell), 0);
+  }
+
+  async function addItemToCart(targetCart: Cart, cell: GradeCell) {
+    if (!sessionId || !product?.ref) return;
+    setAdding(cell.itemKey);
+    try {
+      const res = await api<{ cart: Cart }>(`/live-pdv/sessions/${sessionId}/items`, {
+        method: 'POST',
+        body: JSON.stringify({
+          cartId: targetCart.id,
+          refCode: product.ref,
+          cor: cell.cor,
+          tamanho: cell.tamanho,
+          qty: 1,
+        }),
+      });
+      setCart(res.cart);
+      await doSearch();
+      await refreshCarts();
+      closeAfterAdd(res.cart?.customerName);
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao adicionar');
+    } finally {
+      setAdding(null);
+    }
+  }
+
   function newClient() {
     setActiveCustomer(null);
     setCart(null);
@@ -1401,14 +1436,17 @@ export default function LivePdvPage() {
         />
       )}
 
-      {/* Modal cliente */}
+      {/* Modal cliente — @ primeiro/obrigatório + verificador de @ duplicada */}
       {showCustomerModal && (
         <CustomerModal
+          title="Identificar cliente (@)"
           onClose={() => {
             setShowCustomerModal(false);
             setPendingCell(null);
           }}
           onSave={saveCustomerAndAdd}
+          dupCarts={carts}
+          onUseExisting={handleUseExisting}
         />
       )}
     </div>
@@ -1702,6 +1740,8 @@ function CustomerModal({
   title = 'Identificar cliente',
   submitLabel = 'Salvar e adicionar item',
   showAddress = false,
+  dupCarts,
+  onUseExisting,
 }: {
   onClose: () => void;
   onSave: (f: {
@@ -1715,6 +1755,8 @@ function CustomerModal({
   title?: string;
   submitLabel?: string;
   showAddress?: boolean;
+  dupCarts?: Cart[];
+  onUseExisting?: (cart: Cart) => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [phone, setPhone] = useState(maskPhoneBR(initial?.phone ?? ''));
@@ -1729,8 +1771,20 @@ function CustomerModal({
   const [cidade, setCidade] = useState(initial?.cidade ?? '');
   const [uf, setUf] = useState(initial?.uf ?? '');
   const [cepLoading, setCepLoading] = useState(false);
-  const nameRef = useRef<HTMLInputElement>(null);
-  useEffect(() => nameRef.current?.focus(), []);
+  const igRef = useRef<HTMLInputElement>(null);
+  useEffect(() => igRef.current?.focus(), []);
+
+  // VERIFICADOR de @ duplicada: normaliza (sem @, minúsculo) e procura um
+  // carrinho ABERTO com a mesma @ na lista da live. Evita pedido duplicado.
+  const normIg = (s?: string | null) => (s || '').trim().toLowerCase().replace(/^@/, '');
+  const igDup =
+    normIg(instagram).length >= 2
+      ? (dupCarts || []).find(
+          (c) =>
+            ['open', 'awaiting_payment'].includes(c.status) &&
+            normIg(c.customerInstagram) === normIg(instagram),
+        ) || null
+      : null;
 
   // CEP → endereço via ViaCEP (mesmo padrão do PDV). Só preenche o que estiver
   // vazio pra não sobrescrever edição manual.
@@ -1756,12 +1810,21 @@ function CustomerModal({
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim()) {
-      alert('Nome é obrigatório');
+    const ig = instagram.trim().replace(/^@/, '');
+    if (!ig) {
+      alert('O @ do Instagram é obrigatório.');
+      igRef.current?.focus();
       return;
     }
+    // Se já existe carrinho aberto pra essa @, não cria de novo — usa o existente.
+    if (igDup && onUseExisting) {
+      onUseExisting(igDup);
+      return;
+    }
+    // Nome é opcional: se vazio, usa a @ como nome de exibição.
+    const finalName = name.trim() || ig;
     onSave({
-      name, phone: phone.replace(/\D/g, ''), instagram, cpf, email,
+      name: finalName, phone: phone.replace(/\D/g, ''), instagram: ig, cpf, email,
       ...(showAddress
         ? { cep: cep.replace(/\D/g, ''), endereco, numero, complemento, bairro, cidade, uf }
         : {}),
@@ -1780,9 +1843,47 @@ function CustomerModal({
           </button>
         </div>
         <div className="space-y-2.5">
-          <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="(11) 99999-9999" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Instagram (@)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          {/* @ do Instagram — PRIMEIRO e OBRIGATÓRIO */}
+          <div>
+            <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">
+              @ do Instagram *
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">@</span>
+              <input
+                ref={igRef}
+                value={instagram}
+                onChange={(e) => setInstagram(e.target.value)}
+                placeholder="usuaria_do_insta"
+                autoCapitalize="none"
+                autoCorrect="off"
+                className={`w-full rounded-lg border px-3 py-2 pl-7 ${
+                  igDup ? 'border-amber-400 bg-amber-50' : 'border-slate-300'
+                }`}
+              />
+            </div>
+          </div>
+
+          {/* VERIFICADOR: essa @ já tem carrinho aberto na live */}
+          {igDup && onUseExisting && (
+            <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-2.5">
+              <div className="text-xs font-bold text-amber-800">
+                ⚠️ @{normIg(igDup.customerInstagram)} já está na live — carrinho aberto
+                {' '}({igDup.items?.length || 0} item{(igDup.items?.length || 0) === 1 ? '' : 's'} · {brl(igDup.totalCents)})
+              </div>
+              <button
+                type="button"
+                onClick={() => onUseExisting(igDup)}
+                className="mt-2 w-full rounded-lg bg-amber-600 py-2 text-sm font-bold text-white hover:bg-amber-700"
+              >
+                Usar esse carrinho (não duplicar)
+              </button>
+            </div>
+          )}
+
+          {/* Nome — SEGUNDO e OPCIONAL (se vazio, usa a @) */}
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (opcional)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="Telefone (opcional)" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
             <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
