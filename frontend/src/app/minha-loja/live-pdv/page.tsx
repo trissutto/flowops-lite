@@ -22,6 +22,7 @@ import {
   Loader2,
   Package,
   Pencil,
+  Percent,
   QrCode,
   Search,
   ShoppingCart,
@@ -173,6 +174,8 @@ export default function LivePdvPage() {
   const [searching, setSearching] = useState(false);
   const [promoEditing, setPromoEditing] = useState(false);
   const [promoInput, setPromoInput] = useState('');
+  const [cupomEditing, setCupomEditing] = useState(false);
+  const [cupomInput, setCupomInput] = useState('20,00');
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Cliente / carrinho
@@ -285,6 +288,56 @@ export default function LivePdvPage() {
     } catch (e: any) {
       alert('Erro ao remover promo: ' + (e?.message || e));
     }
+  }
+
+  // Preço ORIGINAL (base) — referência pros descontos rápidos. Quando já tem
+  // promo ativa, usa o basePriceCents (o riscado); senão o preço atual.
+  function baseCents(): number {
+    if (!product) return 0;
+    return product.basePriceCents || product.priceCents || 0;
+  }
+
+  // Grava um preço final (centavos) como promo da live — usado pelos atalhos
+  // "50% OFF" e "Cupom relâmpago". Mesmo endpoint do applyPromo.
+  async function setPromoCents(cents: number) {
+    if (!sessionId || !product?.ref) return;
+    const safe = Math.max(0, Math.round(cents));
+    try {
+      await api(`/live-pdv/sessions/${sessionId}/promo`, {
+        method: 'POST',
+        body: JSON.stringify({ refCode: product.ref, priceCents: safe }),
+      });
+      setPromoEditing(false);
+      setCupomEditing(false);
+      await doSearch();
+      await refreshCarts();
+      await syncOpenCartAfterPriceChange();
+    } catch (e: any) {
+      alert('Erro ao aplicar desconto: ' + (e?.message || e));
+    }
+  }
+
+  // 50% sobre o preço ORIGINAL.
+  function applyMetade() {
+    const base = baseCents();
+    if (!base) return;
+    setPromoCents(Math.round(base / 2));
+  }
+
+  // Cupom relâmpago: desconta R$ X do preço ORIGINAL.
+  function applyCupom() {
+    const base = baseCents();
+    const off = parseFloat(cupomInput.replace(',', '.'));
+    if (isNaN(off) || off <= 0) {
+      alert('Informe o valor do cupom em reais (ex: 20,00).');
+      return;
+    }
+    const offCents = Math.round(off * 100);
+    if (offCents >= base) {
+      alert('O desconto não pode ser maior ou igual ao preço.');
+      return;
+    }
+    setPromoCents(base - offCents);
   }
 
   // Após mudar preço (promo), ressincroniza o carrinho aberto e descarta um
@@ -753,30 +806,99 @@ export default function LivePdvPage() {
                         </button>
                       </div>
                     ) : (
-                      <div className="mt-1 flex items-center gap-2">
-                        <span className={`text-2xl font-extrabold ${product.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
-                          {brl(product.priceCents || 0)}
-                        </span>
-                        {product.promoActive && (
-                          <>
-                            <span className="text-sm text-slate-400 line-through">
-                              {brl(product.basePriceCents || 0)}
+                      <div className="mt-1 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`text-2xl font-extrabold ${product.promoActive ? 'text-rose-600' : 'text-slate-900'}`}>
+                            {brl(product.priceCents || 0)}
+                          </span>
+                          {product.promoActive && (
+                            <>
+                              <span className="text-sm text-slate-400 line-through">
+                                {brl(product.basePriceCents || 0)}
+                              </span>
+                              <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700">
+                                <Tag className="h-3 w-3" /> Promo Live
+                              </span>
+                            </>
+                          )}
+                          <button
+                            onClick={() => {
+                              setPromoInput(((product.priceCents || 0) / 100).toFixed(2).replace('.', ','));
+                              setCupomEditing(false);
+                              setPromoEditing(true);
+                            }}
+                            title="Definir preço promocional da live"
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
+                          >
+                            <Pencil className="h-3.5 w-3.5" /> Preço
+                          </button>
+                          {/* 50% sobre o preço ORIGINAL */}
+                          <button
+                            onClick={applyMetade}
+                            title="Aplicar 50% de desconto sobre o preço original"
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700 hover:bg-amber-100"
+                          >
+                            <Percent className="h-3.5 w-3.5" /> 50% OFF
+                          </button>
+                          {/* Cupom relâmpago — R$ X off editável */}
+                          <button
+                            onClick={() => {
+                              setPromoEditing(false);
+                              setCupomEditing((v) => !v);
+                            }}
+                            title="Cupom relâmpago — desconto em reais sobre o preço original"
+                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-bold ${
+                              cupomEditing
+                                ? 'border-rose-400 bg-rose-50 text-rose-700'
+                                : 'border-rose-300 text-rose-600 hover:bg-rose-50'
+                            }`}
+                          >
+                            <Zap className="h-3.5 w-3.5" /> Cupom relâmpago
+                          </button>
+                          {product.promoActive && (
+                            <button
+                              onClick={removePromo}
+                              className="text-xs text-slate-400 underline hover:text-slate-600"
+                            >
+                              remover
+                            </button>
+                          )}
+                        </div>
+
+                        {cupomEditing && (
+                          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-rose-200 bg-rose-50/50 p-2">
+                            <span className="text-xs font-bold uppercase tracking-wide text-rose-700">
+                              Cupom relâmpago
                             </span>
-                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700">
-                              <Tag className="h-3 w-3" /> Promo Live
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-slate-400">−R$</span>
+                              <input
+                                autoFocus
+                                value={cupomInput}
+                                onChange={(e) => setCupomInput(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && applyCupom()}
+                                inputMode="decimal"
+                                placeholder="20,00"
+                                className="w-28 rounded-lg border border-rose-300 py-1.5 pl-9 pr-2 text-base font-bold focus:outline-none focus:ring-2 focus:ring-rose-200"
+                              />
+                            </div>
+                            <button
+                              onClick={applyCupom}
+                              className="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-rose-700"
+                            >
+                              Aplicar
+                            </button>
+                            <span className="text-xs text-slate-500">
+                              sobre {brl(product.basePriceCents || product.priceCents || 0)}
                             </span>
-                          </>
+                            <button
+                              onClick={() => setCupomEditing(false)}
+                              className="text-sm text-slate-400 hover:text-slate-600"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
                         )}
-                        <button
-                          onClick={() => {
-                            setPromoInput(((product.priceCents || 0) / 100).toFixed(2).replace('.', ','));
-                            setPromoEditing(true);
-                          }}
-                          title="Definir preço promocional da live"
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:border-rose-300 hover:text-rose-600"
-                        >
-                          <Pencil className="h-3.5 w-3.5" /> Preço
-                        </button>
                       </div>
                     )}
 
