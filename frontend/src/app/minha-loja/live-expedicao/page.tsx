@@ -16,6 +16,7 @@ import {
   PackageCheck,
   Truck,
   User,
+  X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -36,6 +37,7 @@ interface QueueGroup {
   customerName: string;
   customerPhone: string;
   customerInstagram: string | null;
+  customerCpf: string | null;
   paidAt: string | null;
   items: QueueItem[];
 }
@@ -44,6 +46,18 @@ export default function LiveExpedicaoPage() {
   const [groups, setGroups] = useState<QueueGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [editCart, setEditCart] = useState<any | null>(null);
+
+  // Abre o "Completar cadastro" — busca o carrinho completo pra prefill (o
+  // endpoint de salvar sobrescreve tudo, então precisamos dos dados atuais).
+  async function openCadastro(cartId: string) {
+    try {
+      const c = await api<any>(`/live-pdv/carts/${cartId}`);
+      setEditCart(c);
+    } catch (e: any) {
+      alert('Erro ao carregar cadastro: ' + (e?.message || e));
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -141,7 +155,19 @@ export default function LiveExpedicaoPage() {
                     {g.customerInstagram && ` · @${g.customerInstagram}`}
                   </div>
                 </div>
-                <span className="ml-auto text-xs text-slate-400">{g.items.length} item(s)</span>
+                <div className="ml-auto flex items-center gap-2">
+                  <button
+                    onClick={() => openCadastro(g.cartId)}
+                    className={`rounded-lg border px-2.5 py-1 text-xs font-semibold ${
+                      g.customerCpf
+                        ? 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                        : 'border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                    }`}
+                  >
+                    {g.customerCpf ? '✓ Cadastro' : 'Completar cadastro (CPF)'}
+                  </button>
+                  <span className="text-xs text-slate-400">{g.items.length} item(s)</span>
+                </div>
               </div>
               <div className="divide-y divide-slate-50">
                 {g.items.map((it) => (
@@ -194,6 +220,145 @@ export default function LiveExpedicaoPage() {
             </div>
           ))}
         </div>
+
+        {editCart && (
+          <CadastroModal
+            cart={editCart}
+            onClose={() => setEditCart(null)}
+            onSaved={() => {
+              setEditCart(null);
+              load();
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Completar cadastro (CPF + endereço) na expedição ─── */
+function CadastroModal({
+  cart,
+  onClose,
+  onSaved,
+}: {
+  cart: any;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(cart.customerName ?? '');
+  const [phone, setPhone] = useState(cart.customerPhone ?? '');
+  const [instagram, setInstagram] = useState(cart.customerInstagram ?? '');
+  const [cpf, setCpf] = useState(cart.customerCpf ?? '');
+  const [email, setEmail] = useState(cart.customerEmail ?? '');
+  const [cep, setCep] = useState(cart.customerCep ?? '');
+  const [endereco, setEndereco] = useState(cart.customerEndereco ?? '');
+  const [numero, setNumero] = useState(cart.customerNumero ?? '');
+  const [complemento, setComplemento] = useState(cart.customerComplemento ?? '');
+  const [bairro, setBairro] = useState(cart.customerBairro ?? '');
+  const [cidade, setCidade] = useState(cart.customerCidade ?? '');
+  const [uf, setUf] = useState(cart.customerUf ?? '');
+  const [cepLoading, setCepLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function lookupCep(raw: string) {
+    const clean = raw.replace(/\D/g, '');
+    if (clean.length !== 8) return;
+    setCepLoading(true);
+    try {
+      const r = await fetch(`https://viacep.com.br/ws/${clean}/json/`);
+      const data = await r.json();
+      if (!data?.erro) {
+        setEndereco((prev: string) => prev || data.logradouro || '');
+        setBairro((prev: string) => prev || data.bairro || '');
+        setCidade((prev: string) => prev || data.localidade || '');
+        setUf((prev: string) => prev || (data.uf || '').toUpperCase());
+      }
+    } catch {
+      /* ViaCEP indisponível */
+    } finally {
+      setCepLoading(false);
+    }
+  }
+
+  async function save() {
+    if (!name.trim()) {
+      alert('Nome é obrigatório');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api(`/live-pdv/carts/${cart.id}/customer`, {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          phone: phone.replace(/\D/g, ''),
+          instagram,
+          cpf,
+          email,
+          cep: cep.replace(/\D/g, ''),
+          endereco,
+          numero,
+          complemento,
+          bairro,
+          cidade,
+          uf,
+        }),
+      });
+      onSaved();
+    } catch (e: any) {
+      alert('Erro ao salvar: ' + (e?.message || e));
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 text-lg font-bold text-slate-800">
+            <User className="h-5 w-5 text-rose-500" /> Completar cadastro
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="space-y-2.5">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+          <div className="grid grid-cols-2 gap-2">
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone" inputMode="tel" className="rounded-lg border border-slate-300 px-3 py-2" />
+            <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF" inputMode="numeric" className="rounded-lg border border-rose-300 bg-rose-50/40 px-3 py-2 font-semibold" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Instagram (@)" className="rounded-lg border border-slate-300 px-3 py-2" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail" className="rounded-lg border border-slate-300 px-3 py-2" />
+          </div>
+          <div className="mt-1 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Endereço (CEP puxa o resto)</div>
+            <div className="flex items-center gap-2">
+              <input value={cep} onChange={(e) => { setCep(e.target.value); lookupCep(e.target.value); }} placeholder="CEP" inputMode="numeric" maxLength={9} className="w-32 rounded-lg border border-slate-300 px-3 py-2" />
+              {cepLoading && <span className="text-xs text-slate-400">buscando…</span>}
+            </div>
+            <input value={endereco} onChange={(e) => setEndereco(e.target.value)} placeholder="Rua / logradouro" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+            <div className="grid grid-cols-2 gap-2">
+              <input value={numero} onChange={(e) => setNumero(e.target.value)} placeholder="Número" className="rounded-lg border border-slate-300 px-3 py-2" />
+              <input value={complemento} onChange={(e) => setComplemento(e.target.value)} placeholder="Complemento" className="rounded-lg border border-slate-300 px-3 py-2" />
+            </div>
+            <input value={bairro} onChange={(e) => setBairro(e.target.value)} placeholder="Bairro" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+            <div className="grid grid-cols-[1fr_72px] gap-2">
+              <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade" className="rounded-lg border border-slate-300 px-3 py-2" />
+              <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF" maxLength={2} className="rounded-lg border border-slate-300 px-3 py-2 uppercase" />
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={save}
+          disabled={saving}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-rose-600 py-2.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          Salvar cadastro
+        </button>
       </div>
     </div>
   );

@@ -690,7 +690,10 @@ export class LivePdvService {
       { customerName: { contains: t, mode: 'insensitive' } },
       { customerInstagram: { contains: ig, mode: 'insensitive' } },
     ];
-    if (digits.length >= 3) OR.push({ customerPhone: { contains: digits } });
+    if (digits.length >= 3) {
+      OR.push({ customerPhone: { contains: digits } });
+      OR.push({ customerCpf: { contains: digits } }); // CPF é chave de busca
+    }
     const carts = await (this.prisma as any).livePdvCart.findMany({
       where: { customerId: { not: null }, OR },
       distinct: ['customerId'],
@@ -700,6 +703,7 @@ export class LivePdvService {
         customerName: true,
         customerPhone: true,
         customerInstagram: true,
+        customerCpf: true,
       },
       take: 20,
     });
@@ -708,6 +712,7 @@ export class LivePdvService {
       name: c.customerName,
       phone: c.customerPhone,
       instagram: c.customerInstagram,
+      cpf: c.customerCpf,
     }));
   }
 
@@ -1330,6 +1335,7 @@ export class LivePdvService {
           customerName: c?.customerName,
           customerPhone: c?.customerPhone,
           customerInstagram: c?.customerInstagram,
+          customerCpf: c?.customerCpf || null,
           paidAt: c?.paidAt,
           items: [],
         });
