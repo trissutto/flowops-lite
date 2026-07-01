@@ -409,10 +409,21 @@ export default function LivePdvPage() {
   // SP (CEP 01000-19999) = SEDEX R$ 9,99; qualquer outro estado = PAC R$ 19,99.
   async function calcFrete() {
     if (!cart) return;
+    // Se o carrinho ainda não tem CEP, pergunta na hora (e o backend salva).
+    let cep = (cart.customerCep || '').replace(/\D/g, '');
+    if (cep.length !== 8) {
+      const typed = prompt('CEP da cliente (pra calcular o frete):', '');
+      if (typed === null) return;
+      cep = typed.replace(/\D/g, '');
+      if (cep.length !== 8) {
+        alert('CEP inválido — precisa ter 8 dígitos.');
+        return;
+      }
+    }
     try {
       const res = await api<Cart & { freteServico?: string }>(
         `/live-pdv/carts/${cart.id}/frete/auto`,
-        { method: 'POST' },
+        { method: 'POST', body: JSON.stringify({ cep }) },
       );
       setCart(res);
       setQr(null);

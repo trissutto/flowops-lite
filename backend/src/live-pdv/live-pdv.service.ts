@@ -1110,21 +1110,24 @@ export class LivePdvService {
    * Calcula e aplica o frete do carrinho DERIVANDO do CEP da cliente.
    * Usado pelo botão "Calcular frete pelo CEP" na tela da live.
    */
-  async computeFreteFromCep(cartId: string) {
+  async computeFreteFromCep(cartId: string, cepOverride?: string) {
     const cart = await (this.prisma as any).livePdvCart.findUnique({
       where: { id: cartId },
     });
     if (!cart) throw new NotFoundException('Carrinho não encontrado');
-    const calc = this.freteFromCep(cart.customerCep);
+    // Usa o CEP digitado na hora (se veio válido) ou o que está no carrinho.
+    const overrideDigits = (cepOverride || '').replace(/\D/g, '');
+    const cepToUse = overrideDigits.length === 8 ? overrideDigits : cart.customerCep;
+    const calc = this.freteFromCep(cepToUse);
     if (!calc) {
       throw new BadRequestException(
-        'Cliente sem CEP válido no carrinho — preencha o CEP da cliente pra calcular o frete.',
+        'Cliente sem CEP válido — informe o CEP pra calcular o frete.',
       );
     }
-    await (this.prisma as any).livePdvCart.update({
-      where: { id: cartId },
-      data: { freteCents: calc.cents },
-    });
+    const data: any = { freteCents: calc.cents };
+    // Se o operador digitou o CEP na hora, guarda no carrinho.
+    if (overrideDigits.length === 8) data.customerCep = overrideDigits;
+    await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data });
     await this.recalcCart(cartId);
     const fresh = await this.getCart(cartId);
     return { ...(fresh as any), freteServico: calc.servico };
