@@ -182,9 +182,13 @@ export default function NewOrderAlert() {
     if (!token) return;
 
     let stopped = false;
+    // Guard de in-flight: o endpoint bate no WooCommerce (servidor do Giga/WP,
+    // que pode ficar lento). Sem isto, um check demorado empilha com o proximo.
+    let running = false;
 
     async function check() {
-      if (stopped) return;
+      if (stopped || running) return;
+      running = true;
       try {
         const res = await api<{ data: IncomingOrder[] }>(
           '/orders/wc?status=processing&per_page=20',
@@ -211,6 +215,8 @@ export default function NewOrderAlert() {
         knownWcIdsRef.current = incomingIds;
       } catch (e: any) {
         LOG('Polling falhou:', e?.message);
+      } finally {
+        running = false;
       }
     }
 
@@ -222,8 +228,11 @@ export default function NewOrderAlert() {
       clearTimeout(kickoff);
       clearInterval(interval);
     };
+    // Deps completas: sem isStorePage/isStoreUser aqui, o guard nao reavaliava
+    // quando esses resolviam depois (JWT decodificado em outro efeito) — vendedora
+    // role=store seguia pollando /orders/wc fora do PDV.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoginPage]);
+  }, [isLoginPage, isStorePage, isStoreUser]);
 
   function pushOrder(o: IncomingOrder, source: 'socket' | 'poll' | 'test') {
     const num = String(o.wcOrderNumber ?? o.number ?? o.id ?? '—');
