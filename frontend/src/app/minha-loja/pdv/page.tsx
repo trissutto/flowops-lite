@@ -1700,7 +1700,7 @@ function PdvPageInner() {
             minHeight: '100vh',
             maxHeight: '100vh',
             overflowY: 'auto',
-            background: '#0B0B0B',
+            background: '#FBFBF9',
           }}
         >
           <div className="p-2.5 pt-3 space-y-3">
@@ -1708,16 +1708,16 @@ function PdvPageInner() {
             <div className="space-y-1.5">
               <Link
                 href="/minha-loja/consultar"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Consulta de produtos (F10)"
               >
-                <Search className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <Search className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Consulta Produtos</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Buscar produto, estoque</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F10</span>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F10</span>
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/devolucao"
@@ -1727,23 +1727,23 @@ function PdvPageInner() {
                     else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                   } catch {}
                 }}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Trocas / Devolução (F4)"
               >
-                <ArrowRightLeft className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <ArrowRightLeft className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Trocas</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Devolução / troca</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F4</span>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F4</span>
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               {/* TROCA SITE — cliente comprou no lurds.com.br, vem trocar na loja física.
                   Backend wc-returns já cuida: busca pedido WC, valida prazo, retorna estoque
                   na loja receptora. */}
               <Link
                 href="/site/trocas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-violet-500 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-violet-50 border border-slate-200 hover:border-violet-400 rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Troca de pedido do site (lurds.com.br)"
               >
                 <Globe className="w-5 h-5 text-violet-400 shrink-0" />
@@ -1756,90 +1756,90 @@ function PdvPageInner() {
               </Link>
               <Link
                 href="/minha-loja/pdv/marcados"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Marcados (provar em casa)"
               >
-                <Tag className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <Tag className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Marcados</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Provar em casa</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <button
                 type="button"
                 onClick={() => setShowSimular(true)}
                 disabled={!sale?.total || sale.total <= 0}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#161616] disabled:hover:border-[#2A2A2A] disabled:hover:translate-y-0 disabled:hover:shadow-none"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-slate-200 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                 title="Simular parcelamento"
               >
-                <CreditCard className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <CreditCard className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Simular</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Simular parcelamento</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </button>
               <Link
                 href="/minha-loja/pdv/recebimentos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Baixa de Crediário"
               >
-                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <Receipt className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Baixa Crediário</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Receber parcelas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/caixa"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Retiradas, sangria, suprimento (F3)"
               >
-                <DollarSign className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <DollarSign className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Retiradas</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Caixa, sangria</div>
                 </div>
-                <span className="text-[9px] font-mono font-bold bg-[#D4AF37] text-black px-1.5 py-0.5 rounded shrink-0">F3</span>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F3</span>
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/produtos-vendidos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Conferir vendas + trocas do turno"
               >
-                <Receipt className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <Receipt className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Vendas + trocas (conferir)</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/notas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Notas Fiscais emitidas"
               >
-                <FileText className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <FileText className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Notas Fiscais</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">NFC-es emitidas</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
               <Link
                 href="/minha-loja/pdv/config-impressora"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
                 title="Configurar impressoras térmica e A4"
               >
-                <Printer className="w-5 h-5 text-[#D4AF37] shrink-0" />
+                <Printer className="w-5 h-5 text-[#B58A1E] shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-black leading-tight">Impressoras</div>
                   <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Térmica + A4</div>
                 </div>
-                <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
               </Link>
             </div>
           </div>
@@ -2267,10 +2267,10 @@ function PdvPageInner() {
           <div className="space-y-1.5">
             <Link
               href="/minha-loja"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
               title="Pedidos do site"
             >
-              <Globe className="w-5 h-5 text-[#D4AF37] shrink-0" />
+              <Globe className="w-5 h-5 text-[#B58A1E] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Pedidos Site</div>
                 <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">E-commerce</div>
@@ -2280,7 +2280,7 @@ function PdvPageInner() {
                   {pedidosSitePending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/realinhamento"
@@ -2291,7 +2291,7 @@ function PdvPageInner() {
               }`}
               title="Realinhamento de estoque"
             >
-              <Shuffle className="w-5 h-5 text-[#D4AF37] shrink-0" />
+              <Shuffle className="w-5 h-5 text-[#B58A1E] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Realinhar</div>
                 <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Inter-lojas</div>
@@ -2301,19 +2301,19 @@ function PdvPageInner() {
                   {realignPending}
                 </span>
               )}
-              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
             <Link
               href="/minha-loja/pdv/fechamento"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-[#161616] hover:bg-[#1C1C1C] border border-[#2A2A2A] hover:border-[#D4AF37] rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]"
+              className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
               title="Fechamento diário"
             >
-              <Wallet className="w-5 h-5 text-[#D4AF37] shrink-0" />
+              <Wallet className="w-5 h-5 text-[#B58A1E] shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-black leading-tight">Fechamento</div>
                 <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Fechamento diário</div>
               </div>
-              <ArrowUpRight className="w-3 h-3 text-[#D4AF37]/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
             </Link>
           </div>
 
