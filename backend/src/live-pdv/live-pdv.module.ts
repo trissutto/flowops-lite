@@ -11,6 +11,7 @@ import { WebsocketModule } from '../websocket/websocket.module';
 import { LivePdvController } from './live-pdv.controller';
 import { LivePdvService } from './live-pdv.service';
 import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
+import { LivePdvPayReconcileCron } from './live-pdv-pay-reconcile.cron';
 
 /**
  * Módulo de Live Commerce operado pela apresentadora (Live PDV).
@@ -31,7 +32,7 @@ import { LivePdvExpiryCron } from './live-pdv-expiry.cron';
     WebsocketModule,
   ],
   controllers: [LivePdvController],
-  providers: [LivePdvService, LivePdvExpiryCron],
+  providers: [LivePdvService, LivePdvExpiryCron, LivePdvPayReconcileCron],
   exports: [LivePdvService],
 })
 export class LivePdvModule {}
