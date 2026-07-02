@@ -80,8 +80,57 @@ export default function WincredMirrorPage() {
 
   useEffect(() => { loadStatus(); }, []);
 
+  // Etapa em execução no sync background (mostrada no botão: "produtos...")
+  const [bgCurrent, setBgCurrent] = useState<string | null>(null);
+
+  /**
+   * SYNC COMPLETO em BACKGROUND (02/07): o POST responde na hora ("started")
+   * e o servidor roda sozinho — antes a requisição segurava o sync inteiro
+   * e, com 352k produtos, estourava o timeout do proxy ("Failed to fetch")
+   * matando o processo no meio. Aqui a tela fica fazendo poll do progresso
+   * (leve, a cada 4s) até terminar.
+   */
+  const syncAllBackground = async () => {
+    if (syncing) return;
+    setSyncing('all');
+    setError(null);
+    setResults([]);
+    try {
+      const start = await api<{ started: boolean; alreadyRunning: boolean }>(
+        '/admin/wincred-mirror/sync/all',
+        { method: 'POST' },
+      );
+      if (!start.started && start.alreadyRunning) {
+        setError('Já existe um sync em andamento — acompanhando o progresso dele.');
+      }
+      // Poll do progresso até terminar (máx ~20min de guarda)
+      const t0 = Date.now();
+      while (Date.now() - t0 < 20 * 60 * 1000) {
+        await new Promise((r) => setTimeout(r, 4000));
+        try {
+          const p = await api<{
+            running: boolean; current: string | null; results: SyncResult[]; error: string | null;
+          }>('/admin/wincred-mirror/sync/progress');
+          setBgCurrent(p.current);
+          setResults(p.results || []);
+          if (!p.running) {
+            if (p.error) setError(`Sync abortado: ${p.error}`);
+            break;
+          }
+        } catch { /* rede piscou — tenta no próximo tick */ }
+      }
+      await loadStatus();
+    } catch (e: any) {
+      setError(e?.message || 'Erro ao iniciar o sync');
+    } finally {
+      setSyncing(null);
+      setBgCurrent(null);
+    }
+  };
+
   const sync = async (label: string, endpoint: string) => {
     if (syncing) return;
+    if (label === 'all') return syncAllBackground();
     setSyncing(label);
     setError(null);
     try {
@@ -156,7 +205,7 @@ export default function WincredMirrorPage() {
           className="ml-auto shrink-0 px-5 py-3 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold flex items-center gap-2 shadow disabled:opacity-50"
         >
           {syncing === 'all' ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Sincronizando...</>
+            <><Loader2 className="w-4 h-4 animate-spin" /> Sincronizando{bgCurrent ? ` ${bgCurrent}` : ''}...</>
           ) : (
             <><Play className="w-4 h-4" /> Rodar Sync Completo</>
           )}

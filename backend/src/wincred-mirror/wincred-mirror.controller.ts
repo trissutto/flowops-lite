@@ -38,7 +38,17 @@ export class WincredMirrorController {
   @Post('sync/all')
   syncAll(@Req() req: any) {
     this.requireAdmin(req);
-    return this.mirror.syncAll();
+    // BACKGROUND (02/07): com o catálogo completo (352k linhas) o sync
+    // síncrono estourava o timeout do proxy ("Failed to fetch") e morria no
+    // meio; clique repetido disparava dois syncs concorrentes. Agora
+    // responde na hora e a tela acompanha via GET sync/progress.
+    return this.mirror.startSyncAllBackground();
+  }
+
+  @Get('sync/progress')
+  syncProgress(@Req() req: any) {
+    this.requireAdmin(req);
+    return this.mirror.getSyncProgress();
   }
 
   @Post('sync/produtos')

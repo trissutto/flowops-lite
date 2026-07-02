@@ -151,8 +151,68 @@ export class WincredMirrorService {
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  //  SYNC ALL
+  //  SYNC ALL — EM BACKGROUND (02/07)
+  //
+  //  O botão "Sync Completo" esperava o sync inteiro NA MESMA requisição
+  //  HTTP. Com o catálogo completo (352k linhas) isso estoura o timeout do
+  //  proxy (~5min): o navegador recebia "Failed to fetch", o processo
+  //  morria no meio e clique repetido disparava DOIS syncs concorrentes.
+  //  Agora: dispara em background (responde "started" na hora), guarda o
+  //  progresso em memória (GET sync/progress) e trava clique duplo.
   // ─────────────────────────────────────────────────────────────────────
+
+  private bgState: {
+    running: boolean;
+    startedAt: string | null;
+    finishedAt: string | null;
+    current: string | null;
+    results: SyncResult[];
+    error: string | null;
+  } = { running: false, startedAt: null, finishedAt: null, current: null, results: [], error: null };
+
+  getSyncProgress() {
+    return this.bgState;
+  }
+
+  startSyncAllBackground(): { started: boolean; alreadyRunning: boolean } {
+    if (this.bgState.running) return { started: false, alreadyRunning: true };
+    this.bgState = {
+      running: true,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      current: null,
+      results: [],
+      error: null,
+    };
+    void (async () => {
+      const steps: Array<[string, () => Promise<SyncResult>]> = [
+        ['grupos', () => this.syncGrupos()],
+        ['subgrupos', () => this.syncSubgrupos()],
+        ['fornecedores', () => this.syncFornecedores()],
+        ['codigos', () => this.syncCodigos()],
+        ['produtos', () => this.syncProdutos()],
+        ['estoque', () => this.syncEstoque()],
+      ];
+      try {
+        for (const [name, fn] of steps) {
+          this.bgState.current = name;
+          const r = await fn();
+          this.bgState.results.push(r);
+          if (!r.success) {
+            this.logger.error(`[sync-bg] etapa ${name} falhou: ${r.error}`);
+          }
+        }
+      } catch (e: any) {
+        this.bgState.error = e?.message || String(e);
+        this.logger.error(`[sync-bg] abortado: ${this.bgState.error}`);
+      } finally {
+        this.bgState.running = false;
+        this.bgState.current = null;
+        this.bgState.finishedAt = new Date().toISOString();
+      }
+    })();
+    return { started: true, alreadyRunning: false };
+  }
 
   async syncAll(): Promise<{
     total: SyncResult[];
