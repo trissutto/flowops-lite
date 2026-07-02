@@ -1439,10 +1439,12 @@ export default function LivePdvPage() {
         />
       )}
 
-      {/* Modal cliente — @ primeiro/obrigatório + verificador de @ duplicada */}
+      {/* Modal cliente — SÓ o @ (obrigatório) + verificador de @ duplicada.
+          Dados extras (nome/telefone/etc) ficam pro "Editar cliente". */}
       {showCustomerModal && (
         <CustomerModal
           title="Identificar cliente (@)"
+          onlyInstagram
           onClose={() => {
             setShowCustomerModal(false);
             setPendingCell(null);
@@ -1743,6 +1745,7 @@ function CustomerModal({
   title = 'Identificar cliente',
   submitLabel = 'Salvar e adicionar item',
   showAddress = false,
+  onlyInstagram = false,
   dupCarts,
   onUseExisting,
 }: {
@@ -1758,6 +1761,10 @@ function CustomerModal({
   title?: string;
   submitLabel?: string;
   showAddress?: boolean;
+  /** Abertura de carrinho na live: mostra SÓ o campo @ (nome/telefone/CPF/
+      e-mail saem — dá pra completar depois no "Editar"). Pedido do dono:
+      na live a apresentadora só cola o arroba e segue. */
+  onlyInstagram?: boolean;
   dupCarts?: Cart[];
   onUseExisting?: (cart: Cart) => void;
 }) {
@@ -1884,13 +1891,19 @@ function CustomerModal({
             </div>
           )}
 
-          {/* Nome — SEGUNDO e OPCIONAL (se vazio, usa a @) */}
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (opcional)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="Telefone (opcional)" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
-          </div>
+          {/* Nome/telefone/CPF/e-mail — OPCIONAIS. Na abertura de carrinho
+              (onlyInstagram) ficam ocultos: só o @ importa na hora da live;
+              o resto se completa depois no "Editar cliente". */}
+          {!onlyInstagram && (
+            <>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (opcional)" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <input value={phone} onChange={(e) => setPhone(maskPhoneBR(e.target.value))} placeholder="Telefone (opcional)" inputMode="tel" maxLength={15} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input value={cpf} onChange={(e) => setCpf(e.target.value)} placeholder="CPF (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
+                <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="E-mail (opcional)" className="rounded-lg border border-slate-300 px-3 py-2" />
+              </div>
+            </>
+          )}
 
           {showAddress && (
             <div className="mt-1 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-2">
