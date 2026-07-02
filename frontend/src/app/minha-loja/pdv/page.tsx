@@ -3923,6 +3923,9 @@ function PaymentModal({
   const [pixPaid, setPixPaid] = useState(false);  // setado quando PagBank webhook confirma
   const [pixFallbackReason, setPixFallbackReason] = useState<string | null>(null);
   const [copyMsg, setCopyMsg] = useState(false);
+  // Valor com que o QR ATUAL foi gerado — base da regeneração automática
+  // quando a vendedora altera o campo "Quanto cobrar com PIX?".
+  const pixQrValorRef = useRef<number | null>(null);
 
   // VENDA ONLINE — sub-tipo (PIX direto ou Link externo). Vendedora informa
   // só pra ter no histórico. Sem geração de cobrança, sem NFC-e automática.
@@ -4219,6 +4222,9 @@ function PaymentModal({
           : restante > 0
           ? restante
           : total;
+      // Registra o valor deste QR — a regeneração automática compara com o
+      // campo "Quanto cobrar" pra saber se o QR ficou defasado.
+      pixQrValorRef.current = valor;
       const customerPayload = {
         saleId,
         valor,
@@ -4360,6 +4366,33 @@ function PaymentModal({
     generatePix();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
+
+  // ── REGENERAÇÃO AUTOMÁTICA DO QR ──
+  // Vendedora altera o "Quanto cobrar com PIX?" com QR já na tela → espera
+  // 900ms ela terminar de digitar e regera o QR com o novo valor sozinho.
+  // (Substituiu o botão "Regerar QR" — ela esquecia de clicar e o cliente
+  // pagava o valor antigo.) Não roda se: sem QR, QR pago, ou já gerando.
+  useEffect(() => {
+    if (selected !== 'pix' || !pixCharge || pixPaid || pixLoading) return;
+    const valorDigitado = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
+    // Mesmo critério do generatePix — evita regerar por valor que ele ignoraria
+    const valorEsperado =
+      valorDigitado > 0 && valorDigitado <= restante + 0.01
+        ? valorDigitado
+        : restante > 0
+        ? restante
+        : total;
+    const valorAtualQr = pixQrValorRef.current;
+    if (valorAtualQr != null && Math.abs(valorEsperado - valorAtualQr) < 0.01) return;
+    if (valorEsperado <= 0) return;
+    const t = setTimeout(() => {
+      autoPixTriggeredRef.current = false;
+      setPixCharge(null);
+      generatePix(valorEsperado);
+    }, 900);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valorParcial, selected, pixCharge, pixPaid, pixLoading]);
 
   // ── POLLING (Pagar.me ou PagBank) ──
   // Estrategia 2-em-1: a cada 1s consulta o status local (que webhook
@@ -5599,30 +5632,14 @@ function PaymentModal({
                   )}
                 </button>
 
-                {/* Regerar QR — se vendedora mudou o valorParcial depois de gerar */}
-                {(() => {
-                  const valorDigitado = Number((valorParcial || '0').replace(/\./g, '').replace(',', '.')) || 0;
-                  // Backend salva como pagarmeValor / valor — comparamos com o valor digitado.
-                  // Se o QR foi gerado com um valor diferente do atual (mais ou menos), avisa.
-                  const valorEsperado = valorDigitado > 0 ? valorDigitado : (restante > 0 ? restante : total);
-                  // Sem acesso direto ao valor do QR — comparamos com o que SERIA gerado agora.
-                  // Botao sempre disponivel pra regerar com valor atual.
-                  return !pixPaid && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        autoPixTriggeredRef.current = false;
-                        setPixCharge(null);
-                        generatePix(valorEsperado);
-                      }}
-                      disabled={pixLoading}
-                      className="w-full px-3 py-2 mt-1 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded text-xs font-bold flex items-center justify-center gap-1 transition-colors disabled:opacity-40"
-                      title="Gera novo QR com o valor atualmente digitado no campo Valor"
-                    >
-                      🔄 Regerar QR com {brl(valorEsperado)}
-                    </button>
-                  );
-                })()}
+                {/* Regeneração AUTOMÁTICA: mudou o "Quanto cobrar com PIX?" →
+                    o QR regera sozinho (useEffect com debounce de 900ms).
+                    O botão manual "Regerar QR" foi removido a pedido do dono. */}
+                {!pixPaid && (
+                  <div className="text-[10px] text-slate-400 text-center">
+                    Mudou o valor? O QR atualiza sozinho.
+                  </div>
+                )}
 
                 {pixCharge.provider === 'pagarme' || pixCharge.provider === 'pagbank' ? (
                   pixPaid ? (
