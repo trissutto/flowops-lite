@@ -197,6 +197,8 @@ export default function LivePdvPage() {
   const [pendingCell, setPendingCell] = useState<GradeCell | null>(null);
   // Aviso rápido "adicionado a Fulana" após fechar o carrinho.
   const [addedFlash, setAddedFlash] = useState<string | null>(null);
+  // Aviso âmbar "QR da Fulana venceu" (cobrança resetada pelo backend).
+  const [expiredFlash, setExpiredFlash] = useState<string | null>(null);
   const [editCustomerOpen, setEditCustomerOpen] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
 
@@ -236,20 +238,67 @@ export default function LivePdvPage() {
     refreshCarts();
   }, [refreshCarts]);
 
-  // Realtime: atualiza listas quando algo muda
+  // Ref do carrinho aberto — pros handlers de socket enxergarem o atual sem
+  // re-registrar listener a cada mudança de carrinho.
+  const cartOpenRef = useRef<Cart | null>(null);
+  useEffect(() => { cartOpenRef.current = cart; }, [cart]);
+
+  // Realtime: atualiza listas quando algo muda.
+  // (02/07) Endurecido pra live: entra na sala 'live-pdv-ops' (push chega
+  // pra QUALQUER login, não só admin), re-entra e recarrega ao RECONECTAR
+  // (wi-fi piscou ≠ lista congelada), trata QR vencido, e mantém um refresh
+  // de segurança a cada 90s — 1 request bounded, nada a ver com o polling
+  // antigo que empilhava.
   useEffect(() => {
     if (!sessionId) return;
     const socket = getSocket();
     const onChange = () => refreshCarts();
+
+    // QR venceu (backend resetou a cobrança): atualiza lista, avisa, e se o
+    // carrinho está ABERTO na tela, tira o QR morto da frente da operadora.
+    const onChargeExpired = async (p: any) => {
+      refreshCarts();
+      setExpiredFlash(p?.customerName || 'cliente');
+      setTimeout(() => setExpiredFlash(null), 6000);
+      const aberto = cartOpenRef.current;
+      if (p?.cartId && aberto?.id === p.cartId) {
+        try {
+          const fresh = await api<Cart>(`/live-pdv/carts/${p.cartId}`);
+          setCart(fresh);
+          if (fresh.status === 'open') { setQr(null); setPaid(false); }
+        } catch { /* lista já atualizou */ }
+      }
+    };
+
+    // Entra na sala da live (e re-entra a cada reconexão do socket).
+    const join = () => socket.emit('live-pdv:join');
+    const onConnect = () => {
+      join();
+      refreshCarts(); // recupera eventos perdidos enquanto esteve offline
+    };
+    if (socket.connected) join();
+    socket.on('connect', onConnect);
+
     socket.on('live-pdv:cart-paid', onChange);
+    socket.on('live-pdv:cart-updated', onChange);
     socket.on('live-pdv:reservations-expired', onChange);
     socket.on('live-pdv:item-shipped', onChange);
     socket.on('live-pdv:promo', onChange);
+    socket.on('live-pdv:charge-expired', onChargeExpired);
+
+    // Cinto de segurança: se socket E webhook falharem, a lista ainda
+    // atualiza sozinha a cada 90s.
+    const safety = setInterval(() => refreshCarts(), 90_000);
+
     return () => {
+      socket.off('connect', onConnect);
       socket.off('live-pdv:cart-paid', onChange);
+      socket.off('live-pdv:cart-updated', onChange);
       socket.off('live-pdv:reservations-expired', onChange);
       socket.off('live-pdv:item-shipped', onChange);
       socket.off('live-pdv:promo', onChange);
+      socket.off('live-pdv:charge-expired', onChargeExpired);
+      clearInterval(safety);
     };
   }, [sessionId, refreshCarts]);
 
@@ -960,6 +1009,12 @@ export default function LivePdvPage() {
       {addedFlash && (
         <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg">
           ✓ Adicionado a {addedFlash} · carrinho fechado
+        </div>
+      )}
+      {/* Aviso: QR PIX venceu — cobrança voltou pra aberto (peças intactas) */}
+      {expiredFlash && (
+        <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-xl bg-amber-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg">
+          ⏰ QR de {expiredFlash} venceu — gere uma nova cobrança
         </div>
       )}
       {/* Header */}
