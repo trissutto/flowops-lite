@@ -960,7 +960,10 @@ function PeriodsTab() {
     try {
       const r = await api<any>(`/commissions/periods/${yearMonth}/${action}`, { method: 'POST' });
       if (action === 'calculate') {
-        alert(`Recálculo OK: ${r.entries?.length || 0} entries, total ${brl(r.total)}`);
+        const skip = r?.skipped?.count
+          ? `\n\n⚠️ ${r.skipped.count} venda(s) com vendedora não cadastrada (${brl(r.skipped.vendido)}) ficaram de fora. Corrija na aba "Trocar vendedora".`
+          : '';
+        alert(`Recálculo OK: ${r.entries?.length || 0} entries, total ${brl(r.total)}.${skip}`);
       }
       load();
     } catch (e: any) {
@@ -1115,7 +1118,10 @@ function ReportTab() {
     setCalcing(true);
     try {
       const r = await api<any>(`/commissions/periods/${yearMonth}/calculate`, { method: 'POST' });
-      alert(`Cálculo OK: ${r.entries?.length || 0} lançamentos, total ${brl(r.total)}`);
+      const skip = r?.skipped?.count
+        ? `\n\n⚠️ ${r.skipped.count} venda(s) com vendedora não cadastrada (${brl(r.skipped.vendido)}) ficaram de fora. Corrija na aba "Trocar vendedora" e calcule de novo.`
+        : '';
+      alert(`Cálculo OK: ${r.entries?.length || 0} lançamentos, total ${brl(r.total)}.${skip}`);
       await load();
     } catch (e: any) {
       alert('Erro ao calcular: ' + (e?.message || e));
