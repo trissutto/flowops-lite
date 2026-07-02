@@ -1713,13 +1713,20 @@ function PdvPageInner() {
             );
           })()}
 
-          {/* Vendedora da venda (quando já definida) */}
-          {(sale?.sellerName || sale?.vendedorName) && (
-            <span className="hidden md:flex items-center gap-1.5 text-xs font-semibold text-slate-500 shrink-0">
-              <User className="w-3.5 h-3.5 text-slate-400" />
-              {(sale.sellerName || sale.vendedorName || '').split(' ')[0]}
-            </span>
-          )}
+          {/* Vendedora da venda (quando já definida). Alguns fluxos gravam o
+              nome da LOJA em vendedorName — nesse caso não mostra (ficaria
+              duplicado com o título da loja no lado esquerdo). */}
+          {(() => {
+            const nome = (sale?.sellerName || sale?.vendedorName || '').trim();
+            if (!nome) return null;
+            if (nome.toLowerCase() === (sale?.storeName || '').trim().toLowerCase()) return null;
+            return (
+              <span className="hidden md:flex items-center gap-1.5 text-xs font-semibold text-slate-500 shrink-0">
+                <User className="w-3.5 h-3.5 text-slate-400" />
+                {nome.split(' ')[0]}
+              </span>
+            );
+          })()}
 
           <span className="hidden md:block"><HeaderClock /></span>
           <span className="hidden sm:block"><ConnBadge compact /></span>
@@ -7417,9 +7424,9 @@ function ProductThumb({ sku, refCode }: { sku: string; refCode: string | null })
       </div>
     );
   }
-  // Fallback: avatar gradiente com inicial
+  // Fallback: tile neutro cinza-claro com inicial (espec do layout claro)
   return (
-    <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 flex items-center justify-center text-white font-black text-lg shadow-sm shrink-0">
+    <div className="w-12 h-12 rounded-lg bg-[#F3F1EA] border border-[#E5E2D9] flex items-center justify-center text-[#8C7325] font-black text-lg shrink-0">
       {letter}
     </div>
   );
