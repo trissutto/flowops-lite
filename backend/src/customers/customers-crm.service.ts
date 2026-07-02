@@ -176,7 +176,14 @@ export class CustomersCrmService {
     const c = await this.prisma.customer.findUnique({ where: { id: customerId } });
     if (!c) throw new NotFoundException('Cliente não encontrado');
     if (actor && !isMatrix(actor)) {
-      if (!actor.storeId || c.originStoreId !== actor.storeId) {
+      // MESMO escopo da list(): cliente nascido na loja (originStoreId) OU
+      // cliente WC atribuído à loja por CEP (targetStoreId, badge "SITE").
+      // Antes só aceitava originStoreId → cliente aparecia na LISTA mas a
+      // FICHA devolvia 404 e o drawer travava em "Carregando...".
+      const ok =
+        !!actor.storeId &&
+        (c.originStoreId === actor.storeId || (c as any).targetStoreId === actor.storeId);
+      if (!ok) {
         throw new NotFoundException('Cliente não encontrado');
       }
     }
@@ -465,9 +472,15 @@ export class CustomersCrmService {
     });
     if (!c) throw new NotFoundException('Cliente não encontrado');
 
-    // SCOPE POR LOJA — vendedora de outra loja não pode ver
+    // SCOPE POR LOJA — vendedora de outra loja não pode ver.
+    // MESMO critério da list(): originStoreId OU targetStoreId (cliente WC
+    // atribuído à loja por CEP). Antes só originStoreId — cliente "SITE"
+    // aparecia na lista mas a ficha dava 404 e o drawer travava.
     if (actor && !isMatrix(actor)) {
-      if (!actor.storeId || c.originStoreId !== actor.storeId) {
+      const ok =
+        !!actor.storeId &&
+        (c.originStoreId === actor.storeId || (c as any).targetStoreId === actor.storeId);
+      if (!ok) {
         throw new NotFoundException('Cliente não encontrado');  // 404 disfarça existência
       }
     }
