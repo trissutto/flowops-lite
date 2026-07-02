@@ -55,11 +55,19 @@ export class WincredCatalogService {
     return String(raw || '').trim().toUpperCase().replace(/^LJ/i, '').padStart(2, '0');
   }
 
-  /** VENDAUN vem do Giga em CENTAVOS (25990 = R$ 259,90). */
+  /**
+   * VENDAUN no Giga é DECIMAL em REAIS (80.00 = R$ 80,00) — o espelho copia
+   * o valor cru, então aqui é só Number().
+   *
+   * ⚠ NÃO dividir por 100! O caminho antigo do Giga PARECIA centavos porque
+   * o parsePrice de lá remove o ponto ("80.00" → 8000) e o isCentavos divide
+   * por 100 de volta. Ler o Decimal do Prisma direto já dá o valor em reais —
+   * dividir de novo derrubava o preço 100× (bug de 01/07: blusa R$ 80 → 0,80).
+   */
   private precoFromVendaUn(vendaUn: any): number {
     const n = Number(vendaUn);
     if (!Number.isFinite(n) || n <= 0) return 0;
-    return n / 100;
+    return n;
   }
 
   // ═══════════════════════════════════════════════════════════════════════
