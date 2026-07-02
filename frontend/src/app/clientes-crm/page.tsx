@@ -721,12 +721,18 @@ function CustomerDetailDrawer({
   const [tab, setTab] = useState<'perfil' | 'historico' | 'cashback' | 'enderecos' | 'lgpd' | 'tags'>('perfil');
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const res = await api<CustomerDetail>(`/customers-crm/${customerId}`);
       setDetail(res);
+    } catch (e: any) {
+      // Sem catch, o drawer ficava ETERNAMENTE em "Carregando..." quando a
+      // API falhava (404 de escopo, 500, rede). Agora mostra o erro + retry.
+      setLoadError(e?.message || 'Falha ao carregar a ficha do cliente');
     } finally {
       setLoading(false);
     }
@@ -784,7 +790,27 @@ function CustomerDetailDrawer({
         </div>
 
         {/* Body */}
-        {loading || !detail ? (
+        {!loading && loadError ? (
+          <div className="p-10 text-center space-y-4">
+            <div className="text-3xl">⚠️</div>
+            <div className="text-sm font-semibold text-gray-800">Não foi possível carregar a ficha</div>
+            <div className="text-xs text-gray-500 max-w-sm mx-auto">{loadError}</div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={load}
+                className="px-4 py-2 text-sm font-semibold bg-purple-700 text-white rounded-lg hover:bg-purple-800"
+              >
+                Tentar de novo
+              </button>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-semibold border rounded-lg text-gray-600 hover:bg-gray-50"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        ) : loading || !detail ? (
           <div className="p-12 text-center text-gray-400">
             <Loader2 className="w-6 h-6 animate-spin mx-auto" />
           </div>
