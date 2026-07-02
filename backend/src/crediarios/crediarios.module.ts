@@ -8,6 +8,7 @@ import { CrediariosService } from './crediarios.service';
 import { CrediariosController } from './crediarios.controller';
 import { CobrancaAutoService } from './cobranca-auto.service';
 import { CrediarioBaixaService } from './crediario-baixa.service';
+import { CrediarioMirrorService } from './crediario-mirror.service';
 import { CrediarioBaixaController } from './crediario-baixa.controller';
 import { CrediarioBaixaPublicController } from './crediario-baixa-public.controller';
 
@@ -20,7 +21,7 @@ import { CrediarioBaixaPublicController } from './crediario-baixa-public.control
     forwardRef(() => PagbankModule),
   ],
   controllers: [CrediariosController, CrediarioBaixaController, CrediarioBaixaPublicController],
-  providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
-  exports: [CrediariosService, CobrancaAutoService, CrediarioBaixaService],
+  providers: [CrediariosService, CobrancaAutoService, CrediarioBaixaService, CrediarioMirrorService],
+  exports: [CrediariosService, CobrancaAutoService, CrediarioBaixaService, CrediarioMirrorService],
 })
 export class CrediariosModule {}

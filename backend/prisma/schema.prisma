@@ -3293,6 +3293,43 @@ model WincredCodigo {
   @@map("wincred_codigos")
 }
 
+/// Espelho ENXUTO de wincred.movimento — SÓ parcelas de crediário EM ABERTO.
+/// Full replace de hora em hora + write-through nas baixas do Flow. A tela
+/// de cobrança (listAllOpenInstallments) lê daqui — a query que varria a
+/// tabela movimento inteira no Giga (5.000 linhas / teto 30s) vira local.
+model WincredMovimentoAberto {
+  registro      String    @id
+  controle      String?
+  numeroCompra  String?   @map("numero_compra")
+  loja          String?   @db.VarChar(4)
+  codCliente    String?   @map("cod_cliente")
+  nome          String?
+  parcela       Int?
+  totalParcelas Int?      @map("total_parcelas")
+  vencimento    DateTime? @db.Date
+  valorParcela  Decimal?  @map("valor_parcela") @db.Decimal(10, 2)
+
+  syncedAt      DateTime  @default(now()) @map("synced_at")
+
+  @@index([vencimento])
+  @@index([codCliente])
+  @@index([loja])
+  @@map("wincred_movimento_aberto")
+}
+
+/// Espelho SLIM de clientes do Giga — nome + telefones pra cobrança/
+/// recebimentos funcionarem com o Giga fora do ar.
+model WincredCliente {
+  codCliente String   @id @map("cod_cliente")
+  nome       String?
+  telefone   String?
+  telefone2  String?
+
+  syncedAt   DateTime @default(now()) @map("synced_at")
+
+  @@map("wincred_clientes")
+}
+
 /// Estado do sync incremental. 1 linha por tabela.
 /// Cron incremental usa lastDataAlt pra pegar so produtos modificados desde
 /// o ultimo run (WHERE DATAALT > lastDataAlt). Estoque nao tem DATAALT — re-syncamos
