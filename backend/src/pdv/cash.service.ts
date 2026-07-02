@@ -1453,6 +1453,11 @@ export class CashService {
     valor: number;
     motivo: string;
     userName?: string | null;
+    /** YYYY-MM-DD (opcional): grava o movimento na sessão DESSE dia — a que o
+     *  super painel HISTÓRICO exibe. Sem a data (ao vivo com caixa aberto), o
+     *  movimento ia pra última sessão de HOJE e o painel do dia filtrado não
+     *  mudava ("não grava"). Mesmo fix que já foi feito no masterAdjustFundo. */
+    date?: string | null;
   }) {
     const { storeCode, tipo, valor, motivo, userName } = input;
     if (!['sangria', 'suprimento'].includes(tipo)) {
@@ -1464,7 +1469,24 @@ export class CashService {
     if (!motivo || motivo.trim().length < 3) {
       throw new BadRequestException('Informe o motivo (>=3 chars)');
     }
-    const session = await this.getLatestAdjustableSession(storeCode);
+    let session: any;
+    if (input.date && /^\d{4}-\d{2}-\d{2}$/.test(String(input.date).trim())) {
+      const bounds = dayBoundsFromUtcDate(new Date(`${String(input.date).trim()}T00:00:00`));
+      // 1ª sessão do dia (mesma referência que o painel histórico usa pro fundo).
+      // O histórico soma os movimentos de TODAS as sessões do dia, então anexar
+      // à primeira já faz o lançamento aparecer no total do dia filtrado.
+      session = await (this.prisma as any).pdvCashSession.findFirst({
+        where: { storeCode, openedAt: { gte: bounds.start, lte: bounds.end } },
+        orderBy: { openedAt: 'asc' },
+      });
+      if (!session) {
+        throw new BadRequestException(
+          `Nenhuma sessão de caixa da loja ${storeCode} em ${input.date}`,
+        );
+      }
+    } else {
+      session = await this.getLatestAdjustableSession(storeCode);
+    }
 
     const movement = await (this.prisma as any).pdvCashMovement.create({
       data: {
