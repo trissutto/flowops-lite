@@ -1424,6 +1424,9 @@ function MasterAdjustModal({
             valor: valorNum,
             motivo: motivo.trim(),
             password,
+            // Modo histórico: grava na sessão do dia filtrado (a que o painel
+            // exibe). Sem data (ao vivo, caixa aberto), backend usa a última sessão.
+            ...(date ? { date } : {}),
           }),
         });
       }

@@ -411,6 +411,7 @@ export class CashController {
       valor: number;
       motivo: string;
       password: string;
+      date?: string;
     },
   ) {
     this.requireMasterRole(req);
@@ -423,6 +424,9 @@ export class CashController {
       valor: Number(body.valor),
       motivo: body.motivo,
       userName: `[${nivel}] ${userName}`,
+      // Painel HISTÓRICO manda a data — grava na sessão daquele dia (senão o
+      // lançamento ia pra sessão de hoje e não aparecia no dia filtrado).
+      date: body.date || null,
     });
   }
 
