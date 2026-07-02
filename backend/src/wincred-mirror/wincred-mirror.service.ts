@@ -182,45 +182,36 @@ export class WincredMirrorService {
     try {
       const total = await this.countMysql('produtos');
 
-      // Catálogo INTEIRO (filtro PLUS_SIZE removido em 02/07).
-      // Sempre TRUNCATE — full sync sempre limpo e simples.
-      this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred`);
-      await this.withRetry('truncate produtos', () =>
-        this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`),
-      );
-
-      let processed = 0;
-      let offset = 0;
-      while (offset < total) {
-        // OFFSET pagination — mais simples e robusta que cursor com CODIGO varchar.
-        // Com 58k linhas e batch 200 = ~290 batches. OK pra performance.
-        const [rows] = await pool.query(
-          {
-            sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
+      // (02/07) Catálogo INTEIRO sem filtro = 352k linhas. A paginação por
+      // OFFSET que servia pras 58k plus-size vira ARMADILHA nesse volume:
+      // cada batch do fundo re-varre a tabela (OFFSET 300k+) e o sync levava
+      // dezenas de minutos/estourava timeout. Trocada por LEITURA ÚNICA —
+      // mesma estratégia do GigaMirrorService.getGigaProdutos, que puxa essa
+      // MESMA tabela inteira de hora em hora há semanas sem incidente
+      // (~350k linhas ≈ 1-2min de SELECT + inserts locais).
+      this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred (leitura única)`);
+      const [rows] = await pool.query({
+        sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                   CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
                   SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
                   CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                   CST, CSOSN, CFOP
-             FROM produtos
-            ORDER BY ID
-            LIMIT ? OFFSET ?`,
-            timeout: 120_000, // OFFSET fundo fica lento — pool-guard não pode matar o sync
-          },
-          [this.BATCH, offset],
-        );
-        if (!(rows as any[]).length) break;
+             FROM produtos`,
+        timeout: 300_000,
+      });
+      this.logger.log(`[produtos] SELECT completo: ${(rows as any[]).length} linhas em ${Date.now() - t0}ms`);
 
-        // Dedup por CODIGO (Wincred nao tem PK em produtos — pode duplicar)
-        const seen = new Set<string>();
-        const data = (rows as any[])
-          .filter((r) => {
-            const c = this.normalizeCodigo(r.CODIGO);
-            if (!c || seen.has(c)) return false;
-            seen.add(c);
-            return true;
-          })
-          .map((r) => ({
+      // Dedup por CODIGO (Wincred nao tem PK em produtos — pode duplicar)
+      const seen = new Set<string>();
+      const data = (rows as any[])
+        .filter((r) => {
+          const c = this.normalizeCodigo(r.CODIGO);
+          if (!c || seen.has(c)) return false;
+          seen.add(c);
+          return true;
+        })
+        .map((r) => ({
             codigo: this.normalizeCodigo(r.CODIGO)!,
             grupo: r.GRUPO != null ? Number(r.GRUPO) : null,
             nomeGrupo: r.NOMEGRUPO || null,
@@ -256,20 +247,27 @@ export class WincredMirrorService {
             cfop: r.CFOP != null ? Number(r.CFOP) : null,
           }));
 
-        if (data.length) {
-          await this.withRetry(`produtos@${processed}`, () =>
-            (this.prisma as any).wincredProduto.createMany({
-              data,
-              skipDuplicates: true,
-            }),
-          );
-        }
-        processed += data.length;
-        offset += this.BATCH;
-        // Log + pausa a cada 10 batches (libera conexao Railway)
-        if (offset % (this.BATCH * 10) === 0) {
-          this.logger.log(`[produtos] ${processed}/${total} (${Math.round((processed / total) * 100)}%) offset=${offset}`);
-          await this.sleep(50);
+      // TRUNCATE só DEPOIS do SELECT dar certo — a janela em que o espelho
+      // fica vazio (bipe caindo no fallback Giga) encolhe pros segundos dos
+      // inserts locais, em vez do sync inteiro. SELECT falhou → espelho
+      // antigo fica intacto.
+      await this.withRetry('truncate produtos', () =>
+        this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`),
+      );
+
+      let processed = 0;
+      const CHUNK = 1000;
+      for (let i = 0; i < data.length; i += CHUNK) {
+        await this.withRetry(`produtos@${i}`, () =>
+          (this.prisma as any).wincredProduto.createMany({
+            data: data.slice(i, i + CHUNK),
+            skipDuplicates: true,
+          }),
+        );
+        processed = Math.min(i + CHUNK, data.length);
+        if (i % (CHUNK * 20) === 0 && i > 0) {
+          this.logger.log(`[produtos] insert ${processed}/${data.length} (${Math.round((processed / data.length) * 100)}%)`);
+          await this.sleep(25);
         }
       }
 
