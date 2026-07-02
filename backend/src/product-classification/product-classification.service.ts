@@ -42,6 +42,13 @@ interface ClsRow {
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000; // 10min — catálogo muda pouco intra-sessão
 const UPSERT_CHUNK = 500;
 
+// ── PROMOÇÃO DE JULHO/2026 (regra do dono, 02/07) ─────────────────────────
+// Cadastro (DATAALT) até 31/12/2023 → 50% OFF, EXCETO linha BÁSICA.
+// É a MESMA regra YEAR_BASED que o PDV aplica na venda (applyAutoDiscounts) —
+// esta tela mostra o preço promocional pra planejamento/etiquetagem.
+const PROMO_JULHO_CUTOFF = '2023-12-31';
+const PROMO_JULHO_PCT = 0.5;
+
 @Injectable()
 export class ProductClassificationService {
   private readonly logger = new Logger(ProductClassificationService.name);
@@ -155,8 +162,26 @@ export class ProductClassificationService {
     const p = Math.max(1, page || 1);
     const pp = Math.min(200, Math.max(1, perPage || 50));
     const start = (p - 1) * pp;
-    const rows = filtered.slice(start, start + pp).map((r) => {
+    const pageRows = filtered.slice(start, start + pp);
+
+    // ── PREÇO + PROMO JULHO (02/07) — agregado do ESPELHO (Postgres) por REF
+    // da página: preço de etiqueta (maior VENDAUN da REF) e data de cadastro
+    // (DATAALT mais recente). Regra da promoção de julho: cadastro até
+    // 31/12/2023 = 50% OFF, EXCETO linha BÁSICA — a MESMA regra YEAR_BASED
+    // que o PDV aplica na venda.
+    const precoByRef = await this.getPrecoEDataByRefs(pageRows.map((r) => r.ref));
+
+    const rows = pageRows.map((r) => {
       const c = cls.get(r.ref);
+      const tipoProduto = c ? c.tipoProduto : 0;
+      const info = precoByRef.get(r.ref) || null;
+      const preco = info?.preco ?? null;
+      const dataCadastro = info?.dataCadastro ?? null;
+      const isBasico = tipoProduto === 1;
+      const elegivel = !!dataCadastro && dataCadastro <= PROMO_JULHO_CUTOFF;
+      const precoPromo = !isBasico && elegivel && preco != null
+        ? Math.round(preco * (1 - PROMO_JULHO_PCT) * 100) / 100
+        : null;
       return {
         ref: r.ref,
         descricao: r.descricao,
@@ -164,11 +189,52 @@ export class ProductClassificationService {
         fornecedor: r.fornecedor,
         categoria: r.categoria,
         plusSize: r.plusSize,
-        tipoProduto: c ? c.tipoProduto : 0,
+        tipoProduto,
         revisada: c ? c.classificacaoRevisada : false,
+        preco,
+        dataCadastro,
+        precoPromo,                                   // null = fora da promo
+        promoIsento: isBasico && elegivel,            // básico antigo = isento
       };
     });
     return { rows, total, page: p, perPage: pp };
+  }
+
+  /**
+   * Preço de etiqueta + data de cadastro por REF, lidos do ESPELHO
+   * (wincred_produtos). Batch por página (≤200 REFs) — Postgres local, ~ms.
+   * VENDAUN no espelho está em REAIS (nunca ÷100 — ver WincredCatalogService).
+   * Espelho vazio/erro → mapa vazio (a tela mostra "—" sem quebrar).
+   */
+  private async getPrecoEDataByRefs(
+    refs: string[],
+  ): Promise<Map<string, { preco: number | null; dataCadastro: string | null }>> {
+    const out = new Map<string, { preco: number | null; dataCadastro: string | null }>();
+    const clean = Array.from(new Set(refs.map((r) => this.normRef(r)).filter(Boolean)));
+    if (!clean.length) return out;
+    try {
+      const rows: any[] = await this.prisma.$queryRawUnsafe(
+        `SELECT UPPER(TRIM(ref)) AS ref,
+                MAX("vendaUn")::float AS preco,
+                MAX("dataAlt") AS data_cadastro
+           FROM wincred_produtos
+          WHERE ref IS NOT NULL
+            AND UPPER(TRIM(ref)) = ANY($1::text[])
+          GROUP BY 1`,
+        clean,
+      );
+      for (const r of rows) {
+        const preco = r.preco != null && Number(r.preco) > 0 ? Number(r.preco) : null;
+        const d = r.data_cadastro ? new Date(r.data_cadastro) : null;
+        out.set(String(r.ref), {
+          preco,
+          dataCadastro: d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : null,
+        });
+      }
+    } catch (e: any) {
+      this.logger?.warn?.(`[classificacao] preço via espelho falhou: ${e?.message || e}`);
+    }
+    return out;
   }
 
   async counters() {
