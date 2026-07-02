@@ -1427,10 +1427,10 @@ export default function LivePdvPage() {
                     </button>
                   )}
                 </div>
-                {/* GRID de 3 COLUNAS (alfabético, que já vinha da ordenação) —
-                    antes era lista única e com 12+ carrinhos virava rolagem
-                    infinita. Em telas menores cai pra 2/1 coluna. */}
-                <div className="grid max-h-[60vh] grid-cols-1 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 md:grid-cols-2 xl:grid-cols-3">
+                {/* GRID de 6 COLUNAS (alfabético, que já vinha da ordenação) —
+                    era lista única, depois 3 colunas; o dono pediu 6 pra ver a
+                    live inteira sem rolar. Em telas menores cai pra 3/2. */}
+                <div className="grid max-h-[60vh] grid-cols-2 content-start gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 md:grid-cols-3 xl:grid-cols-6">
                   {clientesFiltradas.length === 0 && (
                     <div className="col-span-full px-3 py-4 text-center text-sm text-slate-400">
                       Nenhuma cliente encontrada.
