@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import {
   WebSocketGateway, WebSocketServer, OnGatewayConnection, OnGatewayDisconnect,
+  SubscribeMessage,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
@@ -129,6 +130,30 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
    */
   emitToAdmins(event: string, payload: any) {
     this.server.to('admin').emit(event, payload);
+  }
+
+  // ---------- Live PDV ----------
+
+  /**
+   * Sala 'live-pdv-ops' — quem está COM A TELA DA LIVE ABERTA entra aqui,
+   * independente do role. Antes os eventos da live iam só pra sala 'admin':
+   * PC logado como LOJA não recebia o 'cart-paid' e o card nunca virava
+   * PAGO sozinho (bug silencioso do multi-PC). O frontend emite
+   * 'live-pdv:join' ao montar a tela e a cada reconexão.
+   */
+  @SubscribeMessage('live-pdv:join')
+  handleLivePdvJoin(client: Socket) {
+    client.join('live-pdv-ops');
+    this.logger.log(`[socket ${client.id}] entrou em live-pdv-ops (role=${(client.data as any)?.role})`);
+    return { ok: true };
+  }
+
+  /**
+   * Eventos da Live PDV: sala admin + sala live-pdv-ops (socket.io dedupa
+   * quem está nas duas — ninguém recebe em dobro).
+   */
+  emitToLiveOps(event: string, payload: any) {
+    this.server.to('admin').to('live-pdv-ops').emit(event, payload);
   }
 
   /**

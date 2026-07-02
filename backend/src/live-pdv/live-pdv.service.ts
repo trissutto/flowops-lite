@@ -506,7 +506,7 @@ export class LivePdvService {
     // que JÁ estão no carrinho ficam TRAVADOS no preço que pegaram — NÃO
     // re-precificamos nada (nem ao mudar, nem ao remover a promo). O custo (÷2,5)
     // do intercompany continua preso ao basePriceCents (preço cheio).
-    this.gateway.emitToAdmins('live-pdv:promo', {
+    this.gateway.emitToLiveOps('live-pdv:promo', {
       sessionId,
       refCode: ref,
       priceCents: promoOn ? Math.round(priceCents) : null,
@@ -667,7 +667,7 @@ export class LivePdvService {
         customerUf: uf,
       },
     });
-    this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId, sessionId: cart.sessionId });
     return this.getCart(updated.id);
   }
 
@@ -770,7 +770,7 @@ export class LivePdvService {
     }
     if (!name) throw new NotFoundException('Cliente não encontrada');
     const cart = await this.ensureCart(sessionId, { id: customerId, name, phone, instagram });
-    this.gateway.emitToAdmins('live-pdv:cart-updated', { cartId: cart.id, sessionId });
+    this.gateway.emitToLiveOps('live-pdv:cart-updated', { cartId: cart.id, sessionId });
     return cart;
   }
 
@@ -930,7 +930,7 @@ export class LivePdvService {
     const fullCart = await this.getCart(cart.id);
 
     // Eventos realtime
-    this.gateway.emitToAdmins('live-pdv:item-reserved', {
+    this.gateway.emitToLiveOps('live-pdv:item-reserved', {
       sessionId: session.id,
       cartId: cart.id,
       itemId: item.id,
@@ -1007,7 +1007,7 @@ export class LivePdvService {
       data: { status: 'cancelled', cancelledAt: new Date(), cancelReason: reason || 'manual' },
     });
     await this.recalcCart(item.cartId);
-    this.gateway.emitToAdmins('live-pdv:item-cancelled', { itemId, cartId: item.cartId });
+    this.gateway.emitToLiveOps('live-pdv:item-cancelled', { itemId, cartId: item.cartId });
     return this.getCart(item.cartId);
   }
 
@@ -1031,7 +1031,7 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'cancelled' },
     });
-    this.gateway.emitToAdmins('live-pdv:cart-cancelled', { cartId, sessionId: cart.sessionId });
+    this.gateway.emitToLiveOps('live-pdv:cart-cancelled', { cartId, sessionId: cart.sessionId });
     return { ok: true };
   }
 
@@ -1082,7 +1082,7 @@ export class LivePdvService {
     }
     for (const cid of affected) await this.recalcCart(cid).catch(() => {});
     if (recovered > 0) {
-      this.gateway.emitToAdmins('live-pdv:recovered', { sessionId, recovered, carts: affected.size });
+      this.gateway.emitToLiveOps('live-pdv:recovered', { sessionId, recovered, carts: affected.size });
     }
     return { recovered, carts: affected.size, expiresAt };
   }
@@ -1310,6 +1310,56 @@ export class LivePdvService {
   }
 
   /**
+   * COBRANÇA MORTA (02/07): QR PIX vence (TTL da sessão) mas o carrinho
+   * ficava em 'awaiting_payment' PRA SEMPRE — a cliente tentava pagar um QR
+   * recusado pelo banco e ninguém do nosso lado sabia. Este método (cron de
+   * 1min) volta a COBRANÇA pra 'open' com aviso em tempo real.
+   *
+   * RESPEITA a política do dono (25/06): itens/reservas ficam INTACTOS — só
+   * o status de cobrança reseta. Quem decide recobrar ou excluir é humano.
+   *
+   * Segurança: 5min de folga após o vencimento + checkPayment antes de
+   * resetar (webhook atrasado de quem pagou no último segundo → vira PAGO
+   * normalmente em vez de resetar).
+   */
+  async expireDeadCharges(): Promise<{ resetados: number }> {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+    const zumbis: any[] = await (this.prisma as any).livePdvCart.findMany({
+      where: { status: 'awaiting_payment', paymentExpiresAt: { lt: cutoff } },
+      select: { id: true, sessionId: true, customerName: true },
+      take: 50,
+    });
+    let resetados = 0;
+    for (const c of zumbis) {
+      try {
+        // Última chance: pagou e o webhook atrasou? checkPayment resolve e
+        // dispara o pipeline de pago — não reseta.
+        const r = await this.checkPayment(c.id).catch(() => ({ paid: false }));
+        if ((r as any).paid) continue;
+        await (this.prisma as any).livePdvCart.update({
+          where: { id: c.id },
+          data: {
+            status: 'open',
+            qrCodeText: null,
+            qrCodeImageUrl: null,
+            paymentExpiresAt: null,
+          },
+        });
+        resetados++;
+        this.gateway.emitToLiveOps('live-pdv:charge-expired', {
+          cartId: c.id,
+          sessionId: c.sessionId,
+          customerName: c.customerName || null,
+        });
+        this.logger.log(`[charge-expired] carrinho ${c.id} (${c.customerName || 's/nome'}): QR venceu — cobrança resetada pra 'open' (itens intactos)`);
+      } catch (e: any) {
+        this.logger.warn(`[charge-expired] carrinho ${c.id}: ${e?.message || e}`);
+      }
+    }
+    return { resetados };
+  }
+
+  /**
    * Pipeline pós-pagamento: marca pago, gera ordens de separação por loja de
    * origem e avisa cada loja em tempo real.
    */
@@ -1371,7 +1421,7 @@ export class LivePdvService {
       where: { id: cartId },
       data: { status: 'separating' },
     });
-    this.gateway.emitToAdmins('live-pdv:cart-paid', { sessionId: session.id, cartId });
+    this.gateway.emitToLiveOps('live-pdv:cart-paid', { sessionId: session.id, cartId });
     return this.getCart(cartId);
   }
 
@@ -1498,7 +1548,7 @@ export class LivePdvService {
     });
 
     await this.maybeAdvanceCart(item.cartId);
-    this.gateway.emitToAdmins('live-pdv:item-shipped', {
+    this.gateway.emitToLiveOps('live-pdv:item-shipped', {
       cartId: item.cartId,
       itemId: input.itemId,
       transferOrderId: transfer.id,
@@ -1530,7 +1580,7 @@ export class LivePdvService {
     else if (allShipped) status = 'shipped';
     if (status) {
       await (this.prisma as any).livePdvCart.update({ where: { id: cartId }, data: { status } });
-      this.gateway.emitToAdmins('live-pdv:cart-status', { cartId, status });
+      this.gateway.emitToLiveOps('live-pdv:cart-status', { cartId, status });
     }
   }
 
@@ -1593,7 +1643,7 @@ export class LivePdvService {
     for (const cartId of cartIds) {
       await this.recalcCart(cartId).catch(() => {});
     }
-    this.gateway.emitToAdmins('live-pdv:reservations-expired', { count: expired.length, cartIds });
+    this.gateway.emitToLiveOps('live-pdv:reservations-expired', { count: expired.length, cartIds });
     this.logger.log(`[live-pdv] ${expired.length} reservas expiradas liberadas`);
     return expired.length;
   }

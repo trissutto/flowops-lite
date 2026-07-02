@@ -19,13 +19,25 @@ export class LivePdvExpiryCron {
 
   @Cron(CronExpression.EVERY_MINUTE)
   async handle() {
-    // DESATIVADO — reservas só saem por ação humana. Pra reativar a expiração
-    // automática por TTL, descomente o bloco abaixo.
+    // RESERVAS: DESATIVADO — só saem por ação humana (política do dono).
+    // Pra reativar a expiração automática por TTL, descomente o bloco abaixo.
     // try {
     //   await this.svc.expireReservations();
     // } catch (e) {
     //   this.logger.warn(`expireReservations falhou: ${(e as Error).message}`);
     // }
-    return;
+
+    // COBRANÇA MORTA (02/07): QR PIX vencido reseta a COBRANÇA pra 'open'
+    // (itens/reservas intactos — não fere a política acima). Sem isso o
+    // carrinho ficava "aguardando pagamento" eternamente com QR que o banco
+    // já recusa.
+    try {
+      const r = await this.svc.expireDeadCharges();
+      if (r.resetados > 0) {
+        this.logger.log(`[charge-expired] ${r.resetados} cobrança(s) vencida(s) resetada(s)`);
+      }
+    } catch (e) {
+      this.logger.warn(`expireDeadCharges falhou: ${(e as Error).message}`);
+    }
   }
 }
