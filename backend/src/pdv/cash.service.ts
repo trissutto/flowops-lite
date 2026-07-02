@@ -863,8 +863,20 @@ export class CashService {
           const vd = Number(b.valorDinheiro) || 0;
           const vp = Number(b.valorPix) || 0;
           recTotal += total;
-          recDinheiro += vd;
-          recPix += vp;
+          // BUG FIX (02/07): valorDinheiro/valorPix SÓ existem em baixa MISTA.
+          // Baixa normal (dinheiro OU pix) tem os dois nulos — somar só eles
+          // zerava os subtotais e a CASCATA sumia no modo histórico (o
+          // cabeçalho mostrava "3 baixas · R$ 635" mas expandia vazio).
+          // Mesma regra do modo ao vivo: decide pela FORMA.
+          const forma = String(b.formaPagamento || '').toLowerCase();
+          if (forma === 'misto') {
+            recDinheiro += vd;
+            recPix += vp;
+          } else if (forma === 'dinheiro') {
+            recDinheiro += total;
+          } else if (forma === 'pix') {
+            recPix += total;
+          }
           recBaixas.push({
             id: b.id,
             forma: String(b.formaPagamento || '').toLowerCase(),
