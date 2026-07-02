@@ -684,6 +684,18 @@ function PdvPageInner() {
   const [loadingSale, setLoadingSale] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Menu lateral recolhível (só visual). Persiste a preferência por PC.
+  const [menuCollapsed, setMenuCollapsed] = useState(false);
+  useEffect(() => {
+    try { setMenuCollapsed(localStorage.getItem('lurds_pdv_menu_collapsed') === '1'); } catch {}
+  }, []);
+  const toggleMenu = () => {
+    setMenuCollapsed((v) => {
+      try { localStorage.setItem('lurds_pdv_menu_collapsed', v ? '0' : '1'); } catch {}
+      return !v;
+    });
+  };
+
   // Barra de bipagem isolada — o estado digitado vive DENTRO do componente
   // ScanBar (ver definição acima). O pai fala com ela só via ref imperativo.
   const scanBarRef = useRef<ScanBarHandle>(null);
@@ -1625,24 +1637,18 @@ function PdvPageInner() {
             <ArrowLeft className="w-4 h-4" />
           </Link>
 
-          {/* Wordmark Lurd's — script serif itálico, como na espec */}
-          <Link href="/minha-loja" className="flex items-center gap-2.5 shrink-0 group" title="Início">
-            <div className="relative w-9 h-9 shrink-0">
+          {/* Logotipo Lurd's — só a marca, sem texto */}
+          <Link href="/minha-loja" className="flex items-center shrink-0 group" title="Início">
+            <div className="relative w-11 h-11 shrink-0">
               <Image
                 src="/lurds-logo.png"
-                alt=""
+                alt="Lurd's Plus Size"
                 fill
-                sizes="36px"
+                sizes="44px"
                 className="object-contain"
                 priority
               />
             </div>
-            <span
-              className="text-[26px] font-black italic leading-none text-[#3B3325] tracking-tight"
-              style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
-            >
-              Lurd&apos;s
-            </span>
           </Link>
 
           <span
@@ -1741,28 +1747,32 @@ function PdvPageInner() {
           fixo de status. */}
       <div className="flex-1 w-full max-w-[1700px] mx-auto flex flex-col lg:flex-row items-start gap-4 px-3 lg:px-5 pt-4 pb-14 bg-[#FAFAF7]">
 
-      {/* ─── RAIL ESQUERDO — menu de ícones (espec do layout claro) ─────────
-          Coluna estreita de botões quadrados: ícone em cima + label embaixo.
-          "Venda" (tela atual) fica ativa em dourado. Itens secundários que
-          não estão na espec ficam abaixo de um divisor, no mesmo estilo,
-          pra nenhuma função sumir. Em mobile (<lg) some — PdvMobilePill
-          horizontais continuam pra mesma navegação. */}
+      {/* ─── MENU LATERAL ESQUERDO (padrão da referência) ───────────────────
+          Linhas horizontais: ícone + label à esquerda, atalho real à direita.
+          "Venda" (tela atual) ativa em dourado. "Recolher menu" encolhe pra
+          coluna de ícones. Rodapé com o logotipo + versão. Em mobile (<lg)
+          some — PdvMobilePill horizontais continuam pra mesma navegação. */}
       {sale?.status === 'open' && (() => {
-        const railBase = 'w-full flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 transition text-slate-500 hover:bg-[#FBF6E6] hover:text-[#8C7325]';
-        const railLabel = 'text-[10px] font-semibold leading-none';
+        const rowBase = menuCollapsed
+          ? 'w-full flex items-center justify-center rounded-lg py-2.5 transition text-slate-600 hover:bg-[#FBF6E6] hover:text-[#8C7325]'
+          : 'w-full flex items-center gap-2.5 rounded-lg px-3 py-2 transition text-slate-600 hover:bg-[#FBF6E6] hover:text-[#8C7325]';
+        const rowLabel = menuCollapsed ? 'hidden' : 'text-[13px] font-semibold leading-none truncate';
+        const rowKey = menuCollapsed ? 'hidden' : 'ml-auto text-[9px] font-mono font-bold bg-slate-100 text-slate-400 border border-slate-200 rounded px-1 py-0.5 shrink-0';
+        const rowIcon = 'w-[18px] h-[18px] shrink-0';
         return (
-        <aside className="w-[84px] shrink-0 hidden lg:flex flex-col sticky self-start top-[64px]">
-          <div className="bg-white border border-[#E5E2D9] rounded-2xl p-1.5 flex flex-col gap-0.5 shadow-sm max-h-[calc(100vh-120px)] overflow-y-auto">
+        <aside className={`${menuCollapsed ? 'w-[76px]' : 'w-[220px]'} shrink-0 hidden lg:flex flex-col sticky self-start top-[64px] transition-all`}>
+          <div className="bg-white border border-[#E5E2D9] rounded-2xl p-2 flex flex-col gap-1 shadow-sm max-h-[calc(100vh-120px)] overflow-y-auto">
             <span
-              className="w-full flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 bg-[#FBF6E6] text-[#8C7325] ring-1 ring-[#D4AF37]/50"
+              className={`${menuCollapsed ? 'w-full flex items-center justify-center py-2.5' : 'w-full flex items-center gap-2.5 px-3 py-2'} rounded-lg bg-[#FBF6E6] text-[#8C7325] ring-1 ring-[#D4AF37]/50`}
               title="Venda (tela atual)"
             >
-              <ShoppingCart className="w-5 h-5" />
-              <span className="text-[10px] font-black leading-none">Venda</span>
+              <ShoppingCart className={rowIcon} />
+              <span className={menuCollapsed ? 'hidden' : 'text-[13px] font-black leading-none'}>Venda</span>
             </span>
-            <Link href="/minha-loja/consultar" className={railBase} title="Consulta de produtos (F10)">
-              <Search className="w-5 h-5" />
-              <span className={railLabel}>Produtos</span>
+            <Link href="/minha-loja/consultar" className={rowBase} title="Consulta de produtos (F10)">
+              <Search className={rowIcon} />
+              <span className={rowLabel}>Produtos</span>
+              <span className={rowKey}>F10</span>
             </Link>
             <Link
               href="/minha-loja/pdv/devolucao"
@@ -1772,75 +1782,99 @@ function PdvPageInner() {
                   else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
                 } catch {}
               }}
-              className={railBase}
+              className={rowBase}
               title="Trocas / Devolução (F4)"
             >
-              <ArrowRightLeft className="w-5 h-5" />
-              <span className={railLabel}>Trocas</span>
+              <ArrowRightLeft className={rowIcon} />
+              <span className={rowLabel}>Trocas</span>
+              <span className={rowKey}>F4</span>
             </Link>
-            <Link href="/minha-loja/pdv/marcados" className={railBase} title="Marcados (provar em casa)">
-              <Tag className="w-5 h-5" />
-              <span className={railLabel}>Marcados</span>
+            <Link href="/site/trocas" className={rowBase} title="Troca de pedido do site (lurds.com.br)">
+              <Globe className={rowIcon} />
+              <span className={rowLabel}>Troca site</span>
             </Link>
-            <Link href="/minha-loja/pdv/recebimentos" className={railBase} title="Baixa de Crediário — receber parcelas">
-              <Receipt className="w-5 h-5" />
-              <span className={railLabel}>Crediário</span>
+            <Link href="/minha-loja/pdv/marcados" className={rowBase} title="Marcados (provar em casa)">
+              <Tag className={rowIcon} />
+              <span className={rowLabel}>Marcados</span>
             </Link>
-            <Link href="/minha-loja/pdv/caixa" className={railBase} title="Retiradas, sangria, suprimento (F3)">
-              <DollarSign className="w-5 h-5" />
-              <span className={railLabel}>Caixa</span>
+            <Link href="/minha-loja/pdv/recebimentos" className={rowBase} title="Baixa de Crediário — receber parcelas">
+              <Receipt className={rowIcon} />
+              <span className={rowLabel}>Baixa crediário</span>
             </Link>
-            <Link href="/minha-loja/pdv/notas" className={railBase} title="Notas Fiscais emitidas">
-              <FileText className="w-5 h-5" />
-              <span className={railLabel}>Notas</span>
+            <Link href="/minha-loja/pdv/caixa" className={rowBase} title="Retiradas, sangria, suprimento (F3)">
+              <DollarSign className={rowIcon} />
+              <span className={rowLabel}>Retiradas</span>
+              <span className={rowKey}>F3</span>
             </Link>
-            <Link href="/minha-loja/pdv/config-impressora" className={railBase} title="Configurar impressoras térmica e A4">
-              <Printer className="w-5 h-5" />
-              <span className={railLabel}>Impress.</span>
+            <Link href="/minha-loja/pdv/produtos-vendidos" className={rowBase} title="Conferir vendas + trocas do turno">
+              <History className={rowIcon} />
+              <span className={rowLabel}>Produtos vendidos</span>
+            </Link>
+            <Link href="/minha-loja/pdv/notas" className={rowBase} title="Notas Fiscais emitidas">
+              <FileText className={rowIcon} />
+              <span className={rowLabel}>Notas fiscais</span>
+            </Link>
+            <Link href="/minha-loja/pdv/config-impressora" className={rowBase} title="Configurar impressoras térmica e A4">
+              <Printer className={rowIcon} />
+              <span className={rowLabel}>Impressoras</span>
             </Link>
 
             <div className="h-px bg-[#EDEAE1] mx-2 my-1" />
 
-            <Link href="/site/trocas" className={railBase} title="Troca de pedido do site (lurds.com.br)">
-              <Globe className="w-5 h-5" />
-              <span className={railLabel}>Troca site</span>
-            </Link>
             <button
               type="button"
               onClick={() => setShowSimular(true)}
               disabled={!sale?.total || sale.total <= 0}
-              className={`${railBase} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+              className={`${rowBase} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
               title="Simular parcelamento"
             >
-              <CreditCard className="w-5 h-5" />
-              <span className={railLabel}>Simular</span>
+              <CreditCard className={rowIcon} />
+              <span className={rowLabel}>Simular</span>
             </button>
-            <Link href="/minha-loja/pdv/produtos-vendidos" className={railBase} title="Conferir vendas + trocas do turno">
-              <History className="w-5 h-5" />
-              <span className={railLabel}>Vendidos</span>
-            </Link>
-            <Link href="/minha-loja" className={`${railBase} relative`} title="Pedidos do site (e-commerce)">
-              <Globe className="w-5 h-5" />
-              <span className={railLabel}>Site</span>
+            <Link href="/minha-loja" className={`${rowBase} relative`} title="Pedidos do site (e-commerce)">
+              <Globe className={rowIcon} />
+              <span className={rowLabel}>Pedidos site</span>
               {pedidosSitePending > 0 && (
-                <span className="absolute top-1 right-1.5 bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                <span className={`${menuCollapsed ? 'absolute top-1 right-1.5' : 'ml-auto'} bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 shrink-0`}>
                   {pedidosSitePending}
                 </span>
               )}
             </Link>
-            <Link href="/minha-loja/realinhamento" className={`${railBase} relative`} title="Realinhamento de estoque inter-lojas">
-              <Shuffle className="w-5 h-5" />
-              <span className={railLabel}>Realinhar</span>
+            <Link href="/minha-loja/realinhamento" className={`${rowBase} relative`} title="Realinhamento de estoque inter-lojas">
+              <Shuffle className={rowIcon} />
+              <span className={rowLabel}>Realinhar</span>
               {realignPending > 0 && (
-                <span className="absolute top-1 right-1.5 bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                <span className={`${menuCollapsed ? 'absolute top-1 right-1.5' : 'ml-auto'} bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1 shrink-0`}>
                   {realignPending}
                 </span>
               )}
             </Link>
-            <Link href="/minha-loja/pdv/fechamento" className={railBase} title="Fechamento diário">
-              <Wallet className="w-5 h-5" />
-              <span className={railLabel}>Fechar</span>
+            <Link href="/minha-loja/pdv/fechamento" className={rowBase} title="Fechamento diário">
+              <Wallet className={rowIcon} />
+              <span className={rowLabel}>Fechamento</span>
             </Link>
+
+            <div className="h-px bg-[#EDEAE1] mx-2 my-1" />
+
+            <button
+              type="button"
+              onClick={toggleMenu}
+              className={rowBase}
+              title={menuCollapsed ? 'Expandir menu' : 'Recolher menu'}
+            >
+              <ChevronRight className={`${rowIcon} transition-transform ${menuCollapsed ? '' : 'rotate-180'}`} />
+              <span className={rowLabel}>Recolher menu</span>
+            </button>
+
+            {/* Rodapé do menu — logotipo + versão */}
+            <div className={`flex flex-col items-${menuCollapsed ? 'center' : 'start'} gap-0.5 px-3 pt-2 pb-1`}>
+              <div className="relative w-16 h-8">
+                <Image src="/lurds-logo.png" alt="Lurd's" fill sizes="64px" className="object-contain object-left" />
+              </div>
+              {!menuCollapsed && (
+                <span className="text-[10px] text-slate-400 font-medium">Versão 1.0.0</span>
+              )}
+            </div>
           </div>
         </aside>
         );
