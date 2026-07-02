@@ -382,7 +382,7 @@ export class CashController {
   @Patch('master/fundo')
   async masterFundo(
     @Req() req: any,
-    @Body() body: { storeCode: string; valor: number; motivo: string; password: string },
+    @Body() body: { storeCode: string; valor: number; motivo: string; password: string; date?: string },
   ) {
     this.requireMasterRole(req);
     const nivel = this.validateLevel(body?.password, 'MASTER');
@@ -393,6 +393,8 @@ export class CashController {
       valor: Number(body.valor),
       motivo: body.motivo,
       userName: `[${nivel}] ${userName}`,
+      // Painel HISTÓRICO manda a data — ajusta a 1ª sessão daquele dia
+      date: body.date || null,
     });
   }
 

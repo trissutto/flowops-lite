@@ -906,11 +906,13 @@ export class CashService {
         });
         let totalSangrias = 0, totalSuprimentos = 0;
         const movimentos: any[] = [];
-        // Soma fundos de TODAS as sessões do dia (caso tenha mais de uma — ex: auto-close + reabertura)
-        const fundoTrocoDoDia = (sessions as any[]).reduce(
-          (acc, x) => acc + (Number(x.fundoTroco) || 0),
-          0,
-        );
+        // FUNDO DO DIA = fundo da PRIMEIRA sessão (fix 02/07). Antes SOMAVA
+        // os fundos de todas as sessões — mas reabertura de caixa carrega o
+        // MESMO dinheiro físico da gaveta: somar contava o fundo 2-3× (loja
+        // com 3 aberturas de ~R$ 637 mostrava R$ 1.911 de "abertura") e
+        // inflava o "dinheiro fim de dia" da conferência. Dinheiro colocado
+        // na gaveta DURANTE o dia é SUPRIMENTO, não fundo.
+        const fundoTrocoDoDia = Number((sessions as any[])[0]?.fundoTroco) || 0;
         // Última sessão do dia conferida (pra mostrar "Conferido por X em Y")
         const ultimoCheck = (sessions as any[])
           .filter((x) => x.checkedAt)
@@ -1374,6 +1376,11 @@ export class CashService {
     valor: number;
     motivo: string;
     userName?: string | null;
+    /** YYYY-MM-DD (opcional): ajusta o fundo da PRIMEIRA sessão DESSE dia.
+     *  É o que o super painel HISTÓRICO mostra como "Fundo do caixa
+     *  (abertura)" — sem a data, o ajuste ia pra última sessão e o valor
+     *  do painel não mudava ("não consigo arrumar"). */
+    date?: string | null;
   }) {
     const { storeCode, valor, motivo, userName } = input;
     if (valor == null || isNaN(Number(valor)) || Number(valor) < 0) {
@@ -1382,7 +1389,21 @@ export class CashService {
     if (!motivo || motivo.trim().length < 3) {
       throw new BadRequestException('Informe o motivo do ajuste (>=3 chars)');
     }
-    const session = await this.getLatestAdjustableSession(storeCode);
+    let session: any;
+    if (input.date && /^\d{4}-\d{2}-\d{2}$/.test(String(input.date).trim())) {
+      const bounds = dayBoundsFromUtcDate(new Date(`${String(input.date).trim()}T00:00:00`));
+      session = await (this.prisma as any).pdvCashSession.findFirst({
+        where: { storeCode, openedAt: { gte: bounds.start, lte: bounds.end } },
+        orderBy: { openedAt: 'asc' },
+      });
+      if (!session) {
+        throw new BadRequestException(
+          `Nenhuma sessão de caixa da loja ${storeCode} em ${input.date}`,
+        );
+      }
+    } else {
+      session = await this.getLatestAdjustableSession(storeCode);
+    }
     const old = Number(session.fundoTroco || 0);
     const novo = Number(valor);
 
