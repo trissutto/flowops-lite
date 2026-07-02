@@ -690,6 +690,7 @@ function LojaCard({ loja, isAdmin, pixStatus, onReload, dateFrom, dateTo }: { lo
       {masterModal && (
         <MasterAdjustModal
           loja={loja}
+          date={loja.aberta ? null : dateFrom || null}
           onClose={() => setMasterModal(false)}
           onSaved={() => { setMasterModal(false); reload(); }}
         />
@@ -1358,11 +1359,14 @@ function EditBandeiraModal({
 // pra nao precisar redigitar a cada loja na mesma sessao do navegador.
 // ═══════════════════════════════════════════════════════════════════════
 function MasterAdjustModal({
-  loja, onClose, onSaved,
+  loja, onClose, onSaved, date,
 }: {
   loja: Loja;
   onClose: () => void;
   onSaved: () => void;
+  /** Data do filtro (YYYY-MM-DD) no modo HISTÓRICO — ajusta o fundo da 1ª
+   *  sessão DESSE dia (a que o painel mostra). Nulo no modo ao vivo. */
+  date?: string | null;
 }) {
   type Tab = 'fundo' | 'sangria' | 'suprimento';
   const [tab, setTab] = useState<Tab>('fundo');
@@ -1406,6 +1410,9 @@ function MasterAdjustModal({
             valor: valorNum,
             motivo: motivo.trim(),
             password,
+            // Modo histórico: ajusta a 1ª sessão do dia filtrado (a que o
+            // painel exibe). Sem data (ao vivo), backend usa a última sessão.
+            ...(date ? { date } : {}),
           }),
         });
       } else {
