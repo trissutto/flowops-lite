@@ -1528,7 +1528,7 @@ function PdvPageInner() {
   return (
     <div
       className="pdv1-skin min-h-screen flex flex-col"
-      style={{ background: '#0B0B0B', zoom: uiZoom }}
+      style={{ background: '#FAFAF7', zoom: uiZoom }}
     >
       <TrainingModeBanner />
       {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
@@ -1536,12 +1536,12 @@ function PdvPageInner() {
           */}
       <header
         className="sticky top-0 z-20"
-        style={{ background: '#0B0B0B' }}
+        style={{ background: '#FFFFFF', borderBottom: '1px solid #EDEAE1' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
             href="/minha-loja"
-            className="text-white/80 hover:text-white transition shrink-0"
+            className="text-slate-500 hover:text-slate-800 transition shrink-0"
             aria-label="Voltar"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -1568,7 +1568,7 @@ function PdvPageInner() {
           {/* Header reformulado — PROPOSTA A: cidade em destaque dourado */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-white/70 tracking-[0.15em] uppercase leading-none">
+              <span className="text-[10px] font-bold text-slate-500 tracking-[0.15em] uppercase leading-none">
                 PDV · LOJA
               </span>
               {sale?.storeCode && (
@@ -1580,16 +1580,13 @@ function PdvPageInner() {
             <h1
               className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
               style={{
-                background: 'linear-gradient(90deg, #D4AF37 0%, #E5C158 100%)',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
+                color: '#1f2937',
               }}
               title={sale?.storeName || ''}
             >
               {sale?.storeName || 'Carregando…'}
             </h1>
-            <p className="text-[11px] text-white/85 truncate font-medium mt-1">
+            <p className="text-[11px] text-slate-500 truncate font-medium mt-1">
               {sale
                 ? (() => {
                     const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
@@ -1605,17 +1602,17 @@ function PdvPageInner() {
               precisa procurar venda específica que sumiu da sessão). */}
           <button
             onClick={() => setShowOpenList(true)}
-            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition text-white bg-[#161616] border ${
+            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition text-slate-700 bg-white border ${
               openCount > 0
-                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
-                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
+                ? 'border-[#CDA434] hover:bg-[#FBF6E6]'
+                : 'border-slate-200 hover:border-[#CDA434] hover:bg-[#FBF6E6]'
             }`}
             title={openCount > 0 ? `${openCount} venda(s) pausada(s)` : 'Nenhuma venda pausada agora — clique pra ver histórico recente'}
           >
             <Pause className="w-4 h-4 text-[#D4AF37]" />
             <span className="hidden sm:inline">Pausadas</span>
             <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
-              openCount > 0 ? 'bg-[#D4AF37] text-black' : 'bg-[#2A2A2A] text-white/70'
+              openCount > 0 ? 'bg-[#CDA434] text-black' : 'bg-slate-100 text-slate-500'
             }`}>
               {openCount}
             </span>
@@ -1634,7 +1631,7 @@ function PdvPageInner() {
                 className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
                   hasPaid
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
-                    : 'bg-[#161616] hover:bg-[#1f1f1f] text-white border border-[#2A2A2A] hover:border-[#D4AF37]'
+                    : 'bg-white hover:bg-[#FBF6E6] text-slate-700 border border-slate-200 hover:border-[#CDA434]'
                 }`}
                 title={
                   hasPaid
@@ -1662,10 +1659,10 @@ function PdvPageInner() {
           <button
             onClick={() => setShowCustomer(true)}
             disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-white bg-[#161616] border ${
+            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-slate-700 bg-white border ${
               sale?.customerCpf
-                ? 'border-[#D4AF37] hover:bg-[#1f1f1f]'
-                : 'border-[#2A2A2A] hover:border-[#D4AF37] hover:bg-[#1f1f1f]'
+                ? 'border-[#CDA434] hover:bg-[#FBF6E6]'
+                : 'border-slate-200 hover:border-[#CDA434] hover:bg-[#FBF6E6]'
             }`}
             title="Identificar cliente (atalho F6)"
           >
@@ -1673,12 +1670,12 @@ function PdvPageInner() {
             <span className="hidden sm:inline truncate max-w-[100px]">
               {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-[#D4AF37]/40 rounded px-1.5 py-0.5">F6</kbd>
+            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5">F6</kbd>
           </button>
 
           {/* Botão Modo Treinamento — só aparece quando NÃO está em treino.
               Quando está em treino, o banner global cobre. */}
-          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-[#161616] hover:bg-[#1f1f1f] text-[#D4AF37] border-2 border-[#D4AF37]" />
+          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border-2 border-[#CDA434]" />
         </div>
       </header>
 
@@ -1937,7 +1934,7 @@ function PdvPageInner() {
                   onClick={() => setPromotion('FOUR_FOR_THREE')}
                   className={`text-xs py-1.5 px-1 rounded font-bold transition-colors border ${
                     sale.activePromotion === 'FOUR_FOR_THREE'
-                      ? 'bg-[#0B0B0B] text-[#D4AF37] border-[#0B0B0B]'
+                      ? 'bg-[#8C7325] text-white border-[#8C7325]'
                       : 'bg-white text-[#8C7325] border-[#E5E5E0] hover:border-[#D4AF37]'
                   }`}
                 >
@@ -2066,9 +2063,9 @@ function PdvPageInner() {
                           it.promoTag === 'SEM_PROMO'
                             ? 'bg-slate-200 text-slate-600 border border-slate-300'
                             : it.promoTag.includes('4 LEVA 3')
-                            ? 'bg-[#0B0B0B] text-[#D4AF37] border border-[#0B0B0B]'
+                            ? 'bg-[#8C7325] text-white border border-[#8C7325]'
                             : it.promoTag === 'MANUAL'
-                            ? 'bg-black text-[#D4AF37] border border-[#D4AF37]/50'
+                            ? 'bg-slate-600 text-white border border-slate-600'
                             : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
                         }`}
                         title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
@@ -2192,7 +2189,7 @@ function PdvPageInner() {
           minHeight: '100vh',
           maxHeight: '100vh',
           overflowY: 'auto',
-          background: '#0B0B0B',
+          background: '#FBFBF9',
         }}
       >
         <div className="p-2.5 pt-3 space-y-3">
@@ -2284,10 +2281,10 @@ function PdvPageInner() {
             </Link>
             <Link
               href="/minha-loja/realinhamento"
-              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-white transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98] bg-[#161616] hover:bg-[#1C1C1C] border ${
+              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] bg-white hover:bg-[#FBF6E6] border ${
                 realignPending > 0
-                  ? 'border-[#D4AF37] ring-2 ring-[#D4AF37]/30'
-                  : 'border-[#2A2A2A] hover:border-[#D4AF37]'
+                  ? 'border-[#CDA434] ring-2 ring-[#CDA434]/30'
+                  : 'border-slate-200 hover:border-[#CDA434]'
               }`}
               title="Realinhamento de estoque"
             >
@@ -2630,7 +2627,7 @@ function PdvPageInner() {
               >
                 <Percent className="w-4 h-4" />
                 <span className="hidden sm:inline">Desconto geral</span>
-                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-black text-[#D4AF37] border border-black rounded px-1.5 py-0.5 ml-1">F2</kbd>
+                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 ml-1">F2</kbd>
               </button>
 
               {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
