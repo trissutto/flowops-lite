@@ -143,9 +143,10 @@ export class WincredMirrorService {
   private async countMysql(table: string): Promise<number> {
     const pool: any = (this.erp as any).pool;
     if (!pool) throw new Error('MySQL pool nao inicializado');
-    // Filtro plus size aplicado em produtos (so sincroniza o que importa)
-    const where = table === 'produtos' ? ` WHERE PLUS_SIZE IN (1, 2)` : '';
-    const [rows] = await pool.query(`SELECT COUNT(*) AS c FROM \`${table}\`${where}`);
+    // (02/07) Filtro PLUS_SIZE REMOVIDO — o espelho agora cobre o catálogo
+    // INTEIRO. Motivo: bipe/busca/consulta leem do espelho e produtos
+    // não-plus (gravatas, acessórios) caíam no fallback Giga em todo acesso.
+    const [rows] = await pool.query({ sql: `SELECT COUNT(*) AS c FROM \`${table}\``, timeout: 120_000 });
     return Number((rows as any[])[0]?.c ?? 0);
   }
 
@@ -181,9 +182,9 @@ export class WincredMirrorService {
     try {
       const total = await this.countMysql('produtos');
 
-      // Filtro PLUS_SIZE: so sincronizamos os produtos relevantes.
+      // Catálogo INTEIRO (filtro PLUS_SIZE removido em 02/07).
       // Sempre TRUNCATE — full sync sempre limpo e simples.
-      this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred filtrado`);
+      this.logger.log(`[produtos] iniciando full sync — ${total} linhas no Wincred`);
       await this.withRetry('truncate produtos', () =>
         this.prisma.$executeRawUnsafe(`TRUNCATE TABLE "wincred_produtos"`),
       );
@@ -194,16 +195,18 @@ export class WincredMirrorService {
         // OFFSET pagination — mais simples e robusta que cursor com CODIGO varchar.
         // Com 58k linhas e batch 200 = ~290 batches. OK pra performance.
         const [rows] = await pool.query(
-          `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
+          {
+            sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                   CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
                   SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
                   CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
                   COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                   CST, CSOSN, CFOP
              FROM produtos
-            WHERE PLUS_SIZE IN (1, 2)
             ORDER BY ID
             LIMIT ? OFFSET ?`,
+            timeout: 120_000, // OFFSET fundo fica lento — pool-guard não pode matar o sync
+          },
           [this.BATCH, offset],
         );
         if (!(rows as any[]).length) break;
@@ -299,7 +302,7 @@ export class WincredMirrorService {
       let offset = 0;
       while (offset < total) {
         const [rows] = await pool.query(
-          `SELECT CODIGO, ESTOQUE, LOJA FROM estoque ORDER BY CODIGO, LOJA LIMIT ? OFFSET ?`,
+          { sql: `SELECT CODIGO, ESTOQUE, LOJA FROM estoque ORDER BY CODIGO, LOJA LIMIT ? OFFSET ?`, timeout: 120_000 },
           [this.BATCH, offset],
         );
         if (!(rows as any[]).length) break;
@@ -427,17 +430,19 @@ export class WincredMirrorService {
     let maxDataAlt: Date | null = null;
     try {
       const [rows] = await pool.query(
-        `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
+        {
+          sql: `SELECT CODIGO, GRUPO, NOMEGRUPO, DESCRICAOPDV, DESCRICAOCOMPLETA,
                 CUSTO, VENDAUN, FORNECEDOR, UNIDADE, ESTOQUE, MARGEM, DATAALT,
                 SUBGRUPO, COR, TAMANHO, MARCA, REF, CODFORNECEDOR, OPERADOR,
                 CONFPRECO, TRIBUTO, NCM, PLUS_SIZE, ID, CATEGORIAS,
                 COD_PIS, ALIQ_PIS, COD_COFINS, ALIQ_COFINS, ALIQ_ICMS,
                 CST, CSOSN, CFOP
            FROM produtos
-          WHERE PLUS_SIZE IN (1, 2)
-            AND DATAALT IS NOT NULL
+          WHERE DATAALT IS NOT NULL
             AND DATAALT >= ?
           ORDER BY DATAALT`,
+          timeout: 120_000,
+        },
         [isoDate],
       );
 
@@ -647,8 +652,7 @@ export class WincredMirrorService {
       try {
         const [topProds] = await pool.query(
           `SELECT CODIGO FROM produtos
-            WHERE PLUS_SIZE IN (1, 2)
-              AND CODIGO IS NOT NULL
+            WHERE CODIGO IS NOT NULL
             ORDER BY DATAALT DESC
             LIMIT 30`,
         );

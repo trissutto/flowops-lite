@@ -12,8 +12,8 @@ import { ErpService } from '../erp/erp.service';
  * local (Postgres, mesmo datacenter), responde em ms e não morre junto.
  *
  * Regras de fallback (Giga ao vivo continua como plano B):
- *   - espelho MISS (SKU não achado — ex.: produto não-plus-size, que o sync
- *     filtra, ou EAN13 que só resolve nas colunas do Giga) → consulta o Giga
+ *   - espelho MISS (SKU não achado — ex.: produto cadastrado há minutos, ou
+ *     EAN13 que só resolve nas colunas do Giga) → consulta o Giga
  *   - espelho com preço zerado → Giga (lá existe fallback de preço via caixa)
  *   - erro de query no espelho → Giga
  *   - kill-switch: PDV_MIRROR_READS=0 desliga tudo e volta 100% pro Giga
@@ -273,6 +273,271 @@ export class WincredCatalogService {
         qtyTotal: s.total,
       };
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CONSULTA DE PRODUTOS (F10) — /products/store-search.
+  // Réplicas fiéis dos 4 métodos do ErpService que a tela usa, lendo do
+  // espelho com fallback pro Giga (produto recém-cadastrado, EAN, erro).
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Mesma semântica do ErpService.searchByRef: tudo que começa com a REF
+   * base, filtrado pelos padrões de sufixo de cor da Lurd's, com dedup por
+   * (REF+COR+TAM) escolhendo o CODIGO com mais estoque total.
+   */
+  async searchByRef(ref: string): Promise<any[]> {
+    if (this.enabled) {
+      try {
+        const rows = await this.searchByRefFromMirror(ref);
+        if (rows.length > 0) return rows;
+        this.logger.log(`[consulta] ref "${ref}": espelho vazio → Giga ao vivo`);
+      } catch (e: any) {
+        this.logger.warn(`[consulta] ref "${ref}": espelho ERRO (${e?.message || e}) → Giga`);
+      }
+    }
+    return this.erp.searchByRef(ref);
+  }
+
+  private async searchByRefFromMirror(ref: string): Promise<any[]> {
+    const clean = String(ref || '').trim();
+    if (!clean) return [];
+    const prisma: any = this.prisma;
+
+    const produtos: any[] = await prisma.wincredProduto.findMany({
+      where: { OR: [{ ref: clean }, { ref: { startsWith: clean } }] },
+      orderBy: [{ cor: 'asc' }, { tamanho: 'asc' }],
+      take: 1000,
+    });
+    if (!produtos.length) return [];
+
+    // Padrões aceitos como variação de cor da MESMA REF base (igual ao Giga):
+    // exata · base+" X" · base+"-X" · base+letras. Rejeita base+dígito
+    // ("9002" não pode trazer "900271", que é outra REF).
+    const isVariationOf = (foundRef: string, baseRef: string): boolean => {
+      if (!foundRef) return false;
+      if (foundRef === baseRef) return true;
+      if (!foundRef.startsWith(baseRef)) return false;
+      const suffix = foundRef.slice(baseRef.length);
+      if (suffix.startsWith(' ') || suffix.startsWith('-')) return true;
+      if (/^[A-Za-z]/.test(suffix)) return true;
+      return false;
+    };
+    const filtered = produtos.filter((p) => isVariationOf(String(p.ref || '').trim(), clean));
+    if (!filtered.length) return [];
+
+    // TOTAL_EST por codigo (dedup de duplicidade do Wincred, igual ao Giga)
+    const codigos = filtered.map((p) => String(p.codigo));
+    const estRows: any[] = await prisma.wincredEstoque.findMany({
+      where: { codigo: { in: codigos } },
+      select: { codigo: true, estoque: true },
+    });
+    const totalByCodigo = new Map<string, number>();
+    for (const r of estRows) {
+      const c = String(r.codigo);
+      totalByCodigo.set(c, (totalByCodigo.get(c) || 0) + (Number(r.estoque) || 0));
+    }
+
+    const norm = (s: any) => String(s ?? '').trim().toUpperCase();
+    const byKey = new Map<string, any>();
+    for (const p of filtered) {
+      const k = `${norm(p.ref)}|${norm(p.cor)}|${norm(p.tamanho)}`;
+      const totalEst = totalByCodigo.get(String(p.codigo)) || 0;
+      const codigoNum = Number(p.codigo) || 0;
+      const cur = byKey.get(k);
+      if (!cur) { byKey.set(k, { p, totalEst, codigoNum }); continue; }
+      if (totalEst > cur.totalEst || (totalEst === cur.totalEst && codigoNum > cur.codigoNum)) {
+        byKey.set(k, { p, totalEst, codigoNum });
+      }
+    }
+    return Array.from(byKey.values()).map(({ p, totalEst }) => ({
+      CODIGO: String(p.codigo),
+      REF: p.ref ? String(p.ref).trim() : null,
+      DESCRICAOCOMPLETA: p.descricaoCompleta ? String(p.descricaoCompleta).trim() : null,
+      COR: p.cor ? String(p.cor).trim() : null,
+      TAMANHO: p.tamanho ? String(p.tamanho).trim() : null,
+      ESTOQUE: p.estoque != null ? Number(p.estoque) : null,
+      TOTAL_EST: totalEst,
+      ID: p.idWincred != null ? Number(p.idWincred) : null,
+    }));
+  }
+
+  /**
+   * Bipou código na consulta: acha a REF do código e expande a REF inteira.
+   * EAN não existe no espelho — miss cai pro Giga (que varre colunas de EAN).
+   */
+  async searchByCodeAndExpandRef(code: string): Promise<any[]> {
+    if (this.enabled) {
+      try {
+        const codigo = this.normalizeCodigo(code);
+        if (codigo) {
+          const p: any = await (this.prisma as any).wincredProduto.findUnique({
+            where: { codigo },
+            select: { ref: true },
+          });
+          if (p?.ref) {
+            const rows = await this.searchByRefFromMirror(String(p.ref).trim());
+            if (rows.length > 0) return rows;
+          }
+        }
+        this.logger.log(`[consulta] codigo "${code}": espelho MISS → Giga ao vivo`);
+      } catch (e: any) {
+        this.logger.warn(`[consulta] codigo "${code}": espelho ERRO (${e?.message || e}) → Giga`);
+      }
+    }
+    return this.erp.searchByCodeAndExpandRef(code);
+  }
+
+  /**
+   * Busca por descrição agrupada por REF (modo "desc" da consulta).
+   * Mesma lógica do Giga: termo REF-like → match exato/prefixo agrupado por
+   * família; texto livre → todas as palavras na descrição, agrupado por REF.
+   */
+  async searchByDescriptionGrouped(
+    term: string,
+  ): Promise<Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number; FAMILIA?: string }>> {
+    if (this.enabled) {
+      try {
+        const rows = await this.searchByDescriptionGroupedFromMirror(term);
+        if (rows.length > 0) return rows;
+        this.logger.log(`[consulta] desc "${term}": espelho vazio → Giga ao vivo`);
+      } catch (e: any) {
+        this.logger.warn(`[consulta] desc "${term}": espelho ERRO (${e?.message || e}) → Giga`);
+      }
+    }
+    return this.erp.searchByDescriptionGrouped(term);
+  }
+
+  private async searchByDescriptionGroupedFromMirror(term: string) {
+    const trimmed = String(term || '').trim();
+    if (!trimmed) return [];
+    const prisma: any = this.prisma;
+
+    const isRefLike = /^[A-Z0-9]+(-[A-Z0-9]+)*$/i.test(trimmed) && !trimmed.includes(' ');
+    if (isRefLike) {
+      let rows: any[] = await prisma.wincredProduto.findMany({
+        where: { ref: trimmed },
+        select: { ref: true, descricaoCompleta: true },
+      });
+      if (!rows.length) {
+        rows = await prisma.wincredProduto.findMany({
+          where: { ref: { startsWith: trimmed, not: '' } },
+          select: { ref: true, descricaoCompleta: true },
+          orderBy: { ref: 'asc' },
+          take: 500,
+        });
+      }
+      return this.groupRowsByFamily(
+        rows.map((r) => ({ REF: String(r.ref || ''), DESCRICAOCOMPLETA: String(r.descricaoCompleta || '') })),
+      );
+    }
+
+    const words = trimmed.split(/\s+/).filter((w) => w.length >= 2).slice(0, 6);
+    if (!words.length) return [];
+    const rows: any[] = await prisma.wincredProduto.findMany({
+      where: {
+        AND: [
+          ...words.map((w) => ({ descricaoCompleta: { contains: w, mode: 'insensitive' } })),
+          { ref: { not: null } },
+          { NOT: { ref: '' } },
+        ],
+      },
+      select: { ref: true, descricaoCompleta: true },
+      take: 5000,
+    });
+    // Agrupa por REF (COUNT + uma descrição de amostra), ordena por variantes
+    const byRef = new Map<string, { desc: string; count: number }>();
+    for (const r of rows) {
+      const ref = String(r.ref || '').trim();
+      if (!ref) continue;
+      const cur = byRef.get(ref);
+      if (cur) cur.count++;
+      else byRef.set(ref, { desc: String(r.descricaoCompleta || ''), count: 1 });
+    }
+    return Array.from(byRef.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 200)
+      .map(([ref, g]) => ({ REF: ref, DESCRICAOCOMPLETA: g.desc, VARIANT_COUNT: g.count }));
+  }
+
+  /**
+   * Cópia do ErpService.groupRowsByFamily — REF ambígua (mesma REF pra
+   * PIJAMA e VESTIDO) vira uma linha por família de descrição.
+   */
+  private groupRowsByFamily(
+    rows: Array<{ REF: string; DESCRICAOCOMPLETA: string }>,
+  ): Array<{ REF: string; DESCRICAOCOMPLETA: string; VARIANT_COUNT: number; FAMILIA?: string }> {
+    const STOPWORDS = new Set([
+      'plus', 'size', 'feminina', 'feminino', 'masculino', 'masculina',
+      'infantil', 'unissex', 'adulto', 'manga', 'curta', 'longa', 'comum',
+      'basica', 'basico', 'alfaiataria', 'modelo', 'inverno', 'verao',
+    ]);
+    const norm = (s: string) =>
+      String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const groups = new Map<string, { ref: string; desc: string; count: number; familia: string }>();
+    for (const r of rows) {
+      const ref = String(r.REF || '').trim();
+      const desc = String(r.DESCRICAOCOMPLETA || '').trim();
+      if (!ref) continue;
+      const palavras = norm(desc).split(/\s+/).filter(Boolean);
+      const familia = palavras.find((w) => w.length >= 4 && !STOPWORDS.has(w)) || '_outros';
+      const key = `${ref}::${familia}`;
+      const existing = groups.get(key);
+      if (existing) existing.count++;
+      else groups.set(key, { ref, desc, count: 1, familia });
+    }
+    return Array.from(groups.values())
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 200)
+      .map((g) => ({ REF: g.ref, DESCRICAOCOMPLETA: g.desc, VARIANT_COUNT: g.count, FAMILIA: g.familia }));
+  }
+
+  /**
+   * Estoque detalhado por loja pros SKUs (shape Record<sku, [{storeCode, qty}]>).
+   * Espelho primeiro; se não achou NADA, fallback Giga (produto fora do espelho).
+   */
+  async getStockBySkusDetailed(
+    skus: string[],
+  ): Promise<Record<string, Array<{ storeCode: string; qty: number }>>> {
+    if (this.enabled && skus.length) {
+      try {
+        const map = await this.getStockBySkusDetailedFromMirror(skus);
+        if (Object.keys(map).length > 0) return map;
+        this.logger.log(`[consulta] estoque de ${skus.length} SKU(s): espelho vazio → Giga ao vivo`);
+      } catch (e: any) {
+        this.logger.warn(`[consulta] estoque: espelho ERRO (${e?.message || e}) → Giga`);
+      }
+    }
+    return this.erp.getStockBySkusDetailed(skus);
+  }
+
+  private async getStockBySkusDetailedFromMirror(skus: string[]) {
+    const bySkuNorm = new Map<string, string>();
+    for (const s of skus) {
+      const n = this.normalizeCodigo(s);
+      if (n && !bySkuNorm.has(n)) bySkuNorm.set(n, String(s).trim());
+    }
+    if (!bySkuNorm.size) return {};
+    const rows: any[] = await (this.prisma as any).wincredEstoque.findMany({
+      where: { codigo: { in: Array.from(bySkuNorm.keys()) }, estoque: { gt: 0 } },
+      select: { codigo: true, loja: true, estoque: true },
+    });
+    const agg = new Map<string, Map<string, number>>();
+    for (const r of rows) {
+      const original = bySkuNorm.get(String(r.codigo).trim());
+      if (!original) continue;
+      const storeCode = String(r.loja || '').trim();
+      const qty = Number(r.estoque) || 0;
+      if (qty <= 0 || !storeCode) continue;
+      if (!agg.has(original)) agg.set(original, new Map());
+      const lojaMap = agg.get(original)!;
+      lojaMap.set(storeCode, (lojaMap.get(storeCode) || 0) + qty);
+    }
+    const map: Record<string, Array<{ storeCode: string; qty: number }>> = {};
+    for (const [sku, lojaMap] of agg.entries()) {
+      map[sku] = Array.from(lojaMap.entries()).map(([storeCode, qty]) => ({ storeCode, qty }));
+    }
+    return map;
   }
 
   // ═══════════════════════════════════════════════════════════════════════

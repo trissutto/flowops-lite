@@ -94,7 +94,11 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
       // Aumentado de 5 â†’ 15 (2025-05) pra suportar batch concorrente de baixa
       // em transferencias + PDV + crediario sem fila. Wincred MySQL aguenta.
       connectionLimit: 15,
-      queueLimit: 0,
+      // FILA FINITA (02/07): era 0 (ilimitada) — quando o Giga pendurava, os
+      // requests empilhavam sem teto atrás de conexões que nunca voltavam e o
+      // app inteiro congelava (live de 01/07). Com 30, quem chegar com a fila
+      // cheia recebe erro imediato ("Queue limit reached") em vez de travar.
+      queueLimit: 30,
       // REGRESSÃO (23/06): isto tinha sido cortado pra 4s. Mas um fix anterior
       // JÁ tinha subido pra 15s justamente porque <5s causava ETIMEDOUT em pico
       // de uso / latência. Com 4s, qualquer lentidão do Giga estoura o connect,
@@ -113,6 +117,79 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
     // aberto pra qualquer IP — o cenário não se aplica. Ele só introduziu um
     // modo de falha novo (blackout global de 20s ao disparar). O pool + o
     // connectTimeout já limitam o dano. Mantido o comportamento simples.
+
+    // ── TIMEOUT POR QUERY (02/07) — proteção contra PENDURA ─────────────────
+    // O Giga não dá erro quando o firewall da KingHost derruba a conexão: a
+    // query fica esperando PRA SEMPRE, segurando uma das 15 vagas do pool até
+    // congelar tudo (live de 01/07). Este wrapper embrulha o pool.query:
+    //   - default 30s por query; chamadas de sync passam {sql, timeout: X}
+    //     pra ter mais (o mysql2 ignora `timeout`, quem aplica somos nós);
+    //   - runReadOnly NÃO passa por aqui (usa getConnection próprio + SET
+    //     max_execution_time) — segue com o teto dele de até 120s;
+    //   - transações via getConnection direto também não passam por aqui;
+    //   - no estouro, a conexão é DESTRUÍDA (destroy), não devolvida — devolver
+    //     um socket pendurado só espalharia o veneno pras próximas queries.
+    // A mensagem contém "ETIMEDOUT" de propósito: os retries existentes
+    // (wincred-mirror.withRetry etc) já tratam esse padrão.
+    const DEFAULT_QUERY_TIMEOUT_MS = 30_000;
+    const ACQUIRE_TIMEOUT_MS = 15_000;
+    const rawPool: any = this.pool;
+    const guardLogger = this.logger;
+    rawPool.query = async function guardedQuery(...args: any[]) {
+      let timeoutMs = DEFAULT_QUERY_TIMEOUT_MS;
+      if (args[0] && typeof args[0] === 'object' && (args[0] as any).sql) {
+        const t = Number((args[0] as any).timeout);
+        if (Number.isFinite(t) && t > 0) timeoutMs = t;
+      }
+
+      // Aquisição com teto: fila cheia/pool morto não segura o request.
+      const acquirePromise: Promise<any> = (rawPool as any).getConnection();
+      let conn: any;
+      try {
+        conn = await Promise.race([
+          acquirePromise,
+          new Promise((_, rej) =>
+            setTimeout(
+              () => rej(new Error(`GIGA_TIMEOUT ETIMEDOUT: fila de conexões do Giga não liberou em ${ACQUIRE_TIMEOUT_MS}ms`)),
+              ACQUIRE_TIMEOUT_MS,
+            ),
+          ),
+        ]);
+      } catch (e) {
+        // Se a aquisição resolver DEPOIS do timeout, devolve a vaga (senão vaza).
+        acquirePromise.then((c: any) => { try { c.release(); } catch { /* noop */ } }).catch(() => { /* noop */ });
+        throw e;
+      }
+
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const result = await Promise.race([
+          conn.query(...args),
+          new Promise((_, rej) => {
+            timer = setTimeout(
+              () => rej(new Error(`GIGA_TIMEOUT ETIMEDOUT: query excedeu ${timeoutMs}ms no Giga`)),
+              timeoutMs,
+            );
+          }),
+        ]);
+        conn.release();
+        return result;
+      } catch (e: any) {
+        if (String(e?.message || '').includes('GIGA_TIMEOUT')) {
+          guardLogger.warn(`[pool-guard] ${e.message} — conexão destruída pra liberar a vaga`);
+          // PromisePoolConnection expõe destroy(); fallback pro raw por segurança.
+          try {
+            if (typeof conn.destroy === 'function') conn.destroy();
+            else conn.connection?.destroy?.();
+          } catch { /* noop */ }
+        } else {
+          try { conn.release(); } catch { /* noop */ }
+        }
+        throw e;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
 
     // IMPORTANTE: ping em background. NÃƒO bloquear o boot do Nest.
     // Se ERP_HOST nÃ£o estiver acessÃ­vel do Railway, o TCP fica pendurado
@@ -276,12 +353,14 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
   async getGigaEstoque(): Promise<Array<{ codigo: string; loja: string; estoque: number }>> {
     if (!this.pool) return [];
     try {
-      const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-        `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
+      // Sync pesado (tabela inteira) — timeout estendido no pool-guard.
+      const [rows] = await this.pool.query<mysql.RowDataPacket[]>({
+        sql: `SELECT CODIGO AS codigo, LOJA AS loja, SUM(ESTOQUE) AS estoque
            FROM estoque
           WHERE ESTOQUE > 0
           GROUP BY CODIGO, LOJA`,
-      );
+        timeout: 300_000,
+      } as any);
       return (rows as any[])
         .map((r) => ({
           codigo: String(r.codigo ?? '').trim(),
@@ -315,7 +394,8 @@ export class ErpService implements OnModuleInit, OnModuleDestroy {
             ${col('NCM', 'ncm')},
             ${col('VENDAUN', 'vendaUn')}
           FROM produtos`;
-        const [rows] = await this.pool.query<mysql.RowDataPacket[]>(sql);
+        // Sync pesado (tabela inteira) — timeout estendido no pool-guard.
+        const [rows] = await this.pool.query<mysql.RowDataPacket[]>({ sql, timeout: 300_000 } as any);
         return (rows as any[])
           .map((r) => ({
             codigo: String(r.codigo ?? '').trim(),
