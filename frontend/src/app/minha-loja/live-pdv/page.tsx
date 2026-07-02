@@ -963,7 +963,10 @@ export default function LivePdvPage() {
       {tab === 'dashboard' ? (
         <Dashboard sessionId={sessionId} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_460px]">
+        // Proporção 1.3fr:1fr (~56/44) — antes era [1fr_460px]: a coluna da
+        // busca+grade encolheu ~25% pra dar mais espaço aos carrinhos
+        // (Carrinho + Clientes da Live).
+        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[1.3fr_1fr]">
           {/* Coluna principal: busca + grade */}
           <div>
             <form onSubmit={doSearch} className="mb-4 flex flex-col sm:flex-row gap-2">
