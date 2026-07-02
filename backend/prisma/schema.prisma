@@ -3133,6 +3133,34 @@ model StockMovement {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+//  ERP OUTBOX — fila de escrita assíncrona no Giga/Wincred.
+//
+//  A venda finaliza SÓ no Postgres (instantâneo) e um job entra aqui.
+//  Um processor (cron 30s) grava no Wincred (caixa + baixa de estoque) com
+//  retry/backoff. Se o Giga estiver fora, a venda sai normal e o Wincred é
+//  atualizado quando voltar. Sub-passos idempotentes: caixaDoneAt e
+//  stockDoneAt marcam o que JÁ executou — retry nunca duplica INSERT na caixa.
+// ════════════════════════════════════════════════════════════════════════
+model ErpOutbox {
+  id          String    @id @default(uuid())
+  kind        String                          // 'venda' (finalize → caixa + estoque)
+  saleId      String    @map("sale_id")
+  payload     Json?                           // { finalMethod } — resto é re-lido do Postgres na hora
+  status      String    @default("pending")   // pending | processing | done | failed
+  attempts    Int       @default(0)
+  caixaDoneAt DateTime? @map("caixa_done_at") // gravarVendaPdv OK (ou shadow)
+  stockDoneAt DateTime? @map("stock_done_at") // decreaseStock OK (ou write desligado)
+  lastError   String?   @map("last_error")
+  nextRetryAt DateTime  @default(now()) @map("next_retry_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  doneAt      DateTime? @map("done_at")
+
+  @@unique([kind, saleId])
+  @@index([status, nextRetryAt])
+  @@map("erp_outbox")
+}
+
+// ════════════════════════════════════════════════════════════════════════
 //  WINCRED MIRROR — espelho 1:1 das 6 tabelas critícas do MySQL Wincred.
 //
 //  Estrategia: sync incremental por DATAALT (quando existir) + upsert.

@@ -20,7 +20,9 @@ import { JwtAuthGuard } from '../auth/jwt.guard';
 import { validateMinLevel } from '../auth/auth-levels.util';
 import { isValidTrainingPassword, isTrainingRequest } from './training.util';
 import { PdvService } from './pdv.service';
+import { ErpOutboxService } from './erp-outbox.service';
 import { ErpService } from '../erp/erp.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PixService } from './pix.service';
 import { NfceService } from './nfce.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
@@ -41,7 +43,9 @@ export class PdvController {
 
   constructor(
     private readonly svc: PdvService,
+    private readonly outbox: ErpOutboxService,
     private readonly erp: ErpService,
+    private readonly catalog: WincredCatalogService,
     private readonly pix: PixService,
     private readonly nfce: NfceService,
     private readonly pagarme: PagarmeService,
@@ -115,14 +119,35 @@ export class PdvController {
 
   /**
    * GET /pdv/product?sku=5358427
-   * Busca produto Giga pra pré-visualização (sem adicionar ao carrinho).
-   * Útil pra consulta de preço.
+   * Busca produto pra pré-visualização (sem adicionar ao carrinho).
+   * Lê do ESPELHO Postgres com fallback pro Giga ao vivo.
    */
   @Get('product')
   product(@Req() req: any, @Query('sku') sku: string) {
     this.requireRole(req);
     if (!sku) throw new BadRequestException('sku obrigatório');
-    return this.erp.getPdvProductInfo(sku);
+    return this.catalog.getPdvProductInfo(sku);
+  }
+
+  /**
+   * GET /pdv/erp-outbox — status da fila de sync ERP (admin).
+   * Mostra contagens por status, job pendente mais antigo e últimas falhas.
+   */
+  @Get('erp-outbox')
+  erpOutboxStatus(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.outbox.status();
+  }
+
+  /**
+   * POST /pdv/erp-outbox/retry — re-enfileira jobs 'failed' (admin).
+   */
+  @Post('erp-outbox/retry')
+  erpOutboxRetry(@Req() req: any) {
+    const role = req?.user?.role;
+    if (role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.outbox.retryFailed();
   }
 
   /**

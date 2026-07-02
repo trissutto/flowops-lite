@@ -18,6 +18,7 @@ export class WincredMirrorCron {
   private readonly logger = new Logger(WincredMirrorCron.name);
   private isRunningIncremental = false;
   private isRunningFull = false;
+  private isRunningEstoque = false;
 
   constructor(private readonly mirror: WincredMirrorService) {}
 
@@ -43,6 +44,31 @@ export class WincredMirrorCron {
       this.logger.error(`[cron] incremental FAIL: ${(e as Error).message}`);
     } finally {
       this.isRunningIncremental = false;
+    }
+  }
+
+  /**
+   * Estoque FULL de hora em hora (minuto 23, pra não colidir com o
+   * incremental de 10min). O incremental só re-sincroniza estoque de
+   * produtos com DATAALT alterada — venda no Giga muda o estoque SEM tocar
+   * DATAALT, então sem este full o espelho de estoque defasava o dia todo.
+   * Custo: 60-180s em background, batches de 200 com pausas.
+   */
+  @Cron('23 * * * *', { name: 'wincred-mirror-estoque' })
+  async runEstoqueHourly() {
+    if (!this.enabled) return;
+    if (this.isRunningEstoque || this.isRunningFull) {
+      this.logger.log('[cron] estoque hourly skipped — outro sync em andamento');
+      return;
+    }
+    this.isRunningEstoque = true;
+    try {
+      const r = await this.mirror.syncEstoque();
+      this.logger.log(`[cron] estoque hourly OK — ${r.processed} linhas (${r.durationMs}ms)`);
+    } catch (e) {
+      this.logger.error(`[cron] estoque hourly FAIL: ${(e as Error).message}`);
+    } finally {
+      this.isRunningEstoque = false;
     }
   }
 

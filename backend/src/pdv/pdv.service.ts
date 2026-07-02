@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { startOfDayBR, startOfNextDayBR, startOfDayBRFromYmd, endOfDayBRFromYmd } from '../lib/date-br';
 import { ErpService } from '../erp/erp.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { CashService } from './cash.service';
 import { NfceService } from './nfce.service';
 import { PromoConfigService } from '../promo-config/promo-config.service';
@@ -35,6 +36,7 @@ export class PdvService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
+    private readonly catalog: WincredCatalogService,
     private readonly cash: CashService,
     private readonly nfce: NfceService,
     private readonly promoConfig: PromoConfigService,
@@ -996,14 +998,15 @@ export class PdvService {
    * linha (UX melhor pro PDV).
    */
   async addItem(input: { saleId: string; skuOrEan: string; qty?: number }) {
-    // PERF: lookup da venda (Postgres) e do produto (MySQL Giga) em PARALELO —
-    // são independentes e o Giga é a chamada mais lenta do bipe.
+    // PERF: lookup da venda e do produto em PARALELO. O produto vem do
+    // ESPELHO Postgres (WincredCatalogService) com fallback automático pro
+    // Giga ao vivo — o bipe não depende mais do MySQL remoto no caso comum.
     const [sale, info] = await Promise.all([
       (this.prisma as any).pdvSale.findUnique({
         where: { id: input.saleId },
         select: { id: true, status: true },
       }),
-      this.erp.getPdvProductInfo(input.skuOrEan),
+      this.catalog.getPdvProductInfo(input.skuOrEan),
     ]);
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
@@ -1838,21 +1841,47 @@ export class PdvService {
       return { ok: true, sale: updated, nfcePreview: null, training: true };
     }
 
-    // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — extraído pra postFinalizeErpSync().
-    // FLAG PDV_FINALIZE_ASYNC (default: false):
-    //   false → await (comportamento atual: resposta espera Wincred + estoque)
-    //   true  → fire-and-forget (resposta volta imediata; erros só logam, igual hoje,
-    //           já que erros nesses blocos NUNCA bloquearam a venda — só warning)
-    const finalizeAsync =
-      String(process.env.PDV_FINALIZE_ASYNC ?? '').trim().toLowerCase() === 'true';
-    if (finalizeAsync) {
-      void this.postFinalizeErpSync(sale, payments as any[], finalMethod).catch((e: any) =>
+    // PÓS-PROCESSAMENTO ERP (Wincred + estoque) — OUTBOX por padrão.
+    //
+    // PDV_ERP_OUTBOX (default: ligado; '0' desliga):
+    //   ligado  → só ENFILEIRA um job em erp_outbox (INSERT local, ~ms) e a
+    //             resposta volta na hora. O ErpOutboxService (cron 30s) grava
+    //             no Wincred com retry/backoff — Giga fora do ar NÃO trava
+    //             mais a finalização; o job espera o Giga voltar.
+    //   '0'     → comportamento legado: executa inline (ou fire-and-forget
+    //             com PDV_FINALIZE_ASYNC=true).
+    const outboxEnabled = String(process.env.PDV_ERP_OUTBOX ?? '').trim() !== '0';
+    if (outboxEnabled) {
+      try {
+        await (this.prisma as any).erpOutbox.upsert({
+          where: { kind_saleId: { kind: 'venda', saleId: sale.id } },
+          create: { kind: 'venda', saleId: sale.id, payload: { finalMethod } },
+          // Já existia (re-finalize raro) — mantém progresso dos sub-passos.
+          update: {},
+        });
+        this.logger.log(`[pdv→outbox] venda ${sale.id} enfileirada pro sync ERP (caixa + estoque)`);
+      } catch (e: any) {
+        // Enfileirar falhou (não deveria — é o mesmo Postgres da venda).
+        // Rede de segurança: dispara o caminho legado em background.
         this.logger.error(
-          `[pdv] postFinalizeErpSync (async) falhou pra venda ${sale.id}: ${e?.message || e}`,
-        ),
-      );
+          `[pdv→outbox] falha ao enfileirar venda ${sale.id}: ${e?.message || e} — executando sync legado em background`,
+        );
+        void this.postFinalizeErpSync(sale, payments as any[], finalMethod).catch((e2: any) =>
+          this.logger.error(`[pdv] postFinalizeErpSync (fallback) falhou pra venda ${sale.id}: ${e2?.message || e2}`),
+        );
+      }
     } else {
-      await this.postFinalizeErpSync(sale, payments as any[], finalMethod);
+      const finalizeAsync =
+        String(process.env.PDV_FINALIZE_ASYNC ?? '').trim().toLowerCase() === 'true';
+      if (finalizeAsync) {
+        void this.postFinalizeErpSync(sale, payments as any[], finalMethod).catch((e: any) =>
+          this.logger.error(
+            `[pdv] postFinalizeErpSync (async) falhou pra venda ${sale.id}: ${e?.message || e}`,
+          ),
+        );
+      } else {
+        await this.postFinalizeErpSync(sale, payments as any[], finalMethod);
+      }
     }
 
     // VALE-TROCA — marca como USED todo pdvReturn cujo creditoCode foi usado
@@ -1969,15 +1998,36 @@ export class PdvService {
     payments: any[],
     finalMethod: string,
   ): Promise<void> {
-    // GRAVAÇÃO NO WINCRED — replica venda na tabela `caixa` do gigasistemas21
-    // pra contabilidade/relatórios. Em modo SHADOW por padrão (PDV_ERP_WRITE_ENABLED=false)
-    // só LOGA os SQLs sem executar — permite validar antes de ligar real.
-    // Erro NÃO bloqueia a venda no flowops (que é a fonte da verdade) — só loga warning.
+    // Caminho LEGADO (PDV_ERP_OUTBOX=0) — executa os dois passos em sequência,
+    // engolindo erro com warning (comportamento histórico).
+    const caixa = await this.erpStepGravarCaixa(sale, payments, finalMethod);
+    if (!caixa.ok) {
+      this.logger.warn(
+        `[pdv→wincred] Venda ${sale.id} NÃO gravada no Wincred: ${caixa.error}. Venda no flowops segue OK.`,
+      );
+    }
+    const estoque = await this.erpStepBaixarEstoque(sale);
+    if (!estoque.ok) {
+      this.logger.warn(
+        `[pdv→estoque] Venda ${sale.id}: falha na baixa de estoque — ${estoque.error}. Venda no flowops segue OK.`,
+      );
+    }
+  }
+
+  /**
+   * PASSO 1 do sync ERP: grava a venda na tabela `caixa` do Wincred.
+   * Retorna status estruturado (o outbox usa pra decidir retry).
+   * mode='shadow' (PDV_ERP_WRITE_ENABLED=false) conta como ok — nada mais a fazer.
+   */
+  async erpStepGravarCaixa(
+    sale: any,
+    payments: any[],
+    finalMethod: string,
+  ): Promise<{ ok: boolean; mode?: string; error?: string }> {
     try {
-      // ⚡ BUG FIX: rateia o sale.desconto (desconto GERAL via F2)
-      // proporcionalmente entre os items, somando ao desconto individual.
-      // Sem isso, o Wincred grava valor SEM o desconto geral, distorcendo
-      // o fechamento de caixa.
+      // ⚡ Rateia o sale.desconto (desconto GERAL via F2) proporcionalmente
+      // entre os items — sem isso o Wincred gravava valor SEM o desconto
+      // geral, distorcendo o fechamento de caixa.
       const saleItems = (sale.items || []) as any[];
       const descontoGeral = Number(sale.desconto) || 0;
       const baseRateio = saleItems
@@ -2031,91 +2081,101 @@ export class PdvService {
         obsPedido: `flowops-${sale.id.slice(0, 8)}`,
       });
       if (!result.ok) {
-        this.logger.warn(
-          `[pdv→wincred] Venda ${sale.id} NÃO gravada no Wincred (${result.mode}): ${result.error}`,
-        );
-      } else if (result.mode === 'shadow') {
+        return { ok: false, mode: result.mode, error: result.error || 'gravarVendaPdv retornou ok=false' };
+      }
+      if (result.mode === 'shadow') {
         this.logger.warn(
           `[pdv→wincred SHADOW] Venda ${sale.id}: ${result.sqlExecuted.length} SQLs gerados (não executados). Set PDV_ERP_WRITE_ENABLED=true pra ativar.`,
         );
-      } else {
-        this.logger.log(
-          `[pdv→wincred REAL] Venda ${sale.id} → caixa NUMERO=${result.numero} (${result.registros?.length} registros)`,
-        );
+        return { ok: true, mode: 'shadow' };
       }
-    } catch (e: any) {
-      this.logger.warn(
-        `[pdv→wincred] Erro ao gravar venda ${sale.id} no Wincred: ${e?.message || e}. Venda no flowops segue OK.`,
+      this.logger.log(
+        `[pdv→wincred REAL] Venda ${sale.id} → caixa NUMERO=${result.numero} (${result.registros?.length} registros)`,
       );
+      return { ok: true, mode: 'real' };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
     }
+  }
 
-    // ── BAIXA DE ESTOQUE NO WINCRED ─────────────────────────────────────────────
-    // Decrementa estoque na tabela `estoque` do Giga pra cada item da venda.
-    // PULA: items MANUAL (sku=MANUAL-*) e items MARCADO (estoque ja foi baixado
-    // quando a peca foi marcada como "provar em casa").
-    // allowNegative=true: nao bloqueia se estoque ja estava zerado (divergencia
-    // fisico x sistema — Wincred aceita estoque negativo).
-    // skipNotFound=true: nao bloqueia se o SKU nao existir mais no Wincred.
+  /**
+   * PASSO 2 do sync ERP: baixa de estoque no Wincred.
+   * PULA items MANUAL/MARCADO. allowNegative + skipNotFound (divergências não
+   * bloqueiam). Marca sale.stockDecreasedAt no sucesso — mesma flag usada pelo
+   * reconcileStockBacklog, então o backlog continua funcionando como rede de
+   * segurança. Idempotente: se stockDecreasedAt já está marcado, não repete.
+   */
+  async erpStepBaixarEstoque(
+    sale: any,
+  ): Promise<{ ok: boolean; skippedWriteDisabled?: boolean; error?: string }> {
     try {
-      if (this.erp.isWriteEnabled) {
-        const saleItems = (sale.items || []) as any[];
-        const stockItems = saleItems
-          .filter((it: any) => {
-            const sku = String(it.sku || '').trim();
-            if (!sku) return false;
-            if (sku.startsWith('MANUAL-')) return false;
-            if (it.ref === 'MANUAL') return false;
-            if (it.ref === 'MARCADO') return false;
-            if (it.promoTag === 'MARCADO') return false;
-            if (it.promoTag === 'MANUAL') return false;
-            return true;
-          })
-          .map((it: any) => ({
-            sku: String(it.sku || '').trim(),
-            qty: Math.max(1, Number(it.qty) || 1),
-            storeCode: sale.storeCode,
-          }));
+      // Guard de idempotência — retry do outbox nunca baixa estoque 2x.
+      const fresh = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: sale.id },
+        select: { stockDecreasedAt: true },
+      });
+      if (fresh?.stockDecreasedAt) return { ok: true };
 
-        if (stockItems.length > 0) {
-          const r = await this.erp.decreaseStock(stockItems, {
-            allowNegative: true,
-            skipNotFound: true,
-          });
-          if (!r.success) {
-            this.logger.warn(
-              `[pdv→estoque] Venda ${sale.id}: falha na baixa de estoque — ${r.error}. ` +
-              `Venda no flowops segue OK. Estoque Wincred pode estar divergente. ` +
-              `Items: ${stockItems.length} (${stockItems.map((i) => i.sku).join(',')})`,
-            );
-          } else {
-            this.logger.log(
-              `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Wincred ` +
-              `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
-            );
-            try {
-              await (this.prisma as any).pdvSale.update({
-                where: { id: sale.id },
-                data: { stockDecreasedAt: new Date() },
-              });
-            } catch { /* segue */ }
-          }
-        } else {
-          try {
-            await (this.prisma as any).pdvSale.update({
-              where: { id: sale.id },
-              data: { stockDecreasedAt: new Date() },
-            });
-          } catch { /* segue */ }
-        }
-      } else {
+      if (!this.erp.isWriteEnabled) {
         this.logger.warn(
           `[pdv→estoque] Venda ${sale.id}: ERP_WRITE_ENABLED=false — estoque NAO baixado no Wincred.`,
         );
+        // Sem permissão de escrita não adianta re-tentar — o reconcile pega
+        // depois (stockDecreasedAt continua null).
+        return { ok: true, skippedWriteDisabled: true };
       }
-    } catch (e: any) {
-      this.logger.warn(
-        `[pdv→estoque] Erro inesperado ao baixar estoque da venda ${sale.id}: ${e?.message || e}. Venda no flowops segue OK.`,
+
+      const saleItems = (sale.items || []) as any[];
+      const stockItems = saleItems
+        .filter((it: any) => {
+          const sku = String(it.sku || '').trim();
+          if (!sku) return false;
+          if (sku.startsWith('MANUAL-')) return false;
+          if (it.ref === 'MANUAL') return false;
+          if (it.ref === 'MARCADO') return false;
+          if (it.promoTag === 'MARCADO') return false;
+          if (it.promoTag === 'MANUAL') return false;
+          return true;
+        })
+        .map((it: any) => ({
+          sku: String(it.sku || '').trim(),
+          qty: Math.max(1, Number(it.qty) || 1),
+          storeCode: sale.storeCode,
+        }));
+
+      if (stockItems.length === 0) {
+        try {
+          await (this.prisma as any).pdvSale.update({
+            where: { id: sale.id },
+            data: { stockDecreasedAt: new Date() },
+          });
+        } catch { /* segue */ }
+        return { ok: true };
+      }
+
+      const r = await this.erp.decreaseStock(stockItems, {
+        allowNegative: true,
+        skipNotFound: true,
+      });
+      if (!r.success) {
+        return {
+          ok: false,
+          error: `${r.error || 'falha desconhecida'} · items: ${stockItems.map((i) => i.sku).join(',')}`,
+        };
+      }
+      this.logger.log(
+        `[pdv→estoque] Venda ${sale.id}: ${r.applied.length} item(s) baixado(s) no Wincred ` +
+        `(loja ${sale.storeCode}) em ${r.attempts || 1} tentativa(s).`,
       );
+      try {
+        await (this.prisma as any).pdvSale.update({
+          where: { id: sale.id },
+          data: { stockDecreasedAt: new Date() },
+        });
+      } catch { /* segue */ }
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
     }
   }
 

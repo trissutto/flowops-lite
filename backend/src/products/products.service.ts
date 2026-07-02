@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as ExcelJS from 'exceljs';
 import { ErpService } from '../erp/erp.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -195,6 +196,7 @@ export class ProductsService {
     private readonly http: HttpService,
     private readonly config: ConfigService,
     private readonly erp: ErpService,
+    private readonly catalog: WincredCatalogService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -1671,7 +1673,8 @@ export class ProductsService {
   }
 
   searchErpProductsLike(q: string, storeCode?: string) {
-    return this.erp.searchProductsLike(q || '', storeCode);
+    // Busca do PDV (dropdown) — ESPELHO Postgres primeiro, fallback Giga.
+    return this.catalog.searchProductsLike(q || '', storeCode);
   }
 
   async testErpStock(skus: string[]): Promise<{
