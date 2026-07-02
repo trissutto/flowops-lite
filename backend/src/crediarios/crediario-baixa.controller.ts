@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CrediarioBaixaService } from './crediario-baixa.service';
+import { CrediarioMirrorService } from './crediario-mirror.service';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
 
@@ -18,9 +19,30 @@ import { CrediariosService } from './crediarios.service';
 export class CrediarioBaixaController {
   constructor(
     private readonly svc: CrediarioBaixaService,
+    private readonly mirror: CrediarioMirrorService,
     private readonly erp: ErpService,
     private readonly crediarios: CrediariosService,
   ) {}
+
+  // ── ESPELHO do crediário (admin): 1ª carga manual + status ────────
+  // O cron horário (min 41) mantém depois; estes endpoints servem pra
+  // carregar sem esperar e pra conferir idade/contagem do espelho.
+
+  @Post('espelho/sync')
+  async espelhoSync(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    const abertas = await this.mirror.syncAbertas();
+    const clientes = await this.mirror.syncClientes();
+    // Cache da lista antiga pode estar servindo dados do Giga — limpa.
+    this.svc.clearListCache();
+    return { ok: true, abertas, clientes };
+  }
+
+  @Get('espelho/status')
+  async espelhoStatus(@Req() req: any) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.mirror.status();
+  }
 
   private requireRole(req: any) {
     const role = req?.user?.role;

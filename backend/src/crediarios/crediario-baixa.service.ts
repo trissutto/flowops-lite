@@ -27,6 +27,7 @@ import { Injectable, Logger, BadRequestException, NotFoundException } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { ErpService } from '../erp/erp.service';
 import { CrediariosService } from './crediarios.service';
+import { CrediarioMirrorService } from './crediario-mirror.service';
 import { PagarmeService } from '../pagarme/pagarme.service';
 import { PagbankService } from '../pagbank/pagbank.service';
 
@@ -94,6 +95,7 @@ export class CrediarioBaixaService {
     private readonly prisma: PrismaService,
     private readonly erp: ErpService,
     private readonly crediarios: CrediariosService,
+    private readonly crediarioMirror: CrediarioMirrorService,
     private readonly pagarme: PagarmeService,
     private readonly pagbank: PagbankService,
   ) {}
@@ -318,6 +320,30 @@ export class CrediarioBaixaService {
       this.logger.log(`[crediario-baixa] cache HIT (${cacheKey})`);
       return cached.data;
     }
+    // ── ESPELHO PRIMEIRO (02/07) — wincred_movimento_aberto + wincred_clientes.
+    // A varredura da tabela movimento no Giga (5.000 linhas / teto 30s) era a
+    // query mais pesada do sistema. Se o espelho tem dados, a lista sai do
+    // Postgres em ms — e a cobrança funciona com o Giga fora do ar.
+    // Fallback: espelho vazio (1ª carga ainda não rodou) ou erro → Giga.
+    if (String(process.env.PDV_MIRROR_READS ?? '').trim() !== '0') {
+      try {
+        const espelho = await this.listAbertasDoEspelho(input.storeCode);
+        if (espelho) {
+          this.logger.log(
+            `[crediario-baixa] listAllOpen via ESPELHO (${espelho.parcelas.length} parcelas)`,
+          );
+          this.listCache.set(cacheKey, {
+            data: espelho,
+            expiresAt: Date.now() + this.LIST_CACHE_TTL_MS,
+          });
+          return espelho;
+        }
+        this.logger.log('[crediario-baixa] espelho de movimento vazio → Giga ao vivo');
+      } catch (e: any) {
+        this.logger.warn(`[crediario-baixa] espelho falhou (${e?.message || e}) → Giga ao vivo`);
+      }
+    }
+
     this.logger.log(`[crediario-baixa] cache MISS (${cacheKey}) — vai bater no Giga`);
     // Sempre força refresh do detectColumns aqui — algumas instâncias do Giga
     // têm timeouts intermitentes na primeira chamada que cacheiam EMPTY_MAP.
@@ -426,6 +452,26 @@ export class CrediarioBaixaService {
       }
     }
 
+    const response = await this.montarRespostaAbertas(filteredRows, phones, cardCodes);
+
+    // Cacheia 5 min — evita matar o pool com requests repetidas
+    this.listCache.set(cacheKey, {
+      data: response,
+      expiresAt: Date.now() + this.LIST_CACHE_TTL_MS,
+    });
+
+    return response;
+  }
+
+  /**
+   * Cauda COMPARTILHADA entre o caminho Giga e o caminho espelho:
+   * calcula juros/multa por parcela e agrupa o resumo por cliente.
+   */
+  private async montarRespostaAbertas(
+    filteredRows: any[],
+    phones: Map<string, { nome?: string | null; telefone?: string | null }>,
+    cardCodes: Set<string>,
+  ): Promise<{ parcelas: OpenInstallment[]; clientes: Array<{ codCliente: string; nome: string; telefone: string | null; qtdParcelas: number; total: number }> }> {
     const cfg = await this.getConfig();
     const out: OpenInstallment[] = [];
     for (const row of filteredRows) {
@@ -478,19 +524,76 @@ export class CrediarioBaixaService {
       }
     }
 
-    const response = {
+    return {
       parcelas: out,
       clientes: Array.from(byCliente.values())
         .sort((a, b) => a.nome.localeCompare(b.nome)),
     };
+  }
 
-    // Cacheia 5 min — evita matar o pool com requests repetidas
-    this.listCache.set(cacheKey, {
-      data: response,
-      expiresAt: Date.now() + this.LIST_CACHE_TTL_MS,
+  /**
+   * Lista de parcelas abertas 100% do ESPELHO (Postgres). Retorna null quando
+   * o espelho ainda não tem dados (1ª carga pendente) — caller cai pro Giga.
+   * Filtros idênticos ao caminho Giga: codCliente > 3 (cartões clássicos) e
+   * clientes-cartão pelo nome (CARD_NAME_REGEX, via wincred_clientes).
+   */
+  private async listAbertasDoEspelho(storeCode?: string): Promise<{
+    parcelas: OpenInstallment[];
+    clientes: Array<{ codCliente: string; nome: string; telefone: string | null; qtdParcelas: number; total: number }>;
+  } | null> {
+    const safeStore = storeCode
+      ? String(storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
+    const abertas: any[] = await (this.prisma as any).wincredMovimentoAberto.findMany({
+      where: safeStore ? { loja: safeStore } : undefined,
+      orderBy: { vencimento: 'asc' },
+      take: 5000,
     });
+    if (!abertas.length) {
+      // Espelho pode estar vazio por 1ª carga pendente OU realmente não haver
+      // parcelas. Distingue: se a tabela inteira está vazia → null (fallback).
+      const totalEspelho = await (this.prisma as any).wincredMovimentoAberto.count();
+      if (totalEspelho === 0) return null;
+      return { parcelas: [], clientes: [] };
+    }
 
-    return response;
+    // Filtro cód 0-3 (cartões clássicos), igual ao caminho Giga
+    const filteredRows = abertas
+      .filter((r) => {
+        const cod = String(r.codCliente || '').replace(/\D/g, '');
+        const n = parseInt(cod, 10);
+        return !isNaN(n) && n > 3;
+      })
+      .map((r) => ({
+        registro: r.registro,
+        controle: r.controle,
+        numeroCompra: r.numeroCompra,
+        parcela: r.parcela,
+        totalParcelas: r.totalParcelas,
+        vencimento: r.vencimento,
+        valorParcela: r.valorParcela != null ? Number(r.valorParcela) : 0,
+        codCliente: r.codCliente,
+        nome: r.nome,
+        obs: null,
+      }));
+
+    // Nome + telefone + filtro de clientes-cartão via espelho de clientes
+    const codClientes = Array.from(new Set(filteredRows.map((r) => String(r.codCliente))));
+    const clientesEspelho: any[] = codClientes.length
+      ? await (this.prisma as any).wincredCliente.findMany({
+          where: { codCliente: { in: codClientes } },
+        })
+      : [];
+    const phones = new Map<string, { nome?: string | null; telefone?: string | null }>();
+    const cardCodes = new Set<string>();
+    for (const c of clientesEspelho) {
+      const cod = String(c.codCliente);
+      phones.set(cod, { nome: c.nome || null, telefone: c.telefone || c.telefone2 || null });
+      if (CARD_NAME_REGEX.test(String(c.nome || '').trim())) cardCodes.add(cod);
+    }
+
+    return this.montarRespostaAbertas(filteredRows, phones, cardCodes);
   }
 
   /** Limpa cache (chamado após cada baixa pra refletir parcelas pagas) */
@@ -527,6 +630,42 @@ export class CrediarioBaixaService {
   }>> {
     if (this.clientesCache && Date.now() < this.clientesCache.expiresAt) {
       return this.clientesCache.data;
+    }
+
+    // ── ESPELHO PRIMEIRO (02/07) — wincred_clientes. Mesmos filtros do
+    // caminho Giga (cod > 3, sem clientes-cartão, dedup cod+nome). Espelho
+    // vazio (1ª carga pendente) → segue pro Giga normalmente.
+    if (String(process.env.PDV_MIRROR_READS ?? '').trim() !== '0') {
+      try {
+        const doEspelho: any[] = await (this.prisma as any).wincredCliente.findMany({
+          where: { nome: { not: null } },
+          orderBy: { nome: 'asc' },
+        });
+        if (doEspelho.length > 0) {
+          const seen = new Set<string>();
+          const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+          for (const c of doEspelho) {
+            const cod = String(c.codCliente || '').trim();
+            const codNum = parseInt(cod.replace(/\D/g, ''), 10);
+            if (!cod || isNaN(codNum) || codNum <= 3) continue;
+            const nome = String(c.nome || '').trim();
+            if (!nome || CARD_NAME_REGEX.test(nome)) continue;
+            const dedupKey = `${cod}|${nome.toUpperCase()}`;
+            if (seen.has(dedupKey)) continue;
+            seen.add(dedupKey);
+            out.push({
+              codCliente: cod,
+              nome,
+              telefone: (String(c.telefone || '').trim()) || (String(c.telefone2 || '').trim()) || null,
+            });
+          }
+          this.logger.log(`[crediario-baixa] listAllClientes via ESPELHO (${out.length} clientes)`);
+          this.clientesCache = { data: out, expiresAt: Date.now() + this.CLIENTES_CACHE_TTL_MS };
+          return out;
+        }
+      } catch (e: any) {
+        this.logger.warn(`[crediario-baixa] espelho de clientes falhou (${e?.message || e}) → Giga`);
+      }
     }
 
     // Circuit breaker aberto?
@@ -1464,6 +1603,12 @@ export class CrediarioBaixaService {
         this.logger.error(
           `[crediario-baixa] item ${it.id} (REGISTRO=${it.registro} CONTROLE=${it.controle}) falhou: ${result.error}`,
         );
+      } else {
+        // WRITE-THROUGH: parcela paga sai do espelho na hora (não espera o
+        // cron horário) — a tela de cobrança reflete imediatamente.
+        void this.crediarioMirror
+          .marcarPagasNoEspelho([it.registro])
+          .catch(() => { /* cron corrige */ });
       }
     }
   }
@@ -1676,6 +1821,12 @@ export class CrediarioBaixaService {
           gigaError: r.success ? 'ESTORNADA' : `ESTORNO FALHOU: ${r.error || 'erro'}`,
         },
       });
+    }
+
+    // WRITE-THROUGH do estorno: re-sincroniza as abertas do espelho em
+    // background pra parcela estornada voltar à lista sem esperar o cron.
+    if (revertidos > 0) {
+      void this.crediarioMirror.reinserirAposEstorno().catch(() => { /* cron corrige */ });
     }
 
     // Marca a baixa como cancelada
