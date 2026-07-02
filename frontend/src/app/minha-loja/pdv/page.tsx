@@ -23,7 +23,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import Link from 'next/link';
 import Image from 'next/image';
 import {
-  ArrowLeft, Loader2, X, Barcode, ArrowRight, Trash2, Plus, Minus,
+  ArrowLeft, Loader2, X, Barcode, Trash2, Plus, Minus,
   ShoppingCart, User, CreditCard, Banknote, QrCode, Check, AlertCircle,
   AlertTriangle,
   Send, Mail, MessageSquare, FileText, RotateCcw, History, Percent,
@@ -33,6 +33,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { loadPrinterConfig } from '@/lib/printer-router';
 import { PdvToastProvider, usePdvToast, humanizeError } from '@/components/PdvToast';
 import ValeTrocaModal from './ValeTrocaModal';
 import { HUB_TONES, type HubTone } from '@/components/HubCard';
@@ -468,9 +469,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
             handleScan(e);
           }
         }}
-        className="bg-white rounded-xl border border-slate-200 px-4 py-3 shadow-sm flex items-center gap-3 w-full"
+        className="bg-white rounded-xl border border-[#E5E2D9] pl-4 pr-2 py-2 shadow-sm flex items-center gap-3 w-full"
       >
-        <Barcode className="w-6 h-6 text-slate-500 shrink-0" />
+        <Barcode className="w-5 h-5 text-slate-400 shrink-0" />
         <input
           ref={inputRef}
           type="text"
@@ -510,9 +511,9 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
           onFocus={() => {
             if (searchResults.length > 0) setShowResults(true);
           }}
-          placeholder="Bipe ou digite o código + Enter · REF + ESPAÇO abre a grade · ou nome da peça…"
+          placeholder="Bipe o código, a REF ou o nome da peça"
           disabled={scanLoading}
-          className="flex-1 min-w-0 px-2 py-2 text-lg font-bold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
+          className="flex-1 min-w-0 px-1 py-2 text-base font-semibold border-0 focus:outline-none disabled:bg-slate-50 placeholder:text-slate-400 placeholder:font-normal text-slate-900"
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"
@@ -524,10 +525,11 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
         <button
           type="submit"
           disabled={!scanInput || scanLoading}
-          className="px-5 py-3 text-black font-bold rounded-lg flex items-center disabled:opacity-40 transition shrink-0 hover:brightness-95"
-          style={{ background: '#D4AF37' }}
+          className="w-11 h-11 text-white font-bold rounded-lg flex items-center justify-center disabled:opacity-40 transition shrink-0 hover:brightness-95"
+          style={{ background: '#B8912B' }}
+          title="Buscar / adicionar (Enter)"
         >
-          {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
+          {scanLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
         </button>
       </form>
 
@@ -585,6 +587,80 @@ const ScanBar = forwardRef<ScanBarHandle, ScanBarProps>(function ScanBar(
     </div>
   );
 });
+
+/**
+ * Relógio do header — "Caixa aberto · 14:32". Puramente visual, atualiza a
+ * cada 30s. Nenhuma dependência de estado da venda.
+ */
+function HeaderClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const hhmm = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return (
+    <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 whitespace-nowrap">
+      <Clock className="w-3.5 h-3.5 text-slate-400" />
+      Caixa aberto · {hhmm}
+    </span>
+  );
+}
+
+/**
+ * Status de conexão com o servidor — escuta o evento global
+ * 'flowops:connection' que o wrapper api() já dispara em toda chamada
+ * (online em sucesso, offline em falha de rede/5xx). Só representação visual.
+ */
+function useConnStatus() {
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const det = (e as CustomEvent<{ status: 'online' | 'offline' }>).detail;
+      if (det?.status) setOnline(det.status === 'online');
+    };
+    window.addEventListener('flowops:connection', handler);
+    return () => window.removeEventListener('flowops:connection', handler);
+  }, []);
+  return online;
+}
+
+function ConnBadge({ compact }: { compact?: boolean }) {
+  const online = useConnStatus();
+  return (
+    <span className={`flex items-center gap-1.5 text-xs font-bold whitespace-nowrap ${online ? 'text-emerald-700' : 'text-rose-600'}`}>
+      <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'}`} />
+      {compact ? (online ? 'Conectado' : 'Sem conexão') : (online ? 'Conectado ao servidor' : 'Sem conexão com o servidor')}
+    </span>
+  );
+}
+
+/**
+ * Rodapé fino de status (espec do layout claro): conexão + impressora térmica
+ * configurada + ambiente. Fixed no fundo, altura mínima, só leitura.
+ */
+function StatusFooter() {
+  const [printerName, setPrinterName] = useState<string | null>(null);
+  useEffect(() => {
+    try { setPrinterName(loadPrinterConfig().termica); } catch { setPrinterName(null); }
+  }, []);
+  const isProd = process.env.NODE_ENV === 'production';
+  return (
+    <footer className="fixed bottom-0 left-0 right-0 z-10 bg-white border-t border-[#EDEAE1]">
+      <div className="max-w-[1700px] mx-auto px-5 h-9 flex items-center gap-6 text-[11px] font-semibold text-slate-500">
+        <ConnBadge />
+        <span className="flex items-center gap-1.5 whitespace-nowrap">
+          <Printer className="w-3.5 h-3.5 text-slate-400" />
+          {printerName || 'Impressora não configurada'}
+        </span>
+        <span className="flex items-center gap-1.5 whitespace-nowrap">
+          <FileText className="w-3.5 h-3.5 text-slate-400" />
+          Ambiente: {isProd ? 'Produção' : 'Desenvolvimento'}
+        </span>
+      </div>
+    </footer>
+  );
+}
 
 export default function PdvPage() {
   return (
@@ -1531,87 +1607,72 @@ function PdvPageInner() {
       style={{ background: '#FAFAF7', zoom: uiZoom }}
     >
       <TrainingModeBanner />
-      {/* Header — fundo violet escuro com texto branco. Mesmo estilo do
-          /minha-loja/realinhamento pra unificar identidade visual.
-          */}
+      {/* Header — barra branca fina (espec do layout claro): wordmark Lurd's +
+          cidade + badge "PDV · loja" à esquerda; operadora, relógio do caixa e
+          status de conexão à direita. Botões funcionais (Pausadas, Online,
+          Treinamento) viram chips compactos no mesmo grupo da direita. */}
       <header
         className="sticky top-0 z-20"
         style={{ background: '#FFFFFF', borderBottom: '1px solid #EDEAE1' }}
       >
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="max-w-[1700px] mx-auto pl-3 pr-5 py-2.5 flex items-center gap-3">
           <Link
             href="/minha-loja"
-            className="text-slate-500 hover:text-slate-800 transition shrink-0"
+            className="text-slate-400 hover:text-slate-700 transition shrink-0"
             aria-label="Voltar"
+            title="Voltar ao início"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-4 h-4" />
           </Link>
 
-          {/* LOGO Lurd's — maior (56px) pra dar identidade */}
-          <Link
-            href="/minha-loja"
-            className="flex items-center gap-2 shrink-0 group"
-            title="Início"
-          >
-            <div className="relative w-14 h-14 bg-white rounded-full p-1.5 shadow-md ring-2 ring-[#D4AF37]/50">
+          {/* Wordmark Lurd's — script serif itálico, como na espec */}
+          <Link href="/minha-loja" className="flex items-center gap-2.5 shrink-0 group" title="Início">
+            <div className="relative w-9 h-9 shrink-0">
               <Image
                 src="/lurds-logo.png"
-                alt="Lurd's Plus Size"
+                alt=""
                 fill
-                sizes="56px"
+                sizes="36px"
                 className="object-contain"
                 priority
               />
             </div>
+            <span
+              className="text-[26px] font-black italic leading-none text-[#3B3325] tracking-tight"
+              style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
+            >
+              Lurd&apos;s
+            </span>
           </Link>
 
-          {/* Header reformulado — PROPOSTA A: cidade em destaque dourado */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold text-slate-500 tracking-[0.15em] uppercase leading-none">
-                PDV · LOJA
-              </span>
-              {sale?.storeCode && (
-                <span className="text-[10px] font-mono font-bold text-black bg-[#D4AF37] px-1.5 py-0.5 rounded shadow-sm leading-none">
-                  {sale.storeCode}
-                </span>
-              )}
-            </div>
-            <h1
-              className="text-2xl sm:text-3xl font-black leading-none tracking-tight mt-1 truncate"
-              style={{
-                color: '#1f2937',
-              }}
-              title={sale?.storeName || ''}
-            >
-              {sale?.storeName || 'Carregando…'}
-            </h1>
-            <p className="text-[11px] text-slate-500 truncate font-medium mt-1">
-              {sale
-                ? (() => {
-                    const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
-                    return `Venda #${sale.id.slice(-6).toUpperCase()} · ${totalQty} ${totalQty === 1 ? 'peça' : 'peças'} no carrinho`;
-                  })()
-                : ''}
-            </p>
-          </div>
+          <span
+            className="text-base font-bold text-slate-800 truncate leading-none"
+            title={sale?.storeName || ''}
+          >
+            {sale?.storeName || 'Carregando…'}
+          </span>
 
-          {/* Botão Pausadas — FIXO no header, sempre visível.
-              Quando vazio: estilo cinza claro. Com pendentes: amarelo destacado.
-              Permite vendedora abrir lista mesmo quando count=0 (caso bug ou
-              precisa procurar venda específica que sumiu da sessão). */}
+          {sale?.storeCode && (
+            <span className="text-[11px] font-bold text-slate-500 bg-[#F3F1EA] border border-[#E5E2D9] px-2 py-1 rounded-md leading-none shrink-0">
+              PDV · {sale.storeCode}
+            </span>
+          )}
+
+          <div className="flex-1" />
+
+          {/* Botão Pausadas — sempre visível; chip compacto */}
           <button
             onClick={() => setShowOpenList(true)}
-            className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition text-slate-700 bg-white border ${
+            className={`relative text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 transition text-slate-600 bg-white border ${
               openCount > 0
                 ? 'border-[#CDA434] hover:bg-[#FBF6E6]'
                 : 'border-slate-200 hover:border-[#CDA434] hover:bg-[#FBF6E6]'
             }`}
             title={openCount > 0 ? `${openCount} venda(s) pausada(s)` : 'Nenhuma venda pausada agora — clique pra ver histórico recente'}
           >
-            <Pause className="w-4 h-4 text-[#D4AF37]" />
-            <span className="hidden sm:inline">Pausadas</span>
-            <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
+            <Pause className="w-3.5 h-3.5 text-[#B8912B]" />
+            <span className="hidden xl:inline">Pausadas</span>
+            <span className={`text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 ${
               openCount > 0 ? 'bg-[#CDA434] text-black' : 'bg-slate-100 text-slate-500'
             }`}>
               {openCount}
@@ -1628,10 +1689,10 @@ function PdvPageInner() {
             return (
               <button
                 onClick={() => setShowOnlinePending(true)}
-                className={`relative text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md transition ${
+                className={`relative text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 transition ${
                   hasPaid
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-white ring-2 ring-emerald-300 animate-pulse'
-                    : 'bg-white hover:bg-[#FBF6E6] text-slate-700 border border-slate-200 hover:border-[#CDA434]'
+                    : 'bg-white hover:bg-[#FBF6E6] text-slate-600 border border-slate-200 hover:border-[#CDA434]'
                 }`}
                 title={
                   hasPaid
@@ -1639,11 +1700,11 @@ function PdvPageInner() {
                     : `${totalLinks} link(s) aguardando pagamento`
                 }
               >
-                <span className="text-base leading-none">🔗</span>
-                <span className="hidden sm:inline">
+                <span className="text-sm leading-none">🔗</span>
+                <span className="hidden xl:inline">
                   {hasPaid ? `${paidCount} PAGO${paidCount > 1 ? 'S' : ''}!` : 'Online'}
                 </span>
-                <span className={`text-[10px] font-black rounded-full min-w-[20px] h-[20px] flex items-center justify-center px-1.5 ${
+                <span className={`text-[10px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 ${
                   hasPaid ? 'bg-white text-emerald-700' : 'bg-[#D4AF37] text-black'
                 }`}>
                   {totalLinks}
@@ -1652,199 +1713,134 @@ function PdvPageInner() {
             );
           })()}
 
-          {/* Seletor de vendedora do canto REMOVIDO — agora a vendedora é
-              escolhida no popup central de confirmação, na finalização. */}
-
-          {/* Botão Cliente — atalho F5 */}
-          <button
-            onClick={() => setShowCustomer(true)}
-            disabled={!sale || sale.status !== 'open'}
-            className={`text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold transition disabled:opacity-50 shrink-0 shadow-md text-slate-700 bg-white border ${
-              sale?.customerCpf
-                ? 'border-[#CDA434] hover:bg-[#FBF6E6]'
-                : 'border-slate-200 hover:border-[#CDA434] hover:bg-[#FBF6E6]'
-            }`}
-            title="Identificar cliente (atalho F6)"
-          >
-            <User className="w-4 h-4 text-[#D4AF37]" />
-            <span className="hidden sm:inline truncate max-w-[100px]">
-              {sale?.customerCpf ? sale.customerName?.split(' ')[0] || 'Cliente' : 'Identificar'}
+          {/* Vendedora da venda (quando já definida) */}
+          {(sale?.sellerName || sale?.vendedorName) && (
+            <span className="hidden md:flex items-center gap-1.5 text-xs font-semibold text-slate-500 shrink-0">
+              <User className="w-3.5 h-3.5 text-slate-400" />
+              {(sale.sellerName || sale.vendedorName || '').split(' ')[0]}
             </span>
-            <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5">F6</kbd>
-          </button>
+          )}
 
-          {/* Botão Modo Treinamento — só aparece quando NÃO está em treino.
-              Quando está em treino, o banner global cobre. */}
-          <TrainingModeButton className="text-xs px-3 py-2.5 rounded-xl flex items-center gap-1.5 font-bold shrink-0 shadow-md bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border-2 border-[#CDA434]" />
+          <span className="hidden md:block"><HeaderClock /></span>
+          <span className="hidden sm:block"><ConnBadge compact /></span>
+
+          {/* Botão Modo Treinamento — só aparece quando NÃO está em treino. */}
+          <TrainingModeButton className="text-xs px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 font-bold shrink-0 bg-white hover:bg-[#FBF6E6] text-[#B58A1E] border border-[#CDA434]" />
         </div>
       </header>
 
-      {/* CONTAINER PRINCIPAL: main (esquerda) + sidebar (direita) */}
-      <div className="flex-1 w-full max-w-[1700px] mx-auto flex gap-3 px-0 pt-0 pb-[240px] lg:pb-[230px] bg-[#FAFAF7]">
+      {/* CONTAINER PRINCIPAL: rail de ícones (esquerda) + carrinho (centro) +
+          painel de pagamento (direita). pb-12 deixa espaço pro rodapé fino
+          fixo de status. */}
+      <div className="flex-1 w-full max-w-[1700px] mx-auto flex flex-col lg:flex-row items-start gap-4 px-3 lg:px-5 pt-4 pb-14 bg-[#FAFAF7]">
 
-      {/* ─── SIDEBAR ESQUERDA — AÇÕES DO PDV (desktop) ─────────────────────
-          Painel MARINHO/NAVY escuro (mesma cor do header — visual integrado).
-          Botões QUADRADOS em grid 2 colunas: ícone em cima + label embaixo +
-          atalho como chip no canto superior direito. Sticky logo abaixo do
-          header (top-0 — encosta no header pra dar sensação de bloco único).
-          Em mobile (<lg) some — PdvMobilePill horizontais continuam acima
-          do footer pra mesma navegação. */}
-      {sale?.status === 'open' && (
-        <aside
-          className="w-[210px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
-          style={{
-            top: '0',
-            minHeight: '100vh',
-            maxHeight: '100vh',
-            overflowY: 'auto',
-            background: '#FBFBF9',
-          }}
-        >
-          <div className="p-2.5 pt-3 space-y-3">
-            {/* SIDEBAR ESQUERDA — cards horizontais compactos */}
-            <div className="space-y-1.5">
-              <Link
-                href="/minha-loja/consultar"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Consulta de produtos (F10)"
-              >
-                <Search className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Consulta Produtos</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Buscar produto, estoque</div>
-                </div>
-                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F10</span>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/devolucao"
-                onClick={() => {
-                  try {
-                    if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
-                    else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
-                  } catch {}
-                }}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Trocas / Devolução (F4)"
-              >
-                <ArrowRightLeft className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Trocas</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Devolução / troca</div>
-                </div>
-                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F4</span>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              {/* TROCA SITE — cliente comprou no lurds.com.br, vem trocar na loja física.
-                  Backend wc-returns já cuida: busca pedido WC, valida prazo, retorna estoque
-                  na loja receptora. */}
-              <Link
-                href="/site/trocas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-violet-50 border border-slate-200 hover:border-violet-400 rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Troca de pedido do site (lurds.com.br)"
-              >
-                <Globe className="w-5 h-5 text-violet-400 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Troca SITE</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Pedido lurds.com.br</div>
-                </div>
-                <span className="text-[9px] font-mono font-bold bg-violet-500 text-white px-1.5 py-0.5 rounded shrink-0">WC</span>
-                <ArrowUpRight className="w-3 h-3 text-violet-400/60 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/marcados"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Marcados (provar em casa)"
-              >
-                <Tag className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Marcados</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Provar em casa</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <button
-                type="button"
-                onClick={() => setShowSimular(true)}
-                disabled={!sale?.total || sale.total <= 0}
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-slate-200 disabled:hover:translate-y-0 disabled:hover:shadow-none"
-                title="Simular parcelamento"
-              >
-                <CreditCard className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Simular</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Simular parcelamento</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </button>
-              <Link
-                href="/minha-loja/pdv/recebimentos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Baixa de Crediário"
-              >
-                <Receipt className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Baixa Crediário</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Receber parcelas</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/caixa"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Retiradas, sangria, suprimento (F3)"
-              >
-                <DollarSign className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Retiradas</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Caixa, sangria</div>
-                </div>
-                <span className="text-[9px] font-mono font-bold bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded shrink-0">F3</span>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/produtos-vendidos"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Conferir vendas + trocas do turno"
-              >
-                <Receipt className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Produtos Vendidos</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Vendas + trocas (conferir)</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/notas"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Notas Fiscais emitidas"
-              >
-                <FileText className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Notas Fiscais</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">NFC-es emitidas</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-              <Link
-                href="/minha-loja/pdv/config-impressora"
-                className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-                title="Configurar impressoras térmica e A4"
-              >
-                <Printer className="w-5 h-5 text-[#B58A1E] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-black leading-tight">Impressoras</div>
-                  <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Térmica + A4</div>
-                </div>
-                <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </Link>
-            </div>
+      {/* ─── RAIL ESQUERDO — menu de ícones (espec do layout claro) ─────────
+          Coluna estreita de botões quadrados: ícone em cima + label embaixo.
+          "Venda" (tela atual) fica ativa em dourado. Itens secundários que
+          não estão na espec ficam abaixo de um divisor, no mesmo estilo,
+          pra nenhuma função sumir. Em mobile (<lg) some — PdvMobilePill
+          horizontais continuam pra mesma navegação. */}
+      {sale?.status === 'open' && (() => {
+        const railBase = 'w-full flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 transition text-slate-500 hover:bg-[#FBF6E6] hover:text-[#8C7325]';
+        const railLabel = 'text-[10px] font-semibold leading-none';
+        return (
+        <aside className="w-[84px] shrink-0 hidden lg:flex flex-col sticky self-start top-[64px]">
+          <div className="bg-white border border-[#E5E2D9] rounded-2xl p-1.5 flex flex-col gap-0.5 shadow-sm max-h-[calc(100vh-120px)] overflow-y-auto">
+            <span
+              className="w-full flex flex-col items-center justify-center gap-1 rounded-xl py-2.5 bg-[#FBF6E6] text-[#8C7325] ring-1 ring-[#D4AF37]/50"
+              title="Venda (tela atual)"
+            >
+              <ShoppingCart className="w-5 h-5" />
+              <span className="text-[10px] font-black leading-none">Venda</span>
+            </span>
+            <Link href="/minha-loja/consultar" className={railBase} title="Consulta de produtos (F10)">
+              <Search className="w-5 h-5" />
+              <span className={railLabel}>Produtos</span>
+            </Link>
+            <Link
+              href="/minha-loja/pdv/devolucao"
+              onClick={() => {
+                try {
+                  if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 }));
+                  else localStorage.removeItem('lurds_pdv_attach_to_sale_id');
+                } catch {}
+              }}
+              className={railBase}
+              title="Trocas / Devolução (F4)"
+            >
+              <ArrowRightLeft className="w-5 h-5" />
+              <span className={railLabel}>Trocas</span>
+            </Link>
+            <Link href="/minha-loja/pdv/marcados" className={railBase} title="Marcados (provar em casa)">
+              <Tag className="w-5 h-5" />
+              <span className={railLabel}>Marcados</span>
+            </Link>
+            <Link href="/minha-loja/pdv/recebimentos" className={railBase} title="Baixa de Crediário — receber parcelas">
+              <Receipt className="w-5 h-5" />
+              <span className={railLabel}>Crediário</span>
+            </Link>
+            <Link href="/minha-loja/pdv/caixa" className={railBase} title="Retiradas, sangria, suprimento (F3)">
+              <DollarSign className="w-5 h-5" />
+              <span className={railLabel}>Caixa</span>
+            </Link>
+            <Link href="/minha-loja/pdv/notas" className={railBase} title="Notas Fiscais emitidas">
+              <FileText className="w-5 h-5" />
+              <span className={railLabel}>Notas</span>
+            </Link>
+            <Link href="/minha-loja/pdv/config-impressora" className={railBase} title="Configurar impressoras térmica e A4">
+              <Printer className="w-5 h-5" />
+              <span className={railLabel}>Impress.</span>
+            </Link>
+
+            <div className="h-px bg-[#EDEAE1] mx-2 my-1" />
+
+            <Link href="/site/trocas" className={railBase} title="Troca de pedido do site (lurds.com.br)">
+              <Globe className="w-5 h-5" />
+              <span className={railLabel}>Troca site</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowSimular(true)}
+              disabled={!sale?.total || sale.total <= 0}
+              className={`${railBase} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
+              title="Simular parcelamento"
+            >
+              <CreditCard className="w-5 h-5" />
+              <span className={railLabel}>Simular</span>
+            </button>
+            <Link href="/minha-loja/pdv/produtos-vendidos" className={railBase} title="Conferir vendas + trocas do turno">
+              <History className="w-5 h-5" />
+              <span className={railLabel}>Vendidos</span>
+            </Link>
+            <Link href="/minha-loja" className={`${railBase} relative`} title="Pedidos do site (e-commerce)">
+              <Globe className="w-5 h-5" />
+              <span className={railLabel}>Site</span>
+              {pedidosSitePending > 0 && (
+                <span className="absolute top-1 right-1.5 bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                  {pedidosSitePending}
+                </span>
+              )}
+            </Link>
+            <Link href="/minha-loja/realinhamento" className={`${railBase} relative`} title="Realinhamento de estoque inter-lojas">
+              <Shuffle className="w-5 h-5" />
+              <span className={railLabel}>Realinhar</span>
+              {realignPending > 0 && (
+                <span className="absolute top-1 right-1.5 bg-[#D4AF37] text-black text-[9px] font-black rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                  {realignPending}
+                </span>
+              )}
+            </Link>
+            <Link href="/minha-loja/pdv/fechamento" className={railBase} title="Fechamento diário">
+              <Wallet className="w-5 h-5" />
+              <span className={railLabel}>Fechar</span>
+            </Link>
           </div>
         </aside>
-      )}
+        );
+      })()}
 
 
-      <main className="flex-1 min-w-0 space-y-3">
+      <main className="flex-1 min-w-0 space-y-3 w-full">
         {error && (
           <div className="bg-rose-50 border-2 border-rose-300 text-rose-800 p-3 rounded-xl text-sm flex items-start gap-2 shadow-sm">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
@@ -1876,7 +1872,14 @@ function PdvPageInner() {
             <Loader2 className="w-6 h-6 animate-spin inline-block" />
           </div>
         ) : sale && sale.items?.length > 0 ? (
-          <div className="bg-white rounded-lg border overflow-hidden">
+          <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm overflow-hidden">
+            {/* Cabeçalho do card — "Carrinho" + contagem (espec) */}
+            <div className="px-4 pt-3.5 pb-2.5 flex items-baseline justify-between">
+              <span className="text-base font-bold text-slate-900">Carrinho</span>
+              <span className="text-xs font-semibold text-slate-400" title="Último item bipado aparece no topo">
+                {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
+              </span>
+            </div>
             {/* Seletor de campanha — só aparece se TEM campanha ativa OU foi
                 expandido explicitamente. Quando "Nenhuma", mostra só botão sutil
                 pra ativar (não polui a tela quando não tá em uso). */}
@@ -1961,21 +1964,7 @@ function PdvPageInner() {
               })()}
             </div>
             )}
-            {/* Cabeçalho de colunas — agora com coluna de THUMBNAIL antes da DESC */}
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-600">
-              <div>SKU</div>
-              <div></div>
-              <div>Produto</div>
-              <div className="text-center">Qtd</div>
-              <div className="text-right">R$ Unit</div>
-              <div className="text-right">R$ Total</div>
-              <div className="text-center">Ações</div>
-            </div>
-            <div className="px-3 py-1.5 bg-[#FAF6E8] border-b border-[#E5E5E0] text-[11px] text-[#8C7325] font-bold flex items-center gap-1.5">
-              <ShoppingCart className="w-3 h-3" /> Itens da venda · {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
-              <span className="ml-2 text-[9px] font-bold text-[#8C7325]/70 uppercase tracking-wider">↓ último bipado no topo</span>
-            </div>
-            <div className="divide-y">
+            <div className="divide-y divide-[#F0EEE6]">
               {/* LINHAS VIRTUAIS DE VALE-TROCA — quando o cliente aplica um vale
                   na venda, aparece como "produto devolvido" no carrinho com valor
                   negativo, deixando claro que o abatimento foi feito. Renderizado
@@ -1989,18 +1978,15 @@ function PdvPageInner() {
                 return (
                   <div
                     key={`vt-${p.id}`}
-                    className="px-3 py-2 grid grid-cols-[80px_56px_1fr_80px_90px_110px_56px] gap-2 items-center bg-[#FAF6E8] border-l-4 border-[#D4AF37]"
+                    className="px-4 py-3 flex items-center gap-3 bg-[#FAF6E8] border-l-4 border-[#D4AF37]"
                     title="Vale-troca aplicado — abate da venda"
                   >
-                    <div className="font-mono text-[10px] text-[#8C7325] truncate">{code || 'VALE'}</div>
-                    <div className="flex items-center justify-center text-[#8C7325] text-xl">↺</div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-black uppercase tracking-wide">DEVOLUÇÃO (vale-troca)</div>
-                      <div className="text-[10px] text-[#8C7325] font-mono">{code}</div>
+                    <div className="w-11 h-11 rounded-lg bg-white border border-[#E5E2D9] flex items-center justify-center text-[#8C7325] text-xl shrink-0">↺</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-bold text-slate-900">Devolução (vale-troca)</div>
+                      <div className="text-xs text-[#8C7325] font-mono mt-0.5">{code || 'VALE'}</div>
                     </div>
-                    <div className="text-right text-[11px] text-slate-500">1×</div>
-                    <div className="text-right text-[11px] text-slate-500 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
-                    <div className="text-right text-sm font-bold text-rose-700 tabular-nums">−{brl(Number(p.valor) || 0)}</div>
+                    <div className="text-right text-sm font-bold text-rose-700 tabular-nums shrink-0">−{brl(Number(p.valor) || 0)}</div>
                     <button
                       onClick={async () => {
                         if (!confirm(`Remover vale-troca ${code}?\n\nO codigo TROCA volta a ficar disponivel.`)) return;
@@ -2030,57 +2016,61 @@ function PdvPageInner() {
                 return (
                 <div
                   key={it.id}
-                  className={`px-3 py-2 grid grid-cols-[68px_52px_1fr_56px_72px_96px_44px] gap-2 items-center transition-colors duration-500 ${
+                  className={`px-4 py-3 flex items-center gap-3 transition-colors duration-500 ${
                     it.id === lastAddedItemId
                       ? 'bg-emerald-200/80 ring-2 ring-inset ring-emerald-500'
                       : isLast
-                      ? 'bg-[#FAF6E8] shadow-[inset_3px_0_0_0_#D4AF37]'
+                      ? 'bg-[#FAF6E8]/70 shadow-[inset_3px_0_0_0_#D4AF37]'
                       : 'hover:bg-[#FAF6E8]/50'
                   }`}
                 >
-                  {/* SKU/EAN */}
-                  <div className="font-mono text-[11px] text-slate-700 truncate" title={it.ean || it.sku}>
-                    {it.ean || it.sku}
-                  </div>
-
                   {/* THUMBNAIL — busca foto do WooCommerce; fallback avatar */}
                   <ProductThumb sku={it.sku} refCode={it.ref} />
 
-                  {/* DESCRIÇÃO — REF como chip destacado + descrição em negrito.
-                      Ordem: SKU (col 1) -> REF (chip) -> descrição. */}
-                  <div className="min-w-0 flex items-center gap-2">
-                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
-                      <span className="font-mono font-black text-[11px] bg-white text-slate-700 border border-[#E5E5E0] rounded px-1.5 py-0.5 shrink-0 tracking-wide">
-                        {it.ref || it.sku}
+                  {/* NOME + linha "ref · tamanho" (espec). EAN/SKU ficam no title. */}
+                  <div className="min-w-0 flex-1" title={`SKU ${it.sku}${it.ean ? ` · EAN ${it.ean}` : ''}`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm font-bold text-slate-900 truncate">
+                        {it.descricao || it.ref || it.sku}
                       </span>
-                      {it.descricao && (
-                        <span className="text-sm font-bold text-slate-900 truncate font-sans">{it.descricao}</span>
+                      {it.promoTag && (
+                        <span
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
+                            it.promoTag === 'SEM_PROMO'
+                              ? 'bg-slate-200 text-slate-600 border border-slate-300'
+                              : it.promoTag.includes('4 LEVA 3')
+                              ? 'bg-[#8C7325] text-white border border-[#8C7325]'
+                              : it.promoTag === 'MANUAL'
+                              ? 'bg-slate-600 text-white border border-slate-600'
+                              : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
+                          }`}
+                          title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
+                        >
+                          {it.promoTag === 'SEM_PROMO'
+                            ? '🚫 Fora da promo'
+                            : it.promoTag === 'MANUAL'
+                            ? '✏️ MANUAL'
+                            : `🎁 ${it.promoTag}`}
+                        </span>
                       )}
                     </div>
-                    {it.promoTag && (
-                      <span
-                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                          it.promoTag === 'SEM_PROMO'
-                            ? 'bg-slate-200 text-slate-600 border border-slate-300'
-                            : it.promoTag.includes('4 LEVA 3')
-                            ? 'bg-[#8C7325] text-white border border-[#8C7325]'
-                            : it.promoTag === 'MANUAL'
-                            ? 'bg-slate-600 text-white border border-slate-600'
-                            : 'bg-[#FAF6E8] text-[#8C7325] border border-[#D4AF37]/40'
-                        }`}
-                        title={it.promoTag === 'SEM_PROMO' ? 'Fora da promoção (não participa)' : `Desconto: ${brl(it.desconto)}`}
-                      >
-                        {it.promoTag === 'SEM_PROMO'
-                          ? '🚫 Fora da promo'
-                          : it.promoTag === 'MANUAL'
-                          ? '✏️ MANUAL'
-                          : `🎁 ${it.promoTag}`}
-                      </span>
-                    )}
+                    <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
+                      ref {it.ref || it.sku}
+                      {it.tamanho ? ` · ${it.tamanho}` : ''}
+                      {it.qty > 1 ? ` · ${it.qty} × ${brl(it.precoUnit)}` : ''}
+                    </div>
                   </div>
 
-                  {/* QTD — input editável direto, sem botões */}
-                  <div className="flex items-center justify-center">
+                  {/* QTD — stepper − / valor / + (espec). Valor continua editável. */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => { if (it.qty > 1) updateItem(it.id, { qty: it.qty - 1 }); }}
+                      disabled={sale.status !== 'open' || it.qty <= 1}
+                      className="w-7 h-7 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="Diminuir quantidade"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
                     <input
                       type="number"
                       min={1}
@@ -2093,26 +2083,29 @@ function PdvPageInner() {
                         }
                       }}
                       disabled={sale.status !== 'open'}
-                      className="w-14 h-9 text-center font-black tabular-nums text-base text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-300 focus:border-rose-400 disabled:bg-slate-50 disabled:opacity-60"
+                      className="w-9 h-7 text-center font-bold tabular-nums text-sm text-slate-900 border-0 bg-transparent focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 rounded disabled:opacity-60 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
+                    <button
+                      onClick={() => { if (it.qty < 99) updateItem(it.id, { qty: it.qty + 1 }); }}
+                      disabled={sale.status !== 'open' || it.qty >= 99}
+                      className="w-7 h-7 rounded-md border border-[#E5E2D9] bg-white text-slate-500 hover:bg-[#FAF6E8] hover:text-[#8C7325] flex items-center justify-center transition active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="Aumentar quantidade"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
                   </div>
 
-                  {/* VAL UNITÁRIO */}
-                  <div className="text-right text-sm tabular-nums text-slate-700 font-semibold">
-                    {brl(it.precoUnit)}
-                  </div>
-
-                  {/* VAL TOTAL — preto forte, fonte grande */}
-                  <div className="text-right">
-                    <div className="font-black text-black tabular-nums text-base">{brl(it.total)}</div>
+                  {/* TOTAL DA LINHA */}
+                  <div className="text-right w-[92px] shrink-0">
+                    <div className="font-bold text-slate-900 tabular-nums text-sm">{brl(it.total)}</div>
                     {it.desconto > 0 && (
                       <div className="text-[10px] text-slate-400 line-through tabular-nums">{brl(bruto)}</div>
                     )}
                   </div>
 
-                  {/* AÇÕES — % desconto + 🗑 remover. Compactos pra não roubar espaço. */}
+                  {/* AÇÕES — % desconto + 🗑 remover, discretos à direita */}
                   {sale.status === 'open' ? (
-                    <div className="flex items-center justify-center gap-0.5">
+                    <div className="flex items-center gap-0.5 shrink-0">
                       <button
                         onClick={() =>
                           setShowDiscount({ kind: 'item', itemId: it.id, bruto, atual: it.desconto || 0 })
@@ -2120,7 +2113,7 @@ function PdvPageInner() {
                         className={`w-6 h-6 rounded flex items-center justify-center transition active:scale-95 ${
                           it.desconto > 0 && it.promoTag === 'MANUAL'
                             ? 'bg-amber-500 text-white hover:bg-amber-600'
-                            : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                            : 'text-slate-300 hover:text-amber-600 hover:bg-amber-50'
                         }`}
                         title={
                           it.desconto > 0 && it.promoTag === 'MANUAL'
@@ -2128,7 +2121,7 @@ function PdvPageInner() {
                             : 'Aplicar desconto neste item (% ou R$)'
                         }
                       >
-                        <Percent className="w-3 h-3" />
+                        <Percent className="w-3.5 h-3.5" />
                       </button>
                       {/* Tirar/voltar item da PROMOÇÃO ativa (peça que não participa).
                           Só aparece com campanha ativa e item que tem promo OU já foi excluído. */}
@@ -2152,10 +2145,10 @@ function PdvPageInner() {
                       )}
                       <button
                         onClick={() => removeItem(it.id)}
-                        className="w-6 h-6 rounded bg-rose-100 text-rose-700 hover:bg-rose-200 flex items-center justify-center transition active:scale-95"
+                        className="w-6 h-6 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 flex items-center justify-center transition active:scale-95"
                         title="Remover item"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   ) : <div />}
@@ -2177,173 +2170,13 @@ function PdvPageInner() {
         ) : null}
       </main>
 
-      {/* SIDEBAR DIREITA — RESUMO DA VENDA + GESTAO/RELATORIOS
-          Mesmo estilo navy marinho da sidebar esquerda. Encosta no header
-          (top-0) pra dar sensacao de bloco unico. Resumo no topo destacado
-          em card branco; abaixo botoes em horizontal cinza gelo. */}
-      {sale?.status === 'open' && (
-      <aside
-        className="w-[230px] shrink-0 hidden lg:flex flex-col gap-2 sticky self-start"
-        style={{
-          top: '0',
-          minHeight: '100vh',
-          maxHeight: '100vh',
-          overflowY: 'auto',
-          background: '#FBFBF9',
-        }}
-      >
-        <div className="p-2.5 pt-3 space-y-3">
-
-          {/* ─── RESUMO DA VENDA (card branco destacado) ─── */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-            <div className="text-[10px] font-black uppercase tracking-wider text-[#8C7325] mb-2">
-              Resumo da venda
-            </div>
-            <div className="space-y-1 text-xs">
-              {(() => {
-                const totalQty = (sale.items || []).reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0);
-                return (
-                  <div className="flex justify-between items-center bg-[#FAF6E8] border-2 border-[#D4AF37] rounded-lg px-3 py-2.5">
-                    <span className="text-[#8C7325] uppercase text-xs font-black tracking-wide">Peças</span>
-                    <span className="text-3xl font-black text-black tabular-nums">{totalQty}</span>
-                  </div>
-                );
-              })()}
-              <div className="flex justify-between items-center">
-                <span className="text-slate-600 uppercase text-[10px] tracking-wide">Subtotal</span>
-                <span className="font-bold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
-              </div>
-              {(() => {
-                const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
-                const totalDesc = descontoItens + (sale.desconto || 0);
-                if (totalDesc <= 0) return null;
-                return (
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-600 uppercase text-[10px] tracking-wide">Descontos</span>
-                    <span className="font-bold text-rose-600 tabular-nums">− {brl(totalDesc)}</span>
-                  </div>
-                );
-              })()}
-              {/* Devoluções/Vale-troca já aplicados — mostra em vermelho negativo */}
-              {(() => {
-                const valeTrocaPago = (sale.payments || []).reduce(
-                  (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
-                  0,
-                );
-                if (valeTrocaPago <= 0.01) return null;
-                return (
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-600 uppercase text-[10px] tracking-wide">Devolução / Vale</span>
-                    <span className="font-bold text-rose-600 tabular-nums">− {brl(valeTrocaPago)}</span>
-                  </div>
-                );
-              })()}
-            </div>
-            {(() => {
-              const valeTrocaPago = (sale.payments || []).reduce(
-                (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
-                0,
-              );
-              const liquido = Math.round((sale.total - valeTrocaPago) * 100) / 100;
-              const ehCredito = liquido < -0.01;
-              return (
-                <div className="border-t border-dashed border-slate-300 mt-2 pt-2 flex justify-between items-baseline">
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#8C7325]">
-                    {ehCredito ? 'Sobra crédito' : 'A pagar'}
-                  </span>
-                  <span className={`text-xl font-black tabular-nums ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
-                    {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
-                  </span>
-                </div>
-              );
-            })()}
-          </div>
-          {/* fim do resumo da venda */}
-
-          {/* SIDEBAR DIREITA — cards compactos */}
-          <div className="space-y-1.5">
-            <Link
-              href="/minha-loja"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-              title="Pedidos do site"
-            >
-              <Globe className="w-5 h-5 text-[#B58A1E] shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-black leading-tight">Pedidos Site</div>
-                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">E-commerce</div>
-              </div>
-              {pedidosSitePending > 0 && (
-                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 shrink-0">
-                  {pedidosSitePending}
-                </span>
-              )}
-              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </Link>
-            <Link
-              href="/minha-loja/realinhamento"
-              className={`group relative w-full text-left flex items-center gap-2.5 rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] bg-white hover:bg-[#FBF6E6] border ${
-                realignPending > 0
-                  ? 'border-[#CDA434] ring-2 ring-[#CDA434]/30'
-                  : 'border-slate-200 hover:border-[#CDA434]'
-              }`}
-              title="Realinhamento de estoque"
-            >
-              <Shuffle className="w-5 h-5 text-[#B58A1E] shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-black leading-tight">Realinhar</div>
-                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Inter-lojas</div>
-              </div>
-              {realignPending > 0 && (
-                <span className="bg-[#D4AF37] text-black text-[10px] font-black rounded-full min-w-[22px] h-5 flex items-center justify-center px-1.5 shrink-0">
-                  {realignPending}
-                </span>
-              )}
-              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </Link>
-            <Link
-              href="/minha-loja/pdv/fechamento"
-              className="group relative w-full text-left flex items-center gap-2.5 bg-white hover:bg-[#FBF6E6] border border-slate-200 hover:border-[#CDA434] rounded-xl px-3 py-2 text-slate-700 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
-              title="Fechamento diário"
-            >
-              <Wallet className="w-5 h-5 text-[#B58A1E] shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-black leading-tight">Fechamento</div>
-                <div className="text-[10px] text-[#9CA3AF] leading-tight mt-0.5">Fechamento diário</div>
-              </div>
-              <ArrowUpRight className="w-3 h-3 text-slate-300 absolute top-1.5 right-1.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </Link>
-          </div>
-
-        </div>
-      </aside>
-      )}
-
-      </div>{/* fim do flex main+sidebar */}
-
-      {/* MOBILE BAR — em telas <lg, mostra ações em scroll horizontal acima do footer */}
-      <div className="lg:hidden fixed bottom-[220px] left-0 right-0 z-10 px-3">
-        <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
-          <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
-          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
-          <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
-          <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
-          <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
-          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao" onClick={() => { try { if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 })); else localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {} }} icon={ArrowRightLeft} label="Trocar" />
-          <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
-          <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
-        </div>
-      </div>
-
-      {/* ─── PaymentBar — barra inferior com 3 grupos de pagamento ─────────
-         Posicionada fixed acima do footer principal. Aparece só quando a
-         venda tem itens (>0) — evita poluir tela vazia. Cada botão dispara
-         o PaymentModal já com método+bandeira preset (vai direto pra parcelas
-         em crédito ou confirmação em débito; PIX/CREDIÁRIO/DINHEIRO abrem
-         no modo certo). */}
-      {sale?.status === 'open' && (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0 && (() => {
-        // CRÉDITO/DÉBITO viram 1 botão cada — a BANDEIRA é escolhida no
-        // PaymentModal (seletor próprio de logos). presetBandeira=null força
-        // o picker a aparecer (igual ao fluxo do pdv2).
+      {/* ─── PAINEL DIREITO — CLIENTE + TOTAIS + PAGAMENTO (espec) ─────────
+          Card do cliente no topo; abaixo, card com subtotal/desconto, total a
+          pagar em verde, grade 2 colunas de formas de pagamento e o botão
+          verde "Finalizar venda · F8". Toda a lógica é a mesma da antiga
+          PaymentBar + footer — só mudou de lugar e de roupa. */}
+      {sale?.status === 'open' && (() => {
+        // Handlers de forma de pagamento (mesmo comportamento da PaymentBar antiga)
         const venderCredito = () => {
           setPresetMethod('credito');
           setPresetBandeira(null);
@@ -2373,403 +2206,339 @@ function PdvPageInner() {
             return;
           }
         };
-        const PayBtn = ({
-          onClick, brand, label, hoverColor,
-        }: {
-          onClick: () => void;
-          brand?: string;
-          label?: React.ReactNode;
-          hoverColor: string;
-        }) => (
-          <button
-            onClick={onClick}
-            className={`bg-white rounded-lg px-2 py-1.5 flex items-center justify-center transition border border-slate-200 hover:shadow-md h-11 min-w-[60px] ${hoverColor}`}
-            title={brand || (typeof label === 'string' ? label : '')}
-          >
-            {brand ? <BandeiraLogo brand={brand} /> : label}
-          </button>
+        const podePagar = (sale.items?.length ?? 0) > 0 && (sale.total || 0) > 0;
+        const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+        const liquido = Math.round((sale.total - paid) * 100) / 100;
+        const ehCredito = liquido < -0.01;
+        const temPgtoParcial = paid > 0.01 && paid < sale.total - 0.01;
+        const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
+        const economiaTotal = descontoItens + (sale.desconto || 0);
+        const valeTrocaPago = (sale.payments || []).reduce(
+          (s: number, p: any) => p.method === 'vale_troca' ? s + (Number(p.valor) || 0) : s,
+          0,
         );
+        const payBtnCls = 'flex items-center gap-2 border border-[#E5E2D9] rounded-lg px-3 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-[#FBF6E6] hover:border-[#CDA434] hover:text-[#8C7325] transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:border-[#E5E2D9] disabled:hover:text-slate-700';
         return (
-          <div className="fixed bottom-[130px] lg:bottom-[120px] left-0 right-0 z-20 px-3 pointer-events-none">
-            <div className="w-fit max-w-full mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl shadow-xl p-2 pointer-events-auto flex items-stretch gap-3 overflow-x-auto">
-              {/* GRUPO CARTÃO — CRÉDITO/DÉBITO em 1 botão cada. A bandeira é
-                  escolhida no PaymentModal (seletor de logos). */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Cartão</span>
-                <div className="flex gap-1.5">
-                  <PayBtn
-                    onClick={venderCredito}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <CreditCard className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">CRÉDITO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={venderDebito}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <CreditCard className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">DÉBITO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                </div>
-              </div>
+      <aside className="w-full lg:w-[320px] shrink-0 flex flex-col gap-3 lg:sticky self-start lg:top-[64px]">
 
-              <div className="w-px bg-slate-200 self-stretch mx-1" />
-
-              {/* GRUPO OUTROS */}
-              <div className="flex flex-col gap-1 shrink-0">
-                <span className="text-[13px] font-black uppercase tracking-wide text-[#8C7325] text-center">Outros</span>
-                <div className="flex gap-1.5">
-                  <PayBtn
-                    onClick={() => venderOutro('pix')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <QrCode className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">PIX</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('dinheiro')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Banknote className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">DINHEIRO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => venderOutro('crediario')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Receipt className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">CREDIÁRIO</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  <PayBtn
-                    onClick={() => setShowValeTroca(true)}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Tag className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">VALE</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  {/* VENDA ONLINE — WhatsApp/Instagram. Pagamento JÁ recebido por
-                      fora (PIX direto ou link externo). Só registra venda +
-                      baixa estoque. Sem NFC-e automática. CPF obrigatório. */}
-                  <PayBtn
-                    onClick={() => venderOutro('venda_online')}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <Globe className="w-4 h-4 text-[#8C7325]" />
-                        <span className="text-xs font-black text-black tracking-wide">V.ONLINE</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                  {/* MARCAR — cliente leva pra provar em casa.
-                      Exige cliente identificado (CPF) — senao abre modal de
-                      cliente primeiro. O click executa o fluxo direto: chama
-                      backend pra criar marcado + baixa estoque + fecha venda.
-                      Backend valida classe A e limite — se nao puder, retorna
-                      erro claro pra vendedora. */}
-                  <PayBtn
-                    onClick={async () => {
-                      if (!sale.customerCpf) {
-                        toast('warning', 'Identifique a cliente primeiro', 'CPF é obrigatorio pra marcar (provar em casa)');
-                        setShowCustomer(true);
-                        return;
-                      }
-                      if (!sale.items?.length) {
-                        toast('warning', 'Carrinho vazio', 'Bipe as peças que a cliente vai levar pra provar');
-                        return;
-                      }
-                      if (!confirm(
-                        `MARCAR ${sale.items.length} peça(s) pra ${sale.customerName || 'cliente'}?\n\n` +
-                        `Total: ${brl(sale.total)}\n\n` +
-                        `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
-                        `Cliente precisa ser classe A com limite disponivel no Giga.`,
-                      )) return;
-                      const doMarcar = async (force: boolean) => {
-                        const r = await api<any>('/pdv/marcados/criar', {
-                          method: 'POST',
-                          body: JSON.stringify({ saleId: sale.id, force }),
-                        });
-                        if (r.ok) {
-                          toast(
-                            'success',
-                            `${r.totalItems || sale.items.length} peças marcadas!`,
-                            `Controle ${r.controle || ''} · ${r.forced ? '⚠ FORÇADO (acima do limite) · ' : ''}Cliente vai provar em casa`,
-                          );
-                          setSale(null);
-                          setTimeout(() => createNewSale(), 500);
-                        } else {
-                          toast('error', 'Falha ao marcar', r.error || 'Tente de novo');
-                        }
-                      };
-                      try {
-                        await doMarcar(false);
-                      } catch (e: any) {
-                        const msg = String(e?.message || '');
-                        // Erro de limite estourado — oferece override
-                        const isLimite = /limite dispon[ií]vel|em marca/i.test(msg);
-                        if (isLimite) {
-                          const ok = window.confirm(
-                            `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
-                            `Isso costuma acontecer quando a cliente tem marcações antigas no Giga ` +
-                            `que nunca foram baixadas (peças que voltaram mas o flag MARCADO=SIM ficou).\n\n` +
-                            `Quer MARCAR MESMO ASSIM?\n` +
-                            `(Vai ficar registrado quem forçou — só faça se tiver certeza)`,
-                          );
-                          if (ok) {
-                            try {
-                              await doMarcar(true);
-                            } catch (e2: any) {
-                              const h2 = humanizeError(e2);
-                              toast('error', 'Falha mesmo com override', h2.hint || h2.title);
-                            }
-                          }
-                          return;
-                        }
-                        const h = humanizeError(e);
-                        toast('error', 'Cliente nao pode marcar', h.hint || h.title);
-                      }
-                    }}
-                    label={
-                      <span className="flex items-center gap-1">
-                        <span className="text-base">📋</span>
-                        <span className="text-xs font-black text-black tracking-wide">MARCAR</span>
-                      </span>
-                    }
-                    hoverColor="hover:bg-[#FAF6E8] hover:border-[#D4AF37]"
-                  />
-                </div>
-              </div>
-            </div>
+        {/* Card do CLIENTE — clique abre o modal de identificação (F6) */}
+        <button
+          onClick={() => setShowCustomer(true)}
+          className="w-full bg-white rounded-2xl border border-[#E5E2D9] shadow-sm px-4 py-3 flex items-center gap-3 text-left hover:border-[#CDA434] hover:bg-[#FBF6E6]/40 transition group"
+          title="Identificar / trocar cliente (atalho F6)"
+        >
+          <div className="w-10 h-10 rounded-full bg-[#F3F1EA] border border-[#E5E2D9] flex items-center justify-center shrink-0">
+            {sale.customerName ? (
+              <span className="text-xs font-black text-[#8C7325]">
+                {sale.customerName.trim().split(/\s+/).slice(0, 2).map((w) => w.charAt(0).toUpperCase()).join('')}
+              </span>
+            ) : (
+              <User className="w-5 h-5 text-slate-400" />
+            )}
           </div>
+          <div className="flex-1 min-w-0">
+            {sale.customerName || sale.customerCpf ? (
+              <>
+                <div className="text-sm font-bold text-slate-900 truncate">{sale.customerName || 'Cliente'}</div>
+                <div className="text-xs text-slate-400 font-medium mt-0.5 truncate">
+                  {sale.customerCpf
+                    ? `CPF ${String(sale.customerCpf).replace(/\D/g, '').replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.***.***-$4')}`
+                    : 'Sem CPF'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm font-bold text-slate-500">Identificar cliente</div>
+                <div className="text-xs text-slate-400 font-medium mt-0.5">CPF / nome / telefone</div>
+              </>
+            )}
+          </div>
+          <span className="text-slate-300 group-hover:text-[#8C7325] transition shrink-0 flex items-center gap-1">
+            <kbd className="text-[9px] font-mono bg-slate-100 text-slate-400 border border-slate-200 rounded px-1 py-0.5">F6</kbd>
+            <ChevronRight className="w-4 h-4" />
+          </span>
+        </button>
+
+        {/* Card TOTAIS + PAGAMENTO */}
+        <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm p-4 space-y-3">
+          <div className="space-y-1.5 text-sm">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 font-medium">Subtotal</span>
+              <span className="font-semibold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
+            </div>
+            {economiaTotal > 0 && (
+              <div className="flex justify-between items-center">
+                <span className="text-[#2E7D46] font-medium">Desconto</span>
+                <span className="font-semibold text-[#2E7D46] tabular-nums">− {brl(economiaTotal)}</span>
+              </div>
+            )}
+            {valeTrocaPago > 0.01 && (
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Devolução / Vale</span>
+                <span className="font-semibold text-rose-600 tabular-nums">− {brl(valeTrocaPago)}</span>
+              </div>
+            )}
+            {temPgtoParcial && (
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Já pago</span>
+                <span className="font-semibold text-emerald-600 tabular-nums">✓ {brl(paid)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-[#F0EEE6] pt-2.5 flex justify-between items-baseline">
+            <span className="text-sm font-semibold text-slate-600">
+              {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
+            </span>
+            <span className={`text-[28px] font-black tabular-nums leading-none ${ehCredito ? 'text-rose-600' : 'text-[#2E7D46]'}`}>
+              {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
+            </span>
+          </div>
+
+          {/* Grade de formas de pagamento — 2 colunas (espec) */}
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => venderOutro('pix')} disabled={!podePagar} className={payBtnCls} title="Receber em PIX">
+              <QrCode className="w-4 h-4 shrink-0" /> PIX
+            </button>
+            <button onClick={() => venderOutro('dinheiro')} disabled={!podePagar} className={payBtnCls} title="Receber em dinheiro">
+              <Banknote className="w-4 h-4 shrink-0" /> Dinheiro
+            </button>
+            <button onClick={venderDebito} disabled={!podePagar} className={payBtnCls} title="Cartão de débito (bandeira no próximo passo)">
+              <CreditCard className="w-4 h-4 shrink-0" /> Débito
+            </button>
+            <button onClick={venderCredito} disabled={!podePagar} className={payBtnCls} title="Cartão de crédito (bandeira e parcelas no próximo passo)">
+              <CreditCard className="w-4 h-4 shrink-0" /> Crédito
+            </button>
+            <button onClick={() => venderOutro('crediario')} disabled={!podePagar} className={payBtnCls} title="Crediário próprio">
+              <Receipt className="w-4 h-4 shrink-0" /> Crediário
+            </button>
+            <button onClick={() => setShowValeTroca(true)} disabled={(sale.items?.length ?? 0) === 0} className={payBtnCls} title="Aplicar vale-troca">
+              <Tag className="w-4 h-4 shrink-0" /> Voucher
+            </button>
+          </div>
+
+          {/* Linha secundária — venda online + marcar (fluxos especiais) */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => venderOutro('venda_online')}
+              disabled={!podePagar}
+              className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 border border-dashed border-[#E5E2D9] rounded-lg px-2 py-1.5 hover:bg-[#FBF6E6] hover:text-[#8C7325] hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Venda online (WhatsApp/Instagram) — pagamento já recebido por fora"
+            >
+              <Globe className="w-3.5 h-3.5" /> V. Online
+            </button>
+            <button
+              onClick={async () => {
+                if (!sale.customerCpf) {
+                  toast('warning', 'Identifique a cliente primeiro', 'CPF é obrigatorio pra marcar (provar em casa)');
+                  setShowCustomer(true);
+                  return;
+                }
+                if (!sale.items?.length) {
+                  toast('warning', 'Carrinho vazio', 'Bipe as peças que a cliente vai levar pra provar');
+                  return;
+                }
+                if (!confirm(
+                  `MARCAR ${sale.items.length} peça(s) pra ${sale.customerName || 'cliente'}?\n\n` +
+                  `Total: ${brl(sale.total)}\n\n` +
+                  `As peças vão como "provar em casa" — baixa estoque + fica em aberto pra cliente devolver depois.\n\n` +
+                  `Cliente precisa ser classe A com limite disponivel no Giga.`,
+                )) return;
+                const doMarcar = async (force: boolean) => {
+                  const r = await api<any>('/pdv/marcados/criar', {
+                    method: 'POST',
+                    body: JSON.stringify({ saleId: sale.id, force }),
+                  });
+                  if (r.ok) {
+                    toast(
+                      'success',
+                      `${r.totalItems || sale.items.length} peças marcadas!`,
+                      `Controle ${r.controle || ''} · ${r.forced ? '⚠ FORÇADO (acima do limite) · ' : ''}Cliente vai provar em casa`,
+                    );
+                    setSale(null);
+                    setTimeout(() => createNewSale(), 500);
+                  } else {
+                    toast('error', 'Falha ao marcar', r.error || 'Tente de novo');
+                  }
+                };
+                try {
+                  await doMarcar(false);
+                } catch (e: any) {
+                  const msg = String(e?.message || '');
+                  // Erro de limite estourado — oferece override
+                  const isLimite = /limite dispon[ií]vel|em marca/i.test(msg);
+                  if (isLimite) {
+                    const ok = window.confirm(
+                      `⚠ LIMITE DE MARCAÇÃO ESTOURADO\n\n${msg}\n\n` +
+                      `Isso costuma acontecer quando a cliente tem marcações antigas no Giga ` +
+                      `que nunca foram baixadas (peças que voltaram mas o flag MARCADO=SIM ficou).\n\n` +
+                      `Quer MARCAR MESMO ASSIM?\n` +
+                      `(Vai ficar registrado quem forçou — só faça se tiver certeza)`,
+                    );
+                    if (ok) {
+                      try {
+                        await doMarcar(true);
+                      } catch (e2: any) {
+                        const h2 = humanizeError(e2);
+                        toast('error', 'Falha mesmo com override', h2.hint || h2.title);
+                      }
+                    }
+                    return;
+                  }
+                  const h = humanizeError(e);
+                  toast('error', 'Cliente nao pode marcar', h.hint || h.title);
+                }
+              }}
+              disabled={(sale.items?.length ?? 0) === 0}
+              className="flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 border border-dashed border-[#E5E2D9] rounded-lg px-2 py-1.5 hover:bg-[#FBF6E6] hover:text-[#8C7325] hover:border-[#CDA434] transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Marcar — cliente leva pra provar em casa (exige CPF)"
+            >
+              <span className="text-sm leading-none">📋</span> Marcar
+            </button>
+          </div>
+
+          {/* FINALIZAR VENDA — verde, F8 (abre a tela de pagamento) */}
+          <button
+            onClick={() => {
+              if (sale.items?.length > 0) {
+                setPaymentFilter('all');
+                setShowPayment(true);
+              }
+            }}
+            disabled={(sale.items?.length ?? 0) === 0}
+            className="w-full py-3.5 rounded-xl text-white font-bold text-base flex items-center justify-center gap-2 transition hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+            style={{ background: '#2E7D46' }}
+            title="Abrir pagamento e finalizar (atalho F8)"
+          >
+            <Check className="w-5 h-5" />
+            Finalizar venda
+            <kbd className="text-[10px] font-mono font-semibold bg-white/20 rounded px-1.5 py-0.5 ml-1">F8</kbd>
+          </button>
+
+          {/* FINALIZAR DIRETO — aparece SÓ quando a venda já está 100% paga
+              (ex: vale-troca cobriu todo o total numa TROCA PAR). Sem esse
+              botão, vendedora ficava travada sem saber onde clicar pra fechar. */}
+          {sale.items?.length > 0 && (() => {
+            const restante = Math.round((sale.total - paid) * 100) / 100;
+            const jaCoberto = sale.total >= 0 && Math.abs(restante) < 0.01 && paid > 0;
+            const trocaParZero = Math.abs(sale.total) < 0.01 && paid === 0;
+            if (!jaCoberto && !trocaParZero) return null;
+            return (
+              <button
+                onClick={() => finalizeSale('')}
+                disabled={finalizing}
+                className={`w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ${trocaParZero ? '' : 'ring-4 ring-emerald-300/60 animate-pulse'}`}
+                title={trocaParZero ? 'Troca par sem diferença — clique pra finalizar' : 'Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar.'}
+              >
+                {finalizing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+                {finalizing ? 'Finalizando...' : 'FINALIZAR'}
+              </button>
+            );
+          })()}
+
+          {/* GERAR VALE DO SALDO — aparece quando vale_troca > total (cliente
+              tem credito sobrando e nao quer levar outra peca). */}
+          {sale.items?.length > 0 && (() => {
+            const valeAplicado = (sale.payments || [])
+              .filter((p: any) => String(p.method).toLowerCase() === 'vale_troca')
+              .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+            const sobraCredito = liquido < -0.01 && valeAplicado > 0;
+            if (!sobraCredito) return null;
+            const valorResidual = Math.abs(liquido);
+            return (
+              <button
+                onClick={async () => {
+                  if (!confirm(
+                    `Gerar vale de R$ ${valorResidual.toFixed(2).replace('.', ',')} pra cliente usar depois?\n\n` +
+                    `✓ O vale-troca atual será ajustado pra cobrir só ${brl(sale.total)}\n` +
+                    `✓ O saldo R$ ${valorResidual.toFixed(2).replace('.', ',')} vira novo vale (90 dias)\n` +
+                    `✓ Venda será finalizada e o vale impresso`
+                  )) return;
+                  try {
+                    const r: any = await api('/pdv/devolucao/dividir-vale-residual', {
+                      method: 'POST',
+                      body: JSON.stringify({
+                        saleId: sale.id,
+                        customerCpf: sale.customerCpf || undefined,
+                        customerName: sale.customerName || undefined,
+                      }),
+                    });
+                    // Finaliza venda apos ajuste
+                    await finalizeSale('');
+                    // Imprime o vale
+                    if (r?.creditoCode) {
+                      const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
+                      try {
+                        const { routePrint } = await import('@/lib/printer-router');
+                        await routePrint({ kind: 'vale', url }).catch(() => {
+                          window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
+                        });
+                      } catch {
+                        window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
+                      }
+                    }
+                  } catch (e: any) {
+                    toast('error', 'Erro ao gerar vale', e?.message || String(e));
+                  }
+                }}
+                disabled={finalizing}
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center justify-center gap-2 text-base shadow-md ring-4 ring-rose-300/60 animate-pulse"
+                title={`Cria vale de R$ ${valorResidual.toFixed(2)} pra cliente usar depois`}
+              >
+                <span>💰</span>
+                <span>Gerar vale R$ {valorResidual.toFixed(2).replace('.', ',')}</span>
+              </button>
+            );
+          })()}
+
+          {/* Ações da venda — discretas abaixo do finalizar */}
+          <div className="flex items-center justify-between gap-1 pt-1 border-t border-[#F0EEE6]">
+            <button
+              onClick={cancelSale}
+              className="flex-1 text-xs font-semibold text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition"
+              title="Cancelar venda"
+            >
+              <X className="w-3.5 h-3.5" /> Cancelar
+            </button>
+            <button
+              onClick={fecharDepois}
+              disabled={!sale?.items?.length}
+              className="flex-1 text-xs font-semibold text-slate-500 hover:text-[#8C7325] hover:bg-[#FBF6E6] rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Pausar venda (volta na lista Pausadas)"
+            >
+              <Pause className="w-3.5 h-3.5" /> Pausar
+            </button>
+            <button
+              onClick={() => setShowDiscount({ kind: 'sale' })}
+              className="flex-1 text-xs font-semibold text-slate-500 hover:text-[#8C7325] hover:bg-[#FBF6E6] rounded-lg px-2 py-2 flex items-center justify-center gap-1 transition"
+              title="Aplicar desconto na venda toda (atalho F2)"
+            >
+              <Percent className="w-3.5 h-3.5" /> Desconto
+            </button>
+          </div>
+        </div>
+      </aside>
         );
       })()}
 
-      {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
-      {sale?.status === 'open' && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#D4AF37] shadow-lg z-10">
-          <div className="max-w-4xl mx-auto px-4 py-3">
-            {/* Linha de detalhamento: subtotal + economia agregada (descontos itens + sale.desconto extra) */}
-            {(() => {
-              const descontoItens = sale.items.reduce((s, i) => s + (i.desconto || 0), 0);
-              const economiaTotal = descontoItens + (sale.desconto || 0);
-              if (economiaTotal <= 0) return null;
-              return (
-                <div className="flex items-center justify-between gap-4 text-xs mb-2 px-1 pb-2 border-b border-slate-100">
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className="text-slate-500">
-                      Subtotal <span className="tabular-nums font-semibold text-slate-700 ml-1">{brl(sale.subtotal)}</span>
-                    </span>
-                    <span className="text-emerald-700 font-bold flex items-center gap-1">
-                      🎁 Economia <span className="tabular-nums">−{brl(economiaTotal)}</span>
-                    </span>
-                    {descontoItens > 0 && (sale.desconto || 0) > 0 && (
-                      <span className="text-[10px] text-slate-400">
-                        ({brl(descontoItens)} itens + {brl(sale.desconto)} venda)
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-400">
-                    {(() => { const t = sale.items.reduce((s: number, it: any) => s + (Number(it.qty) || 0), 0); return `${t} ${t === 1 ? 'peça' : 'peças'}`; })()}
-                  </span>
-                </div>
-              );
-            })()}
+      </div>{/* fim do flex main+sidebar */}
 
-            {/* Linha principal: ações com LABEL + TOTAL grande + FINALIZAR GIGANTE */}
-            <div className="flex items-center gap-3">
-              {/* Cancelar venda — botão branco com LABEL */}
-              <button
-                onClick={cancelSale}
-                className="px-4 py-3 bg-white hover:bg-rose-50 border border-rose-300 text-rose-600 hover:text-rose-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
-                title="Cancelar venda"
-              >
-                <X className="w-4 h-4" />
-                <span className="hidden sm:inline">Cancelar venda</span>
-              </button>
+      {/* MOBILE BAR — em telas <lg, mostra ações em scroll horizontal acima do rodapé de status */}
+      <div className="lg:hidden fixed bottom-11 left-0 right-0 z-10 px-3">
+        <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
+          <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
+          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
+          <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
+          <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
+          <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
+          <PdvMobilePill tone="orange" href="/minha-loja/pdv/devolucao" onClick={() => { try { if (sale?.id) localStorage.setItem('lurds_pdv_attach_to_sale_id', JSON.stringify({ id: sale.id, ts: Date.now(), items: sale.items?.length || 0 })); else localStorage.removeItem('lurds_pdv_attach_to_sale_id'); } catch {} }} icon={ArrowRightLeft} label="Trocar" />
+          <PdvMobilePill tone="slate"  onClick={() => setShowOpenList(true)} disabled={openCount === 0} icon={Pause} label="Pausa" badge={openCount} />
+          <PdvMobilePill tone="orange" href="/minha-loja/realinhamento"    icon={Shuffle}    label="Realin." badge={realignPending} />
+        </div>
+      </div>
 
-              {/* PAUSAR venda — fica na fila pra retomar depois (botão amarelo
-                  em destaque). Útil quando cliente está esperando (ex: foi
-                  pegar mais peças) e a vendedora precisa atender outra. Só
-                  habilita se já tem peça bipada. */}
-              <button
-                onClick={fecharDepois}
-                disabled={!sale?.items?.length}
-                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border border-slate-300 text-slate-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Pausar venda (volta na lista Pausadas)"
-              >
-                <Pause className="w-4 h-4" />
-                <span className="hidden sm:inline">Pausar</span>
-              </button>
-
-              {/* Desconto geral — botão branco com LABEL + atalho F2 */}
-              <button
-                onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border border-slate-300 text-slate-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
-                title="Aplicar desconto na venda toda (atalho F2)"
-              >
-                <Percent className="w-4 h-4" />
-                <span className="hidden sm:inline">Desconto geral</span>
-                <kbd className="hidden md:inline-flex items-center justify-center text-[10px] font-mono bg-slate-100 text-slate-500 border border-slate-200 rounded px-1.5 py-0.5 ml-1">F2</kbd>
-              </button>
-
-              {/* TOTAL GIGANTE — destaque máximo, ocupa espaço central.
-                  whitespace-nowrap (sem truncate) — valor grande NAO pode cortar.
-                  Escala progressiva: vai diminuindo a fonte em telas estreitas
-                  pra caber sempre, mesmo com R$ 9.999,99+
-                  SHOW RESTANTE: desconta pagamentos ja feitos (vale-troca, etc)
-                  pra vendedora ver de cara quanto FALTA cobrar. */}
-              <div className="flex-1 px-2 min-w-[140px] text-center overflow-visible">
-                {(() => {
-                  const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-                  // SEM Math.max — se vale_troca > total das peças, mostra
-                  // negativo (cliente ainda tem crédito sobrando). Atualiza em
-                  // tempo real conforme bipa: -49,90 → -10,00 → +19,90.
-                  const liquido = Math.round((sale.total - paid) * 100) / 100;
-                  const ehCredito = liquido < -0.01;
-                  const temPgtoParcial = paid > 0.01 && paid < sale.total - 0.01;
-                  return (
-                    <>
-                      {temPgtoParcial && (
-                        <div className="text-[10px] text-slate-500 font-bold leading-none mb-0.5">
-                          {brl(sale.total)} · <span className="text-emerald-600">✓ {brl(paid)} pago</span>
-                        </div>
-                      )}
-                      <div className="text-[10px] text-[#8C7325] uppercase tracking-widest font-bold leading-none">
-                        {ehCredito ? 'Sobra crédito' : temPgtoParcial ? 'Falta a pagar' : 'Total a pagar'}
-                      </div>
-                      <div className={`text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-black tabular-nums leading-none mt-1 whitespace-nowrap ${ehCredito ? 'text-rose-600' : 'text-black'}`}>
-                        {ehCredito ? `− ${brl(Math.abs(liquido))}` : brl(liquido)}
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-
-              {/* FINALIZAR DIRETO — aparece SÓ quando a venda já está 100% paga
-                  (ex: vale-troca cobriu todo o total numa TROCA PAR). Sem esse
-                  botão, vendedora ficava travada sem saber onde clicar pra fechar.
-                  Nos outros casos (precisa receber dinheiro/cartão/PIX), a vendedora
-                  clica nos botões de forma de pagamento — esses abrem o modal. */}
-              {sale && sale.items?.length > 0 && (() => {
-                const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-                const restante = Math.round((sale.total - paid) * 100) / 100;
-                // Caso 1: vale-troca cobriu tudo (paid > 0, total > 0, restante = 0)
-                // Caso 2: troca par com total = 0 (item negativo cancela item positivo) — finaliza sem pagamento
-                const jaCoberto = sale.total >= 0 && Math.abs(restante) < 0.01 && paid > 0;
-                const trocaParZero = Math.abs(sale.total) < 0.01 && paid === 0;
-                if (!jaCoberto && !trocaParZero) return null;
-                // Troca par zero usa visual mais discreto (sem piscar, sem ring grande)
-                // pra não sobrepor o TOTAL R$ 0,00.
-                const styleStrong = 'px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-emerald-300/60 animate-pulse';
-                const styleSubtle = 'px-5 py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-md';
-                return (
-                  <button
-                    onClick={() => finalizeSale('')}
-                    disabled={finalizing}
-                    className={trocaParZero ? styleSubtle : styleStrong}
-                    title={trocaParZero ? 'Troca par sem diferença — clique pra finalizar' : 'Venda já está 100% paga (vale-troca cobriu tudo). Clique pra finalizar.'}
-                  >
-                    {finalizing ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Check className="w-5 h-5" />
-                    )}
-                    {finalizing ? 'Finalizando...' : 'FINALIZAR'}
-                  </button>
-                );
-              })()}
-
-              {/* GERAR VALE DO SALDO — aparece quando vale_troca > total (cliente
-                  tem credito sobrando e nao quer levar outra peca). Click:
-                  ajusta o vale_troca payment pra cobrir so o necessario,
-                  cria vale residual com a diferenca (90 dias), finaliza venda
-                  e imprime o vale automatico. */}
-              {sale && sale.items?.length > 0 && (() => {
-                const paid = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-                const valeAplicado = (sale.payments || [])
-                  .filter((p: any) => String(p.method).toLowerCase() === 'vale_troca')
-                  .reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
-                const liquido = Math.round((sale.total - paid) * 100) / 100;
-                const sobraCredito = liquido < -0.01 && valeAplicado > 0;
-                if (!sobraCredito) return null;
-                const valorResidual = Math.abs(liquido);
-                return (
-                  <button
-                    onClick={async () => {
-                      if (!confirm(
-                        `Gerar vale de R$ ${valorResidual.toFixed(2).replace('.', ',')} pra cliente usar depois?\n\n` +
-                        `✓ O vale-troca atual será ajustado pra cobrir só ${brl(sale.total)}\n` +
-                        `✓ O saldo R$ ${valorResidual.toFixed(2).replace('.', ',')} vira novo vale (90 dias)\n` +
-                        `✓ Venda será finalizada e o vale impresso`
-                      )) return;
-                      try {
-                        const r: any = await api('/pdv/devolucao/dividir-vale-residual', {
-                          method: 'POST',
-                          body: JSON.stringify({
-                            saleId: sale.id,
-                            customerCpf: sale.customerCpf || undefined,
-                            customerName: sale.customerName || undefined,
-                          }),
-                        });
-                        // Finaliza venda apos ajuste
-                        await finalizeSale('');
-                        // Imprime o vale
-                        if (r?.creditoCode) {
-                          const url = `/minha-loja/pdv/vale-troca/${encodeURIComponent(r.creditoCode)}?autoprint=1`;
-                          try {
-                            const { routePrint } = await import('@/lib/printer-router');
-                            await routePrint({ kind: 'vale', url }).catch(() => {
-                              window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
-                            });
-                          } catch {
-                            window.open(url, `vale_${Date.now()}`, 'width=420,height=720');
-                          }
-                        }
-                      } catch (e: any) {
-                        toast('error', 'Erro ao gerar vale', e?.message || String(e));
-                      }
-                    }}
-                    disabled={finalizing}
-                    className="px-5 py-3 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-black rounded-xl flex items-center gap-2 text-base shrink-0 shadow-lg ring-4 ring-rose-300/60 animate-pulse"
-                    title={`Cria vale de R$ ${valorResidual.toFixed(2)} pra cliente usar depois`}
-                  >
-                    <span>💰</span>
-                    <span>Gerar vale R$ {valorResidual.toFixed(2).replace('.', ',')}</span>
-                  </button>
-                );
-              })()}
-            </div>
-
-            {/* ── PDV2: barra de atalhos discreta no rodapé ── */}
-            <div className="text-center text-[10px] text-slate-400 font-semibold tracking-wide select-none pt-1.5 mt-2 border-t border-slate-100 flex items-center justify-center gap-x-2 gap-y-1 flex-wrap">
-              {[['F1', 'Bipar'], ['F2', 'Desconto'], ['F4', 'Troca'], ['F6', 'Cliente'], ['F8', 'Pagamento'], ['F10', 'Consulta'], ['F12', 'Ajuda']].map(([k, lbl]) => (
-                <span key={k} className="inline-flex items-center gap-1">
-                  <kbd className="inline-flex items-center justify-center font-mono text-[9px] bg-black text-[#D4AF37] rounded px-1 py-0.5 leading-none">{k}</kbd>
-                  <span className="text-slate-500">{lbl}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </footer>
-      )}
+      {/* Rodapé fino de status — conexão / impressora / ambiente (espec) */}
+      <StatusFooter />
 
       {/* Modal Cliente */}
       {showCustomer && sale && (
