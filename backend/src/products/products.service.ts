@@ -2585,8 +2585,10 @@ export class ProductsService {
     }
 
     // Modo DESC puro — retorna LISTA de REFs pra vendedora escolher (não expande).
+    // ESPELHO primeiro (fallback Giga dentro do catalog) — consulta não pode
+    // morrer quando o Giga pendura.
     if (effectiveMode === 'desc') {
-      const grouped = await this.erp.searchByDescriptionGrouped(term);
+      const grouped = await this.catalog.searchByDescriptionGrouped(term);
       return {
         query: term,
         mode,
@@ -2609,14 +2611,14 @@ export class ProductsService {
       if (isLikelyEan) detectedAs = 'ean';
       // Guarda o código exato que a vendedora passou — marca a variante no resultado
       matchedSkuForResult = term;
-      rawRows = await this.erp.searchByCodeAndExpandRef(term);
+      rawRows = await this.catalog.searchByCodeAndExpandRef(term);
       // Fallback: se não achou pelo código, tenta como REF direto
       if (!rawRows.length) {
-        rawRows = await this.erp.searchByRef(term);
+        rawRows = await this.catalog.searchByRef(term);
       }
     } else {
       // Modo REF — busca exata + prefixo
-      rawRows = await this.erp.searchByRef(term);
+      rawRows = await this.catalog.searchByRef(term);
     }
     if (!rawRows.length) {
       return {
@@ -2703,8 +2705,8 @@ export class ProductsService {
       return n.replace(/\s{2,}/g, ' ').trim();
     };
 
-    // 4. Pega estoque detalhado por loja pra todos os SKUs
-    const detailed = await this.erp.getStockBySkusDetailed(skus);
+    // 4. Pega estoque detalhado por loja pra todos os SKUs (espelho → Giga)
+    const detailed = await this.catalog.getStockBySkusDetailed(skus);
 
     // 5. Carrega todas as lojas ativas uma vez (pra pegar whatsapp e nome)
     const allStores = await this.prisma.store.findMany({
