@@ -998,16 +998,29 @@ export class PdvService {
    * linha (UX melhor pro PDV).
    */
   async addItem(input: { saleId: string; skuOrEan: string; qty?: number }) {
+    // ── INSTRUMENTAÇÃO (02/07) — mede cada etapa do bipe pra atacar o
+    // pedaço certo da latência (bipe estava ~0,6s ponta a ponta). Uma linha
+    // de log por bipe: [bipe-timing] sku total=Xms · lookup=… reload=…
+    const t0 = Date.now();
+    const marks: string[] = [];
+    let tStep = Date.now();
+    const mark = (label: string) => {
+      marks.push(`${label}=${Date.now() - tStep}`);
+      tStep = Date.now();
+    };
+
     // PERF: lookup da venda e do produto em PARALELO. O produto vem do
     // ESPELHO Postgres (WincredCatalogService) com fallback automático pro
     // Giga ao vivo — o bipe não depende mais do MySQL remoto no caso comum.
+    // (activePromotion já vem aqui pra applyAutoDiscounts não re-buscar.)
     const [sale, info] = await Promise.all([
       (this.prisma as any).pdvSale.findUnique({
         where: { id: input.saleId },
-        select: { id: true, status: true },
+        select: { id: true, status: true, activePromotion: true },
       }),
       this.catalog.getPdvProductInfo(input.skuOrEan),
     ]);
+    mark('lookup');
     if (!sale) throw new NotFoundException('Venda não encontrada');
     if (sale.status !== 'open')
       throw new BadRequestException(`Venda não está aberta (status=${sale.status})`);
@@ -1018,10 +1031,12 @@ export class PdvService {
 
     const qty = Math.max(1, Math.min(99, input.qty || 1));
 
-    // Procura item existente do mesmo SKU
+    // Procura item existente do mesmo SKU (precisa do sku RESOLVIDO pelo
+    // lookup — o código bipado pode vir com padding/EAN — então roda depois).
     const existing = await (this.prisma as any).pdvSaleItem.findFirst({
       where: { saleId: sale.id, sku: info.sku },
     });
+    mark('find');
 
     let item;
     if (existing) {
@@ -1053,12 +1068,20 @@ export class PdvService {
         },
       });
     }
+    mark('write');
 
-    await this.applyAutoDiscounts(sale.id);
+    await this.applyAutoDiscounts(sale.id, (sale as any).activePromotion);
+    mark('promo');
     await this.recalcTotals(sale.id);
+    mark('totals');
     // PERF: devolve a venda COMPLETA junto — o frontend não precisa fazer um
     // segundo GET /pdv/sales/:id (eliminava ida-e-volta inteira a cada bipe).
     const freshSale = await this.getSale(sale.id);
+    mark('reload');
+
+    this.logger.log(
+      `[bipe-timing] ${info.sku} total=${Date.now() - t0}ms · ${marks.join(' ')}${existing ? ' (incremento)' : ''}`,
+    );
     return { ok: true, item, sale: freshSale };
   }
 
@@ -1298,12 +1321,19 @@ export class PdvService {
    * Defensivo: se a coluna `promoTag`/`active_promotion` não existir no DB
    * (db push pendente), tenta sem ela e loga o erro pra debug.
    */
-  private async applyAutoDiscounts(saleId: string) {
-    const sale = await (this.prisma as any).pdvSale.findUnique({
-      where: { id: saleId },
-      select: { activePromotion: true },
-    });
-    const activePromotion = (sale as any)?.activePromotion || 'NONE';
+  private async applyAutoDiscounts(saleId: string, knownPromotion?: string | null) {
+    // PERF: quem já tem a promoção ativa em mãos (addItem) passa por parâmetro
+    // e economiza uma ida ao banco por bipe.
+    let activePromotion: string;
+    if (knownPromotion !== undefined) {
+      activePromotion = knownPromotion || 'NONE';
+    } else {
+      const sale = await (this.prisma as any).pdvSale.findUnique({
+        where: { id: saleId },
+        select: { activePromotion: true },
+      });
+      activePromotion = (sale as any)?.activePromotion || 'NONE';
+    }
 
     const items = await (this.prisma as any).pdvSaleItem.findMany({
       where: { saleId },
