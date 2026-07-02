@@ -5,7 +5,9 @@ import { PagarmeModule } from '../pagarme/pagarme.module';
 import { CrediariosModule } from '../crediarios/crediarios.module';
 import { WooCommerceModule } from '../woocommerce/woocommerce.module';
 import { PromoConfigModule } from '../promo-config/promo-config.module';
+import { WincredMirrorModule } from '../wincred-mirror/wincred-mirror.module';
 import { PdvService } from './pdv.service';
+import { ErpOutboxService } from './erp-outbox.service';
 import { PdvController } from './pdv.controller';
 import { PixService } from './pix.service';
 import { CashService } from './cash.service';
@@ -29,9 +31,9 @@ import { ProdutosVendidosService } from './produtos-vendidos.service';
 import { ProdutosVendidosController } from './produtos-vendidos.controller';
 
 @Module({
-  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule],
+  imports: [PrismaModule, ErpModule, PagarmeModule, forwardRef(() => CrediariosModule), WooCommerceModule, PromoConfigModule, WincredMirrorModule],
   controllers: [PdvController, CashController, ReturnsController, ReturnsPublicController, PdvDiagController, MarcadosController, ActiveSellersController, CarneCoordsController, FiscalReportController, ProdutosVendidosController],
-  providers: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
+  providers: [PdvService, ErpOutboxService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
   exports: [PdvService, PixService, CashService, ReturnsService, NfceService, CrediarioPrintService, CoordsDbService, MarcadosService, ActiveSellersService, CarneCoordsService, FiscalReportService, ProdutosVendidosService],
 })
 export class PdvModule {}
