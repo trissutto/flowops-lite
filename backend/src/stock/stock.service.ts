@@ -1,11 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ErpService } from '../erp/erp.service';
+import { WincredCatalogService } from '../wincred-mirror/wincred-catalog.service';
 import { MemoryCacheService } from '../common/memory-cache.service';
 import { StockEntry } from '../routing/types';
 
 /**
  * Wrapper sobre o ERP com cache em memória (30s).
  * Na versão Lite, o cache é in-process (sem Redis).
+ *
+ * FALLBACK ESPELHO: se o Giga ao vivo falhar (firewall KingHost derrubou o
+ * IP do Railway, timeout, etc), a consulta cai pro espelho Postgres
+ * (wincred_estoque, full sync de hora em hora) em vez de estourar erro.
+ * Estoque com até ~1h de atraso é melhor que consulta morta.
  */
 @Injectable()
 export class StockService {
@@ -14,6 +20,7 @@ export class StockService {
 
   constructor(
     private readonly erp: ErpService,
+    private readonly catalog: WincredCatalogService,
     private readonly cache: MemoryCacheService,
   ) {}
 
@@ -37,7 +44,15 @@ export class StockService {
 
     const uniqueSkus = [...new Set(missKeys.map((k) => k.sku))];
     const uniqueStores = [...new Set(missKeys.map((k) => k.storeCode))];
-    const fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
+    let fresh: StockEntry[];
+    try {
+      fresh = await this.erp.getStock(uniqueSkus, uniqueStores);
+    } catch (e: any) {
+      this.logger.warn(
+        `[stock] Giga ao vivo falhou (${e?.message || e}) — usando espelho wincred_estoque como fallback`,
+      );
+      fresh = await this.catalog.getStockFromMirror(uniqueSkus, uniqueStores);
+    }
 
     for (const e of fresh) {
       this.cache.set(`stock:${e.storeCode}:${e.sku}`, e.availableQty, this.TTL_SECONDS);
