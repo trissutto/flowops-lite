@@ -27,7 +27,23 @@ interface Row {
   plusSize: boolean;
   tipoProduto: number; // 0=MODA, 1=BASICO
   revisada: boolean;
+  /** Preço de etiqueta (maior VENDAUN da REF, via espelho) — null se REF fora do espelho */
+  preco?: number | null;
+  /** Data de cadastro (DATAALT mais recente da REF) YYYY-MM-DD */
+  dataCadastro?: string | null;
+  /** Preço com 50% da PROMO JULHO — null se fora da promo (novo ou básico) */
+  precoPromo?: number | null;
+  /** true = seria elegível pela data mas é BÁSICO (isento por regra) */
+  promoIsento?: boolean;
 }
+
+const brl = (n: number) =>
+  Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const fmtDataCad = (d?: string | null) => {
+  if (!d) return null;
+  const [y, m, dd] = d.split('-');
+  return `${dd}/${m}/${y.slice(2)}`;
+};
 
 interface Counters {
   total: number;
@@ -398,14 +414,16 @@ export default function ClassificacaoProdutosPage() {
                 <th className="px-3 py-2.5 text-left">Marca</th>
                 <th className="px-3 py-2.5 text-left">Categoria</th>
                 <th className="px-3 py-2.5 text-center">Plus</th>
+                <th className="px-3 py-2.5 text-right">Preço</th>
+                <th className="px-3 py-2.5 text-right" title="Promoção de julho: cadastro até 31/12/2023 = 50% OFF, exceto linha BÁSICA">Promo julho −50%</th>
                 <th className="px-3 py-2.5 text-center">Tipo Atual</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
+                <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={7} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
+                <tr><td colSpan={9} className="px-3 py-10 text-center text-slate-400">Nenhum produto encontrado.</td></tr>
               ) : (
                 rows.map((r) => {
                   const isSel = allFiltered || selected.has(r.ref);
@@ -435,6 +453,36 @@ export default function ClassificacaoProdutosPage() {
                       <td className="px-3 py-2 text-slate-600 text-xs">{r.categoria || '—'}</td>
                       <td className="px-3 py-2 text-center">
                         {r.plusSize ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold">PLUS</span> : <span className="text-slate-300">—</span>}
+                      </td>
+                      {/* PREÇO de etiqueta (espelho) + data de cadastro */}
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {r.preco != null ? (
+                          <div>
+                            <div className="font-mono font-semibold text-slate-800 tabular-nums">{brl(r.preco)}</div>
+                            {r.dataCadastro && (
+                              <div className="text-[10px] text-slate-400" title="Data de cadastro no Giga (DATAALT)">
+                                cad. {fmtDataCad(r.dataCadastro)}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      {/* PROMO JULHO: cadastro ≤ 31/12/2023 = 50% OFF, exceto BÁSICO */}
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {r.precoPromo != null ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-rose-100 text-rose-700 font-black">−50%</span>
+                            <span className="font-mono font-black text-rose-600 tabular-nums">{brl(r.precoPromo)}</span>
+                          </span>
+                        ) : r.promoIsento ? (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500" title="Cadastro antigo, mas linha BÁSICA é isenta da promoção">
+                            isento (básico)
+                          </span>
+                        ) : (
+                          <span className="text-slate-300" title="Fora da promoção — cadastro após 31/12/2023">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <button
