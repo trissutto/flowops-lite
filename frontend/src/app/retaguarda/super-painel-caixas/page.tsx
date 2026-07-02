@@ -492,6 +492,11 @@ export default function SuperPainelCaixas() {
               })()}
             </div>
 
+            {/* DINHEIRO EM CAIXA por loja — réplica da tela "Dinheiro em
+                Caixa (Todas as Lojas)" do Wincred que o dono pediu (02/07):
+                quanto cada loja tem NA GAVETA agora/naquele dia. */}
+            <DinheiroEmCaixaTable lojas={data.lojas} />
+
             {/* Grid de lojas */}
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {data.lojas.map((l) => (
@@ -517,6 +522,113 @@ function ConsolidadoItem({ label, valor, icon }: { label: string; valor: number;
         {icon} {label}
       </div>
       <div className="text-base font-black tabular-nums">{brl(valor)}</div>
+    </div>
+  );
+}
+
+/**
+ * DINHEIRO EM CAIXA (todas as lojas) — réplica da tela homônima do Wincred.
+ * Uma linha por loja: quanto tem NA GAVETA = fundo + vendas em dinheiro +
+ * crediário recebido em dinheiro + suprimentos − sangrias. Tudo calculado
+ * do payload que o painel já carrega — zero request extra.
+ */
+function DinheiroEmCaixaTable({ lojas }: { lojas: Loja[] }) {
+  const [open, setOpen] = useState(true);
+  const rows = (lojas || []).map((l) => {
+    const fundo = Number(l.fundoTroco) || 0;
+    const vendasDin = Number(l.totais?.totalDinheiro) || 0;
+    const recDin = Number((l.recebimentosCrediario as any)?.totalDinheiro) || 0;
+    const supr = Number(l.totais?.totalSuprimentos) || 0;
+    const sangrias = Number(l.totais?.totalSangrias) || 0;
+    const total = Math.round((fundo + vendasDin + recDin + supr - sangrias) * 100) / 100;
+    const vazia = fundo === 0 && vendasDin === 0 && recDin === 0 && supr === 0 && sangrias === 0;
+    return { code: l.storeCode, name: l.storeName, fundo, vendasDin, recDin, supr, sangrias, total, vazia };
+  });
+  const tot = rows.reduce(
+    (a, r) => ({
+      fundo: a.fundo + r.fundo,
+      vendasDin: a.vendasDin + r.vendasDin,
+      recDin: a.recDin + r.recDin,
+      supr: a.supr + r.supr,
+      sangrias: a.sangrias + r.sangrias,
+      total: a.total + r.total,
+    }),
+    { fundo: 0, vendasDin: 0, recDin: 0, supr: 0, sangrias: 0, total: 0 },
+  );
+  const num = (v: number, cls = 'text-slate-700') => (
+    <td className={`px-2 py-1 text-right font-mono tabular-nums ${v === 0 ? 'text-slate-300' : cls}`}>
+      {brl(v)}
+    </td>
+  );
+  return (
+    <div className="bg-white rounded-xl shadow-lg border-2 border-slate-200 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-3 py-2 flex items-center justify-between bg-slate-700 text-white hover:bg-slate-600 transition"
+        title="Quanto cada loja tem em dinheiro na gaveta"
+      >
+        <span className="font-black text-sm uppercase flex items-center gap-2">
+          <Banknote size={16} />
+          Dinheiro em caixa (todas as lojas)
+        </span>
+        <span className="flex items-center gap-3">
+          <span className="font-mono font-black tabular-nums">{brl(tot.total)}</span>
+          <span className={`transition-transform inline-block text-xs ${open ? 'rotate-90' : ''}`}>▶</span>
+        </span>
+      </button>
+      {open && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="bg-slate-100 text-slate-600 uppercase text-[10px]">
+                <th className="px-2 py-1.5 text-left">Loja</th>
+                <th className="px-2 py-1.5 text-right">Fundo</th>
+                <th className="px-2 py-1.5 text-right">Dinheiro (vendas)</th>
+                <th className="px-2 py-1.5 text-right">Recebidos (crediário)</th>
+                <th className="px-2 py-1.5 text-right">Suprimentos</th>
+                <th className="px-2 py-1.5 text-right">Retiradas</th>
+                <th className="px-2 py-1.5 text-right">Total na gaveta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.code} className={`border-t border-slate-100 ${r.vazia ? 'opacity-40' : 'hover:bg-slate-50'}`}>
+                  <td className="px-2 py-1 font-bold text-slate-800">
+                    {r.name} <span className="font-mono text-[9px] text-slate-400">{r.code}</span>
+                  </td>
+                  {num(r.fundo)}
+                  {num(r.vendasDin, 'text-emerald-700')}
+                  {num(r.recDin, 'text-emerald-700')}
+                  {num(r.supr, 'text-sky-700')}
+                  {num(r.sangrias, 'text-rose-600')}
+                  <td className={`px-2 py-1 text-right font-mono font-black tabular-nums ${
+                    r.total < 0 ? 'bg-rose-50 text-rose-700' : r.total > 0 ? 'bg-emerald-50 text-emerald-800' : 'text-slate-300'
+                  }`}>
+                    {brl(r.total)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-slate-300 bg-slate-50 font-black">
+                <td className="px-2 py-1.5 text-slate-800 uppercase text-[10px]">Total</td>
+                {num(tot.fundo, 'text-slate-800')}
+                {num(tot.vendasDin, 'text-emerald-800')}
+                {num(tot.recDin, 'text-emerald-800')}
+                {num(tot.supr, 'text-sky-800')}
+                {num(tot.sangrias, 'text-rose-700')}
+                <td className={`px-2 py-1.5 text-right font-mono font-black tabular-nums ${tot.total < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                  {brl(tot.total)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+          <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
+            Total na gaveta = fundo + vendas em dinheiro + crediário recebido em dinheiro + suprimentos − sangrias
+          </div>
+        </div>
+      )}
     </div>
   );
 }
