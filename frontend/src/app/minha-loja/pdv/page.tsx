@@ -2567,7 +2567,7 @@ function PdvPageInner() {
 
       {/* Footer fixo: TOTAL GIGANTE + Finalizar destaque máximo */}
       {sale?.status === 'open' && (
-        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#D4AF37] shadow-2xl z-10">
+        <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#D4AF37] shadow-lg z-10">
           <div className="max-w-4xl mx-auto px-4 py-3">
             {/* Linha de detalhamento: subtotal + economia agregada (descontos itens + sale.desconto extra) */}
             {(() => {
@@ -2601,7 +2601,7 @@ function PdvPageInner() {
               {/* Cancelar venda — botão branco com LABEL */}
               <button
                 onClick={cancelSale}
-                className="px-4 py-3 bg-white hover:bg-rose-50 border-2 border-rose-300 text-rose-600 hover:text-rose-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
+                className="px-4 py-3 bg-white hover:bg-rose-50 border border-rose-300 text-rose-600 hover:text-rose-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
                 title="Cancelar venda"
               >
                 <X className="w-4 h-4" />
@@ -2615,7 +2615,7 @@ function PdvPageInner() {
               <button
                 onClick={fecharDepois}
                 disabled={!sale?.items?.length}
-                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border border-slate-300 text-slate-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
                 title="Pausar venda (volta na lista Pausadas)"
               >
                 <Pause className="w-4 h-4" />
@@ -2625,7 +2625,7 @@ function PdvPageInner() {
               {/* Desconto geral — botão branco com LABEL + atalho F2 */}
               <button
                 onClick={() => setShowDiscount({ kind: 'sale' })}
-                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border-2 border-black text-black rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
+                className="px-4 py-3 bg-white hover:bg-[#FAF6E8] border border-slate-300 text-slate-700 rounded-xl flex items-center gap-2 font-bold text-sm transition shrink-0 shadow-sm"
                 title="Aplicar desconto na venda toda (atalho F2)"
               >
                 <Percent className="w-4 h-4" />
