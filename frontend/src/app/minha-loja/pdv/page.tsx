@@ -1914,12 +1914,21 @@ function PdvPageInner() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm overflow-hidden">
-            {/* Cabeçalho do card — "Carrinho" + contagem (espec) */}
+            {/* Cabeçalho do card — "Carrinho" + contador de PEÇAS (soma das qtds,
+                não nº de linhas: linha com qty 3 conta 3 peças). */}
             <div className="px-4 pt-3.5 pb-2.5 flex items-baseline justify-between">
               <span className="text-base font-bold text-slate-900">Carrinho</span>
-              <span className="text-xs font-semibold text-slate-400" title="Último item bipado aparece no topo">
-                {sale.items.length} {sale.items.length === 1 ? 'item' : 'itens'}
-              </span>
+              {(() => {
+                const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
+                return (
+                  <span className="text-xs font-semibold text-slate-400" title="Total de peças no carrinho (soma das quantidades). Último item bipado aparece no topo.">
+                    {totalPecas} {totalPecas === 1 ? 'peça' : 'peças'}
+                    {totalPecas !== sale.items.length
+                      ? ` · ${sale.items.length} ${sale.items.length === 1 ? 'linha' : 'linhas'}`
+                      : ''}
+                  </span>
+                );
+              })()}
             </div>
             {/* Seletor de campanha — só aparece se TEM campanha ativa OU foi
                 expandido explicitamente. Quando "Nenhuma", mostra só botão sutil
