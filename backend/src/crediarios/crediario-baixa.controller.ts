@@ -120,10 +120,25 @@ export class CrediarioBaixaController {
   // ── Lista TODOS clientes do Giga (com ou sem parcelas) ───────────
   // Query LEVE — só lê tabela `clientes`, não toca em `movimento`.
   // Frontend filtra local + ao clicar carrega parcelas sob demanda.
+  // ESCOPO POR LOJA: cada loja tem sua base de clientes e seu crediário
+  // (o CODIGO se repete entre lojas — mesmo código = outra pessoa).
+  // Vendedora vê SEMPRE só a própria loja; admin pode passar ?storeCode=
+  // ou ?todasLojas=1.
   @Get('clientes-todos')
-  async listAllClientes(@Req() req: any) {
+  async listAllClientes(
+    @Req() req: any,
+    @Query('storeCode') storeCodeOverride?: string,
+    @Query('todasLojas') todasLojas?: string,
+  ) {
     this.requireRole(req);
-    return this.svc.listAllClientesGiga();
+    const role = req?.user?.role;
+    let storeCode: string | undefined;
+    if (role === 'admin') {
+      storeCode = todasLojas === '1' ? undefined : (storeCodeOverride || undefined);
+    } else {
+      storeCode = req?.user?.storeCode;
+    }
+    return this.svc.listAllClientesGiga(storeCode);
   }
 
   // ── Lista TUDO (todos clientes com parcelas em aberto) ──────────
@@ -166,20 +181,33 @@ export class CrediarioBaixaController {
     if (process.env.CREDIARIO_BAIXA_TODAS_ENABLED !== 'true') {
       return [];
     }
-    return this.svc.searchClientes({ q: q || '' });
+    // Vendedora busca só na base da própria loja (código repete entre lojas)
+    const storeCode = req?.user?.role === 'admin' ? undefined : req?.user?.storeCode;
+    return this.svc.searchClientes({ q: q || '', storeCode });
   }
 
   // ── Lista parcelas de 1 cliente específico ────────────────────────
   // Query LEVE — WHERE codCliente=X (com índice na tabela movimento por
-  // cliente é instantâneo). Sempre todas as lojas (cliente pode pagar
-  // promissória em qualquer filial).
+  // cliente é instantâneo).
+  //
+  // ESCOPO POR LOJA (03/07): o codCliente se REPETE entre lojas — sem filtrar
+  // a loja, o código X da loja da vendedora listava também as parcelas do
+  // código X de OUTRA loja (outra pessoa!) e dava pra baixar parcela errada.
+  // O recebimento em outra filial continua possível: a vendedora escolhe o
+  // cliente DA LOJA DELE (admin passa ?storeCode=) — a identidade é sempre
+  // (loja, codigo).
   @Get('parcelas')
   async listByCodCliente(
     @Req() req: any,
     @Query('codCliente') codCliente: string,
+    @Query('storeCode') storeCodeOverride?: string,
   ) {
     this.requireRole(req);
-    return this.svc.listInstallmentsByCodCliente({ codCliente });
+    const role = req?.user?.role;
+    const storeCode = role === 'admin'
+      ? (storeCodeOverride || undefined)
+      : (req?.user?.storeCode || undefined);
+    return this.svc.listInstallmentsByCodCliente({ codCliente, storeCode });
   }
 
   // ── Busca cliente + parcelas em aberto ────────────────────────────

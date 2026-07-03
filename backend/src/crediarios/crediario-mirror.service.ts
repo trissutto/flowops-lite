@@ -53,11 +53,15 @@ export class CrediarioMirrorService {
     try {
       const r = await this.syncAbertas();
       this.logger.log(`[cron] abertas OK — ${r.processed} parcelas (${r.durationMs}ms)`);
-      // Primeira carga de clientes de carona (tabela vazia = nunca sincronizou)
-      const temClientes = await (this.prisma as any).wincredCliente.count().catch(() => 0);
-      if (!temClientes) {
+      // Primeira carga de clientes de carona: tabela vazia (nunca sincronizou)
+      // OU só linhas legadas com loja='00' (migração da chave composta — o
+      // deploy adiciona a coluna mas as linhas antigas ficam sem loja real).
+      const temClientesComLoja = await (this.prisma as any).wincredCliente
+        .count({ where: { loja: { not: '00' } } })
+        .catch(() => 0);
+      if (!temClientesComLoja) {
         const c = await this.syncClientes();
-        this.logger.log(`[cron] clientes (1ª carga) OK — ${c.processed} (${c.durationMs}ms)`);
+        this.logger.log(`[cron] clientes (1ª carga/re-carga pós-migração) OK — ${c.processed} (${c.durationMs}ms)`);
       }
     } catch (e: any) {
       this.logger.error(`[cron] abertas FAIL: ${e?.message || e}`);
@@ -178,26 +182,33 @@ export class CrediarioMirrorService {
       cm.nome ? `\`${cm.nome}\` AS nome` : 'NULL AS nome',
       cm.telefone ? `\`${cm.telefone}\` AS tel1` : 'NULL AS tel1',
       (cm as any).telefone2 ? `\`${(cm as any).telefone2}\` AS tel2` : 'NULL AS tel2',
+      // LOJA: o CODIGO se repete entre lojas — a chave do espelho é (loja, cod).
+      // Sem a coluna no Giga (clone antigo), tudo cai em '00'.
+      (cm as any).loja ? `\`${(cm as any).loja}\` AS loja` : `'00' AS loja`,
     ];
     const [rows] = await pool.query({
       sql: `SELECT ${sel.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IS NOT NULL AND \`${cm.codCliente}\` <> '' LIMIT 300000`,
       timeout: 180_000,
     });
 
+    // Dedup por (loja, cod) — dedup só por cod descartava os clientes das
+    // outras lojas que compartilham o mesmo código (mistura de crediário).
     const seen = new Set<string>();
     const data = (rows as any[])
-      .filter((r) => {
-        const cod = String(r.cod ?? '').trim();
-        if (!cod || seen.has(cod)) return false;
-        seen.add(cod);
-        return true;
-      })
       .map((r) => ({
-        codCliente: String(r.cod).trim(),
+        loja: String(r.loja ?? '').replace(/\D/g, '').padStart(2, '0').slice(0, 2) || '00',
+        codCliente: String(r.cod ?? '').trim(),
         nome: r.nome != null ? String(r.nome).trim().slice(0, 120) : null,
         telefone: r.tel1 != null ? String(r.tel1).trim().slice(0, 30) : null,
         telefone2: r.tel2 != null ? String(r.tel2).trim().slice(0, 30) : null,
-      }));
+      }))
+      .filter((r) => {
+        if (!r.codCliente) return false;
+        const key = `${r.loja}|${r.codCliente}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
 
     await this.prisma.$transaction(async (tx: any) => {
       await tx.wincredCliente.deleteMany({});
