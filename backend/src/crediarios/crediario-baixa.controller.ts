@@ -46,6 +46,31 @@ export class CrediarioBaixaController {
     return this.mirror.status();
   }
 
+  // ── UNIFICAÇÃO de cadastros duplicados no Giga (admin) ──────────────
+  // Caso Livia (03/07): 2 cadastros na mesma loja (um sem CPF, crediário
+  // pendurado nele). Lista os grupos duplicados e move parcelas/histórico
+  // pro cadastro certo. Tela: /retaguarda/clientes-duplicados.
+
+  @Get('clientes-duplicados')
+  async listClientesDuplicados(@Req() req: any, @Query('storeCode') storeCode: string) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.listClientesDuplicados(storeCode);
+  }
+
+  @Post('unificar-clientes')
+  async unificarClientes(
+    @Req() req: any,
+    @Body() body: { storeCode: string; codOrigem: string; codDestino: string; dryRun?: boolean },
+  ) {
+    if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
+    return this.svc.unificarClientesGiga({
+      storeCode: body?.storeCode,
+      codOrigem: body?.codOrigem,
+      codDestino: body?.codDestino,
+      dryRun: !!body?.dryRun,
+    });
+  }
+
   private requireRole(req: any) {
     const role = req?.user?.role;
     if (role !== 'admin' && role !== 'store')
