@@ -98,6 +98,10 @@ export default function DevolucaoPage() {
     vendas: Array<{ data: string; numero: string; valor: number; quantidade: number }>;
     salesCount: number;
     diasJanela: number;
+    /** Valor que a devolução vai gerar: o PAGO na venda mais recente da loja
+     *  (fallback: preço de etiqueta quando o histórico não tem valor). */
+    valorDevolucao?: number;
+    valorBase?: 'pago' | 'etiqueta';
   } | null>(null);
   const [manualBlocked, setManualBlocked] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState(false);
@@ -257,6 +261,8 @@ export default function DevolucaoPage() {
             vendas?: any[];
             salesCount?: number;
             diasJanela?: number;
+            valorDevolucao?: number;
+            valorBase?: 'pago' | 'etiqueta';
           }>(`/pdv/devolucao/lookup-manual?sku=${encodeURIComponent(q)}`);
           if (r.eligible && r.produto) {
             setManualEligible({
@@ -264,6 +270,8 @@ export default function DevolucaoPage() {
               vendas: r.vendas || [],
               salesCount: r.salesCount || 0,
               diasJanela: r.diasJanela || 60,
+              valorDevolucao: r.valorDevolucao,
+              valorBase: r.valorBase,
             });
             return;
           }
@@ -781,6 +789,24 @@ export default function DevolucaoPage() {
                         </span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* VALOR QUE VAI SAIR — o pago na venda mais recente da loja,
+                  não o preço atual da etiqueta (que pode ter mudado) */}
+              {(manualEligible.valorDevolucao ?? 0) > 0 && (
+                <div className="mt-3 bg-emerald-50 border-2 border-emerald-400 rounded-lg px-3 py-2 flex items-center justify-between">
+                  <div className="text-xs font-bold uppercase text-emerald-900">
+                    Valor da devolução
+                    <div className="text-[10px] font-medium normal-case text-emerald-700">
+                      {manualEligible.valorBase === 'pago'
+                        ? 'último valor pago nesta loja'
+                        : 'preço de etiqueta (histórico sem valor)'}
+                    </div>
+                  </div>
+                  <div className="text-xl font-black text-emerald-700 tabular-nums">
+                    R$ {fmt(manualEligible.valorDevolucao!)}
                   </div>
                 </div>
               )}
