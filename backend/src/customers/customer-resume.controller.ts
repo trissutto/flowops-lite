@@ -53,6 +53,15 @@ export class CustomerResumeController {
         cashbackBalanceCents: agg.cashbackBalanceCents,
         cashbackExpiraEm: agg.cashbackExpiraEm,
         cadastrosEm: customers.map((x) => x.originStore?.name).filter(Boolean),
+        // Origem do cadastro primário — pra tela avisar "cliente do SITE" /
+        // "cliente da loja X" e a vendedora NÃO recadastrar. daLojaAtual=true
+        // quando a pessoa tem cadastro na loja que está consultando.
+        origem: {
+          source: c.originSource || null,
+          storeCode: c.originStore?.code || null,
+          storeName: c.originStore?.name || null,
+          daLojaAtual: !!storeId && c.originStoreId === storeId,
+        },
       },
       cashbackConfig: cashbackCfg,
     };
