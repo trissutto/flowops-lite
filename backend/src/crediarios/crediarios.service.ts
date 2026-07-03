@@ -341,7 +341,10 @@ export class CrediariosService {
    * Pra cada codCliente recebido, busca telefone na tabela detectada.
    * Retorna Map<codCliente, { telefone, nome }>.
    */
-  async fetchPhonesByClienteIds(codClientes: string[]): Promise<Map<string, { telefone: string | null; nome: string | null }>> {
+  async fetchPhonesByClienteIds(
+    codClientes: string[],
+    storeCode?: string,
+  ): Promise<Map<string, { telefone: string | null; nome: string | null }>> {
     const out = new Map<string, { telefone: string | null; nome: string | null }>();
     if (codClientes.length === 0) return out;
 
@@ -352,12 +355,19 @@ export class CrediariosService {
     const ids = Array.from(new Set(codClientes.map((c) => String(c).replace(/['"\\]/g, '')))).filter(Boolean);
     if (ids.length === 0) return out;
 
+    // Escopo por loja (opcional) — o mesmo cod em outra loja é OUTRA pessoa;
+    // sem o filtro, nome/telefone podem vir do cadastro errado.
+    const safeStore = storeCode
+      ? String(storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+    const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
+
     const inList = ids.map((i) => `'${i}'`).join(',');
     const cols: string[] = [`\`${cm.codCliente}\` AS codCliente`];
     if (cm.nome) cols.push(`\`${cm.nome}\` AS nome`);
     if (cm.telefone) cols.push(`\`${cm.telefone}\` AS telefone`);
     if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS telefone2`);
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${ids.length + 100}`;
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList})${lojaAnd} LIMIT ${ids.length + 100}`;
 
     try {
       const { normalizeBrPhone } = await import('../lib/phone-br');

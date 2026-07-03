@@ -3319,14 +3319,22 @@ model WincredMovimentoAberto {
 
 /// Espelho SLIM de clientes do Giga — nome + telefones pra cobrança/
 /// recebimentos funcionarem com o Giga fora do ar.
+/// ⚠️ CHAVE COMPOSTA (loja, codCliente): o CODIGO de cliente do Wincred se
+/// REPETE entre lojas — cada loja tem sua numeração e seu crediário separado.
+/// Antes (codCliente @id global) o sync sobrescrevia o cliente de uma loja
+/// com o de outra. loja = char(2) do Giga; '00' = linha legada pré-migração
+/// (o cron das 4h / primeira carga regrava tudo com a loja certa).
 model WincredCliente {
-  codCliente String   @id @map("cod_cliente")
+  loja       String   @default("00") @db.VarChar(2)
+  codCliente String   @map("cod_cliente")
   nome       String?
   telefone   String?
   telefone2  String?
 
   syncedAt   DateTime @default(now()) @map("synced_at")
 
+  @@id([loja, codCliente])
+  @@index([codCliente])
   @@map("wincred_clientes")
 }
 

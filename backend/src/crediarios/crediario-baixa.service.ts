@@ -428,15 +428,16 @@ export class CrediarioBaixaService {
 
     // Enriquece com telefone + filtra clientes-cartão
     const codClientes = Array.from(new Set(filteredRows.map((r: any) => String(r.codCliente))));
-    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes);
+    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes, safeStore || undefined);
 
-    // Filtra cartões pelo nome
+    // Filtra cartões pelo nome (escopado por loja quando há filtro)
     const cardRegex = CARD_NAME_REGEX;
     const cardCodes = new Set<string>();
     const cm = await this.crediarios.detectClientesTable();
     if (cm && cm.nome && codClientes.length > 0) {
       const inList = codClientes.map((c) => `'${c.replace(/'/g, '')}'`).join(',');
-      const sqlCli = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList}) LIMIT ${codClientes.length + 100}`;
+      const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
+      const sqlCli = `SELECT \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome FROM \`${cm.table}\` WHERE \`${cm.codCliente}\` IN (${inList})${lojaAnd} LIMIT ${codClientes.length + 100}`;
       try {
         const r = await this.erp.runReadOnly(sqlCli, {
           maxRows: codClientes.length + 100,
@@ -578,11 +579,16 @@ export class CrediarioBaixaService {
         obs: null,
       }));
 
-    // Nome + telefone + filtro de clientes-cartão via espelho de clientes
+    // Nome + telefone + filtro de clientes-cartão via espelho de clientes.
+    // Filtra por LOJA quando há escopo — o mesmo cod em outra loja é OUTRA
+    // pessoa (nome/telefone errados sem o filtro).
     const codClientes = Array.from(new Set(filteredRows.map((r) => String(r.codCliente))));
     const clientesEspelho: any[] = codClientes.length
       ? await (this.prisma as any).wincredCliente.findMany({
-          where: { codCliente: { in: codClientes } },
+          where: {
+            codCliente: { in: codClientes },
+            ...(safeStore ? { loja: safeStore } : {}),
+          },
         })
       : [];
     const phones = new Map<string, { nome?: string | null; telefone?: string | null }>();
@@ -611,56 +617,75 @@ export class CrediarioBaixaService {
   //
   // Cache 30min — já que mudanças em clientes (cadastro novo) são raras.
 
-  private clientesCache: { data: any[]; expiresAt: number } | null = null;
+  // Cache POR LOJA ('all' = sem filtro): cada loja tem sua base de clientes
+  // e seu crediário — a lista da loja 05 não pode servir a loja 01.
+  private clientesCache = new Map<string, { data: any[]; expiresAt: number }>();
   private readonly CLIENTES_CACHE_TTL_MS = 30 * 60 * 1000;
 
-  // Lock anti-stampede: se múltiplas vendedoras abrem RECEBIMENTOS ao mesmo
-  // tempo (cache vazio), só 1 query roda — as demais aguardam o resultado.
-  private clientesPromise: Promise<Array<{ codCliente: string; nome: string; telefone: string | null }>> | null = null;
+  // Lock anti-stampede POR LOJA: se múltiplas vendedoras abrem RECEBIMENTOS ao
+  // mesmo tempo (cache vazio), só 1 query roda — as demais aguardam o resultado.
+  private clientesPromise = new Map<string, Promise<Array<{ codCliente: string; nome: string; telefone: string | null; loja: string | null }>>>();
 
   // Circuit breaker: se Giga falhar 3x seguidas, bloqueia por 5min
   // (evita rebloquear o IP por excesso de erros).
   private breakerFailCount = 0;
   private breakerOpenUntil = 0;
 
-  async listAllClientesGiga(): Promise<Array<{
+  async listAllClientesGiga(storeCode?: string): Promise<Array<{
     codCliente: string;
     nome: string;
     telefone: string | null;
+    loja: string | null;
   }>> {
-    if (this.clientesCache && Date.now() < this.clientesCache.expiresAt) {
-      return this.clientesCache.data;
+    const safeStore = storeCode
+      ? String(storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+    const cacheKey = safeStore || 'all';
+
+    const cached = this.clientesCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.data;
     }
 
     // ── ESPELHO PRIMEIRO (02/07) — wincred_clientes. Mesmos filtros do
-    // caminho Giga (cod > 3, sem clientes-cartão, dedup cod+nome). Espelho
-    // vazio (1ª carga pendente) → segue pro Giga normalmente.
+    // caminho Giga (cod > 3, sem clientes-cartão, dedup loja+cod+nome).
+    // Espelho vazio (1ª carga pendente) OU só linhas legadas sem loja
+    // (pré-migração da chave composta) → segue pro Giga normalmente.
     if (String(process.env.PDV_MIRROR_READS ?? '').trim() !== '0') {
       try {
-        const doEspelho: any[] = await (this.prisma as any).wincredCliente.findMany({
-          where: { nome: { not: null } },
-          orderBy: { nome: 'asc' },
-        });
+        // Linhas legadas (loja='00') não servem pra filtro por loja — se o
+        // espelho ainda não foi re-carregado com loja, cai pro Giga ao vivo.
+        const espelhoMigrado = safeStore
+          ? (await (this.prisma as any).wincredCliente.count({ where: { loja: { not: '00' } }, take: 1 }).catch(() => 0)) > 0
+          : true;
+        const doEspelho: any[] = espelhoMigrado
+          ? await (this.prisma as any).wincredCliente.findMany({
+              where: { nome: { not: null }, ...(safeStore ? { loja: safeStore } : {}) },
+              orderBy: { nome: 'asc' },
+            })
+          : [];
         if (doEspelho.length > 0) {
           const seen = new Set<string>();
-          const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+          const out: Array<{ codCliente: string; nome: string; telefone: string | null; loja: string | null }> = [];
           for (const c of doEspelho) {
             const cod = String(c.codCliente || '').trim();
             const codNum = parseInt(cod.replace(/\D/g, ''), 10);
             if (!cod || isNaN(codNum) || codNum <= 3) continue;
             const nome = String(c.nome || '').trim();
             if (!nome || CARD_NAME_REGEX.test(nome)) continue;
-            const dedupKey = `${cod}|${nome.toUpperCase()}`;
+            const lojaCli = String(c.loja || '').trim() || null;
+            const dedupKey = `${lojaCli || ''}|${cod}|${nome.toUpperCase()}`;
             if (seen.has(dedupKey)) continue;
             seen.add(dedupKey);
             out.push({
               codCliente: cod,
               nome,
               telefone: (String(c.telefone || '').trim()) || (String(c.telefone2 || '').trim()) || null,
+              loja: lojaCli === '00' ? null : lojaCli,
             });
           }
-          this.logger.log(`[crediario-baixa] listAllClientes via ESPELHO (${out.length} clientes)`);
-          this.clientesCache = { data: out, expiresAt: Date.now() + this.CLIENTES_CACHE_TTL_MS };
+          this.logger.log(`[crediario-baixa] listAllClientes via ESPELHO (${out.length} clientes, loja=${cacheKey})`);
+          this.clientesCache.set(cacheKey, { data: out, expiresAt: Date.now() + this.CLIENTES_CACHE_TTL_MS });
           return out;
         }
       } catch (e: any) {
@@ -675,32 +700,34 @@ export class CrediarioBaixaService {
       );
     }
 
-    // Já tem outra request rodando? Espera ela.
-    if (this.clientesPromise) {
-      return this.clientesPromise;
+    // Já tem outra request rodando pra essa loja? Espera ela.
+    const inflight = this.clientesPromise.get(cacheKey);
+    if (inflight) {
+      return inflight;
     }
 
-    // Encadeia: cria a promise UNA, todas as chamadas concorrentes pegam a mesma
-    this.clientesPromise = this._doListAllClientesGiga()
+    // Encadeia: cria a promise UNA por loja, chamadas concorrentes pegam a mesma
+    const p = this._doListAllClientesGiga(safeStore)
       .then((data) => {
         this.breakerFailCount = 0;
-        this.clientesPromise = null;
+        this.clientesPromise.delete(cacheKey);
         return data;
       })
       .catch((err) => {
         this.breakerFailCount++;
-        this.clientesPromise = null;
+        this.clientesPromise.delete(cacheKey);
         if (this.breakerFailCount >= 3) {
           this.breakerOpenUntil = Date.now() + 5 * 60 * 1000;
           this.logger.error(`[crediario-baixa] CIRCUIT BREAKER aberto por 5min — ${this.breakerFailCount} falhas seguidas`);
         }
         throw err;
       });
+    this.clientesPromise.set(cacheKey, p);
 
-    return this.clientesPromise;
+    return p;
   }
 
-  private async _doListAllClientesGiga(): Promise<Array<{ codCliente: string; nome: string; telefone: string | null }>> {
+  private async _doListAllClientesGiga(safeStore: string | null): Promise<Array<{ codCliente: string; nome: string; telefone: string | null; loja: string | null }>> {
 
     const cm = await this.crediarios.detectClientesTable();
     if (!cm || !cm.nome) {
@@ -712,10 +739,14 @@ export class CrediarioBaixaService {
     const cols: string[] = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
     if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
     if (cm.telefone2) cols.push(`\`${cm.telefone2}\` AS tel2`);
+    if (cm.loja) cols.push(`\`${cm.loja}\` AS loja`);
+
+    // Filtro por LOJA — cada loja tem sua base de clientes e seu crediário.
+    const whereLoja = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
 
     // LIMIT conservador — 15000 cobre Lurd's (7k clientes hoje, espaço pra crescer)
     // sem segurar conexão MySQL por muito tempo.
-    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' ORDER BY \`${cm.nome}\` ASC LIMIT 15000`;
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> ''${whereLoja} ORDER BY \`${cm.nome}\` ASC LIMIT 15000`;
     this.logger.log(`[crediario-baixa] listAllClientes SQL: ${sql.slice(0, 300)}`);
     const t0 = Date.now();
     const result = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
@@ -723,12 +754,11 @@ export class CrediarioBaixaService {
 
     const cardRegex = CARD_NAME_REGEX;
 
-    // DEDUP por COD+NOME — antes era só por cod, mas se a tabela tem múltiplos
-    // registros com mesmo CODCLIENTE (legado de cadastros antigos, troca de nome,
-    // etc), eliminar pelo cod sozinho fazia clientes válidos sumirem da busca.
-    // Usar cod+nome preserva todos os registros legítimos.
+    // DEDUP por LOJA+COD+NOME — o mesmo COD em lojas diferentes é OUTRA pessoa;
+    // e múltiplos registros com mesmo cod na MESMA loja (legado, troca de nome)
+    // são preservados pelo nome.
     const seen = new Set<string>();
-    const out: Array<{ codCliente: string; nome: string; telefone: string | null }> = [];
+    const out: Array<{ codCliente: string; nome: string; telefone: string | null; loja: string | null }> = [];
     let descartadosCod = 0, descartadosCodInvalido = 0, descartadosNome = 0, descartadosCartao = 0, descartadosDup = 0;
     for (const row of result.rows as any[]) {
       const cod = String(row.cod || '').trim();
@@ -738,24 +768,25 @@ export class CrediarioBaixaService {
       const nome = String(row.nome || '').trim();
       if (!nome) { descartadosNome++; continue; }
       if (cardRegex.test(nome)) { descartadosCartao++; continue; }
-      const dedupKey = `${cod}|${nome.toUpperCase()}`;
+      const lojaCli = row.loja != null ? String(row.loja).trim() : null;
+      const dedupKey = `${lojaCli || ''}|${cod}|${nome.toUpperCase()}`;
       if (seen.has(dedupKey)) { descartadosDup++; continue; }
       const tel = (String(row.tel || '').trim()) || (String(row.tel2 || '').trim()) || null;
       seen.add(dedupKey);
-      out.push({ codCliente: cod, nome, telefone: tel });
+      out.push({ codCliente: cod, nome, telefone: tel, loja: lojaCli });
     }
-    this.logger.log(`[crediario-baixa] após filtros: ${out.length} clientes únicos (de ${result.rows.length} linhas) | descartados: cod=${descartadosCod} codInvalido=${descartadosCodInvalido} nome=${descartadosNome} cartao=${descartadosCartao} dup=${descartadosDup}`);
+    this.logger.log(`[crediario-baixa] após filtros: ${out.length} clientes únicos (de ${result.rows.length} linhas, loja=${safeStore || 'todas'}) | descartados: cod=${descartadosCod} codInvalido=${descartadosCodInvalido} nome=${descartadosNome} cartao=${descartadosCartao} dup=${descartadosDup}`);
 
-    this.clientesCache = {
+    this.clientesCache.set(safeStore || 'all', {
       data: out,
       expiresAt: Date.now() + this.CLIENTES_CACHE_TTL_MS,
-    };
+    });
     return out;
   }
 
   /** Limpa cache (chamado após cada baixa) */
   clearClientesCache() {
-    this.clientesCache = null;
+    this.clientesCache.clear();
   }
 
   // ── Autocomplete: busca rápida de clientes ────────────────────────
@@ -766,7 +797,7 @@ export class CrediarioBaixaService {
    *
    * Filtra clientes-cartão (VISANET, MASTERCARD, etc) e cód <= 3.
    */
-  async searchClientes(input: { q: string }): Promise<Array<{
+  async searchClientes(input: { q: string; storeCode?: string }): Promise<Array<{
     codCliente: string;
     nome: string;
     telefone: string | null;
@@ -783,6 +814,9 @@ export class CrediarioBaixaService {
 
     const safe = q.replace(/['"\\;]/g, '').slice(0, 100);
     const onlyDigits = /^\d+$/.test(safe);
+    const safeStore = input.storeCode
+      ? String(input.storeCode).replace(/[^0-9]/g, '').padStart(2, '0').slice(0, 2)
+      : null;
 
     // Monta SELECT
     const cols: string[] = [`\`${cm.codCliente}\` AS cod`];
@@ -797,6 +831,10 @@ export class CrediarioBaixaService {
       // Busca insensitive a case + acentos via UPPER + REPLACE básico
       // (cobre caso comum de ÁÉÍÓÚÇ no nome cadastrado)
       where = `UPPER(\`${cm.nome}\`) LIKE UPPER('%${safe}%')`;
+    }
+    // Escopo por loja — cada loja tem sua base (mesmo cod = outra pessoa)
+    if (safeStore && cm.loja) {
+      where += ` AND \`${cm.loja}\` = '${safeStore}'`;
     }
 
     const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE ${where} ORDER BY \`${cm.nome}\` ASC LIMIT 30`;
@@ -871,7 +909,7 @@ export class CrediarioBaixaService {
     const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC LIMIT 500`;
     const result = await this.erp.runReadOnly(sql, { maxRows: 500, timeoutMs: 30000 });
 
-    const phones = await this.crediarios.fetchPhonesByClienteIds([safeCod]);
+    const phones = await this.crediarios.fetchPhonesByClienteIds([safeCod], safeStore || undefined);
     const phoneInfo = phones.get(safeCod) || null;
 
     const cfg = await this.getConfig();
@@ -961,7 +999,9 @@ export class CrediarioBaixaService {
           const orParts: string[] = [`\`${cm.codCliente}\` = ?`];
           // Procura por colunas tipo cpf/cnpj/telefone
           // Heurística simples: tenta nome de coluna comum
-          const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE ${orParts.join(' OR ')} LIMIT 50`;
+          // Escopo por loja — o mesmo cod em outra loja é OUTRA pessoa
+          const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
+          const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE (${orParts.join(' OR ')})${lojaAnd} LIMIT 50`;
           const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [safeBusca]);
           for (const row of r.rows) codClientes.push(String(row.cod));
         }
@@ -973,7 +1013,8 @@ export class CrediarioBaixaService {
       // CODCLIENTE=26 VISANET, NOME=ELISA. Não queremos VISANET aqui.)
       const cm = await this.crediarios.detectClientesTable();
       if (cm && cm.nome) {
-        const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE ? LIMIT 50`;
+        const lojaAnd = safeStore && cm.loja ? ` AND \`${cm.loja}\` = '${safeStore}'` : '';
+        const sql = `SELECT \`${cm.codCliente}\` AS cod FROM \`${cm.table}\` WHERE \`${cm.nome}\` LIKE ?${lojaAnd} LIMIT 50`;
         const r = await this.erp.runReadOnly(sql, { maxRows: 50, timeoutMs: 10000 }, [`%${safeBusca}%`]);
         codClientes = r.rows.map((row) => String(row.cod));
       } else {
@@ -1057,8 +1098,8 @@ export class CrediarioBaixaService {
     const sql = `SELECT ${select.join(', ')} FROM \`movimento\` WHERE ${where.join(' AND ')} ORDER BY \`${map.vencimento}\` ASC, \`${map.codCliente}\` ASC LIMIT 500`;
     const result = await this.erp.runReadOnly(sql, { maxRows: 500, timeoutMs: 30000 });
 
-    // Enriquece com telefone
-    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes);
+    // Enriquece com telefone (escopado pela loja quando há filtro)
+    const phones = await this.crediarios.fetchPhonesByClienteIds(codClientes, safeStore || undefined);
 
     const cfg = await this.getConfig();
     const out: OpenInstallment[] = [];
