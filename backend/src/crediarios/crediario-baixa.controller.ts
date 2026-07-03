@@ -33,8 +33,10 @@ export class CrediarioBaixaController {
     if (req?.user?.role !== 'admin') throw new ForbiddenException('Apenas admin');
     const abertas = await this.mirror.syncAbertas();
     const clientes = await this.mirror.syncClientes();
-    // Cache da lista antiga pode estar servindo dados do Giga — limpa.
+    // Caches antigos podem estar servindo dados velhos/misturados — limpa os 2
+    // (parcelas E lista de clientes, senão a recarga só aparece em 30min).
     this.svc.clearListCache();
+    this.svc.clearClientesCache();
     return { ok: true, abertas, clientes };
   }
 

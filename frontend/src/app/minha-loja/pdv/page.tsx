@@ -1453,6 +1453,21 @@ function PdvPageInner() {
     }
   };
 
+  // ── VISÃO POR PESSOA do cliente identificado ──
+  // /pdv/customer-resume agrega TODOS os cadastros da pessoa (lojas + site)
+  // pelo CPF: cashback e LTV somados + origem do cadastro. Alimenta o badge
+  // no card da venda ("🌐 Cliente do SITE" / "loja tal" + cashback total).
+  const [clientePessoa, setClientePessoa] = useState<any>(null);
+  useEffect(() => {
+    const digits = String(sale?.customerCpf || '').replace(/\D/g, '');
+    if (digits.length !== 11) { setClientePessoa(null); return; }
+    let cancelled = false;
+    api<any>(`/pdv/customer-resume?cpf=${digits}`)
+      .then((r) => { if (!cancelled) setClientePessoa(r?.found ? r.customer : null); })
+      .catch(() => { if (!cancelled) setClientePessoa(null); });
+    return () => { cancelled = true; };
+  }, [sale?.customerCpf]);
+
   // ── Cancelar ──
   const cancelSale = async () => {
     if (!sale) return;
@@ -2308,6 +2323,20 @@ function PdvPageInner() {
                     ? `CPF ${String(sale.customerCpf).replace(/\D/g, '').replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.***.***-$4')}`
                     : 'Sem CPF'}
                 </div>
+                {clientePessoa && ((clientePessoa.origem && !clientePessoa.origem.daLojaAtual) || clientePessoa.cashbackBalanceCents > 0) && (
+                  <div className="text-[10px] font-bold mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                    {clientePessoa.origem && !clientePessoa.origem.daLojaAtual && (
+                      <span className="text-sky-700 truncate">
+                        {clientePessoa.origem.source === 'woo'
+                          ? '🌐 Cliente do SITE'
+                          : `🏬 Cliente da loja ${clientePessoa.origem.storeName || clientePessoa.origem.storeCode || '—'}`}
+                      </span>
+                    )}
+                    {clientePessoa.cashbackBalanceCents > 0 && (
+                      <span className="text-emerald-700">💰 {brl(clientePessoa.cashbackBalanceCents / 100)} cashback</span>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               <>
@@ -3594,6 +3623,23 @@ function CustomerModal({
                   {c.vipTier}
                 </span>
               </div>
+
+              {/* ORIGEM — cliente de outro canal: avisa e NÃO recadastra.
+                  Os números abaixo já são a PESSOA inteira (soma de todos os
+                  cadastros dela: lojas físicas + site). */}
+              {c.origem && !c.origem.daLojaAtual && (
+                <div className="bg-sky-100 border-2 border-sky-400 rounded-lg px-2 py-1.5 text-[11px] font-bold text-sky-900">
+                  {c.origem.source === 'woo'
+                    ? '🌐 Cliente do SITE'
+                    : `🏬 Cliente da loja ${c.origem.storeName || c.origem.storeCode || '—'}`}
+                  {' '}— cadastro único da rede, não recadastre
+                </div>
+              )}
+              {Array.isArray(c.cadastrosEm) && c.cadastrosEm.length > 1 && (
+                <div className="text-[10px] text-slate-500">
+                  Cadastros em: {c.cadastrosEm.join(' · ')}
+                </div>
+              )}
 
               {/* Métricas */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-center">
