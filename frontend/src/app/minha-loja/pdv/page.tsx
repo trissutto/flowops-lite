@@ -751,6 +751,9 @@ function PdvPageInner() {
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'pix' | 'cartao' | 'crediario'>('all');
   const [showFinalized, setShowFinalized] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
+  // Erro FIXO do último finalize (o toast some rápido — sem isto a vendedora
+  // não sabia por que a venda "voltava" após escolher a vendedora).
+  const [finalizeError, setFinalizeError] = useState<string | null>(null);
   // ── PDV2: overlay de ajuda de atalhos (F12 ou ?) ──
   const [showShortcuts, setShowShortcuts] = useState(false);
   // ── PDV2: flash visual no item recém-bipado (fundo verde ~600ms) ──
@@ -1519,22 +1522,28 @@ function PdvPageInner() {
     // checar pra evitar isso.
     if (!paymentMethod) {
       let payments = sale.payments || [];
+      let totalAtual = Number(sale.total || 0);
       if (payments.length === 0) {
         try {
           const fresh = await api<Sale>(`/pdv/sales/${sale.id}`);
           payments = fresh.payments || [];
+          totalAtual = Number(fresh.total ?? totalAtual);
           if (payments.length > 0) {
             setSale(fresh);
           }
         } catch { /* segue com state local */ }
       }
-      if (payments.length === 0) {
+      // TROCA PAR com total ZERO: não há o que pagar — finaliza sem payment
+      // (o backend aceita; sem essa exceção a vendedora ficava em loop:
+      // finalizar → vendedora → "sem forma de pagamento" → volta pra tela).
+      if (payments.length === 0 && Math.abs(totalAtual) >= 0.01) {
         toast('warning', 'Sem forma de pagamento', 'Escolha PIX, cartao, dinheiro, crediario ou vale-troca antes de finalizar.');
         setShowPayment(true);
         finalizingRef.current = false; // libera pra proximo finalize
         return;
       }
     }
+    setFinalizeError(null);
     setFinalizing(true);
     try {
       const body: any = {};
@@ -1589,6 +1598,10 @@ function PdvPageInner() {
     } catch (e: any) {
       const h = humanizeError(e);
       toast('error', h.title, h.hint);
+      // Banner FIXO no card da venda — o toast some rápido e a vendedora
+      // ficava sem saber por que a venda "voltou" depois de escolher a
+      // vendedora (caso troca 03/07). Limpa no próximo finalize.
+      setFinalizeError(h.hint || h.title || e?.message || 'Falha ao finalizar');
     } finally {
       setFinalizing(false);
       finalizingRef.current = false;
@@ -1606,6 +1619,7 @@ function PdvPageInner() {
 
   const startNewSale = () => {
     setShowFinalized(false);
+    setFinalizeError(null);
     setSale(null);
     createNewSale();
   };
@@ -2496,6 +2510,13 @@ function PdvPageInner() {
               <span className="text-sm leading-none">📋</span> Marcar
             </button>
           </div>
+
+          {/* ERRO DO ÚLTIMO FINALIZE — fixo até a próxima tentativa */}
+          {finalizeError && (
+            <div className="bg-rose-50 border-2 border-rose-400 rounded-lg px-3 py-2 text-xs text-rose-900">
+              <b>⚠️ A venda NÃO finalizou:</b> {finalizeError}
+            </div>
+          )}
 
           {/* FINALIZAR VENDA — verde, F8 (abre a tela de pagamento) */}
           <button
