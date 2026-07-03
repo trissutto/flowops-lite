@@ -3940,7 +3940,7 @@ function PaymentModal({
   // Info do cliente vinda do Giga + pendências (pra banner de inadimplência)
   const [credCustomerInfo, setCredCustomerInfo] = useState<{
     found: boolean;
-    cliente?: { codCliente: string; nome: string | null; cpf: string };
+    cliente?: { codCliente: string; nome: string | null; cpf: string; viaFallback?: 'telefone' | 'nome' | null };
     pendencias?: Array<{ vencimento: string; valor: number; diasAtraso: number }>;
     totalDevido?: number;
     totalAtraso?: number;
@@ -3969,9 +3969,14 @@ function PaymentModal({
         // storeCode: escopo por loja — código de cliente do Wincred se repete
         // entre lojas (crediário é separado por loja). Admin/impersonate usa
         // a loja da venda; vendedora o backend já resolve pelo JWT.
-        const r = await api<any>(
-          `/pdv/customer-info?cpf=${encodeURIComponent(customerCpf)}${storeCode ? `&storeCode=${encodeURIComponent(storeCode)}` : ''}`,
-        );
+        // nome/telefone: fallback quando o cadastro do Wincred está sem CPF.
+        const qs = [
+          `cpf=${encodeURIComponent(customerCpf)}`,
+          storeCode ? `storeCode=${encodeURIComponent(storeCode)}` : '',
+          customerName ? `nome=${encodeURIComponent(customerName)}` : '',
+          customerPhone ? `telefone=${encodeURIComponent(customerPhone)}` : '',
+        ].filter(Boolean).join('&');
+        const r = await api<any>(`/pdv/customer-info?${qs}`);
         if (!cancelled) setCredCustomerInfo(r);
       } catch (e: any) {
         if (!cancelled) setCredCustomerInfo({ found: false, message: e?.message || 'Erro ao buscar cliente' });
@@ -5449,6 +5454,13 @@ function PaymentModal({
               <div className="bg-emerald-50 border border-emerald-200 rounded px-2.5 py-1.5 text-xs text-emerald-800 flex items-center gap-2">
                 <Check className="w-3.5 h-3.5" />
                 Cliente <b>{credCustomerInfo.cliente?.nome || '—'}</b> sem pendências.
+              </div>
+            )}
+            {credCustomerInfo?.found && credCustomerInfo.cliente?.viaFallback && (
+              <div className="bg-amber-50 border border-amber-300 rounded px-2.5 py-1.5 text-[11px] text-amber-800">
+                ⚠️ Achada pelo <b>{credCustomerInfo.cliente.viaFallback}</b> (cód{' '}
+                {credCustomerInfo.cliente.codCliente}) — o cadastro no Wincred está sem o CPF.
+                Complete depois pra busca ficar exata.
               </div>
             )}
             {credCustomerInfo?.found && (credCustomerInfo.qtdPendencias || 0) > 0 && (
