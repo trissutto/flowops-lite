@@ -2418,7 +2418,7 @@ function PdvPageInner() {
               <Receipt className="w-4 h-4 shrink-0" /> Crediário
             </button>
             <button onClick={() => setShowValeTroca(true)} disabled={(sale.items?.length ?? 0) === 0} className={payBtnCls} title="Aplicar vale-troca">
-              <Tag className="w-4 h-4 shrink-0" /> Voucher
+              <Tag className="w-4 h-4 shrink-0" /> Vale-troca
             </button>
           </div>
 
