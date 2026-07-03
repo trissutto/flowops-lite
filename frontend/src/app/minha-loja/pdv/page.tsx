@@ -1914,19 +1914,23 @@ function PdvPageInner() {
           </div>
         ) : sale && sale.items?.length > 0 ? (
           <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm overflow-hidden">
-            {/* Cabeçalho do card — "Carrinho" + contador de PEÇAS (soma das qtds,
+            {/* Cabeçalho do card — contador de PEÇAS em DESTAQUE (soma das qtds,
                 não nº de linhas: linha com qty 3 conta 3 peças). */}
             <div className="px-4 pt-3.5 pb-2.5 flex items-baseline justify-between">
-              <span className="text-base font-bold text-slate-900">Carrinho</span>
               {(() => {
                 const totalPecas = sale.items.reduce((s, i) => s + i.qty, 0);
                 return (
-                  <span className="text-xs font-semibold text-slate-400" title="Total de peças no carrinho (soma das quantidades). Último item bipado aparece no topo.">
-                    {totalPecas} {totalPecas === 1 ? 'peça' : 'peças'}
-                    {totalPecas !== sale.items.length
-                      ? ` · ${sale.items.length} ${sale.items.length === 1 ? 'linha' : 'linhas'}`
-                      : ''}
-                  </span>
+                  <>
+                    <span className="tabular-nums leading-none" title="Total de peças (soma das quantidades). Último item bipado aparece no topo.">
+                      <span className="text-3xl font-black text-slate-900">{totalPecas}</span>
+                      <span className="text-base font-bold text-slate-500 ml-1.5">{totalPecas === 1 ? 'peça' : 'peças'}</span>
+                    </span>
+                    {totalPecas !== sale.items.length && (
+                      <span className="text-xs font-semibold text-slate-400">
+                        {sale.items.length} {sale.items.length === 1 ? 'linha' : 'linhas'}
+                      </span>
+                    )}
+                  </>
                 );
               })()}
             </div>
