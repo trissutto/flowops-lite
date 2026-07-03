@@ -1343,12 +1343,25 @@ export class ReturnsService {
         produto: result.produto,
       };
     }
+    // VALOR DA DEVOLUÇÃO = o que a cliente PAGOU na venda mais recente desta
+    // loja (linha da caixa, dividida pela quantidade), NÃO o preço atual da
+    // etiqueta. Caso real (03/07): etiqueta R$ 239,90 mas a cliente pagou
+    // R$ 232,48 — o vale saía R$ 7,42 maior que o pago. Fallback: preço atual
+    // (histórico sem valor).
+    const vendaRecente = result.vendas[0];
+    const valorPagoUnit = vendaRecente && Number(vendaRecente.valor) > 0
+      ? Math.round((Number(vendaRecente.valor) / Math.max(1, Number(vendaRecente.quantidade) || 1)) * 100) / 100
+      : 0;
+    const valorDevolucao = valorPagoUnit > 0 ? valorPagoUnit : (result.produto.preco || 0);
+
     return {
       eligible: true,
       produto: result.produto,
       vendas: result.vendas,
       salesCount: result.salesCount,
       diasJanela,
+      valorDevolucao,
+      valorBase: valorPagoUnit > 0 ? ('pago' as const) : ('etiqueta' as const),
     };
   }
 
@@ -1385,7 +1398,9 @@ export class ReturnsService {
       throw new BadRequestException(elig.message || 'Devolução não permitida');
     }
     const produto = elig.produto!;
-    const valorTotal = produto.preco || 0;
+    // Valor = o que a cliente PAGOU (calculado no lookupManualReturnSku a
+    // partir do histórico da caixa desta loja) — etiqueta só como fallback.
+    const valorTotal = (elig as any).valorDevolucao || produto.preco || 0;
     if (valorTotal <= 0) {
       throw new BadRequestException(
         `Peça ${produto.codigo} sem preço VENDAUN no Giga — admin precisa ajustar.`,
