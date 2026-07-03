@@ -149,6 +149,15 @@ const BANDEIRAS_CREDITO = ['MASTERCARD', 'VISANET', 'CIELO', 'HIPERCARD', 'AMEX'
 const brl = (n: number) =>
   Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+// Quanto ainda FALTA pagar da venda: total menos vale-troca e pagamentos
+// parciais já lançados. É esse valor que o simulador de parcelamento usa —
+// numa troca, a cliente parcela só a diferença, não o carrinho inteiro.
+const restanteVenda = (sale: Sale | null): number => {
+  if (!sale) return 0;
+  const pago = (sale.payments || []).reduce((s: number, p: any) => s + (Number(p.valor) || 0), 0);
+  return Math.round(((sale.total || 0) - pago) * 100) / 100;
+};
+
 /**
  * Imprime um cupom em browser puro (sem Electron).
  *
@@ -1824,7 +1833,7 @@ function PdvPageInner() {
             <button
               type="button"
               onClick={() => setShowSimular(true)}
-              disabled={!sale?.total || sale.total <= 0}
+              disabled={restanteVenda(sale) <= 0}
               className={`${rowBase} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent`}
               title="Simular parcelamento"
             >
@@ -2589,7 +2598,7 @@ function PdvPageInner() {
       <div className="lg:hidden fixed bottom-11 left-0 right-0 z-10 px-3">
         <div className="max-w-4xl mx-auto bg-white/95 backdrop-blur border border-slate-200 rounded-2xl p-2 shadow-lg flex gap-2 overflow-x-auto">
           <PdvMobilePill tone="rose"   href="/minha-loja/pdv/recebimentos" icon={Receipt}    label="Crediário" />
-          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={!sale?.total || sale.total <= 0} icon={CreditCard} label="Simular" />
+          <PdvMobilePill tone="amber"  onClick={() => setShowSimular(true)} disabled={restanteVenda(sale) <= 0} icon={CreditCard} label="Simular" />
           <PdvMobilePill tone="sky"    href="/minha-loja/consultar"        icon={Search}     label="Estoque" />
           <PdvMobilePill tone="purple" href="/minha-loja"                  icon={Globe}      label="Site" badge={pedidosSitePending} />
           <PdvMobilePill tone="green"  href="/minha-loja/pdv/caixa"        icon={DollarSign} label="Caixa" />
@@ -2941,12 +2950,20 @@ function PdvPageInner() {
       )}
 
       {/* Modal Simulador de Parcelamento Cartão */}
-      {showSimular && sale && sale.total > 0 && (
-        <SimularParcelasModal
-          total={sale.total}
-          onClose={() => setShowSimular(false)}
-        />
-      )}
+      {/* BUG FIX: em TROCA (vale-troca aplicado) ou pagamento parcial, simula
+          sobre o que FALTA pagar — não sobre o total bruto do carrinho. Cliente
+          com vale de R$ 269,90 num carrinho de R$ 539,80 parcela só R$ 269,90. */}
+      {showSimular && sale && (() => {
+        const restante = restanteVenda(sale);
+        if (restante <= 0) return null;
+        return (
+          <SimularParcelasModal
+            total={restante}
+            temAbatimento={restante < (sale.total || 0) - 0.01}
+            onClose={() => setShowSimular(false)}
+          />
+        );
+      })()}
 
       {/* Modal PIX Rápido (cobrança avulsa) */}
       {showPixAvulso && (
@@ -7552,11 +7569,15 @@ function PdvOutlinePill({
 // Mostra pra cliente quanto fica cada parcela de 1× a 12×, SEMPRE SEM JUROS.
 // Vendedora fala em voz alta pra cliente "fica 5× de R$ 31,04". A tela cabe
 // todas as 12 parcelas em grade 2 colunas — sem scroll, sem configuração.
+// `total` já vem líquido de vale-troca/parciais; `temAbatimento` troca o
+// rótulo pra "Falta a pagar" pra vendedora não confundir com o total bruto.
 function SimularParcelasModal({
   total,
+  temAbatimento,
   onClose,
 }: {
   total: number;
+  temAbatimento?: boolean;
   onClose: () => void;
 }) {
   const parcelas = Array.from({ length: 12 }, (_, idx) => idx + 1);
@@ -7578,7 +7599,9 @@ function SimularParcelasModal({
 
         {/* Total da venda — referência compacta pra cliente */}
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center justify-between">
-          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide">Total da venda</span>
+          <span className="text-[10px] text-emerald-700 font-bold uppercase tracking-wide">
+            {temAbatimento ? 'Falta a pagar' : 'Total da venda'}
+          </span>
           <span className="text-xl font-black text-emerald-700 tabular-nums">{brl(total)}</span>
         </div>
 
