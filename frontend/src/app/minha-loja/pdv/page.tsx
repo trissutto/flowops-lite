@@ -2312,6 +2312,14 @@ function PdvPageInner() {
         {/* Card TOTAIS + PAGAMENTO */}
         <div className="bg-white rounded-2xl border border-[#E5E2D9] shadow-sm p-4 space-y-3">
           <div className="space-y-1.5 text-sm">
+            {/* Contador de PEÇAS — soma das quantidades (linha qty 3 = 3 peças).
+                Sempre visível, mesmo com carrinho vazio. */}
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 font-medium">Peças</span>
+              <span className="font-semibold text-slate-800 tabular-nums">
+                {(sale.items || []).reduce((s, i) => s + i.qty, 0)}
+              </span>
+            </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-500 font-medium">Subtotal</span>
               <span className="font-semibold text-slate-800 tabular-nums">{brl(sale.subtotal)}</span>
