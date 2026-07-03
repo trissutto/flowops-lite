@@ -778,6 +778,8 @@ export class PdvController {
     @Req() req: any,
     @Query('cpf') cpf: string,
     @Query('storeCode') storeCodeQ?: string,
+    @Query('nome') nomeQ?: string,
+    @Query('telefone') telefoneQ?: string,
   ) {
     this.requireRole(req);
     if (!cpf) {
@@ -787,6 +789,11 @@ export class PdvController {
     if (cleanCpf.length < 3) {
       throw new BadRequestException('Mínimo 3 dígitos');
     }
+    // Nome/telefone da venda — fallback quando o cadastro do Wincred está SEM
+    // CPF (cadastro rápido de balcão, caso Piracicaba 03/07). Mesma estratégia
+    // do lookupClienteCode que grava a caixa: CPF → telefone → nome.
+    const nomeBusca = String(nomeQ || '').trim().toUpperCase().replace(/['"\\;%_]/g, '').slice(0, 80);
+    const telBusca = String(telefoneQ || '').replace(/\D/g, '');
 
     // Loja do escopo: vendedora usa SEMPRE a própria; admin pode escolher.
     const role = req?.user?.role;
@@ -893,6 +900,55 @@ export class PdvController {
       } catch {/* ignora */}
     }
 
+    // Tentativa 4b/4c: cadastro do Wincred SEM CPF (cadastro rápido de balcão).
+    // Procura por TELEFONE e depois por NOME — sempre NA LOJA, e só usa se a
+    // correspondência for ÚNICA (2+ resultados = ambíguo, não arrisca).
+    let viaFallback: 'telefone' | 'nome' | null = null;
+    if (!cliente && loja && cm.loja) {
+      // 4b: telefone (FONECEL/FONERES, últimos 9 dígitos cobrem celular sem DDD)
+      if (telBusca.length >= 8 && (cm.telefone || cm.telefone2)) {
+        try {
+          const last9 = telBusca.slice(-9);
+          const telNorm = (col: string) =>
+            `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(\`${col}\`, '(', ''), ')', ''), '-', ''), ' ', ''), '.', '')`;
+          const telConds = [cm.telefone, cm.telefone2]
+            .filter(Boolean)
+            .map((col) => `${telNorm(col as string)} LIKE '%${last9}%'`);
+          const sqlTel = `SELECT * FROM \`${cm.table}\` WHERE (${telConds.join(' OR ')})${lojaFilter} LIMIT 2`;
+          const rTel = await this.erp.runReadOnly(sqlTel, { maxRows: 2, timeoutMs: 10000 });
+          queryOk = true;
+          if (rTel.rows.length === 1) {
+            cliente = rTel.rows[0];
+            viaFallback = 'telefone';
+            console.log(`[customer-info] achado via TELEFONE na loja ${loja} (cpf digitado=${safeCpf})`);
+          } else if (rTel.rows.length > 1) {
+            console.log(`[customer-info] telefone ${last9} ambíguo na loja ${loja} (${rTel.rows.length} matches) — pulando`);
+          }
+        } catch {/* ignora */}
+      }
+      // 4c: nome exato, depois LIKE — só match ÚNICO
+      if (!cliente && nomeBusca.length >= 5 && cm.nome) {
+        try {
+          const sqlNome = `SELECT * FROM \`${cm.table}\` WHERE UPPER(TRIM(\`${cm.nome}\`)) = ?${lojaFilter} LIMIT 2`;
+          const rNome = await this.erp.runReadOnly(sqlNome, { maxRows: 2, timeoutMs: 10000 }, [nomeBusca]);
+          queryOk = true;
+          if (rNome.rows.length === 1) {
+            cliente = rNome.rows[0];
+            viaFallback = 'nome';
+            console.log(`[customer-info] achado via NOME EXATO na loja ${loja}: "${nomeBusca}"`);
+          } else if (rNome.rows.length === 0) {
+            const sqlLike = `SELECT * FROM \`${cm.table}\` WHERE UPPER(\`${cm.nome}\`) LIKE ?${lojaFilter} LIMIT 2`;
+            const rLike = await this.erp.runReadOnly(sqlLike, { maxRows: 2, timeoutMs: 10000 }, [`%${nomeBusca}%`]);
+            if (rLike.rows.length === 1) {
+              cliente = rLike.rows[0];
+              viaFallback = 'nome';
+              console.log(`[customer-info] achado via NOME LIKE na loja ${loja}: "${nomeBusca}"`);
+            }
+          }
+        } catch {/* ignora */}
+      }
+    }
+
     if (!cliente && !queryOk) {
       console.warn(`[customer-info] GIGA FORA: nenhuma query respondeu (cpf=${safeCpf})`);
       return {
@@ -932,7 +988,30 @@ export class PdvController {
     }
 
     if (!cliente) {
-      console.log(`[customer-info] NÃO ACHOU: tabela=${cm.table} cpfCol=${cpfCol} cpfBusca=${safeCpf} loja=${loja || 'todas'}`);
+      console.log(
+        `[customer-info] NÃO ACHOU: tabela=${cm.table} cpfCol=${cpfCol} cpfBusca=${safeCpf} ` +
+        `nome="${nomeBusca}" tel=${telBusca || '—'} loja=${loja || 'todas'}`,
+      );
+      // DIAGNÓSTICO no log: candidatos da loja pelo primeiro nome — mostra no
+      // Railway o que existe lá (loja/código/nome/cpf) quando a busca falha.
+      if (loja && cm.loja && cm.nome && nomeBusca) {
+        try {
+          const primeiroNome = nomeBusca.split(/\s+/)[0];
+          if (primeiroNome.length >= 3) {
+            const sqlDiag =
+              `SELECT \`${cm.loja}\` AS loja, \`${cm.codCliente}\` AS cod, \`${cm.nome}\` AS nome` +
+              `${cm.cpf ? `, \`${cm.cpf}\` AS cpf` : ''} FROM \`${cm.table}\` ` +
+              `WHERE UPPER(\`${cm.nome}\`) LIKE ?${lojaFilter} LIMIT 5`;
+            const rDiag = await this.erp.runReadOnly(sqlDiag, { maxRows: 5, timeoutMs: 10000 }, [`${primeiroNome}%`]);
+            console.log(
+              `[customer-info][diag] candidatos "${primeiroNome}%" na loja ${loja}: ` +
+              (rDiag.rows.length
+                ? rDiag.rows.map((r: any) => `[loja=${r.loja} cod=${r.cod} nome="${String(r.nome || '').trim()}" cpf="${String(r.cpf || '').trim()}"]`).join(' ')
+                : 'NENHUM'),
+            );
+          }
+        } catch {/* diagnóstico é best-effort */}
+      }
       return {
         found: false,
         message: `Cliente não encontrado no Giga${loja ? ` (loja ${loja})` : ''} — cadastre no Wincred antes de fazer crediário`,
@@ -968,6 +1047,9 @@ export class PdvController {
         nome,
         cpf: cleanCpf,
         loja: lojaCliente || null,
+        // 'telefone' | 'nome' quando o cadastro foi achado SEM bater o CPF
+        // (Wincred com CPF vazio/errado) — a tela avisa pra completar depois.
+        viaFallback,
         raw: cliente, // dados completos pra preencher form de cadastro se precisar
       },
       pendencias: pendencias.map((p) => ({
@@ -1512,7 +1594,14 @@ export class PdvController {
     // Busca cliente no Giga pra pegar codCliente (+ pendências pra checar limite).
     // ESCOPADO pela loja DA VENDA — código de cliente se repete entre lojas;
     // sem isso as parcelas caíam no cadastro de outra loja (cliente errado).
-    const info = await this.getCustomerInfo(req, sale.customerCpf, sale.storeCode);
+    // Nome/telefone entram como fallback (cadastro do Wincred sem CPF).
+    const info = await this.getCustomerInfo(
+      req,
+      sale.customerCpf,
+      sale.storeCode,
+      sale.customerName || undefined,
+      (sale as any).customerPhone || undefined,
+    );
     if (!info.found || !info.cliente) {
       throw new BadRequestException(
         (info as any).message ||
