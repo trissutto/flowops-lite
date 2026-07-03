@@ -789,6 +789,275 @@ export class CrediarioBaixaService {
     this.clientesCache.clear();
   }
 
+  /* ═════════════════════════════════════════════════════════════════════════
+     UNIFICAÇÃO DE CADASTROS DUPLICADOS (Giga, por loja) — admin
+
+     Caso Livia (03/07, Piracicaba): 2 cadastros da MESMA cliente na loja —
+     um com CPF e um sem (cadastro rápido de balcão), com o crediário
+     pendurado no sem-CPF. A busca por CPF acha um cadastro, as parcelas
+     estão no outro.
+
+     Unificar = mover `movimento` (parcelas) + `caixa` (histórico de compras)
+     do cadastro ORIGEM pro DESTINO na MESMA loja, completar campos vazios do
+     destino (CPF, fones, endereço) e marcar o origem como '#UNIF>cod' — a
+     linha NÃO é deletada (integridade do Wincred). Dry-run de prévia antes.
+     Gated por ERP_WRITE_ENABLED.
+     ═════════════════════════════════════════════════════════════════════════ */
+
+  async listClientesDuplicados(storeCode: string): Promise<{
+    loja: string;
+    grupos: Array<{
+      motivo: 'nome' | 'cpf';
+      chave: string;
+      clientes: Array<{ codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number }>;
+    }>;
+  }> {
+    const loja = String(storeCode || '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
+    if (!loja || loja === '00') throw new BadRequestException('storeCode obrigatório');
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm?.nome || !cm.loja) {
+      throw new BadRequestException('Tabela clientes do Giga sem colunas NOME/LOJA detectadas');
+    }
+
+    const cols = [`\`${cm.codCliente}\` AS cod`, `\`${cm.nome}\` AS nome`];
+    if (cm.cpf) cols.push(`\`${cm.cpf}\` AS cpf`);
+    if (cm.telefone) cols.push(`\`${cm.telefone}\` AS tel`);
+    const sql = `SELECT ${cols.join(', ')} FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND \`${cm.nome}\` IS NOT NULL AND \`${cm.nome}\` <> '' LIMIT 15000`;
+    const r = await this.erp.runReadOnly(sql, { maxRows: 15000, timeoutMs: 20000 });
+
+    type Cli = { codCliente: string; nome: string; cpf: string | null; telefone: string | null; parcelasAbertas: number };
+    const clientes: Cli[] = [];
+    for (const row of r.rows as any[]) {
+      const cod = String(row.cod || '').trim();
+      const codNum = parseInt(cod.replace(/\D/g, ''), 10);
+      if (!cod || isNaN(codNum) || codNum <= 3) continue;
+      const nome = String(row.nome || '').trim();
+      if (!nome || nome.startsWith('#UNIF>') || CARD_NAME_REGEX.test(nome)) continue;
+      const cpfDig = String(row.cpf || '').replace(/\D/g, '');
+      clientes.push({
+        codCliente: cod,
+        nome,
+        cpf: cpfDig.length === 11 ? cpfDig : null,
+        telefone: row.tel ? String(row.tel).trim() || null : null,
+        parcelasAbertas: 0,
+      });
+    }
+
+    // Grupos: mesmo CPF OU mesmo nome (normalizado). Dedup por conjunto de códigos.
+    const byCpf = new Map<string, Cli[]>();
+    const byNome = new Map<string, Cli[]>();
+    for (const c of clientes) {
+      if (c.cpf) { const a = byCpf.get(c.cpf) || []; a.push(c); byCpf.set(c.cpf, a); }
+      const n = c.nome.toUpperCase().replace(/\s+/g, ' ');
+      const b = byNome.get(n) || []; b.push(c); byNome.set(n, b);
+    }
+    const seenSets = new Set<string>();
+    const grupos: Array<{ motivo: 'nome' | 'cpf'; chave: string; clientes: Cli[] }> = [];
+    const push = (motivo: 'nome' | 'cpf', chave: string, list: Cli[]) => {
+      if (list.length < 2) return;
+      const key = list.map((c) => c.codCliente).sort().join('|');
+      if (seenSets.has(key)) return;
+      seenSets.add(key);
+      grupos.push({ motivo, chave, clientes: list });
+    };
+    for (const [cpf, list] of byCpf) push('cpf', cpf, list);
+    for (const [nome, list] of byNome) push('nome', nome, list);
+
+    // Parcelas em aberto por código (mostra onde o crediário está pendurado)
+    const map = await this.crediarios.detectColumns();
+    const cods = Array.from(new Set(grupos.flatMap((g) => g.clientes.map((c) => c.codCliente))));
+    if (map.codCliente && cods.length > 0) {
+      try {
+        const inList = cods.map((c) => `'${c.replace(/'/g, '')}'`).join(',');
+        const conds = [`\`${map.codCliente}\` IN (${inList})`];
+        if (map.loja) conds.push(`\`${map.loja}\` = '${loja}'`);
+        if (map.pago) {
+          conds.push(`(\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`);
+        } else if (map.dataPagamento) {
+          conds.push(`(\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`);
+        }
+        const sqlCnt = `SELECT \`${map.codCliente}\` AS cod, COUNT(*) AS n FROM \`movimento\` WHERE ${conds.join(' AND ')} GROUP BY \`${map.codCliente}\``;
+        const rc = await this.erp.runReadOnly(sqlCnt, { maxRows: cods.length + 10, timeoutMs: 20000 });
+        const cnt = new Map((rc.rows as any[]).map((x) => [String(x.cod), Number(x.n) || 0]));
+        for (const g of grupos) for (const c of g.clientes) c.parcelasAbertas = cnt.get(c.codCliente) || 0;
+      } catch (e: any) {
+        this.logger.warn(`[duplicados] contagem de parcelas falhou: ${e?.message}`);
+      }
+    }
+
+    // Grupos com crediário em aberto primeiro (são os que dão problema no PDV)
+    grupos.sort((a, b) =>
+      b.clientes.reduce((s, c) => s + c.parcelasAbertas, 0) -
+      a.clientes.reduce((s, c) => s + c.parcelasAbertas, 0),
+    );
+    return { loja, grupos: grupos.slice(0, 100) };
+  }
+
+  async unificarClientesGiga(input: {
+    storeCode: string;
+    codOrigem: string;
+    codDestino: string;
+    dryRun?: boolean;
+  }): Promise<any> {
+    const loja = String(input.storeCode || '').replace(/\D/g, '').padStart(2, '0').slice(0, 2);
+    const codOrigem = String(input.codOrigem || '').replace(/\D/g, '');
+    const codDestino = String(input.codDestino || '').replace(/\D/g, '');
+    if (!loja || loja === '00') throw new BadRequestException('storeCode obrigatório');
+    if (!codOrigem || !codDestino) throw new BadRequestException('codOrigem e codDestino obrigatórios');
+    if (codOrigem === codDestino) throw new BadRequestException('Origem e destino são o mesmo código');
+
+    const cm = await this.crediarios.detectClientesTable();
+    if (!cm?.nome || !cm.loja) {
+      throw new BadRequestException('Tabela clientes do Giga sem colunas NOME/LOJA detectadas');
+    }
+    const map = await this.crediarios.detectColumns();
+    if (!map.codCliente) throw new BadRequestException('Coluna codCliente do movimento não detectada');
+
+    const fetchCli = async (cod: string) => {
+      const r = await this.erp.runReadOnly(
+        `SELECT * FROM \`${cm.table}\` WHERE \`${cm.loja}\` = '${loja}' AND CONCAT('', \`${cm.codCliente}\`) = '${cod}' LIMIT 1`,
+        { maxRows: 1, timeoutMs: 10000 },
+      );
+      return (r.rows[0] as any) || null;
+    };
+    const origem = await fetchCli(codOrigem);
+    const destino = await fetchCli(codDestino);
+    if (!origem) throw new NotFoundException(`Cadastro origem ${codOrigem} não existe na loja ${loja}`);
+    if (!destino) throw new NotFoundException(`Cadastro destino ${codDestino} não existe na loja ${loja}`);
+
+    const condLojaMov = map.loja ? ` AND \`${map.loja}\` = '${loja}'` : '';
+    const count = async (sql: string) => {
+      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 15000 });
+      return Number((r.rows[0] as any)?.n) || 0;
+    };
+    const movimentoLinhas = await count(
+      `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}`,
+    );
+    let abertasCond = '';
+    if (map.pago) abertasCond = ` AND (\`${map.pago}\` IS NULL OR \`${map.pago}\` = '' OR UPPER(\`${map.pago}\`) IN ('N','NAO','NÃO'))`;
+    else if (map.dataPagamento) abertasCond = ` AND (\`${map.dataPagamento}\` IS NULL OR \`${map.dataPagamento}\` = '0000-00-00')`;
+    const parcelasAbertas = await count(
+      `SELECT COUNT(*) AS n FROM \`movimento\` WHERE \`${map.codCliente}\` = '${codOrigem}'${condLojaMov}${abertasCond}`,
+    );
+    const caixaLinhas = await count(
+      `SELECT COUNT(*) AS n FROM \`caixa\` WHERE LOJA = '${loja}' AND CODCLIENTE = '${codOrigem}'`,
+    );
+
+    // Campos vazios no destino que o origem tem — serão copiados
+    const copiar: Array<{ col: string; valor: string }> = [];
+    const check = (col?: string | null) => {
+      if (!col) return;
+      const vD = String(destino[col] ?? '').trim();
+      const vO = String(origem[col] ?? '').trim();
+      if (!vD && vO) copiar.push({ col, valor: vO });
+    };
+    check(cm.cpf); check(cm.telefone); check(cm.telefone2);
+    check(cm.endereco); check(cm.bairro); check(cm.cidade); check(cm.cep);
+
+    const resumo = {
+      loja,
+      origem: {
+        codCliente: codOrigem,
+        nome: cm.nome ? String(origem[cm.nome] || '').trim() : null,
+        cpf: cm.cpf ? String(origem[cm.cpf] || '').trim() || null : null,
+      },
+      destino: {
+        codCliente: codDestino,
+        nome: cm.nome ? String(destino[cm.nome] || '').trim() : null,
+        cpf: cm.cpf ? String(destino[cm.cpf] || '').trim() || null : null,
+      },
+      movimentoLinhas,
+      parcelasAbertas,
+      caixaLinhas,
+      camposACopiar: copiar.map((c) => c.col),
+    };
+    if (input.dryRun) return { dryRun: true, ...resumo };
+
+    if (!(this.erp as any).isWriteEnabled) {
+      throw new BadRequestException('ERP_WRITE_ENABLED desligado — a unificação escreve no Giga');
+    }
+
+    const pool: any = (this.erp as any).pool;
+    if (!pool) throw new BadRequestException('MySQL Giga não conectado');
+    const conn = await pool.getConnection();
+    let movidosMovimento = 0;
+    let movidosCaixa = 0;
+    try {
+      await conn.beginTransaction();
+      const [r1]: any = await conn.query(
+        `UPDATE \`movimento\` SET \`${map.codCliente}\` = ? WHERE \`${map.codCliente}\` = ?${condLojaMov}`,
+        [codDestino, codOrigem],
+      );
+      movidosMovimento = r1?.affectedRows || 0;
+      const [r2]: any = await conn.query(
+        `UPDATE \`caixa\` SET CODCLIENTE = ? WHERE LOJA = ? AND CODCLIENTE = ?`,
+        [codDestino, loja, codOrigem],
+      );
+      movidosCaixa = r2?.affectedRows || 0;
+      if (copiar.length > 0) {
+        await conn.query(
+          `UPDATE \`${cm.table}\` SET ${copiar.map((c) => `\`${c.col}\` = ?`).join(', ')} WHERE \`${cm.loja}\` = ? AND CONCAT('', \`${cm.codCliente}\`) = ?`,
+          [...copiar.map((c) => c.valor), loja, codDestino],
+        );
+      }
+      // Marca o origem (linha mantida — Wincred não gosta de DELETE): nome
+      // prefixado com '#UNIF>' + CPF esvaziado pra não colidir nas buscas.
+      const sets = [`\`${cm.nome}\` = CONCAT('#UNIF>', ?, ' ', LEFT(\`${cm.nome}\`, 40))`];
+      if (cm.cpf) sets.push(`\`${cm.cpf}\` = ''`);
+      await conn.query(
+        `UPDATE \`${cm.table}\` SET ${sets.join(', ')} WHERE \`${cm.loja}\` = ? AND CONCAT('', \`${cm.codCliente}\`) = ?`,
+        [codDestino, loja, codOrigem],
+      );
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    // Espelhos + caches (best-effort — o cron corrige se falhar)
+    try {
+      await (this.prisma as any).wincredMovimentoAberto.updateMany({
+        where: { loja, codCliente: codOrigem },
+        data: { codCliente: codDestino },
+      });
+      await (this.prisma as any).wincredCliente.updateMany({
+        where: { loja, codCliente: codOrigem },
+        data: { nome: `#UNIF>${codDestino}` },
+      });
+    } catch (e: any) {
+      this.logger.warn(`[unificar] espelho não atualizado (cron corrige): ${e?.message}`);
+    }
+    this.clearListCache();
+    this.clearClientesCache();
+
+    // CRM (best-effort): desativa o Customer do cadastro origem se ele só
+    // tinha esse vínculo — evita a pessoa aparecer 2x nas listas do Flow.
+    try {
+      const link = await (this.prisma as any).customerGigaLink.findUnique({
+        where: { giga_loja_codigo_unique: { gigaLoja: loja, gigaCodigo: Number(codOrigem) } },
+        include: { customer: { include: { gigaLinks: true } } },
+      });
+      if (link) {
+        if (link.customer && (link.customer.gigaLinks?.length || 0) <= 1) {
+          await (this.prisma as any).customer.update({
+            where: { id: link.customerId },
+            data: { active: false, inactiveReason: `unificado no Giga cod ${codDestino} (loja ${loja})` },
+          });
+        }
+        await (this.prisma as any).customerGigaLink.delete({ where: { id: link.id } });
+      }
+    } catch (e: any) {
+      this.logger.warn(`[unificar] CRM não ajustado (ETL corrige): ${e?.message}`);
+    }
+
+    this.logger.log(
+      `[unificar] loja ${loja}: cod ${codOrigem} → ${codDestino} · movimento=${movidosMovimento} caixa=${movidosCaixa} campos=[${copiar.map((c) => c.col).join(',')}]`,
+    );
+    return { ok: true, ...resumo, movidosMovimento, movidosCaixa };
+  }
+
   // ── Autocomplete: busca rápida de clientes ────────────────────────
 
   /**
