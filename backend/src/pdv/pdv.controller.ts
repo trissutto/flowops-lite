@@ -752,13 +752,33 @@ export class PdvController {
   // ═══════════════════════════════════════════════════════════════════════
 
   /**
-   * GET /pdv/customer-info?cpf=12345678900
+   * GET /pdv/customer-info?cpf=12345678900[&storeCode=05]
    * Busca cliente no Giga pelo CPF + retorna pendências (parcelas em aberto).
    * Usado pelo PaymentModal aba crediário pra mostrar banner de inadimplência.
    * Não bloqueia venda — só avisa.
+   *
+   * ⚠️ ESCOPO POR LOJA (incidente Piracicaba 03/07): o CODIGO de cliente do
+   * Wincred se REPETE entre lojas — cada loja tem sua numeração e seu
+   * crediário. Buscar sem filtrar LOJA misturava clientes: pegava cadastro
+   * de outra loja (LIMIT 1 arbitrário) e listava pendências de OUTRA pessoa
+   * (mesmo código em loja diferente). Toda busca aqui filtra (LOJA, CPF/CODIGO).
+   *
+   * Ordem de busca (loja = da vendedora logada; admin pode passar ?storeCode=):
+   *   1. CRM determinístico: Customer por CPF → CustomerGigaLink (loja+codigo)
+   *      da loja → lookup por (LOJA, CODIGO). Cobre cadastro do Giga com CPF
+   *      vazio/errado — caso comum de cadastro rápido no balcão.
+   *   2. clientes WHERE cpf normalizado = X AND LOJA
+   *   3. clientes WHERE codigo = X AND LOJA (se digitaram código)
+   *   4. LIKE do CPF + LOJA (chars invisíveis)
+   *   5. Nada na loja? Procura o CPF SEM loja só pra AVISAR "cadastro é da
+   *      loja YY" — não usa, porque crediário é por loja.
    */
   @Get('customer-info')
-  async getCustomerInfo(@Req() req: any, @Query('cpf') cpf: string) {
+  async getCustomerInfo(
+    @Req() req: any,
+    @Query('cpf') cpf: string,
+    @Query('storeCode') storeCodeQ?: string,
+  ) {
     this.requireRole(req);
     if (!cpf) {
       throw new BadRequestException('CPF ou código do cliente obrigatório');
@@ -768,12 +788,30 @@ export class PdvController {
       throw new BadRequestException('Mínimo 3 dígitos');
     }
 
+    // Loja do escopo: vendedora usa SEMPRE a própria; admin pode escolher.
+    const role = req?.user?.role;
+    const lojaRaw = role === 'admin'
+      ? (storeCodeQ || req?.user?.storeCode)
+      : (req?.user?.storeCode || storeCodeQ);
+    const loja = lojaRaw
+      ? String(lojaRaw).replace(/\D/g, '').padStart(2, '0').slice(0, 2)
+      : null;
+
     // Busca cliente no Giga (tabela clientes detectada dinamicamente —
     // com cache opcional de 1h via flag PDV_GIGA_CACHE)
     const cm = await this.detectClientesTableCached();
     if (!cm) {
-      return { found: false, message: 'Tabela de clientes do Giga não detectada' };
+      // Detecção falha quando o Giga está fora (firewall/rede) e não há cache —
+      // é erro de conexão, não "cliente não existe".
+      return {
+        found: false,
+        gigaError: true,
+        message: 'Giga indisponível no momento — tente de novo em instantes',
+      };
     }
+
+    // Filtro de loja aplicado em TODAS as buscas (quando a tabela tem a coluna)
+    const lojaFilter = loja && cm.loja ? ` AND \`${cm.loja}\` = '${loja}'` : '';
 
     // Procura por CPF (coluna detectada dinamicamente — pode chamar CPF, cpf, CPFCGC, etc).
     // BUG FIX: CPF no Giga pode estar FORMATADO (108.458.788-24), só dígitos,
@@ -784,22 +822,60 @@ export class PdvController {
     // Helper SQL que normaliza coluna CPF: tira pontos, traços, barras, espaços e TRIM
     const normalizeSql = `TRIM(REPLACE(REPLACE(REPLACE(REPLACE(\`${cpfCol}\`, '.', ''), '-', ''), '/', ''), ' ', ''))`;
     let cliente: any = null;
+    // Se TODAS as tentativas falharem por erro (Giga fora/firewall), avisa
+    // "falha de conexão" em vez de "não encontrado" — senão a vendedora
+    // acha que o cliente não existe (e ele existe).
+    let queryOk = false;
 
-    // Tentativa 1: CPF normalizado igual exato
-    try {
-      const sql = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} = '${safeCpf}' LIMIT 1`;
-      const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
-      cliente = r.rows[0] || null;
-    } catch (e: any) {
-      console.warn('[customer-info] erro buscando CPF normalizado:', e?.message);
+    // Tentativa 1: CRM determinístico — o Customer do Flow já conhece o
+    // (loja, codigo) do Giga via CustomerGigaLink. Resolve mesmo quando o
+    // cadastro do Wincred está com CPF vazio/errado.
+    if (loja && cm.loja && safeCpf.length === 11) {
+      try {
+        const prisma = (this.svc as any).prisma;
+        const cpfFmt = `${safeCpf.slice(0, 3)}.${safeCpf.slice(3, 6)}.${safeCpf.slice(6, 9)}-${safeCpf.slice(9)}`;
+        const crmCustomers = await prisma.customer.findMany({
+          where: { cpf: { in: [safeCpf, cpfFmt] } },
+          include: { gigaLinks: true },
+          take: 20,
+        });
+        const linkDaLoja = crmCustomers
+          .flatMap((c: any) => c.gigaLinks || [])
+          .find((l: any) => String(l.gigaLoja || '').replace(/\D/g, '').padStart(2, '0') === loja);
+        if (linkDaLoja) {
+          const sqlLink =
+            `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${Number(linkDaLoja.gigaCodigo)}'${lojaFilter} LIMIT 1`;
+          const rLink = await this.erp.runReadOnly(sqlLink, { maxRows: 1, timeoutMs: 10000 });
+          cliente = rLink.rows[0] || null;
+          queryOk = true;
+          if (cliente) {
+            console.log(`[customer-info] achado via CRM link: loja=${loja} codigo=${linkDaLoja.gigaCodigo}`);
+          }
+        }
+      } catch (e: any) {
+        console.warn('[customer-info] lookup via CRM link falhou:', e?.message);
+      }
     }
 
-    // Tentativa 2: codCliente direto (caso passou um código em vez de CPF)
+    // Tentativa 2: CPF normalizado igual exato (na loja)
     if (!cliente) {
       try {
-        const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}' LIMIT 1`;
+        const sql = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} = '${safeCpf}'${lojaFilter} LIMIT 1`;
+        const r = await this.erp.runReadOnly(sql, { maxRows: 1, timeoutMs: 10000 });
+        cliente = r.rows[0] || null;
+        queryOk = true;
+      } catch (e: any) {
+        console.warn('[customer-info] erro buscando CPF normalizado:', e?.message);
+      }
+    }
+
+    // Tentativa 3: codCliente direto (caso passou um código em vez de CPF)
+    if (!cliente) {
+      try {
+        const sql2 = `SELECT * FROM \`${cm.table}\` WHERE CONCAT('', \`${cm.codCliente}\`) = '${safeCpf}'${lojaFilter} LIMIT 1`;
         const r2 = await this.erp.runReadOnly(sql2, { maxRows: 1, timeoutMs: 10000 });
         cliente = r2.rows[0] || null;
+        queryOk = true;
       } catch {/* ignora */}
     }
 
@@ -807,33 +883,76 @@ export class PdvController {
     // (zero-width space, BOM, tabs, etc). Mais permissivo, último recurso.
     if (!cliente && safeCpf.length >= 11) {
       try {
-        const sql3 = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} LIKE '%${safeCpf}%' LIMIT 1`;
+        const sql3 = `SELECT * FROM \`${cm.table}\` WHERE ${normalizeSql} LIKE '%${safeCpf}%'${lojaFilter} LIMIT 1`;
         const r3 = await this.erp.runReadOnly(sql3, { maxRows: 1, timeoutMs: 10000 });
         cliente = r3.rows[0] || null;
+        queryOk = true;
         if (cliente) {
           console.log(`[customer-info] cliente achado via LIKE fallback: cpf=${safeCpf}`);
         }
       } catch {/* ignora */}
     }
 
-    if (!cliente) {
-      console.log(`[customer-info] NÃO ACHOU: tabela=${cm.table} cpfCol=${cpfCol} cpfBusca=${safeCpf}`);
+    if (!cliente && !queryOk) {
+      console.warn(`[customer-info] GIGA FORA: nenhuma query respondeu (cpf=${safeCpf})`);
+      return {
+        found: false,
+        gigaError: true,
+        message: 'Falha consultando o Giga — tente de novo (NÃO significa que o cliente não existe)',
+      };
+    }
+
+    // Tentativa 5: nada NESTA loja — procura o CPF sem filtro de loja só pra
+    // dar a mensagem certa ("cadastro é da loja YY"). NÃO usa o cadastro de
+    // outra loja: o crediário é por loja e a numeração de código também.
+    if (!cliente && loja && cm.loja && safeCpf.length >= 11) {
+      try {
+        const sqlOutra =
+          `SELECT \`${cm.loja}\` AS loja, \`${cm.codCliente}\` AS cod${cm.nome ? `, \`${cm.nome}\` AS nome` : ''} ` +
+          `FROM \`${cm.table}\` WHERE ${normalizeSql} = '${safeCpf}' LIMIT 5`;
+        const rOutra = await this.erp.runReadOnly(sqlOutra, { maxRows: 5, timeoutMs: 10000 });
+        if (rOutra.rows.length > 0) {
+          const lojas = rOutra.rows
+            .map((row: any) => String(row.loja || '').trim())
+            .filter(Boolean);
+          console.log(`[customer-info] CPF ${safeCpf} tem cadastro nas lojas [${lojas.join(',')}] mas não na ${loja}`);
+          return {
+            found: false,
+            outraLoja: {
+              lojas,
+              codCliente: String(rOutra.rows[0].cod || ''),
+              nome: rOutra.rows[0].nome ? String(rOutra.rows[0].nome).trim() : null,
+            },
+            message:
+              `Cliente tem cadastro na loja ${lojas.join(', ')}, mas NÃO na sua loja (${loja}). ` +
+              `Crediário é separado por loja — cadastre o cliente no Wincred DESTA loja antes de fechar.`,
+          };
+        }
+      } catch {/* ignora — cai na mensagem genérica */}
     }
 
     if (!cliente) {
-      return { found: false, message: 'Cliente não encontrado no Giga — cadastre antes de fazer crediário' };
+      console.log(`[customer-info] NÃO ACHOU: tabela=${cm.table} cpfCol=${cpfCol} cpfBusca=${safeCpf} loja=${loja || 'todas'}`);
+      return {
+        found: false,
+        message: `Cliente não encontrado no Giga${loja ? ` (loja ${loja})` : ''} — cadastre no Wincred antes de fazer crediário`,
+      };
     }
 
     const codCliente = String(cliente[cm.codCliente] || '').trim();
     const nome = cm.nome ? String(cliente[cm.nome] || '').trim() : null;
+    const lojaCliente = cm.loja ? String(cliente[cm.loja] || '').trim() : loja;
 
-    // Lista pendências (parcelas em aberto)
+    // Lista pendências (parcelas em aberto) — ESCOPADAS pela loja do cadastro.
+    // Sem o filtro, o mesmo código em outra loja é OUTRA pessoa e as parcelas
+    // dela apareciam aqui (mistura de crediário entre lojas).
     let pendencias: any[] = [];
     let totalDevido = 0;
     let totalAtraso = 0;
     try {
       pendencias = await this.crediarioBaixa.listOpenInstallmentsByCustomer({
         busca: codCliente,
+        storeCode: lojaCliente || loja || undefined,
       });
       totalDevido = pendencias.reduce((s, p) => s + (p.valorParcela || 0), 0);
       totalAtraso = pendencias.filter((p) => p.diasAtraso > 0).reduce((s, p) => s + (p.valorParcela || 0), 0);
@@ -848,6 +967,7 @@ export class PdvController {
         codCliente,
         nome,
         cpf: cleanCpf,
+        loja: lojaCliente || null,
         raw: cliente, // dados completos pra preencher form de cadastro se precisar
       },
       pendencias: pendencias.map((p) => ({
@@ -1389,10 +1509,13 @@ export class PdvController {
       };
     }
 
-    // Busca cliente no Giga pra pegar codCliente (+ pendências pra checar limite)
-    const info = await this.getCustomerInfo(req, sale.customerCpf);
+    // Busca cliente no Giga pra pegar codCliente (+ pendências pra checar limite).
+    // ESCOPADO pela loja DA VENDA — código de cliente se repete entre lojas;
+    // sem isso as parcelas caíam no cadastro de outra loja (cliente errado).
+    const info = await this.getCustomerInfo(req, sale.customerCpf, sale.storeCode);
     if (!info.found || !info.cliente) {
       throw new BadRequestException(
+        (info as any).message ||
         'Cliente não encontrado no Giga. Cadastre o cliente antes de fazer crediário.',
       );
     }

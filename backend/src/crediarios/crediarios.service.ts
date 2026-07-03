@@ -214,10 +214,14 @@ export class CrediariosService {
         const endereco = pickColumn(cols, /^endereco$/i, /^logradouro$/i, /^rua$/i, /^endereço$/i);
         const bairro = pickColumn(cols, /^bairro$/i, /^distrito$/i);
         const cep = pickColumn(cols, /^cep$/i, /^codigo_?postal$/i);
+        // LOJA — char(2) com zero à esquerda. CRÍTICO: o CODIGO de cliente se
+        // REPETE entre lojas (cada loja tem sua numeração) — toda busca de
+        // cliente pra crediário PRECISA filtrar por loja junto.
+        const loja = pickColumn(cols, /^loja$/i, /^cod_?loja$/i, /^filial$/i);
         if (!codCliente) continue;
         const result: ClientesMap = {
           table: tbl, codCliente, nome, telefone, telefone2,
-          cpf, cidade, endereco, bairro, cep,
+          cpf, cidade, endereco, bairro, cep, loja,
         };
         this.clientesMapCache = result;
         this.logger.log(`detectClientesTable: ${JSON.stringify(result)}`);
@@ -896,6 +900,9 @@ export interface ClientesMap {
   endereco: string | null;
   bairro: string | null;
   cep: string | null;
+  // Coluna LOJA (char(2)). O CODIGO de cliente se repete entre lojas —
+  // buscas pra crediário DEVEM filtrar (LOJA, CODIGO) juntos.
+  loja: string | null;
 }
 
 const EMPTY_MAP: ColumnMap = {
