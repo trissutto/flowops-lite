@@ -1740,6 +1740,9 @@ export class PdvService {
 
       if (!sess) {
         // Mensagem de erro com diagnóstico — mostra qual storeCode foi consultado
+        this.logger.warn(
+          `[pdv] finalize REJEITADO (sem caixa): venda ${sale.id} storeCode=${sale.storeCode} userStoreCode=${input.userStoreCode || '—'}`,
+        );
         throw new BadRequestException(
           `Não há caixa aberto na loja ${sale.storeCode}. ` +
             `Abra o caixa antes de finalizar a venda.`,
@@ -1768,11 +1771,19 @@ export class PdvService {
     // GUARD: precisa ter PELO MENOS 1 forma de pagamento associada.
     // (defesa em profundidade — addPayment já valida, mas garante que ninguém
     // burle chamando finalize direto sem registrar payment.)
+    // EXCEÇÃO (03/07): TROCA PAR com total ZERO — não há o que pagar, e
+    // addPayment rejeita valor <= 0, então é IMPOSSÍVEL registrar payment.
+    // Sem a exceção a vendedora ficava num loop: finalizar → escolher
+    // vendedora → "sem forma de pagamento" → volta pra tela.
     const payments = await (this.prisma as any).pdvSalePayment.findMany({
       where: { saleId: sale.id },
       orderBy: { createdAt: 'asc' },
     });
-    if ((payments as any[]).length === 0) {
+    const totalZero = sale.total < 0.01; // total<0 já foi rejeitado acima
+    if ((payments as any[]).length === 0 && !totalZero) {
+      this.logger.warn(
+        `[pdv] finalize REJEITADO (sem pagamento): venda ${sale.id} total=R$${Number(sale.total || 0).toFixed(2)}`,
+      );
       throw new BadRequestException(
         'Venda nao pode ser finalizada sem forma de pagamento. ' +
           'Adicione PIX, cartao, dinheiro, crediario ou vale-troca antes.',
@@ -1782,14 +1793,21 @@ export class PdvService {
     // Verifica que pago = total
     const jaPago = await this.sumPaidValue(sale.id);
     if (Math.abs(jaPago - sale.total) > 0.01) {
+      this.logger.warn(
+        `[pdv] finalize REJEITADO (pago≠total): venda ${sale.id} ` +
+          `total=R$${Number(sale.total || 0).toFixed(2)} pago=R$${jaPago.toFixed(2)} ` +
+          `payments=[${(payments as any[]).map((p: any) => `${p.method}:${Number(p.valor || 0).toFixed(2)}`).join(', ')}]`,
+      );
       throw new BadRequestException(
         `Total pago R$${jaPago.toFixed(2)} ≠ total venda R$${sale.total.toFixed(2)}. ` +
           `Faltam R$${(sale.total - jaPago).toFixed(2)}.`,
       );
     }
-    // 1 pagamento → método dele · N pagamentos → "MULTIPLO"
+    // 0 pagamentos (troca par zerada) → 'troca_par' · 1 → método dele · N → "MULTIPLO"
     const finalMethod =
-      (payments as any[]).length === 1
+      (payments as any[]).length === 0
+        ? 'troca_par'
+        : (payments as any[]).length === 1
         ? (payments as any[])[0].method
         : 'MULTIPLO';
     const finalDetails =
