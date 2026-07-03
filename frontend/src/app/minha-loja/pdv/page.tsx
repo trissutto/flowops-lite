@@ -3884,8 +3884,14 @@ function PaymentModal({
     qtdPendencias?: number;
     qtdAtrasadas?: number;
     message?: string;
+    /** true = falha de CONEXÃO com o Giga (não significa que o cliente não existe) */
+    gigaError?: boolean;
+    /** Cliente tem cadastro em OUTRA(S) loja(s), mas não na loja da venda */
+    outraLoja?: { lojas: string[]; codCliente: string; nome: string | null };
   } | null>(null);
   const [credLoading, setCredLoading] = useState(false);
+  // Contador pra forçar re-busca (botão "Tentar de novo" quando Giga falhou)
+  const [credRefresh, setCredRefresh] = useState(0);
 
   // Busca info do cliente quando seleciona crediário OU quando troca o cliente.
   // BUG FIX: antes tinha "if (credCustomerInfo) return" que impedia re-busca
@@ -3897,7 +3903,12 @@ function PaymentModal({
     setCredLoading(true);
     (async () => {
       try {
-        const r = await api<any>(`/pdv/customer-info?cpf=${encodeURIComponent(customerCpf)}`);
+        // storeCode: escopo por loja — código de cliente do Wincred se repete
+        // entre lojas (crediário é separado por loja). Admin/impersonate usa
+        // a loja da venda; vendedora o backend já resolve pelo JWT.
+        const r = await api<any>(
+          `/pdv/customer-info?cpf=${encodeURIComponent(customerCpf)}${storeCode ? `&storeCode=${encodeURIComponent(storeCode)}` : ''}`,
+        );
         if (!cancelled) setCredCustomerInfo(r);
       } catch (e: any) {
         if (!cancelled) setCredCustomerInfo({ found: false, message: e?.message || 'Erro ao buscar cliente' });
@@ -3907,7 +3918,7 @@ function PaymentModal({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, customerCpf]);
+  }, [selected, customerCpf, credRefresh]);
 
   // Quando muda o restante, sugere preencher o valor parcial
   useEffect(() => {
@@ -3983,7 +3994,11 @@ function PaymentModal({
       return;
     }
     if (selected === 'crediario' && credCustomerInfo && !credCustomerInfo.found) {
-      toast('error', 'Cliente não cadastrado no Giga', 'Cadastre antes de fechar no crediário');
+      if (credCustomerInfo.gigaError) {
+        toast('error', 'Giga fora do ar', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
+      } else {
+        toast('error', 'Cliente não cadastrado NESTA loja', credCustomerInfo.message || 'Cadastre no Wincred desta loja antes de fechar no crediário');
+      }
       return;
     }
     if (selected === 'crediario' && !credVencto) {
@@ -4689,7 +4704,11 @@ function PaymentModal({
         return;
       }
       if (credCustomerInfo && !credCustomerInfo.found) {
-        toast('error', 'Cliente não cadastrado no Giga', 'Cadastre antes de fechar no crediário');
+        if (credCustomerInfo.gigaError) {
+          toast('error', 'Giga fora do ar', 'Clique em "Tentar de novo" no banner antes de fechar no crediário');
+        } else {
+          toast('error', 'Cliente não cadastrado NESTA loja', credCustomerInfo.message || 'Cadastre no Wincred desta loja antes de fechar no crediário');
+        }
         return;
       }
       if (!credVencto) {
@@ -5327,11 +5346,40 @@ function PaymentModal({
                 <Loader2 className="w-3 h-3 animate-spin" /> Buscando cliente no Giga…
               </div>
             )}
-            {credCustomerInfo && !credCustomerInfo.found && (
-              <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2.5 text-xs text-rose-900">
-                <b>⚠️ Cliente não encontrado no Giga.</b> {credCustomerInfo.message}
-                <br />
-                Cadastre o cliente no Wincred antes de fechar a venda no crediário.
+            {credCustomerInfo && !credCustomerInfo.found && credCustomerInfo.gigaError && (
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-2.5 text-xs text-amber-900 space-y-2">
+                <div>
+                  <b>⚠️ Giga fora do ar agora.</b> {credCustomerInfo.message}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCredRefresh((n) => n + 1)}
+                  className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs"
+                >
+                  🔄 Tentar de novo
+                </button>
+              </div>
+            )}
+            {credCustomerInfo && !credCustomerInfo.found && !credCustomerInfo.gigaError && (
+              <div className="bg-rose-50 border-2 border-rose-300 rounded-lg p-2.5 text-xs text-rose-900 space-y-2">
+                <div>
+                  <b>⚠️ {credCustomerInfo.outraLoja ? 'Cliente é de outra loja.' : 'Cliente não encontrado no Giga.'}</b>{' '}
+                  {credCustomerInfo.message}
+                </div>
+                {credCustomerInfo.outraLoja && (
+                  <div className="text-[10px] text-rose-700">
+                    Cadastro encontrado: <b>{credCustomerInfo.outraLoja.nome || '—'}</b> · cód{' '}
+                    {credCustomerInfo.outraLoja.codCliente} · loja {credCustomerInfo.outraLoja.lojas.join(', ')}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setCredRefresh((n) => n + 1)}
+                  className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs"
+                  title="Buscar de novo depois de cadastrar no Wincred"
+                >
+                  🔄 Já cadastrei no Wincred — buscar de novo
+                </button>
               </div>
             )}
             {credCustomerInfo?.found && credCustomerInfo.qtdPendencias === 0 && (
