@@ -54,6 +54,32 @@ export class LivePdvController {
     return this.svc.searchGrade(term, sessionId);
   }
 
+  // ── Legenda da Live (atalhos 01, 02... → referência completa) ──
+  // A validação de cada linha usa a MESMA rotina da busca acima (o front
+  // chama GET /search pra prévia; o POST revalida no servidor antes de salvar).
+
+  @Get('sessions/:id/atalhos')
+  listAtalhos(@Param('id') sessionId: string) {
+    return this.svc.listAtalhos(sessionId);
+  }
+
+  @Post('sessions/:id/atalhos')
+  saveAtalho(
+    @Param('id') sessionId: string,
+    @Body() body: { id?: string | null; atalho: string; refCode: string },
+  ) {
+    return this.svc.saveAtalho(sessionId, {
+      id: body?.id || null,
+      atalho: body?.atalho || '',
+      refCode: body?.refCode || '',
+    });
+  }
+
+  @Post('sessions/:id/atalhos/:atalhoId/delete')
+  deleteAtalho(@Param('id') sessionId: string, @Param('atalhoId') atalhoId: string) {
+    return this.svc.deleteAtalho(sessionId, atalhoId);
+  }
+
   // ── Preço promocional da live ──
   @Get('sessions/:id/promos')
   listPromos(@Param('id') sessionId: string) {

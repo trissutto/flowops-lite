@@ -177,6 +177,8 @@ export default function LivePdvPage() {
   const [activeLive, setActiveLive] = useState<{ id: string; title: string } | null>(null);
   const [booting, setBooting] = useState(true);
   const [tab, setTab] = useState<'console' | 'dashboard'>('console');
+  // Legenda da Live — atalhos curtos (01, 02...) → referência completa
+  const [showLegenda, setShowLegenda] = useState(false);
 
   // Busca / grade
   const [term, setTerm] = useState('');
@@ -1017,6 +1019,9 @@ export default function LivePdvPage() {
           ⏰ QR de {expiredFlash} venceu — gere uma nova cobrança
         </div>
       )}
+      {showLegenda && sessionId && (
+        <LegendaModal sessionId={sessionId} onClose={() => setShowLegenda(false)} />
+      )}
       {/* Header */}
       <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
         <Link href="/minha-loja" className="text-slate-400 hover:text-slate-600">
@@ -1033,6 +1038,13 @@ export default function LivePdvPage() {
           className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:text-rose-600"
         >
           Fechar live
+        </button>
+        <button
+          onClick={() => setShowLegenda(true)}
+          title="Legenda da live — atalhos curtos (01, 02...) pra cada referência, com validação"
+          className="rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-bold text-violet-700 hover:bg-violet-100"
+        >
+          📋 Legenda
         </button>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 p-0.5">
           <button
@@ -2152,6 +2164,301 @@ function Dashboard({ sessionId }: { sessionId: string }) {
               </span>
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LEGENDA DA LIVE — atalhos curtos → referência completa ─────────────────
+// A equipe monta a sequência dos produtos ANTES da transmissão: cada linha tem
+// um ATALHO (01, 02...) e a REFERÊNCIA completa. Cada referência é validada na
+// hora pela MESMA rota GET /live-pdv/search usada pelo operador durante a live
+// (zero lógica de busca paralela) e a prévia mostra exatamente a grade que vai
+// abrir na transmissão. Linha inválida NÃO salva (o backend revalida no POST).
+type LegendaStatus = 'vazia' | 'buscando' | 'ok' | 'nao_encontrada' | 'ambigua' | 'erro';
+type LegendaRow = {
+  id: string | null;
+  atalho: string;
+  refCode: string;
+  status: LegendaStatus;
+  grade: any | null;
+  erro: string | null;
+  salva: boolean;      // true = persistida e sem edição pendente
+  salvando: boolean;
+};
+
+function LegendaModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const [rows, setRows] = useState<LegendaRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [topErr, setTopErr] = useState<string | null>(null);
+  // Debounce por linha: digitou → 700ms → valida (cancela o timer anterior)
+  const timersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  // Sequência por linha: descarta resposta de validação antiga (digitação rápida)
+  const seqRef = useRef<Record<number, number>>({});
+
+  const patchRow = (idx: number, patch: Partial<LegendaRow>) =>
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+
+  // Valida UMA linha usando a MESMA busca da live (com sessionId — inclusive
+  // preço promocional aparece igualzinho ao que o operador vê).
+  const validarLinha = useCallback(async (idx: number, refCode: string) => {
+    const q = refCode.trim();
+    if (!q) { patchRow(idx, { status: 'vazia', grade: null, erro: null }); return; }
+    const seq = (seqRef.current[idx] = (seqRef.current[idx] || 0) + 1);
+    patchRow(idx, { status: 'buscando', erro: null });
+    try {
+      const r = await api<any>(
+        `/live-pdv/search?term=${encodeURIComponent(q)}&sessionId=${encodeURIComponent(sessionId)}`,
+      );
+      if (seq !== seqRef.current[idx]) return; // resposta velha — descarta
+      if (!r?.found) {
+        patchRow(idx, { status: 'nao_encontrada', grade: null, erro: null });
+      } else if (!r.exactMatch && (r.matchedRefs?.length || 0) > 1) {
+        patchRow(idx, { status: 'ambigua', grade: r, erro: null });
+      } else {
+        patchRow(idx, { status: 'ok', grade: r, erro: null });
+      }
+    } catch (e: any) {
+      if (seq !== seqRef.current[idx]) return;
+      patchRow(idx, { status: 'erro', grade: null, erro: e?.message || 'Falha na busca' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // Carrega linhas salvas e REVALIDA uma a uma (a equipe confere tudo antes
+  // da live — estoque pode ter mudado desde o cadastro).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const salvos = await api<any[]>(`/live-pdv/sessions/${sessionId}/atalhos`);
+        if (cancelled) return;
+        const iniciais: LegendaRow[] = (salvos || []).map((a) => ({
+          id: a.id, atalho: a.atalho, refCode: a.refCode,
+          status: 'buscando' as LegendaStatus, grade: null, erro: null, salva: true, salvando: false,
+        }));
+        if (iniciais.length === 0) {
+          iniciais.push({ id: null, atalho: '01', refCode: '', status: 'vazia', grade: null, erro: null, salva: false, salvando: false });
+        }
+        setRows(iniciais);
+        setLoading(false);
+        // Revalidação sequencial (não afoga o backend com N buscas paralelas)
+        for (let i = 0; i < iniciais.length; i++) {
+          if (cancelled) return;
+          if (iniciais[i].refCode.trim()) await validarLinha(i, iniciais[i].refCode);
+          else patchRow(i, { status: 'vazia' });
+        }
+      } catch (e: any) {
+        if (!cancelled) { setTopErr(e?.message || 'Falha ao carregar a legenda'); setLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  const onRefChange = (idx: number, value: string) => {
+    patchRow(idx, { refCode: value, salva: false, status: value.trim() ? 'buscando' : 'vazia', grade: null });
+    if (timersRef.current[idx]) clearTimeout(timersRef.current[idx]);
+    timersRef.current[idx] = setTimeout(() => validarLinha(idx, value), 700);
+  };
+
+  const proximoAtalho = (lista: LegendaRow[]): string => {
+    const nums = lista.map((r) => parseInt(r.atalho, 10)).filter((n) => !isNaN(n));
+    const prox = (nums.length ? Math.max(...nums) : 0) + 1;
+    return String(prox).padStart(2, '0');
+  };
+
+  const addLinha = () =>
+    setRows((prev) => [...prev, {
+      id: null, atalho: proximoAtalho(prev), refCode: '',
+      status: 'vazia' as LegendaStatus, grade: null, erro: null, salva: false, salvando: false,
+    }]);
+
+  const salvarLinha = async (idx: number) => {
+    const row = rows[idx];
+    if (row.status !== 'ok' || !row.atalho.trim()) return;
+    patchRow(idx, { salvando: true, erro: null });
+    try {
+      const r = await api<any>(`/live-pdv/sessions/${sessionId}/atalhos`, {
+        method: 'POST',
+        body: JSON.stringify({ id: row.id, atalho: row.atalho, refCode: row.refCode.trim() }),
+      });
+      patchRow(idx, { id: r?.atalho?.id || row.id, atalho: r?.atalho?.atalho || row.atalho, salva: true, salvando: false });
+    } catch (e: any) {
+      patchRow(idx, { salvando: false, erro: e?.message || 'Falha ao salvar' });
+    }
+  };
+
+  const removerLinha = async (idx: number) => {
+    const row = rows[idx];
+    if (row.id) {
+      try {
+        await api(`/live-pdv/sessions/${sessionId}/atalhos/${row.id}/delete`, { method: 'POST' });
+      } catch (e: any) {
+        patchRow(idx, { erro: e?.message || 'Falha ao excluir' });
+        return;
+      }
+    }
+    setRows((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const pendentes = rows.filter((r) => r.refCode.trim() && (!r.salva || r.status !== 'ok')).length;
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 p-3 sm:p-6 overflow-y-auto" onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800">📋 Legenda da Live</h2>
+            <p className="text-xs text-slate-500">
+              Atalho curto → referência completa. Cada linha é validada pela <b>mesma busca da live</b> —
+              a grade abaixo é exatamente o que o operador vai ver ao digitar o atalho.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="h-5 w-5" /></button>
+        </div>
+
+        {topErr && <div className="mx-5 mt-3 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs text-rose-800">{topErr}</div>}
+
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-3 space-y-3">
+          {loading && (
+            <div className="flex items-center gap-2 py-8 justify-center text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando legenda…
+            </div>
+          )}
+
+          {!loading && (
+            <div className="grid grid-cols-[80px_1fr_40px] gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500 px-1">
+              <span>Atalho</span><span>Referência</span><span />
+            </div>
+          )}
+
+          {!loading && rows.map((row, idx) => (
+            <div key={idx} className={`rounded-xl border-2 p-2.5 space-y-2 ${
+              row.status === 'ok' ? 'border-emerald-300 bg-emerald-50/40'
+              : row.status === 'nao_encontrada' || row.status === 'erro' ? 'border-rose-300 bg-rose-50/40'
+              : row.status === 'ambigua' ? 'border-amber-300 bg-amber-50/40'
+              : 'border-slate-200'
+            }`}>
+              <div className="grid grid-cols-[80px_1fr_40px] gap-2 items-center">
+                <input
+                  value={row.atalho}
+                  onChange={(e) => patchRow(idx, { atalho: e.target.value.toUpperCase(), salva: false })}
+                  placeholder="01"
+                  className="rounded-lg border-2 border-slate-300 px-2 py-2 text-center text-base font-black tracking-widest focus:border-violet-500 focus:outline-none"
+                  maxLength={10}
+                />
+                <input
+                  value={row.refCode}
+                  onChange={(e) => onRefChange(idx, e.target.value.toUpperCase())}
+                  placeholder="Referência completa (ex: VLM-222)"
+                  className="rounded-lg border-2 border-slate-300 px-3 py-2 text-sm font-semibold focus:border-violet-500 focus:outline-none"
+                />
+                <button
+                  onClick={() => removerLinha(idx)}
+                  title="Remover esta linha"
+                  className="justify-self-center text-slate-400 hover:text-rose-600"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Status + prévia — exatamente o resultado da busca da live */}
+              {row.status === 'buscando' && (
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Validando pela busca da live…
+                </div>
+              )}
+              {row.status === 'nao_encontrada' && (
+                <div className="text-xs font-bold text-rose-700">
+                  🔴 Referência não encontrada. Confira a referência informada.
+                </div>
+              )}
+              {row.status === 'ambigua' && (
+                <div className="text-xs font-bold text-amber-700">
+                  🟠 Referência possui mais de um resultado ({(row.grade?.matchedRefs || []).slice(0, 5).join(', ')}
+                  {(row.grade?.matchedRefs?.length || 0) > 5 ? '…' : ''}). Informe a referência completa.
+                </div>
+              )}
+              {row.status === 'erro' && (
+                <div className="text-xs font-bold text-rose-700">🔴 {row.erro || 'Falha na validação'}</div>
+              )}
+
+              {row.status === 'ok' && row.grade && (
+                <div className="rounded-lg bg-white border border-emerald-200 p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-emerald-700">🟢 Referência validada</div>
+                    <div className="text-xs font-black text-emerald-700 tabular-nums">
+                      {((row.grade.priceCents || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      {row.grade.promoActive ? ' (promo da live)' : ''}
+                    </div>
+                  </div>
+                  <div className="text-sm font-bold text-slate-800">{row.grade.descricao}</div>
+                  <div className="text-[11px] text-slate-500">
+                    Referência: <b>{row.grade.ref}</b> · {row.grade.totalRede} peças na rede
+                  </div>
+                  {/* Grade por cor × tamanho — mesmo dado que abre na live */}
+                  {(() => {
+                    const porCor = new Map<string, any[]>();
+                    for (const c of row.grade.cells || []) {
+                      const cor = c.cor || '—';
+                      if (!porCor.has(cor)) porCor.set(cor, []);
+                      porCor.get(cor)!.push(c);
+                    }
+                    return Array.from(porCor.entries()).map(([cor, cells]) => (
+                      <div key={cor} className="text-xs">
+                        <span className="font-bold text-slate-600">{cor}:</span>{' '}
+                        <span className="tabular-nums">
+                          {cells.map((c: any) => `${c.tamanho || '—'} ${c.available} pç`).join(' · ')}
+                        </span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              )}
+
+              {row.erro && row.status !== 'erro' && (
+                <div className="text-xs font-bold text-rose-700">🔴 {row.erro}</div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-slate-400">
+                  {row.salva ? '✓ salvo — o operador já pode digitar o atalho' : row.id ? 'editado — salve de novo' : 'não salvo'}
+                </span>
+                <button
+                  onClick={() => salvarLinha(idx)}
+                  disabled={row.status !== 'ok' || !row.atalho.trim() || row.salvando || row.salva}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={row.status !== 'ok' ? 'Só salva com a referência validada (🟢)' : 'Salvar esta linha'}
+                >
+                  {row.salvando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : row.salva ? 'Salvo ✓' : 'Salvar'}
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {!loading && (
+            <button
+              onClick={addLinha}
+              className="w-full rounded-xl border-2 border-dashed border-slate-300 py-2.5 text-sm font-bold text-slate-500 hover:border-violet-400 hover:text-violet-600"
+            >
+              + Adicionar linha
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+          <span className="text-xs text-slate-500">
+            {pendentes > 0
+              ? `⚠️ ${pendentes} linha(s) inválida(s) ou não salva(s) — corrija antes da live`
+              : rows.some((r) => r.salva)
+                ? '✓ Legenda pronta — todos os atalhos validados'
+                : 'Preencha atalho + referência; a validação roda sozinha'}
+          </span>
+          <button onClick={onClose} className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-bold text-white hover:bg-slate-700">
+            Fechar
+          </button>
         </div>
       </div>
     </div>

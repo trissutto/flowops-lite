@@ -3386,9 +3386,31 @@ model LivePdvSession {
 
   carts             LivePdvCart[]
   items             LivePdvItem[]
+  atalhos           LivePdvAtalho[]
 
   @@index([status, createdAt(sort: Desc)])
   @@map("live_pdv_sessions")
+}
+
+/// LEGENDA DA LIVE — sequência de produtos com ATALHO curto (01, 02, ...).
+/// A equipe monta e VALIDA antes da transmissão (mesma rotina searchGrade da
+/// live); durante a live o operador digita só o atalho e o searchGrade
+/// converte pra referência completa antes da busca normal.
+model LivePdvAtalho {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  atalho    String   // código curto normalizado (trim + UPPER) — único por sessão
+  refCode   String   @map("ref_code")  // referência COMPLETA validada (o termo que o operador digitaria)
+  descricao String?  // snapshot da descrição na validação (exibição na lista)
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  session   LivePdvSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, atalho])
+  @@index([sessionId, position])
+  @@map("live_pdv_atalhos")
 }
 
 model LivePdvCart {
