@@ -4,7 +4,8 @@
  * /minha-loja/pdv/devolucao
  *
  * Fluxo:
- *  1. Bipa/digita ID ou nº NFC-e do cupom original
+ *  1. Bipa o SKU/REF da peça que voltou (busca por NFC-e foi REMOVIDA
+ *     04/07 — as lojas não usam e atrapalhava a triagem do bipe)
  *  2. Vê itens da venda + quantidade já devolvida
  *  3. Marca peças e quantidade a devolver
  *  4. Escolhe modo: Dinheiro / Troca / Vale-troca
@@ -211,18 +212,13 @@ export default function DevolucaoPage() {
     setManualBlocked(null);
     setBusy(true);
     try {
-      // ESTRATÉGIA: sempre tenta SKU/REF primeiro (caso 95% — vendedora bipa
-      // a peça que voltou). Se não achar, e o input parecer ID/número de venda
-      // (UUID ou número longo), tenta lookup direto. Sem heuristicas frageis.
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
-      // BUG FIX (04/07): o leitor de código de barras manda o código COM
-      // padding de zeros ("0000011051893" = peça 11051893). Isso tem 13
-      // dígitos e caía na heurística de NFC-e — a busca tentava como venda,
-      // falhava e PARAVA, sem nunca tentar como peça do Giga. Tira os zeros
-      // à esquerda ANTES de decidir: só é número de venda se o número LIMPO
-      // ainda tiver 9+ dígitos.
-      const strippedDigits = /^\d+$/.test(q) ? q.replace(/^0+/, '') : q;
-      const looksLikeSaleNumber = isUuid || /^\d{9,}$/.test(strippedDigits); // NFC-e tem 9+ digitos
+      // ESTRATÉGIA (04/07 — busca por NFC-e REMOVIDA a pedido do dono: as
+      // lojas não usam e o número longo atrapalhava a triagem do bipe):
+      //   1. peça nas vendas do FlowOps (lookup-by-sku, tolera zeros)
+      //   2. peça no histórico do Giga (lookup-manual, tolera zeros)
+      // O leitor de código de barras manda o código COM padding de zeros
+      // ("0000011051893" = peça 11051893) — os DOIS lookups tratam isso
+      // no backend via skuVariants.
 
       // 1a tentativa: busca por SKU/REF (lista vendas com essa peca)
       // crossStore só é respeitado pelo backend se o user for admin/operator.
@@ -240,26 +236,12 @@ export default function DevolucaoPage() {
           foundBySku = true;
         }
       } catch {
-        // ignora — vai tentar por venda abaixo
+        // ignora — vai tentar pelo Giga abaixo
       }
 
-      // 2a tentativa: busca por ID/NFC-e da venda (so se SKU nao achou nada)
+      // 2a tentativa: DEVOLUÇÃO MANUAL GIGA — peça antiga, sem cupom flowops.
+      // Verifica se foi vendida na loja atual nos últimos 60d (caixa Giga).
       if (!foundBySku) {
-        let vendaLookupFalhou = false;
-        if (looksLikeSaleNumber) {
-          // Input parece ID/NFC-e — tenta busca direta
-          try {
-            const r = await api<LookupResult>(`/pdv/devolucao/lookup?q=${encodeURIComponent(q)}`);
-            setData(r);
-            return;
-          } catch (e: any) {
-            // Não achou por venda — NÃO desiste: ainda tenta como peça do
-            // Giga abaixo (o input pode ser um código bipado longo).
-            vendaLookupFalhou = true;
-          }
-        }
-        // 3a tentativa: DEVOLUÇÃO MANUAL GIGA — peça antiga, sem cupom flowops.
-        // Verifica se foi vendida na loja atual nos últimos 60d (caixa Giga).
         try {
           const r = await api<{
             eligible: boolean;
@@ -286,11 +268,7 @@ export default function DevolucaoPage() {
           // não elegível: SKU não existe OU sem histórico na loja
           setManualBlocked(r.message || 'Devolução não permitida');
         } catch {
-          setErr(
-            vendaLookupFalhou
-              ? `Nada encontrado pra "${q}" — nem venda/NFC-e, nem peça no Giga. Confira o código.`
-              : `Nenhuma venda encontrada com SKU/REF "${q}"`,
-          );
+          setErr(`Nenhuma venda encontrada com a peça "${q}". Confira o código bipado.`);
         }
       }
     } catch (e: any) {
@@ -610,7 +588,7 @@ export default function DevolucaoPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') lookup(); }}
-                placeholder={data ? "Bipe MAIS peças dessa venda (cada bipa soma 1)" : "Bipe o SKU/REF da peça ou número da NFC-e"}
+                placeholder={data ? "Bipe MAIS peças dessa venda (cada bipa soma 1)" : "Bipe o SKU/REF da peça que voltou"}
                 className={`flex-1 p-2 border-2 rounded text-base focus:ring-2 focus:ring-rose-400 focus:outline-none ${data ? 'border-emerald-400 bg-emerald-50' : ''}`}
               />
               <button
