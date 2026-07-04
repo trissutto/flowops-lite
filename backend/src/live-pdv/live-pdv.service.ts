@@ -319,16 +319,41 @@ export class LivePdvService {
   /**
    * Busca produto e devolve a grade com estoque consolidado + por loja
    * (já descontando reservas ativas da live).
+   *
+   * ATALHOS DA LEGENDA (04/07): se o termo bate com um atalho cadastrado na
+   * legenda desta sessão ("01", "02"...), converte pra referência completa e
+   * segue EXATAMENTE a mesma busca — 1 lookup indexado no Postgres (~ms),
+   * o operador não percebe a conversão. `skipAtalho` é usado pela VALIDAÇÃO
+   * da legenda (valida a referência em si, sem risco de recursão).
    */
-  async searchGrade(term: string, sessionId?: string) {
-    const q = (term || '').trim();
+  async searchGrade(term: string, sessionId?: string, opts?: { skipAtalho?: boolean }) {
+    let q = (term || '').trim();
     if (!q) throw new BadRequestException('Informe referência, código, SKU ou nome');
+
+    let viaAtalho: { atalho: string; refCode: string } | null = null;
+    if (sessionId && !opts?.skipAtalho) {
+      const key = this.normAtalho(q);
+      // Tolerância de digitação: "1" acha o atalho "01" e vice-versa.
+      const candidates = new Set<string>([key]);
+      if (/^\d+$/.test(key)) {
+        const semZeros = key.replace(/^0+/, '');
+        if (semZeros) candidates.add(semZeros);
+        candidates.add(key.padStart(2, '0'));
+      }
+      const at = await (this.prisma as any).livePdvAtalho.findFirst({
+        where: { sessionId, atalho: { in: Array.from(candidates) } },
+      });
+      if (at) {
+        viaAtalho = { atalho: at.atalho, refCode: at.refCode };
+        q = String(at.refCode).trim();
+      }
+    }
 
     // 1) Resolve linhas do produto (REF/código/nome) COM FALLBACK no espelho
     // giga_produto quando o Giga ao vivo não responde.
     const resolved = await this.resolveRowsWithMirror(q);
     const rows = resolved.rows;
-    if (!rows.length) return { found: false, term: q };
+    if (!rows.length) return { found: false, term: q, viaAtalho, matchedRefs: [], exactMatch: false };
 
     // Foco em 1 produto. searchByRef("VLM-222") também traz "VLM-222EST" (LIKE),
     // que é OUTRO produto (estampado). Prefere a REF que bate EXATO com o termo
@@ -339,6 +364,10 @@ export class LivePdvService {
     const productRows = exact.length
       ? exact
       : rows.filter((r) => this.norm(r.REF) === this.norm(rows[0].REF));
+    // Metadados pra VALIDAÇÃO da legenda: quais REFs distintas o termo trouxe
+    // e se houve match exato. Campos ADITIVOS — não mudam o comportamento.
+    const matchedRefs = Array.from(new Set(rows.map((r) => String(r.REF || '').trim()).filter(Boolean)));
+    const exactMatch = exact.length > 0;
     const ref = String(productRows[0].REF).trim();
     const descricao = productRows[0].DESCRICAOCOMPLETA || ref;
 
@@ -463,7 +492,84 @@ export class LivePdvService {
       // true = produto/estoque vieram do ESPELHO (Giga ao vivo estava fora);
       // o número pode estar desatualizado — frontend mostra aviso.
       fromMirror,
+      // Metadados da legenda/atalhos (aditivos — UI da live ignora)
+      matchedRefs,
+      exactMatch,
+      viaAtalho,
     };
+  }
+
+  // ─── Legenda da Live (atalhos) ───────────────────────────────────────────────
+  /** Normaliza o código de atalho: trim + MAIÚSCULA. */
+  private normAtalho(s: string): string {
+    return String(s || '').trim().toUpperCase();
+  }
+
+  async listAtalhos(sessionId: string) {
+    await this.getSession(sessionId);
+    return (this.prisma as any).livePdvAtalho.findMany({
+      where: { sessionId },
+      orderBy: [{ position: 'asc' }, { atalho: 'asc' }],
+    });
+  }
+
+  /**
+   * Cria/atualiza uma linha da legenda (atalho → referência).
+   *
+   * VALIDAÇÃO OBRIGATÓRIA: roda a MESMA rotina da live (searchGrade) na
+   * referência — nada de lógica de busca paralela. Só salva se:
+   *   - a busca ACHOU o produto; e
+   *   - o termo não é AMBÍGUO (várias REFs sem match exato).
+   * Retorna a grade da validação pro front exibir a prévia idêntica à live.
+   */
+  async saveAtalho(sessionId: string, input: { id?: string | null; atalho: string; refCode: string }) {
+    await this.getSession(sessionId);
+    const atalho = this.normAtalho(input.atalho);
+    const refCode = String(input.refCode || '').trim();
+    if (!atalho) throw new BadRequestException('Informe o atalho (ex: 01)');
+    if (atalho.length > 10) throw new BadRequestException('Atalho muito longo (máx 10 caracteres)');
+    if (!refCode) throw new BadRequestException('Informe a referência');
+
+    // MESMA rotina da live. skipAtalho: valida a referência em si (e evita
+    // recursão se alguém digitar um atalho no campo de referência).
+    const grade: any = await this.searchGrade(refCode, sessionId, { skipAtalho: true });
+    if (!grade.found) {
+      throw new BadRequestException('Referência não encontrada. Confira a referência informada.');
+    }
+    if (!grade.exactMatch && (grade.matchedRefs?.length || 0) > 1) {
+      throw new BadRequestException(
+        'Referência possui mais de um resultado. Informe a referência completa.',
+      );
+    }
+
+    // Atalho duplicado na mesma live (em OUTRA linha) — erro amigável
+    const dup = await (this.prisma as any).livePdvAtalho.findUnique({
+      where: { sessionId_atalho: { sessionId, atalho } },
+    });
+    if (dup && dup.id !== input.id) {
+      throw new BadRequestException(`Atalho "${atalho}" já usado pra ${dup.refCode} nesta live`);
+    }
+
+    let row;
+    if (input.id) {
+      row = await (this.prisma as any).livePdvAtalho.update({
+        where: { id: input.id },
+        data: { atalho, refCode, descricao: grade.descricao || null },
+      });
+    } else {
+      const count = await (this.prisma as any).livePdvAtalho.count({ where: { sessionId } });
+      row = await (this.prisma as any).livePdvAtalho.create({
+        data: { sessionId, atalho, refCode, descricao: grade.descricao || null, position: count },
+      });
+    }
+    return { ok: true, atalho: row, grade };
+  }
+
+  async deleteAtalho(sessionId: string, id: string) {
+    const row = await (this.prisma as any).livePdvAtalho.findUnique({ where: { id } });
+    if (!row || row.sessionId !== sessionId) throw new NotFoundException('Atalho não encontrado');
+    await (this.prisma as any).livePdvAtalho.delete({ where: { id } });
+    return { ok: true };
   }
 
   // ─── Preço promocional da live ───────────────────────────────────────────────
