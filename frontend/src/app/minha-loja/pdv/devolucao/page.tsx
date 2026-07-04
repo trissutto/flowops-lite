@@ -215,7 +215,14 @@ export default function DevolucaoPage() {
       // a peça que voltou). Se não achar, e o input parecer ID/número de venda
       // (UUID ou número longo), tenta lookup direto. Sem heuristicas frageis.
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
-      const looksLikeSaleNumber = isUuid || /^\d{9,}$/.test(q); // NFC-e tem 9+ digitos
+      // BUG FIX (04/07): o leitor de código de barras manda o código COM
+      // padding de zeros ("0000011051893" = peça 11051893). Isso tem 13
+      // dígitos e caía na heurística de NFC-e — a busca tentava como venda,
+      // falhava e PARAVA, sem nunca tentar como peça do Giga. Tira os zeros
+      // à esquerda ANTES de decidir: só é número de venda se o número LIMPO
+      // ainda tiver 9+ dígitos.
+      const strippedDigits = /^\d+$/.test(q) ? q.replace(/^0+/, '') : q;
+      const looksLikeSaleNumber = isUuid || /^\d{9,}$/.test(strippedDigits); // NFC-e tem 9+ digitos
 
       // 1a tentativa: busca por SKU/REF (lista vendas com essa peca)
       // crossStore só é respeitado pelo backend se o user for admin/operator.
@@ -238,6 +245,7 @@ export default function DevolucaoPage() {
 
       // 2a tentativa: busca por ID/NFC-e da venda (so se SKU nao achou nada)
       if (!foundBySku) {
+        let vendaLookupFalhou = false;
         if (looksLikeSaleNumber) {
           // Input parece ID/NFC-e — tenta busca direta
           try {
@@ -245,9 +253,9 @@ export default function DevolucaoPage() {
             setData(r);
             return;
           } catch (e: any) {
-            // nao achou por venda tambem — mensagem unificada
-            setErr(`Nada encontrado pra "${q}". Verifique o SKU/REF da peca ou o numero da NFC-e.`);
-            return;
+            // Não achou por venda — NÃO desiste: ainda tenta como peça do
+            // Giga abaixo (o input pode ser um código bipado longo).
+            vendaLookupFalhou = true;
           }
         }
         // 3a tentativa: DEVOLUÇÃO MANUAL GIGA — peça antiga, sem cupom flowops.
@@ -278,7 +286,11 @@ export default function DevolucaoPage() {
           // não elegível: SKU não existe OU sem histórico na loja
           setManualBlocked(r.message || 'Devolução não permitida');
         } catch {
-          setErr(`Nenhuma venda encontrada com SKU/REF "${q}"`);
+          setErr(
+            vendaLookupFalhou
+              ? `Nada encontrado pra "${q}" — nem venda/NFC-e, nem peça no Giga. Confira o código.`
+              : `Nenhuma venda encontrada com SKU/REF "${q}"`,
+          );
         }
       }
     } catch (e: any) {
