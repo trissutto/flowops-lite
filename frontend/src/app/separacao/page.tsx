@@ -1808,8 +1808,41 @@ function CarrinhosTab() {
       if (search) qsList.set('search', search);
       // Cache-bust pra forcar request fresh (Vercel/CDN/browser cache)
       qsList.set('_t', String(Date.now()));
+
+      // Busca TODAS as páginas. O plugin do WP limita a 200 carrinhos por
+      // página; num período de 90 dias há centenas (ex.: 463 abandonados).
+      // Antes só a página 1 era carregada → os 263+ carrinhos restantes (os
+      // mais ANTIGOS, no fim da ordenação por data) nunca apareciam na lista,
+      // mesmo o card de KPI mostrando o total cheio.
+      const fetchAllCarts = async (): Promise<ListResp> => {
+        const first = await api<ListResp>(`/abandoned-carts?${qsList}`);
+        const acc: CarrinhoAB[] = [
+          ...(((first as any).items || (first as any).rows || []) as CarrinhoAB[]),
+        ];
+        const totalPages = Number((first as any).total_pages || 1);
+        // Só pagina o plugin real; o fallback WooCommerce já é um proxy parcial
+        // (1 request por status) e não segue a mesma paginação por offset.
+        const isFallback =
+          (first as any).source === 'woocommerce-fallback' ||
+          !!(first as any).pluginError;
+        if (!isFallback && totalPages > 1) {
+          const MAX_PAGES = 20; // teto de segurança (~4.000 carrinhos)
+          for (let p = 2; p <= Math.min(totalPages, MAX_PAGES); p++) {
+            const qs = new URLSearchParams(qsList);
+            qs.set('page', String(p));
+            qs.set('_t', String(Date.now()));
+            try {
+              const r = await api<ListResp>(`/abandoned-carts?${qs}`);
+              const arr = ((r as any).items || (r as any).rows || []) as CarrinhoAB[];
+              if (Array.isArray(arr)) acc.push(...arr);
+            } catch { /* uma página falhou — segue com o que já veio */ }
+          }
+        }
+        return { ...first, items: acc };
+      };
+
       const [listResp, statsResp] = await Promise.all([
-        api<ListResp>(`/abandoned-carts?${qsList}`).catch((e) => ({ ok: false, error: e?.message } as ListResp)),
+        fetchAllCarts().catch((e) => ({ ok: false, error: e?.message } as ListResp)),
         api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`).catch(() => null),
       ]);
       setLastFetch(new Date());
