@@ -15,7 +15,7 @@
  */
 
 import * as React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -90,6 +90,16 @@ const firstOfMonthIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 };
 
+// Valida data do filtro ANTES de buscar. O input date dispara onChange com
+// ano PARCIAL enquanto digita ("0002-07-01") — isso já mandou uma consulta
+// de 1902→hoje pro Giga (base inteira na tela + pool MySQL sofrendo).
+const isValidPeriodDate = (s: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+  if (!m) return false;
+  const y = Number(m[1]);
+  return y >= 2000 && y <= 2100;
+};
+
 export default function FaturamentoPage() {
   const router = useRouter();
   const [from, setFrom] = useState(firstOfMonthIso());
@@ -111,28 +121,10 @@ export default function FaturamentoPage() {
     if (!token) router.push('/login');
   }, [router]);
 
-  // Invalida cache de drill-down quando MUDA o período.
-  // Se a loja expandida estava aberta, força recarga com o novo período.
-  useEffect(() => {
-    setStoreVendas({});
-    setStoreMeta({});
-    // Se tem uma loja expandida, dispara recarregar
-    if (expandedStore) {
-      const sc = expandedStore;
-      setLoadingVendas(sc);
-      (async () => {
-        try {
-          const r = await api<{ vendas: any[]; source?: string; sourceWarning?: string }>(
-            `/faturamento/loja/${encodeURIComponent(sc)}/vendas?from=${from}&to=${to}`,
-          );
-          setStoreVendas((prev) => ({ ...prev, [sc]: r.vendas || [] }));
-          setStoreMeta((prev) => ({ ...prev, [sc]: { source: r.source, sourceWarning: r.sourceWarning, zumbisOcultas: (r as any).zumbisOcultas } }));
-        } catch {}
-        setLoadingVendas(null);
-      })();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to]);
+  // Sequência de requests — a resposta de um load ANTIGO (ex: a consulta
+  // gigante de um ano digitado pela metade) chegava DEPOIS e sobrescrevia a
+  // certa. Só a resposta do último load() aplica.
+  const loadSeqRef = useRef(0);
 
   const load = async (
     forceRefresh = false,
@@ -140,6 +132,17 @@ export default function FaturamentoPage() {
   ) => {
     const useFrom = override?.from ?? from;
     const useTo = override?.to ?? to;
+    // NUNCA busca com data inválida/parcial — era isso que varria o Giga
+    // de 1902 até hoje quando se digitava o ano no campo.
+    if (!isValidPeriodDate(useFrom) || !isValidPeriodDate(useTo)) {
+      setErr('Período inválido — confira as datas De/Até (ano com 4 dígitos).');
+      return;
+    }
+    if (useFrom > useTo) {
+      setErr('A data "De" está depois da data "Até".');
+      return;
+    }
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setErr(null);
     // Limpa cache de drill-down — qualquer mudança no resumo invalida detalhes
@@ -149,11 +152,28 @@ export default function FaturamentoPage() {
       const qs = new URLSearchParams({ from: useFrom, to: useTo, granularity });
       if (forceRefresh) qs.set('refresh', '1');
       const r = await api<Resumo>(`/faturamento/resumo?${qs.toString()}`);
+      if (seq !== loadSeqRef.current) return; // resposta velha — descarta
       setData(r);
+      // Loja expandida: recarrega o drill-down já com o período aplicado
+      if (expandedStore) {
+        const sc = expandedStore;
+        setLoadingVendas(sc);
+        try {
+          const rv = await api<{ vendas: any[]; source?: string; sourceWarning?: string }>(
+            `/faturamento/loja/${encodeURIComponent(sc)}/vendas?from=${useFrom}&to=${useTo}`,
+          );
+          if (seq === loadSeqRef.current) {
+            setStoreVendas((prev) => ({ ...prev, [sc]: rv.vendas || [] }));
+            setStoreMeta((prev) => ({ ...prev, [sc]: { source: rv.source, sourceWarning: rv.sourceWarning, zumbisOcultas: (rv as any).zumbisOcultas } }));
+          }
+        } catch {}
+        setLoadingVendas(null);
+      }
     } catch (e: any) {
+      if (seq !== loadSeqRef.current) return;
       setErr(e?.message || 'Falha ao carregar faturamento');
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   };
 
@@ -202,13 +222,14 @@ export default function FaturamentoPage() {
     load(true); // FORÇA refresh — limpa cache pra estorno aparecer na hora
   };
 
-  // Carrega no mount E sempre que QUALQUER filtro muda (datas, atalhos,
-  // granularidade) — antes a granularidade não recarregava e dava a impressão
-  // de que os filtros "não funcionavam". load() não altera esses estados → sem loop.
+  // Carrega SÓ no mount. As datas digitadas NÃO disparam busca sozinhas —
+  // o input date emite onChange com ano parcial ("0002-...") enquanto digita,
+  // e isso mandava uma consulta de 1902→hoje pro Giga a cada tecla (incidente
+  // 03/07: R$ 169mi na tela). Buscar = botão Aplicar ou atalhos.
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to, granularity]);
+  }, []);
 
   // Formata bucket pro eixo X do gráfico
   const chartData = useMemo(() => {

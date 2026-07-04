@@ -809,6 +809,10 @@ export class FaturamentoService {
   private parseDate(s: string, endExclusive: boolean): Date {
     const [y, m, d] = s.split('-').map(Number);
     const date = new Date(y, (m || 1) - 1, d || 1);
+    // QUIRK do JS: new Date(2, ...) vira ano 1902 (0–99 mapeia pra 1900–1999).
+    // Foi assim que um ano parcial digitado no filtro virou uma varredura da
+    // base inteira (1902→hoje). Força o ano LITERAL sempre.
+    date.setFullYear(y);
     if (endExclusive) date.setDate(date.getDate() + 1);
     return date;
   }
