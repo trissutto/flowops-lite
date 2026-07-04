@@ -254,7 +254,20 @@ function SeparacaoPageInner() {
       next['separacao']   = r.byStatus['separacao']?.total ?? 0;
       next['em-transito'] = r.byStatus['shipped']?.total ?? 0;
       next['completed']   = r.byStatus['completed']?.total ?? 0;
-      setTabCounts(next);
+      // merge (não substitui) pra não apagar o contador de carrinhos,
+      // que vem de outro endpoint e pode chegar depois
+      setTabCounts((prev) => ({ ...prev, ...next }));
+    } catch { /* silencioso */ }
+    // Carrinhos abandonados vêm do plugin WP (endpoint próprio), não do
+    // /orders/wc/counts. Badge = abandonados nos últimos 7 dias.
+    try {
+      const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const s = await api<any>(`/abandoned-carts/stats?since=${since}&_t=${Date.now()}`);
+      // stats pode vir PLANO (abandoned) ou ANINHADO (by_status.abandoned.qty)
+      const raw = (s as any)?.stats || s || {};
+      const by = raw.by_status || {};
+      const abandoned = Number(raw.abandoned ?? by.abandoned?.qty ?? by.abandoned?.count ?? 0) || 0;
+      setTabCounts((prev) => ({ ...prev, carrinhos: abandoned }));
     } catch { /* silencioso */ }
   }
   useEffect(() => {
